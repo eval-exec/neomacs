@@ -158,16 +158,13 @@ fn font_supports_query(font: &Font, query: &FontCandidateQuery) -> bool {
     )
 }
 
-fn font_supports_explicit_language(font: &Font, query: &FontCandidateQuery) -> bool {
-    super::windows_query_policy::explicit_language_is_satisfied_by(
-        query.explicit_language.as_deref(),
-        || {
-            font.create_font_face()
-                .font_table(u32::from_le_bytes(*b"OS/2"))
-                .ok()
-                .flatten()
-        },
-    )
+fn font_supports_signature_and_language(font: &Font, query: &FontCandidateQuery) -> bool {
+    super::windows_query_policy::signature_and_language_are_satisfied_by(query, || {
+        font.create_font_face()
+            .font_table(u32::from_le_bytes(*b"OS/2"))
+            .ok()
+            .flatten()
+    })
 }
 
 fn resolve_generic_family(family: &str) -> Option<String> {
@@ -239,7 +236,7 @@ fn native_fallback_candidate(query: &FontCandidateQuery) -> Option<FontCandidate
             to_directwrite_stretch(query.requested_width),
         )
         .mapped_font
-        .filter(|font| font_supports_explicit_language(font, query))
+        .filter(|font| font_supports_signature_and_language(font, query))
         .and_then(font_candidate_from_font)
 }
 

@@ -224,6 +224,7 @@ impl CapturedCharacterPolicy {
             charset_ranges: Vec::new(),
             languages: Vec::new(),
             explicit_language: None,
+            signature_requirement: None,
             weight: key.weight,
             slant: style.slant,
             width: style.width,
@@ -324,7 +325,7 @@ impl FontResolver {
                         Ok(policy) => policy,
                         Err(error) => {
                             tracing::warn!(target: "font_registry", %error, "invalid native font policy");
-                            continue;
+                            return None;
                         }
                     };
                     if let Some(matched) = self.resolve_from_policy(&policy, prefer_monospace) {

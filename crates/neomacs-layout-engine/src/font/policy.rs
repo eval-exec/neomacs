@@ -4,6 +4,7 @@
 //! Fontconfig behavior. This module translates a stored Lisp font spec into a
 //! typed native-catalog query without naming any operating-system backend.
 
+use crate::font_backend::FontSignatureRequirement;
 use neomacs_display_protocol::font::FontBackendKind;
 use neovm_core::emacs_core::font::FrozenFontFamilies;
 use neovm_core::emacs_core::fontset::{FontsetRenderingSpec, StoredFontSpec, native_font_name};
@@ -212,6 +213,13 @@ pub(super) struct FontPolicySpec<'a> {
 }
 
 impl FontPolicySpec<'_> {
+    pub(super) fn signature_requirement(
+        &self,
+        backend: FontBackendKind,
+    ) -> Option<FontSignatureRequirement> {
+        registry_signature_requirement(backend, self.registry.as_deref())
+    }
+
     pub(super) fn for_backend(mut self, backend: FontBackendKind) -> Self {
         self.registry = self
             .registry
@@ -554,8 +562,8 @@ impl ParsedRegistry {
 fn parse_registry(registry: Option<&str>) -> Result<ParsedRegistry, EmacsRegexpError> {
     match registry {
         None => Ok(ParsedRegistry::Unconstrained),
-        // Preserve the historical native-policy shortcut normalization. The
-        // public listing gate below separately requires the exact GNU symbols.
+        // ftfont_spec_pattern compares these registry symbols exactly before
+        // applying the case-insensitive legacy charset regexp lookup.
         Some(registry) if ftfont_registry_uses_unconstrained_charset(registry) => {
             Ok(ParsedRegistry::Unconstrained)
         }
@@ -616,10 +624,7 @@ pub(crate) fn combined_query_langs(
 }
 
 fn ftfont_registry_uses_unconstrained_charset(registry: &str) -> bool {
-    matches!(
-        registry.trim().to_ascii_lowercase().as_str(),
-        "ascii-0" | "iso10646-1" | "unicode-bmp"
-    )
+    matches!(registry, "ascii-0" | "iso10646-1" | "unicode-bmp")
 }
 
 #[cfg(test)]
@@ -675,6 +680,23 @@ pub(super) fn windows_registry_shortcut(registry: &str) -> bool {
         registry,
         "unknown" | "ascii-0" | "iso10646-1" | "unicode-bmp" | "unicode-sip"
     )
+}
+
+/// w32font's Unicode registry symbols select native signature masks, not
+/// Fontconfig representative characters or a requirement to cover all glyphs.
+pub(super) fn registry_signature_requirement(
+    backend: FontBackendKind,
+    registry: Option<&str>,
+) -> Option<FontSignatureRequirement> {
+    if backend != FontBackendKind::DirectWrite {
+        return None;
+    }
+    match registry {
+        Some("iso10646-1") => Some(FontSignatureRequirement::Unicode),
+        Some("unicode-bmp") => Some(FontSignatureRequirement::Bmp),
+        Some("unicode-sip") => Some(FontSignatureRequirement::Sip),
+        _ => None,
+    }
 }
 
 /// Retain the existing recognized-legacy approximation on non-Fontconfig

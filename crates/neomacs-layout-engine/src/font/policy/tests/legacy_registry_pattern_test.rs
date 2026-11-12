@@ -48,9 +48,11 @@ fn legacy_registry_language_and_coverage_share_the_selected_entry() {
 #[test]
 fn legacy_registry_unicode_shortcuts_keep_their_existing_exact_listing_identity() {
     for name in ["ascii-0", "iso10646-1", "unicode-bmp"] {
+        assert!(ftfont_registry_uses_unconstrained_charset(name));
         assert!(registry_supported_for_listing(name).unwrap());
     }
-    for name in ["ASCII-0", "ISO10646-1", "Unicode-BMP"] {
+    for name in ["ASCII-0", "ISO10646-1", "Unicode-BMP", " iso10646-1 "] {
+        assert!(!ftfont_registry_uses_unconstrained_charset(name));
         assert!(!registry_supported_for_listing(name).unwrap());
     }
 }

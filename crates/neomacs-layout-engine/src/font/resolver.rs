@@ -99,6 +99,16 @@ fn non_empty_query_text(value: String) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
+fn result_registry(backend: FontBackendKind, requested: Option<&str>) -> String {
+    // w32font's add_font_entity_to_list preserves any explicit registry on
+    // an admitted entity. FT instead publishes its native Unicode registry.
+    if backend == FontBackendKind::DirectWrite {
+        requested.unwrap_or("iso10646-1").to_owned()
+    } else {
+        "iso10646-1".to_owned()
+    }
+}
+
 // GNU uses these driver symbols for its HarfBuzz/Cairo and Cocoa adapters.
 // DirectWrite is a Neomacs driver, not GNU's GDI or Uniscribe implementation.
 fn font_driver_symbol(kind: FontBackendKind) -> Option<neovm_core::emacs_core::intern::SymId> {
@@ -267,6 +277,9 @@ impl FontResolver {
     /// platform adapter.  Unlike the former binary-side helper this never
     /// assumes Fontconfig on CoreText or DirectWrite builds.
     pub fn resolve_entity(&self, query: &FontEntityQuery) -> Option<ResolvedFontEntity> {
+        if !self.native_registry_query_allowed(query.registry.as_deref(), None) {
+            return None;
+        }
         let candidate_query = match self.entity_candidate_query(query) {
             Ok(query) => query,
             Err(error) => {
@@ -313,7 +326,10 @@ impl FontResolver {
             }?;
         Some(ResolvedFontEntity {
             matched: selected,
-            registry: Some("iso10646-1".to_owned()),
+            registry: Some(result_registry(
+                self.backend.kind(),
+                query.registry.as_deref(),
+            )),
             driver: font_driver_symbol(self.backend.kind()),
         })
     }
@@ -458,7 +474,10 @@ impl FontResolver {
         };
         let listed = |candidate: FontCandidate| ListedFontCandidate {
             candidate: candidate.matched,
-            registry: Some("iso10646-1".to_owned()),
+            registry: Some(result_registry(
+                self.backend.kind(),
+                query.registry.as_deref(),
+            )),
             driver,
         };
         if let Some((prefer, constraints)) = prefer {
@@ -605,6 +624,10 @@ impl FontResolver {
             .collect();
         let scope = family.map_or(FontCandidateScope::All, FontCandidateScope::Family);
         Ok(FontCandidateQuery {
+            signature_requirement: super::policy::registry_signature_requirement(
+                self.backend.kind(),
+                query.registry.as_deref(),
+            ),
             scalable: None,
             otf: None,
             script_coverage: None,
@@ -752,6 +775,7 @@ impl FontResolver {
         let family = self.resolve_family(family);
         let family_name = FontFamilyName::new(family.clone())?;
         let query = FontCandidateQuery {
+            signature_requirement: None,
             scalable: None,
             otf: None,
             script_coverage: None,
@@ -804,6 +828,7 @@ impl FontResolver {
             return cached.clone();
         }
         let mut query = FontCandidateQuery {
+            signature_requirement: None,
             scalable: None,
             otf: None,
             script_coverage: None,
@@ -887,7 +912,7 @@ impl FontResolver {
                     break;
                 }
                 FontSpecEntry::Font(spec) => {
-                    if let Some(matched) = self.resolve_from_spec(
+                    let attempt = match self.resolve_from_spec(
                         family,
                         ch,
                         prefer_monospace,
@@ -897,6 +922,13 @@ impl FontResolver {
                         size,
                         &spec,
                     ) {
+                        Ok(attempt) => attempt,
+                        Err(error) => {
+                            tracing::warn!(target: "font_registry", %error, "invalid native font policy");
+                            return None;
+                        }
+                    };
+                    if let Some(matched) = attempt {
                         selected = Some(matched);
                         break;
                     }
@@ -905,7 +937,7 @@ impl FontResolver {
         }
 
         if selected.is_none() && allow_generic_fallback {
-            selected = self.resolve_from_spec(
+            selected = match self.resolve_from_spec(
                 family,
                 ch,
                 prefer_monospace,
@@ -922,7 +954,13 @@ impl FontResolver {
                     width: None,
                     definition: None,
                 },
-            );
+            ) {
+                Ok(attempt) => attempt,
+                Err(error) => {
+                    tracing::warn!(target: "font_registry", %error, "invalid native font policy");
+                    return None;
+                }
+            };
         }
         let selected = selected
             .and_then(|matched| self.backend.finalize_match(matched))
@@ -1048,7 +1086,7 @@ impl FontResolver {
         requested_width: FontWidth,
         size: FontSelectionSize,
         spec: &StoredFontSpec,
-    ) -> Option<PlatformFontCandidate> {
+    ) -> Result<Option<PlatformFontCandidate>, EmacsRegexpError> {
         if self.backend.kind() != FontBackendKind::Fontconfig
             && !self.native_registry_query_allowed(
                 spec.registry
@@ -1057,9 +1095,9 @@ impl FontResolver {
                 None,
             )
         {
-            return None;
+            return Ok(None);
         }
-        let policy = match CapturedCharacterPolicy::capture(
+        let policy = CapturedCharacterPolicy::capture(
             requested_family,
             ch,
             requested_weight,
@@ -1068,14 +1106,8 @@ impl FontResolver {
             size,
             spec,
             self.backend.kind(),
-        ) {
-            Ok(policy) => policy,
-            Err(error) => {
-                tracing::warn!(target: "font_registry", %error, "invalid native font policy");
-                return None;
-            }
-        };
-        self.resolve_from_policy(&policy, prefer_monospace)
+        )?;
+        Ok(self.resolve_from_policy(&policy, prefer_monospace))
     }
 
     /// Native discovery and scoring use only owned policy, never Lisp symbols
@@ -1100,6 +1132,7 @@ impl FontResolver {
                 },
             };
             let query = FontCandidateQuery {
+                signature_requirement: policy.signature_requirement,
                 scalable: None,
                 otf: None,
                 script_coverage: None,
@@ -1166,6 +1199,7 @@ struct CapturedCharacterPolicy {
     charset_ranges: Vec<(u32, u32)>,
     languages: Vec<String>,
     explicit_language: Option<String>,
+    signature_requirement: Option<crate::font_backend::FontSignatureRequirement>,
     weight: u16,
     slant: FontSlant,
     width: FontWidth,
@@ -1191,6 +1225,7 @@ impl CapturedCharacterPolicy {
             charset_ranges: Vec::new(),
             languages: Vec::new(),
             explicit_language: None,
+            signature_requirement: None,
             weight,
             slant,
             width,
@@ -1206,6 +1241,7 @@ impl CapturedCharacterPolicy {
         spec: super::policy::FontPolicySpec<'_>,
         backend: FontBackendKind,
     ) -> Result<Self, EmacsRegexpError> {
+        self.signature_requirement = spec.signature_requirement(backend);
         let spec = spec.for_backend(backend);
         let constraints = GnuFontPolicy::constraints_for_names(&spec, self.ch)?;
         self.charset_ranges = constraints.coverage().ranges().to_vec();

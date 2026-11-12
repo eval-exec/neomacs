@@ -3089,22 +3089,14 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         };
         let coverage = match request.target {
             FontCoverageTarget::Entity(handle) => {
-                if let Some(candidate) = self.font_entities.discovered(handle).cloned() {
-                    let Some(font) = self
-                        .synchronized_font_metrics()
-                        .materialize_font_candidate(candidate)
-                    else {
-                        return Ok(FontCoverage::NeedsOpening);
-                    };
-                    if !self.font_entities.promote(handle, font) {
-                        return Ok(FontCoverage::NeedsOpening);
-                    }
-                }
-                let Some(font) = self.font_entities.get(handle).cloned() else {
+                let _ = self.synchronized_font_metrics();
+                let Some(service) = self.font_metrics.as_mut() else {
                     return Ok(FontCoverage::NeedsOpening);
                 };
-                self.synchronized_font_metrics()
-                    .font_has_char_in_match(&font, ch)
+                let Some(font) = self.font_entities.materialize(service, handle) else {
+                    return Ok(FontCoverage::NeedsOpening);
+                };
+                service.font_has_char_in_match(&font, ch)
             }
             FontCoverageTarget::Opened(identity) => self
                 .synchronized_font_metrics()

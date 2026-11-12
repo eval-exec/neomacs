@@ -77,6 +77,7 @@ fn inherited_first_winner_never_resolves_unused_large_family_alternatives() {
         charset_ranges: Vec::new(),
         languages: Vec::new(),
         explicit_language: None,
+        signature_requirement: None,
         weight: 400,
         slant: FontSlant::Normal,
         width: FontWidth::Normal,
@@ -154,6 +155,7 @@ fn native_queries_preserve_explicit_language_separately_from_registry_hints() {
                     selection_size(),
                     &spec,
                 )
+                .unwrap()
                 .is_some()
         );
         assert_eq!(attempts.load(Ordering::Relaxed), 2);

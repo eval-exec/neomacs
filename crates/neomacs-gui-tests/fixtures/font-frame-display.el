@@ -237,8 +237,10 @@
    (lambda ()
      (not (null (list-fonts (font-spec :family "Hack") nil 1
                             (font-spec :registry "["))))))
-  (font-frame-script-case
-   "find-font-otf-uses-listing" nil (font-spec :family "Hack" :otf '(zzzz)))
+  (font-frame-observe
+   "find-font-otf-uses-listing" nil
+   (lambda ()
+     (not (null (find-font (font-spec :family "Hack" :otf '(zzzz)))))))
   (font-frame-observe
    "find-font-registry-error" 'invalid-regexp
    (lambda ()

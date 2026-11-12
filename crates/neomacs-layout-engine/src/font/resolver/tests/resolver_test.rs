@@ -1,3 +1,5 @@
+#[path = "windows_registry_signature_review_test.rs"]
+mod windows_registry_signature_review_test;
 use super::*;
 #[path = "legacy_registry_boundary_test.rs"]
 mod legacy_registry_boundary_test;
@@ -1014,6 +1016,7 @@ fn captured_character_policy_selects_on_a_thread_without_evaluator_state() {
             selection_size(),
             &spec,
         )
+        .expect("valid live policy")
         .expect("live selection");
     spec.family = Some(intern("Changed Family"));
     spec.weight = Some(FontWeight::from_css_weight(400));

@@ -4,7 +4,7 @@
 //! host. Native language hints may include a registry-derived language; only
 //! the raw explicit :lang receives GNU Windows' codepage restriction.
 
-use super::FontCandidateQuery;
+use super::{FontCandidateQuery, FontSignatureRequirement};
 
 pub(super) fn generic_adstyle(pitch_and_family: u8) -> Option<&'static str> {
     // GNU w32_enumfont_pattern_entity uses the native generic family, not
@@ -83,7 +83,65 @@ pub(super) fn query_is_satisfied_by(
     if !codepoints.is_empty() && !supports(&codepoints) {
         return false;
     }
-    explicit_language_is_satisfied_by(query.explicit_language.as_deref(), os2_table)
+    signature_and_language_are_satisfied_by(query, os2_table)
+}
+
+/// A native fallback may cover only a prefix of the text. Its signature and
+/// language still apply, independently of full-text glyph coverage.
+pub(super) fn signature_and_language_are_satisfied_by(
+    query: &FontCandidateQuery,
+    os2_table: impl FnOnce() -> Option<Vec<u8>>,
+) -> bool {
+    let Some(requirement) = query.signature_requirement else {
+        return explicit_language_is_satisfied_by(query.explicit_language.as_deref(), os2_table);
+    };
+    let Some(table) = os2_table() else {
+        return false;
+    };
+    signature_matches(requirement, &table)
+        && explicit_language_is_satisfied_by(query.explicit_language.as_deref(), || Some(table))
+}
+
+fn os2_u32(table: &[u8], offset: usize) -> Option<u32> {
+    table
+        .get(offset..offset + 4)?
+        .try_into()
+        .ok()
+        .map(u32::from_be_bytes)
+}
+
+fn codepage_range(table: &[u8]) -> Option<u32> {
+    let version = u16::from_be_bytes(table.get(..2)?.try_into().ok()?);
+    // Version zero contains the Unicode ranges but no codepage fields.
+    (version != 0).then(|| os2_u32(table, 78)).flatten()
+}
+
+fn signature_matches(requirement: FontSignatureRequirement, table: &[u8]) -> bool {
+    // The four Unicode-range words are present even in OS/2 version zero.
+    // A complete signature is required before interpreting any of its bits.
+    let [Some(usb0), Some(usb1), Some(usb2), Some(usb3)] =
+        [42, 46, 50, 54].map(|offset| os2_u32(table, offset))
+    else {
+        return false;
+    };
+    // GNU w32font.c add_font_entity_to_list tests the native signature,
+    // including its specific surrogate/CJK combination for Unicode plane 2.
+    match requirement {
+        FontSignatureRequirement::Unicode => {
+            usb3 != 0 || usb2 != 0 || usb1 != 0 || usb0 & 0x3fff_ffff != 0
+        }
+        FontSignatureRequirement::Bmp => {
+            usb3 != 0
+                || usb2 & 0xffff_ff9e != 0
+                || usb1 & 0xe81f_ffff != 0
+                || usb0 & 0x007f_001f != 0
+        }
+        FontSignatureRequirement::Sip => {
+            usb1 & 0x0200_0000 != 0
+                && (usb1 & 0x2800_0000 != 0
+                    || codepage_range(table).is_some_and(|csb| csb & 0x003e_0000 != 0))
+        }
+    }
 }
 
 /// A mapped fallback may cover only a prefix of the requested text. Admit
@@ -105,18 +163,8 @@ pub(super) fn explicit_language_is_satisfied_by(
     let Some(table) = os2_table() else {
         return false;
     };
-    // ulCodePageRange1 was introduced in OS/2 version 1. OpenType table
-    // integers are big-endian, independently of the native platform.
-    let Some(version) = table.get(..2).and_then(|bytes| bytes.try_into().ok()) else {
-        return false;
-    };
-    if u16::from_be_bytes(version) == 0 {
-        return false;
-    }
-    table
-        .get(78..82)
-        .and_then(|bytes| bytes.try_into().ok())
-        .is_some_and(|bytes| u32::from_be_bytes(bytes) & required_codepages != 0)
+    // OpenType table integers are big-endian on every native platform.
+    codepage_range(&table).is_some_and(|csb| csb & required_codepages != 0)
 }
 
 #[cfg(test)]

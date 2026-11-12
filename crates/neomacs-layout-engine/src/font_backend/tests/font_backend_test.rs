@@ -20,6 +20,7 @@ fn core_text_candidates_are_complete_scalable_native_answers() {
     let family = super::FontFamilyName::new(backend.resolve_family("monospace"))
         .expect("CoreText generic family");
     let query = super::FontCandidateQuery {
+        signature_requirement: None,
         scalable: None,
         otf: None,
         script_coverage: None,
@@ -97,6 +98,7 @@ fn native_fallback_direction_uses_unicode_bidi_class() {
 #[test]
 fn catalog_coverage_requires_the_character_and_every_normalized_range() {
     let query = super::FontCandidateQuery {
+        signature_requirement: None,
         scalable: None,
         otf: None,
         script_coverage: None,
@@ -125,6 +127,7 @@ fn native_fallback_text_is_non_empty_and_requires_the_whole_cluster() {
     assert!(super::RequiredFontCoverage::for_text("").is_none());
     let required = super::RequiredFontCoverage::for_text("👩‍💻").unwrap();
     let query = super::FontCandidateQuery {
+        signature_requirement: None,
         scalable: None,
         otf: None,
         script_coverage: None,
@@ -152,6 +155,7 @@ fn native_fallback_text_is_non_empty_and_requires_the_whole_cluster() {
 #[test]
 fn catalog_language_hints_are_alternatives() {
     let query = super::FontCandidateQuery {
+        signature_requirement: None,
         scalable: None,
         otf: None,
         script_coverage: None,

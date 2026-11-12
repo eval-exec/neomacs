@@ -406,9 +406,19 @@ pub struct NativeFontOtfRequirement {
     pub gpos: Vec<NativeFontOtfFeature>,
 }
 
+/// Windows enumeration checks the native Unicode signature, independently of
+/// Fontconfig representative-character and explicit-language constraints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FontSignatureRequirement {
+    Unicode,
+    Bmp,
+    Sip,
+}
+
 /// Discovery request passed from shared policy to one native backend.
 #[derive(Clone, Debug)]
 pub struct FontCandidateQuery {
+    pub signature_requirement: Option<FontSignatureRequirement>,
     pub otf: Option<NativeFontOtfRequirement>,
     /// Explicit Fontconfig listing scalability; absent stays unconstrained.
     pub scalable: Option<bool>,

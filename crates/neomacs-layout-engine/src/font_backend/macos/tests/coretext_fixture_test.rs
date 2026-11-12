@@ -81,6 +81,7 @@ fn registered_coretext_thin_fixture_enumerates_and_opens_with_normal_preference(
         FontBackend, FontCandidateQuery, FontCandidateScope, RequiredFontCoverage, TextDirection,
     };
     let query = FontCandidateQuery {
+        signature_requirement: None,
         scalable: None,
         otf: None,
         script_coverage: None,
@@ -123,6 +124,7 @@ fn exact_identity_miss_does_not_read_unrelated_font_files() {
 
     let backend = CoreTextBackend::default();
     let query = FontCandidateQuery {
+        signature_requirement: None,
         scalable: None,
         otf: None,
         script_coverage: None,

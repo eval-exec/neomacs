@@ -44,6 +44,7 @@ fn windows_generic_family_probe_requires_matching_style_and_unambiguous_physical
 
 fn query() -> FontCandidateQuery {
     FontCandidateQuery {
+        signature_requirement: None,
         scalable: None,
         otf: None,
         script_coverage: None,
@@ -255,5 +256,169 @@ fn windows_fallback_language_admission_preserves_partial_text_coverage() {
 fn windows_fallback_without_explicit_language_needs_no_native_metadata() {
     assert!(explicit_language_is_satisfied_by(None, || panic!(
         "unconstrained fallback needs no OS/2"
+    )));
+}
+
+fn signature_table(version: u16, unicode: [u32; 4], codepages: u32) -> Vec<u8> {
+    let mut bytes = vec![0; if version == 0 { 78 } else { 86 }];
+    bytes[..2].copy_from_slice(&version.to_be_bytes());
+    for (word, value) in unicode.into_iter().enumerate() {
+        bytes[42 + word * 4..46 + word * 4].copy_from_slice(&value.to_be_bytes());
+    }
+    if version != 0 {
+        bytes[78..82].copy_from_slice(&codepages.to_be_bytes());
+    }
+    bytes
+}
+
+#[test]
+fn windows_signature_sip_requires_surrogate_and_cjk_signature_bits() {
+    use crate::font_backend::FontSignatureRequirement;
+    let mut query = query();
+    query.signature_requirement = Some(FontSignatureRequirement::Sip);
+    for (version, usb1, csb, expected) in [
+        (1, 0, 0, false),
+        (1, 0x02000000, 0, false),
+        (1, 0x28000000, 0, false),
+        (1, 0, 0x003e0000, false),
+        (0, 0x0a000000, 0, true),
+        (0, 0x22000000, 0, true),
+        (0, 0x02000000, 0x003e0000, false),
+        (1, 0x02000000, 1 << 17, true),
+        (1, 0x02000000, 1 << 18, true),
+        (1, 0x02000000, 1 << 19, true),
+        (1, 0x02000000, 1 << 20, true),
+        (1, 0x02000000, 1 << 21, true),
+        (1, 0x02000000, 1 << 16, false),
+    ] {
+        assert_eq!(
+            query_is_satisfied_by(
+                &query,
+                |_| panic!("no invented representative glyph"),
+                || Some(signature_table(version, [0, usb1, 0, 0], csb))
+            ),
+            expected,
+            "v{version} USB1={usb1:x} CSB={csb:x}"
+        );
+    }
+}
+
+#[test]
+fn windows_signature_unicode_and_bmp_follow_each_native_range_bit() {
+    use crate::font_backend::FontSignatureRequirement;
+    for (requirement, masks) in [
+        (
+            FontSignatureRequirement::Unicode,
+            [0x3fffffffu32, u32::MAX, u32::MAX, u32::MAX],
+        ),
+        (
+            FontSignatureRequirement::Bmp,
+            [0x007f001f, 0xe81fffff, 0xffffff9e, u32::MAX],
+        ),
+    ] {
+        let mut query = query();
+        query.signature_requirement = Some(requirement);
+        for word in 0..4 {
+            for bit in 0..32 {
+                let mut ranges = [0; 4];
+                ranges[word] = 1 << bit;
+                assert_eq!(
+                    query_is_satisfied_by(
+                        &query,
+                        |_| panic!("signature is not glyph coverage"),
+                        || Some(signature_table(0, ranges, 0))
+                    ),
+                    masks[word] & (1 << bit) != 0,
+                    "{requirement:?} word={word} bit={bit}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn windows_signature_rejects_missing_and_truncated_metadata() {
+    use crate::font_backend::FontSignatureRequirement;
+    for requirement in [
+        FontSignatureRequirement::Unicode,
+        FontSignatureRequirement::Bmp,
+        FontSignatureRequirement::Sip,
+    ] {
+        let mut query = query();
+        query.signature_requirement = Some(requirement);
+        assert!(!query_is_satisfied_by(&query, |_| true, || None));
+        for table in [
+            Vec::new(),
+            vec![0; 42],
+            signature_table(0, [1, 0x0a000000, 0, 0], 0)[..57].to_vec(),
+        ] {
+            assert!(
+                !query_is_satisfied_by(&query, |_| true, || Some(table.clone())),
+                "{requirement:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn windows_signature_composes_with_glyph_and_language_admission() {
+    use crate::font_backend::FontSignatureRequirement;
+    let mut query = query();
+    query.signature_requirement = Some(FontSignatureRequirement::Sip);
+    query.explicit_language = Some("ja".to_owned());
+    query.required = RequiredFontCoverage::Character('好');
+    let calls = std::cell::Cell::new(0);
+    assert!(query_is_satisfied_by(
+        &query,
+        |cps| cps == [u32::from('好')],
+        || {
+            calls.set(calls.get() + 1);
+            Some(signature_table(1, [0, 0x02000000, 0, 0], 1 << 17))
+        }
+    ));
+    assert_eq!(calls.get(), 1);
+    assert!(!query_is_satisfied_by(
+        &query,
+        |_| false,
+        || panic!("failed glyph coverage must stop before table probing")
+    ));
+    assert!(
+        !query_is_satisfied_by(
+            &query,
+            |_| true,
+            || Some(signature_table(1, [0, 0x02000000, 0, 0], 1 << 18))
+        ),
+        "SIP may pass through Chinese coverage while explicit Japanese still fails"
+    );
+}
+
+#[test]
+fn windows_signature_native_fallback_preserves_partial_text_coverage() {
+    use crate::font_backend::FontSignatureRequirement;
+    let mut query = query();
+    query.required = RequiredFontCoverage::for_text("好a").unwrap();
+    query.charset_ranges = vec![(0x0400, 0x04ff)];
+    query.signature_requirement = Some(FontSignatureRequirement::Sip);
+    query.explicit_language = Some("ja".to_owned());
+    assert!(
+        signature_and_language_are_satisfied_by(&query, || Some(signature_table(
+            1,
+            [0, 0x02000000, 0, 0],
+            1 << 17
+        ))),
+        "mapped fallback admits its signature/language without requiring the complete requested text"
+    );
+    assert!(
+        !signature_and_language_are_satisfied_by(&query, || Some(signature_table(
+            1,
+            [1, 0, 0, 0],
+            1 << 17
+        ))),
+        "matching language alone cannot erase a requested SIP signature"
+    );
+    query.signature_requirement = None;
+    query.explicit_language = None;
+    assert!(signature_and_language_are_satisfied_by(&query, || panic!(
+        "unconstrained native fallback must not probe OS/2"
     )));
 }

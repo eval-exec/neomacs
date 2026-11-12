@@ -180,3 +180,86 @@ fn coretext_preserves_the_existing_recognized_legacy_constraints() {
         vec![(0xa0, 0xa0), (0x10e, 0x10e)]
     );
 }
+
+#[test]
+fn native_entity_unicode_registry_shortcuts_require_exact_case() {
+    for selection in [
+        FontSpecSelection::Enumerate,
+        FontSpecSelection::DriverMatch,
+        FontSpecSelection::OpenBySpec,
+    ] {
+        let (resolver, queries) = boundary(FontBackendKind::Fontconfig);
+        let canonical = FontEntityQuery::new(FontFamilyName::new("Registry Boundary"))
+            .with_registry("iso10646-1")
+            .with_selection(selection);
+        assert!(
+            resolver.resolve_entity(&canonical).is_some(),
+            "{selection:?}"
+        );
+        assert_eq!(queries.lock().unwrap().len(), 1);
+        queries.lock().unwrap().clear();
+        let noncanonical = FontEntityQuery::new(FontFamilyName::new("Registry Boundary"))
+            .with_registry("ISO10646-1")
+            .with_selection(selection);
+        assert!(
+            resolver.resolve_entity(&noncanonical).is_none(),
+            "{selection:?}"
+        );
+        assert!(queries.lock().unwrap().is_empty());
+    }
+}
+
+fn invalid_registry_fontset() -> neovm_core::emacs_core::Context {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(set-fontset-font t ?好
+              (font-spec :family "Registry Boundary" :registry "["))"#,
+    )
+    .unwrap();
+    eval
+}
+
+#[test]
+fn live_character_registry_error_aborts_before_unconstrained_fallback() {
+    let _eval = invalid_registry_fontset();
+    let (resolver, queries) = boundary(FontBackendKind::Fontconfig);
+    let result = resolver.resolve_for_char(
+        "Registry Boundary",
+        '好',
+        400,
+        FontSlant::Normal,
+        FontWidth::Normal,
+        selection_size(),
+    );
+    assert!(
+        queries.lock().unwrap().is_empty(),
+        "invalid registry must abort the whole resolution, not enumerate generic fallback"
+    );
+    assert!(result.is_none());
+}
+
+#[test]
+fn frozen_character_registry_error_aborts_before_unconstrained_fallback() {
+    let _eval = invalid_registry_fontset();
+    let policies = FrozenCharacterPolicies::capture(
+        &[("Registry Boundary", '好', 400, false, selection_size())],
+        4096,
+    )
+    .unwrap();
+    let (mut resolver, queries) = boundary(FontBackendKind::Fontconfig);
+    resolver.install_worker_policy(Arc::new(policies));
+    let result = resolver.resolve_for_char(
+        "Registry Boundary",
+        '好',
+        400,
+        FontSlant::Normal,
+        FontWidth::Normal,
+        selection_size(),
+    );
+    assert!(
+        queries.lock().unwrap().is_empty(),
+        "invalid registry must abort the frozen resolution before generic fallback"
+    );
+    assert!(result.is_none());
+    assert!(!resolver.worker_policy_missing());
+}
