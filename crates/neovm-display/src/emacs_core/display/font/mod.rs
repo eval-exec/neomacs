@@ -1135,7 +1135,7 @@ pub fn seed_live_frame_default_face_from_font_parameter(
         // GNU `set_lface_from_font` sets a derived attribute only when the
         // face slot is unspecified. An explicit `set-face-attribute` on the
         // frame-local default face must survive a font change.
-        if super::xfaces::default_face_vector_has_explicit_font_attr(vector, attr_name) {
+        if super::xfaces::frame_has_explicit_default_font_attr(eval, frame_id, attr_name) {
             continue;
         }
         set_lisp_face_vector_attr(vector, attr_name, attr_value);

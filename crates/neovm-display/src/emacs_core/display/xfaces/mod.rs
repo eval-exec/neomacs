@@ -1709,17 +1709,48 @@ fn frame_parameter_color_or_tty_default(
         .unwrap_or_else(|| Value::string(tty_default))
 }
 
-pub(crate) fn default_face_vector_has_explicit_font_attr(vector: Value, attr: LFaceAttr) -> bool {
-    // The override maps are process-wide, so they cannot say which frame set
-    // the attribute. A slot still holding the face's base value was not set
-    // on this frame. `unspecified` is not a concrete attribute either.
-    let Some(value) = lisp_face_vector_attr(vector, attr) else {
+fn derived_font_attr_bit(attr: LFaceAttr) -> Option<u32> {
+    match attr {
+        LFaceAttr::Family
+        | LFaceAttr::Foundry
+        | LFaceAttr::Width
+        | LFaceAttr::Height
+        | LFaceAttr::Weight
+        | LFaceAttr::Slant => Some(1_u32 << (attr as u8)),
+        _ => None,
+    }
+}
+
+pub(crate) fn frame_has_explicit_default_font_attr(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    attr: LFaceAttr,
+) -> bool {
+    let Some(bit) = derived_font_attr_bit(attr) else {
         return false;
     };
+    eval.frame_manager()
+        .get(frame_id)
+        .is_some_and(|frame| frame.explicit_default_font_attrs & bit != 0)
+}
+
+fn note_explicit_default_font_attr(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    attr: LFaceAttr,
+    value: Value,
+) {
+    let Some(bit) = derived_font_attr_bit(attr) else {
+        return;
+    };
+    let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) else {
+        return;
+    };
     if runtime_unspecified_lisp_face_attr(attr, value) {
-        return false;
+        frame.explicit_default_font_attrs &= !bit;
+    } else {
+        frame.explicit_default_font_attrs |= bit;
     }
-    value != lisp_face_attribute_base_value("default", attr, false)
 }
 
 pub(crate) fn realize_default_lisp_face_for_frame(
@@ -1765,7 +1796,7 @@ pub(crate) fn realize_default_lisp_face_for_frame(
             LFaceAttr::Weight,
             LFaceAttr::Slant,
         ] {
-            if default_face_vector_has_explicit_font_attr(vector, attr) {
+            if frame_has_explicit_default_font_attr(eval, frame_id, attr) {
                 continue;
             }
             let fallback = live_frame_font_attribute_fallback(eval, frame_id, attr);
@@ -3490,6 +3521,14 @@ pub fn builtin_internal_set_lisp_face_attribute(
                         )?;
                         if changed && !changed_live_frames.contains(&frame_id) {
                             changed_live_frames.push(frame_id);
+                        }
+                        if face_name == "default" {
+                            note_explicit_default_font_attr(
+                                eval,
+                                frame_id,
+                                canonical_attr,
+                                canonical_value,
+                            );
                         }
                     }
                 }
