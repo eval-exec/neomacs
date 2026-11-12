@@ -2879,6 +2879,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Co
 crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Context::minibuffer_is_active
 crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Context::minibuffer_selected_window_id
 crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Context::minibuffer_window_is_active
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum FontListError
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum FontSpecSelection
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum ShaderSurfaceContent
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum ShaderSurfaceLanguage
@@ -3136,6 +3137,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct VideoResolveR
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct WebKitResolveRequest
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	type	type DaemonNotifier
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	type	type EvalThreadTask
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	type	type FontListFilter
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	type	type OtfSideCapability
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	type	type PopupMenuEntry
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use CarrierTlsReset

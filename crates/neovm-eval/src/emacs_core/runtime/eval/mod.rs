@@ -2556,6 +2556,18 @@ pub struct ListedFontEntity {
     pub average_width: Option<i32>,
 }
 
+/// Font listing preserves failures from the native backend and the caller's
+/// Lisp acceptance policy without changing the original Lisp condition.
+#[derive(Debug)]
+pub enum FontListError {
+    Backend(String),
+    Filter(Flow),
+}
+
+/// Synchronous acceptance over metadata, before retaining a native handle.
+/// The callback must not reenter the display host.
+pub type FontListFilter<'a> = dyn FnMut(&ListedFontEntity) -> Result<bool, Flow> + 'a;
+
 /// GNU separates entity listing/selection from the font driver's `match`
 /// operation. A driver match is authoritative, not another style-filtered
 /// list (notably, ftfont_match deliberately omits Fontconfig style fields).

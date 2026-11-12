@@ -73,6 +73,9 @@ mod oracle_find_file_directory;
 #[path = "oracle_font_coverage.rs"]
 mod oracle_font_coverage;
 
+#[path = "oracle_font_xlfd_patterns.rs"]
+mod oracle_font_xlfd_patterns;
+
 #[path = "oracle_frame_bar_parameters.rs"]
 mod oracle_frame_bar_parameters;
 

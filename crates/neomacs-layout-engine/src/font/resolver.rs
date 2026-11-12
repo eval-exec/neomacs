@@ -116,6 +116,14 @@ pub struct ResolvedFontEntity {
     pub driver: Option<neovm_core::emacs_core::intern::SymId>,
 }
 
+/// Catalog metadata before acceptance and native asset finalization.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedFontCandidate {
+    pub candidate: PlatformFontCandidate,
+    pub registry: Option<String>,
+    pub driver: Option<neovm_core::emacs_core::intern::SymId>,
+}
+
 /// Constraints for catalog listing, separate from driver matching and opening.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FontEntityListConstraints {
@@ -295,26 +303,59 @@ impl FontResolver {
         prefer: Option<(&FontEntityQuery, &FontEntityListConstraints)>,
         maximum: Option<usize>,
     ) -> Vec<ResolvedFontEntity> {
+        let mut entities = Vec::new();
+        match self.try_visit_entities::<std::convert::Infallible>(
+            query,
+            constraints,
+            prefer,
+            maximum,
+            None,
+            &mut |entity| {
+                entities.push(entity);
+                std::ops::ControlFlow::Continue(())
+            },
+        ) {
+            Ok(()) => entities,
+            Err(never) => match never {},
+        }
+    }
+
+    /// Apply the caller's metadata policy before GNU's numeric postfilters.
+    /// Only accepted, selected entities are finalized. The limit counts
+    /// successful finalizations; rejected and unavailable assets do not use it.
+    #[allow(clippy::type_complexity)]
+    pub fn try_visit_entities<E>(
+        &self,
+        query: &FontEntityQuery,
+        constraints: &FontEntityListConstraints,
+        prefer: Option<(&FontEntityQuery, &FontEntityListConstraints)>,
+        maximum: Option<usize>,
+        mut filter: Option<&mut dyn FnMut(&ListedFontCandidate) -> Result<bool, E>>,
+        visitor: &mut dyn FnMut(ResolvedFontEntity) -> std::ops::ControlFlow<()>,
+    ) -> Result<(), E> {
+        if maximum == Some(0) {
+            return Ok(());
+        }
         if constraints
             .driver
             .is_some_and(|driver| Some(driver) != font_driver_symbol(self.backend.kind()))
         {
-            return Vec::new();
+            return Ok(());
         }
         if query
             .registry
             .as_deref()
             .is_some_and(|registry| !crate::font::policy::registry_supported_for_listing(registry))
         {
-            return Vec::new();
+            return Ok(());
         }
         let candidate_query = self.entity_candidate_query(query);
         let policy = FontEntityMatchPolicy::for_backend(self.backend.kind());
-        let mut candidates: Vec<_> = self.backend.list_candidates(&candidate_query)
+        let candidates = self.backend.list_candidates(&candidate_query)
             .into_iter()
             .filter(|candidate| {
                 let metadata = &candidate.matched.metadata;
-                entity_matches_query(candidate, query, policy)
+                entity_matches_identity(candidate, query)
                     && constraints.foundry.as_ref().is_none_or(|foundry| {
                         metadata.foundry.as_ref().is_some_and(|actual| actual.eq_ignore_ascii_case(foundry))
                     })
@@ -322,17 +363,60 @@ impl FontResolver {
                     // it must never become an unconstrained family fallback.
                     && constraints.adstyle.as_ref().is_none_or(String::is_empty)
                     && constraints.spacing.is_none_or(|spacing| metadata.spacing.is_none_or(|actual| actual == spacing))
-                    && constraints.average_width.is_none_or(|width| {
-                        width != 0 || metadata.size == PlatformFontSize::Scalable
-                    })
-                    && constraints.pixel_size.is_none_or(|size| match metadata.size {
-                        PlatformFontSize::Fixed { device_ppem_26_6 } => (device_ppem_26_6 >> 6).abs_diff(size) <= 1,
+            });
+        let driver = font_driver_symbol(self.backend.kind());
+        let mut admit = |candidate: FontCandidate| -> Result<Option<ListedFontCandidate>, E> {
+            let listed = ListedFontCandidate {
+                candidate: candidate.matched,
+                registry: Some("iso10646-1".to_owned()),
+                driver,
+            };
+            if let Some(filter) = filter.as_mut()
+                && !filter(&listed)?
+            {
+                return Ok(None);
+            }
+            let metadata = &listed.candidate.metadata;
+            // This catalog does not publish measured nonzero average widths.
+            // GNU leaves unknown/zero widths unconstrained; strike size is
+            // not evidence of a nonzero width (font.c:font_delete_unmatched).
+            let matches = entity_styles_match(metadata, query, policy)
+                && constraints.pixel_size.filter(|size| *size != 0).is_none_or(
+                    |size| match metadata.size {
+                        PlatformFontSize::Fixed { device_ppem_26_6 } => {
+                            (device_ppem_26_6 >> 6).abs_diff(size) <= 1
+                        }
                         PlatformFontSize::Scalable | PlatformFontSize::Unknown => true,
-                    })
-            }).collect();
+                    },
+                );
+            Ok(matches.then_some(listed))
+        };
+        let mut count = 0;
+        let mut emit = |listed: ListedFontCandidate| {
+            let Some(matched) = self.backend.finalize_match(listed.candidate) else {
+                return std::ops::ControlFlow::Continue(());
+            };
+            count += 1;
+            let outcome = visitor(ResolvedFontEntity {
+                matched,
+                registry: listed.registry,
+                driver: listed.driver,
+            });
+            if outcome.is_break() || maximum.is_some_and(|maximum| count >= maximum) {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        };
         if let Some((prefer, constraints)) = prefer {
-            candidates.sort_by_key(|candidate| {
-                let metadata = &candidate.matched.metadata;
+            let mut accepted = Vec::new();
+            for candidate in candidates {
+                if let Some(listed) = admit(candidate)? {
+                    accepted.push(listed);
+                }
+            }
+            accepted.sort_by_key(|listed| {
+                let metadata = &listed.candidate.metadata;
                 let weight = FontWeight::from_css_weight(metadata.weight.unwrap_or(400));
                 let requested_weight = prefer
                     .weight
@@ -363,17 +447,21 @@ impl FontResolver {
                 };
                 (score.is_none(), score)
             });
+            for listed in accepted {
+                if emit(listed).is_break() {
+                    break;
+                }
+            }
+        } else {
+            for candidate in candidates {
+                if let Some(listed) = admit(candidate)?
+                    && emit(listed).is_break()
+                {
+                    break;
+                }
+            }
         }
-        candidates
-            .into_iter()
-            .filter_map(|candidate| self.backend.finalize_match(candidate.matched))
-            .take(maximum.unwrap_or(usize::MAX))
-            .map(|matched| ResolvedFontEntity {
-                matched,
-                registry: Some("iso10646-1".to_owned()),
-                driver: font_driver_symbol(self.backend.kind()),
-            })
-            .collect()
+        Ok(())
     }
 
     fn entity_candidate_query(&self, query: &FontEntityQuery) -> FontCandidateQuery {
@@ -1027,15 +1115,21 @@ fn entity_matches_query(
     policy: FontEntityMatchPolicy,
 ) -> bool {
     entity_matches_identity(candidate, query)
-        && query
-            .weight
-            .is_none_or(|weight| policy.weight_matches(weight, candidate.matched.weight()))
-        && query
-            .slant
-            .is_none_or(|slant| candidate.matched.slant() == slant)
+        && entity_styles_match(&candidate.matched.metadata, query, policy)
+}
+
+fn entity_styles_match(
+    metadata: &crate::font_backend::PlatformFontMetadata,
+    query: &FontEntityQuery,
+    policy: FontEntityMatchPolicy,
+) -> bool {
+    query
+        .weight
+        .is_none_or(|weight| policy.weight_matches(weight, metadata.weight))
+        && query.slant.is_none_or(|slant| metadata.slant == slant)
         && query
             .width
-            .is_none_or(|width| candidate.matched.metadata.width == Some(width))
+            .is_none_or(|width| metadata.width == Some(width))
 }
 
 fn requested_width_distance(requested: Option<FontWidth>, candidate: Option<FontWidth>) -> u16 {
