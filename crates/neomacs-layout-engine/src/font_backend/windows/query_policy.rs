@@ -64,6 +64,59 @@ impl GenericFamilyProbe {
     }
 }
 
+pub(super) struct GenericFamilyRequest {
+    pub(super) family: [u16; 32],
+    pub(super) weight: i32,
+    pub(super) italic: u8,
+}
+
+pub(super) struct GenericFamilyRecord {
+    pub(super) weight: i32,
+    pub(super) italic: u8,
+    pub(super) pitch_and_family: u8,
+}
+
+/// One native listing's physical-family classification boundary.
+///
+/// The native adapter supplies owned resources and copied observations; no
+/// callback pointer or catalog-owned font escapes through this controller.
+pub(super) struct GenericFamilyQuery<R> {
+    resources: std::cell::OnceCell<Option<R>>,
+    families: std::collections::HashMap<[u16; 32], Option<Vec<GenericFamilyRecord>>>,
+}
+
+impl<R> GenericFamilyQuery<R> {
+    pub(super) fn new() -> Self {
+        Self {
+            resources: std::cell::OnceCell::new(),
+            families: std::collections::HashMap::new(),
+        }
+    }
+
+    pub(super) fn classify(
+        &mut self,
+        initialize: impl FnOnce() -> Option<R>,
+        describe: impl FnOnce(&R) -> Option<GenericFamilyRequest>,
+        enumerate: impl FnOnce(&R, &[u16; 32]) -> Option<Vec<GenericFamilyRecord>>,
+    ) -> Option<&'static str> {
+        let resources = self.resources.get_or_init(initialize).as_ref()?;
+        let request = describe(resources)?;
+        // A named-family enumeration supplies all styles and charsets. Keep
+        // its complete observations, including failure/empty results, only
+        // until this native query ends; a new catalog query starts fresh.
+        let records = self
+            .families
+            .entry(request.family)
+            .or_insert_with(|| enumerate(resources, &request.family))
+            .as_ref()?;
+        let mut probe = GenericFamilyProbe::new(request.weight, request.italic);
+        for record in records {
+            probe.observe(record.weight, record.italic, record.pitch_and_family);
+        }
+        probe.adstyle()
+    }
+}
+
 pub(super) fn query_is_satisfied_by(
     query: &FontCandidateQuery,
     supports: impl FnOnce(&[u32]) -> bool,

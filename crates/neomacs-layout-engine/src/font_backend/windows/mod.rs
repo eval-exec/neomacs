@@ -6,6 +6,7 @@
 mod catalog;
 
 use super::native_asset_cache::NativeFontAssetCache;
+use super::windows_query_policy::{GenericFamilyQuery, GenericFamilyRecord, GenericFamilyRequest};
 use super::{
     FontBackend, FontCandidate, FontCandidateQuery, FontCandidateScope, FontFamilyName,
     PlatformFontCandidate, PlatformFontCandidateLocator, PlatformFontDesignMetrics,
@@ -74,6 +75,7 @@ impl FontBackend for DirectWriteBackend {
     }
 
     fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
+        let mut generic_families = GenericFamilyQuery::new();
         match &query.scope {
             FontCandidateScope::Family(family) => {
                 let Some(family) = FontCollection::system()
@@ -86,7 +88,7 @@ impl FontBackend for DirectWriteBackend {
                 (0..family.get_font_count())
                     .filter_map(|index| family.font(index).ok())
                     .filter(|font| font_supports_query(font, query))
-                    .filter_map(font_candidate_from_font)
+                    .filter_map(|font| font_candidate_from_font(font, &mut generic_families))
                     .collect()
             }
             FontCandidateScope::All => FontCollection::system()
@@ -95,10 +97,12 @@ impl FontBackend for DirectWriteBackend {
                     (0..family.get_font_count()).filter_map(move |index| family.font(index).ok())
                 })
                 .filter(|font| font_supports_query(font, query))
-                .filter_map(font_candidate_from_font)
+                .filter_map(|font| font_candidate_from_font(font, &mut generic_families))
                 .collect(),
             FontCandidateScope::NativeFallback { .. } => {
-                native_fallback_candidate(query).into_iter().collect()
+                native_fallback_candidate(query, &mut generic_families)
+                    .into_iter()
+                    .collect()
             }
         }
     }
@@ -194,7 +198,10 @@ fn to_directwrite_weight(weight: u16) -> FontWeight {
     FontWeight::from_u32(u32::from(weight.clamp(1, 999)))
 }
 
-fn native_fallback_candidate(query: &FontCandidateQuery) -> Option<FontCandidate> {
+fn native_fallback_candidate(
+    query: &FontCandidateQuery,
+    generic_families: &mut GenericFamilyQuery<FontGenericResources>,
+) -> Option<FontCandidate> {
     let FontCandidateScope::NativeFallback { base_family } = &query.scope else {
         return None;
     };
@@ -237,7 +244,7 @@ fn native_fallback_candidate(query: &FontCandidateQuery) -> Option<FontCandidate
         )
         .mapped_font
         .filter(|font| font_supports_signature_and_language(font, query))
-        .and_then(font_candidate_from_font)
+        .and_then(|font| font_candidate_from_font(font, generic_families))
 }
 
 struct LocalizedStrings(ComPtr<IDWriteLocalizedStrings>);
@@ -309,20 +316,40 @@ unsafe extern "system" fn observe_font_generic_family(
         return 1;
     }
     // SAFETY: EnumFontFamiliesExW provides live LOGFONT/TEXTMETRIC prefixes.
-    // Its caller passes one exclusive stack-owned probe; callbacks are
+    // Its caller passes one exclusive stack-owned collector; callbacks are
     // synchronous and neither the references nor the context escape.
-    let (logical, metrics, probe) = unsafe {
+    let (logical, metrics, observations) = unsafe {
         (
             &*logical,
             &*metrics,
-            &mut *(context as *mut super::windows_query_policy::GenericFamilyProbe),
+            &mut *(context
+                as *mut Result<Vec<GenericFamilyRecord>, std::collections::TryReserveError>),
         )
     };
-    probe.observe(logical.lfWeight, logical.lfItalic, metrics.tmPitchAndFamily);
+    let Ok(records) = observations else {
+        return 0;
+    };
+    if let Err(error) = records.try_reserve(1) {
+        // Stop instead of publishing an incomplete, potentially unambiguous
+        // prefix. No allocation failure or panic crosses the native callback.
+        *observations = Err(error);
+        return 0;
+    }
+    records.push(GenericFamilyRecord {
+        weight: logical.lfWeight,
+        italic: logical.lfItalic,
+        pitch_and_family: metrics.tmPitchAndFamily,
+    });
     1
 }
 
-fn font_generic_adstyle(font: &Font) -> Option<String> {
+struct FontGenericResources {
+    dc: FontEnumerationDc,
+    interop: ComPtr<IDWriteGdiInterop>,
+    _factory: ComPtr<IDWriteFactory>,
+}
+
+fn font_generic_resources() -> Option<FontGenericResources> {
     let mut factory = ptr::null_mut();
     // SAFETY: the output pointer is writable; the requested IID is exactly
     // IDWriteFactory. Success transfers an owned COM reference to this call.
@@ -347,46 +374,90 @@ fn font_generic_adstyle(font: &Font) -> Option<String> {
     }
     // SAFETY: GetGdiInterop returned one owned, non-null interface reference.
     let interop = unsafe { ComPtr::<IDWriteGdiInterop>::from_raw(interop) };
+    // SAFETY: a null compatible DC requests a new caller-owned memory DC.
+    let dc = unsafe { CreateCompatibleDC(ptr::null_mut()) };
+    if dc.is_null() {
+        return None;
+    }
+    Some(FontGenericResources {
+        dc: FontEnumerationDc(dc),
+        interop,
+        _factory: factory,
+    })
+}
+
+fn font_generic_request(
+    resources: &FontGenericResources,
+    font: &Font,
+) -> Option<GenericFamilyRequest> {
     // SAFETY: LOGFONTW consists entirely of integer fields and a UTF-16 array;
     // zero initializes a valid output buffer for the native conversion.
     let mut logical: LOGFONTW = unsafe { std::mem::zeroed() };
     let mut system_font = 0;
     // SAFETY: font and interop own live interfaces, and both native outputs
     // remain writable through the call. The conversion retains neither output.
-    let status =
-        unsafe { interop.ConvertFontToLOGFONT(font.as_ptr(), &mut logical, &mut system_font) };
+    let status = unsafe {
+        resources
+            .interop
+            .ConvertFontToLOGFONT(font.as_ptr(), &mut logical, &mut system_font)
+    };
     if status != S_OK || system_font == 0 || logical.lfFaceName[0] == 0 {
         return None;
     }
     // The interop description is only logical. GNU reads the physical GDI
     // TEXTMETRIC classification instead; do not treat the converted logical
     // pitch/family field or the font's monospace flag as that observation.
-    let mut probe =
-        super::windows_query_policy::GenericFamilyProbe::new(logical.lfWeight, logical.lfItalic);
-    logical.lfPitchAndFamily = 0; // Required by EnumFontFamiliesExW.
+    Some(GenericFamilyRequest {
+        family: logical.lfFaceName,
+        weight: logical.lfWeight,
+        italic: logical.lfItalic,
+    })
+}
+
+fn font_generic_records(
+    resources: &FontGenericResources,
+    family: &[u16; 32],
+) -> Option<Vec<GenericFamilyRecord>> {
+    // SAFETY: LOGFONTW has only integer fields and a fixed UTF-16 array.
+    let mut logical: LOGFONTW = unsafe { std::mem::zeroed() };
+    logical.lfFaceName = *family;
     logical.lfCharSet = DEFAULT_CHARSET as u8;
-    // SAFETY: a null compatible DC requests a new caller-owned memory DC.
-    let dc = unsafe { CreateCompatibleDC(ptr::null_mut()) };
-    if dc.is_null() {
-        return None;
-    }
-    let dc = FontEnumerationDc(dc);
-    // SAFETY: the DC, family description and exclusive stack probe all remain
-    // live until synchronous enumeration returns. The callback does not retain
-    // any native pointer, allocate, or call back into the enumeration.
+    // A specific face enumerates every style/charset. An empty-face sweep can
+    // yield only one font per typeface and cannot replace this observation.
+    let mut observations: Result<Vec<GenericFamilyRecord>, std::collections::TryReserveError> =
+        Ok(Vec::new());
+    // SAFETY: the owned DC, family and exclusive collector remain live until
+    // synchronous enumeration returns. The callback copies only integer data,
+    // checks allocation failure, and retains no native pointer or reference.
     unsafe {
         EnumFontFamiliesExW(
-            dc.0,
+            resources.dc.0,
             &mut logical,
             Some(observe_font_generic_family),
-            &mut probe as *mut _ as LPARAM,
+            &mut observations as *mut _ as LPARAM,
             0,
         );
     }
-    probe.adstyle().map(str::to_owned)
+    observations.ok()
 }
 
-fn font_candidate_from_font(font: Font) -> Option<FontCandidate> {
+fn font_generic_adstyle(
+    font: &Font,
+    generic_families: &mut GenericFamilyQuery<FontGenericResources>,
+) -> Option<String> {
+    generic_families
+        .classify(
+            font_generic_resources,
+            |resources| font_generic_request(resources, font),
+            font_generic_records,
+        )
+        .map(str::to_owned)
+}
+
+fn font_candidate_from_font(
+    font: Font,
+    generic_families: &mut GenericFamilyQuery<FontGenericResources>,
+) -> Option<FontCandidate> {
     let face = font.create_font_face();
     let files = face.files().ok()?;
     let [file] = files.as_slice() else {
@@ -413,7 +484,7 @@ fn font_candidate_from_font(font: Font) -> Option<FontCandidate> {
     let width = from_directwrite_stretch(font.stretch());
     let metadata = PlatformFontMetadata {
         average_width: None,
-        adstyle: font_generic_adstyle(&font),
+        adstyle: font_generic_adstyle(&font, generic_families),
         foundry: None,
         family: font.family_name(),
         weight: Some(font.weight().to_u32().clamp(1, u32::from(u16::MAX)) as u16),

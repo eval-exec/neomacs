@@ -42,6 +42,196 @@ fn windows_generic_family_probe_requires_matching_style_and_unambiguous_physical
     );
 }
 
+#[test]
+fn windows_generic_family_query_reuses_native_resources_and_all_styles_per_family() {
+    let initialized = std::cell::Cell::new(0);
+    let enumerated = std::cell::Cell::new(0);
+    let mut query = GenericFamilyQuery::new();
+    for (family, weight, italic, expected) in [
+        (1, 400, 0, Some("mono")),
+        (1, 700, 0, Some("sans")),
+        (1, 400, 1, None),
+        (2, 400, 0, Some("serif")),
+        (1, 400, 0, Some("mono")),
+    ] {
+        let mut name = [0; 32];
+        name[0] = family;
+        let actual = query.classify(
+            || {
+                initialized.set(initialized.get() + 1);
+                Some(())
+            },
+            |_| {
+                Some(GenericFamilyRequest {
+                    family: name,
+                    weight,
+                    italic,
+                })
+            },
+            |_, name| {
+                enumerated.set(enumerated.get() + 1);
+                Some(if name[0] == 1 {
+                    vec![
+                        GenericFamilyRecord {
+                            weight: 400,
+                            italic: 0,
+                            pitch_and_family: 0x31,
+                        },
+                        // A second charset repeats the same physical class.
+                        GenericFamilyRecord {
+                            weight: 400,
+                            italic: 0,
+                            pitch_and_family: 0x32,
+                        },
+                        GenericFamilyRecord {
+                            weight: 700,
+                            italic: 0,
+                            pitch_and_family: 0x20,
+                        },
+                    ]
+                } else {
+                    vec![GenericFamilyRecord {
+                        weight: 400,
+                        italic: 0,
+                        pitch_and_family: 0x10,
+                    }]
+                })
+            },
+        );
+        assert_eq!(
+            actual, expected,
+            "family {family}, weight {weight}, italic {italic}"
+        );
+    }
+    assert_eq!(initialized.get(), 1, "one native resource set per query");
+    assert_eq!(enumerated.get(), 2, "one complete enumeration per family");
+}
+
+#[test]
+fn windows_generic_family_query_preserves_ambiguity_and_retries_only_in_a_new_scope() {
+    struct Resources<'a>(&'a std::cell::Cell<usize>);
+    impl Drop for Resources<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    let initialized = std::cell::Cell::new(0);
+    let enumerated = std::cell::Cell::new(0);
+    let dropped = std::cell::Cell::new(0);
+    {
+        let mut query = GenericFamilyQuery::new();
+        for (family, weight, expected) in [
+            (1, 400, None),
+            (1, 400, None),
+            (1, 700, Some("serif")),
+            (2, 400, None),
+            (2, 400, None),
+            (3, 400, None),
+            (3, 400, None),
+        ] {
+            let mut name = [0; 32];
+            name[0] = family;
+            assert_eq!(
+                query.classify(
+                    || {
+                        initialized.set(initialized.get() + 1);
+                        Some(Resources(&dropped))
+                    },
+                    |_| Some(GenericFamilyRequest {
+                        family: name,
+                        weight,
+                        italic: 0
+                    }),
+                    |_, name| {
+                        enumerated.set(enumerated.get() + 1);
+                        match name[0] {
+                            1 => Some(vec![
+                                GenericFamilyRecord {
+                                    weight: 400,
+                                    italic: 0,
+                                    pitch_and_family: 0x30,
+                                },
+                                GenericFamilyRecord {
+                                    weight: 400,
+                                    italic: 0,
+                                    pitch_and_family: 0x20,
+                                },
+                                GenericFamilyRecord {
+                                    weight: 700,
+                                    italic: 0,
+                                    pitch_and_family: 0x10,
+                                },
+                            ]),
+                            // A failed or incomplete native enumeration is unknown.
+                            2 => None,
+                            _ => Some(Vec::new()),
+                        }
+                    },
+                ),
+                expected
+            );
+        }
+        assert_eq!(initialized.get(), 1);
+        assert_eq!(enumerated.get(), 3);
+        assert_eq!(
+            dropped.get(),
+            0,
+            "resources stay live through the native query"
+        );
+    }
+    assert_eq!(dropped.get(), 1);
+    let mut next_query = GenericFamilyQuery::new();
+    let mut same_family = [0; 32];
+    same_family[0] = 2;
+    assert_eq!(
+        next_query.classify(
+            || {
+                initialized.set(initialized.get() + 1);
+                Some(Resources(&dropped))
+            },
+            |_| Some(GenericFamilyRequest {
+                family: same_family,
+                weight: 400,
+                italic: 0
+            }),
+            |_, _| {
+                enumerated.set(enumerated.get() + 1);
+                Some(vec![GenericFamilyRecord {
+                    weight: 400,
+                    italic: 0,
+                    pitch_and_family: 0x30,
+                }])
+            },
+        ),
+        Some("mono")
+    );
+    assert_eq!(initialized.get(), 2);
+    assert_eq!(enumerated.get(), 4);
+    drop(next_query);
+    assert_eq!(dropped.get(), 2);
+}
+
+#[test]
+fn windows_generic_family_query_initialization_failure_is_lazy_and_not_retried() {
+    let initialized = std::cell::Cell::new(0);
+    let mut query = GenericFamilyQuery::<()>::new();
+    assert_eq!(initialized.get(), 0);
+    for _ in 0..3 {
+        assert_eq!(
+            query.classify(
+                || {
+                    initialized.set(initialized.get() + 1);
+                    None
+                },
+                |_| panic!("failed resources cannot describe a font"),
+                |_, _| panic!("failed resources cannot enumerate a family"),
+            ),
+            None
+        );
+    }
+    assert_eq!(initialized.get(), 1);
+}
+
 fn query() -> FontCandidateQuery {
     FontCandidateQuery {
         signature_requirement: None,

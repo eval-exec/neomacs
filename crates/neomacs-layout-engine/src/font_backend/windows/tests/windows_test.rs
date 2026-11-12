@@ -20,12 +20,15 @@ fn replay_source_keeps_locator_and_size_capability_consistent() {
 #[test]
 fn selected_native_face_replays_from_the_directwrite_stream_without_a_path() {
     let collection = FontCollection::system();
+    let mut generic_families = GenericFamilyQuery::new();
     let (identity, mut candidate) = collection
         .families_iter()
         .find_map(|family| {
             (0..family.get_font_count()).find_map(|index| {
                 let identity = native_identity_from_font(&family.font(index).ok()?)?;
-                let candidate = font_candidate_from_font(family.font(index).ok()?)?.matched;
+                let candidate =
+                    font_candidate_from_font(family.font(index).ok()?, &mut generic_families)?
+                        .matched;
                 Some((identity, candidate))
             })
         })
