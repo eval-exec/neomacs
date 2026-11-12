@@ -14,11 +14,12 @@ use neovm_edit::buffer::BufferId;
 
 use super::data::face::{Face, FaceHeight};
 use super::{
-    FontEntityMetricsRequest, FontOtfCapability, FontPxProbeResult, FontSpecResolveRequest,
-    GuiFrameHostRequest, GuiFrameHostSize, PopupMenuRequest, ResolvedFontEntityMetrics,
-    ResolvedFontMatch, ResolvedFontSpecMatch, ResolvedFrameFont, ResolvedSurface, ResolvedVideo,
-    ResolvedWebKit, ShaderSurfaceCreateRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
-    SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
+    FontEntityMetricsRequest, FontOtfCapability, FontPxProbeResult, FontSpecListQuery,
+    FontSpecResolveRequest, GuiFrameHostRequest, GuiFrameHostSize, ListedFontEntity,
+    PopupMenuRequest, ResolvedFontEntityMetrics, ResolvedFontMatch, ResolvedFontSpecMatch,
+    ResolvedFrameFont, ResolvedSurface, ResolvedVideo, ResolvedWebKit, ShaderSurfaceCreateRequest,
+    ShaderSurfaceLanguage, ShaderSurfaceUniformInit, SurfaceResolveRequest, VideoResolveRequest,
+    WebKitResolveRequest,
 };
 use neomacs_display_protocol::font::ResolvedFontIdentity;
 use neomacs_display_protocol::{
@@ -530,6 +531,14 @@ pub trait DisplayHost {
         _request: FontSpecResolveRequest,
     ) -> Result<Option<ResolvedFontSpecMatch>, String> {
         Ok(None)
+    }
+    fn list_fonts_for_spec(
+        &mut self,
+        _query: FontSpecListQuery,
+        _prefer: Option<FontSpecListQuery>,
+        _maximum: Option<usize>,
+    ) -> Result<Vec<ListedFontEntity>, String> {
+        Ok(Vec::new())
     }
     fn font_character_coverage(
         &mut self,

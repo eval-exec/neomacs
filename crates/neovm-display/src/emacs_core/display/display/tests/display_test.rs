@@ -1020,6 +1020,46 @@ fn x_open_connection_eval_accepts_x_host_startup() {
 }
 
 #[test]
+fn x_list_fonts_validates_query_arguments_on_x_display() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    eval.set_variable("initial-window-system", Value::symbol("x"));
+
+    for (args, predicate, invalid) in [
+        (vec![Value::NIL], "stringp", Value::NIL),
+        (
+            vec![
+                Value::string("*"),
+                Value::NIL,
+                Value::NIL,
+                Value::fixnum(-1),
+            ],
+            "wholenump",
+            Value::fixnum(-1),
+        ),
+        (
+            vec![
+                Value::string("*"),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::symbol("invalid-width"),
+            ],
+            "fixnump",
+            Value::symbol("invalid-width"),
+        ),
+    ] {
+        match builtin_x_list_fonts(&mut eval, args).kinded() {
+            Err(FlowKind::Signal(sig)) => {
+                assert_eq!(sig.symbol_name(), "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol(predicate), invalid]);
+            }
+            other => panic!("expected {predicate} argument error, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn x_window_system_resource_queries_return_nil() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
