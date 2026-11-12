@@ -1709,9 +1709,11 @@ fn frame_parameter_color_or_tty_default(
         .unwrap_or_else(|| Value::string(tty_default))
 }
 
-fn default_face_has_explicit_font_attr(attr: LFaceAttr) -> bool {
-    get_face_override("default", attr, false).is_some()
-        || get_face_override("default", attr, true).is_some()
+pub(crate) fn default_face_has_explicit_font_attr(attr: LFaceAttr) -> bool {
+    [false, true].into_iter().any(|defaults_frame| {
+        get_face_override("default", attr, defaults_frame)
+            .is_some_and(|value| !runtime_unspecified_lisp_face_attr(attr, value))
+    })
 }
 
 pub(crate) fn realize_default_lisp_face_for_frame(

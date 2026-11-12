@@ -1906,6 +1906,68 @@ pub fn builtin_modify_frame_parameters(
                                 }
                             }
                         }
+                        FrameParamKey::Known(param @ FrameParam::Font) => {
+                            let gui = eval
+                                .frame_manager()
+                                .get(fid)
+                                .is_some_and(|frame| frame.effective_window_system().is_some());
+                            if !gui {
+                                // A non-graphical frame has no font to open.
+                                // GNU's tty handler only stores the value.
+                                if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
+                                    frame.set_known_parameter(param, pair_cdr);
+                                }
+                            } else {
+                                // GNU `gui_set_font' puts the old value back
+                                // before opening, so a failed open leaves the
+                                // previous font in place.
+                                // `frame-notice-user-settings' uses this path
+                                // to apply a `font' installed in
+                                // `default-frame-alist' after the initial
+                                // frame already exists (#639).
+                                let old_value = eval
+                                    .frame_manager()
+                                    .get(fid)
+                                    .and_then(|frame| frame.known_parameter(param))
+                                    .unwrap_or(Value::NIL);
+                                if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
+                                    frame.set_known_parameter(param, old_value);
+                                }
+                                let resolution = super::font::resolve_live_frame_font_request(
+                                    eval, fid, &pair_cdr,
+                                );
+                                if resolution.font_value == pair_cdr
+                                    && !super::font::is_font_object(&resolution.font_value)
+                                {
+                                    // GNU `gui_set_font' has two failure
+                                    // shapes: a font-name string that cannot
+                                    // be opened, and any other value that is
+                                    // not a font object.
+                                    if pair_cdr.is_string() {
+                                        let name = super::font::font_value_text(&pair_cdr)
+                                            .unwrap_or_default();
+                                        return Err(signal(
+                                            "error",
+                                            vec![Value::string(format!(
+                                                "Font `{name}' is not defined"
+                                            ))],
+                                        ));
+                                    }
+                                    return Err(signal(
+                                        "error",
+                                        vec![Value::string("Invalid font")],
+                                    ));
+                                }
+                                super::font::sync_live_frame_font_state(eval, fid, &resolution)?;
+                                // GNU `gui_set_font' ends in
+                                // `recompute_basic_faces'. Without this the
+                                // frame-local default face keeps the previous
+                                // font.
+                                super::font::seed_live_frame_default_face_from_font_parameter(
+                                    eval, fid,
+                                );
+                            }
+                        }
                         FrameParamKey::Known(FrameParam::Name) => {
                             if let Some(name) = frame_name_parameter_value(&pair_cdr) {
                                 let is_tty = eval
