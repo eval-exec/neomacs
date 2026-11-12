@@ -5278,6 +5278,7 @@ pub(crate) fn detect_highest_coding_system_for_unibyte_bytes(
     block: SourceBlock,
     mode: SymbolMode,
     inhibit_null: bool,
+    prefer_utf_8: bool,
 ) -> DetectedBase {
     let bindings = coding_category_bindings(mgr, mode);
     let scan = scan_undecided(
@@ -5286,7 +5287,11 @@ pub(crate) fn detect_highest_coding_system_for_unibyte_bytes(
         bytes.len(),
         false,
         block,
-        WalkStop::AtFirstFound,
+        if prefer_utf_8 {
+            WalkStop::AtFirstFoundPreferUtf8
+        } else {
+            WalkStop::AtFirstFound
+        },
         inhibit_null,
     );
     // A decoder resolves EOL after character conversion. Decorating the name
@@ -5386,7 +5391,7 @@ fn apply_detected_eol(
     Value::list(items.into_iter().map(rewrite).collect())
 }
 
-/// Whether the category priority walk stops at the first category it finds.
+/// How the category priority walk selects or collects its detected categories.
 ///
 /// GNU's two undecided detectors differ here and the difference is not
 /// cosmetic: `detect_coding` always stops, because it wants ONE coding system
@@ -5399,6 +5404,9 @@ fn apply_detected_eol(
 enum WalkStop {
     /// GNU's unconditional `break`, and its `highest` one.
     AtFirstFound,
+    /// Decode-time UTF-8 preference narrows the categories when UTF-8 accepts
+    /// the source, then the same priority walk chooses their configured coding.
+    AtFirstFoundPreferUtf8,
     /// GNU's `highest == 0`: keep going and collect every category's verdict.
     RunEveryDetector,
 }
@@ -5545,6 +5553,13 @@ fn scan_undecided(
                 // applied to `detect_coding`'s door.
                 di.checked |= !MASK_UTF_16;
                 di.rejected |= !MASK_UTF_16;
+            } else if stop == WalkStop::AtFirstFoundPreferUtf8
+                && detect_utf_8(bytes, head_ascii, multibytep, block, &mut di)
+            {
+                // GNU prefers the UTF-8 categories, preserving their bound
+                // coding systems and priority order (coding.c:6619-6624).
+                di.checked |= !MASK_UTF_8;
+                di.rejected |= !MASK_UTF_8;
             }
             // Run each category detector for the first `coding_category_raw_text`
             // PRIORITY POSITIONS (coding.c:6622 / :8801
@@ -5579,7 +5594,7 @@ fn scan_undecided(
                         cat, bytes, head_ascii, src_chars, multibytep, block, &mut di,
                     )
                 };
-                if stop == WalkStop::AtFirstFound && accepted && di.found & (1 << cat) != 0 {
+                if stop != WalkStop::RunEveryDetector && accepted && di.found & (1 << cat) != 0 {
                     found_at = Some(cat);
                     break;
                 }

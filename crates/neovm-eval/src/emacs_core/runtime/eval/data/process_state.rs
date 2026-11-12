@@ -2794,10 +2794,12 @@ impl ProcessCodingState {
         }
     }
 
-    /// A process whose descriptor is being replaced starts over, the way a
-    /// fresh `setup_coding_system` would.
+    /// Restart the descriptor as `setup_process_coding_systems` does, keeping
+    /// `p->decoding_carryover`: those pending source bytes belong to the
+    /// process, outside the coding system that setup replaces (process.c:8380).
     pub fn reset(&mut self) {
-        *self = Self::default();
+        self.last_block = LastBlock::default();
+        self.decoder = neovm_text::encoding::CodingDecoderState::default();
     }
 }
 

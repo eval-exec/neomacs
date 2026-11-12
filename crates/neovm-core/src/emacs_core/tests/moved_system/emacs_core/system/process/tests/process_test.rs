@@ -18422,3 +18422,97 @@ fn a_wholly_empty_child_keeps_its_configured_auto_coding() {
         "OK ((nil utf-8-auto) (nil neovm-empty-child-auto) (nil undecided))"
     );
 }
+
+#[test]
+fn process_setup_resets_preserve_incomplete_character_bytes() {
+    crate::test_utils::init_test_tracing();
+    let cat = find_bin("cat");
+    let result = eval_one(&format!(
+        r#"(progn
+ (defvar neovm-carry-pieces nil)
+ (defun neovm-carry-filter (_p text) (push text neovm-carry-pieces))
+ (defun neovm-carry-probe (reset)
+  (let* ((buffer (generate-new-buffer " *carry-reset*")) (neovm-carry-pieces nil)
+         (process (make-process :name "carry-reset" :buffer buffer :command '("{cat}")
+           :coding '(utf-8 . no-conversion) :connection-type 'pipe :noquery t
+           :filter 'neovm-carry-filter :sentinel #'ignore))
+         (deadline (+ (float-time) 5)) first)
+   (unwind-protect
+    (progn
+     (process-send-string process (unibyte-string 65 231 161))
+     (while (and (< (length (apply #'concat neovm-carry-pieces)) 1)
+                 (< (float-time) deadline)) (accept-process-output process 0.01))
+     (setq first (string-to-list (apply #'concat (reverse neovm-carry-pieces))))
+     (cond ((eq reset 'filter) (set-process-filter process (process-filter process)))
+           ((eq reset 'buffer) (set-process-buffer process (process-buffer process)))
+           ((eq reset 'coding) (set-process-coding-system process 'utf-8 'no-conversion)))
+     (process-send-string process (unibyte-string 172))
+     (process-send-eof process)
+     (while (and (process-live-p process) (< (float-time) deadline))
+      (accept-process-output process 0.01))
+     (when (process-live-p process) (error "carry timeout"))
+     (accept-process-output process 0.01)
+     (list reset first (string-to-list (apply #'concat (nreverse neovm-carry-pieces)))))
+    (when (process-live-p process) (delete-process process)) (kill-buffer buffer))))
+ (mapcar #'neovm-carry-probe '(none filter buffer coding)))"#
+    ));
+    assert_eq!(
+        result,
+        "OK ((none (65) (65 30828)) (filter (65) (65 30828)) (buffer (65) (65 30828)) (coding (65) (65 30828)))"
+    );
+}
+
+#[test]
+fn retained_raw_dos_decoder_holds_cr_across_process_reads() {
+    crate::test_utils::init_test_tracing();
+    let cat = find_bin("cat");
+    let result = eval_one(&format!(
+        r#"(progn
+ (defvar neovm-retained-pieces nil)
+ (defvar neovm-retained-observed nil)
+ (defun neovm-retained-filter (_p text) (push text neovm-retained-pieces))
+ (defun neovm-retained-post (size)
+  (when (> size 0)
+   (push (list size (string-to-list (buffer-substring (point) (+ (point) size))))
+         neovm-retained-observed)) size)
+ (defun neovm-retained-probe (hook filter)
+  (let* ((coding (if hook 'neovm-retained-hook-fixed 'neovm-retained-fixed))
+         (_ (define-coding-system coding "Retained raw DOS"
+          :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode) :eol-type 'dos
+          :bom (cons 'utf-8-with-signature 'utf-8)
+          :post-read-conversion (and hook 'neovm-retained-post)))
+         (_ (setcdr (coding-system-get coding :bom) nil))
+         (_ (coding-system-put coding :bom nil))
+         (_ (set-coding-system-priority coding))
+         (buffer (generate-new-buffer " *retained-raw-dos*"))
+         (neovm-retained-pieces nil) (neovm-retained-observed nil)
+         (process (make-process :name "retained-raw-dos" :buffer buffer :command '("{cat}")
+          :coding '(undecided . no-conversion) :connection-type 'pipe :noquery t
+          :filter (and filter 'neovm-retained-filter) :sentinel #'ignore))
+         (deadline (+ (float-time) 5)) first)
+   (unwind-protect
+    (progn
+     (process-send-string process (unibyte-string 195 169 13))
+     (while (and (< (if filter (length (apply #'concat neovm-retained-pieces))
+                      (with-current-buffer buffer (buffer-size))) 2)
+                 (< (float-time) deadline)) (accept-process-output process 0.01))
+     (setq first (string-to-list (if filter (apply #'concat (reverse neovm-retained-pieces))
+                                  (with-current-buffer buffer (buffer-string)))))
+     (process-send-string process (unibyte-string 10))
+     (process-send-eof process)
+     (while (and (process-live-p process) (< (float-time) deadline))
+      (accept-process-output process 0.01))
+     (when (process-live-p process) (error "retained DOS timeout"))
+     (accept-process-output process 0.01)
+     (list hook filter first
+      (string-to-list (if filter (apply #'concat (nreverse neovm-retained-pieces))
+                        (with-current-buffer buffer (buffer-string))))
+      (car (process-coding-system process)) (nreverse neovm-retained-observed)))
+    (when (process-live-p process) (delete-process process)) (kill-buffer buffer))))
+ (mapcar (lambda (hook) (mapcar (lambda (filter) (neovm-retained-probe hook filter)) '(nil t))) '(nil t)))"#
+    ));
+    assert_eq!(
+        result,
+        "OK (((nil nil (4194243 4194217) (4194243 4194217 10) neovm-retained-fixed nil) (nil t (4194243 4194217) (4194243 4194217 10) neovm-retained-fixed nil)) ((t nil (4194243 4194217) (4194243 4194217 10) neovm-retained-hook-fixed ((2 (4194243 4194217)) (1 (10)))) (t t (4194243 4194217) (4194243 4194217 10) neovm-retained-hook-fixed ((2 (4194243 4194217)) (1 (10))))))"
+    );
+}

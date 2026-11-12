@@ -105,45 +105,14 @@ fn detect_undecided_coding(
     block: super::SourceBlock,
     mode: neovm_value::tagged::SymbolMode,
 ) -> super::DetectedBase {
-    // `prefer-utf-8` raises UTF-8 ahead of the configured category priority --
-    // GNU's `prefer_utf_8 && detect_coding_utf_8 (coding, &detect_info)`
-    // (src/coding.c:6619-6620), which is the same detector as everywhere else
-    // and therefore tolerates a trailing partial character when this is not the
-    // last block.
-    if prefer_utf_8
-        && (inhibit_null || !bytes.contains(&0))
-        && utf8_or_truncated_utf8(bytes, block)
-        && bytes.iter().any(|&b| b >= 0x80)
-    {
-        return super::DetectedBase::Rebase(intern("utf-8"));
-    }
-
     super::detect_highest_coding_system_for_unibyte_bytes(
         coding_systems,
         bytes,
         block,
         mode,
         inhibit_null,
+        prefer_utf_8,
     )
-}
-
-/// Valid UTF-8, or valid UTF-8 that stops in the middle of its last character
-/// when more bytes may still follow.
-///
-/// GNU has no separate predicate for this: `detect_coding_utf_8` walks the
-/// source and its `no_more_source:` tail rejects a partial trailing character
-/// only under `CODING_MODE_LAST_BLOCK` (src/coding.c:1215).  This is that one
-/// rule spelled for the `prefer-utf-8` shortcut, which does not go through the
-/// category walk.
-fn utf8_or_truncated_utf8(bytes: &[u8], block: super::SourceBlock) -> bool {
-    match std::str::from_utf8(bytes) {
-        Ok(_) => true,
-        Err(error) => {
-            !matches!(block, super::SourceBlock::Last)
-                && error.error_len().is_none()
-                && std::str::from_utf8(&bytes[..error.valid_up_to()]).is_ok()
-        }
-    }
 }
 
 /// The BOM-detecting arms of GNU's `detect_coding` (src/coding.c:6702-6742).
@@ -204,13 +173,12 @@ fn detect_bom_auto_coding(
             signature,
             without_signature,
         } => {
+            let mut detection = super::DetectInfo::default();
             if bytes.iter().all(|byte| byte.is_ascii()) {
                 Some(without_signature)
-            } else if std::str::from_utf8(bytes).is_err_and(|error| {
-                error.error_len().is_some() || matches!(block, super::SourceBlock::Last)
-            }) {
+            } else if !super::detect_utf_8(bytes, 0, false, block, &mut detection) {
                 None
-            } else if bytes.len() > 3 && bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            } else if detection.found & super::cat_mask(super::CodingCat::Utf8Sig) != 0 {
                 // GNU's strict `src + 3 < src_end` requires a following byte.
                 // Exact three-byte input selects the other target, retaining U+FEFF.
                 Some(signature)

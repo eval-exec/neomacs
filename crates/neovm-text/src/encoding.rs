@@ -3909,24 +3909,20 @@ fn run_coding_with_conversion_hook<H: TextHost>(
             HookCodec::Utf8Signature | HookCodec::RetainedUndecided
         ) {
             let mut scratch = CodingDecoderState::default();
+            let native_eol = if eol == EolType::Dos
+                && ctx.eol_conversion() == crate::emacs_core::coding::EolConversion::Enabled
+            {
+                DosEolLookahead::Required
+            } else {
+                DosEolLookahead::NotRequired
+            };
             let mut decoded = match codec {
-                HookCodec::Utf8Signature => {
-                    let signature_eol = if eol == EolType::Dos
-                        && ctx.eol_conversion() == crate::emacs_core::coding::EolConversion::Enabled
-                    {
-                        DosEolLookahead::Required
-                    } else {
-                        DosEolLookahead::NotRequired
-                    };
-                    decode_utf8_signature_source(
-                        &source_bytes,
-                        &mut run.decoder_state(&mut scratch).utf8_signature,
-                        signature_eol,
-                    )
-                }
-                HookCodec::RetainedUndecided => {
-                    DecodedSource::whole(decode_raw_text_multibyte(&source_bytes), &source_bytes)
-                }
+                HookCodec::Utf8Signature => decode_utf8_signature_source(
+                    &source_bytes,
+                    &mut run.decoder_state(&mut scratch).utf8_signature,
+                    native_eol,
+                ),
+                HookCodec::RetainedUndecided => decode_raw_text_source(&source_bytes, native_eol),
                 HookCodec::Base(_) => unreachable!("the native hook codec was selected above"),
             };
             run.record(decoded.consumed);
@@ -4054,6 +4050,12 @@ fn decode_raw_text_multibyte(bytes: &[u8]) -> Vec<u8> {
         out.extend_from_slice(&buf[..n]);
     }
     out
+}
+
+/// GNU's retained undecided decoder is raw text, including the DOS decoder's
+/// unconsumed terminal CR (coding.c:5267). The next read supplies its lookahead.
+fn decode_raw_text_source(bytes: &[u8], eol: DosEolLookahead) -> DecodedSource {
+    decode_units_with(bytes, eol, AsciiRuns::Identity, invalid_code)
 }
 
 /// The emacs-mule leading byte(s) for a charset's emacs-mule id
@@ -5181,10 +5183,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
         let mut scratch = CodingDecoderState::default();
         let source_bytes = lisp_string_coding_source_bytes(source_string());
         let decoded = if effective_decoder == EffectiveDecoder::RetainedUndecided {
-            Some(DecodedSource::whole(
-                decode_raw_text_multibyte(&source_bytes),
-                &source_bytes,
-            ))
+            Some(decode_raw_text_source(&source_bytes, dos_eol))
         } else if let Some(imap) = utf7_coding {
             // GNU implements utf-7 in Lisp, as a `:post-read-conversion` over
             // `raw-text` (lisp/international/utf-7.el), so the C decoder under
