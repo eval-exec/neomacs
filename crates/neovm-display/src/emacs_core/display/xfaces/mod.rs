@@ -1753,6 +1753,25 @@ fn note_explicit_default_font_attr(
     }
 }
 
+fn sync_explicit_default_font_attrs_from_vector(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    vector: Value,
+) {
+    for attr in [
+        LFaceAttr::Family,
+        LFaceAttr::Foundry,
+        LFaceAttr::Width,
+        LFaceAttr::Height,
+        LFaceAttr::Weight,
+        LFaceAttr::Slant,
+    ] {
+        let value =
+            lisp_face_vector_attr(vector, attr).unwrap_or_else(|| Value::symbol("unspecified"));
+        note_explicit_default_font_attr(eval, frame_id, attr, value);
+    }
+}
+
 pub(crate) fn realize_default_lisp_face_for_frame(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame_id: FrameId,
@@ -3324,11 +3343,21 @@ pub fn builtin_internal_copy_lisp_face(
 
     let result = args[1];
 
+    // GNU `Finternal_copy_lisp_face` with FRAME t writes only the global
+    // definition (`src/xfaces.c:3163-3169`). That does not change an existing
+    // frame's lface, so it does not change that frame's mask. A copy onto a
+    // live frame's `default` face does write the vector, and the mask has to
+    // follow those slots or the next font treats a copied family as unset.
     let local_frame = if copy_defaults_domain {
         None
     } else {
         frame_id_from_designator(if args[3].is_nil() { &args[2] } else { &args[3] })
     };
+    if to_name == "default"
+        && let Some(frame_id) = local_frame
+    {
+        sync_explicit_default_font_attrs_from_vector(eval, frame_id, dst_vector);
+    }
     let frames: Vec<FrameId> = local_frame.into_iter().collect();
     let scope = if copy_defaults_domain {
         realization::FaceChangeScope::AllFrames

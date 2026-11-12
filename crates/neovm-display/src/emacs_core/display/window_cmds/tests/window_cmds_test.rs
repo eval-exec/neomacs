@@ -3513,6 +3513,114 @@ fn modify_frame_parameters_font_updates_a_previously_seeded_family() {
 }
 
 #[test]
+fn modify_frame_parameters_font_honors_a_copied_default_face() {
+    // `internal-copy-lisp-face` installs the source vector on this frame.
+    // A concrete copied family must stick, and a copied `unspecified`
+    // height must let the next font fill it. FRAME t copies only the
+    // global definition, so it must leave this frame's mask alone.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    ev.set_display_host(Box::new(opened_noto_host()));
+    let fid = gui_frame_for_font_change(&mut ev);
+    let frame = Value::make_frame(fid.0);
+    ev.eval_str("(fset 'frame-windows-min-size (lambda (&rest _) 1))")
+        .expect("stub the absent window-minimum subr");
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("source-face"),
+            Value::keyword("family"),
+            Value::string("Copied Family"),
+            frame,
+        ],
+    )
+    .expect("create the source face");
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("height"),
+            Value::fixnum(1),
+            frame,
+        ],
+    )
+    .expect("mark an explicit height on this frame");
+
+    let out = ev.eval_str_each(
+        r#"(modify-frame-parameters (selected-frame) '((font . "Noto Sans Mono-16")))"#,
+    );
+    assert!(out[0].is_ok(), "first font update failed: {:?}", out[0]);
+
+    crate::emacs_core::xfaces::builtin_internal_copy_lisp_face(
+        &mut ev,
+        vec![
+            Value::symbol("source-face"),
+            Value::symbol("default"),
+            Value::T,
+            Value::NIL,
+        ],
+    )
+    .expect("a global copy must not touch this frame");
+    let face = |ev: &Context| {
+        crate::emacs_core::xfaces::runtime_face_table_from_frame_lisp_faces(ev, fid, false)
+            .merge_faces(&["default"])
+    };
+    let height_after_global_copy = face(&ev).height;
+    assert_ne!(
+        height_after_global_copy,
+        Some(crate::face::FaceHeight::Absolute(160)),
+        "FRAME t must not clear this frame's explicit height"
+    );
+
+    crate::emacs_core::xfaces::builtin_internal_copy_lisp_face(
+        &mut ev,
+        vec![
+            Value::symbol("source-face"),
+            Value::symbol("default"),
+            frame,
+            Value::NIL,
+        ],
+    )
+    .expect("copy the source face onto this frame's default");
+    assert_eq!(
+        face(&ev).family,
+        Some(Value::string("Copied Family")),
+        "the copy installs the source family"
+    );
+
+    ev.set_display_host(Box::new(RecordingDisplayHost::with_resolved_frame_font(
+        resolved_frame_font(
+            "Other Mono",
+            "OtherMono-Regular",
+            180,
+            FontPxProbeResult {
+                pixel_size: 24,
+                height: 33,
+                ascent: 24,
+                descent: 9,
+                max_width: 14,
+                space_width: 14,
+                average_width: 14,
+            },
+        ),
+    )));
+    let out = ev
+        .eval_str_each(r#"(modify-frame-parameters (selected-frame) '((font . "Other Mono-18")))"#);
+    assert!(out[0].is_ok(), "second font update failed: {:?}", out[0]);
+    let face = face(&ev);
+    assert_eq!(
+        face.family,
+        Some(Value::string("Copied Family")),
+        "a family installed by copy-face must survive the next font"
+    );
+    assert_eq!(
+        face.height,
+        Some(crate::face::FaceHeight::Absolute(180)),
+        "a copied unspecified height must be filled by the next font"
+    );
+}
+
+#[test]
 fn x_create_frame_accepts_text_pixel_size_on_gui_child_frame() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
