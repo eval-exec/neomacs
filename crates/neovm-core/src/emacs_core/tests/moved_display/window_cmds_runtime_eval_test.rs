@@ -1652,3 +1652,64 @@ fn category_word_wrap_projection_tracks_inherited_sets_and_nested_observations()
     .unwrap();
     assert!(!permits_x(&ev), "replace and reclaim the old source");
 }
+
+#[test]
+fn make_frame_applies_early_init_default_frame_alist_bars() {
+    // #600: an early-init file setting these in `default-frame-alist' must
+    // reach the opening frame through the real `make-frame' merge path.
+    // `make-frame' is lisp/frame.el and exists only after loadup.
+    crate::test_utils::init_test_tracing();
+    let mut ev = runtime_startup_context();
+    crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&ev);
+    let base = ev
+        .frame_manager()
+        .selected_frame()
+        .expect("startup frame")
+        .id;
+    {
+        let frame = ev.frame_manager_mut().get_mut(base).expect("base frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    ev.frame_manager_mut().select_frame(base);
+    ev.set_variable("window-system", Value::symbol("neo"));
+    ev.set_display_host(Box::new(
+        neovm_display::test_utils::window_cmds_host::RecordingDisplayHost::new(),
+    ));
+
+    let out = ev.eval_str_each(
+        r#"(let ((default-frame-alist '((menu-bar-lines . 0)
+                                        (tool-bar-lines . 0)
+                                        (vertical-scroll-bars))))
+             (make-frame nil))"#,
+    );
+    let frame_value = out[0].as_ref().expect("make-frame should succeed");
+    let fid = crate::window::FrameId(
+        frame_value
+            .as_frame_id()
+            .expect("make-frame returns a frame"),
+    );
+    let frame = ev.frame_manager().get(fid).expect("created frame");
+
+    assert_eq!(
+        frame.parameter("menu-bar-lines"),
+        Some(Value::fixnum(0)),
+        "menu-bar-lines from default-frame-alist must reach the frame"
+    );
+    assert_eq!(
+        frame.parameter("tool-bar-lines"),
+        Some(Value::fixnum(0)),
+        "tool-bar-lines from default-frame-alist must reach the frame"
+    );
+    assert_eq!(
+        frame.parameter("vertical-scroll-bars"),
+        Some(Value::NIL),
+        "the bare (vertical-scroll-bars) entry must be stored as an explicit nil"
+    );
+    assert_eq!(frame.menu_bar_height, 0);
+    assert_eq!(frame.tool_bar_height, 0);
+    assert_eq!(
+        frame.root_window().bounds().y,
+        0.0,
+        "with both bars disabled the root window starts at the top"
+    );
+}
