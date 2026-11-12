@@ -737,6 +737,90 @@ fn cursor_capture_state_captures_once_and_refines_matching_main_char_width() {
     assert_eq!(captured.slot_width, Some(12.5));
 }
 
+fn cursor_word_wrap_boundary() -> crate::display_row::walk_state::WordWrapBreakCandidate {
+    let mut boundary = crate::display_row::walk_state::WordWrapBreakCandidate::default();
+    boundary.record_at(
+        crate::display_source::DisplaySourceTextPosition::new(5, 5),
+        0,
+        (None, None),
+        Default::default(),
+        crate::display_row::builder::DisplayRowPosition::new(5.0, 5),
+        None,
+    );
+    boundary
+}
+
+#[test]
+fn cursor_word_wrap_rewind_preserves_prior_row_and_prefix_candidates() {
+    for (row, column) in [(0, 7), (1, 3)] {
+        let mut state = CursorCaptureState::new();
+        state.capture_once(cursor_info_at(column as f32, row));
+        state.rewind_word_wrap(1, cursor_word_wrap_boundary(), 3);
+        let captured = state.captured().expect("retained prefix cursor");
+        assert_eq!((captured.display_row_offset, captured.col), (row, column));
+    }
+    let mut state = CursorCaptureState::new();
+    state.capture_once(cursor_info_at(7.0, 1));
+    state.rewind_word_wrap(1, cursor_word_wrap_boundary(), 7);
+    assert!(state.is_missing());
+    state.capture_once(cursor_info_at(2.0, 2));
+    assert_eq!(state.captured().unwrap().display_row_offset, 2);
+
+    // A source-prefix origin with no fitting following glyph belongs to the
+    // row being closed, rather than being captured anew on the next row.
+    let mut pending = CursorCaptureState::new();
+    pending.defer_zero_width_to_next_glyph(cursor_info_at(5.0, 1));
+    pending.rewind_word_wrap(1, cursor_word_wrap_boundary(), 4);
+    let origin = pending.captured().expect("closed-row origin fallback");
+    assert_eq!((origin.display_row_offset, origin.col), (1, 5));
+    assert!(!pending.should_capture_visible_glyph_at(5, 4));
+}
+
+#[test]
+fn cursor_word_wrap_rewind_restores_earlier_string_fallback() {
+    let mut state = CursorCaptureState::new();
+    state.capture_approximation_once(cursor_info_at(1.0, 1));
+    let context = DisplayStringCursorContext::for_overlay(
+        CharPos0::new(0),
+        CharPos0::new(0),
+        CharPos0::new(0),
+    );
+    for column in [2.0, 7.0] {
+        state.capture_display_string_cursor(
+            context
+                .resolve(Value::T, cursor_info_at(column, 1))
+                .unwrap(),
+        );
+    }
+    assert_eq!(state.captured().unwrap().col, 7);
+    state.rewind_word_wrap(1, cursor_word_wrap_boundary(), 3);
+    assert_eq!(state.captured().unwrap().col, 2);
+}
+
+#[test]
+fn cursor_word_wrap_rewind_reclassifies_a_discarded_following_glyph() {
+    let mut state = CursorCaptureState::new();
+    state.defer_zero_width_to_next_glyph(cursor_info_at(5.0, 1));
+    state.capture_once(cursor_info_at(7.0, 1));
+    let context = DisplayStringCursorContext::for_overlay(
+        CharPos0::new(3),
+        CharPos0::new(3),
+        CharPos0::new(3),
+    );
+    state.capture_display_string_cursor(context.resolve(Value::T, cursor_info_at(2.0, 1)).unwrap());
+    assert_eq!(
+        state.captured().unwrap().col,
+        7,
+        "an exact glyph suppresses attachment fallback"
+    );
+    state.rewind_word_wrap(1, cursor_word_wrap_boundary(), 3);
+    assert_eq!(
+        state.captured().unwrap().col,
+        2,
+        "a removed following glyph leaves the retained prefix fallback eligible"
+    );
+}
+
 #[test]
 fn cursor_capture_state_rejects_integer_override_without_point_row_proof() {
     let mut state = CursorCaptureState::new();
@@ -34377,14 +34461,99 @@ fn p45_cursor_shadow_tracks_point_across_a_word_wrap_break() {
 
     assert_eq!(cursor_at(3), (0, 3), "inside the first word");
     assert_eq!(cursor_at(4), (0, 4), "the candidate space itself");
-    // CURRENT BEHAVIOUR, pinned as-is: point on the word that moved down is
-    // placed in the broken row's filler column rather than at the start of the
-    // continuation row. GNU puts it at the continuation row's first column, so
-    // this is an open parity question — recorded here rather than "fixed" mid
-    // rung, because the shadow's job is to detect a CHANGE in what the per-char
-    // feeder's removal does to cursor capture.
-    assert_eq!(cursor_at(5), (0, 5), "the word that moved to the next row");
+    // GNU Emacs 31.1 GUI, ten-column text area: every character of the
+    // relocated word belongs to the continuation row (xdisp.c:26379,26830).
+    assert_eq!(cursor_at(5), (1, 0), "the word that moved to the next row");
     assert_eq!(cursor_at(10), (1, 5), "the last character of the word");
+}
+
+/// Cursor-only replay and a fresh walk must agree when point visits every
+/// character of a word that was rolled off the preceding visual row.
+#[test]
+fn word_wrap_moved_word_cursor_matches_full_and_replay() {
+    const TEXT: &str = "aaaa bbbbbb\n";
+    let mut fresh_cursors = Vec::new();
+    for point in (3..=10).chain((3..10).rev()) {
+        let fresh = layout_trace_with_buffer_setup(TEXT, 88, 240, |buffer, _, _| {
+            buffer.set_buffer_local("truncate-lines", Value::NIL);
+            buffer.set_buffer_local("word-wrap", Value::T);
+            buffer.goto_emacs_byte_pos(EmacsBytePos::new(point));
+        });
+        let cursor = fresh.phys_cursor.as_ref().expect("fresh cursor");
+        fresh_cursors.push((point, cursor.row, cursor.col));
+    }
+    let (mut eval, frame_id, buffer_id, _) = incr_editing_frame(TEXT, 88, 240);
+    {
+        let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
+        buffer.set_buffer_local("truncate-lines", Value::NIL);
+        buffer.set_buffer_local("word-wrap", Value::T);
+        buffer.goto_emacs_byte_pos(EmacsBytePos::new(10));
+    }
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let mut replayed_cursors = Vec::new();
+    let mut replay_count = 0;
+    for point in (3..=10).chain((3..10).rev()) {
+        eval.buffer_manager_mut()
+            .get_mut(buffer_id)
+            .unwrap()
+            .goto_emacs_byte_pos(EmacsBytePos::new(point));
+        engine.layout_frame_rust(&mut eval, frame_id);
+        replay_count += engine.last_layout_stats().cursor_only_windows;
+        let trace = selected_window_layout_trace(&eval, &engine, frame_id);
+        let cursor = trace.phys_cursor.as_ref().expect("replayed cursor");
+        replayed_cursors.push((point, cursor.row, cursor.col));
+    }
+    assert!(replay_count > 0, "exercise cursor-only reuse");
+    let expected: Vec<_> = (3..=10)
+        .chain((3..10).rev())
+        .map(|point| {
+            if point < 5 {
+                (point, 0, point as i64)
+            } else {
+                (point, 1, (point - 5) as i64)
+            }
+        })
+        .collect();
+    assert_eq!(
+        fresh_cursors, expected,
+        "GNU keeps the entire moved word on its continuation row"
+    );
+    assert_eq!(
+        fresh_cursors, replayed_cursors,
+        "fresh and retained rows must place point on the same moved word"
+    );
+}
+
+/// GNU keeps a zero-width origin before the source break in the old row's
+/// filler, while an origin in the relocated word follows its visible glyph.
+#[test]
+fn word_wrap_zero_width_cursor_respects_the_source_break() {
+    for (text, point, expected) in [
+        ("aaaa Xbbbbbb\n", 5, (0, 5)),
+        ("aaaa Xbbbbbb\n", 6, (1, 0)),
+        ("aaaa bXbbbbb\n", 6, (1, 1)),
+        ("aaaa bXbbbbb\n", 7, (1, 1)),
+    ] {
+        let trace = layout_trace_with_buffer_setup(text, 88, 240, |buffer, _, _| {
+            let table = Value::make_char_table(Value::symbol("display-table"), Value::NIL, 6);
+            neovm_core::emacs_core::chartable::ct_set_single(
+                &table,
+                'X' as i64,
+                Value::vector(vec![]),
+            );
+            buffer.set_buffer_local("buffer-display-table", table);
+            buffer.set_buffer_local("truncate-lines", Value::NIL);
+            buffer.set_buffer_local("word-wrap", Value::T);
+            buffer.goto_emacs_byte_pos(EmacsBytePos::new(point));
+        });
+        let cursor = trace.phys_cursor.as_ref().expect("zero-width cursor");
+        assert_eq!(
+            (cursor.row, cursor.col),
+            expected,
+            "text={text:?}, point={point}"
+        );
+    }
 }
 
 /// Trailing-whitespace highlighting across a WRAPPED boundary.

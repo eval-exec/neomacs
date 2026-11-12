@@ -1149,6 +1149,49 @@ impl CursorCaptureState {
         }
     }
 
+    /// Discard cursor evidence with the glyph suffix that word wrapping
+    /// removes. GNU selects the cursor from the finalized row, after restoring
+    /// its wrap iterator (xdisp.c:26379,26830); a captured discarded glyph must
+    /// not prevent its continuation-row replacement from capturing point.
+    pub(crate) fn rewind_word_wrap(
+        &mut self,
+        row: usize,
+        boundary: crate::display_row::walk_state::WordWrapBreakCandidate,
+        point_charpos: i64,
+    ) {
+        let discarded = |info: &CapturedCursorInfo| {
+            info.display_row_offset == row && info.col >= boundary.row_position().col()
+        };
+        self.integer_string_overrides
+            .retain(|info| !discarded(info));
+        self.string_fallbacks.retain(|info| !discarded(info));
+        if point_charpos < boundary.source_position().charpos() {
+            // Point before the source break belongs to the row being closed,
+            // even if its empty display vector had followed a now-discarded
+            // glyph. Freeze a pending origin at that row's existing fallback.
+            if let Some(candidate) = self.captured.as_mut()
+                && discarded(&candidate.info)
+            {
+                // Its source position stays on this row, but its following
+                // glyph no longer proves an exact match on the finalized row.
+                candidate.kind = BufferCursorCandidateKind::Approximation;
+            }
+            if self.captured.is_none() {
+                self.captured = self
+                    .deferred_zero_width
+                    .take()
+                    .map(BufferCursorCandidate::approximation);
+            }
+        } else {
+            self.captured = self
+                .captured
+                .filter(|candidate| !discarded(&candidate.info));
+            // The rewound source reproduces its own empty display vector and
+            // following visible glyph on the continuation row.
+            self.deferred_zero_width = None;
+        }
+    }
+
     /// Whether the visible glyph at `glyph_charpos` should capture point.
     ///
     /// A zero-width display vector defers point to the next visible glyph,
@@ -1179,17 +1222,9 @@ impl CursorCaptureState {
             }
             DisplayStringCursorCandidateKind::FallbackAtAttachment => {
                 info.slot_state = CursorSlotResolutionState::Resolved;
-                if let Some(candidate) = self
-                    .string_fallbacks
-                    .iter_mut()
-                    .find(|candidate| candidate.display_row_offset == info.display_row_offset)
-                {
-                    // GNU's overlay-string scan retains the last noninteger
-                    // candidate found on a point row.
-                    *candidate = info;
-                } else {
-                    self.string_fallbacks.push(info);
-                }
+                // Keep earlier candidates until the row is finalized: a word
+                // wrap can remove the last one and reveal its predecessor.
+                self.string_fallbacks.push(info);
             }
         }
     }
@@ -1259,6 +1294,7 @@ impl CursorCaptureState {
             }) => self
                 .string_fallbacks
                 .iter()
+                .rev()
                 .find(|candidate| candidate.display_row_offset == info.display_row_offset),
             Some(BufferCursorCandidate {
                 kind: BufferCursorCandidateKind::ExactVisibleGlyph,

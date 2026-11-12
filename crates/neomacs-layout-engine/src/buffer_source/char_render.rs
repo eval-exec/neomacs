@@ -96,15 +96,21 @@ pub(crate) fn render_source_char_and_apply<
     // call used to implement by probing every character.
     let append_position = state.progress.row_position();
     let append_geometry = *state.row_build.row_geometry;
-    source_step_char.record_word_wrap_candidate_at(
-        state.row_carryover.word_wrap,
-        &state.source_render,
-        append_position,
-        predecessor_row_extend,
-    );
+    let display_table_vector = source_item.is_display_table_vector();
+    let empty_display_vector = display_table_vector
+        && matches!(&source_item.kind, DisplayItemKind::SourceMappedText(mapped) if mapped.text.is_empty());
+    // GNU get_next_display_element skips an empty vector before display_line
+    // can save a word-wrap candidate for it (xdisp.c:8491-8517).
+    if !empty_display_vector {
+        source_step_char.record_word_wrap_candidate_at(
+            state.row_carryover.word_wrap,
+            &state.source_render,
+            append_position,
+            predecessor_row_extend,
+        );
+    }
 
     let buffer_source_char = source_step_char.source_char(params.nobreak_char_display);
-    let display_table_vector = source_item.is_display_table_vector();
     let prepared_append = if display_table_vector {
         DisplaySourcePreparedCharAppend::Text(
             append_context.prepare_display_vector_for_current_text_row(
@@ -274,6 +280,7 @@ pub(crate) fn render_source_char_and_apply<
             loop_context.row_limit(),
             active_face_state.metrics(),
             loop_context.frame_background(),
+            loop_context.point_charpos(),
         ),
     )
     .render_if_needed_and_apply(append_context, source_walk, text, state.reborrow());
@@ -371,6 +378,7 @@ fn render_display_table_vector_and_apply<
     prepared_append: &DisplaySourceTextCharPreparedAppend,
     mut state: BufferSourceLoopMutableState<'_, '_, '_, FS>,
 ) -> BufferSourceItemRenderOutcome {
+    let empty_display_vector = matches!(&source_item.kind, DisplayItemKind::SourceMappedText(mapped) if mapped.text.is_empty());
     let mut source = DisplayItemSegmentSource::new(source_item);
     let mut source_state = DisplayRowSourceState::frame_local();
     let mut render_policy = NaturalDisplayRowAppendRenderPolicy;
@@ -433,14 +441,18 @@ fn render_display_table_vector_and_apply<
                         ),
                     );
                 }
-                prepared_append.apply_rendered_progress_to_walk_state(
-                    append_progress,
-                    source_step_char.ch(),
-                    state.row_build.row_geometry,
-                    state.row_carryover.trailing_whitespace,
-                    state.row_carryover.word_wrap,
-                    &mut state.progress.reborrow(),
-                );
+                if empty_display_vector {
+                    state.progress.advance_charpos_by_one();
+                } else {
+                    prepared_append.apply_rendered_progress_to_walk_state(
+                        append_progress,
+                        source_step_char.ch(),
+                        state.row_build.row_geometry,
+                        state.row_carryover.trailing_whitespace,
+                        state.row_carryover.word_wrap,
+                        &mut state.progress.reborrow(),
+                    );
+                }
                 if let Some(end_charpos) = source_end_charpos {
                     state.progress.max_charpos(end_charpos);
                 }
@@ -470,6 +482,7 @@ fn render_display_table_vector_and_apply<
                             loop_context.row_limit(),
                             active_face_state.metrics(),
                             loop_context.frame_background(),
+                            loop_context.point_charpos(),
                         ),
                     )
                     .render_if_needed_and_apply(

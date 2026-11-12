@@ -160,6 +160,7 @@ fn emit_word_wrap_rewind<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
         face_scan,
         row_y_positions,
         surface,
+        cursor_info,
         ..
     } = state;
     let action = BufferSourceWordWrapAction::new(break_candidate);
@@ -169,6 +170,11 @@ fn emit_word_wrap_rewind<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
         loop_context.content_x(),
     );
     source_render.restore_word_wrap_checkpoint(break_candidate);
+    cursor_info.rewind_word_wrap(
+        row_build.row_geometry.row(),
+        break_candidate,
+        loop_context.point_charpos(),
+    );
     action.restore_row_extend(row_build.row_extend, row_build.row_geometry);
     {
         let box_vertical_edges = source_render.trailing_box_run_terminal();
