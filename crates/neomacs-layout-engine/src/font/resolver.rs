@@ -304,24 +304,49 @@ impl FontResolver {
         prefer: Option<(&FontEntityQuery, &FontEntityListConstraints)>,
         maximum: Option<usize>,
     ) -> Vec<ListedFontCandidate> {
+        let mut listed = Vec::new();
+        if maximum == Some(0) {
+            return listed;
+        }
+        self.visit_entities(query, constraints, prefer, |entity| {
+            listed.push(entity);
+            if maximum.is_some_and(|maximum| listed.len() >= maximum) {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        });
+        listed
+    }
+
+    /// Visit metadata until the consumer has enough accepted results. Without
+    /// PREFER, a break also stops exact file-capability probes. Preference
+    /// sorting must first classify all matching candidates to rank their sizes.
+    pub fn visit_entities(
+        &self,
+        query: &FontEntityQuery,
+        constraints: &FontEntityListConstraints,
+        prefer: Option<(&FontEntityQuery, &FontEntityListConstraints)>,
+        mut visitor: impl FnMut(ListedFontCandidate) -> std::ops::ControlFlow<()>,
+    ) {
+        let driver = font_driver_symbol(self.backend.kind());
         if constraints
             .driver
-            .is_some_and(|driver| Some(driver) != font_driver_symbol(self.backend.kind()))
+            .is_some_and(|requested| Some(requested) != driver)
         {
-            return Vec::new();
+            return;
         }
         if query
             .registry
             .as_deref()
             .is_some_and(|registry| !crate::font::policy::registry_supported_for_listing(registry))
         {
-            return Vec::new();
+            return;
         }
         let candidate_query = self.entity_candidate_query(query);
         let policy = FontEntityMatchPolicy::for_backend(self.backend.kind());
-        // Cheap native-selector filtering precedes file capability probes.
-        // Unknown file metadata is then completed with the same cached exact
-        // classification used by font selection; it is never assumed scalable.
+        // Native discovery owns family membership. Other cheap selector
+        // filters precede any exact file inspection.
         let candidates = self
             .backend
             .list_candidates(&candidate_query)
@@ -348,27 +373,33 @@ impl FontResolver {
                     && constraints.spacing.is_none_or(|spacing| {
                         metadata.spacing.is_none_or(|actual| actual == spacing)
                     })
-            })
-            .collect();
-        let mut candidates: Vec<_> =
-            self.classify_unknown_candidate_sizes(candidates)
-                .into_iter()
-                .filter(|candidate| {
-                    let metadata = &candidate.matched.metadata;
-                    constraints.average_width.is_none_or(|width| {
-                        width != 0 || metadata.size == PlatformFontSize::Scalable
-                    }) && constraints
-                        .pixel_size
-                        .is_none_or(|size| match metadata.size {
-                            PlatformFontSize::Fixed { device_ppem_26_6 } => {
-                                (device_ppem_26_6 >> 6).abs_diff(size) <= 1
-                            }
-                            PlatformFontSize::Scalable => true,
-                            PlatformFontSize::Unknown => false,
-                        })
-                })
-                .collect();
+            });
+        let size_matches = |candidate: &FontCandidate| {
+            let metadata = &candidate.matched.metadata;
+            constraints
+                .average_width
+                .is_none_or(|width| width != 0 || metadata.size == PlatformFontSize::Scalable)
+                && constraints
+                    .pixel_size
+                    .is_none_or(|size| match metadata.size {
+                        PlatformFontSize::Fixed { device_ppem_26_6 } => {
+                            (device_ppem_26_6 >> 6).abs_diff(size) <= 1
+                        }
+                        PlatformFontSize::Scalable => true,
+                        PlatformFontSize::Unknown => false,
+                    })
+        };
+        let listed = |candidate: FontCandidate| ListedFontCandidate {
+            candidate: candidate.matched,
+            registry: Some("iso10646-1".to_owned()),
+            driver,
+        };
         if let Some((prefer, constraints)) = prefer {
+            let mut candidates: Vec<_> = self
+                .classify_unknown_candidate_sizes(candidates.collect())
+                .into_iter()
+                .filter(size_matches)
+                .collect();
             candidates.sort_by_key(|candidate| {
                 let metadata = &candidate.matched.metadata;
                 let weight = FontWeight::from_css_weight(metadata.weight.unwrap_or(400));
@@ -401,16 +432,34 @@ impl FontResolver {
                 };
                 (score.is_none(), score)
             });
+            for candidate in candidates {
+                if visitor(listed(candidate)).is_break() {
+                    return;
+                }
+            }
+        } else {
+            let mut emit = |candidate| {
+                if size_matches(&candidate) {
+                    visitor(listed(candidate))
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                }
+            };
+            for candidate in candidates {
+                if candidate.matched.metadata.size == PlatformFontSize::Unknown {
+                    // One unknown file can expand to several fixed strikes.
+                    // Inspect it only when native discovery reaches it.
+                    for classified in self.classify_unknown_candidate_sizes(vec![candidate]) {
+                        if emit(classified).is_break() {
+                            return;
+                        }
+                    }
+                } else if emit(candidate).is_break() {
+                    // Known native metadata needs no per-candidate allocation.
+                    return;
+                }
+            }
         }
-        candidates
-            .into_iter()
-            .take(maximum.unwrap_or(usize::MAX))
-            .map(|candidate| ListedFontCandidate {
-                candidate: candidate.matched,
-                registry: Some("iso10646-1".to_owned()),
-                driver: font_driver_symbol(self.backend.kind()),
-            })
-            .collect()
     }
 
     /// Finalize this exact catalog candidate without another selection pass.

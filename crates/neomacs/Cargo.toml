@@ -132,6 +132,7 @@ windows-version = "0.1.7"
 windows-sys = { workspace = true, features = ["Win32_System_Environment", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
+neomacs-test-fonts.workspace = true
 neomacs-test-oracle.workspace = true
 neomacs-test-env.workspace = true
 neomacs-layout-engine = { workspace = true, features = ["redisplay-test-policy"] }

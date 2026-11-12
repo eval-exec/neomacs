@@ -1150,6 +1150,20 @@ impl FontMetricsService {
             .list_entities(query, constraints, prefer, maximum)
     }
 
+    pub fn visit_font_entities(
+        &self,
+        query: &crate::font::resolver::FontEntityQuery,
+        constraints: &crate::font::resolver::FontEntityListConstraints,
+        prefer: Option<(
+            &crate::font::resolver::FontEntityQuery,
+            &crate::font::resolver::FontEntityListConstraints,
+        )>,
+        visitor: impl FnMut(crate::font::resolver::ListedFontCandidate) -> std::ops::ControlFlow<()>,
+    ) {
+        self.font_resolver
+            .visit_entities(query, constraints, prefer, visitor)
+    }
+
     /// Load an exact listed candidate only when its outline is needed.
     pub fn materialize_font_candidate(
         &self,

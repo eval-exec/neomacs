@@ -532,6 +532,11 @@ pub trait DisplayHost {
     ) -> Result<Option<ResolvedFontSpecMatch>, String> {
         Ok(None)
     }
+    /// List matching entities in preference order. Apply `filter`, when
+    /// supplied, before counting accepted results toward `maximum` and before
+    /// retaining entity handles. Propagate filter failures as `FontListError::Filter`.
+    /// A zero maximum returns no entities. The default host has no font catalog
+    /// and returns an empty list without invoking the filter.
     fn list_fonts_for_spec(
         &mut self,
         _query: FontSpecListQuery,

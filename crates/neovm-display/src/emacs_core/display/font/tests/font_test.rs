@@ -2930,3 +2930,49 @@ fn listing_publishes_adstyle_before_ignored_font_filtering() {
     );
     assert!(list_fonts(&mut eval, vec![spec]).unwrap().is_nil());
 }
+
+#[test]
+fn listing_replacement_xlfd_clears_only_gnu_overwritten_properties() {
+    crate::test_utils::init_test_tracing();
+    for (name, family, registry) in [
+        ("*", Value::NIL, Value::symbol("iso10646-1")),
+        (
+            "-*-Hack-*",
+            Value::symbol("Hack"),
+            Value::symbol("iso10646-1"),
+        ),
+        ("-*-*-*-*-*-*-*-*-*-*-*-*-*-*", Value::NIL, Value::NIL),
+    ] {
+        let spec = font_spec(vec![
+            Value::keyword("family"),
+            Value::string("Hack"),
+            Value::keyword("foundry"),
+            Value::string("SRC"),
+            Value::keyword("adstyle"),
+            Value::string("ja"),
+            Value::keyword("registry"),
+            Value::string("iso10646-1"),
+            Value::keyword("weight"),
+            Value::symbol("bold"),
+            Value::keyword("size"),
+            Value::fixnum(17),
+            Value::keyword("name"),
+            Value::string(name),
+        ])
+        .unwrap();
+        for (key, expected) in [
+            ("foundry", Value::NIL),
+            ("family", family),
+            ("adstyle", Value::NIL),
+            ("registry", registry),
+            ("weight", Value::symbol("bold")),
+            ("size", Value::fixnum(17)),
+        ] {
+            assert_eq!(
+                font_get(vec![spec, Value::keyword(key)]).unwrap(),
+                expected,
+                "{name}: {key}"
+            );
+        }
+    }
+}

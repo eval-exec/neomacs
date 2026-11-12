@@ -104,9 +104,9 @@ fn expand(fields: &[Field]) -> Option<[String; XLFD_LAST]> {
     }
     let mut ranges = [Range::default(); XLFD_LAST];
     let mut from = 0;
-    let mut to = (XLFD_LAST - count) as i32;
     let mut mask = (1u16 << (XLFD_LAST - count + 1)) - 1;
     for (index, field) in fields.iter().enumerate() {
+        let to = (XLFD_LAST - count + index) as i32;
         let positional = Range { from, to, mask };
         let mut restriction = value_range(field, index, count, positional);
         restriction.mask &= mask;
@@ -158,7 +158,6 @@ fn expand(fields: &[Field]) -> Option<[String; XLFD_LAST]> {
             }
         }
         from += 1;
-        to += 1;
         mask <<= 1;
     }
     let mut expanded = std::array::from_fn(|_| "*".to_owned());
@@ -238,30 +237,33 @@ pub(super) fn matrix_size(text: &str) -> Option<i64> {
         return None;
     }
     let storage = std::ffi::CString::new(text).ok()?;
-    // SAFETY: storage owns a NUL-terminated buffer for this entire block.
-    // cursor starts inside it; strtod's end pointer remains in that buffer
-    // (or at its terminator), and add(1) only follows a non-NUL '[' or '~'.
-    // strtod only reads the buffer and writes our local end-pointer variable.
-    let last = unsafe {
-        let mut cursor = storage.as_ptr().add(1);
-        let mut last = 0.0;
-        for _ in 0..4 {
-            if *cursor == 0 || *cursor == b']' as libc::c_char {
-                return None;
-            }
-            let negative = *cursor == b'~' as libc::c_char;
-            if negative {
-                cursor = cursor.add(1);
-            }
-            let mut end = std::ptr::null_mut();
-            last = libc::strtod(cursor, &mut end);
-            if negative {
-                last = -last;
-            }
-            cursor = end;
+    let bytes = storage.as_bytes_with_nul();
+    let mut offset = 1;
+    let mut last = 0.0;
+    for _ in 0..4 {
+        let byte = *bytes.get(offset)?;
+        if byte == 0 || byte == b']' {
+            return None;
         }
-        last
-    };
+        let negative = byte == b'~';
+        if negative {
+            offset += 1;
+        }
+        let mut end = std::ptr::null_mut();
+        // SAFETY: offset is inside storage's owned NUL-terminated buffer.
+        // Skipping '~' can at most reach its terminator. strtod reads from
+        // that suffix and writes only our local end-pointer variable.
+        last = unsafe { libc::strtod(storage.as_ptr().add(offset), &mut end) };
+        if negative {
+            last = -last;
+        }
+        // Never dereference strtod's returned pointer. Validate its address
+        // before using the offset for another safe byte lookup or C call.
+        offset = end.addr().checked_sub(storage.as_ptr().addr())?;
+        if offset >= bytes.len() {
+            return None;
+        }
+    }
     // GNU stores an int. Avoid invoking its undefined out-of-range casts.
     (last.is_finite() && last >= i32::MIN as f64 && last <= i32::MAX as f64)
         .then_some(last.trunc() as i64)

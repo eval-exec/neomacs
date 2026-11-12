@@ -2054,12 +2054,14 @@ fn font_parse_xlfd_fields(elems: &mut Vec<Value>, fields: &xlfd_fields::ParsedXl
             .flatten()
     };
 
-    // Foundry / family (interned as symbols).
-    if f[XLFD_FOUNDRY] != "*" {
-        font_parse_set(elems, "foundry", Value::symbol(&f[XLFD_FOUNDRY]));
-    }
-    if f[XLFD_FAMILY] != "*" {
-        font_parse_set(elems, "family", Value::symbol(&f[XLFD_FAMILY]));
+    // GNU overwrites these slots even when a replacement name has wildcards.
+    for (index, key) in [(XLFD_FOUNDRY, "foundry"), (XLFD_FAMILY, "family")] {
+        let value = if f[index] == "*" {
+            Value::NIL
+        } else {
+            Value::symbol(&f[index])
+        };
+        font_parse_set(elems, key, value);
     }
 
     // Weight / slant / width style fields.
@@ -2082,9 +2084,15 @@ fn font_parse_xlfd_fields(elems: &mut Vec<Value>, fields: &xlfd_fields::ParsedXl
     // Adstyle: GNU stores the interned field unconditionally for a fully
     // specified XLFD (an empty field becomes the empty symbol `##`).
     let adstyle = intern_field(XLFD_ADSTYLE);
-    if adstyle != "*" {
-        font_parse_set(elems, "adstyle", Value::symbol(adstyle));
-    }
+    font_parse_set(
+        elems,
+        "adstyle",
+        if adstyle == "*" {
+            Value::NIL
+        } else {
+            Value::symbol(adstyle)
+        },
+    );
 
     // Registry-encoding: "registry-encoding" combined.
     let registry = intern_field(XLFD_REGISTRY);
@@ -2092,6 +2100,10 @@ fn font_parse_xlfd_fields(elems: &mut Vec<Value>, fields: &xlfd_fields::ParsedXl
     if !(registry == "*" && encoding == "*") {
         let combined = format!("{registry}-{encoding}");
         font_parse_set(elems, "registry", Value::symbol(combined));
+    } else if !abbreviated {
+        // The abbreviated path retains an earlier registry when both fields
+        // are unspecified; the complete path writes nil unconditionally.
+        font_parse_set(elems, "registry", Value::NIL);
     }
 
     // Size: prefer pixel size (fixnum), else point size / 10 (float).
@@ -2119,13 +2131,11 @@ fn font_parse_xlfd_fields(elems: &mut Vec<Value>, fields: &xlfd_fields::ParsedXl
             return false;
         }
     }
-    let _ = intern_field(XLFD_RESX);
-
     // Spacing letter (p/d/m/c).
     let spacing = intern_field(XLFD_SPACING);
     if spacing != "*" {
         let value = numeric(spacing)
-            .filter(|value| *value <= i64::from(FontSpacing::MAX_GNU_CODE))
+            .filter(|value| *value <= FontSpacing::MAX_GNU_CODE)
             .or_else(|| {
                 (spacing.len() == 1)
                     .then(|| {
@@ -2634,21 +2644,21 @@ pub(crate) fn x_list_fonts(
             vec![Value::symbol("stringp"), args[0]],
         )
     })?;
-    if let Some(maximum) = args.get(3).filter(|value| !value.is_nil()) {
-        if maximum.as_fixnum().is_none_or(|count| count < 0) {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("wholenump"), *maximum],
-            ));
-        }
+    if let Some(maximum) = args.get(3).filter(|value| !value.is_nil())
+        && maximum.as_fixnum().is_none_or(|count| count < 0)
+    {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("wholenump"), *maximum],
+        ));
     }
-    if let Some(width) = args.get(4).filter(|value| !value.is_nil()) {
-        if !width.is_fixnum() {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("fixnump"), *width],
-            ));
-        }
+    if let Some(width) = args.get(4).filter(|value| !value.is_nil())
+        && !width.is_fixnum()
+    {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("fixnump"), *width],
+        ));
     }
     let frame_id = find_font_frame_id(eval, args.get(2))?;
     let spec = font_spec_from_name(&pattern)

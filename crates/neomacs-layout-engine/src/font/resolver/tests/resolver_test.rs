@@ -1644,3 +1644,113 @@ fn entity_listing_matches_recorded_bitmap_adstyle_case_insensitively() {
             .is_empty()
     );
 }
+
+#[cfg(any(windows, target_os = "linux"))]
+fn unknown_listing_probe_candidates() -> Vec<FontCandidate> {
+    vec![
+        unknown_windows_file_candidate(
+            neomacs_test_fonts::plemol_jp_console_nf_regular()
+                .to_str()
+                .unwrap(),
+        ),
+        unknown_windows_file_candidate(neomacs_test_fonts::spleen_2_2_0().otb().to_str().unwrap()),
+        unknown_windows_file_candidate("/fixture/unneeded-listing-probe.ttf"),
+    ]
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn entity_listing_without_preference_stops_file_probes_at_limit() {
+    let candidates = unknown_listing_probe_candidates();
+    let first = candidates[0].matched.locator.file().unwrap().clone();
+    let second = candidates[1].matched.locator.file().unwrap().clone();
+    let resolver = FontResolver::new(Box::new(FileSizeListingBackend { candidates }));
+    let listed = resolver.list_entities(
+        &FontEntityQuery::default(),
+        &FontEntityListConstraints::default(),
+        None,
+        Some(1),
+    );
+    assert_eq!(listed.len(), 1);
+    let probes = resolver.capability_cache.lock().unwrap();
+    assert!(probes.contains_key(&first));
+    assert!(
+        !probes.contains_key(&second),
+        "bounded unsorted listing does not probe a later file"
+    );
+    assert_eq!(probes.len(), 1);
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn entity_listing_zero_limit_does_not_probe_files() {
+    let resolver = FontResolver::new(Box::new(FileSizeListingBackend {
+        candidates: unknown_listing_probe_candidates(),
+    }));
+    let listed = resolver.list_entities(
+        &FontEntityQuery::default(),
+        &FontEntityListConstraints::default(),
+        None,
+        Some(0),
+    );
+    assert!(listed.is_empty());
+    assert!(
+        resolver.capability_cache.lock().unwrap().is_empty(),
+        "zero results require no capability probes"
+    );
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn entity_listing_visitor_rejection_and_break_bound_file_probes() {
+    let candidates = unknown_listing_probe_candidates();
+    let unvisited = candidates[2].matched.locator.file().unwrap().clone();
+    let resolver = FontResolver::new(Box::new(FileSizeListingBackend { candidates }));
+    let mut visits = 0;
+    resolver.visit_entities(
+        &FontEntityQuery::default(),
+        &FontEntityListConstraints::default(),
+        None,
+        |_| {
+            visits += 1;
+            if visits == 2 {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        },
+    );
+    assert_eq!(visits, 2, "one rejected and one accepted candidate");
+    let probes = resolver.capability_cache.lock().unwrap();
+    assert!(
+        !probes.contains_key(&unvisited),
+        "accepting the second candidate stops before the third file"
+    );
+    assert_eq!(probes.len(), 2);
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn entity_listing_preference_scores_later_candidates_before_limit() {
+    let mut candidates = unknown_listing_probe_candidates();
+    candidates.swap(0, 1);
+    let resolver = FontResolver::new(Box::new(FileSizeListingBackend { candidates }));
+    let query = FontEntityQuery::default();
+    let constraints = FontEntityListConstraints::default();
+    let preferred = FontEntityListConstraints {
+        pixel_size: Some(13),
+        ..Default::default()
+    };
+    let listed = resolver.list_entities(&query, &constraints, Some((&query, &preferred)), Some(1));
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].candidate.metadata.size,
+        PlatformFontSize::Scalable,
+        "the later scalable outline beats the first 16px bitmap for 13px"
+    );
+    assert_eq!(
+        resolver.capability_cache.lock().unwrap().len(),
+        3,
+        "sorting observes every eligible candidate's capability"
+    );
+}

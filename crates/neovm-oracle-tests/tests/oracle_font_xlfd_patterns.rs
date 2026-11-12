@@ -35,3 +35,20 @@ fn xlfd_abbreviations_family_dashes_and_sizes_match_gnu() {
         ]],
     );
 }
+
+#[test]
+fn xlfd_replacement_clears_wildcards_and_preserves_other_properties_like_gnu() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    common::assert_oracle_parity_expect(
+        r#"(mapcar
+              (lambda (name)
+                (let ((spec (font-spec :family "Hack" :foundry "SRC" :adstyle "ja"
+                                       :registry "iso10646-1" :weight 'bold :size 17 :name name)))
+                  (cons name (mapcar (lambda (prop) (font-get spec prop))
+                                     '(:foundry :family :adstyle :registry :weight :size)))))
+              '("*" "-*-Hack-*" "-*-*-*-*-*-*-*-*-*-*-*-*-*-*"))"#,
+        expect_test::expect![[
+            r#""OK ((\"*\" nil nil nil iso10646-1 bold 17) (\"-*-Hack-*\" nil Hack nil iso10646-1 bold 17) (\"-*-*-*-*-*-*-*-*-*-*-*-*-*-*\" nil nil nil nil bold 17))""#
+        ]],
+    );
+}

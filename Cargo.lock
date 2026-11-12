@@ -3832,6 +3832,7 @@ dependencies = [
  "neomacs-layout-engine",
  "neomacs-terminfo",
  "neomacs-test-env",
+ "neomacs-test-fonts",
  "neomacs-test-oracle",
  "neomacs-video-model",
  "neomacs-webview",
