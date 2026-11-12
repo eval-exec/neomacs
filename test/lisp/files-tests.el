@@ -1859,7 +1859,7 @@ controls exercise the same path.  GLOBAL-ENTRIES replaces the trusted
                   files-tests--dir-local-mode-calls
                   (buffer-local-value 'major-mode buffer)))
         ;; Also reclaim a buffer made before an unexpected visit error.
-        (when-let ((visited (or buffer (get-file-buffer file))))
+        (when-let* ((visited (or buffer (get-file-buffer file))))
           (when (buffer-live-p visited)
             (with-current-buffer visited (set-buffer-modified-p nil))
             (kill-buffer visited)))))))
@@ -1915,7 +1915,7 @@ controls exercise the same path.  GLOBAL-ENTRIES replaces the trusted
      (equal
       (files-tests--visit-dir-local-auto-mode
        '(("\\.txt\\'" . fundamental-mode)
-         ("\\.probe\\'" files-tests--dir-local-marker t))
+         ("\\.probe\\'" files-tests--dir-local-valid-mode t))
        "sample.txt.probe" (car flags) (cadr flags))
       '(0 0 fundamental-mode)))))
 
@@ -1948,6 +1948,48 @@ controls exercise the same path.  GLOBAL-ENTRIES replaces the trusted
      '(("\\.probe\\'" nil t)
        ("\\.txt\\'" . files-tests--dir-local-valid-mode)))
     '(0 1 files-tests--dir-local-valid-mode))))
+
+(ert-deftest files-test-auto-mode-alist-intermediate-continuation-keeps-same-mode ()
+  "An intermediate continuation never re-enters the current major mode."
+  (ert-with-temp-directory directory
+    (dolist (dir-local '(nil t))
+      (dolist (keep '(nil t))
+        (ert-info ((format "dir-local=%S keep=%S" dir-local keep))
+          (with-temp-buffer
+            (let ((files-tests--dir-local-mode-calls 0))
+              (files-tests--dir-local-valid-mode)
+              (setq files-tests--dir-local-mode-calls 0)
+              (setq buffer-file-name
+                    (expand-file-name "sample.txt.probe" directory))
+              (should
+               (set-auto-mode--apply-alist
+                (list (list (rx ".probe" eos)
+                            'files-tests--dir-local-valid-mode t)
+                      (cons (rx ".txt" eos) 'fundamental-mode))
+                keep dir-local))
+              (should (eq major-mode 'fundamental-mode))
+              (should (= files-tests--dir-local-mode-calls 0)))))))))
+
+(ert-deftest files-test-auto-mode-alist-terminal-continuation-respects-keep-mode ()
+  "Without a later match, the continuation uses the caller's KEEP value."
+  (ert-with-temp-directory directory
+    (dolist (dir-local '(nil t))
+      (dolist (keep '(nil t))
+        (ert-info ((format "dir-local=%S keep=%S" dir-local keep))
+          (with-temp-buffer
+            (let ((files-tests--dir-local-mode-calls 0))
+              (files-tests--dir-local-valid-mode)
+              (setq files-tests--dir-local-mode-calls 0)
+              (setq buffer-file-name
+                    (expand-file-name "sample.txt.probe" directory))
+              (should
+               (set-auto-mode--apply-alist
+                (list (list (rx ".probe" eos)
+                            'files-tests--dir-local-valid-mode t))
+                keep dir-local))
+              (should (eq major-mode 'files-tests--dir-local-valid-mode))
+              (should (= files-tests--dir-local-mode-calls
+                         (if keep 0 1))))))))))
 
 (defun files-tests--save-some-buffers (pred def-pred-bind exp-1 exp-2)
   "Helper function to test `save-some-buffers'.
