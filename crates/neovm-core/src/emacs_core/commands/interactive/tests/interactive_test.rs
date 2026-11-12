@@ -7417,3 +7417,33 @@ fn interactive_prefix_policy_runs_once_before_invalid_argument_errors() {
     );
     assert_eq!(result, "OK ((error 1) (error 1))");
 }
+
+#[test]
+fn invalid_control_letter_error_follows_text_quoting_style_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `Fcall_interactively` (src/callint.c) signals with `error`, whose format string goes
+    // through `doprnt`: its grave accent and apostrophe follow `text-quoting-style`, but the
+    // letter it formats with `%c` is left as it is, and the octal code takes 3 digits (`%03o`).
+    assert_eq!(
+        eval_one(
+            r##"(let ((message-of
+                    (lambda (spec)
+                      (condition-case err
+                          (call-interactively (list 'lambda nil (list 'interactive spec)))
+                        (error (car (cdr err)))))))
+                  (list
+                   (let ((text-quoting-style 'grave)) (funcall message-of "\xFF"))
+                   (let ((text-quoting-style 'straight)) (funcall message-of "\xFF"))
+                   (let ((text-quoting-style 'curve)) (funcall message-of "\xFF"))
+                   (let ((text-quoting-style 'curve)) (funcall message-of "`"))
+                   (let ((text-quoting-style 'grave)) (funcall message-of "\C-a"))))"##
+        ),
+        concat!(
+            "OK (\"Invalid control letter `\u{ff}' (#o377, #x00ff) in interactive calling string\"",
+            " \"Invalid control letter '\u{ff}' (#o377, #x00ff) in interactive calling string\"",
+            " \"Invalid control letter \u{2018}\u{ff}\u{2019} (#o377, #x00ff) in interactive calling string\"",
+            " \"Invalid control letter \u{2018}`\u{2019} (#o140, #x0060) in interactive calling string\"",
+            " \"Invalid control letter `\u{1}' (#o001, #x0001) in interactive calling string\")"
+        )
+    );
+}
