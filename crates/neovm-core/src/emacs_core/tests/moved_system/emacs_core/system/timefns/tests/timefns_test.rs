@@ -1958,3 +1958,30 @@ mod cpu_soft_limit;
 #[cfg(target_os = "linux")]
 #[path = "local_reader_concurrency.rs"]
 mod local_reader_concurrency;
+
+/// GNU `Fencode_time` (src/timefns.c) decodes its SECOND field with `decode_lisp_time`, so a
+/// `(TICKS . HZ)` second keeps a frequency of any size, a bignum included, as `decode-time` with
+/// FORM t produces. This is GNU's decode-then-encode-time.
+#[test]
+fn encode_time_accepts_seconds_with_a_bignum_frequency() {
+    crate::test_utils::init_test_tracing();
+    let result = runtime_startup_eval_all(
+        r#"(let ((big (1+ most-positive-fixnum)))
+             (mapcar
+              (lambda (a)
+                (let* ((d (decode-time a t t))
+                       (e (condition-case err (encode-time d) (error err))))
+                  (list (car d) e (ignore-errors (time-equal-p a e)))))
+              (list (cons 1000000000000 big)
+                    (cons (* 3 big) big)
+                    (cons big 1000000000000))))"#,
+    );
+    assert_eq!(
+        result,
+        [concat!(
+            "OK (((1000000000000 . 2305843009213693952) (1000000000000 . 2305843009213693952) t)",
+            " ((6917529027641081856 . 2305843009213693952) (6917529027641081856 . 2305843009213693952) t)",
+            " ((43009213693952 . 1000000000000) (2305843009213693952 . 1000000000000) t))"
+        )]
+    );
+}
