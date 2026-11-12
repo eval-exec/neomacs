@@ -139,6 +139,9 @@ mod mouse_position_in_root_frame_gui_oracle;
 #[path = "native_frame_focus.rs"]
 mod native_frame_focus;
 
+#[path = "word_wrap_cursor.rs"]
+mod word_wrap_cursor;
+
 #[path = "native_menus.rs"]
 mod native_menus;
 

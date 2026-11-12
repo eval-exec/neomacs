@@ -4058,6 +4058,7 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
             row_limit,
             DisplayRowMeasuredFaceMetrics::new(8.0, 16.0, 12.0, 8.0),
             Color::from_pixel(0x00FFFFFF),
+            charpos,
         ),
     )
     .render_if_needed_and_apply(
