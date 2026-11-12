@@ -2,6 +2,8 @@
 
 mod chrome_memo_session_test;
 mod edit_sync_session_test;
+mod font_entity_catalog_review_test;
+mod font_listing_size_review_test;
 mod idle_redisplay_session_test;
 mod main_test;
 mod selected_font_capability_test;

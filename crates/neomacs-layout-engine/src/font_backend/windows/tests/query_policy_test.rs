@@ -5,6 +5,7 @@ use neovm_core::face::{FontSlant, FontWidth};
 fn query() -> FontCandidateQuery {
     FontCandidateQuery {
         scalable: None,
+        otf: None,
         script_coverage: None,
         scope: FontCandidateScope::All,
         required: RequiredFontCoverage::Any,

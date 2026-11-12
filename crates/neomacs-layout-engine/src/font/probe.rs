@@ -791,7 +791,7 @@ impl OtfCapabilityCache {
 
 #[cfg(all(test, unix))]
 #[path = "tests/otf_cache_test.rs"]
-mod otf_cache_tests;
+pub(crate) mod otf_cache_tests;
 
 pub fn otf_capability(file: &str, face_index: u32) -> Option<OtfCapability> {
     let data = std::fs::read(file).ok()?;

@@ -1,6 +1,8 @@
 //! Bounded native discovery answers. Scoring and font opening remain callers'
 //! responsibilities; every argument affecting native enumeration is in the key.
-use super::{FcQueryKind, ListedFont, NativeFontScriptCoverage};
+use super::{
+    CandidateQuery, FcQueryKind, ListedFont, NativeFontOtfRequirement, NativeFontScriptCoverage,
+};
 use std::collections::VecDeque;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,19 +13,22 @@ pub(super) struct Query {
     langs: Vec<String>,
     script_coverage: Option<NativeFontScriptCoverage>,
     scalable: Option<bool>,
+    otf: Option<NativeFontOtfRequirement>,
     kind: FcQueryKind,
 }
 
 impl Query {
-    pub(super) fn new(
-        family: Option<&str>,
-        ranges: &[(u32, u32)],
-        required_char: Option<u32>,
-        langs: &[String],
-        script_coverage: Option<&NativeFontScriptCoverage>,
-        scalable: Option<bool>,
-        kind: FcQueryKind,
-    ) -> Option<Self> {
+    pub(super) fn new(request: &CandidateQuery<'_>) -> Option<Self> {
+        let &CandidateQuery {
+            family,
+            query_charset_ranges: ranges,
+            required_char,
+            langs,
+            script_coverage,
+            scalable,
+            otf,
+            kind,
+        } = request;
         // Oversized requests remain valid native queries, but cannot enlarge
         // the reusable cache or allocate an unbounded duplicate key.
         let script_bytes = script_coverage.map_or(0, |coverage| match coverage {
@@ -32,10 +37,18 @@ impl Query {
                 characters.len().saturating_mul(std::mem::size_of::<u32>())
             }
         });
+        let otf_bytes = otf.map_or(0, |requirement| {
+            requirement
+                .gsub
+                .len()
+                .saturating_add(requirement.gpos.len())
+                .saturating_mul(std::mem::size_of::<crate::font_backend::NativeFontOtfFeature>())
+        });
         if ranges.len() > 1024
             || langs.len() > 64
             || (family.map_or(0, str::len) + langs.iter().map(String::len).sum::<usize>())
                 .saturating_add(script_bytes)
+                .saturating_add(otf_bytes)
                 > 65536
         {
             return None;
@@ -47,6 +60,7 @@ impl Query {
             langs: langs.to_vec(),
             script_coverage: script_coverage.cloned(),
             scalable,
+            otf: otf.cloned(),
             kind,
         })
     }
@@ -68,6 +82,10 @@ impl Query {
                         characters.len() * std::mem::size_of::<u32>()
                     }
                 })
+            + self.otf.as_ref().map_or(0, |requirement| {
+                (requirement.gsub.len() + requirement.gpos.len())
+                    * std::mem::size_of::<crate::font_backend::NativeFontOtfFeature>()
+            })
     }
 }
 

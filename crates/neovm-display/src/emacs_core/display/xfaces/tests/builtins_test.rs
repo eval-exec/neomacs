@@ -1354,11 +1354,12 @@ fn internal_set_lisp_face_attribute_eval_uses_live_frame_font_parameter_for_defa
             .as_int(),
         Some(102)
     );
-    assert_eq!(
+    // GNU Ffont_get exposes basic properties or explicit extras; the native
+    // face height is checked through the live face attribute below.
+    assert!(
         font_get(vec![internal_font, Value::keyword(":height")])
-            .expect("internal opened font height")
-            .as_int(),
-        Some(102)
+            .expect("public opened font height property")
+            .is_nil()
     );
     assert!(
         fontp(vec![public_font, Value::symbol("font-object")])

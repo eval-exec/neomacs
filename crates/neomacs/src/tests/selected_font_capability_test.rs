@@ -1,6 +1,8 @@
 use super::super::*;
 
-fn native_catalog_font(key: &str) -> neomacs_layout_engine::font_backend::PlatformFontMatch {
+pub(super) fn native_catalog_font(
+    key: &str,
+) -> neomacs_layout_engine::font_backend::PlatformFontMatch {
     use neomacs_display_protocol::font::{
         FontBackendKind, FontMemoryAsset, FontOutlineAsset, ResolvedFontIdentity,
     };
@@ -28,7 +30,7 @@ fn native_catalog_font(key: &str) -> neomacs_layout_engine::font_backend::Platfo
     }
 }
 
-fn listed_catalog_font(
+pub(super) fn listed_catalog_font(
     font: &neomacs_layout_engine::font_backend::PlatformFontMatch,
 ) -> neomacs_layout_engine::font::resolver::ListedFontCandidate {
     use neomacs_layout_engine::font_backend::{
@@ -70,7 +72,7 @@ fn core_listed_font_entities(
     })
 }
 
-fn list_catalog_font(
+pub(super) fn list_catalog_font(
     catalog: &mut FontEntityCatalog,
     entity: neomacs_layout_engine::font::resolver::ListedFontCandidate,
 ) -> ResolvedFontSpecMatch {
@@ -84,6 +86,10 @@ fn list_catalog_font(
 fn listed_native_font_stays_unmaterialized_until_selected() {
     let mut catalog = FontEntityCatalog::default();
     let font = native_catalog_font("native:catalog-fixture");
+    assert_eq!(
+        core_listed_font_entity_preview(&listed_catalog_font(&font)).native_index,
+        None
+    );
     let listed = list_catalog_font(&mut catalog, listed_catalog_font(&font));
     let handle = listed.coverage_handle.expect("listed entity handle");
     assert_eq!(listed.family.as_utf8_str(), Some("Catalog Fixture"));
@@ -315,6 +321,15 @@ fn listed_base_and_named_file_instances_keep_distinct_discovery_handles() {
         .unwrap();
     let base = file_catalog_font(file, 0, Vec::new());
     let named = file_catalog_font(file, 0x0001_0000, Vec::new());
+    assert_eq!(
+        core_listed_font_entity_preview(&listed_catalog_font(&base)).native_index,
+        Some(0)
+    );
+    assert_eq!(
+        core_listed_font_entity_preview(&listed_catalog_font(&named)).native_index,
+        Some(0x0001_0000),
+        "listing publication preserves the complete native named-instance selector"
+    );
     assert_eq!(
         base.identity, named.identity,
         "unresolved canonical keys lack named-instance coordinates"

@@ -34,7 +34,7 @@
    (lambda () (not (null (list-fonts spec nil 1))))))
 
 (defun font-frame-scalable-cases ()
-  ;; The private font directory contains only the pinned Hack outline font.
+  ;; The private font directory contains pinned Hack and Spleen fonts.
   ;; An explicitly nil property requests non-scalable fonts; absence does not.
   (font-frame-script-case
    "scalable-explicit-nil" nil (font-spec :family "Hack" :scalable nil))
@@ -51,6 +51,68 @@
   (font-frame-script-case
    "scalable-nil-average-width-zero" nil
    (font-spec :family "Hack" :avgwidth 0 :scalable nil)))
+
+(defun font-frame-remapping-cases ()
+  (set-frame-font "Hack-13" t)
+  (let* ((plain (x-list-fonts "Hack-13" 'default nil 1))
+         (unconstrained (x-list-fonts "Hack-13" nil nil 1))
+         (pixels (font-get (font-spec :name (car plain)) :size)))
+    (unless (and (integerp pixels) (> pixels 0))
+      (error "Pinned Hack FACE did not provide a pixel size: %S" plain))
+    ;; lookup_named_face receives a NULL window, but get_lface_attributes
+    ;; still consults the current buffer's remapping whenever FRAME is live.
+    (let ((face-remapping-alist '((default (:height 2.0) default))))
+      (font-frame-observe
+       "face-remapping-default-height" (* 2 pixels)
+       (lambda ()
+         (font-get (font-spec :name (car (x-list-fonts "Hack-13" 'default nil 1)))
+                   :size)))
+      (font-frame-observe
+       "face-remapping-nil-face" unconstrained
+       (lambda () (x-list-fonts "Hack-13" nil nil 1)))
+      (font-frame-observe
+       "face-remapping-invalid-face" plain
+       (lambda () (x-list-fonts "Hack-13" [] nil 1))))
+    (font-frame-observe
+     "face-remapping-restored" plain
+     (lambda () (x-list-fonts "Hack-13" 'default nil 1)))))
+
+(defun font-frame-property-cases ()
+  (font-frame-script-case
+   "otf-unsupported-hack-script" nil
+   (font-spec :family "Hack" :otf '(zzzz) :font-frame-case 'unsupported-otf))
+  (font-frame-observe
+   "font-extra-existing-slots-shared" t
+   (lambda ()
+     (let* ((spec (font-spec :family "Hack" :lang 'en :font-frame-custom 11
+                             :font-frame-case 'shared-extra))
+            (entity (car (list-fonts spec nil 1))))
+       (font-put spec :lang 'fr)
+       (font-put spec :font-frame-custom 22)
+       (and entity (eq (font-get entity :lang) 'fr)
+            (equal (font-get entity :font-frame-custom) 22)))))
+  (font-frame-observe
+   "font-native-key-updates-primary-slot" t
+   (lambda ()
+     (let* ((fake (cons "font-frame-forged" 999))
+            (spec (font-spec :family "Hack" :font-entity fake
+                             :font-frame-case 'native-key))
+            (before (font-get spec :font-entity))
+            (entity (car (list-fonts spec nil 1)))
+            (after (font-get spec :font-entity)))
+       (and entity (eq before fake) (not (eq after fake))
+            (eq after (font-get entity :font-entity))
+            (consp after) (stringp (car after))
+            (not (multibyte-string-p (car after)))
+            (equal (cdr after) 0)))))
+  (font-frame-observe
+   "font-point-size-zero-dpi" '((16) nil)
+   (lambda ()
+     (list
+      (mapcar (lambda (font) (font-get font :size))
+              (list-fonts (font-spec :family "Spleen" :size 50.0 :dpi 0)))
+      (mapcar (lambda (font) (font-get font :size))
+              (list-fonts (font-spec :family "Spleen" :size 50.0)))))))
 
 (defun font-frame-script-cases ()
   ;; Every named script has a unique specification. GNU caches script
@@ -94,6 +156,8 @@
              tty names)
         (font-frame-script-cases)
         (font-frame-scalable-cases)
+        (font-frame-remapping-cases)
+        (font-frame-property-cases)
         (setq tty (make-terminal-frame
                    `((tty . ,(getenv "NEOMACS_FONT_FRAME_TTY"))
                      (tty-type . "xterm-256color")
@@ -130,6 +194,8 @@
              (gui-graphic . t) (tty-graphic . :json-false)
              (script-cases . 9)
              (scalable-cases . 7)
+             (face-remapping-cases . 4)
+             (font-property-cases . 4)
              (observations . ,(vconcat (reverse font-frame-observations)))))
           (select-frame gui)
           (kill-emacs (if passed 0 1))))

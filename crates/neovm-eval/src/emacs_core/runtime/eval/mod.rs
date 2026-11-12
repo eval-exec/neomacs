@@ -2539,6 +2539,22 @@ pub enum FontScriptCoverage {
     Any(Vec<u32>),
 }
 
+/// One required or excluded OpenType feature in a native listing query.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FontOtfFeature {
+    Required([u8; 4]),
+    Forbidden([u8; 4]),
+}
+
+/// Owned OpenType tags; Lisp font properties remain in the evaluator.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FontOtfRequirement {
+    pub script: [u8; 4],
+    pub language: Option<[u8; 4]>,
+    pub gsub: Vec<FontOtfFeature>,
+    pub gpos: Vec<FontOtfFeature>,
+}
+
 /// Listing constraints which must not alter the driver's single-font match
 /// and opening operations. An absent size leaves scalable entities unsized.
 #[derive(Clone, Debug, PartialEq)]
@@ -2555,6 +2571,7 @@ pub struct FontSpecListQuery {
     pub dpi: Option<u32>,
     pub average_width: Option<i32>,
     pub script_coverage: Option<FontScriptCoverage>,
+    pub otf: Option<FontOtfRequirement>,
 }
 
 /// An enumerated entity retains its catalog size rather than opening a font
@@ -2562,6 +2579,8 @@ pub struct FontSpecListQuery {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListedFontEntity {
     pub font: ResolvedFontSpecMatch,
+    /// Raw file-backed Fontconfig selector, including named-instance bits.
+    pub native_index: Option<i32>,
     pub driver: Option<SymId>,
     pub adstyle: Option<neovm_value::heap_types::LispString>,
     pub pixel_size: Option<u32>,

@@ -387,9 +387,26 @@ pub enum NativeFontScriptCoverage {
     Any(Vec<u32>),
 }
 
+/// Positive or negative OpenType feature admission for native font listing.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NativeFontOtfFeature {
+    Required([u8; 4]),
+    Forbidden([u8; 4]),
+}
+
+/// Owned GNU Fontconfig listing constraints for both layout tables.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NativeFontOtfRequirement {
+    pub script: [u8; 4],
+    pub language: Option<[u8; 4]>,
+    pub gsub: Vec<NativeFontOtfFeature>,
+    pub gpos: Vec<NativeFontOtfFeature>,
+}
+
 /// Discovery request passed from shared policy to one native backend.
 #[derive(Clone, Debug)]
 pub struct FontCandidateQuery {
+    pub otf: Option<NativeFontOtfRequirement>,
     /// Explicit Fontconfig listing scalability; absent stays unconstrained.
     pub scalable: Option<bool>,
     pub script_coverage: Option<NativeFontScriptCoverage>,

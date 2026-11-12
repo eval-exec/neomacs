@@ -4598,3 +4598,11 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	struct	struct
 crates/neovm-eval/src/emacs_core/runtime/owned_roots/mod.rs	fn	fn impl Context::owned_root_retainer
 crates/neovm-eval/src/emacs_core/runtime/owned_roots/mod.rs	fn	fn impl OwnedRootRetainer::retain
 crates/neovm-eval/src/emacs_core/runtime/owned_roots/mod.rs	struct	struct OwnedRootRetainer
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum FontOtfFeature
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOtfRequirement field gpos
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOtfRequirement field gsub
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOtfRequirement field language
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOtfRequirement field script
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field otf
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontOtfRequirement
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	ListedFontEntity field native_index

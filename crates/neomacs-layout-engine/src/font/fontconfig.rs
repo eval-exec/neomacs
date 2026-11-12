@@ -16,7 +16,9 @@ use crate::font::policy::{
 };
 use crate::font::selection::{CandidateSelectionScore, candidate_selection_score};
 pub use crate::font::subpixel::FontconfigSubpixelOrder;
-use crate::font_backend::{FontFamilyName, NativeFontScriptCoverage, PlatformFontSize};
+use crate::font_backend::{
+    FontFamilyName, NativeFontOtfRequirement, NativeFontScriptCoverage, PlatformFontSize,
+};
 #[cfg(unix)]
 use fontconfig_sys::constants::{
     FC_RGBA, FC_RGBA_BGR, FC_RGBA_NONE, FC_RGBA_RGB, FC_RGBA_VBGR, FC_RGBA_VRGB,
@@ -40,6 +42,8 @@ use {fontconfig::Pattern, fontconfig_sys};
 
 #[cfg(unix)]
 mod candidate_cache;
+#[cfg(unix)]
+mod otf_requirement;
 #[cfg(all(test, unix))]
 pub(crate) mod test_config;
 
@@ -429,6 +433,7 @@ pub fn find_font_for_spec(
         &query_langs,
         None,
         None,
+        None,
     );
 
     select_find_font_candidate(candidates, &spec).map(|mut candidate| {
@@ -592,6 +597,7 @@ fn match_font_from_spec(
             &query_charset_ranges,
             Some(ch as u32),
             &query_langs,
+            None,
             None,
             None,
         );
@@ -990,6 +996,31 @@ fn raw_pattern_string(pattern: *mut fontconfig_sys::FcPattern, key: &CStr) -> Op
 }
 
 #[cfg(unix)]
+fn raw_pattern_matches_otf_script(
+    pattern: *mut fontconfig_sys::FcPattern,
+    script: [u8; 4],
+) -> bool {
+    let mut capability: *mut fontconfig_sys::FcChar8 = ptr::null_mut();
+    // SAFETY: enumeration owns this live pattern in its font-set guard. The
+    // property name is static and the output pointer is writable for the call.
+    let result = unsafe {
+        fontconfig_sys::FcPatternGetString(
+            pattern,
+            fontconfig_sys::constants::FC_CAPABILITY.as_ptr(),
+            0,
+            &mut capability,
+        )
+    };
+    if result != fontconfig_sys::FcResultMatch || capability.is_null() {
+        return false;
+    }
+    // SAFETY: successful FcPatternGetString returns a NUL-terminated value
+    // owned by the live pattern. This byte borrow ends before the font-set drops.
+    let capability = unsafe { CStr::from_ptr(capability.cast()) };
+    otf_requirement::capability_matches(capability.to_bytes(), script)
+}
+
+#[cfg(unix)]
 fn raw_pattern_int(pattern: *mut fontconfig_sys::FcPattern, key: &CStr) -> Option<i32> {
     let mut value = 0;
     let result =
@@ -1279,17 +1310,21 @@ pub(crate) fn fc_list_candidates(
     langs: &[String],
     script_coverage: Option<&NativeFontScriptCoverage>,
     scalable: Option<bool>,
+    otf: Option<&NativeFontOtfRequirement>,
 ) -> Vec<ListedFont> {
     fc_query_candidates(
         #[cfg(test)]
         owner,
-        family,
-        query_charset_ranges,
-        required_char,
-        langs,
-        script_coverage,
-        scalable,
-        FcQueryKind::List,
+        &CandidateQuery {
+            family,
+            query_charset_ranges,
+            required_char,
+            langs,
+            script_coverage,
+            scalable,
+            otf,
+            kind: FcQueryKind::List,
+        },
     )
 }
 
@@ -1303,13 +1338,16 @@ pub(crate) fn fc_match_candidate(
     fc_query_candidates(
         #[cfg(test)]
         owner,
-        family,
-        query_charset_ranges,
-        None,
-        langs,
-        None,
-        None,
-        FcQueryKind::Match,
+        &CandidateQuery {
+            family,
+            query_charset_ranges,
+            required_char: None,
+            langs,
+            script_coverage: None,
+            scalable: None,
+            otf: None,
+            kind: FcQueryKind::Match,
+        },
     )
     .into_iter()
     // Like GNU ftfont_match, do not silently substitute a missing family.
@@ -1325,6 +1363,20 @@ enum FcQueryKind {
     Match,
 }
 
+/// The complete native request, borrowed by both cache-key construction and
+/// enumeration so their constraint sets cannot diverge at a call site.
+#[cfg(unix)]
+struct CandidateQuery<'a> {
+    family: Option<&'a str>,
+    query_charset_ranges: &'a [(u32, u32)],
+    required_char: Option<u32>,
+    langs: &'a [String],
+    script_coverage: Option<&'a NativeFontScriptCoverage>,
+    scalable: Option<bool>,
+    otf: Option<&'a NativeFontOtfRequirement>,
+    kind: FcQueryKind,
+}
+
 #[cfg(all(test, unix))]
 thread_local! {
     static NATIVE_CANDIDATE_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -1334,35 +1386,15 @@ thread_local! {
 #[cfg(unix)]
 fn fc_query_candidates(
     #[cfg(test)] owner: test_config::QueryOwner<'_>,
-    family: Option<&str>,
-    query_charset_ranges: &[(u32, u32)],
-    required_char: Option<u32>,
-    langs: &[String],
-    script_coverage: Option<&NativeFontScriptCoverage>,
-    scalable: Option<bool>,
-    kind: FcQueryKind,
+    request: &CandidateQuery<'_>,
 ) -> Vec<ListedFont> {
     #[cfg(test)]
     let access = owner.acquire();
-    let Some(query) = candidate_cache::Query::new(
-        family,
-        query_charset_ranges,
-        required_char,
-        langs,
-        script_coverage,
-        scalable,
-        kind,
-    ) else {
+    let Some(query) = candidate_cache::Query::new(request) else {
         return fc_query_candidates_uncached(
             #[cfg(test)]
             access.borrow(),
-            family,
-            query_charset_ranges,
-            required_char,
-            langs,
-            script_coverage,
-            scalable,
-            kind,
+            request,
         );
     };
     let epoch = {
@@ -1388,13 +1420,7 @@ fn fc_query_candidates(
     let answer = fc_query_candidates_uncached(
         #[cfg(test)]
         access.borrow(),
-        family,
-        query_charset_ranges,
-        required_char,
-        langs,
-        script_coverage,
-        scalable,
-        kind,
+        request,
     );
     let mut caches = ({
         #[cfg(all(test, unix))]
@@ -1417,14 +1443,18 @@ fn fc_query_candidates(
 #[cfg(unix)]
 fn fc_query_candidates_uncached(
     #[cfg(test)] config: test_config::ConfigBorrow<'_>,
-    family: Option<&str>,
-    query_charset_ranges: &[(u32, u32)],
-    required_char: Option<u32>,
-    langs: &[String],
-    script_coverage: Option<&NativeFontScriptCoverage>,
-    scalable: Option<bool>,
-    kind: FcQueryKind,
+    request: &CandidateQuery<'_>,
 ) -> Vec<ListedFont> {
+    let &CandidateQuery {
+        family,
+        query_charset_ranges,
+        required_char,
+        langs,
+        script_coverage,
+        scalable,
+        otf,
+        kind,
+    } = request;
     #[cfg(test)]
     NATIVE_CANDIDATE_QUERIES.with(|count| count.set(count.get() + 1));
     #[cfg(test)]
@@ -1664,6 +1694,13 @@ fn fc_query_candidates_uncached(
     let before = candidates.len();
 
     for &candidate_pattern in patterns {
+        if let Some(requirement) = otf {
+            // GNU ftfont_list gates the actual candidate's projected native
+            // capability before opening the file for both layout-table checks.
+            if !raw_pattern_matches_otf_script(candidate_pattern, requirement.script) {
+                continue;
+            }
+        }
         if let Some(required_char) = required_char
             && !raw_pattern_supports_any_char(candidate_pattern, &[required_char])
         {
@@ -1679,6 +1716,15 @@ fn fc_query_candidates_uncached(
         let Some(candidate) = listed_font_from_raw_pattern(candidate_pattern) else {
             continue;
         };
+        if let Some(requirement) = otf
+            && !candidate
+                .matched
+                .file
+                .as_deref()
+                .is_some_and(|file| otf_requirement::matches_file(file, requirement))
+        {
+            continue;
+        }
         candidates.push(candidate);
     }
     tracing::trace!(
@@ -1702,6 +1748,7 @@ pub(crate) fn fc_list_candidates(
     langs: &[String],
     _script_coverage: Option<&NativeFontScriptCoverage>,
     _scalable: Option<bool>,
+    _otf: Option<&NativeFontOtfRequirement>,
 ) -> Vec<ListedFont> {
     let mut candidates = Vec::new();
     let query_langs = if langs.is_empty() {

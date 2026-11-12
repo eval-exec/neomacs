@@ -234,6 +234,7 @@ impl FontBackend for FontconfigBackend {
             &query.languages,
             query.script_coverage.as_ref(),
             query.scalable,
+            query.otf.as_ref(),
         )
         .into_iter()
         .filter_map(|candidate| {

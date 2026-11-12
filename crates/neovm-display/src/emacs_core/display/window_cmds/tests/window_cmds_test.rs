@@ -4062,9 +4062,15 @@ fn gui_frame_font_parameter_exposes_font_name_not_font_object() {
     font_face.slant = Some(FontSlant::Normal);
     font_face.height = Some(crate::face::FaceHeight::Absolute(27));
     let font_object = crate::emacs_core::font::build_font_object(&font_face);
-    let public_font_name =
+    // GNU Ffont_get reads basic slots or FONT_EXTRA, not FONT_NAME_INDEX.
+    assert!(
         crate::emacs_core::font::font_get(vec![font_object, Value::keyword("name")])
-            .expect("opened font name");
+            .expect("public opened font name property")
+            .is_nil()
+    );
+    let query =
+        crate::emacs_core::font::query_font(&mut ev, vec![font_object]).expect("query opened font");
+    let public_font_name = query.as_vector_data().expect("font query vector")[0];
     let public_font_name_text = public_font_name
         .as_utf8_str()
         .expect("opened font name string")

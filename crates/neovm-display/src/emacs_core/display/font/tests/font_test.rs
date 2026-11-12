@@ -1,5 +1,11 @@
 use super::*;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
+#[path = "extra_sharing_test.rs"]
+mod extra_sharing_test;
+#[path = "face_remapping_review_test.rs"]
+mod face_remapping_review_test;
+#[path = "preferred_zero_size_review_test.rs"]
+mod preferred_zero_size_review_test;
 #[path = "system_font_test.rs"]
 mod system_font_test;
 use crate::emacs_core::display_host::{AvailableFontFamilyName, FontResolveRequest, FrameFontSize};
@@ -720,7 +726,7 @@ fn find_font_eval_requests_exact_registry_match_from_display_host() {
         Some("iso10646-1")
     );
     assert_eq!(
-        font_get(vec![font, Value::keyword("file")])
+        properties::native_named(font_value_fields(&font).unwrap(), "file")
             .unwrap()
             .as_utf8_str(),
         Some("/tmp/NotoSansMonoCJKsc-Regular.otf")
@@ -729,6 +735,11 @@ fn find_font_eval_requests_exact_registry_match_from_display_host() {
         fontp(vec![font, Value::symbol("font-entity")])
             .unwrap()
             .is_truthy()
+    );
+    assert!(
+        font_get(vec![font, Value::keyword("file")])
+            .unwrap()
+            .is_nil()
     );
     let info = font_info(&mut eval, vec![font]).unwrap();
     let values = info.as_vector_data().expect("font info vector");
@@ -875,7 +886,8 @@ fn font_spec_style_symbols_casefold_and_preserve_aliases_like_gnu() {
         Value::symbol("EXTRABOLD"),
     ])
     .unwrap();
-    assert_eq!(put.as_bare_symbol_name(), Some("extrabold"));
+    // GNU Ffont_put returns the original argument, not its normalized storage.
+    assert_eq!(put.as_bare_symbol_name(), Some("EXTRABOLD"));
     assert_eq!(
         font_get(vec![spec, Value::keyword("weight")])
             .unwrap()
@@ -908,7 +920,7 @@ fn font_get_and_put() {
     // Overwrite existing property.
     let put_family =
         font_put(vec![spec, Value::keyword("family"), Value::string("Serif")]).unwrap();
-    assert_eq!(put_family.as_bare_symbol_name(), Some("Serif"));
+    assert_eq!(put_family.as_utf8_str(), Some("Serif"));
     let family2 = font_get(vec![spec, Value::keyword("family")]).unwrap();
     assert_eq!(family2.as_bare_symbol_name(), Some("Serif"));
 }
@@ -1256,9 +1268,14 @@ fn font_at_eval_reads_source_style_inline_face_keywords() {
             .as_bare_symbol_name(),
         Some("JetBrains Mono")
     );
-    // After the specbind refactor, font-get :height returns the raw
-    // float value from the face spec instead of converting to decipoints.
-    let height = font_get(vec![font, Value::keyword("height")]).unwrap();
+    // Native face metadata remains available internally; GNU font-get reads
+    // only basic slots and user extras, not the opened font's private height.
+    assert!(
+        font_get(vec![font, Value::keyword("height")])
+            .unwrap()
+            .is_nil()
+    );
+    let height = OpenedFont::decode(font).unwrap().property("height");
     match height.kind() {
         ValueKind::Float => {
             let v = height.as_float().unwrap();
@@ -1430,10 +1447,15 @@ fn font_at_eval_prefers_backend_selected_font_match_when_available() {
         Some("Noto Sans Mono CJK SC")
     );
     assert_eq!(
-        font_get(vec![font, Value::keyword("file")])
+        properties::native_named(font_value_fields(&font).unwrap(), "file")
             .unwrap()
             .as_utf8_str(),
         Some("/tmp/NotoSansMonoCJKsc-Regular.otf")
+    );
+    assert!(
+        font_get(vec![font, Value::keyword("file")])
+            .unwrap()
+            .is_nil()
     );
     let info = font_info(&mut eval, vec![font]).unwrap();
     let values = info.as_vector_data().expect("font info vector");
@@ -1690,6 +1712,11 @@ fn font_info_eval_accepts_font_object_on_live_gui_frame() {
         .insert("好");
 
     let font = font_at(&mut eval, vec![Value::fixnum(1)]).unwrap();
+    assert!(
+        font_get(vec![font, Value::keyword("file")])
+            .unwrap()
+            .is_nil()
+    );
     let info = font_info(&mut eval, vec![font]).unwrap();
     if !info.is_vector() {
         panic!("expected font info vector");
@@ -1920,14 +1947,16 @@ fn opened_font_retains_exact_backend_identity_and_variations() {
         identity
     );
     assert_eq!(
-        font_get(vec![object, Value::keyword("full-name")])
+        OpenedFont::decode(object)
             .unwrap()
+            .property("full-name")
             .as_utf8_str(),
         Some("Variable Sans Semibold")
     );
     assert_eq!(
-        font_get(vec![object, Value::keyword("postscript-name")])
+        OpenedFont::decode(object)
             .unwrap()
+            .property("postscript-name")
             .as_utf8_str(),
         Some("VariableSans-Semibold")
     );
@@ -1962,6 +1991,11 @@ fn font_info_eval_reports_font_vector_file_slot_on_live_gui_frame() {
             0,
             None,
         ),
+    );
+    assert!(
+        font_get(vec![font, Value::keyword("file")])
+            .unwrap()
+            .is_nil()
     );
     let info = font_info(&mut eval, vec![font]).unwrap();
     let values = info.as_vector_data().expect("font info vector");
@@ -2783,6 +2817,7 @@ fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_lim
     ensure_selected_gui_frame(&mut eval);
     let queries = Rc::new(RefCell::new(Vec::new()));
     let listed = |family, weight| neovm_eval::emacs_core::eval::ListedFontEntity {
+        native_index: None,
         driver: Some(intern("ftcrhb")),
         adstyle: None,
         font: ResolvedFontSpecMatch {
@@ -2896,6 +2931,7 @@ fn listing_publishes_adstyle_before_ignored_font_filtering() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     let listed = neovm_eval::emacs_core::eval::ListedFontEntity {
+        native_index: None,
         driver: Some(intern("ftcrhb")),
         adstyle: Some(LispString::from_utf8("ja")),
         pixel_size: Some(13),
@@ -2924,13 +2960,21 @@ fn listing_publishes_adstyle_before_ignored_font_filtering() {
         font_get(vec![entity, Value::keyword("adstyle")]).unwrap(),
         Value::symbol("ja")
     );
-    for key in ["avgwidth", "avg-width"] {
-        assert_eq!(
-            font_get(vec![entity, Value::keyword(key)]).unwrap(),
-            Value::fixnum(120),
-            "{key}"
-        );
-    }
+    assert_eq!(
+        font_get(vec![entity, Value::keyword("avgwidth")]).unwrap(),
+        Value::fixnum(120)
+    );
+    // The historical native alias is an internal metadata lens; it is not
+    // one of GNU's twelve public basic properties.
+    assert_eq!(
+        properties::native_named(font_value_fields(&entity).unwrap(), "avg-width"),
+        Some(Value::fixnum(120))
+    );
+    assert!(
+        font_get(vec![entity, Value::keyword("avg-width")])
+            .unwrap()
+            .is_nil()
+    );
     eval.set_variable(
         "face-ignored-fonts",
         Value::list(vec![Value::string("-ja-")]),
@@ -3054,6 +3098,7 @@ fn mixed_font_listing_context() -> (
     eval.set_display_host(Box::new(ListingFontDisplayHost {
         queries: Rc::clone(&queries),
         fonts: vec![neovm_eval::emacs_core::eval::ListedFontEntity {
+            native_index: None,
             driver: Some(intern("ftcrhb")),
             adstyle: None,
             font: ResolvedFontSpecMatch {

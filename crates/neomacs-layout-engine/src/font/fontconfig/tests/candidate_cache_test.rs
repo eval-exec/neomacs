@@ -1,46 +1,124 @@
 use super::*;
 fn query(family: &str) -> Query {
-    Query::new(Some(family), &[], None, &[], None, None, FcQueryKind::List).unwrap()
+    Query::new(&CandidateQuery {
+        family: Some(family),
+        query_charset_ranges: &[],
+        required_char: None,
+        langs: &[],
+        script_coverage: None,
+        scalable: None,
+        otf: None,
+        kind: FcQueryKind::List,
+    })
+    .unwrap()
 }
 #[test]
 fn complete_query_key_distinguishes_native_inputs() {
     let base = query("test");
     for other in [
-        Query::new(None, &[], None, &[], None, None, FcQueryKind::List).unwrap(),
-        Query::new(
-            Some("test"),
-            &[(1, 3)],
-            None,
-            &[],
-            None,
-            None,
-            FcQueryKind::List,
-        )
+        Query::new(&CandidateQuery {
+            family: None,
+            query_charset_ranges: &[],
+            required_char: None,
+            langs: &[],
+            script_coverage: None,
+            scalable: None,
+            otf: None,
+            kind: FcQueryKind::List,
+        })
         .unwrap(),
-        Query::new(
-            Some("test"),
-            &[],
-            Some(65),
-            &[],
-            None,
-            None,
-            FcQueryKind::List,
-        )
+        Query::new(&CandidateQuery {
+            family: Some("test"),
+            query_charset_ranges: &[(1, 3)],
+            required_char: None,
+            langs: &[],
+            script_coverage: None,
+            scalable: None,
+            otf: None,
+            kind: FcQueryKind::List,
+        })
         .unwrap(),
-        Query::new(
-            Some("test"),
-            &[],
-            None,
-            &["en".into()],
-            None,
-            None,
-            FcQueryKind::List,
-        )
+        Query::new(&CandidateQuery {
+            family: Some("test"),
+            query_charset_ranges: &[],
+            required_char: Some(65),
+            langs: &[],
+            script_coverage: None,
+            scalable: None,
+            otf: None,
+            kind: FcQueryKind::List,
+        })
         .unwrap(),
-        Query::new(Some("test"), &[], None, &[], None, None, FcQueryKind::Match).unwrap(),
+        Query::new(&CandidateQuery {
+            family: Some("test"),
+            query_charset_ranges: &[],
+            required_char: None,
+            langs: &["en".into()],
+            script_coverage: None,
+            scalable: None,
+            otf: None,
+            kind: FcQueryKind::List,
+        })
+        .unwrap(),
+        Query::new(&CandidateQuery {
+            family: Some("test"),
+            query_charset_ranges: &[],
+            required_char: None,
+            langs: &[],
+            script_coverage: None,
+            scalable: None,
+            otf: None,
+            kind: FcQueryKind::Match,
+        })
+        .unwrap(),
     ] {
         assert_ne!(base, other);
     }
+}
+
+#[test]
+fn otf_listing_key_accounts_for_owned_feature_payload_and_budget() {
+    use crate::font_backend::{NativeFontOtfFeature, NativeFontOtfRequirement};
+    let mut requirement = NativeFontOtfRequirement {
+        script: *b"latn",
+        language: None,
+        gsub: vec![NativeFontOtfFeature::Required(*b"liga"); 1000],
+        gpos: vec![],
+    };
+    let key = Query::new(&CandidateQuery {
+        family: Some("test"),
+        query_charset_ranges: &[],
+        required_char: None,
+        langs: &[],
+        script_coverage: None,
+        scalable: None,
+        otf: Some(&requirement),
+        kind: FcQueryKind::List,
+    })
+    .unwrap();
+    let mut cache = CandidateQueries::with_limits(8, 1024);
+    cache.insert(key.clone(), &[]);
+    assert!(
+        cache.get(&key).is_none(),
+        "feature payload counts toward cached bytes"
+    );
+    requirement
+        .gsub
+        .resize(20000, NativeFontOtfFeature::Required(*b"liga"));
+    assert!(
+        Query::new(&CandidateQuery {
+            family: Some("test"),
+            query_charset_ranges: &[],
+            required_char: None,
+            langs: &[],
+            script_coverage: None,
+            scalable: None,
+            otf: Some(&requirement),
+            kind: FcQueryKind::List,
+        })
+        .is_none(),
+        "oversized feature requests bypass key allocation and reusable storage"
+    );
 }
 #[test]
 fn bounded_cache_reuses_negative_answers_and_evicts_least_recent_query() {
@@ -63,15 +141,16 @@ fn byte_limit_evicts_and_oversized_keys_are_not_retained() {
     cache.insert(query("too long"), &[]);
     assert_eq!(cache.entries.len(), 1);
     assert!(
-        Query::new(
-            Some(&"x".repeat(65537)),
-            &[],
-            None,
-            &[],
-            None,
-            None,
-            FcQueryKind::List
-        )
+        Query::new(&CandidateQuery {
+            family: Some(&"x".repeat(65537)),
+            query_charset_ranges: &[],
+            required_char: None,
+            langs: &[],
+            script_coverage: None,
+            scalable: None,
+            otf: None,
+            kind: FcQueryKind::List,
+        })
         .is_none()
     );
 }
@@ -119,25 +198,27 @@ fn font_payload_counts_toward_limit_and_returned_answers_are_independent() {
 fn script_query_keys_preserve_mode_characters_and_payload_budget() {
     let all = NativeFontScriptCoverage::All(Vec::new());
     let any = NativeFontScriptCoverage::Any(Vec::new());
-    let all_key = Query::new(
-        Some("script"),
-        &[],
-        None,
-        &[],
-        Some(&all),
-        None,
-        FcQueryKind::List,
-    )
+    let all_key = Query::new(&CandidateQuery {
+        family: Some("script"),
+        query_charset_ranges: &[],
+        required_char: None,
+        langs: &[],
+        script_coverage: Some(&all),
+        scalable: None,
+        otf: None,
+        kind: FcQueryKind::List,
+    })
     .unwrap();
-    let any_key = Query::new(
-        Some("script"),
-        &[],
-        None,
-        &[],
-        Some(&any),
-        None,
-        FcQueryKind::List,
-    )
+    let any_key = Query::new(&CandidateQuery {
+        family: Some("script"),
+        query_charset_ranges: &[],
+        required_char: None,
+        langs: &[],
+        script_coverage: Some(&any),
+        scalable: None,
+        otf: None,
+        kind: FcQueryKind::List,
+    })
     .unwrap();
     assert_ne!(
         all_key, any_key,
@@ -145,28 +226,30 @@ fn script_query_keys_preserve_mode_characters_and_payload_budget() {
     );
     let large = NativeFontScriptCoverage::All(vec![0x41; 20_000]);
     assert!(
-        Query::new(
-            Some("script"),
-            &[],
-            None,
-            &[],
-            Some(&large),
-            None,
-            FcQueryKind::List
-        )
+        Query::new(&CandidateQuery {
+            family: Some("script"),
+            query_charset_ranges: &[],
+            required_char: None,
+            langs: &[],
+            script_coverage: Some(&large),
+            scalable: None,
+            otf: None,
+            kind: FcQueryKind::List,
+        })
         .is_none(),
         "oversized script keys bypass reusable storage"
     );
     let payload = NativeFontScriptCoverage::Any(vec![0x41; 1024]);
-    let key = Query::new(
-        Some("script"),
-        &[],
-        None,
-        &[],
-        Some(&payload),
-        None,
-        FcQueryKind::List,
-    )
+    let key = Query::new(&CandidateQuery {
+        family: Some("script"),
+        query_charset_ranges: &[],
+        required_char: None,
+        langs: &[],
+        script_coverage: Some(&payload),
+        scalable: None,
+        otf: None,
+        kind: FcQueryKind::List,
+    })
     .unwrap();
     let mut cache = CandidateQueries::with_limits(8, query("script").bytes() + 128);
     cache.insert(key.clone(), &[]);

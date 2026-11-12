@@ -128,6 +128,7 @@ pub struct ListedFontCandidate {
 /// Constraints for catalog listing, separate from driver matching and opening.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FontEntityListConstraints {
+    pub otf: Option<crate::font_backend::NativeFontOtfRequirement>,
     pub scalable: Option<bool>,
     pub script_coverage: Option<crate::font_backend::NativeFontScriptCoverage>,
     pub driver: Option<neovm_core::emacs_core::intern::SymId>,
@@ -359,6 +360,7 @@ impl FontResolver {
         }
         let mut candidate_query = self.entity_candidate_query(query);
         if self.backend.kind() == FontBackendKind::Fontconfig {
+            candidate_query.otf = constraints.otf.clone();
             candidate_query.script_coverage = constraints.script_coverage.clone();
             candidate_query.scalable = constraints.scalable;
         }
@@ -415,6 +417,9 @@ impl FontResolver {
             // unknown; a fixed strike alone does not imply an average width.
             constraints
                 .pixel_size
+                // GNU's primary filter tests `if (size)`. Numeric zero is
+                // still meaningful in the separate PREFER scoring path.
+                .filter(|size| *size != 0)
                 .is_none_or(|size| match metadata.size {
                     PlatformFontSize::Fixed { device_ppem_26_6 } => {
                         (device_ppem_26_6 >> 6).abs_diff(size) <= 1
@@ -549,6 +554,7 @@ impl FontResolver {
         let scope = family.map_or(FontCandidateScope::All, FontCandidateScope::Family);
         FontCandidateQuery {
             scalable: None,
+            otf: None,
             script_coverage: None,
             scope,
             // Entity enumeration is not character fallback.  Registry
@@ -684,6 +690,7 @@ impl FontResolver {
         let family_name = FontFamilyName::new(family.clone())?;
         let query = FontCandidateQuery {
             scalable: None,
+            otf: None,
             script_coverage: None,
             scope: FontCandidateScope::Family(family_name),
             required: RequiredFontCoverage::Any,
@@ -735,6 +742,7 @@ impl FontResolver {
         }
         let mut query = FontCandidateQuery {
             scalable: None,
+            otf: None,
             script_coverage: None,
             scope: FontCandidateScope::All,
             required: RequiredFontCoverage::Any,
@@ -1013,6 +1021,7 @@ impl FontResolver {
             };
             let query = FontCandidateQuery {
                 scalable: None,
+                otf: None,
                 script_coverage: None,
                 scope,
                 required: RequiredFontCoverage::Character(policy.ch),

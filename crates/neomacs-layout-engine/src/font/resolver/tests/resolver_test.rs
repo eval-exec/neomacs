@@ -3,6 +3,8 @@ use super::*;
 mod postscript_fallback_review_test;
 #[path = "preferred_size_metadata_review_test.rs"]
 mod preferred_size_metadata_review_test;
+#[path = "preferred_zero_size_review_test.rs"]
+mod preferred_zero_size_review_test;
 #[path = "registry_adstyle_review_test.rs"]
 mod registry_adstyle_review_test;
 #[path = "scalability_review_test.rs"]

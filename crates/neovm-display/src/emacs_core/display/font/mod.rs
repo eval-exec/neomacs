@@ -9,6 +9,7 @@
 //! The xfaces.c builtin surface (internal-*-lisp-face*, colors, face-id,
 //! face-font) lives in `super::xfaces`.
 
+mod properties;
 mod subrs;
 mod system_fonts;
 #[cfg(any(test, feature = "test-support"))]
@@ -427,6 +428,26 @@ pub(crate) fn font_value_text(value: &Value) -> Option<String> {
         ValueKind::String => font_string_text(value),
         ValueKind::Symbol(id) => Some(resolve_sym(id).to_owned()),
         _ => None,
+    }
+}
+
+fn font_value_text_lisp_string_mode(
+    value: Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> Option<LispString> {
+    if value.is_nil() {
+        return None;
+    }
+    if value.is_string() {
+        value.as_lisp_string().cloned()
+    } else {
+        // Preserve the existing UTF-8 host representation for textual names;
+        // retain raw Lisp bytes when the symbol has no UTF-8 spelling.
+        value.as_symbol_lisp_string(mode).map(|name| {
+            name.as_utf8_str()
+                .map(LispString::from_utf8)
+                .unwrap_or_else(|| name.clone())
+        })
     }
 }
 
@@ -1235,7 +1256,7 @@ impl OpenedFont {
     }
 
     fn property(self, name: &str) -> Value {
-        font_vector_get_flexible(self.fields(), name).unwrap_or(Value::NIL)
+        properties::native_named(self.fields(), name).unwrap_or(Value::NIL)
     }
 
     fn query_vector(self) -> Value {
@@ -1293,48 +1314,10 @@ pub(crate) fn font_value_fields(value: &Value) -> Option<&'static [Value]> {
     }
 }
 
-/// The `type-of`/`cl-type-of` symbol for a font value, mirroring GNU's
-/// `PVEC_FONT` size discrimination (`font-spec` < `font-entity` <
-/// `font-object`, src/font.h FONT_*_MAX). Specs and entities are tagged public
-/// vectors; opened fonts use the opaque `PVEC_FONT` runtime tag. `None` for
-/// non-font values.
-/// Extract a property from a tagged font vector.
-///
-/// Property lookup is strict: keys only match if they are exactly equal to
-/// `prop` (keyword vs symbol distinction is preserved).
-fn font_vector_get(vec_elems: &[Value], prop: &Value) -> Value {
-    // Skip the tag at index 0; scan remaining pairs.
-    let mut i = 1;
-    while i + 1 < vec_elems.len() {
-        if vec_elems[i] == *prop {
-            return vec_elems[i + 1];
-        }
-        i += 2;
-    }
-    Value::NIL
-}
-
-/// Get a property from a tagged font vector while accepting both `family` and `:family`
-/// style keys, and both keyword and symbol keys.
+/// Read canonical native constraints from font properties. Legacy flat vectors
+/// also accept the historical bare-symbol aliases.
 pub(crate) fn font_vector_get_flexible(vec_elems: &[Value], prop: &str) -> Option<Value> {
-    let prop_norm = prop.trim_start_matches(':');
-    let mut i = 1;
-    while i + 1 < vec_elems.len() {
-        let key = &vec_elems[i];
-        let key_text = match key.kind() {
-            ValueKind::Symbol(k) => resolve_sym(k),
-            _ => {
-                i += 2;
-                continue;
-            }
-        };
-        let key_norm = key_text.trim_start_matches(':');
-        if key_norm == prop_norm {
-            return Some(vec_elems[i + 1]);
-        }
-        i += 2;
-    }
-    None
+    properties::named(vec_elems, prop)
 }
 
 fn font_spec_field_to_string(value: &Value) -> String {
@@ -1512,19 +1495,15 @@ fn xlfd_fields_from_font_vector(
 }
 
 /// Set (or add) a property in a font-spec in place.
-fn font_spec_put(vec_elems: &mut Vec<Value>, prop: &Value, val: &Value) -> EvalResult {
-    let normalized = normalize_font_prop_value(prop, val)?;
-    let mut i = 1;
-    while i + 1 < vec_elems.len() {
-        if vec_elems[i] == *prop {
-            vec_elems[i + 1] = normalized;
-            return Ok(normalized);
-        }
-        i += 2;
-    }
-    vec_elems.push(*prop);
-    vec_elems.push(normalized);
-    Ok(normalized)
+fn font_spec_put(
+    vec_elems: &mut Vec<Value>,
+    prop: &Value,
+    val: &Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> EvalResult {
+    let normalized = normalize_font_prop_value(prop, val, mode)?;
+    properties::set_user(vec_elems, *prop, normalized, mode);
+    Ok(*val)
 }
 
 fn invalid_font_property(prop: &Value, val: &Value) -> Flow {
@@ -1638,10 +1617,61 @@ fn validate_spacing_font_prop(prop: &Value, val: &Value) -> EvalResult {
     }
 }
 
-fn normalize_font_prop_value(prop: &Value, val: &Value) -> EvalResult {
-    let key = match prop.kind() {
-        ValueKind::Symbol(id) => resolve_sym(id).trim_start_matches(':'),
-        _ => return Ok(*val),
+fn validate_otf_font_prop(
+    prop: &Value,
+    val: &Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> EvalResult {
+    let symbol = |value: Value| value.is_symbol(mode);
+    let valid = || {
+        if val.is_nil() {
+            return true;
+        }
+        if !val.is_cons() || !symbol(val.cons_car()) {
+            return false;
+        }
+        let mut tail = val.cons_cdr();
+        if tail.is_nil() {
+            return true;
+        }
+        if !tail.is_cons() {
+            return false;
+        }
+        // GNU font_prop_validate_otf rechecks SCRIPT at this point rather
+        // than LANGSYS. Keep that constructor rule; native malformed-language
+        // behavior is outside the supported symbolic-tag query contract.
+        for _ in 0..2 {
+            tail = tail.cons_cdr();
+            if tail.is_nil() {
+                return true;
+            }
+            if !tail.is_cons()
+                || !list_to_vec(&tail.cons_car())
+                    .is_some_and(|features| features.into_iter().all(symbol))
+            {
+                return false;
+            }
+        }
+        // GNU ignores fields beyond the GSUB and GPOS feature lists.
+        true
+    };
+    if valid() {
+        Ok(*val)
+    } else {
+        Err(neovm_value::error::signal_error_with_arg(
+            "invalid font property",
+            Value::cons(*prop, *val),
+        ))
+    }
+}
+
+fn normalize_font_prop_value(
+    prop: &Value,
+    val: &Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> EvalResult {
+    let Some(key) = properties::canonical_name(*prop, mode) else {
+        return Ok(*val);
     };
 
     match key {
@@ -1650,7 +1680,7 @@ fn normalize_font_prop_value(prop: &Value, val: &Value) -> EvalResult {
                 .map(|text| Value::from_sym_id(intern(&text)))
                 .map(Ok)
                 .unwrap_or(Ok(*val)),
-            ValueKind::Symbol(_) | ValueKind::Nil => Ok(*val),
+            _ if val.is_symbol(mode) => Ok(*val),
             _ => Err(invalid_font_property(prop, val)),
         },
         "registry" => match val.kind() {
@@ -1669,6 +1699,7 @@ fn normalize_font_prop_value(prop: &Value, val: &Value) -> EvalResult {
             validate_non_negative_font_prop(prop, val)
         }
         "spacing" => validate_spacing_font_prop(prop, val),
+        "otf" => validate_otf_font_prop(prop, val, mode),
         _ => Ok(*val),
     }
 }
@@ -1686,21 +1717,12 @@ fn normalize_font_prop_value(prop: &Value, val: &Value) -> EvalResult {
 /// Set a basic font-spec property (`:family`, `:size`, etc.) on a property
 /// vector, replacing any existing entry.  Mirrors GNU's `ASET (font, IDX, val)`.
 fn font_parse_set(elems: &mut Vec<Value>, key: &str, val: Value) {
-    let prop = Value::keyword(key);
-    let mut i = 1;
-    while i + 1 < elems.len() {
-        if elems[i]
-            .as_bare_symbol_name()
-            .map(|name| name.trim_start_matches(':'))
-            == Some(key)
-        {
-            elems[i + 1] = val;
-            return;
-        }
-        i += 2;
-    }
-    elems.push(prop);
-    elems.push(val);
+    properties::set_user(
+        elems,
+        Value::keyword(key),
+        val,
+        neovm_value::tagged::SymbolMode::Bare,
+    );
 }
 
 /// Canonicalize and store a weight/slant/width style word the way GNU's
@@ -2341,6 +2363,22 @@ pub(crate) fn fontp(args: Vec<Value>) -> EvalResult {
 ///
 /// Returns a vector `[:font-spec :family "Monospace" :weight normal :size 12]`.
 pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
+    font_spec_with_mode(args, neovm_value::tagged::SymbolMode::Bare)
+}
+
+fn font_spec_in_context(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let mode = eval.symbol_mode();
+    if mode == neovm_value::tagged::SymbolMode::Bare {
+        font_spec(args)
+    } else {
+        font_spec_with_mode(args, mode)
+    }
+}
+
+fn font_spec_with_mode(args: Vec<Value>, mode: neovm_value::tagged::SymbolMode) -> EvalResult {
     let mut elems: Vec<Value> = Vec::with_capacity(1 + args.len());
     elems.push(Value::keyword(FONT_SPEC_TAG));
 
@@ -2366,17 +2404,7 @@ pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
             ));
         };
 
-        if key.is_nil() {
-            return Err(signal(
-                "error",
-                vec![
-                    Value::string("invalid font property"),
-                    Value::list(vec![Value::cons(Value::keyword("type"), *value)]),
-                ],
-            ));
-        }
-
-        if !(key.is_bare_keyword() || key.is_bare_symbol()) {
+        if !key.is_symbol(mode) {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), *key],
@@ -2386,11 +2414,7 @@ pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
         // GNU `Ffont_spec`: a `:name` argument is a font name string that is
         // parsed via `font_parse_name` into the spec's basic slots; the name
         // itself is also recorded under `:name`.
-        if key
-            .as_bare_symbol_name()
-            .map(|name| name.trim_start_matches(':'))
-            == Some("name")
-        {
+        if properties::canonical_name(*key, mode) == Some("name") {
             let Some(name) = font_string_text(value) else {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
@@ -2403,12 +2427,12 @@ pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
                     vec![Value::string(format!("Invalid font name: {name}"))],
                 ));
             }
-            font_parse_set(&mut elems, "name", *value);
+            properties::set_user(&mut elems, *key, *value, mode);
             continue;
         }
 
-        elems.push(*key);
-        elems.push(normalize_font_prop_value(key, value)?);
+        let value = normalize_font_prop_value(key, value, mode)?;
+        properties::set_user(&mut elems, *key, value, mode);
     }
 
     Ok(Value::vector(elems))
@@ -2417,6 +2441,22 @@ pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
 /// `(font-get FONT PROP)` -- get a property value from a font-spec.
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn font_get(args: Vec<Value>) -> EvalResult {
+    font_get_with_mode(args, neovm_value::tagged::SymbolMode::Bare)
+}
+
+fn font_get_in_context(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let mode = eval.symbol_mode();
+    if mode == neovm_value::tagged::SymbolMode::Bare {
+        font_get(args)
+    } else {
+        font_get_with_mode(args, mode)
+    }
+}
+
+fn font_get_with_mode(args: Vec<Value>, mode: neovm_value::tagged::SymbolMode) -> EvalResult {
     expect_args("font-get", &args, 2)?;
     if !is_font(&args[0]) {
         return Err(signal(
@@ -2424,7 +2464,7 @@ pub(crate) fn font_get(args: Vec<Value>) -> EvalResult {
             vec![Value::symbol("font"), args[0]],
         ));
     }
-    if !(args[1].is_bare_keyword() || args[1].is_bare_symbol()) {
+    if !args[1].is_symbol(mode) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[1]],
@@ -2435,12 +2475,26 @@ pub(crate) fn font_get(args: Vec<Value>) -> EvalResult {
         ValueKind::Veclike(VecLikeType::Vector | VecLikeType::Font) => {
             let elems =
                 font_value_fields(&args[0]).expect("validated font value exposes properties");
-            let exact = font_vector_get(elems, &args[1]);
-            if !exact.is_nil() {
-                return Ok(exact);
+            if let Some(value) = properties::get(elems, args[1], mode) {
+                return Ok(value);
             }
-
-            if let Some(id) = args[1].as_bare_keyword_id() {
+            if args[1].as_symbol_id(mode) == Some(intern(":otf"))
+                && let Some(opened) = args[0].as_font_data()
+            {
+                // Native storage keeps the font-info prefix. GNU's property
+                // getter calls the driver directly and returns only GSUB/GPOS.
+                let capability = opened.capability;
+                return Ok(
+                    if capability.is_cons() && capability.cons_car() == Value::symbol("opentype") {
+                        capability.cons_cdr()
+                    } else {
+                        capability
+                    },
+                );
+            }
+            if properties::FontProperties::decode(elems).root().is_none()
+                && let Some(id) = args[1].as_bare_keyword_id()
+            {
                 return Ok(font_vector_get_flexible(elems, resolve_sym(id)).unwrap_or(Value::NIL));
             }
 
@@ -2452,24 +2506,79 @@ pub(crate) fn font_get(args: Vec<Value>) -> EvalResult {
 
 /// `(font-put FONT PROP VAL)` -- set a property in a font-spec and return VAL.
 pub(crate) fn font_put(args: Vec<Value>) -> EvalResult {
+    font_put_with_mode(args, neovm_value::tagged::SymbolMode::Bare)
+}
+
+fn font_put_in_context(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let mode = eval.symbol_mode();
+    if mode == neovm_value::tagged::SymbolMode::Bare {
+        font_put(args)
+    } else {
+        font_put_with_mode(args, mode)
+    }
+}
+
+fn font_put_with_mode(args: Vec<Value>, mode: neovm_value::tagged::SymbolMode) -> EvalResult {
     expect_args("font-put", &args, 3)?;
-    if !is_font_spec(&args[0]) {
+    let spec_only = properties::spec_only(args[1], mode);
+    if (spec_only && !is_font_spec(&args[0])) || (!spec_only && !is_font(&args[0])) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("font-spec"), args[0]],
+            vec![
+                Value::symbol(if spec_only { "font-spec" } else { "font" }),
+                args[0],
+            ],
+        ));
+    }
+    if !is_font_spec(&args[0])
+        && args[1].as_symbol_id(mode) == Some(intern(":neomacs-entity-handle"))
+    {
+        return Err(signal(
+            "error",
+            vec![Value::string("Native font identity is read-only")],
         ));
     }
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Vector) => {
+            if !is_font_spec(&args[0])
+                && properties::FontProperties::decode(args[0].as_vector_data().unwrap())
+                    .root()
+                    .is_none()
+            {
+                // Legacy tagged entities have no distinct user-extra lane.
+                // Preserve readable old metadata rather than silently hide it
+                // on the first write. New native entities always own a root.
+                return Err(signal(
+                    "error",
+                    vec![Value::string("Legacy font entity properties are read-only")],
+                ));
+            }
             let mut elems = args[0]
                 .as_vector_data()
                 .map(|items| items.to_vec())
                 .unwrap_or_default();
-            let normalized = font_spec_put(&mut elems, &args[1], &args[2])?;
+            let normalized = font_spec_put(&mut elems, &args[1], &args[2], mode)?;
             let _ = args[0].replace_vector_data(elems);
             Ok(normalized)
         }
-        _ => unreachable!("font-spec check above guarantees vector"),
+        ValueKind::Veclike(VecLikeType::Font) => {
+            let fields = font_value_fields(&args[0]).expect("validated opened font");
+            let root = properties::FontProperties::decode(fields)
+                .root()
+                .ok_or_else(|| {
+                    signal(
+                        "error",
+                        vec![Value::string("Legacy opened font properties are read-only")],
+                    )
+                })?;
+            let normalized = normalize_font_prop_value(&args[1], &args[2], mode)?;
+            properties::set_extra(root, args[1], normalized, mode);
+            Ok(args[2])
+        }
+        _ => unreachable!("font validation guarantees vector or opened font"),
     }
 }
 
@@ -2522,21 +2631,27 @@ pub(crate) fn list_fonts(
     }) {
         return Ok(Value::NIL);
     }
+    if font_has_uninterpretable_driver(&args[0], eval.symbol_mode()) {
+        return Ok(Value::NIL);
+    }
     let prefer = prefer
         .map(|spec| font_list_query(eval, spec, frame_id))
         .transpose()?;
     let mut query = font_list_query(eval, &args[0], frame_id)?;
     query.scalable = font_value_fields(&args[0])
-        .and_then(|fields| font_vector_get_flexible(fields, "scalable"))
+        .and_then(|fields| properties::named_with_mode(fields, "scalable", eval.symbol_mode()))
         .map(|value| !value.is_nil());
     query.script_coverage = font_script_coverage(eval, &args[0]);
+    query.otf = font_otf_requirement(&args[0], eval.symbol_mode());
     let ignored = eval.variable_value_or_nil(intern("face-ignored-fonts"));
     let patterns: Vec<_> = list_iter(ignored)
         .filter_map(|pattern| pattern.as_lisp_string().cloned())
         .collect();
+    let mode = eval.symbol_mode();
     let Some(host) = eval.display_host.as_mut() else {
         return Ok(Value::NIL);
     };
+    let shared_native_key = font_observe_reserved_native_key(host.as_mut(), &query, args[0], mode)?;
     let mut accept = |listed: &neovm_eval::emacs_core::eval::ListedFontEntity| {
         let entity = listed_font_entity(listed);
         let name = font_xlfd_name(vec![entity, Value::NIL, Value::T])?;
@@ -2563,30 +2678,134 @@ pub(crate) fn list_fonts(
     // bounds retained handles when ignored fonts precede accepted results.
     let fonts = host
         .list_fonts_for_spec(query, prefer, maximum, filter)
-        .map_err(|error| match error {
-            neovm_eval::emacs_core::eval::FontListError::Backend(message) => {
-                signal("error", vec![Value::string(message)])
-            }
-            neovm_eval::emacs_core::eval::FontListError::Filter(flow) => flow,
-        })?;
+        .map_err(font_list_error_to_flow)?;
+    let extras = font_primary_extra_fields(&args[0], mode);
     Ok(Value::list(
         fonts
             .iter()
             .take(maximum.unwrap_or(usize::MAX))
             .map(|listed| {
                 let entity = listed_font_entity(listed);
-                // FreeType and NS retain primary extras; W32 builds its own.
-                // Decide by the actual canonical driver, never a printed name.
-                if (listed.driver == Some(intern("ftcrhb")) || listed.driver == Some(intern("ns")))
-                    && let Some(value) = font_value_fields(&args[0])
-                        .and_then(|fields| font_vector_get_flexible(fields, "scalable"))
-                {
-                    font_put_entity_field(entity, "scalable", value);
-                }
+                font_copy_primary_extras(entity, listed, extras, shared_native_key, mode);
                 entity
             })
             .collect(),
     ))
+}
+
+fn font_list_error_to_flow(error: neovm_eval::emacs_core::eval::FontListError) -> Flow {
+    match error {
+        neovm_eval::emacs_core::eval::FontListError::Backend(message) => {
+            signal("error", vec![Value::string(message)])
+        }
+        neovm_eval::emacs_core::eval::FontListError::Filter(flow) => flow,
+    }
+}
+
+fn font_observe_reserved_native_key(
+    host: &mut dyn neovm_eval::emacs_core::eval::DisplayHost,
+    query: &neovm_eval::emacs_core::eval::FontSpecListQuery,
+    primary: Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> Result<Option<Value>, Flow> {
+    let driver = intern("ftcrhb");
+    if query.driver.is_some_and(|requested| requested != driver) {
+        return Ok(None);
+    }
+    let key = Value::keyword("font-entity");
+    let extras = font_primary_extra_fields(&primary, mode);
+    let Some(cell) = properties::assoc(extras, key, mode) else {
+        return Ok(None);
+    };
+    // font_list_entities passes these fields cleared to ftfont_list, which
+    // creates every native entity before MAX, preferences or ignored fonts.
+    // Observe only metadata; rejecting every entry prevents handle retention.
+    let mut observation = query.clone();
+    observation.driver = Some(driver);
+    observation.specification.weight = None;
+    observation.specification.slant = None;
+    observation.specification.width = None;
+    observation.size = None;
+    observation.dpi = None;
+    observation.average_width = None;
+    let mut last = None;
+    let mut observe = |listed: &neovm_eval::emacs_core::eval::ListedFontEntity| {
+        if listed.driver == Some(driver)
+            && let (Some(file), Some(index)) = (&listed.font.file, listed.native_index)
+        {
+            last = Some((file.clone(), index));
+        }
+        Ok(false)
+    };
+    // The existing driver gate rejects this request before native enumeration
+    // on NS/DirectWrite, even when the primary spec has no explicit :type.
+    host.list_fonts_for_spec(observation, None, None, Some(&mut observe))
+        .map_err(font_list_error_to_flow)?;
+    let Some((file, index)) = last else {
+        return Ok(None);
+    };
+    let file = Value::heap_string(LispString::from_unibyte(file.as_bytes().to_vec()));
+    let key = Value::cons(file, Value::fixnum(i64::from(index)));
+    // GNU's shallow extra copy shares this existing property pair. Its final
+    // native assignment updates the caller and all returned FT entities.
+    cell.set_cdr(key);
+    Ok(Some(key))
+}
+
+fn font_primary_extra_fields(spec: &Value, mode: neovm_value::tagged::SymbolMode) -> Value {
+    let fields = font_value_fields(spec).expect("validated font spec");
+    if let Some(extras) = properties::FontProperties::decode(fields).extras() {
+        return extras;
+    }
+    if !fields[1..]
+        .chunks_exact(2)
+        .any(|pair| !properties::basic(pair[0], mode))
+    {
+        return Value::NIL;
+    }
+    let mut fields = fields.to_vec();
+    let root = properties::ensure_root(&mut fields, mode);
+    let _ = spec.replace_vector_data(fields);
+    root.cons_cdr()
+}
+
+fn font_copy_primary_extras(
+    entity: Value,
+    listed: &neovm_eval::emacs_core::eval::ListedFontEntity,
+    extras: Value,
+    shared_native_key: Option<Value>,
+    mode: neovm_value::tagged::SymbolMode,
+) {
+    let freetype = listed.driver == Some(intern("ftcrhb"));
+    if !freetype && listed.driver != Some(intern("ns")) {
+        return;
+    }
+    let mut fields = entity.as_vector_data().expect("fresh font entity").to_vec();
+    let head = if freetype {
+        properties::copy_outer(extras)
+    } else {
+        extras
+    };
+    properties::replace_root(&mut fields, head);
+    let root = properties::FontProperties::decode(&fields)
+        .root()
+        .expect("fresh extra root");
+    if freetype && shared_native_key.is_none() {
+        let key = Value::keyword("font-entity");
+        // Missing native metadata cannot turn a caller's fake key into a
+        // backend identity. Actual Fontconfig entities always have both.
+        properties::remove_extra(root, key, mode);
+        if let (Some(file), Some(index)) = (&listed.font.file, listed.native_index) {
+            let file = Value::heap_string(LispString::from_unibyte(file.as_bytes().to_vec()));
+            properties::set_extra(
+                root,
+                key,
+                Value::cons(file, Value::fixnum(i64::from(index))),
+                mode,
+            );
+        }
+    }
+    let _ = entity.replace_vector_data(fields);
 }
 
 fn listed_font_entity(listed: &neovm_eval::emacs_core::eval::ListedFontEntity) -> Value {
@@ -2615,8 +2834,8 @@ fn listed_font_entity(listed: &neovm_eval::emacs_core::eval::ListedFontEntity) -
     entity
 }
 
-// Entities are immutable through Lisp font-put, but listing builds their
-// canonical fields before publishing the result to Lisp.
+// Listing builds canonical basic/native fields before publishing each entity.
+// Public font-put may subsequently change its ordinary extra properties.
 // Every caller passes a fresh vector from build_font_entity_for_spec_match;
 // no Lisp code runs between its construction and these private updates.
 fn font_put_entity_field(entity: Value, key: &str, value: Value) {
@@ -2624,11 +2843,21 @@ fn font_put_entity_field(entity: Value, key: &str, value: Value) {
         .as_vector_data()
         .expect("freshly constructed font entity vector")
         .to_vec();
-    font_parse_set(&mut fields, key, value);
+    properties::set_native(
+        &mut fields,
+        Value::keyword(key),
+        value,
+        neovm_value::tagged::SymbolMode::Bare,
+    );
     if key == "avgwidth" {
         for alias in FONT_AVERAGE_WIDTH_FIELDS.into_iter().skip(1) {
             if font_vector_get_flexible(&fields, alias).is_some() {
-                font_parse_set(&mut fields, alias, value);
+                properties::set_native(
+                    &mut fields,
+                    Value::keyword(alias),
+                    value,
+                    neovm_value::tagged::SymbolMode::Bare,
+                );
             }
         }
     }
@@ -2643,14 +2872,41 @@ fn font_script_coverage(
     spec: &Value,
 ) -> Option<neovm_eval::emacs_core::eval::FontScriptCoverage> {
     use neovm_eval::emacs_core::eval::FontScriptCoverage;
-    let script = font_vector_get_flexible(font_value_fields(spec)?, "script")?;
+    let fields = font_value_fields(spec)?;
     let mode = eval.symbol_mode();
+    let explicit_script = properties::named_with_mode(fields, "script", mode);
+    let script = if let Some(script) = explicit_script {
+        script
+    } else {
+        let otf = properties::named_with_mode(fields, "otf", mode)?;
+        if !otf.is_cons() || otf.cons_car().is_nil() {
+            return None;
+        }
+        let original_script = mode.unwrap(otf.cons_car());
+        let mut mappings = eval.variable_value_or_nil(intern("otf-script-alist"));
+        let mut mapped = None;
+        while mappings.is_cons() {
+            let entry = mappings.cons_car();
+            if entry.is_cons() && eq_value(&mode.unwrap(entry.cons_car()), &original_script) {
+                let script = entry.cons_cdr();
+                if script.is_symbol(mode) && !script.is_nil() {
+                    mapped = Some(script);
+                }
+                break;
+            }
+            mappings = mappings.cons_cdr();
+        }
+        mapped?
+    };
     let mut cursor = eval.variable_value_or_nil(intern("script-representative-chars"));
     while cursor.is_cons() {
         let entry = cursor.cons_car();
         if entry.is_cons() && eq_value(&mode.unwrap(entry.cons_car()), &mode.unwrap(script)) {
             let representatives = entry.cons_cdr();
             if let Some(values) = representatives.as_vector_data() {
+                // ftfont_list obtains vector alternatives only from an
+                // explicit :script extra, never from the derived OTF script.
+                explicit_script?;
                 return Some(FontScriptCoverage::Any(
                     values
                         .iter()
@@ -2682,19 +2938,115 @@ fn font_script_coverage(
     None
 }
 
+fn font_otf_tag(value: Value, mode: neovm_value::tagged::SymbolMode) -> Option<[u8; 4]> {
+    let name = neovm_value::intern::resolve_sym_lisp_string(value.as_symbol_id(mode)?).as_bytes();
+    let mut tag = [0; 4];
+    let count = name.len().min(tag.len());
+    tag[..count].copy_from_slice(&name[..count]);
+    Some(tag)
+}
+
+fn font_otf_requirement(
+    spec: &Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> Option<neovm_eval::emacs_core::eval::FontOtfRequirement> {
+    use neovm_eval::emacs_core::eval::{FontOtfFeature, FontOtfRequirement};
+    let otf = properties::named_with_mode(font_value_fields(spec)?, "otf", mode)?;
+    if !otf.is_cons() {
+        return None;
+    }
+    // Tags use the first four symbol bytes, preserving case and spaces.
+    // Short names are safely NUL-filled rather than reading outside a string.
+    let script = if otf.cons_car().is_nil() {
+        *b"DFLT"
+    } else {
+        font_otf_tag(otf.cons_car(), mode)?
+    };
+    let mut tail = otf.cons_cdr();
+    let language = if tail.is_cons() && !tail.cons_car().is_nil() {
+        let tag = font_otf_tag(tail.cons_car(), mode)?;
+        (tag != [0; 4]).then_some(tag)
+    } else {
+        None
+    };
+    let mut features = [Vec::new(), Vec::new()];
+    for side in &mut features {
+        tail = if tail.is_cons() {
+            tail.cons_cdr()
+        } else {
+            Value::NIL
+        };
+        let mut values = if tail.is_cons() {
+            tail.cons_car()
+        } else {
+            Value::NIL
+        };
+        let mut negative = false;
+        while values.is_cons() {
+            let value = values.cons_car();
+            if value.is_nil() {
+                negative = true;
+            } else {
+                let mut tag = font_otf_tag(value, mode)?;
+                if tag != [0; 4] {
+                    // GNU stores exclusion in the high bit of the feature tag.
+                    if negative || tag[0] & 0x80 != 0 {
+                        tag[0] &= 0x7f;
+                        side.push(FontOtfFeature::Forbidden(tag));
+                    } else {
+                        side.push(FontOtfFeature::Required(tag));
+                    }
+                }
+            }
+            values = values.cons_cdr();
+        }
+    }
+    let [gsub, gpos] = features;
+    Some(FontOtfRequirement {
+        script,
+        language,
+        gsub,
+        gpos,
+    })
+}
+
+// A positioned :type value can outlive the symbol mode that accepted it.
+// GNU font_list_entities/font_matching_entity gate a raw non-nil TYPE by EQ
+// before querying any driver. Losing its symbol projection must not turn that
+// present, unmatchable constraint into an unrestricted request.
+fn font_has_uninterpretable_driver(spec: &Value, mode: neovm_value::tagged::SymbolMode) -> bool {
+    font_value_fields(spec)
+        .and_then(|fields| properties::named_with_mode(fields, "type", mode))
+        .is_some_and(|value| !value.is_nil() && value.as_symbol_id(mode).is_none())
+}
+
 fn font_list_query(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     spec: &Value,
     frame_id: FrameId,
 ) -> Result<neovm_eval::emacs_core::eval::FontSpecListQuery, Flow> {
     let fields = font_value_fields(spec).expect("validated font specification");
-    let field = |key| font_vector_get_flexible(fields, key);
+    let mode = eval.symbol_mode();
+    let field = |key| properties::named_with_mode(fields, key, mode);
     let size = match field("size") {
+        Some(value)
+            if value.as_fixnum() == Some(0) || (value.is_float() && value.xfloat() == 0.0) =>
+        {
+            Some(FontOpeningSize::SmallestUsable)
+        }
         Some(value) if value.is_fixnum() => value
             .as_fixnum()
             .and_then(|size| u32::try_from(size).ok())
             .and_then(std::num::NonZeroU32::new)
             .map(FontOpeningSize::Pixels),
+        // GNU font_pixel_size multiplies point sizes by an explicitly supplied
+        // integer DPI, including zero. Preserve that computed zero separately
+        // from an absent DPI (which uses the frame resolution).
+        Some(value)
+            if value.is_float() && field("dpi").and_then(|dpi| dpi.as_fixnum()) == Some(0) =>
+        {
+            Some(FontOpeningSize::SmallestUsable)
+        }
         Some(value) if value.is_float() => {
             PositiveFontScalar::new(value.xfloat()).map(|size| FontOpeningSize::Points {
                 size,
@@ -2712,11 +3064,12 @@ fn font_list_query(
         specification,
         scalable: None,
         script_coverage: None,
+        otf: None,
         driver: field("type")
             .filter(|value| !value.is_nil())
-            .and_then(|value| value.as_bare_symbol_id()),
-        foundry: field("foundry").and_then(|value| font_value_text_lisp_string(&value)),
-        adstyle: field("adstyle").and_then(|value| font_value_text_lisp_string(&value)),
+            .and_then(|value| value.as_symbol_id(mode)),
+        foundry: field("foundry").and_then(|value| font_value_text_lisp_string_mode(value, mode)),
+        adstyle: field("adstyle").and_then(|value| font_value_text_lisp_string_mode(value, mode)),
         spacing: field("spacing")
             .and_then(|value| value.as_fixnum())
             .and_then(|value| i32::try_from(value).ok()),
@@ -2791,12 +3144,20 @@ pub(crate) fn x_list_fonts(
     {
         let face_name = args.get(1).and_then(font_value_text_lisp_string);
         let table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, false);
-        let face = table.resolve(
-            face_name
-                .as_ref()
-                .and_then(LispString::as_utf8_str)
-                .unwrap_or("default"),
-        );
+        let face = if let Some(name) = face_name.as_ref().and_then(LispString::as_utf8_str) {
+            // GNU's NULL window lookup still reads the current buffer's
+            // remapping when the target frame is live (xfaces.c).
+            let remapping = face_remapping_for_current_buffer(eval);
+            if remapping.is_empty() {
+                table.resolve(name)
+            } else {
+                table.resolve_with_remapping(name, &remapping)
+            }
+        } else {
+            // An invalid non-name FACE falls back to the frame font, without
+            // applying a remapping of the named default face.
+            table.resolve("default")
+        };
         let opened = eval
             .display_host
             .as_mut()
@@ -2901,15 +3262,15 @@ fn font_spec_resolve_request(
     };
 
     let elems = font_spec.as_vector_data().unwrap().clone();
-    let family = font_vector_get_flexible(&elems, "family")
-        .and_then(|value| font_value_text_lisp_string(&value));
-    let registry = font_vector_get_flexible(&elems, "registry")
-        .and_then(|value| font_value_text_lisp_string(&value));
-    let lang = font_vector_get_flexible(&elems, "lang")
-        .and_then(|value| font_value_text_lisp_string(&value));
-    let weight = font_vector_get_flexible(&elems, "weight").and_then(font_weight_from_value);
-    let slant = font_vector_get_flexible(&elems, "slant").and_then(font_slant_from_value);
-    let width = font_vector_get_flexible(&elems, "width").and_then(|value| match value.kind() {
+    let mode = eval.symbol_mode();
+    let field = |name| properties::named_with_mode(&elems, name, mode);
+    let family = field("family").and_then(|value| font_value_text_lisp_string_mode(value, mode));
+    let registry =
+        field("registry").and_then(|value| font_value_text_lisp_string_mode(value, mode));
+    let lang = field("lang").and_then(|value| font_value_text_lisp_string_mode(value, mode));
+    let weight = field("weight").and_then(font_weight_from_value);
+    let slant = field("slant").and_then(font_slant_from_value);
+    let width = field("width").and_then(|value| match value.kind() {
         ValueKind::Symbol(id) => FontWidth::from_symbol(resolve_sym(id)),
         _ => None,
     });
@@ -2943,6 +3304,9 @@ pub(crate) fn find_font(
     }
 
     let request = font_spec_resolve_request(eval, &args[0], args.get(1))?;
+    if font_has_uninterpretable_driver(&args[0], eval.symbol_mode()) {
+        return Ok(Value::NIL);
+    }
     match_font_spec_request(eval, request)
 }
 
@@ -3006,9 +3370,9 @@ pub(crate) fn font_xlfd_name(args: Vec<Value>) -> EvalResult {
 
     let elems = font_value_fields(&args[0]).expect("validated font value exposes properties");
     if is_font_object(&args[0])
-        && font_vector_get_flexible(elems, "name").is_some_and(|v| v.is_string())
+        && properties::native_named(elems, "name").is_some_and(|v| v.is_string())
     {
-        let font_name = font_vector_get_flexible(elems, "name")
+        let font_name = properties::native_named(elems, "name")
             .unwrap()
             .as_utf8_str()
             .unwrap()
@@ -3471,6 +3835,11 @@ fn finish_opened_font(
     capability: Value,
     identity: ResolvedFontIdentity,
 ) -> Value {
+    let extras = properties::FontProperties::decode(&fields)
+        .extras()
+        .map(properties::copy_cells)
+        .unwrap_or(Value::NIL);
+    properties::replace_root(&mut fields, extras);
     // Render the public XLFD before changing the representation from an
     // ordinary property vector to the opaque `PVEC_FONT` tag.
     let mut xlfd_fields = fields.clone();
@@ -3481,12 +3850,15 @@ fn finish_opened_font(
         .cloned()
         .map(Value::heap_string)
         .unwrap_or_else(|| Value::string(font_full_name(&fields, metrics.pixel_size)));
-    fields.push(Value::keyword("name"));
-    fields.push(name);
-    fields.push(Value::keyword("full-name"));
-    fields.push(full_name);
-    fields.push(Value::keyword("file"));
-    fields.push(file.cloned().map(Value::heap_string).unwrap_or(Value::NIL));
+    let mode = neovm_value::tagged::SymbolMode::Bare;
+    properties::set_native(&mut fields, Value::keyword("name"), name, mode);
+    properties::set_native(&mut fields, Value::keyword("full-name"), full_name, mode);
+    properties::set_native(
+        &mut fields,
+        Value::keyword("file"),
+        file.cloned().map(Value::heap_string).unwrap_or(Value::NIL),
+        mode,
+    );
     Value::make_font(FontObjectData {
         fields: fields.into(),
         metrics,
@@ -3563,7 +3935,7 @@ fn build_font_entity_for_spec_match(
     // Scalable entities carry average width 0 (GNU src/ftfont.c sets
     // FONT_AVGWIDTH_INDEX to 0); the XLFD renders it as "0", not "*".
     push_field("avg-width", Value::fixnum(0));
-
+    properties::replace_root(&mut elems, Value::NIL);
     Value::vector(elems)
 }
 
@@ -3619,7 +3991,12 @@ pub(crate) fn font_name_value(font_like: &Value) -> Option<Value> {
         ValueKind::String => Some(*font_like),
         ValueKind::Veclike(VecLikeType::Vector | VecLikeType::Font) if is_font(font_like) => {
             let elems = font_value_fields(font_like)?;
-            if let Some(value) = font_vector_get_flexible(elems, "name") {
+            let name = if is_font_object(font_like) {
+                properties::native_named(elems, "name")
+            } else {
+                font_vector_get_flexible(elems, "name")
+            };
+            if let Some(value) = name {
                 return match value.kind() {
                     ValueKind::String => Some(value),
                     ValueKind::Symbol(sym) => Some(Value::string(resolve_sym(sym).to_owned())),
@@ -3790,7 +4167,7 @@ fn font_info_vector_for_entity(
         .map(FontOpeningSize::Pixels)
         .unwrap_or(requested_size);
     let text_field = |name| {
-        font_vector_get_flexible(&elems, name).and_then(|value| font_value_text_lisp_string(&value))
+        properties::native_named(&elems, name).and_then(|value| font_value_text_lisp_string(&value))
     };
     let opened = eval
         .display_host
@@ -3818,7 +4195,7 @@ fn font_info_vector_for_entity(
     let file_value = opened
         .file
         .map(Value::heap_string)
-        .or_else(|| font_vector_get_flexible(&elems, "file").filter(|value| value.is_string()))
+        .or_else(|| properties::native_named(&elems, "file").filter(|value| value.is_string()))
         .unwrap_or(Value::NIL);
     // Element 14: (opentype GSUB . GPOS) like GNU's
     // `Fcons (Qopentype, otf_capability (font))` (font.c Ffont_info).
@@ -4358,6 +4735,9 @@ pub(crate) fn font_info(
         FontInfoTarget::Opened(opened) => return Ok(opened.info_vector()),
         FontInfoTarget::Entity(entity) => (entity, FontOpeningSize::SmallestUsable),
         FontInfoTarget::Spec(spec) => {
+            if font_has_uninterpretable_driver(&spec, eval.symbol_mode()) {
+                return Ok(Value::NIL);
+            }
             // GNU font_matching_entity replaces all three style slots with
             // this frame's default-face attributes, even explicit spec
             // styles. It does not inherit the frame's font family.
@@ -4490,7 +4870,7 @@ pub(crate) fn font_has_char_p(
         FontCoverageTarget::Opened(opened.identity.clone())
     } else {
         let handle = font_value_fields(&args[0])
-            .and_then(|fields| font_vector_get_flexible(fields, "neomacs-entity-handle"))
+            .and_then(|fields| properties::native_named(fields, "neomacs-entity-handle"))
             .and_then(|value| value.as_int())
             .and_then(|value| u32::try_from(value).ok())
             .and_then(FontEntityHandle::new);

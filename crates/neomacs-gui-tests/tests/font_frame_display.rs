@@ -173,6 +173,11 @@ fn run(engine: Engine) {
         fonts.join("Hack-Regular.ttf"),
     )
     .unwrap();
+    fs::copy(
+        neomacs_test_fonts::spleen_2_2_0().otb(),
+        fonts.join("spleen-8x16.otb"),
+    )
+    .unwrap();
     let config = artifact_root.join("fonts.conf");
     fs::write(
         &config,
@@ -243,6 +248,8 @@ fn run(engine: Engine) {
     assert_eq!(state["tty-graphic"], false);
     assert_eq!(state["script-cases"], 9);
     assert_eq!(state["scalable-cases"], 7);
+    assert_eq!(state["face-remapping-cases"], 4);
+    assert_eq!(state["font-property-cases"], 4);
     let observations = state["observations"].as_array().unwrap();
     let expected = [
         "script-explicit-nil-han",
@@ -261,6 +268,14 @@ fn run(engine: Engine) {
         "scalable-name-true",
         "scalable-name-mixed-case",
         "scalable-nil-average-width-zero",
+        "face-remapping-default-height",
+        "face-remapping-nil-face",
+        "face-remapping-invalid-face",
+        "face-remapping-restored",
+        "otf-unsupported-hack-script",
+        "font-extra-existing-slots-shared",
+        "font-native-key-updates-primary-slot",
+        "font-point-size-zero-dpi",
         "gui-selected-tty-default-face-negative-width",
         "gui-selected-tty-invalid-face-negative-width",
         "tty-selected-nil-frame",

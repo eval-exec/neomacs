@@ -11,12 +11,12 @@ neovm_eval::emacs_core::subr::define_subrs! {
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
         "font-spec",
-        NativeFn::NoContextVec(font_spec),
+        NativeFn::ContextVec(font_spec_in_context),
         SubrArity::new(0, None),
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
         "font-get",
-        NativeFn::NoContextVec(font_get),
+        NativeFn::ContextVec(font_get_in_context),
         SubrArity::new(2, Some(2)),
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -26,7 +26,7 @@ neovm_eval::emacs_core::subr::define_subrs! {
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
         "font-put",
-        NativeFn::NoContextVec(font_put),
+        NativeFn::ContextVec(font_put_in_context),
         SubrArity::new(3, Some(3)),
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(

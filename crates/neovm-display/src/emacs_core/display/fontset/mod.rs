@@ -1390,22 +1390,7 @@ fn value_text(value: &Value) -> Option<String> {
 }
 
 fn font_vector_get_flexible(items: &[Value], prop: &str) -> Option<Value> {
-    let prop_norm = prop.trim_start_matches(':');
-    let mut index = 1usize;
-    while index + 1 < items.len() {
-        let key_norm = match items[index].kind() {
-            ValueKind::Symbol(id) => resolve_sym(id).trim_start_matches(':'),
-            _ => {
-                index += 2;
-                continue;
-            }
-        };
-        if key_norm == prop_norm {
-            return Some(items[index + 1]);
-        }
-        index += 2;
-    }
-    None
+    super::font::font_vector_get_flexible(items, prop)
 }
 
 /// The Neomacs counterpart of GNU's `syms_of_fontset` (`src/fontset.c:2155`).

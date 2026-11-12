@@ -1266,6 +1266,26 @@ impl ResolvedSurfaceMemo {
     }
 }
 
+fn font_listing_pixel_size(
+    sizing: FontSizing,
+    size: neovm_core::emacs_core::eval::FontOpeningSize,
+) -> u32 {
+    use neovm_core::emacs_core::eval::FontOpeningSize;
+    // Listing keeps a numeric zero for GNU's preference score and primary
+    // no-size restriction. Opening's one-pixel floor applies after selection.
+    match size {
+        FontOpeningSize::SmallestUsable => 0,
+        FontOpeningSize::Points { size, dpi } => {
+            neomacs_layout_engine::font::sizing::points_to_layout_pixels(
+                size.get() as f32,
+                dpi.map(|dpi| dpi.get() as f32)
+                    .unwrap_or_else(|| sizing.layout_dpi().trunc()),
+            ) as u32
+        }
+        other => sizing.font_opening_size_px(other).get(),
+    }
+}
+
 fn font_entity_query(
     request: &FontSpecResolveRequest,
 ) -> neomacs_layout_engine::font::resolver::FontEntityQuery {
@@ -1342,6 +1362,11 @@ fn core_listed_font_entity_preview(
     use neomacs_layout_engine::font_backend::PlatformFontSize;
     let metadata = &entity.candidate.metadata;
     neovm_core::emacs_core::eval::ListedFontEntity {
+        native_index: entity
+            .candidate
+            .file_path()
+            .and_then(|_| entity.candidate.identity.freetype_selector())
+            .and_then(|index| i32::try_from(index).ok()),
         driver: entity.driver,
         adstyle: metadata.adstyle.as_deref().map(LispString::from_utf8),
         pixel_size: match metadata.size {
@@ -1530,9 +1555,23 @@ struct FontEntityCatalog {
     handles: HashMap<FontEntityCanonicalKey, FontEntityHandle>,
     discovery_handles: HashMap<FontEntityDiscoveryKey, FontEntityHandle>,
     entries: Vec<FontEntityCatalogEntry>,
+    // Entries before this boundary remain reachable by existing Lisp handles,
+    // but may never repopulate the current generation's discovery lookups.
+    current_generation_start: usize,
 }
 
 impl FontEntityCatalog {
+    fn observe_catalog_update(
+        &mut self,
+        update: neomacs_layout_engine::font::catalog::FontCatalogUpdate,
+    ) {
+        if update.changed() {
+            self.handles.clear();
+            self.discovery_handles.clear();
+            self.current_generation_start = self.entries.len();
+        }
+    }
+
     fn intern(
         &mut self,
         font: neomacs_layout_engine::font_backend::PlatformFontMatch,
@@ -1635,7 +1674,9 @@ impl FontEntityCatalog {
         handle: FontEntityHandle,
         font: neomacs_layout_engine::font_backend::PlatformFontMatch,
     ) -> bool {
-        let Some(entry) = self.entries.get_mut((handle.get() - 1) as usize) else {
+        let index = (handle.get() - 1) as usize;
+        let current_generation = index >= self.current_generation_start;
+        let Some(entry) = self.entries.get_mut(index) else {
             return false;
         };
         let matches = match entry {
@@ -1654,7 +1695,7 @@ impl FontEntityCatalog {
         if matches!(entry, FontEntityCatalogEntry::Discovered(_)) {
             *entry = FontEntityCatalogEntry::Materialized(font);
         }
-        if font_entity_canonical_identity_known(&identity) {
+        if current_generation && font_entity_canonical_identity_known(&identity) {
             self.handles.insert(canonical_key, handle);
         }
         true
@@ -1965,7 +2006,8 @@ impl PrimaryWindowDisplayHost {
         let service = self
             .font_metrics
             .get_or_insert_with(FontMetricsService::new);
-        let _ = service.synchronize_font_catalog();
+        self.font_entities
+            .observe_catalog_update(service.synchronize_font_catalog());
         service
     }
 
@@ -2904,6 +2946,22 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         let constraints =
             |query: &neovm_core::emacs_core::eval::FontSpecListQuery| FontEntityListConstraints {
                 scalable: query.scalable,
+                otf: query.otf.as_ref().map(|requirement| {
+                    use neomacs_layout_engine::font_backend::{
+                        NativeFontOtfFeature as NativeFeature, NativeFontOtfRequirement,
+                    };
+                    use neovm_core::emacs_core::eval::FontOtfFeature;
+                    let feature = |feature: &FontOtfFeature| match feature {
+                        FontOtfFeature::Required(tag) => NativeFeature::Required(*tag),
+                        FontOtfFeature::Forbidden(tag) => NativeFeature::Forbidden(*tag),
+                    };
+                    NativeFontOtfRequirement {
+                        script: requirement.script,
+                        language: requirement.language,
+                        gsub: requirement.gsub.iter().map(feature).collect(),
+                        gpos: requirement.gpos.iter().map(feature).collect(),
+                    }
+                }),
                 driver: query.driver,
                 foundry: query
                     .foundry
@@ -2917,7 +2975,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                     .map(str::to_owned),
                 pixel_size: query
                     .size
-                    .map(|size| self.font_sizing.font_opening_size_px(size).get()),
+                    .map(|size| font_listing_pixel_size(self.font_sizing, size)),
                 spacing: query.spacing,
                 dpi: query.dpi,
                 average_width: query.average_width,

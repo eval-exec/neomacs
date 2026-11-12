@@ -35,7 +35,7 @@ fn layout_table(script: &[u8; 4], feature: &[u8; 4]) -> Vec<u8> {
     assert_eq!(out.len(), 44);
     out
 }
-fn sfnt(base: usize, feature: &[u8; 4]) -> Vec<u8> {
+pub(crate) fn sfnt(base: usize, feature: &[u8; 4]) -> Vec<u8> {
     let mut head = vec![0; 54];
     head[18..20].copy_from_slice(&1000u16.to_be_bytes());
     let mut hhea = vec![0; 36];

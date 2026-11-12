@@ -173,7 +173,17 @@ impl TestFontconfig {
     ) -> Vec<ListedFont> {
         self.with_reference_config(|config| {
             fc_query_candidates_uncached(
-                config, family, ranges, required, languages, None, None, kind,
+                config,
+                &CandidateQuery {
+                    family,
+                    query_charset_ranges: ranges,
+                    required_char: required,
+                    langs: languages,
+                    script_coverage: None,
+                    scalable: None,
+                    otf: None,
+                    kind,
+                },
             )
         })
     }
@@ -191,6 +201,7 @@ impl TestFontconfig {
             ranges,
             required,
             languages,
+            None,
             None,
             None,
         )
@@ -211,6 +222,7 @@ impl TestFontconfig {
             languages,
             Some(script_coverage),
             None,
+            None,
         )
     }
 
@@ -227,6 +239,24 @@ impl TestFontconfig {
             &[],
             None,
             scalable,
+            None,
+        )
+    }
+
+    pub(crate) fn list_otf_candidates(
+        &self,
+        family: Option<&str>,
+        otf: Option<&NativeFontOtfRequirement>,
+    ) -> Vec<ListedFont> {
+        fc_list_candidates(
+            QueryOwner::Fixture(self),
+            family,
+            &[],
+            None,
+            &[],
+            None,
+            None,
+            otf,
         )
     }
 
@@ -357,13 +387,16 @@ impl ConfigBorrow<'_> {
     fn match_one(self, family: &str) -> Option<ListedFont> {
         fc_query_candidates_uncached(
             self,
-            Some(family),
-            &[],
-            None,
-            &[],
-            None,
-            None,
-            FcQueryKind::Match,
+            &CandidateQuery {
+                family: Some(family),
+                query_charset_ranges: &[],
+                required_char: None,
+                langs: &[],
+                script_coverage: None,
+                scalable: None,
+                otf: None,
+                kind: FcQueryKind::Match,
+            },
         )
         .into_iter()
         .next()
