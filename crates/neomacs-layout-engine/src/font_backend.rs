@@ -379,9 +379,18 @@ impl TextDirection {
     }
 }
 
+/// Owned script coverage for native Fontconfig listing. Lists require every
+/// captured character; vectors admit a font covering any captured FcChar32.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NativeFontScriptCoverage {
+    All(Vec<u32>),
+    Any(Vec<u32>),
+}
+
 /// Discovery request passed from shared policy to one native backend.
 #[derive(Clone, Debug)]
 pub struct FontCandidateQuery {
+    pub script_coverage: Option<NativeFontScriptCoverage>,
     pub scope: FontCandidateScope,
     pub required: RequiredFontCoverage,
     pub charset_ranges: Vec<(u32, u32)>,
@@ -413,8 +422,8 @@ impl FontCandidateQuery {
     }
 
     /// Whether a catalog's supported-language list satisfies this query.
-    /// Multiple GNU language hints are alternatives, matching the union used
-    /// by the Fontconfig adapter.
+    /// Adapters using this admission policy treat language hints as alternatives.
+    /// Fontconfig instead applies its complete native language set to one query.
     pub fn languages_are_satisfied_by(&self, mut supports: impl FnMut(&str) -> bool) -> bool {
         self.languages.is_empty() || self.languages.iter().any(|language| supports(language))
     }

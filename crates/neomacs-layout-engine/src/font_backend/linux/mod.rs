@@ -232,6 +232,7 @@ impl FontBackend for FontconfigBackend {
             &charset_ranges,
             query.required.single_char().map(u32::from),
             &query.languages,
+            query.script_coverage.as_ref(),
         )
         .into_iter()
         .filter_map(|candidate| {

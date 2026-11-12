@@ -4,6 +4,7 @@ use neovm_core::face::{FontSlant, FontWidth};
 
 fn query() -> FontCandidateQuery {
     FontCandidateQuery {
+        script_coverage: None,
         scope: FontCandidateScope::All,
         required: RequiredFontCoverage::Any,
         charset_ranges: Vec::new(),

@@ -1023,6 +1023,13 @@ fn x_open_connection_eval_accepts_x_host_startup() {
 fn x_list_fonts_validates_query_arguments_on_x_display() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    // GNU check_window_system(NULL) requires an actual initialized display,
+    // independent of the Lisp window-system/initial-window-system variables.
+    eval.initialize_graphical_terminal(
+        neomacs_display_protocol::GraphicalDisplayIdentity::anonymous_connection(
+            neomacs_display_protocol::GraphicalBackend::X11,
+        ),
+    );
     eval.set_variable("initial-window-system", Value::symbol("x"));
 
     for (args, predicate, invalid) in [
@@ -1063,6 +1070,13 @@ fn x_list_fonts_validates_query_arguments_on_x_display() {
 fn x_window_system_resource_queries_return_nil() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    // GNU check_window_system(NULL) requires an actual initialized display,
+    // independent of the Lisp window-system/initial-window-system variables.
+    eval.initialize_graphical_terminal(
+        neomacs_display_protocol::GraphicalDisplayIdentity::anonymous_connection(
+            neomacs_display_protocol::GraphicalBackend::X11,
+        ),
+    );
     eval.set_variable("initial-window-system", Value::symbol("x"));
 
     assert!(
@@ -4586,4 +4600,46 @@ fn native_menu_result_rejects_a_previous_session_or_revision() {
         super::popup_menu_selection(&keys(42, 3), expected),
         Some(super::NativePopupSelection::Entry(1))
     ));
+}
+
+#[test]
+fn x_list_fonts_requires_native_connection_before_argument_validation() {
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    // Lisp bindings cannot manufacture GNU display_available().
+    eval.set_variable("initial-window-system", Value::symbol("x"));
+    eval.set_variable("window-system", Value::symbol("x"));
+    for args in [
+        vec![
+            Value::fixnum(42),
+            Value::NIL,
+            Value::fixnum(42),
+            Value::fixnum(-1),
+            Value::make_float(1.5),
+        ],
+        vec![
+            Value::string("Hack-13"),
+            Value::NIL,
+            Value::fixnum(42),
+            Value::fixnum(-1),
+        ],
+        vec![
+            Value::string("Hack-13"),
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum(0),
+        ],
+    ] {
+        match builtin_x_list_fonts(&mut eval, args).kinded() {
+            Err(FlowKind::Signal(signal)) => {
+                assert_eq!(signal.symbol_name(), "error");
+                assert_eq!(
+                    signal.data,
+                    vec![Value::string(
+                        "Window system is not in use or not initialized"
+                    )]
+                );
+            }
+            other => panic!("no connection must precede all font argument checks: {other:?}"),
+        }
+    }
 }

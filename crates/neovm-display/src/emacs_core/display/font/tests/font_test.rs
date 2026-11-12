@@ -3018,3 +3018,269 @@ fn listing_complete_xlfd_clears_numeric_wildcards_but_abbreviations_preserve_the
         );
     }
 }
+
+fn mixed_font_listing_context() -> (
+    Context,
+    FrameId,
+    FrameId,
+    Rc<RefCell<Vec<neovm_eval::emacs_core::eval::FontSpecListQuery>>>,
+) {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.initialize_graphical_terminal(
+        neomacs_display_protocol::GraphicalDisplayIdentity::anonymous_connection(
+            neomacs_display_protocol::GraphicalBackend::X11,
+        ),
+    );
+    let buffer = eval
+        .buffer_manager_mut()
+        .create_buffer("*mixed-font-listing*");
+    let gui = eval
+        .frame_manager_mut()
+        .create_frame_on_terminal("font-gui", 0, 800, 600, buffer);
+    eval.frame_manager_mut()
+        .get_mut(gui)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+    let tty = eval
+        .frame_manager_mut()
+        .create_frame_on_terminal("font-tty", 1, 80, 25, buffer);
+    eval.frame_manager_mut()
+        .get_mut(tty)
+        .unwrap()
+        .set_window_system(None);
+    eval.set_variable("initial-window-system", Value::NIL);
+    eval.set_variable("window-system", Value::NIL);
+    let queries = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(ListingFontDisplayHost {
+        queries: Rc::clone(&queries),
+        fonts: vec![neovm_eval::emacs_core::eval::ListedFontEntity {
+            driver: Some(intern("ftcrhb")),
+            adstyle: None,
+            font: ResolvedFontSpecMatch {
+                coverage_handle: None,
+                family: LispString::from_utf8("Hack"),
+                foundry: Some(LispString::from_utf8("SRC")),
+                registry: Some(LispString::from_utf8("iso10646-1")),
+                file: None,
+                weight: Some(FontWeight::NORMAL),
+                slant: Some(FontSlant::Normal),
+                width: Some(FontWidth::Normal),
+                spacing: Some(100),
+                postscript_name: None,
+            },
+            pixel_size: Some(0),
+            average_width: Some(0),
+        }],
+    }));
+    (eval, gui, tty, queries)
+}
+
+#[test]
+fn x_list_fonts_mixed_frames_use_native_connection_and_effective_target() {
+    // Pinned GNU xfaces.c: a TTY target clears FACE/FRAME, then list-fonts
+    // defaults the nil FRAME to the selected frame. GUI-selected + TTY-target
+    // therefore lists GUI fonts; TTY-selected + nil/TTY returns nil.
+    for selected_is_gui in [true, false] {
+        for target in ["nil", "gui", "tty"] {
+            let (mut eval, gui, tty, queries) = mixed_font_listing_context();
+            eval.frame_manager_mut()
+                .select_frame(if selected_is_gui { gui } else { tty });
+            let target_value = match target {
+                "gui" => Value::make_frame(gui.0),
+                "tty" => Value::make_frame(tty.0),
+                _ => Value::NIL,
+            };
+            let result = crate::emacs_core::display::builtin_x_list_fonts(
+                &mut eval,
+                vec![
+                    Value::string("Hack-13"),
+                    Value::NIL,
+                    target_value,
+                    Value::fixnum(1),
+                ],
+            )
+            .unwrap();
+            if target == "gui" || selected_is_gui {
+                assert_eq!(list_to_vec(&result).unwrap().len(), 1);
+                assert_eq!(queries.borrow().len(), 1);
+                assert_eq!(queries.borrow()[0].specification.frame_id, gui);
+            } else {
+                assert!(result.is_nil(), "TTY listing has no font drivers");
+                assert!(queries.borrow().is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn x_list_fonts_tty_target_clears_face_before_width_and_host_resolution() {
+    for selected_is_gui in [true, false] {
+        for invalid_face in [false, true] {
+            let (mut eval, gui, tty, queries) = mixed_font_listing_context();
+            eval.frame_manager_mut()
+                .select_frame(if selected_is_gui { gui } else { tty });
+            let face = if invalid_face {
+                Value::vector(Vec::new())
+            } else {
+                Value::symbol("default")
+            };
+            let result = crate::emacs_core::display::builtin_x_list_fonts(
+                &mut eval,
+                vec![
+                    Value::string("Hack-13"),
+                    face,
+                    Value::make_frame(tty.0),
+                    Value::fixnum(1),
+                    Value::fixnum(-1),
+                ],
+            )
+            .unwrap();
+            if selected_is_gui {
+                assert_eq!(list_to_vec(&result).unwrap().len(), 1);
+                let queries = queries.borrow();
+                assert_eq!(queries[0].specification.frame_id, gui);
+                assert_eq!(queries[0].average_width, None);
+                assert!(
+                    matches!(queries[0].size, Some(neovm_eval::emacs_core::eval::FontOpeningSize::Points { size, .. }) if size.get() == 13.0)
+                );
+            } else {
+                assert!(result.is_nil());
+                assert!(queries.borrow().is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn x_list_fonts_mixed_tty_validation_precedes_empty_driver_result() {
+    let (mut eval, gui, tty, queries) = mixed_font_listing_context();
+    eval.frame_manager_mut().select_frame(tty);
+    for (args, predicate, invalid) in [
+        (
+            vec![
+                Value::fixnum(42),
+                Value::NIL,
+                Value::fixnum(42),
+                Value::fixnum(-1),
+                Value::make_float(1.5),
+            ],
+            "stringp",
+            Value::fixnum(42),
+        ),
+        (
+            vec![
+                Value::string("Hack-13"),
+                Value::NIL,
+                Value::fixnum(42),
+                Value::fixnum(-1),
+                Value::make_float(1.5),
+            ],
+            "wholenump",
+            Value::fixnum(-1),
+        ),
+        (
+            vec![
+                Value::string("Hack-13"),
+                Value::NIL,
+                Value::fixnum(42),
+                Value::NIL,
+                Value::make_float(1.5),
+            ],
+            "fixnump",
+            Value::make_float(1.5),
+        ),
+        (
+            vec![Value::string("Hack-13"), Value::NIL, Value::fixnum(42)],
+            "frame-live-p",
+            Value::fixnum(42),
+        ),
+        (
+            vec![Value::string("Hack-13"), Value::NIL, Value::T],
+            "frame-live-p",
+            Value::T,
+        ),
+    ] {
+        match crate::emacs_core::display::builtin_x_list_fonts(&mut eval, args).kinded() {
+            Err(FlowKind::Signal(signal)) => {
+                assert_eq!(signal.symbol_name(), "wrong-type-argument");
+                assert_eq!(signal.data, vec![Value::symbol(predicate), invalid]);
+            }
+            other => panic!("expected {predicate}: {other:?}"),
+        }
+    }
+    let bad_name = Value::string("-SRC-Hack--normal-normal-*-13-*-*-*-*-0-iso10646-1");
+    match crate::emacs_core::display::builtin_x_list_fonts(
+        &mut eval,
+        vec![
+            bad_name,
+            Value::NIL,
+            Value::make_frame(tty.0),
+            Value::fixnum(0),
+        ],
+    )
+    .kinded()
+    {
+        Err(FlowKind::Signal(signal)) => {
+            assert_eq!(signal.symbol_name(), "error");
+            assert_eq!(
+                signal.data,
+                vec![Value::string("Invalid font name"), bad_name]
+            );
+        }
+        other => panic!("invalid name must precede MAX0/empty TTY result: {other:?}"),
+    }
+    assert!(queries.borrow().is_empty());
+    assert!(eval.frame_manager().get(gui).is_some());
+}
+
+#[test]
+fn list_fonts_tty_has_no_driver_after_normal_argument_validation() {
+    let (mut eval, gui, tty, queries) = mixed_font_listing_context();
+    eval.frame_manager_mut().select_frame(gui);
+    let spec = font_spec(vec![Value::keyword("family"), Value::string("Hack")]).unwrap();
+    let result = list_fonts(&mut eval, vec![spec, Value::make_frame(tty.0)]).unwrap();
+    assert!(result.is_nil());
+    assert!(queries.borrow().is_empty());
+    for (args, predicate, invalid) in [
+        (
+            vec![Value::fixnum(42), Value::fixnum(42)],
+            "frame-live-p",
+            Value::fixnum(42),
+        ),
+        (
+            vec![Value::fixnum(42), Value::make_frame(tty.0)],
+            "font-spec",
+            Value::fixnum(42),
+        ),
+        (
+            vec![spec, Value::make_frame(tty.0), Value::make_float(1.5)],
+            "fixnump",
+            Value::make_float(1.5),
+        ),
+        (
+            vec![spec, Value::make_frame(tty.0), Value::fixnum(1), Value::T],
+            "font-spec",
+            Value::T,
+        ),
+    ] {
+        match list_fonts(&mut eval, args).kinded() {
+            Err(FlowKind::Signal(signal)) => {
+                assert_eq!(signal.symbol_name(), "wrong-type-argument");
+                assert_eq!(signal.data, vec![Value::symbol(predicate), invalid]);
+            }
+            other => panic!("expected {predicate}: {other:?}"),
+        }
+    }
+    assert!(
+        list_fonts(
+            &mut eval,
+            vec![spec, Value::make_frame(tty.0), Value::fixnum(0), Value::T]
+        )
+        .unwrap()
+        .is_nil()
+    );
+    assert!(queries.borrow().is_empty());
+}
+
+#[path = "script_coverage_test.rs"]
+mod script_coverage_test;

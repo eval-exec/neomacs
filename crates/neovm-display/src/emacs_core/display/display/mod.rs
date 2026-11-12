@@ -2889,7 +2889,11 @@ pub fn builtin_x_list_fonts(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("x-list-fonts", &args, 1, 5)?;
-    if !x_window_system_active(eval) {
+    // GNU check_window_system(NULL) tests the initialized display connection,
+    // independently of the selected frame and Lisp window-system values.
+    if super::terminal::pure::live_terminal_output_method_for_id(TERMINAL_ID)
+        != Some(super::terminal::pure::TerminalOutputMethod::WindowSystem)
+    {
         return Err(window_system_not_initialized_error());
     }
     super::font::x_list_fonts(eval, args)

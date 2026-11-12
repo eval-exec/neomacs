@@ -2920,6 +2920,14 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                 spacing: query.spacing,
                 dpi: query.dpi,
                 average_width: query.average_width,
+                script_coverage: query.script_coverage.as_ref().map(|coverage| {
+                    use neomacs_layout_engine::font_backend::NativeFontScriptCoverage as Native;
+                    use neovm_core::emacs_core::eval::FontScriptCoverage as Captured;
+                    match coverage {
+                        Captured::All(characters) => Native::All(characters.clone()),
+                        Captured::Any(characters) => Native::Any(characters.clone()),
+                    }
+                }),
             };
         let listed_constraints = constraints(&request);
         let preferred = prefer

@@ -1,6 +1,6 @@
 //! Bounded native discovery answers. Scoring and font opening remain callers'
 //! responsibilities; every argument affecting native enumeration is in the key.
-use super::{FcQueryKind, ListedFont};
+use super::{FcQueryKind, ListedFont, NativeFontScriptCoverage};
 use std::collections::VecDeque;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -9,6 +9,7 @@ pub(super) struct Query {
     ranges: Vec<(u32, u32)>,
     required_char: Option<u32>,
     langs: Vec<String>,
+    script_coverage: Option<NativeFontScriptCoverage>,
     kind: FcQueryKind,
 }
 
@@ -18,13 +19,22 @@ impl Query {
         ranges: &[(u32, u32)],
         required_char: Option<u32>,
         langs: &[String],
+        script_coverage: Option<&NativeFontScriptCoverage>,
         kind: FcQueryKind,
     ) -> Option<Self> {
         // Oversized requests remain valid native queries, but cannot enlarge
         // the reusable cache or allocate an unbounded duplicate key.
+        let script_bytes = script_coverage.map_or(0, |coverage| match coverage {
+            NativeFontScriptCoverage::All(characters)
+            | NativeFontScriptCoverage::Any(characters) => {
+                characters.len().saturating_mul(std::mem::size_of::<u32>())
+            }
+        });
         if ranges.len() > 1024
             || langs.len() > 64
-            || family.map_or(0, str::len) + langs.iter().map(String::len).sum::<usize>() > 65536
+            || (family.map_or(0, str::len) + langs.iter().map(String::len).sum::<usize>())
+                .saturating_add(script_bytes)
+                > 65536
         {
             return None;
         }
@@ -33,6 +43,7 @@ impl Query {
             ranges: ranges.to_vec(),
             required_char,
             langs: langs.to_vec(),
+            script_coverage: script_coverage.cloned(),
             kind,
         })
     }
@@ -45,6 +56,15 @@ impl Query {
                 .iter()
                 .map(|s| std::mem::size_of::<String>() + s.len())
                 .sum::<usize>()
+            + self
+                .script_coverage
+                .as_ref()
+                .map_or(0, |coverage| match coverage {
+                    NativeFontScriptCoverage::All(characters)
+                    | NativeFontScriptCoverage::Any(characters) => {
+                        characters.len() * std::mem::size_of::<u32>()
+                    }
+                })
     }
 }
 

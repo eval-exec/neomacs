@@ -128,6 +128,7 @@ pub struct ListedFontCandidate {
 /// Constraints for catalog listing, separate from driver matching and opening.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FontEntityListConstraints {
+    pub script_coverage: Option<crate::font_backend::NativeFontScriptCoverage>,
     pub driver: Option<neovm_core::emacs_core::intern::SymId>,
     pub foundry: Option<String>,
     pub adstyle: Option<String>,
@@ -355,8 +356,21 @@ impl FontResolver {
         {
             return;
         }
-        let candidate_query = self.entity_candidate_query(query);
+        let mut candidate_query = self.entity_candidate_query(query);
+        if self.backend.kind() == FontBackendKind::Fontconfig {
+            candidate_query.script_coverage = constraints.script_coverage.clone();
+        }
         let policy = FontEntityMatchPolicy::for_backend(self.backend.kind());
+        // ftfont_list checks the registry's language independently of an
+        // explicit ADSTYLE. Extra :lang remains a native query constraint.
+        let registry_adstyle_language = if self.backend.kind() == FontBackendKind::Fontconfig {
+            query
+                .registry
+                .as_deref()
+                .and_then(crate::font::policy::registry_language)
+        } else {
+            None
+        };
         // Native discovery owns family membership. Other cheap selector
         // filters precede any exact file inspection.
         let candidates = self
@@ -382,6 +396,12 @@ impl FontResolver {
                                 .as_deref()
                                 .is_some_and(|actual| actual.eq_ignore_ascii_case(requested))
                         })
+                    && registry_adstyle_language.is_none_or(|language| {
+                        metadata
+                            .adstyle
+                            .as_deref()
+                            .is_none_or(|actual| actual.eq_ignore_ascii_case(language))
+                    })
                     && constraints.spacing.is_none_or(|spacing| {
                         metadata.spacing.is_none_or(|actual| actual == spacing)
                     })
@@ -526,6 +546,7 @@ impl FontResolver {
             .collect();
         let scope = family.map_or(FontCandidateScope::All, FontCandidateScope::Family);
         FontCandidateQuery {
+            script_coverage: None,
             scope,
             // Entity enumeration is not character fallback.  Registry
             // constraints are already represented by `charset_ranges`; GNU
@@ -659,6 +680,7 @@ impl FontResolver {
         let family = self.resolve_family(family);
         let family_name = FontFamilyName::new(family.clone())?;
         let query = FontCandidateQuery {
+            script_coverage: None,
             scope: FontCandidateScope::Family(family_name),
             required: RequiredFontCoverage::Any,
             charset_ranges: Vec::new(),
@@ -708,6 +730,7 @@ impl FontResolver {
             return cached.clone();
         }
         let mut query = FontCandidateQuery {
+            script_coverage: None,
             scope: FontCandidateScope::All,
             required: RequiredFontCoverage::Any,
             charset_ranges: Vec::new(),
@@ -984,6 +1007,7 @@ impl FontResolver {
                 },
             };
             let query = FontCandidateQuery {
+                script_coverage: None,
                 scope,
                 required: RequiredFontCoverage::Character(policy.ch),
                 charset_ranges: policy.charset_ranges.clone(),

@@ -82,6 +82,9 @@ mod font_coverage;
 #[path = "font_name_pattern_resize.rs"]
 mod font_name_pattern_resize;
 
+#[path = "font_frame_display.rs"]
+mod font_frame_display;
+
 #[path = "fontset_han_repertory.rs"]
 mod fontset_han_repertory;
 

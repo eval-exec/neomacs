@@ -2879,6 +2879,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Co
 crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Context::minibuffer_selected_window_id
 crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Context::minibuffer_window_is_active
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum FontListError
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum FontScriptCoverage
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum FontSpecSelection
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum ShaderSurfaceContent
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum ShaderSurfaceLanguage
@@ -2960,6 +2961,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery fie
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field dpi
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field driver
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field foundry
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field script_coverage
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field size
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field spacing
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field specification

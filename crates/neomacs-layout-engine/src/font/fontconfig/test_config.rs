@@ -172,7 +172,7 @@ impl TestFontconfig {
         kind: FcQueryKind,
     ) -> Vec<ListedFont> {
         self.with_reference_config(|config| {
-            fc_query_candidates_uncached(config, family, ranges, required, languages, kind)
+            fc_query_candidates_uncached(config, family, ranges, required, languages, None, kind)
         })
     }
 
@@ -189,6 +189,24 @@ impl TestFontconfig {
             ranges,
             required,
             languages,
+            None,
+        )
+    }
+
+    pub(crate) fn list_script_candidates(
+        &self,
+        family: Option<&str>,
+        ranges: &[(u32, u32)],
+        languages: &[String],
+        script_coverage: &NativeFontScriptCoverage,
+    ) -> Vec<ListedFont> {
+        fc_list_candidates(
+            QueryOwner::Fixture(self),
+            family,
+            ranges,
+            None,
+            languages,
+            Some(script_coverage),
         )
     }
 
@@ -317,7 +335,7 @@ impl ConfigBorrow<'_> {
     }
 
     fn match_one(self, family: &str) -> Option<ListedFont> {
-        fc_query_candidates_uncached(self, Some(family), &[], None, &[], FcQueryKind::Match)
+        fc_query_candidates_uncached(self, Some(family), &[], None, &[], None, FcQueryKind::Match)
             .into_iter()
             .next()
     }

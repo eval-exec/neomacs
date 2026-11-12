@@ -1,3 +1,10 @@
+#[cfg(unix)]
+#[path = "language_set_review_test.rs"]
+mod language_set_review_test;
+#[cfg(unix)]
+#[path = "script_coverage_review_test.rs"]
+mod script_coverage_review_test;
+
 use super::{
     FONT_SPACING_MONO, FONT_SPACING_PROPORTIONAL, FcCharSetGuard, FcFontSetGuard, FcLangSetGuard,
     FcPatternGuard, GnuEntityProjection, ListedFont, SpacingClass, build_candidate_object_set,
@@ -27,6 +34,7 @@ fn native_fixture() -> super::test_config::TestFontconfig {
 #[cfg(unix)]
 #[derive(Clone, Copy)]
 enum ReferenceSelection {
+    AllMetadata,
     FirstEightMetadata,
     Covering(char),
 }
@@ -39,7 +47,9 @@ fn native_reference_candidates(
 ) -> Vec<ListedFont> {
     config.with_reference_config(|borrow| {
         let projection = match selection {
-            ReferenceSelection::FirstEightMetadata => GnuEntityProjection::Metadata,
+            ReferenceSelection::AllMetadata | ReferenceSelection::FirstEightMetadata => {
+                GnuEntityProjection::Metadata
+            }
             ReferenceSelection::Covering(_) => GnuEntityProjection::MetadataAndCharset,
         };
         let objects = build_candidate_object_set(projection).expect("native reference object set");
@@ -74,6 +84,11 @@ fn native_reference_candidates(
         // any slice, including the empty/NULL case.
         let patterns = unsafe { std::slice::from_raw_parts(pointer, count) };
         match selection {
+            ReferenceSelection::AllMetadata => patterns
+                .iter()
+                .copied()
+                .filter_map(listed_font_from_raw_pattern)
+                .collect(),
             ReferenceSelection::FirstEightMetadata => patterns
                 .iter()
                 .copied()

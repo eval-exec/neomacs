@@ -16,7 +16,7 @@ use crate::font::policy::{
 };
 use crate::font::selection::{CandidateSelectionScore, candidate_selection_score};
 pub use crate::font::subpixel::FontconfigSubpixelOrder;
-use crate::font_backend::{FontFamilyName, PlatformFontSize};
+use crate::font_backend::{FontFamilyName, NativeFontScriptCoverage, PlatformFontSize};
 #[cfg(unix)]
 use fontconfig_sys::constants::{
     FC_RGBA, FC_RGBA_BGR, FC_RGBA_NONE, FC_RGBA_RGB, FC_RGBA_VBGR, FC_RGBA_VRGB,
@@ -427,6 +427,7 @@ pub fn find_font_for_spec(
         &query_charset_ranges,
         None,
         &query_langs,
+        None,
     );
 
     select_find_font_candidate(candidates, &spec).map(|mut candidate| {
@@ -590,6 +591,7 @@ fn match_font_from_spec(
             &query_charset_ranges,
             Some(ch as u32),
             &query_langs,
+            None,
         );
         if candidates.is_empty() {
             continue;
@@ -1273,6 +1275,7 @@ pub(crate) fn fc_list_candidates(
     query_charset_ranges: &[(u32, u32)],
     required_char: Option<u32>,
     langs: &[String],
+    script_coverage: Option<&NativeFontScriptCoverage>,
 ) -> Vec<ListedFont> {
     fc_query_candidates(
         #[cfg(test)]
@@ -1281,6 +1284,7 @@ pub(crate) fn fc_list_candidates(
         query_charset_ranges,
         required_char,
         langs,
+        script_coverage,
         FcQueryKind::List,
     )
 }
@@ -1299,6 +1303,7 @@ pub(crate) fn fc_match_candidate(
         query_charset_ranges,
         None,
         langs,
+        None,
         FcQueryKind::Match,
     )
     .into_iter()
@@ -1328,13 +1333,19 @@ fn fc_query_candidates(
     query_charset_ranges: &[(u32, u32)],
     required_char: Option<u32>,
     langs: &[String],
+    script_coverage: Option<&NativeFontScriptCoverage>,
     kind: FcQueryKind,
 ) -> Vec<ListedFont> {
     #[cfg(test)]
     let access = owner.acquire();
-    let Some(query) =
-        candidate_cache::Query::new(family, query_charset_ranges, required_char, langs, kind)
-    else {
+    let Some(query) = candidate_cache::Query::new(
+        family,
+        query_charset_ranges,
+        required_char,
+        langs,
+        script_coverage,
+        kind,
+    ) else {
         return fc_query_candidates_uncached(
             #[cfg(test)]
             access.borrow(),
@@ -1342,6 +1353,7 @@ fn fc_query_candidates(
             query_charset_ranges,
             required_char,
             langs,
+            script_coverage,
             kind,
         );
     };
@@ -1372,6 +1384,7 @@ fn fc_query_candidates(
         query_charset_ranges,
         required_char,
         langs,
+        script_coverage,
         kind,
     );
     let mut caches = ({
@@ -1399,6 +1412,7 @@ fn fc_query_candidates_uncached(
     query_charset_ranges: &[(u32, u32)],
     required_char: Option<u32>,
     langs: &[String],
+    script_coverage: Option<&NativeFontScriptCoverage>,
     kind: FcQueryKind,
 ) -> Vec<ListedFont> {
     #[cfg(test)]
@@ -1414,48 +1428,60 @@ fn fc_query_candidates_uncached(
     if fontconfig_handle().is_none() {
         return Vec::new();
     }
-    let mut candidates = Vec::new();
-    let query_langs = if langs.is_empty() {
-        vec![None]
+    // A legacy registry already supplied a charset to ftfont_spec_pattern;
+    // in that case GNU ignores both list and vector script representatives.
+    let script_coverage = if query_charset_ranges.is_empty() && matches!(kind, FcQueryKind::List) {
+        script_coverage
     } else {
-        langs.iter().map(|lang| Some(lang.as_str())).collect()
+        None
     };
-
-    for lang in query_langs {
-        let pattern = unsafe { fontconfig_sys::FcPatternCreate() };
-        if pattern.is_null() {
-            continue;
+    let script_all = match script_coverage {
+        Some(NativeFontScriptCoverage::All(characters)) => Some(characters.as_slice()),
+        _ => None,
+    };
+    let script_any = match script_coverage {
+        Some(NativeFontScriptCoverage::Any(characters)) => Some(characters.as_slice()),
+        _ => None,
+    };
+    if script_any.is_some_and(<[u32]>::is_empty) {
+        return Vec::new();
+    }
+    let mut candidates = Vec::new();
+    let pattern = unsafe { fontconfig_sys::FcPatternCreate() };
+    if pattern.is_null() {
+        return Vec::new();
+    }
+    let pattern = FcPatternGuard(pattern);
+    if let Some(family) = family.filter(|family| !family.is_empty()) {
+        let Ok(value) = CString::new(family) else {
+            return Vec::new();
+        };
+        let ok = unsafe {
+            fontconfig_sys::FcPatternAddString(
+                pattern.0,
+                fontconfig::FC_FAMILY.as_ptr(),
+                value.as_ptr().cast(),
+            )
+        };
+        if ok == 0 {
+            return Vec::new();
         }
-        let pattern = FcPatternGuard(pattern);
-        if let Some(family) = family.filter(|family| !family.is_empty()) {
-            let Ok(value) = CString::new(family) else {
-                continue;
-            };
-            let ok = unsafe {
-                fontconfig_sys::FcPatternAddString(
-                    pattern.0,
-                    fontconfig::FC_FAMILY.as_ptr(),
-                    value.as_ptr().cast(),
-                )
-            };
-            if ok == 0 {
-                continue;
-            }
-        }
-        // Character lookup without a registry already filters these answers
-        // below. Push that same predicate into native enumeration so unrelated
-        // patterns and their large charsets are never copied into the result.
-        // Keep the projection (and therefore candidate order) unchanged; GNU
-        // registry queries and FcFontMatch retain their existing semantics.
-        let required_range = required_char
-            .filter(|_| query_charset_ranges.is_empty() && matches!(kind, FcQueryKind::List))
-            .map(|ch| (ch, ch));
-        let query_charset = if query_charset_ranges.is_empty() && required_range.is_none() {
+    }
+    // Character lookup without a registry already filters these answers
+    // below. Push that same predicate into native enumeration so unrelated
+    // patterns and their large charsets are never copied into the result.
+    // Keep the projection (and therefore candidate order) unchanged; GNU
+    // registry queries and FcFontMatch retain their existing semantics.
+    let required_range = required_char
+        .filter(|_| query_charset_ranges.is_empty() && matches!(kind, FcQueryKind::List))
+        .map(|ch| (ch, ch));
+    let query_charset =
+        if query_charset_ranges.is_empty() && required_range.is_none() && script_all.is_none() {
             None
         } else {
             let charset = unsafe { fontconfig_sys::FcCharSetCreate() };
             if charset.is_null() {
-                continue;
+                return Vec::new();
             }
             let charset = FcCharSetGuard(charset);
             let mut ok = true;
@@ -1477,7 +1503,16 @@ fn fc_query_candidates_uncached(
                 }
             }
             if !ok {
-                continue;
+                return Vec::new();
+            }
+            // List representatives are valid Emacs characters captured by the
+            // caller. Keep their complete FcChar32 values, including non-Unicode
+            // Emacs characters, rather than routing through Rust's char type.
+            for &codepoint in script_all.into_iter().flatten() {
+                // SAFETY: the owned native charset remains live and copies this scalar.
+                if unsafe { fontconfig_sys::FcCharSetAddChar(charset.0, codepoint) } == 0 {
+                    return Vec::new();
+                }
             }
             let added = unsafe {
                 fontconfig_sys::FcPatternAddCharSet(
@@ -1487,138 +1522,151 @@ fn fc_query_candidates_uncached(
                 )
             };
             if added == 0 {
-                continue;
+                return Vec::new();
             }
             Some(charset)
         };
-        let query_langset = if let Some(lang) = lang.filter(|lang| !lang.is_empty()) {
-            let Ok(lang) = CString::new(lang) else {
-                continue;
-            };
-            let langset = unsafe { fontconfig_sys::FcLangSetCreate() };
-            if langset.is_null() {
-                continue;
-            }
-            let langset = FcLangSetGuard(langset);
-            let added = unsafe { fontconfig_sys::FcLangSetAdd(langset.0, lang.as_ptr().cast()) };
-            if added == 0 {
-                continue;
-            }
-            let added = unsafe {
-                fontconfig_sys::FcPatternAddLangSet(
-                    pattern.0,
-                    fontconfig::FC_LANG.as_ptr(),
-                    langset.0,
-                )
-            };
-            if added == 0 {
-                continue;
-            }
-            Some(langset)
-        } else {
-            None
-        };
-        let _keep_charset_alive = query_charset;
-        let _keep_langset_alive = query_langset;
-        if matches!(kind, FcQueryKind::Match) {
-            #[cfg(test)]
-            if config.apply_defaults(&pattern).is_err() {
-                continue;
-            }
-
-            // GNU ftfont_match uses this pattern without weight/slant/width
-            // fields; Fontconfig supplies its native defaults. Enumeration
-            // below deliberately keeps the unsubstituted FcFontList path.
-            // SAFETY: live owned pattern and initialized native configuration;
-            // a test configuration remains borrowed under its owner mutex.
-            if unsafe {
-                fontconfig_sys::FcConfigSubstitute(
-                    native_config,
-                    pattern.0,
-                    fontconfig_sys::FcMatchPattern,
-                )
-            } == 0
-            {
-                continue;
-            }
-            unsafe { fontconfig_sys::FcDefaultSubstitute(pattern.0) };
-            let mut result = fontconfig_sys::FcResultNoMatch;
-            // SAFETY: configuration and pattern remain live; result is a
-            // writable scalar and the returned match is immediately guarded.
-            let matched = FcPatternGuard(unsafe {
-                fontconfig_sys::FcFontMatch(native_config, pattern.0, &mut result)
-            });
-            if let Some(candidate) = listed_font_from_raw_pattern(matched.0) {
-                candidates.push(candidate);
-            }
-            continue;
+    // GNU ftfont_spec_pattern puts registry and explicit language hints in
+    // one set. FcFontList must apply that complete native constraint once;
+    // per-language queries change admission, order, and uniquification.
+    let mut languages = langs
+        .iter()
+        .filter(|language| !language.is_empty())
+        .peekable();
+    let query_langset = if languages.peek().is_some() {
+        // SAFETY: the newly allocated language set is immediately guarded.
+        let langset = unsafe { fontconfig_sys::FcLangSetCreate() };
+        if langset.is_null() {
+            return Vec::new();
         }
-        // The postfilter below needs coverage even when a registry/repertory
-        // already constrained native discovery. Omitting FC_CHARSET makes
-        // every returned pattern appear unsupported and forces fallback.
-        // Registry-only enumeration keeps GNU's metadata-only projection.
-        let projection = if required_char.is_some() {
-            GnuEntityProjection::MetadataAndCharset
-        } else {
-            GnuEntityProjection::Metadata
-        };
-        let Some(object_set) = build_candidate_object_set(projection) else {
-            continue;
-        };
-        // SAFETY: the native configuration, pattern and projection are live;
-        // the returned set is immediately owned until all patterns are copied.
-        let fontset = unsafe {
-            FcFontSetGuard(fontconfig_sys::FcFontList(
+        let langset = FcLangSetGuard(langset);
+        for language in languages {
+            let Ok(language) = CString::new(language.as_str()) else {
+                return Vec::new();
+            };
+            // SAFETY: both guard and C string remain live; Fontconfig copies
+            // the language into its owned set.
+            if unsafe { fontconfig_sys::FcLangSetAdd(langset.0, language.as_ptr().cast()) } == 0 {
+                return Vec::new();
+            }
+        }
+        // SAFETY: the pattern and guarded set stay live for the native query.
+        if unsafe {
+            fontconfig_sys::FcPatternAddLangSet(pattern.0, fontconfig::FC_LANG.as_ptr(), langset.0)
+        } == 0
+        {
+            return Vec::new();
+        }
+        Some(langset)
+    } else {
+        None
+    };
+    let _keep_charset_alive = query_charset;
+    let _keep_langset_alive = query_langset;
+    if matches!(kind, FcQueryKind::Match) {
+        #[cfg(test)]
+        if config.apply_defaults(&pattern).is_err() {
+            return Vec::new();
+        }
+
+        // GNU ftfont_match uses this pattern without weight/slant/width
+        // fields; Fontconfig supplies its native defaults. Enumeration
+        // below deliberately keeps the unsubstituted FcFontList path.
+        // SAFETY: live owned pattern and initialized native configuration;
+        // a test configuration remains borrowed under its owner mutex.
+        if unsafe {
+            fontconfig_sys::FcConfigSubstitute(
                 native_config,
                 pattern.0,
-                object_set.0,
-            ))
-        };
-        if fontset.0.is_null() {
-            continue;
+                fontconfig_sys::FcMatchPattern,
+            )
+        } == 0
+        {
+            return Vec::new();
         }
-        let nfont = unsafe { (*fontset.0).nfont };
-        tracing::trace!(
-            family = family.unwrap_or(""),
-            lang = lang.unwrap_or(""),
-            query_charset_ranges = ?query_charset_ranges,
-            required_char,
-            nfont,
-            "fontconfig raw candidate list"
-        );
-        if nfont <= 0 {
-            continue;
-        }
-        let fonts = unsafe { (*fontset.0).fonts };
-        if fonts.is_null() {
-            continue;
-        }
-        let patterns = unsafe { std::slice::from_raw_parts(fonts, nfont as usize) };
-        let before = candidates.len();
-
-        for &candidate_pattern in patterns {
-            if let Some(required_char) = required_char
-                && !raw_pattern_supports_any_char(candidate_pattern, &[required_char])
-            {
-                #[cfg(test)]
-                NATIVE_UNSUPPORTED_PATTERNS.with(|count| count.set(count.get() + 1));
-                continue;
-            }
-            let Some(candidate) = listed_font_from_raw_pattern(candidate_pattern) else {
-                continue;
-            };
+        unsafe { fontconfig_sys::FcDefaultSubstitute(pattern.0) };
+        let mut result = fontconfig_sys::FcResultNoMatch;
+        // SAFETY: configuration and pattern remain live; result is a
+        // writable scalar and the returned match is immediately guarded.
+        let matched = FcPatternGuard(unsafe {
+            fontconfig_sys::FcFontMatch(native_config, pattern.0, &mut result)
+        });
+        if let Some(candidate) = listed_font_from_raw_pattern(matched.0) {
             candidates.push(candidate);
         }
-        tracing::trace!(
-            family = family.unwrap_or(""),
-            lang = lang.unwrap_or(""),
-            query_charset_ranges = ?query_charset_ranges,
-            required_char,
-            added = candidates.len().saturating_sub(before),
-            total = candidates.len(),
-            "fontconfig filtered candidate list"
-        );
+        return candidates;
     }
+    // The postfilter below needs coverage even when a registry/repertory
+    // already constrained native discovery. Omitting FC_CHARSET makes
+    // every returned pattern appear unsupported and forces fallback.
+    // Registry-only enumeration keeps GNU's metadata-only projection.
+    let projection = if required_char.is_some() || script_any.is_some() {
+        GnuEntityProjection::MetadataAndCharset
+    } else {
+        GnuEntityProjection::Metadata
+    };
+    let Some(object_set) = build_candidate_object_set(projection) else {
+        return Vec::new();
+    };
+    // SAFETY: the native configuration, pattern and projection are live;
+    // the returned set is immediately owned until all patterns are copied.
+    let fontset = unsafe {
+        FcFontSetGuard(fontconfig_sys::FcFontList(
+            native_config,
+            pattern.0,
+            object_set.0,
+        ))
+    };
+    if fontset.0.is_null() {
+        return Vec::new();
+    }
+    let nfont = unsafe { (*fontset.0).nfont };
+    tracing::trace!(
+        family = family.unwrap_or(""),
+        languages = ?langs,
+        query_charset_ranges = ?query_charset_ranges,
+        required_char,
+        nfont,
+        "fontconfig raw candidate list"
+    );
+    if nfont <= 0 {
+        return Vec::new();
+    }
+    let fonts = unsafe { (*fontset.0).fonts };
+    if fonts.is_null() {
+        return Vec::new();
+    }
+    let patterns = unsafe { std::slice::from_raw_parts(fonts, nfont as usize) };
+    let before = candidates.len();
+
+    for &candidate_pattern in patterns {
+        if let Some(required_char) = required_char
+            && !raw_pattern_supports_any_char(candidate_pattern, &[required_char])
+        {
+            #[cfg(test)]
+            NATIVE_UNSUPPORTED_PATTERNS.with(|count| count.set(count.get() + 1));
+            continue;
+        }
+        if let Some(characters) = script_any
+            && !raw_pattern_supports_any_char(candidate_pattern, characters)
+        {
+            continue;
+        }
+        let Some(candidate) = listed_font_from_raw_pattern(candidate_pattern) else {
+            continue;
+        };
+        candidates.push(candidate);
+    }
+    tracing::trace!(
+        family = family.unwrap_or(""),
+        languages = ?langs,
+        query_charset_ranges = ?query_charset_ranges,
+        required_char,
+        added = candidates.len().saturating_sub(before),
+        total = candidates.len(),
+        "fontconfig filtered candidate list"
+    );
+
     candidates
 }
 
@@ -1628,6 +1676,7 @@ pub(crate) fn fc_list_candidates(
     query_charset_ranges: &[(u32, u32)],
     required_char: Option<u32>,
     langs: &[String],
+    _script_coverage: Option<&NativeFontScriptCoverage>,
 ) -> Vec<ListedFont> {
     let mut candidates = Vec::new();
     let query_langs = if langs.is_empty() {

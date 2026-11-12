@@ -3,6 +3,8 @@ use super::*;
 mod postscript_fallback_review_test;
 #[path = "preferred_size_metadata_review_test.rs"]
 mod preferred_size_metadata_review_test;
+#[path = "registry_adstyle_review_test.rs"]
+mod registry_adstyle_review_test;
 use crate::font_backend::{
     FontFamilyName, PlatformFontCandidate, PlatformFontCandidateLocator, PlatformFontDesignMetrics,
     PlatformFontMetadata, PlatformFontSize,

@@ -2531,6 +2531,14 @@ pub struct FontSpecResolveRequest {
     pub width: Option<FontWidth>,
 }
 
+/// Owned representative characters for a fresh native font-listing query.
+/// An empty alternative set rejects all candidates; an absent rule is distinct.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FontScriptCoverage {
+    All(Vec<u32>),
+    Any(Vec<u32>),
+}
+
 /// Listing constraints which must not alter the driver's single-font match
 /// and opening operations. An absent size leaves scalable entities unsized.
 #[derive(Clone, Debug, PartialEq)]
@@ -2544,6 +2552,7 @@ pub struct FontSpecListQuery {
     pub size: Option<FontOpeningSize>,
     pub dpi: Option<u32>,
     pub average_width: Option<i32>,
+    pub script_coverage: Option<FontScriptCoverage>,
 }
 
 /// An enumerated entity retains its catalog size rather than opening a font

@@ -2484,7 +2484,7 @@ pub(crate) fn list_fonts(
         None => None,
     };
     let prefer = match args.get(3).filter(|value| !value.is_nil()) {
-        Some(value) if is_font_spec(value) => Some(font_list_query(eval, value, frame_id)?),
+        Some(value) if is_font_spec(value) => Some(value),
         Some(value) => {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
@@ -2493,7 +2493,18 @@ pub(crate) fn list_fonts(
         }
         None => None,
     };
-    let query = font_list_query(eval, &args[0], frame_id)?;
+    // GNU font_list_entities has no font drivers on a TTY frame. Preserve
+    // FRAME/SPEC/NUM/PREFER checks before observing the empty driver list.
+    if eval.frame_manager().get(frame_id).is_some_and(|frame| {
+        FrameFontRealization::for_frame(frame) == FrameFontRealization::Terminal
+    }) {
+        return Ok(Value::NIL);
+    }
+    let prefer = prefer
+        .map(|spec| font_list_query(eval, spec, frame_id))
+        .transpose()?;
+    let mut query = font_list_query(eval, &args[0], frame_id)?;
+    query.script_coverage = font_script_coverage(eval, &args[0]);
     let ignored = eval.variable_value_or_nil(intern("face-ignored-fonts"));
     let patterns: Vec<_> = list_iter(ignored)
         .filter_map(|pattern| pattern.as_lisp_string().cloned())
@@ -2588,6 +2599,53 @@ fn font_put_entity_field(entity: Value, key: &str, value: Value) {
     let _ = entity.replace_vector_data(fields);
 }
 
+/// Capture only owned characters, before borrowing the native display host.
+/// GNU caches equal specs on live frames; this capture does not recreate that
+/// separate cache or promise immediate representative-table invalidation.
+fn font_script_coverage(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    spec: &Value,
+) -> Option<neovm_eval::emacs_core::eval::FontScriptCoverage> {
+    use neovm_eval::emacs_core::eval::FontScriptCoverage;
+    let script = font_vector_get_flexible(font_value_fields(spec)?, "script")?;
+    let mode = eval.symbol_mode();
+    let mut cursor = eval.variable_value_or_nil(intern("script-representative-chars"));
+    while cursor.is_cons() {
+        let entry = cursor.cons_car();
+        if entry.is_cons() && eq_value(&mode.unwrap(entry.cons_car()), &mode.unwrap(script)) {
+            let representatives = entry.cons_cdr();
+            if let Some(values) = representatives.as_vector_data() {
+                return Some(FontScriptCoverage::Any(
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_fixnum().and_then(|n| u32::try_from(n).ok()))
+                        .collect(),
+                ));
+            }
+            // ftfont_spec_pattern skips a nil script's list, whereas the
+            // vector lookup in ftfont_list still sees an explicit nil key.
+            if !script.is_nil() && representatives.is_cons() {
+                let mut characters = Vec::new();
+                let mut tail = representatives;
+                while tail.is_cons() {
+                    if let Some(character) = tail
+                        .cons_car()
+                        .as_fixnum()
+                        .filter(|n| (0..=0x3fffff).contains(n))
+                    {
+                        characters.push(character as u32);
+                    }
+                    tail = tail.cons_cdr();
+                }
+                return Some(FontScriptCoverage::All(characters));
+            }
+            return None;
+        }
+        cursor = cursor.cons_cdr();
+    }
+    None
+}
+
 fn font_list_query(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     spec: &Value,
@@ -2616,6 +2674,7 @@ fn font_list_query(
     specification.frame_id = frame_id;
     Ok(neovm_eval::emacs_core::eval::FontSpecListQuery {
         specification,
+        script_coverage: None,
         driver: field("type")
             .filter(|value| !value.is_nil())
             .and_then(|value| value.as_bare_symbol_id()),
@@ -2676,10 +2735,23 @@ pub(crate) fn x_list_fonts(
             vec![Value::symbol("fixnump"), *width],
         ));
     }
-    let frame_id = find_font_frame_id(eval, args.get(2))?;
+    let requested_frame_id = find_font_frame_id(eval, args.get(2))?;
+    let requested_domain = eval
+        .frame_manager()
+        .get(requested_frame_id)
+        .map(FrameFontRealization::for_frame)
+        .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?;
+    // GNU Fx_list_fonts clears FRAME and FACE for a non-window-system
+    // target, then Flist_fonts defaults that nil FRAME to the selected one.
+    let frame_id = match requested_domain {
+        FrameFontRealization::WindowSystem => requested_frame_id,
+        FrameFontRealization::Terminal => find_font_frame_id(eval, None)?,
+    };
     let spec = font_spec_from_name(&pattern)
         .ok_or_else(|| signal("error", vec![Value::string("Invalid font name"), args[0]]))?;
-    if args.get(1).is_some_and(|face| !face.is_nil()) {
+    if requested_domain == FrameFontRealization::WindowSystem
+        && args.get(1).is_some_and(|face| !face.is_nil())
+    {
         let face_name = args.get(1).and_then(font_value_text_lisp_string);
         let table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, false);
         let face = table.resolve(
@@ -2723,7 +2795,7 @@ pub(crate) fn x_list_fonts(
         eval,
         vec![
             spec,
-            args.get(2).copied().unwrap_or(Value::NIL),
+            Value::make_frame(frame_id.0),
             args.get(3).copied().unwrap_or(Value::NIL),
             spec,
         ],

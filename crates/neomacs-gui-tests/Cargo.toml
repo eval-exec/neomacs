@@ -54,7 +54,7 @@ libc.workspace = true
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 neomacs-melpa-test-support.workspace = true
 neomacs-test-env.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["pty", "termios"] }
 wayland-client.workspace = true
 wayland-protocols.workspace = true
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
