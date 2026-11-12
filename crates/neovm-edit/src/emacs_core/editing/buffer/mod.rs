@@ -4863,10 +4863,11 @@ pub(crate) fn builtin_overlays_in_in_buffers(
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
 
     let byte_range = elisp_range_to_byte_clipped_full(buf, beg, end);
-    let accessible = buf.accessible_emacs_byte_region();
+    // GNU `overlays_in` includes an empty overlay at END only when END is at `Z`, the end of
+    // the whole buffer, so a narrowed `point-max` doesn't qualify.
     let ids = buf
         .overlays
-        .overlays_in_accessible_emacs_byte_range(byte_range, accessible.end());
+        .overlays_in_accessible_emacs_byte_range(byte_range, buf.total_emacs_byte_end_pos());
     Ok(Value::list(ids))
 }
 

@@ -4244,11 +4244,11 @@ pub(crate) fn builtin_remove_overlays<H: EditHost>(host: &mut H, args: Vec<Value
         None
     };
 
-    // Collect overlay ids in range.
-    let accessible = buf.accessible_emacs_byte_region();
+    // Collect overlay ids in range, as GNU's `remove-overlays` (subr.el) does with
+    // `overlays-in`: an empty overlay at END counts only at the end of the whole buffer.
     let ids = buf.overlays.overlays_in_accessible_emacs_byte_range(
         EmacsByteRange::new(start_pos, end_pos),
-        accessible.end(),
+        buf.total_emacs_byte_end_pos(),
     );
 
     // Filter and delete.
