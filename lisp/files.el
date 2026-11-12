@@ -3507,44 +3507,57 @@ If FUNCTION is nil, then it is not called.")
 Also applies to `magic-fallback-mode-alist'.")
 
 (defun set-auto-mode--from-matching-alist-entry (alist name case-insensitive
-                                                   keep-mode-if-same dir-local)
+                                                 keep-mode-if-same dir-local)
   "Apply matching entries in ALIST for file NAME.
 CASE-INSENSITIVE non-nil means NAME is on a case-insensitive file system.
-Pass KEEP-MODE-IF-SAME to each mode setter.  When DIR-LOCAL is non-nil,
-validate every non-nil mode before calling it.  Return non-nil if a
-matching handler was accepted."
-  (let (was-set)
-    (while
-        (let* ((newmode
-                (if case-insensitive
-                    ;; Filesystem is case-insensitive.
-                    (let ((case-fold-search t))
-                      (assoc-default name alist 'string-match))
-                  ;; Filesystem is case-sensitive.
-                  (or
-                   ;; First match case-sensitively.
-                   (let ((case-fold-search nil))
-                     (assoc-default name alist 'string-match))
-                   ;; Fallback to case-insensitive match.
-                   (and auto-mode-case-fold
-                        (let ((case-fold-search t))
-                          (assoc-default name alist 'string-match))))))
-               ;; Continuation is independent of MODE: a nil function
-               ;; still strips the matched suffix and resumes the search.
-               (continue-search (and (not (functionp newmode))
-                                     (consp newmode)
-                                     (cadr newmode)))
-               (mode (if continue-search (car newmode) newmode)))
-          (when continue-search
-            (setq name (substring name 0 (match-beginning 0))))
+Defer a continuation handler until another match or the end of the search.
+Intermediate handlers preserve the current mode; the final handler uses
+KEEP-MODE-IF-SAME.  Validate every directory-local handler before calling
+it.  Return non-nil if the final handler was accepted."
+  (let (mode)
+    (while name
+      (let ((newmode
+             (if case-insensitive
+                 ;; Filesystem is case-insensitive.
+                 (let ((case-fold-search t))
+                   (assoc-default name alist 'string-match))
+               ;; Filesystem is case-sensitive.
+               (or
+                ;; First match case-sensitively.
+                (let ((case-fold-search nil))
+                  (assoc-default name alist 'string-match))
+                ;; Fallback to case-insensitive match.
+                (and auto-mode-case-fold
+                     (let ((case-fold-search t))
+                       (assoc-default name alist 'string-match)))))))
+        (when newmode
           (when mode
+            ;; A later match makes the pending handler intermediate.
+            ;; Check it immediately before invocation, even though its
+            ;; name was found on the preceding iteration.
             (if (and dir-local
                      (not (set-auto-mode--dir-local-valid-p mode)))
                 (message "Ignoring invalid mode `%S'" mode)
-              (set-auto-mode-0 mode keep-mode-if-same)
-              (setq was-set t)))
-          continue-search))
-    was-set))
+              (set-auto-mode-0 mode t)))
+          (setq mode newmode))
+        (if (and newmode
+                 (not (functionp newmode))
+                 (consp newmode)
+                 (cadr newmode))
+            ;; The continuation flag is independent of a nil MODE.
+            (setq mode (car newmode)
+                  name (substring name 0 (match-beginning 0)))
+          (setq name nil))))
+    (when mode
+      ;; No later match was found.  This includes a terminal continuation.
+      ;; Return nil after rejection so the caller can try its fallback.
+      (if (and dir-local
+               (not (set-auto-mode--dir-local-valid-p mode)))
+          (progn
+            (message "Ignoring invalid mode `%S'" mode)
+            nil)
+        (set-auto-mode-0 mode keep-mode-if-same)
+        t))))
 
 (defun set-auto-mode--apply-alist (alist keep-mode-if-same dir-local)
   "Helper function for `set-auto-mode'.
