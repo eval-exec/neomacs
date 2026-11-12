@@ -138,3 +138,37 @@ fn gde_overlay_default_local_map_at_end() {
     // Generated from GNU 31.1; get_local_map tries the character property first.
     assert_eq!(actual, r#"OK (ignore t t)"#);
 }
+
+/// GNU `overlays_in` (src/buffer.c) includes an empty overlay at END only when END is at `Z`,
+/// the end of the whole buffer, not at the end of the narrowing. These are the narrowed cases
+/// of GNU's test-overlays-in-2 and test-remove-overlays.
+#[test]
+fn overlays_in_counts_empty_overlays_at_end_only_at_the_real_end_of_buffer() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    eval.set_lexical_binding(true);
+    let result = eval.eval_str(
+        r#"(list
+ (with-temp-buffer
+   (insert (make-string 100 ?\s))
+   (make-overlay (point-max) (point-max))
+   (make-overlay 50 50)
+   (narrow-to-region 1 50)
+   (list (length (overlays-in 1 (point-max)))
+         (length (overlays-in (point-max) (point-max)))
+         (length (overlays-in 1 101))))
+ (with-temp-buffer
+   (insert "foo")
+   (goto-char 2)
+   (make-overlay (point) (point))
+   (narrow-to-region 1 2)
+   (let ((before (list (length (overlays-in 1 2))
+                       (length (overlays-in 2 2))
+                       (length (overlays-in (point-max) (point-max))))))
+     (remove-overlays)
+     (widen)
+     (list before (length (overlays-in 2 2))))))"#,
+    );
+    let actual = neovm_eval::emacs_core::print::format_eval_result_with_eval(&eval, &result);
+    assert_eq!(actual, "OK ((0 1 2) ((0 1 1) 1))");
+}
