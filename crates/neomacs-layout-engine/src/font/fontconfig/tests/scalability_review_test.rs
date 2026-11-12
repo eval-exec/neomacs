@@ -71,7 +71,7 @@ fn scalability_listing_matches_exact_native_boolean_for_outline_and_color_bitmap
 }
 
 #[test]
-fn scalability_listing_keeps_native_scalable_color_bitmap_with_average_width_zero() {
+fn scalability_listing_keeps_native_scalable_color_bitmap_with_zero_and_nonzero_width_requests() {
     use crate::font::resolver::{FontEntityListConstraints, FontEntityQuery};
     let catalog = crate::font::metrics::test_catalog::TestFontCatalog::from_files(&[
         neomacs_test_fonts::hack_regular_3_003(),
@@ -81,17 +81,20 @@ fn scalability_listing_keeps_native_scalable_color_bitmap_with_average_width_zer
     .to_native_fontconfig();
     let service = catalog.metrics_service();
     let query = FontEntityQuery::new(crate::font_backend::FontFamilyName::new("Noto Color Emoji"));
-    let constraints = FontEntityListConstraints {
-        scalable: Some(true),
-        average_width: Some(0),
-        ..Default::default()
-    };
-    assert_eq!(
-        service
-            .list_font_entities(&query, &constraints, None, Some(1))
-            .len(),
-        1
-    );
+    for average_width in [0, 120] {
+        let constraints = FontEntityListConstraints {
+            scalable: Some(true),
+            average_width: Some(average_width),
+            ..Default::default()
+        };
+        assert_eq!(
+            service
+                .list_font_entities(&query, &constraints, None, Some(1))
+                .len(),
+            1,
+            "native zero entity width permits requested width {average_width}"
+        );
+    }
 }
 
 #[test]

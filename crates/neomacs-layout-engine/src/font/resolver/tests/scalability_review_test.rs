@@ -95,6 +95,7 @@ fn scalability_preference_does_not_constrain_the_listing_query() {
     assert_eq!(*seen.lock().unwrap(), vec![None]);
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn scalability_listing_keeps_fixed_spleen_when_average_width_is_unknown() {
     let path = neomacs_test_fonts::spleen_2_2_0().otb();
@@ -110,17 +111,18 @@ fn scalability_listing_keeps_fixed_spleen_when_average_width_is_unknown() {
         candidate: fixed,
     }));
     let query = FontEntityQuery::new(FontFamilyName::new("Spleen"));
-    for scalable in [None, Some(false)] {
+    for (scalable, average_width) in [(None, 0), (None, 120), (Some(false), 0), (Some(false), 120)]
+    {
         let constraints = FontEntityListConstraints {
             scalable,
-            average_width: Some(0),
+            average_width: Some(average_width),
             ..Default::default()
         };
         let listed = resolver.list_entities(&query, &constraints, None, Some(1));
         assert_eq!(
             listed.len(),
             1,
-            "GNU admits unknown average width: {scalable:?}"
+            "GNU admits unknown average width: {scalable:?}, requested {average_width}"
         );
         assert_eq!(
             listed[0].candidate.metadata.size,
