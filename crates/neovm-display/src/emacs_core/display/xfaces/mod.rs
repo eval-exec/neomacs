@@ -2527,6 +2527,84 @@ fn default_face_attribute_value(attr: LFaceAttr) -> Value {
     }
 }
 
+/// GNU `internal-set-lisp-face-attribute`, QCinherit arm (src/xfaces.c):
+/// signal when VALUE is FACE itself or reaches FACE through the faces it
+/// inherits from (`face_inheritance_cycle').
+fn check_face_inheritance_cycle(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    domain: Value,
+    face: Value,
+    value: Value,
+) -> Result<(), Flow> {
+    let mut visited = HashSet::default();
+    if same_object(value, face) || face_inheritance_cycle(eval, domain, value, face, &mut visited) {
+        return Err(signal(
+            "error",
+            vec![
+                Value::string("Face inheritance results in inheritance cycle"),
+                value,
+            ],
+        ));
+    }
+    Ok(())
+}
+
+/// GNU `face_inheritance_cycle' (src/xfaces.c): whether FACE, a face symbol
+/// or a list of them, inherits from CHILD in DOMAIN. GNU never stores a
+/// cycle, so it needs no guard; VISITED stops at a face already walked in
+/// case an older cycle is still stored here.
+fn face_inheritance_cycle(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    domain: Value,
+    face: Value,
+    child: Value,
+    visited: &mut HashSet<usize>,
+) -> bool {
+    let members = if face.is_cons() {
+        // Stop at a cons already seen, so that a circular list ends.
+        let mut members = Vec::new();
+        let mut conses = HashSet::default();
+        let mut tail = face;
+        while tail.is_cons() && conses.insert(tail.bits()) {
+            members.push(tail.cons_car());
+            tail = tail.cons_cdr();
+        }
+        members
+    } else if face.is_symbol(eval.symbol_mode()) {
+        vec![face]
+    } else {
+        return false;
+    };
+    for member in members {
+        if !visited.insert(member.bits()) {
+            continue;
+        }
+        // GNU stops at a member that is not a face (`get_lface_attributes'
+        // failing).
+        let Ok(parent) = builtin_internal_get_lisp_face_attribute(
+            eval,
+            vec![member, Value::symbol(":inherit"), domain],
+        ) else {
+            return false;
+        };
+        if same_object(parent, member) || same_object(parent, child) {
+            return true;
+        }
+        if !parent.is_nil()
+            && !is_reset_like_face_attr_value(&parent)
+            && face_inheritance_cycle(eval, domain, parent, child, visited)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Lisp `eq', as GNU's `EQ' in the cycle check. `==` on `Value` is `equal'.
+fn same_object(a: Value, b: Value) -> bool {
+    a.bits() == b.bits()
+}
+
 fn is_reset_like_face_attr_value(value: &Value) -> bool {
     value.as_bare_symbol_id().is_some_and(|id| {
         let s = resolve_sym(id);
@@ -3288,6 +3366,32 @@ pub fn builtin_internal_set_lisp_face_attribute(
                 ensure_lisp_face_id_property(eval, &face_name)?;
             }
 
+            if attr_name == SetFaceAttr::LFace(LFaceAttr::Inherit) {
+                // The face vectors GNU checks: the new-frame defaults, or each
+                // frame the value is stored in. For FRAME 0, GNU calls the
+                // setter once per live frame, so each frame is checked.
+                let domains = if defaults_frame {
+                    vec![Value::T]
+                } else {
+                    match args.get(3) {
+                        Some(v) if v.as_fixnum() == Some(0) => eval
+                            .frame_manager()
+                            .frame_list()
+                            .into_iter()
+                            .map(|frame_id| Value::make_frame(frame_id.0))
+                            .collect(),
+                        Some(frame)
+                            if live_frame_designator_in_state(&eval.frame_manager(), frame) =>
+                        {
+                            vec![*frame]
+                        }
+                        _ => vec![Value::NIL],
+                    }
+                };
+                for domain in domains {
+                    check_face_inheritance_cycle(eval, domain, face_symbol, value)?;
+                }
+            }
             let (canonical_attr, mut canonical_value) =
                 normalize_face_attr_for_set_with_eval(Some(eval), &face_name, attr_name, value)?;
             // GNU Emacs: when updating face--new-frame-defaults, convert

@@ -22,6 +22,8 @@ mod window_system_preload_test;
 #[path = "text_measurement_invisible_test.rs"]
 mod text_measurement_invisible_test;
 
+#[path = "face_inheritance_cycle_test.rs"]
+mod face_inheritance_cycle_test;
 #[cfg(test)]
 #[path = "tsb_face_font_validation.rs"]
 mod tsb_face_font_validation;
