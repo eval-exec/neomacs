@@ -10,6 +10,7 @@ pub(super) struct Query {
     required_char: Option<u32>,
     langs: Vec<String>,
     script_coverage: Option<NativeFontScriptCoverage>,
+    scalable: Option<bool>,
     kind: FcQueryKind,
 }
 
@@ -20,6 +21,7 @@ impl Query {
         required_char: Option<u32>,
         langs: &[String],
         script_coverage: Option<&NativeFontScriptCoverage>,
+        scalable: Option<bool>,
         kind: FcQueryKind,
     ) -> Option<Self> {
         // Oversized requests remain valid native queries, but cannot enlarge
@@ -44,6 +46,7 @@ impl Query {
             required_char,
             langs: langs.to_vec(),
             script_coverage: script_coverage.cloned(),
+            scalable,
             kind,
         })
     }

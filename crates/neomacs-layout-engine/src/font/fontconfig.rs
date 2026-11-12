@@ -428,6 +428,7 @@ pub fn find_font_for_spec(
         None,
         &query_langs,
         None,
+        None,
     );
 
     select_find_font_candidate(candidates, &spec).map(|mut candidate| {
@@ -591,6 +592,7 @@ fn match_font_from_spec(
             &query_charset_ranges,
             Some(ch as u32),
             &query_langs,
+            None,
             None,
         );
         if candidates.is_empty() {
@@ -1276,6 +1278,7 @@ pub(crate) fn fc_list_candidates(
     required_char: Option<u32>,
     langs: &[String],
     script_coverage: Option<&NativeFontScriptCoverage>,
+    scalable: Option<bool>,
 ) -> Vec<ListedFont> {
     fc_query_candidates(
         #[cfg(test)]
@@ -1285,6 +1288,7 @@ pub(crate) fn fc_list_candidates(
         required_char,
         langs,
         script_coverage,
+        scalable,
         FcQueryKind::List,
     )
 }
@@ -1303,6 +1307,7 @@ pub(crate) fn fc_match_candidate(
         query_charset_ranges,
         None,
         langs,
+        None,
         None,
         FcQueryKind::Match,
     )
@@ -1334,6 +1339,7 @@ fn fc_query_candidates(
     required_char: Option<u32>,
     langs: &[String],
     script_coverage: Option<&NativeFontScriptCoverage>,
+    scalable: Option<bool>,
     kind: FcQueryKind,
 ) -> Vec<ListedFont> {
     #[cfg(test)]
@@ -1344,6 +1350,7 @@ fn fc_query_candidates(
         required_char,
         langs,
         script_coverage,
+        scalable,
         kind,
     ) else {
         return fc_query_candidates_uncached(
@@ -1354,6 +1361,7 @@ fn fc_query_candidates(
             required_char,
             langs,
             script_coverage,
+            scalable,
             kind,
         );
     };
@@ -1385,6 +1393,7 @@ fn fc_query_candidates(
         required_char,
         langs,
         script_coverage,
+        scalable,
         kind,
     );
     let mut caches = ({
@@ -1413,6 +1422,7 @@ fn fc_query_candidates_uncached(
     required_char: Option<u32>,
     langs: &[String],
     script_coverage: Option<&NativeFontScriptCoverage>,
+    scalable: Option<bool>,
     kind: FcQueryKind,
 ) -> Vec<ListedFont> {
     #[cfg(test)]
@@ -1452,6 +1462,20 @@ fn fc_query_candidates_uncached(
         return Vec::new();
     }
     let pattern = FcPatternGuard(pattern);
+    if let Some(scalable) = scalable {
+        // SAFETY: the guard owns a live pattern, FC_SCALABLE is a static
+        // NUL-terminated property name, and Fontconfig copies the Boolean.
+        let ok = unsafe {
+            fontconfig_sys::FcPatternAddBool(
+                pattern.0,
+                fontconfig::FC_SCALABLE.as_ptr(),
+                i32::from(scalable),
+            )
+        };
+        if ok == 0 {
+            return Vec::new();
+        }
+    }
     if let Some(family) = family.filter(|family| !family.is_empty()) {
         let Ok(value) = CString::new(family) else {
             return Vec::new();
@@ -1677,6 +1701,7 @@ pub(crate) fn fc_list_candidates(
     required_char: Option<u32>,
     langs: &[String],
     _script_coverage: Option<&NativeFontScriptCoverage>,
+    _scalable: Option<bool>,
 ) -> Vec<ListedFont> {
     let mut candidates = Vec::new();
     let query_langs = if langs.is_empty() {

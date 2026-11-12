@@ -390,6 +390,8 @@ pub enum NativeFontScriptCoverage {
 /// Discovery request passed from shared policy to one native backend.
 #[derive(Clone, Debug)]
 pub struct FontCandidateQuery {
+    /// Explicit Fontconfig listing scalability; absent stays unconstrained.
+    pub scalable: Option<bool>,
     pub script_coverage: Option<NativeFontScriptCoverage>,
     pub scope: FontCandidateScope,
     pub required: RequiredFontCoverage,

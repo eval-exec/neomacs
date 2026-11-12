@@ -2903,6 +2903,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         use neomacs_layout_engine::font::resolver::FontEntityListConstraints;
         let constraints =
             |query: &neovm_core::emacs_core::eval::FontSpecListQuery| FontEntityListConstraints {
+                scalable: query.scalable,
                 driver: query.driver,
                 foundry: query
                     .foundry

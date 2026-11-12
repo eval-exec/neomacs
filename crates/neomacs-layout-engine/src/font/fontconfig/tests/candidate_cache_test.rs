@@ -1,24 +1,43 @@
 use super::*;
 fn query(family: &str) -> Query {
-    Query::new(Some(family), &[], None, &[], None, FcQueryKind::List).unwrap()
+    Query::new(Some(family), &[], None, &[], None, None, FcQueryKind::List).unwrap()
 }
 #[test]
 fn complete_query_key_distinguishes_native_inputs() {
     let base = query("test");
     for other in [
-        Query::new(None, &[], None, &[], None, FcQueryKind::List).unwrap(),
-        Query::new(Some("test"), &[(1, 3)], None, &[], None, FcQueryKind::List).unwrap(),
-        Query::new(Some("test"), &[], Some(65), &[], None, FcQueryKind::List).unwrap(),
+        Query::new(None, &[], None, &[], None, None, FcQueryKind::List).unwrap(),
+        Query::new(
+            Some("test"),
+            &[(1, 3)],
+            None,
+            &[],
+            None,
+            None,
+            FcQueryKind::List,
+        )
+        .unwrap(),
+        Query::new(
+            Some("test"),
+            &[],
+            Some(65),
+            &[],
+            None,
+            None,
+            FcQueryKind::List,
+        )
+        .unwrap(),
         Query::new(
             Some("test"),
             &[],
             None,
             &["en".into()],
             None,
+            None,
             FcQueryKind::List,
         )
         .unwrap(),
-        Query::new(Some("test"), &[], None, &[], None, FcQueryKind::Match).unwrap(),
+        Query::new(Some("test"), &[], None, &[], None, None, FcQueryKind::Match).unwrap(),
     ] {
         assert_ne!(base, other);
     }
@@ -49,6 +68,7 @@ fn byte_limit_evicts_and_oversized_keys_are_not_retained() {
             &[],
             None,
             &[],
+            None,
             None,
             FcQueryKind::List
         )
@@ -105,6 +125,7 @@ fn script_query_keys_preserve_mode_characters_and_payload_budget() {
         None,
         &[],
         Some(&all),
+        None,
         FcQueryKind::List,
     )
     .unwrap();
@@ -114,6 +135,7 @@ fn script_query_keys_preserve_mode_characters_and_payload_budget() {
         None,
         &[],
         Some(&any),
+        None,
         FcQueryKind::List,
     )
     .unwrap();
@@ -129,6 +151,7 @@ fn script_query_keys_preserve_mode_characters_and_payload_budget() {
             None,
             &[],
             Some(&large),
+            None,
             FcQueryKind::List
         )
         .is_none(),
@@ -141,6 +164,7 @@ fn script_query_keys_preserve_mode_characters_and_payload_budget() {
         None,
         &[],
         Some(&payload),
+        None,
         FcQueryKind::List,
     )
     .unwrap();

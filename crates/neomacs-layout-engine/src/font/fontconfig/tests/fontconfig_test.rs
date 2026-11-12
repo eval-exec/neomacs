@@ -2,6 +2,9 @@
 #[path = "language_set_review_test.rs"]
 mod language_set_review_test;
 #[cfg(unix)]
+#[path = "scalability_review_test.rs"]
+mod scalability_review_test;
+#[cfg(unix)]
 #[path = "script_coverage_review_test.rs"]
 mod script_coverage_review_test;
 

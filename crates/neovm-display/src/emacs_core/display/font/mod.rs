@@ -443,7 +443,9 @@ pub(crate) struct LiveFrameFontResolution {
 }
 
 pub(crate) fn frame_font_request_from_named_font_string(name: &str) -> Option<FrameFontRequest> {
-    let spec = font_spec_from_name(name.trim())?;
+    // This optional internal projection cannot deliver Lisp conditions; Lisp
+    // entry points use the parser Result directly and preserve those errors.
+    let spec = font_spec_from_name(name.trim()).ok()??;
     frame_font_request_from_value(&spec)
 }
 
@@ -1734,7 +1736,7 @@ fn font_parse_fcname_enum_word(elems: &mut Vec<Value>, word: &str) {
 /// Store a `key=val` fontconfig property.  Recognized keys map to basic
 /// font-spec slots; unknown keys are dropped (GNU would route them to the
 /// font driver's `filter_properties`, which has no effect on a bare spec).
-fn font_parse_fcname_keyval(elems: &mut Vec<Value>, key: &str, val: &str) {
+fn font_parse_fcname_keyval(elems: &mut Vec<Value>, key: &str, val: &str) -> Result<(), Flow> {
     match key {
         "pixelsize" => {
             if let Ok(n) = val.parse::<i64>() {
@@ -1764,6 +1766,25 @@ fn font_parse_fcname_keyval(elems: &mut Vec<Value>, key: &str, val: &str) {
             font_parse_set(elems, key, Value::symbol(val));
         }
         "registry" => font_parse_set(elems, "registry", Value::symbol(val.to_ascii_lowercase())),
+        "scalable" => {
+            // GNU font_filter_properties recognizes these exact false words.
+            // font_intern_prop first bounds digit-only values to fixnums.
+            let zero = if !val.is_empty() && val.bytes().all(|byte| byte.is_ascii_digit()) {
+                let number = val
+                    .parse::<i64>()
+                    .ok()
+                    .filter(|number| *number <= Value::MOST_POSITIVE_FIXNUM)
+                    .ok_or_else(|| signal("overflow-error", vec![Value::string(val)]))?;
+                number == 0
+            } else {
+                false
+            };
+            let false_word = matches!(
+                val,
+                "false" | "False" | "FALSE" | "FcFalse" | "off" | "OFF" | "Off"
+            );
+            font_parse_set(elems, key, Value::bool_val(!zero && !false_word));
+        }
         "dpi" => {
             if let Ok(n) = val.parse::<i64>() {
                 font_parse_set(elems, "dpi", Value::fixnum(n));
@@ -1771,14 +1792,15 @@ fn font_parse_fcname_keyval(elems: &mut Vec<Value>, key: &str, val: &str) {
         }
         _ => {}
     }
+    Ok(())
 }
 
 /// Port of GNU `font_parse_fcname` (src/font.c): parse a fontconfig-style name
 /// such as `"Monospace-10"`, `"Family:weight=bold"`, or `"Family-12:bold"` into
 /// font-spec properties.  Returns `false` on an empty name (GNU `-1`).
-fn font_parse_fcname(elems: &mut Vec<Value>, name: &str) -> bool {
+fn font_parse_fcname(elems: &mut Vec<Value>, name: &str) -> Result<bool, Flow> {
     if name.is_empty() {
-        return false;
+        return Ok(false);
     }
     let bytes = name.as_bytes();
     let mut family_end: Option<usize> = None;
@@ -1825,7 +1847,7 @@ fn font_parse_fcname(elems: &mut Vec<Value>, name: &str) -> bool {
     let Some(family_end) = family_end else {
         // No size and no property data: a plain family name (possibly GTK-style
         // with trailing style words / size separated by spaces).
-        return font_parse_fcname_plain(elems, name);
+        return Ok(font_parse_fcname_plain(elems, name));
     };
 
     // Family.
@@ -1858,14 +1880,14 @@ fn font_parse_fcname(elems: &mut Vec<Value>, name: &str) -> bool {
             if let Some(eq) = segment.find('=') {
                 let key = &segment[..eq];
                 let val = &segment[eq + 1..];
-                font_parse_fcname_keyval(elems, key, val);
+                font_parse_fcname_keyval(elems, key, val)?;
             } else {
                 font_parse_fcname_enum_word(elems, segment);
             }
         }
     }
 
-    true
+    Ok(true)
 }
 
 /// Strip fontconfig quoting backslashes from a family name.
@@ -2169,9 +2191,9 @@ fn font_parse_xlfd_fields(elems: &mut Vec<Value>, fields: &xlfd_fields::ParsedXl
 /// Port of GNU `font_parse_name` (src/font.c): dispatch a font NAME string to
 /// the XLFD or fontconfig parser and store the parsed properties into ELEMS
 /// (a font-spec property vector).  Returns `false` if the name cannot be parsed.
-fn font_parse_name(elems: &mut Vec<Value>, name: &str) -> bool {
+fn font_parse_name(elems: &mut Vec<Value>, name: &str) -> Result<bool, Flow> {
     if name.starts_with('-') || name.contains('*') || name.contains('?') {
-        font_parse_xlfd(elems, name)
+        Ok(font_parse_xlfd(elems, name))
     } else {
         font_parse_fcname(elems, name)
     }
@@ -2179,13 +2201,13 @@ fn font_parse_name(elems: &mut Vec<Value>, name: &str) -> bool {
 
 /// Build a font-spec from a font NAME string (GNU `font_spec_from_name`):
 /// parse NAME, then record it under `:name`.  Returns `None` on parse failure.
-pub(crate) fn font_spec_from_name(name: &str) -> Option<Value> {
+pub(crate) fn font_spec_from_name(name: &str) -> Result<Option<Value>, Flow> {
     let mut elems = vec![Value::keyword(FONT_SPEC_TAG)];
-    if !font_parse_name(&mut elems, name) {
-        return None;
+    if !font_parse_name(&mut elems, name)? {
+        return Ok(None);
     }
     font_parse_set(&mut elems, "name", Value::string(name.to_string()));
-    Some(Value::vector(elems))
+    Ok(Some(Value::vector(elems)))
 }
 
 /// `(font-face-attributes FONT &optional FRAME)` -- return a plist of face
@@ -2200,7 +2222,7 @@ pub(crate) fn font_face_attributes(args: Vec<Value>) -> EvalResult {
 
     let font = if args[0].is_string() {
         let name = font_string_text(&args[0]).unwrap_or_default();
-        match font_spec_from_name(&name) {
+        match font_spec_from_name(&name)? {
             Some(spec) => spec,
             None => {
                 return Err(signal(
@@ -2375,7 +2397,7 @@ pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
                     vec![Value::symbol("stringp"), *value],
                 ));
             };
-            if !font_parse_name(&mut elems, &name) {
+            if !font_parse_name(&mut elems, &name)? {
                 return Err(signal(
                     "error",
                     vec![Value::string(format!("Invalid font name: {name}"))],
@@ -2504,6 +2526,9 @@ pub(crate) fn list_fonts(
         .map(|spec| font_list_query(eval, spec, frame_id))
         .transpose()?;
     let mut query = font_list_query(eval, &args[0], frame_id)?;
+    query.scalable = font_value_fields(&args[0])
+        .and_then(|fields| font_vector_get_flexible(fields, "scalable"))
+        .map(|value| !value.is_nil());
     query.script_coverage = font_script_coverage(eval, &args[0]);
     let ignored = eval.variable_value_or_nil(intern("face-ignored-fonts"));
     let patterns: Vec<_> = list_iter(ignored)
@@ -2548,7 +2573,18 @@ pub(crate) fn list_fonts(
         fonts
             .iter()
             .take(maximum.unwrap_or(usize::MAX))
-            .map(listed_font_entity)
+            .map(|listed| {
+                let entity = listed_font_entity(listed);
+                // FreeType and NS retain primary extras; W32 builds its own.
+                // Decide by the actual canonical driver, never a printed name.
+                if (listed.driver == Some(intern("ftcrhb")) || listed.driver == Some(intern("ns")))
+                    && let Some(value) = font_value_fields(&args[0])
+                        .and_then(|fields| font_vector_get_flexible(fields, "scalable"))
+                {
+                    font_put_entity_field(entity, "scalable", value);
+                }
+                entity
+            })
             .collect(),
     ))
 }
@@ -2674,6 +2710,7 @@ fn font_list_query(
     specification.frame_id = frame_id;
     Ok(neovm_eval::emacs_core::eval::FontSpecListQuery {
         specification,
+        scalable: None,
         script_coverage: None,
         driver: field("type")
             .filter(|value| !value.is_nil())
@@ -2747,7 +2784,7 @@ pub(crate) fn x_list_fonts(
         FrameFontRealization::WindowSystem => requested_frame_id,
         FrameFontRealization::Terminal => find_font_frame_id(eval, None)?,
     };
-    let spec = font_spec_from_name(&pattern)
+    let spec = font_spec_from_name(&pattern)?
         .ok_or_else(|| signal("error", vec![Value::string("Invalid font name"), args[0]]))?;
     if requested_domain == FrameFontRealization::WindowSystem
         && args.get(1).is_some_and(|face| !face.is_nil())
@@ -4341,7 +4378,7 @@ pub(crate) fn font_info(
             // Share the GNU font-name parser with font-spec, including
             // fontconfig/Pango names and XLFD pixel/point units.
             let text = font_string_text(&name).expect("validated font name");
-            let spec = font_spec_from_name(&text)
+            let spec = font_spec_from_name(&text)?
                 .ok_or_else(|| signal("error", vec![Value::string("Invalid font name"), name]))?;
             let size = named_font_opening_size(
                 spec,

@@ -233,6 +233,7 @@ impl FontBackend for FontconfigBackend {
             query.required.single_char().map(u32::from),
             &query.languages,
             query.script_coverage.as_ref(),
+            query.scalable,
         )
         .into_iter()
         .filter_map(|candidate| {

@@ -2625,7 +2625,7 @@ fn validate_font_face_attr_value(value: &Value) -> Result<(), Flow> {
     }
     if value.is_string() {
         let name = font_string_text(value).unwrap_or_default();
-        if font_spec_from_name(&name).is_some() {
+        if font_spec_from_name(&name)?.is_some() {
             return Ok(());
         }
         return Err(signal_error_with_arg("Invalid font name", *value));

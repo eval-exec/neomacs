@@ -128,6 +128,7 @@ pub struct ListedFontCandidate {
 /// Constraints for catalog listing, separate from driver matching and opening.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FontEntityListConstraints {
+    pub scalable: Option<bool>,
     pub script_coverage: Option<crate::font_backend::NativeFontScriptCoverage>,
     pub driver: Option<neovm_core::emacs_core::intern::SymId>,
     pub foundry: Option<String>,
@@ -359,6 +360,7 @@ impl FontResolver {
         let mut candidate_query = self.entity_candidate_query(query);
         if self.backend.kind() == FontBackendKind::Fontconfig {
             candidate_query.script_coverage = constraints.script_coverage.clone();
+            candidate_query.scalable = constraints.scalable;
         }
         let policy = FontEntityMatchPolicy::for_backend(self.backend.kind());
         // ftfont_list checks the registry's language independently of an
@@ -408,18 +410,18 @@ impl FontResolver {
             });
         let size_matches = |candidate: &FontCandidate| {
             let metadata = &candidate.matched.metadata;
+            // GNU filters only known, nonzero entity average widths. Current
+            // metadata projects scalable widths as zero and other widths as
+            // unknown; a fixed strike alone does not imply an average width.
             constraints
-                .average_width
-                .is_none_or(|width| width != 0 || metadata.size == PlatformFontSize::Scalable)
-                && constraints
-                    .pixel_size
-                    .is_none_or(|size| match metadata.size {
-                        PlatformFontSize::Fixed { device_ppem_26_6 } => {
-                            (device_ppem_26_6 >> 6).abs_diff(size) <= 1
-                        }
-                        PlatformFontSize::Scalable => true,
-                        PlatformFontSize::Unknown => false,
-                    })
+                .pixel_size
+                .is_none_or(|size| match metadata.size {
+                    PlatformFontSize::Fixed { device_ppem_26_6 } => {
+                        (device_ppem_26_6 >> 6).abs_diff(size) <= 1
+                    }
+                    PlatformFontSize::Scalable => true,
+                    PlatformFontSize::Unknown => false,
+                })
         };
         let listed = |candidate: FontCandidate| ListedFontCandidate {
             candidate: candidate.matched,
@@ -546,6 +548,7 @@ impl FontResolver {
             .collect();
         let scope = family.map_or(FontCandidateScope::All, FontCandidateScope::Family);
         FontCandidateQuery {
+            scalable: None,
             script_coverage: None,
             scope,
             // Entity enumeration is not character fallback.  Registry
@@ -680,6 +683,7 @@ impl FontResolver {
         let family = self.resolve_family(family);
         let family_name = FontFamilyName::new(family.clone())?;
         let query = FontCandidateQuery {
+            scalable: None,
             script_coverage: None,
             scope: FontCandidateScope::Family(family_name),
             required: RequiredFontCoverage::Any,
@@ -730,6 +734,7 @@ impl FontResolver {
             return cached.clone();
         }
         let mut query = FontCandidateQuery {
+            scalable: None,
             script_coverage: None,
             scope: FontCandidateScope::All,
             required: RequiredFontCoverage::Any,
@@ -1007,6 +1012,7 @@ impl FontResolver {
                 },
             };
             let query = FontCandidateQuery {
+                scalable: None,
                 script_coverage: None,
                 scope,
                 required: RequiredFontCoverage::Character(policy.ch),

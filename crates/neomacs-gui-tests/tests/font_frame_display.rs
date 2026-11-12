@@ -10,6 +10,7 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
+    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -132,7 +133,26 @@ fn run(engine: Engine) {
                 oracle.is_attested(),
                 "GNU control requires the pinned oracle"
             );
-            ("gnu", oracle.executable_path(), oracle.stamp())
+            let binary = oracle.executable_path();
+            let prefix = binary
+                .parent()
+                .and_then(Path::parent)
+                .expect("canonical GNU executable must be installed in PREFIX/bin");
+            let check = Command::new("bash")
+                .arg(root.join("scripts/ci/check-gnu-oracle.sh"))
+                .arg(&binary)
+                .arg("31.1")
+                .arg(prefix.join("share/gnu-emacs-oracle/build-manifest"))
+                .arg("a360712c9d272d950d8d8255ef74570f7e90b7d9")
+                .output()
+                .expect("run canonical GNU build/profile check");
+            let profile = String::from_utf8_lossy(&check.stdout);
+            assert!(
+                check.status.success(),
+                "GNU build/profile check failed: {profile}{}",
+                String::from_utf8_lossy(&check.stderr)
+            );
+            ("gnu", binary, format!("{}\n{profile}", oracle.stamp()))
         }
     };
     eprintln!("{attestation}");
@@ -222,6 +242,7 @@ fn run(engine: Engine) {
     assert_eq!(state["gui-graphic"], true);
     assert_eq!(state["tty-graphic"], false);
     assert_eq!(state["script-cases"], 9);
+    assert_eq!(state["scalable-cases"], 7);
     let observations = state["observations"].as_array().unwrap();
     let expected = [
         "script-explicit-nil-han",
@@ -233,6 +254,13 @@ fn run(engine: Engine) {
         "script-unknown",
         "script-legacy-overrides-all",
         "script-legacy-overrides-any",
+        "scalable-explicit-nil",
+        "scalable-true",
+        "scalable-absent",
+        "scalable-name-false",
+        "scalable-name-true",
+        "scalable-name-mixed-case",
+        "scalable-nil-average-width-zero",
         "gui-selected-tty-default-face-negative-width",
         "gui-selected-tty-invalid-face-negative-width",
         "tty-selected-nil-frame",

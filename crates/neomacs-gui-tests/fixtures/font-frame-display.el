@@ -33,6 +33,25 @@
    label expected
    (lambda () (not (null (list-fonts spec nil 1))))))
 
+(defun font-frame-scalable-cases ()
+  ;; The private font directory contains only the pinned Hack outline font.
+  ;; An explicitly nil property requests non-scalable fonts; absence does not.
+  (font-frame-script-case
+   "scalable-explicit-nil" nil (font-spec :family "Hack" :scalable nil))
+  (font-frame-script-case
+   "scalable-true" t (font-spec :family "Hack" :scalable t))
+  (font-frame-script-case
+   "scalable-absent" t (font-spec :family "Hack"))
+  (font-frame-script-case
+   "scalable-name-false" nil (font-spec :name "Hack:scalable=false"))
+  (font-frame-script-case
+   "scalable-name-true" t (font-spec :name "Hack:scalable=true"))
+  (font-frame-script-case
+   "scalable-name-mixed-case" t (font-spec :name "Hack:scalable=fAlSe"))
+  (font-frame-script-case
+   "scalable-nil-average-width-zero" nil
+   (font-spec :family "Hack" :avgwidth 0 :scalable nil)))
+
 (defun font-frame-script-cases ()
   ;; Every named script has a unique specification. GNU caches script
   ;; selection, so this never changes representatives for a previously used
@@ -74,6 +93,7 @@
              (pattern "-SRC-Hack-regular-normal-normal-*-13-*-*-*-*-0-iso10646-1")
              tty names)
         (font-frame-script-cases)
+        (font-frame-scalable-cases)
         (setq tty (make-terminal-frame
                    `((tty . ,(getenv "NEOMACS_FONT_FRAME_TTY"))
                      (tty-type . "xterm-256color")
@@ -109,6 +129,7 @@
            `((passed . ,(if passed t :json-false)) (version . ,(emacs-version))
              (gui-graphic . t) (tty-graphic . :json-false)
              (script-cases . 9)
+             (scalable-cases . 7)
              (observations . ,(vconcat (reverse font-frame-observations)))))
           (select-frame gui)
           (kill-emacs (if passed 0 1))))

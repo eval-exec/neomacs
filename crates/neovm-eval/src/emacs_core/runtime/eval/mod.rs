@@ -2544,6 +2544,8 @@ pub enum FontScriptCoverage {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontSpecListQuery {
     pub specification: FontSpecResolveRequest,
+    /// Explicit native scalability constraint; absence preserves driver defaults.
+    pub scalable: Option<bool>,
     /// GNU compares driver symbols by identity, including uninterned symbols.
     pub driver: Option<SymId>,
     pub foundry: Option<neovm_value::heap_types::LispString>,

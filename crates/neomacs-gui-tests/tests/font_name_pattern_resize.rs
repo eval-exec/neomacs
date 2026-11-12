@@ -34,20 +34,44 @@ fn gnu_hack_font_patterns_resolve_and_resize_frame() {
 fn run(engine: Engine) {
     let root = neomacs_infra::workspace_root();
     let (name, binary) = match engine {
-        Engine::Neomacs => (
-            "native",
-            std::env::var_os("NEOMACS_GUI_TEST_BINARY")
+        Engine::Neomacs => {
+            let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| root.join("target/release/neomacs")),
-        ),
+                .unwrap_or_else(|| root.join("target/release/neomacs"));
+            let stamp = neomacs_test_env::fresh_build_stamp::verify(&binary, &root.join("lisp"))
+                .expect("native GUI binary requires its matching fresh-build stamp");
+            assert!(matches!(
+                stamp,
+                neomacs_test_env::fresh_build_stamp::StampVerdict::Verified { .. }
+            ));
+            eprintln!("{stamp:?}");
+            ("native", binary)
+        }
         Engine::Gnu => {
             let oracle = neomacs_test_oracle::gnu::gnu_oracle();
             assert!(
                 oracle.is_attested(),
                 "GNU control requires the pinned reference"
             );
+            let binary = oracle.executable_path();
+            let prefix = binary.parent().unwrap().parent().unwrap();
+            let check = std::process::Command::new("bash")
+                .arg(root.join("scripts/ci/check-gnu-oracle.sh"))
+                .arg(&binary)
+                .arg("31.1")
+                .arg(prefix.join("share/gnu-emacs-oracle/build-manifest"))
+                .arg("a360712c9d272d950d8d8255ef74570f7e90b7d9")
+                .output()
+                .expect("run prescribed GNU oracle check");
+            assert!(
+                check.status.success(),
+                "GNU oracle check failed:\n{}\n{}",
+                String::from_utf8_lossy(&check.stdout),
+                String::from_utf8_lossy(&check.stderr)
+            );
+            eprintln!("{}", String::from_utf8_lossy(&check.stdout));
             eprintln!("{}", oracle.stamp());
-            ("gnu", oracle.executable_path())
+            ("gnu", binary)
         }
     };
     let artifacts = root.join(format!(

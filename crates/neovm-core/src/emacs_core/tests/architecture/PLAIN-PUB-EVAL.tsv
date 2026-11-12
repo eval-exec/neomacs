@@ -2961,6 +2961,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery fie
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field dpi
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field driver
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field foundry
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field scalable
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field script_coverage
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field size
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field spacing

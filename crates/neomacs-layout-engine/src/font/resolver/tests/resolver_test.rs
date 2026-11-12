@@ -5,6 +5,8 @@ mod postscript_fallback_review_test;
 mod preferred_size_metadata_review_test;
 #[path = "registry_adstyle_review_test.rs"]
 mod registry_adstyle_review_test;
+#[path = "scalability_review_test.rs"]
+mod scalability_review_test;
 use crate::font_backend::{
     FontFamilyName, PlatformFontCandidate, PlatformFontCandidateLocator, PlatformFontDesignMetrics,
     PlatformFontMetadata, PlatformFontSize,
@@ -1454,7 +1456,7 @@ fn unknown_windows_file_candidate(path: &str) -> FontCandidate {
 
 #[cfg(any(windows, target_os = "linux"))]
 #[test]
-fn entity_listing_classifies_unknown_windows_outline_before_scalable_filter() {
+fn entity_listing_classifies_unknown_windows_outline_before_pixel_size_filter() {
     let outline = neomacs_test_fonts::plemol_jp_console_nf_regular();
     let bitmap = neomacs_test_fonts::spleen_2_2_0().otb();
     let resolver = FontResolver::new(Box::new(FileSizeListingBackend {
@@ -1475,7 +1477,7 @@ fn entity_listing_classifies_unknown_windows_outline_before_scalable_filter() {
     assert_eq!(
         listed.len(),
         1,
-        "a scalable file is classified before :avgwidth 0 filtering"
+        "outline and fixed files are classified before requested pixel-size filtering"
     );
     assert_eq!(listed[0].candidate.file_path(), outline.to_str());
     assert_eq!(
@@ -1524,14 +1526,18 @@ fn entity_listing_classifies_unknown_bitmap_strikes_before_size_filter() {
             .list_entities(&query, &wrong_size, None, None)
             .is_empty()
     );
-    let scalable_only = FontEntityListConstraints {
+    let unknown_average_width = FontEntityListConstraints {
         average_width: Some(0),
+        pixel_size: Some(16),
         ..Default::default()
     };
-    assert!(
+    // GNU font_delete_unmatched retains nil entity average widths, including
+    // the pinned Spleen bitmap (strict GNU 31.1 :avgwidth 0 control).
+    assert_eq!(
         resolver
-            .list_entities(&query, &scalable_only, None, None)
-            .is_empty()
+            .list_entities(&query, &unknown_average_width, None, None)
+            .len(),
+        1
     );
 }
 
