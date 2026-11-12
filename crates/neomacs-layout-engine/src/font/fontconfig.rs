@@ -227,6 +227,7 @@ struct CharMatchCacheKey {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ListedFont {
+    pub(crate) adstyle: Option<String>,
     pub(crate) matched: FontMatch,
     style: String,
     weight_css: Option<u16>,
@@ -1044,6 +1045,35 @@ fn raw_pattern_supports_any_char(
     })
 }
 
+// GNU ftfont.c:get_adstyle_property decodes FreeType's BDF/PCF STYLE
+// convention. Ordinary outline style names are never additional styles.
+#[cfg(unix)]
+fn bitmap_adstyle(format: Option<&str>, style: &str) -> Option<String> {
+    if format.is_some_and(|format| {
+        !format.eq_ignore_ascii_case("bdf") && !format.eq_ignore_ascii_case("pcf")
+    }) {
+        return None;
+    }
+    let word = style.split(' ').next().unwrap_or("");
+    if ["Regular", "Bold", "Oblique", "Italic"]
+        .iter()
+        .any(|normal| word.eq_ignore_ascii_case(normal))
+    {
+        return None;
+    }
+    let adstyle: String = word
+        .chars()
+        .map(|character| match character {
+            '-' | '?' | '*' | '"' => ' ',
+            character => character,
+        })
+        .collect();
+    if FontWidth::from_symbol(&adstyle).is_some() {
+        return None;
+    }
+    Some(adstyle)
+}
+
 #[cfg(unix)]
 fn listed_font_from_raw_pattern(pattern: *mut fontconfig_sys::FcPattern) -> Option<ListedFont> {
     if pattern.is_null() {
@@ -1060,11 +1090,24 @@ fn listed_font_from_raw_pattern(pattern: *mut fontconfig_sys::FcPattern) -> Opti
     {
         return None;
     }
-    let style = raw_pattern_string(pattern, fontconfig::FC_STYLE).unwrap_or_default();
+    let style_property = raw_pattern_string(pattern, fontconfig::FC_STYLE);
+    let scalable = raw_pattern_bool(pattern, fontconfig::FC_SCALABLE);
+    let adstyle = if scalable == Some(true) {
+        None
+    } else {
+        style_property.as_deref().and_then(|style| {
+            bitmap_adstyle(
+                raw_pattern_string(pattern, fontconfig::FC_FONTFORMAT).as_deref(),
+                style,
+            )
+        })
+    };
+    let style = style_property.unwrap_or_default();
     let weight_css = raw_pattern_int(pattern, fontconfig::FC_WEIGHT).map(map_fontconfig_weight_raw);
     let spacing = raw_pattern_int(pattern, fontconfig::FC_SPACING);
     let matched_family = raw_pattern_string(pattern, fontconfig::FC_FAMILY)?;
     Some(ListedFont {
+        adstyle,
         matched: FontMatch {
             family: matched_family,
             file: Some(file),
@@ -1075,7 +1118,7 @@ fn listed_font_from_raw_pattern(pattern: *mut fontconfig_sys::FcPattern) -> Opti
             slant: raw_pattern_int(pattern, fontconfig::FC_SLANT)
                 .map(map_fontconfig_slant_raw)
                 .unwrap_or_else(|| style_slant(&style)),
-            size: match raw_pattern_bool(pattern, fontconfig::FC_SCALABLE) {
+            size: match scalable {
                 Some(true) => PlatformFontSize::Scalable,
                 Some(false) => raw_pattern_double(pattern, fontconfig::FC_PIXEL_SIZE)
                     .map(|size| PlatformFontSize::Fixed {
@@ -1660,6 +1703,7 @@ pub(crate) fn fc_list_candidates(
                 continue;
             };
             let candidate = ListedFont {
+                adstyle: None,
                 matched: FontMatch {
                     family: matched_family,
                     file,

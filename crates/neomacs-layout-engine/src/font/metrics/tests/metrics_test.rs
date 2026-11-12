@@ -1162,6 +1162,7 @@ impl crate::font_backend::FontBackend for FixedPrimaryFontBackend {
             matched: platform_file_candidate(
                 ResolvedFontIdentity::from_file(&self.file, self.face_index, None),
                 crate::font_backend::PlatformFontMetadata {
+                    adstyle: None,
                     foundry: None,
                     family: match &query.scope {
                         crate::font_backend::FontCandidateScope::Family(family)
@@ -1456,6 +1457,7 @@ fn url_less_native_candidate_publishes_its_finalized_memory_asset() {
         identity: identity.clone(),
         locator: crate::font_backend::PlatformFontCandidateLocator::Native,
         metadata: crate::font_backend::PlatformFontMetadata {
+            adstyle: None,
             foundry: None,
             family: "Native Spleen".to_owned(),
             weight: Some(400),
@@ -1497,6 +1499,7 @@ fn scalable_color_bitmap_keeps_exact_platform_identity_at_requested_size() {
             matched: platform_file_candidate(
                 identity.clone(),
                 crate::font_backend::PlatformFontMetadata {
+                    adstyle: None,
                     foundry: None,
                     family: "Noto Color Emoji".to_owned(),
                     weight: Some(400),
@@ -1724,6 +1727,7 @@ fn native_metrics_fixture_service(
             candidates: vec![platform_file_candidate(
                 identity,
                 crate::font_backend::PlatformFontMetadata {
+                    adstyle: None,
                     foundry: None,
                     family: family.clone(),
                     weight: Some(400),
@@ -3677,6 +3681,7 @@ fn resolved_font_for_char_treats_platform_identity_as_authoritative() {
             matched: platform_file_candidate(
                 identity,
                 crate::font_backend::PlatformFontMetadata {
+                    adstyle: None,
                     foundry: None,
                     // Native backends may publish a selector/display name
                     // unknown to fontdb. The exact identity must still win.
@@ -3925,6 +3930,7 @@ fn dual_width_fixed_pitch_service(
             candidates: vec![platform_file_candidate(
                 identity,
                 crate::font_backend::PlatformFontMetadata {
+                    adstyle: None,
                     foundry: None,
                     family: family.clone(),
                     weight: Some(400),

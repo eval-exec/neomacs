@@ -1494,10 +1494,7 @@ fn xlfd_fields_from_font_vector(
     let size = font_vector_get_flexible(v, "size");
     let dpi = font_vector_get_flexible(v, "dpi");
     let spacing = font_vector_get_flexible(v, "spacing");
-    let avg_width = font_vector_get_flexible(v, "avgwidth")
-        .or_else(|| font_vector_get_flexible(v, "average_width"))
-        .or_else(|| font_vector_get_flexible(v, "avg_width"))
-        .or_else(|| font_vector_get_flexible(v, "avg-width"));
+    let avg_width = font_average_width_field(v);
     let registry = font_vector_get_flexible(v, "registry");
 
     let pixel = xlfd_pixel_field(size.as_ref());
@@ -2024,37 +2021,45 @@ const XLFD_REGISTRY: usize = 12;
 const XLFD_ENCODING: usize = 13;
 const XLFD_LAST: usize = 14;
 
-/// Port of GNU `font_parse_xlfd` (src/font.c): parse a hyphen-delimited XLFD
-/// name such as `"-misc-fixed-medium-r-normal--13-120-..."`.  Only the
-/// fully-specified (14-field) form is handled here, which covers the names
-/// `font-spec :name` is given in practice.  Returns `false` on parse failure.
+mod xlfd_fields;
+
+/// GNU first parses ordinary XLFD fields, expands abbreviated wildcard
+/// fields by their contents, and retries surplus dashes as a family name.
 fn font_parse_xlfd(elems: &mut Vec<Value>, name: &str) -> bool {
-    if name.is_empty() {
-        return false;
+    for retry_family in [false, true] {
+        if retry_family && name.bytes().filter(|byte| *byte == b'-').count() <= XLFD_LAST {
+            break;
+        }
+        let Some(fields) = xlfd_fields::fields(name, retry_family) else {
+            continue;
+        };
+        let mut parsed = elems.clone();
+        if font_parse_xlfd_fields(&mut parsed, &fields) {
+            *elems = parsed;
+            return true;
+        }
     }
-    if name == "*" {
-        return true;
-    }
+    false
+}
 
-    // Split into fields on '-'.  GNU treats a leading "*-" specially; for the
-    // fully-specified form we simply split on '-'.
-    let fields: Vec<&str> = name.split('-').collect();
-
-    // A fully specified XLFD has a leading '-', so split() yields an empty
-    // first element followed by exactly 14 fields.
-    if fields.len() != XLFD_LAST + 1 || !fields[0].is_empty() {
-        return false;
-    }
-    let f = &fields[1..]; // 14 fields, indices XLFD_FOUNDRY..XLFD_ENCODING
-
-    let intern_field = |idx: usize| -> &str { f[idx] };
+fn font_parse_xlfd_fields(elems: &mut Vec<Value>, fields: &xlfd_fields::ParsedXlfdFields) -> bool {
+    let (f, abbreviated) = match fields {
+        xlfd_fields::ParsedXlfdFields::Complete(fields) => (fields, false),
+        xlfd_fields::ParsedXlfdFields::Abbreviated(fields) => (fields, true),
+    };
+    let intern_field = |idx: usize| -> &str { &f[idx] };
+    let numeric = |field: &str| {
+        (!field.is_empty() && field.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| field.parse::<i64>().ok())
+            .flatten()
+    };
 
     // Foundry / family (interned as symbols).
-    if !f[XLFD_FOUNDRY].is_empty() && f[XLFD_FOUNDRY] != "*" {
-        font_parse_set(elems, "foundry", Value::symbol(f[XLFD_FOUNDRY]));
+    if f[XLFD_FOUNDRY] != "*" {
+        font_parse_set(elems, "foundry", Value::symbol(&f[XLFD_FOUNDRY]));
     }
-    if !f[XLFD_FAMILY].is_empty() && f[XLFD_FAMILY] != "*" {
-        font_parse_set(elems, "family", Value::symbol(f[XLFD_FAMILY]));
+    if f[XLFD_FAMILY] != "*" {
+        font_parse_set(elems, "family", Value::symbol(&f[XLFD_FAMILY]));
     }
 
     // Weight / slant / width style fields.
@@ -2064,7 +2069,7 @@ fn font_parse_xlfd(elems: &mut Vec<Value>, name: &str) -> bool {
         (XLFD_SWIDTH, "width"),
     ] {
         let word = intern_field(xlfd_idx);
-        if !word.is_empty() && word != "*" {
+        if word != "*" {
             let Some(style) = font_style_table_for_key(key)
                 .and_then(|table| font_style_symbol_from_name(table, word))
             else {
@@ -2091,34 +2096,56 @@ fn font_parse_xlfd(elems: &mut Vec<Value>, name: &str) -> bool {
 
     // Size: prefer pixel size (fixnum), else point size / 10 (float).
     let pixel = intern_field(XLFD_PIXEL);
-    if let Ok(px) = pixel.parse::<i64>() {
-        if px > 0 {
-            font_parse_set(elems, "size", Value::fixnum(px));
-        }
+    if !abbreviated && let Some(px) = xlfd_fields::matrix_size(pixel).filter(|size| *size >= 0) {
+        font_parse_set(elems, "size", Value::fixnum(px));
+    } else if let Some(px) = numeric(pixel) {
+        font_parse_set(elems, "size", Value::fixnum(px));
     } else {
         let point = intern_field(XLFD_POINT);
-        if let Ok(pt) = point.parse::<i64>() {
+        if !abbreviated && let Some(pt) = xlfd_fields::matrix_size(point).filter(|size| *size >= 0)
+        {
+            font_parse_set(elems, "size", Value::make_float(pt as f64));
+        } else if let Some(pt) = numeric(point) {
             font_parse_set(elems, "size", Value::make_float(pt as f64 / 10.0));
         }
     }
 
     // DPI (resolution-y).
     let resy = intern_field(XLFD_RESY);
-    if let Ok(dpi) = resy.parse::<i64>() {
-        font_parse_set(elems, "dpi", Value::fixnum(dpi));
+    if !abbreviated || numeric(intern_field(XLFD_RESX)).is_some() {
+        if let Some(dpi) = numeric(resy) {
+            font_parse_set(elems, "dpi", Value::fixnum(dpi));
+        } else if !abbreviated && resy != "*" {
+            return false;
+        }
     }
     let _ = intern_field(XLFD_RESX);
 
     // Spacing letter (p/d/m/c).
     let spacing = intern_field(XLFD_SPACING);
-    if let Some(sp) = FontSpacing::from_symbol_name(spacing) {
-        font_parse_set(elems, "spacing", Value::fixnum(i64::from(sp.gnu_code())));
+    if spacing != "*" {
+        let value = numeric(spacing)
+            .filter(|value| *value <= i64::from(FontSpacing::MAX_GNU_CODE))
+            .or_else(|| {
+                (spacing.len() == 1)
+                    .then(|| {
+                        FontSpacing::from_symbol_name(&spacing.to_ascii_lowercase())
+                            .map(|value| i64::from(value.gnu_code()))
+                    })
+                    .flatten()
+            });
+        let Some(value) = value else {
+            return false;
+        };
+        font_parse_set(elems, "spacing", Value::fixnum(value));
     }
 
     // Average width.
     let avg = intern_field(XLFD_AVGWIDTH).trim_start_matches('~');
-    if let Ok(n) = avg.parse::<i64>() {
+    if let Some(n) = numeric(avg) {
         font_parse_set(elems, "avgwidth", Value::fixnum(n));
+    } else if !abbreviated && avg != "*" {
+        return false;
     }
 
     true
@@ -2453,50 +2480,77 @@ pub(crate) fn list_fonts(
     };
     let query = font_list_query(eval, &args[0], frame_id)?;
     let ignored = eval.variable_value_or_nil(intern("face-ignored-fonts"));
+    let patterns: Vec<_> = list_iter(ignored)
+        .filter_map(|pattern| pattern.as_lisp_string().cloned())
+        .collect();
     let Some(host) = eval.display_host.as_mut() else {
         return Ok(Value::NIL);
     };
-    // Ignored-font filtering precedes the caller's limit, just as GNU's
-    // font_list_entities precedes Flist_fonts' truncation.
-    let fonts = host
-        .list_fonts_for_spec(query, prefer, if ignored.is_nil() { maximum } else { None })
-        .map_err(|error| signal("error", vec![Value::string(error)]))?;
-    let mut entities = Vec::new();
-    for listed in fonts {
-        let entity = build_font_entity_for_spec_match(&listed.font);
-        if let Some(driver) = listed.driver {
-            font_put_entity_field(entity, "type", Value::from_sym_id(driver));
-        }
-        if let Some(size) = listed.pixel_size {
-            font_put_entity_field(entity, "size", Value::fixnum(i64::from(size)));
-        }
-        if let Some(width) = listed.average_width {
-            font_put_entity_field(entity, "avgwidth", Value::fixnum(i64::from(width)));
-        } else {
-            font_put_entity_field(entity, "avgwidth", Value::NIL);
-        }
+    let mut accept = |listed: &neovm_eval::emacs_core::eval::ListedFontEntity| {
+        let entity = listed_font_entity(listed);
         let name = font_xlfd_name(vec![entity, Value::NIL, Value::T])?;
-        let mut is_ignored = false;
-        for pattern in list_iter(ignored) {
-            if let (Some(pattern), Some(name)) = (pattern.as_lisp_string(), name.as_utf8_str()) {
-                is_ignored =
-                    neovm_text::emacs_core::regex::predicate_match_ignore_case(pattern, name)
-                        .map_err(|error| {
-                            signal("invalid-regexp", vec![Value::string(error.to_string())])
-                        })?;
-                if is_ignored {
-                    break;
+        if let Some(name) = name.as_utf8_str() {
+            for pattern in &patterns {
+                if neovm_text::emacs_core::regex::predicate_match_ignore_case(pattern, name)
+                    .map_err(|error| {
+                        signal("invalid-regexp", vec![Value::string(error.to_string())])
+                    })?
+                {
+                    return Ok(false);
                 }
             }
         }
-        if !is_ignored {
-            entities.push(entity);
-        }
-        if maximum.is_some_and(|maximum| entities.len() >= maximum) {
-            break;
-        }
+        Ok(true)
+    };
+    let filter: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>> =
+        if patterns.is_empty() {
+            None
+        } else {
+            Some(&mut accept)
+        };
+    // Apply Lisp regex policy before registering candidates, so MAXIMUM also
+    // bounds retained handles when ignored fonts precede accepted results.
+    let fonts = host
+        .list_fonts_for_spec(query, prefer, maximum, filter)
+        .map_err(|error| match error {
+            neovm_eval::emacs_core::eval::FontListError::Backend(message) => {
+                signal("error", vec![Value::string(message)])
+            }
+            neovm_eval::emacs_core::eval::FontListError::Filter(flow) => flow,
+        })?;
+    Ok(Value::list(
+        fonts
+            .iter()
+            .take(maximum.unwrap_or(usize::MAX))
+            .map(listed_font_entity)
+            .collect(),
+    ))
+}
+
+fn listed_font_entity(listed: &neovm_eval::emacs_core::eval::ListedFontEntity) -> Value {
+    let entity = build_font_entity_for_spec_match(&listed.font);
+    if let Some(driver) = listed.driver {
+        font_put_entity_field(entity, "type", Value::from_sym_id(driver));
     }
-    Ok(Value::list(entities))
+    if let Some(adstyle) = &listed.adstyle {
+        font_put_entity_field(
+            entity,
+            "adstyle",
+            Value::symbol(adstyle.as_utf8_str().unwrap_or_default()),
+        );
+    }
+    if let Some(size) = listed.pixel_size {
+        font_put_entity_field(entity, "size", Value::fixnum(i64::from(size)));
+    }
+    font_put_entity_field(
+        entity,
+        "avgwidth",
+        listed
+            .average_width
+            .map(|width| Value::fixnum(i64::from(width)))
+            .unwrap_or(Value::NIL),
+    );
+    entity
 }
 
 // Entities are immutable through Lisp font-put, but listing builds their
@@ -2550,10 +2604,24 @@ fn font_list_query(
         dpi: field("dpi")
             .and_then(|value| value.as_fixnum())
             .and_then(|value| u32::try_from(value).ok()),
-        average_width: field("avgwidth")
+        average_width: font_average_width_field(fields)
             .and_then(|value| value.as_fixnum())
             .and_then(|value| i32::try_from(value).ok()),
     })
+}
+
+/// Keep historical Neomacs property aliases consistent at the listing and
+/// XLFD rendering boundaries. Canonical `avgwidth` has precedence.
+fn font_average_width_field(fields: &[Value]) -> Option<Value> {
+    [
+        "avgwidth",
+        "average_width",
+        "avg_width",
+        "avg-width",
+        "average-width",
+    ]
+    .into_iter()
+    .find_map(|key| font_vector_get_flexible(fields, key))
 }
 
 pub(crate) fn x_list_fonts(

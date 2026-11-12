@@ -118,6 +118,7 @@ impl CoreTextBackend {
             })
             .filter_map(|candidate| {
                 let metadata = PlatformFontMetadata {
+                    adstyle: None,
                     foundry: None,
                     family: candidate.family,
                     weight: Some(candidate.weight),

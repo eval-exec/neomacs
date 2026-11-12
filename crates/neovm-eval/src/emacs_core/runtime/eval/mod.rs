@@ -2552,9 +2552,22 @@ pub struct FontSpecListQuery {
 pub struct ListedFontEntity {
     pub font: ResolvedFontSpecMatch,
     pub driver: Option<SymId>,
+    pub adstyle: Option<neovm_value::heap_types::LispString>,
     pub pixel_size: Option<u32>,
     pub average_width: Option<i32>,
 }
+
+/// Font listing can fail in the native backend or in the caller's Lisp-side
+/// acceptance policy. Preserve the original Lisp condition in the latter case.
+#[derive(Debug)]
+pub enum FontListError {
+    Backend(String),
+    Filter(Flow),
+}
+
+/// Synchronous metadata-only acceptance policy, called before a candidate is
+/// retained in the native entity catalog. It must not reenter the display host.
+pub type FontListFilter<'a> = dyn FnMut(&ListedFontEntity) -> Result<bool, Flow> + 'a;
 
 /// GNU separates entity listing/selection from the font driver's `match`
 /// operation. A driver match is authoritative, not another style-filtered

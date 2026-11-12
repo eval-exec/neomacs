@@ -41,6 +41,7 @@ fn byte_limit_evicts_and_oversized_keys_are_not_retained() {
 #[test]
 fn font_payload_counts_toward_limit_and_returned_answers_are_independent() {
     let font = ListedFont {
+        adstyle: None,
         matched: super::super::FontMatch {
             family: "fixture".into(),
             file: Some("font-file".into()),
@@ -57,6 +58,14 @@ fn font_payload_counts_toward_limit_and_returned_answers_are_independent() {
         spacing: None,
         foundry: None,
     };
+    let mut large_adstyle = font.clone();
+    large_adstyle.adstyle = Some("ja".repeat(1024));
+    let mut bounded = CandidateQueries::with_limits(8, 1024);
+    bounded.insert(query("adstyle"), &[large_adstyle]);
+    assert!(
+        bounded.get(&query("adstyle")).is_none(),
+        "additional style payload counts toward the cache budget"
+    );
     let bytes = query("a").bytes() + font_bytes(&font);
     let mut cache = CandidateQueries::with_limits(128, bytes);
     cache.insert(query("a"), std::slice::from_ref(&font));

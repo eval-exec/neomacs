@@ -18,6 +18,7 @@ fn matched(
         identity,
         asset,
         metadata: PlatformFontMetadata {
+            adstyle: None,
             family: "Coverage fixture".into(),
             foundry: None,
             weight: None,

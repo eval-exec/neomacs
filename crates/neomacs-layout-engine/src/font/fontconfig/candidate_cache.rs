@@ -95,10 +95,15 @@ fn font_bytes(font: &ListedFont) -> usize {
     std::mem::size_of::<ListedFont>()
         + matched.family.len()
         + font.style.len()
-        + [&matched.file, &matched.postscript_name, &font.foundry]
-            .into_iter()
-            .map(|s| s.as_ref().map_or(0, String::len))
-            .sum::<usize>()
+        + [
+            &matched.file,
+            &matched.postscript_name,
+            &font.foundry,
+            &font.adstyle,
+        ]
+        .into_iter()
+        .map(|s| s.as_ref().map_or(0, String::len))
+        .sum::<usize>()
         + matched.variation_coords.len()
             * std::mem::size_of::<neomacs_display_protocol::font::FontVariationCoord>()
 }

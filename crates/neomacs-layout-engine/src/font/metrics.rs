@@ -1145,9 +1145,17 @@ impl FontMetricsService {
             &crate::font::resolver::FontEntityListConstraints,
         )>,
         maximum: Option<usize>,
-    ) -> Vec<crate::font::resolver::ResolvedFontEntity> {
+    ) -> Vec<crate::font::resolver::ListedFontCandidate> {
         self.font_resolver
             .list_entities(query, constraints, prefer, maximum)
+    }
+
+    /// Load an exact listed candidate only when its outline is needed.
+    pub fn materialize_font_candidate(
+        &self,
+        candidate: crate::font_backend::PlatformFontCandidate,
+    ) -> Option<crate::font_backend::PlatformFontMatch> {
+        self.font_resolver.materialize_font_candidate(candidate)
     }
 
     /// Inspect the exact selected face without fontset or family fallback.

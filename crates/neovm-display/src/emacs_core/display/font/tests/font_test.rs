@@ -2592,6 +2592,156 @@ struct ListingFontDisplayHost {
     fonts: Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
 }
 
+#[test]
+fn listing_accepts_gnu_abbreviated_xlfd_fields() {
+    crate::test_utils::init_test_tracing();
+    // Pinned GNU font_expand_wildcards assigns fields by both position and
+    // contents, rather than padding the supplied prefix with wildcards.
+    for (name, family, weight, slant, size, adstyle) in [
+        ("-*-Hack-*", Some("Hack"), None, None, None, None),
+        (
+            "*-Hack-bold-r-*-13-*",
+            Some("Hack"),
+            Some("bold"),
+            Some("r"),
+            Some(13),
+            None,
+        ),
+        ("-*-Hack-reg*-*", None, None, None, None, Some("Hack")),
+    ] {
+        let spec = font_spec(vec![Value::keyword("name"), Value::string(name)])
+            .expect("GNU accepts this abbreviated XLFD");
+        for (key, expected) in [
+            ("family", family),
+            ("weight", weight),
+            ("slant", slant),
+            ("adstyle", adstyle),
+        ] {
+            assert_eq!(
+                font_get(vec![spec, Value::keyword(key)]).unwrap(),
+                expected.map(Value::symbol).unwrap_or(Value::NIL),
+                "{name}: {key}"
+            );
+        }
+        assert_eq!(
+            font_get(vec![spec, Value::keyword("size")]).unwrap(),
+            size.map(Value::fixnum).unwrap_or(Value::NIL),
+            "{name}: size"
+        );
+    }
+}
+
+#[test]
+fn listing_accepts_gnu_hyphenated_xlfd_family() {
+    crate::test_utils::init_test_tracing();
+    let name = "-SRC-Some-Hyphen-Family-regular-normal-normal-*-13-*-*-*-*-0-iso10646-1";
+    let spec = font_spec(vec![Value::keyword("name"), Value::string(name)])
+        .expect("GNU retries extra separators as part of the family");
+    for (key, expected) in [
+        ("family", Value::symbol("Some-Hyphen-Family")),
+        ("weight", Value::symbol("regular")),
+        ("size", Value::fixnum(13)),
+        ("avgwidth", Value::fixnum(0)),
+    ] {
+        assert_eq!(font_get(vec![spec, Value::keyword(key)]).unwrap(), expected);
+    }
+}
+
+#[test]
+fn listing_keeps_gnu_explicit_zero_pixel_size() {
+    crate::test_utils::init_test_tracing();
+    let spec = font_spec(vec![
+        Value::keyword("name"),
+        Value::string("-SRC-Hack-regular-normal-normal-*-0-*-*-*-*-0-iso10646-1"),
+    ])
+    .unwrap();
+    assert_eq!(
+        font_get(vec![spec, Value::keyword("size")]).unwrap(),
+        Value::fixnum(0)
+    );
+}
+
+#[test]
+fn listing_parses_gnu_xlfd_matrix_pixel_size() {
+    crate::test_utils::init_test_tracing();
+    let spec = font_spec(vec![
+        Value::keyword("name"),
+        Value::string("-SRC-Hack-regular-normal-normal-*-[1 0 0 13]-*-*-*-*-0-iso10646-1"),
+    ])
+    .unwrap();
+    assert_eq!(
+        font_get(vec![spec, Value::keyword("size")]).unwrap(),
+        Value::fixnum(13)
+    );
+}
+
+#[test]
+fn listing_distinguishes_gnu_full_and_abbreviated_dpi() {
+    crate::test_utils::init_test_tracing();
+    let sizes: Vec<_> = [
+        "-f-family-regular-normal-normal--13-130-*-96-m-0-*",
+        "-f-family-regular-normal-normal--13-130-*-96-m-0-*-*",
+    ]
+    .into_iter()
+    .map(|name| {
+        let spec = font_spec(vec![Value::keyword("name"), Value::string(name)]).unwrap();
+        font_get(vec![spec, Value::keyword("dpi")]).unwrap()
+    })
+    .collect();
+    assert_eq!(sizes, vec![Value::NIL, Value::fixnum(96)]);
+}
+
+#[test]
+fn listing_rejects_gnu_invalid_full_xlfd_fields() {
+    crate::test_utils::init_test_tracing();
+    let rejected: Vec<_> = [
+        "-f-family-regular-normal-normal-*-13-*-*-oops-m-0-iso10646-1",
+        "-f-family-regular-normal-normal-*-13-*-*-*-oops-0-iso10646-1",
+        "-f-family-regular-normal-normal-*-13-*-*-*-m-oops-iso10646-1",
+    ]
+    .into_iter()
+    .map(|name| font_spec(vec![Value::keyword("name"), Value::string(name)]).is_err())
+    .collect();
+    assert_eq!(rejected, vec![true, true, true]);
+}
+
+#[test]
+fn listing_forwards_existing_average_width_aliases() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    let queries = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(ListingFontDisplayHost {
+        queries: Rc::clone(&queries),
+        fonts: Vec::new(),
+    }));
+    // These are existing Neomacs property aliases, not additional GNU
+    // keywords. Rendering and listing must interpret them consistently.
+    for key in [
+        "avgwidth",
+        "average_width",
+        "avg_width",
+        "avg-width",
+        "average-width",
+    ] {
+        let spec = font_spec(vec![Value::keyword(key), Value::fixnum(42)]).unwrap();
+        list_fonts(&mut eval, vec![spec]).unwrap();
+        assert_eq!(
+            queries.borrow().last().unwrap().average_width,
+            Some(42),
+            "{key}"
+        );
+        assert!(
+            font_xlfd_name(vec![spec])
+                .unwrap()
+                .as_utf8_str()
+                .unwrap()
+                .ends_with("-42-*-*"),
+            "{key}"
+        );
+    }
+}
+
 impl DisplayHost for ListingFontDisplayHost {
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
@@ -2603,10 +2753,26 @@ impl DisplayHost for ListingFontDisplayHost {
         &mut self,
         query: neovm_eval::emacs_core::eval::FontSpecListQuery,
         _: Option<neovm_eval::emacs_core::eval::FontSpecListQuery>,
-        _: Option<usize>,
-    ) -> Result<Vec<neovm_eval::emacs_core::eval::ListedFontEntity>, String> {
+        maximum: Option<usize>,
+        mut filter: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>>,
+    ) -> Result<
+        Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
+        neovm_eval::emacs_core::eval::FontListError,
+    > {
         self.queries.borrow_mut().push(query);
-        Ok(self.fonts.clone())
+        let mut accepted = Vec::new();
+        for listed in &self.fonts {
+            if maximum.is_some_and(|maximum| accepted.len() >= maximum) {
+                break;
+            }
+            if let Some(filter) = filter.as_mut() {
+                if !filter(listed).map_err(neovm_eval::emacs_core::eval::FontListError::Filter)? {
+                    continue;
+                }
+            }
+            accepted.push(listed.clone());
+        }
+        Ok(accepted)
     }
 }
 
@@ -2618,6 +2784,7 @@ fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_lim
     let queries = Rc::new(RefCell::new(Vec::new()));
     let listed = |family, weight| neovm_eval::emacs_core::eval::ListedFontEntity {
         driver: Some(intern("ftcrhb")),
+        adstyle: None,
         font: ResolvedFontSpecMatch {
             coverage_handle: None,
             family: LispString::from_utf8(family),
@@ -2721,4 +2888,45 @@ fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_lim
         )
         .is_err()
     );
+}
+
+#[test]
+fn listing_publishes_adstyle_before_ignored_font_filtering() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    let listed = neovm_eval::emacs_core::eval::ListedFontEntity {
+        driver: Some(intern("ftcrhb")),
+        adstyle: Some(LispString::from_utf8("ja")),
+        pixel_size: Some(13),
+        average_width: Some(120),
+        font: ResolvedFontSpecMatch {
+            coverage_handle: None,
+            family: LispString::from_utf8("Fixed"),
+            foundry: Some(LispString::from_utf8("misc")),
+            registry: Some(LispString::from_utf8("iso10646-1")),
+            file: None,
+            weight: Some(FontWeight::NORMAL),
+            slant: Some(FontSlant::Normal),
+            width: Some(FontWidth::Normal),
+            spacing: Some(100),
+            postscript_name: None,
+        },
+    };
+    eval.set_display_host(Box::new(ListingFontDisplayHost {
+        queries: Rc::new(RefCell::new(Vec::new())),
+        fonts: vec![listed],
+    }));
+    let spec = font_spec(vec![Value::keyword("adstyle"), Value::symbol("ja")]).unwrap();
+    let entities = list_fonts(&mut eval, vec![spec]).unwrap();
+    let entity = list_to_vec(&entities).unwrap()[0];
+    assert_eq!(
+        font_get(vec![entity, Value::keyword("adstyle")]).unwrap(),
+        Value::symbol("ja")
+    );
+    eval.set_variable(
+        "face-ignored-fonts",
+        Value::list(vec![Value::string("-ja-")]),
+    );
+    assert!(list_fonts(&mut eval, vec![spec]).unwrap().is_nil());
 }

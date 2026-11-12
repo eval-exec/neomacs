@@ -16,6 +16,7 @@ impl PlatformFontCandidate {
     fn from_fontconfig(
         matched: crate::font::fontconfig::FontMatch,
         foundry: Option<String>,
+        adstyle: Option<String>,
         width: Option<FontWidth>,
         spacing: Option<i32>,
     ) -> Option<Self> {
@@ -38,6 +39,7 @@ impl PlatformFontCandidate {
             identity,
             locator: PlatformFontCandidateLocator::File(asset),
             metadata: PlatformFontMetadata {
+                adstyle,
                 foundry,
                 family: matched.family,
                 weight,
@@ -145,6 +147,7 @@ impl FontBackend for FontconfigBackend {
                 matched: PlatformFontCandidate::from_fontconfig(
                     candidate.matched,
                     candidate.foundry,
+                    candidate.adstyle,
                     candidate.width,
                     candidate.spacing,
                 )?,
@@ -236,6 +239,7 @@ impl FontBackend for FontconfigBackend {
                 matched: PlatformFontCandidate::from_fontconfig(
                     candidate.matched,
                     candidate.foundry,
+                    candidate.adstyle,
                     candidate.width,
                     candidate.spacing,
                 )?,

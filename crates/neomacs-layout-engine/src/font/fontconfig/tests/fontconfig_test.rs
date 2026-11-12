@@ -435,6 +435,7 @@ fn spacing_categories_follow_gnu_numeric_ranges() {
 #[test]
 fn monospace_preference_penalizes_proportional_candidates() {
     let mono_candidate = ListedFont {
+        adstyle: None,
         foundry: None,
         matched: super::FontMatch {
             family: "Noto Sans Mono CJK SC".to_string(),
@@ -452,6 +453,7 @@ fn monospace_preference_penalizes_proportional_candidates() {
         spacing: Some(FONT_SPACING_MONO),
     };
     let proportional_candidate = ListedFont {
+        adstyle: None,
         foundry: None,
         matched: super::FontMatch {
             family: "Noto Sans CJK SC".to_string(),
@@ -498,6 +500,7 @@ fn monospace_preference_penalizes_proportional_candidates() {
 #[test]
 fn family_affinity_prefers_requested_family_over_unrelated_fixed_pitch_fallback() {
     let requested_family_candidate = ListedFont {
+        adstyle: None,
         foundry: None,
         matched: super::FontMatch {
             family: "Noto Sans Mono CJK SC".to_string(),
@@ -515,6 +518,7 @@ fn family_affinity_prefers_requested_family_over_unrelated_fixed_pitch_fallback(
         spacing: None,
     };
     let unrelated_fixed_candidate = ListedFont {
+        adstyle: None,
         foundry: None,
         matched: super::FontMatch {
             family: "Sarasa Fixed Slab SC".to_string(),
@@ -572,6 +576,7 @@ fn family_affinity_treats_cjk_companion_as_close_match() {
 #[test]
 fn find_font_candidate_prefers_the_requested_family_over_an_earlier_fallback() {
     let candidate = |family: &str, file: &str| ListedFont {
+        adstyle: None,
         foundry: None,
         matched: super::FontMatch {
             family: family.to_string(),
@@ -613,6 +618,7 @@ fn find_font_candidate_prefers_the_requested_family_over_an_earlier_fallback() {
 #[test]
 fn find_font_candidate_prefers_requested_width_over_candidate_order() {
     let candidate = |file: &str, width: FontWidth| ListedFont {
+        adstyle: None,
         foundry: None,
         matched: super::FontMatch {
             family: "Iosevka".to_string(),
@@ -655,6 +661,7 @@ fn find_font_candidate_prefers_requested_width_over_candidate_order() {
 fn best_candidate_for_pass_preserves_each_equal_score_entity_ordinal() {
     let candidates = vec![
         ListedFont {
+            adstyle: None,
             foundry: None,
             matched: super::FontMatch {
                 family: "Noto Sans Mono CJK SC".to_string(),
@@ -672,6 +679,7 @@ fn best_candidate_for_pass_preserves_each_equal_score_entity_ordinal() {
             spacing: None,
         },
         ListedFont {
+            adstyle: None,
             foundry: None,
             matched: super::FontMatch {
                 family: "Noto Sans CJK JP".to_string(),
@@ -689,6 +697,7 @@ fn best_candidate_for_pass_preserves_each_equal_score_entity_ordinal() {
             spacing: None,
         },
         ListedFont {
+            adstyle: None,
             foundry: None,
             matched: super::FontMatch {
                 family: "Noto Sans Mono CJK SC".to_string(),
@@ -898,4 +907,75 @@ fn isolated_native_catalogues_keep_query_and_foundry_caches_with_their_owner() {
         2,
         "clearing one owner cannot invalidate another"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn raw_bitmap_font_adstyle_follows_gnu_fontconfig_normalization() {
+    for (format, style, expected) in [
+        (Some("PCF"), "ja Bold", Some("ja")),
+        (Some("bdf"), "JA Oblique", Some("JA")),
+        (None, "ja", Some("ja")),
+        (Some("TrueType"), "ja Bold", None),
+        (Some("CFF"), "ja", None),
+        (Some("PCF"), "Regular", None),
+        (Some("PCF"), "bOlD", None),
+        (Some("BDF"), "Oblique", None),
+        (Some("BDF"), "Italic", None),
+        (Some("PCF"), "SemiCondensed Bold", None),
+        (Some("PCF"), "Normal", None),
+        (Some("PCF"), "Regularity Bold", Some("Regularity")),
+        (Some("PCF"), "a-b?c*d\"e Bold", Some("a b c d e")),
+    ] {
+        let pattern = FcPatternGuard(unsafe { fontconfig_sys::FcPatternCreate() });
+        assert!(!pattern.0.is_null());
+        for (key, value) in [
+            (fontconfig::FC_FILE, "/fixture/bitmap.pcf"),
+            (fontconfig::FC_FAMILY, "Bitmap Style Fixture"),
+            (fontconfig::FC_STYLE, style),
+        ]
+        .into_iter()
+        .chain(format.map(|format| (fontconfig::FC_FONTFORMAT, format)))
+        {
+            let value = CString::new(value).unwrap();
+            // SAFETY: the pattern guard and C strings remain live; Fontconfig
+            // copies each string into its owned pattern.
+            assert_ne!(
+                unsafe {
+                    fontconfig_sys::FcPatternAddString(
+                        pattern.0,
+                        key.as_ptr(),
+                        value.as_ptr().cast(),
+                    )
+                },
+                0
+            );
+        }
+        // SAFETY: the live guard owns the pattern; these add scalar properties.
+        unsafe {
+            assert_ne!(
+                fontconfig_sys::FcPatternAddInteger(pattern.0, fontconfig::FC_INDEX.as_ptr(), 0),
+                0
+            );
+            assert_ne!(
+                fontconfig_sys::FcPatternAddBool(pattern.0, fontconfig::FC_SCALABLE.as_ptr(), 0),
+                0
+            );
+            assert_ne!(
+                fontconfig_sys::FcPatternAddDouble(
+                    pattern.0,
+                    fontconfig::FC_PIXEL_SIZE.as_ptr(),
+                    13.0
+                ),
+                0
+            );
+        }
+        let listed = listed_font_from_raw_pattern(pattern.0)
+            .expect("complete synthetic native catalog metadata");
+        assert_eq!(
+            listed.adstyle.as_deref(),
+            expected,
+            "format={format:?} style={style:?}"
+        );
+    }
 }

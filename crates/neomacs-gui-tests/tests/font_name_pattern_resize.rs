@@ -5,7 +5,8 @@
 #![cfg(target_os = "linux")]
 
 use neomacs_gui_tests::{
-    DisplayHarness, GuiBackend, GuiRunOptions, GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
+    DisplayHarness, GuiArtifactSet, GuiBackend, GuiCommandRunner, GuiRunOptions, GuiRunStatus,
+    GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
 };
 use serde_json::Value;
 use std::{
@@ -89,24 +90,85 @@ fn run(engine: Engine) {
     for (key, value) in session.env() {
         plan = plan.with_env(key, value);
     }
-    let result = plan
-        .run_with(
-            &mut ProcessGuiCommandRunner,
-            GuiRunOptions::with_timeout(Duration::from_secs(30)),
-        )
-        .unwrap();
-    let state = fs::read(&result.artifacts.gui_state)
+    let options = GuiRunOptions::with_timeout(Duration::from_secs(30));
+    let (artifacts, exit_code, timed_out) = match engine {
+        Engine::Neomacs => {
+            let result = plan
+                .run_with(&mut ProcessGuiCommandRunner, options)
+                .unwrap();
+            assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
+            (result.artifacts, result.exit_code, result.timed_out)
+        }
+        Engine::Gnu => {
+            // GNU does not implement Neomacs GPU readback. Use the shared
+            // process/deadline runner with only the artifacts GNU produces.
+            let artifacts =
+                GuiArtifactSet::new(&artifacts, GuiBackend::LinuxX11, "font-name-pattern-resize");
+            fs::create_dir_all(artifacts.json.parent().unwrap()).unwrap();
+            let mut command = plan.command_spec();
+            command
+                .env
+                .retain(|(key, _)| !key.starts_with("NEOMACS_") || key == "NEOMACS_GUI_STATE_JSON");
+            let output = ProcessGuiCommandRunner
+                .run(&command, &artifacts, &options)
+                .unwrap();
+            fs::write(&artifacts.stdout, &output.stdout).unwrap();
+            fs::write(&artifacts.stderr, &output.stderr).unwrap();
+            let state = fs::read(&artifacts.gui_state)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+            let status = if output.timed_out {
+                GuiRunStatus::TimedOut
+            } else if output.exit_code == Some(0)
+                && state.as_ref().is_some_and(|state| state["passed"] == true)
+            {
+                GuiRunStatus::Passed
+            } else {
+                GuiRunStatus::Failed
+            };
+            let manifest = serde_json::json!({
+                "engine": "gnu-emacs",
+                "backend": "linux-x11",
+                "scenario": "font-name-pattern-resize",
+                "status": status.slug(),
+                "command": {
+                    "program": command.program,
+                    "args": command.args,
+                    "env": command.env.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+                },
+                "process": {"exit_code": output.exit_code, "timed_out": output.timed_out},
+                "expected_artifacts": {
+                    "gui_state": artifacts.gui_state,
+                    "stdout": artifacts.stdout,
+                    "stderr": artifacts.stderr,
+                },
+                "gui_state": state,
+            });
+            fs::write(&artifacts.json, format!("{manifest}\n")).unwrap();
+            assert_eq!(status, GuiRunStatus::Passed, "{manifest}");
+            (artifacts, output.exit_code, output.timed_out)
+        }
+    };
+    let state = fs::read(&artifacts.gui_state)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    assert!(!result.timed_out, "{result:#?}; state={state:?}");
-    assert_eq!(result.exit_code, Some(0), "{result:#?}; state={state:?}");
+    assert!(!timed_out, "artifacts={artifacts:#?}; state={state:?}");
+    assert_eq!(
+        exit_code,
+        Some(0),
+        "artifacts={artifacts:#?}; state={state:?}"
+    );
+    let manifest: Value = serde_json::from_slice(&fs::read(&artifacts.json).unwrap()).unwrap();
+    assert_eq!(manifest["status"], "passed", "{manifest}");
     let state = state.expect("fixture must publish its font-resolution observations");
     assert_eq!(state["passed"], true, "{state}");
-    assert_eq!(state["sizes"], serde_json::json!([13, 21]));
+    assert_eq!(state["sizes"], serde_json::json!([13, 21, 13]));
     for field in ["case-insensitive", "maximum-zero", "missing-foundry"] {
         assert_eq!(state[field], true, "{field}: {state}");
     }
     assert_eq!(state["negative-condition"], "wrong-type-argument");
     assert!(state["large-height"].as_i64().unwrap() > state["small-height"].as_i64().unwrap());
     assert!(state["large-width"].as_i64().unwrap() > state["small-width"].as_i64().unwrap());
+    assert_eq!(state["restored-height"], state["small-height"], "{state}");
+    assert_eq!(state["restored-width"], state["small-width"], "{state}");
 }

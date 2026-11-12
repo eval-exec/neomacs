@@ -283,6 +283,7 @@ fn font_candidate_from_font(font: Font) -> Option<FontCandidate> {
     };
     let width = from_directwrite_stretch(font.stretch());
     let metadata = PlatformFontMetadata {
+        adstyle: None,
         foundry: None,
         family: font.family_name(),
         weight: Some(font.weight().to_u32().clamp(1, u32::from(u16::MAX)) as u16),

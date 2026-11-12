@@ -116,6 +116,15 @@ pub struct ResolvedFontEntity {
     pub driver: Option<neovm_core::emacs_core::intern::SymId>,
 }
 
+/// Catalog metadata before a font has been selected for coverage or opening.
+/// A native locator carries no copied font bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedFontCandidate {
+    pub candidate: PlatformFontCandidate,
+    pub registry: Option<String>,
+    pub driver: Option<neovm_core::emacs_core::intern::SymId>,
+}
+
 /// Constraints for catalog listing, separate from driver matching and opening.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FontEntityListConstraints {
@@ -286,15 +295,15 @@ impl FontResolver {
         })
     }
 
-    /// Enumerate every matching entity in native discovery order. Preference
-    /// sorting is stable and the limit is applied before native asset loading.
+    /// Enumerate catalog metadata in native discovery order. Native assets
+    /// stay deferred until an exact listed candidate is selected for use.
     pub fn list_entities(
         &self,
         query: &FontEntityQuery,
         constraints: &FontEntityListConstraints,
         prefer: Option<(&FontEntityQuery, &FontEntityListConstraints)>,
         maximum: Option<usize>,
-    ) -> Vec<ResolvedFontEntity> {
+    ) -> Vec<ListedFontCandidate> {
         if constraints
             .driver
             .is_some_and(|driver| Some(driver) != font_driver_symbol(self.backend.kind()))
@@ -310,26 +319,55 @@ impl FontResolver {
         }
         let candidate_query = self.entity_candidate_query(query);
         let policy = FontEntityMatchPolicy::for_backend(self.backend.kind());
-        let mut candidates: Vec<_> = self.backend.list_candidates(&candidate_query)
+        // Cheap native-selector filtering precedes file capability probes.
+        // Unknown file metadata is then completed with the same cached exact
+        // classification used by font selection; it is never assumed scalable.
+        let candidates = self
+            .backend
+            .list_candidates(&candidate_query)
             .into_iter()
             .filter(|candidate| {
                 let metadata = &candidate.matched.metadata;
                 entity_matches_query(candidate, query, policy)
                     && constraints.foundry.as_ref().is_none_or(|foundry| {
-                        metadata.foundry.as_ref().is_some_and(|actual| actual.eq_ignore_ascii_case(foundry))
+                        metadata
+                            .foundry
+                            .as_ref()
+                            .is_some_and(|actual| actual.eq_ignore_ascii_case(foundry))
                     })
-                    // A non-empty additional style requires catalog metadata;
-                    // it must never become an unconstrained family fallback.
-                    && constraints.adstyle.as_ref().is_none_or(String::is_empty)
-                    && constraints.spacing.is_none_or(|spacing| metadata.spacing.is_none_or(|actual| actual == spacing))
-                    && constraints.average_width.is_none_or(|width| {
+                    && constraints
+                        .adstyle
+                        .as_deref()
+                        .filter(|style| !style.is_empty())
+                        .is_none_or(|requested| {
+                            metadata
+                                .adstyle
+                                .as_deref()
+                                .is_some_and(|actual| actual.eq_ignore_ascii_case(requested))
+                        })
+                    && constraints.spacing.is_none_or(|spacing| {
+                        metadata.spacing.is_none_or(|actual| actual == spacing)
+                    })
+            })
+            .collect();
+        let mut candidates: Vec<_> =
+            self.classify_unknown_candidate_sizes(candidates)
+                .into_iter()
+                .filter(|candidate| {
+                    let metadata = &candidate.matched.metadata;
+                    constraints.average_width.is_none_or(|width| {
                         width != 0 || metadata.size == PlatformFontSize::Scalable
-                    })
-                    && constraints.pixel_size.is_none_or(|size| match metadata.size {
-                        PlatformFontSize::Fixed { device_ppem_26_6 } => (device_ppem_26_6 >> 6).abs_diff(size) <= 1,
-                        PlatformFontSize::Scalable | PlatformFontSize::Unknown => true,
-                    })
-            }).collect();
+                    }) && constraints
+                        .pixel_size
+                        .is_none_or(|size| match metadata.size {
+                            PlatformFontSize::Fixed { device_ppem_26_6 } => {
+                                (device_ppem_26_6 >> 6).abs_diff(size) <= 1
+                            }
+                            PlatformFontSize::Scalable => true,
+                            PlatformFontSize::Unknown => false,
+                        })
+                })
+                .collect();
         if let Some((prefer, constraints)) = prefer {
             candidates.sort_by_key(|candidate| {
                 let metadata = &candidate.matched.metadata;
@@ -366,14 +404,21 @@ impl FontResolver {
         }
         candidates
             .into_iter()
-            .filter_map(|candidate| self.backend.finalize_match(candidate.matched))
             .take(maximum.unwrap_or(usize::MAX))
-            .map(|matched| ResolvedFontEntity {
-                matched,
+            .map(|candidate| ListedFontCandidate {
+                candidate: candidate.matched,
                 registry: Some("iso10646-1".to_owned()),
                 driver: font_driver_symbol(self.backend.kind()),
             })
             .collect()
+    }
+
+    /// Finalize this exact catalog candidate without another selection pass.
+    pub(crate) fn materialize_font_candidate(
+        &self,
+        candidate: PlatformFontCandidate,
+    ) -> Option<PlatformFontMatch> {
+        self.backend.finalize_match(candidate)
     }
 
     fn entity_candidate_query(&self, query: &FontEntityQuery) -> FontCandidateQuery {

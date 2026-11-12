@@ -40,6 +40,9 @@ enum-map.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true
 num_enum.workspace = true
+# GNU's XLFD matrix parser uses the C numeric-prefix grammar (including hex
+# floats); the private wrapper owns its NUL-terminated input throughout.
+libc.workspace = true
 regex.workspace = true
 rustc-hash.workspace = true
 smallvec.workspace = true
@@ -67,7 +70,6 @@ neovm-value = { path = "../neovm-value", default-features = false, features = ["
 neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support", "redisplay-test-policy"] }
 # Display unit tests use GNU oracle and tempfile fixtures directly.
 tempfile.workspace = true
-libc.workspace = true
 malachite.workspace = true
 
 [lints.rust]

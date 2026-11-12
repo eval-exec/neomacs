@@ -268,6 +268,7 @@ fn candidate(family: &str, weight: u16, slant: FontSlant, spacing: i32) -> FontC
                 FontFileAsset::new(path, 0).expect("fixture path"),
             ),
             metadata: PlatformFontMetadata {
+                adstyle: None,
                 foundry: None,
                 family: family.to_string(),
                 weight: Some(weight),
@@ -303,13 +304,13 @@ fn entity_listing_filters_before_limiting_and_preserves_plural_results() {
     };
     let listed = resolver.list_entities(&query, &constraints, None, None);
     assert_eq!(listed.len(), 2);
-    assert_eq!(listed[0].matched.weight(), Some(400));
-    assert_eq!(listed[1].matched.weight(), Some(700));
+    assert_eq!(listed[0].candidate.weight(), Some(400));
+    assert_eq!(listed[1].candidate.weight(), Some(700));
     let prefer = query.clone().with_weight(700);
     let preferred =
         resolver.list_entities(&query, &constraints, Some((&prefer, &constraints)), Some(1));
     assert_eq!(preferred.len(), 1);
-    assert_eq!(preferred[0].matched.weight(), Some(700));
+    assert_eq!(preferred[0].candidate.weight(), Some(700));
     assert!(
         resolver
             .list_entities(&query, &constraints, None, Some(0))
@@ -1327,7 +1328,7 @@ fn entity_listing_accepts_native_family_alias_membership() {
         1,
         "native family aliases retain their catalog match"
     );
-    assert_eq!(listed[0].matched.family(), "Fixture Sans");
+    assert_eq!(listed[0].candidate.family(), "Fixture Sans");
 }
 
 #[test]
@@ -1394,6 +1395,252 @@ fn entity_listing_spacing_constraint_accepts_absent_catalog_spacing() {
             1,
             "an absent catalog property does not reject the font"
         );
-        assert_eq!(listed[0].matched.metadata.spacing, None);
+        assert_eq!(listed[0].candidate.metadata.spacing, None);
     }
+}
+
+// Model DirectWrite's file-backed discovery on every FreeType-enabled host.
+// Its catalog has the exact identity but leaves size capability Unknown.
+#[cfg(any(windows, target_os = "linux"))]
+struct FileSizeListingBackend {
+    candidates: Vec<FontCandidate>,
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+impl FontBackend for FileSizeListingBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::DirectWrite
+    }
+    fn list_families(&self) -> Vec<FontFamilyName> {
+        Vec::new()
+    }
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+    fn family_prefers_monospace(&self, _: &str) -> bool {
+        true
+    }
+    fn list_candidates(&self, _: &FontCandidateQuery) -> Vec<FontCandidate> {
+        self.candidates.clone()
+    }
+    fn advance_catalog_generation(&mut self) {}
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn unknown_windows_file_candidate(path: &str) -> FontCandidate {
+    let mut font = candidate("Windows Size Fixture", 400, FontSlant::Normal, 100);
+    replace_file_identity(
+        &mut font,
+        ResolvedFontIdentity::from_platform_file_with_variations(
+            FontBackendKind::DirectWrite,
+            path,
+            0,
+            None,
+            Vec::new(),
+        ),
+    );
+    font.matched.metadata.size = PlatformFontSize::Unknown;
+    font
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn entity_listing_classifies_unknown_windows_outline_before_scalable_filter() {
+    let outline = neomacs_test_fonts::plemol_jp_console_nf_regular();
+    let bitmap = neomacs_test_fonts::spleen_2_2_0().otb();
+    let resolver = FontResolver::new(Box::new(FileSizeListingBackend {
+        candidates: vec![
+            unknown_windows_file_candidate(outline.to_str().expect("fixture path")),
+            unknown_windows_file_candidate(bitmap.to_str().expect("fixture path")),
+            unknown_windows_file_candidate("/fixture/does-not-exist-font.ttf"),
+        ],
+    }));
+    let query = FontEntityQuery::new(FontFamilyName::new("Windows Size Fixture"));
+    let constraints = FontEntityListConstraints {
+        driver: Some(intern("directwrite")),
+        pixel_size: Some(13),
+        average_width: Some(0),
+        ..Default::default()
+    };
+    let listed = resolver.list_entities(&query, &constraints, None, None);
+    assert_eq!(
+        listed.len(),
+        1,
+        "a scalable file is classified before :avgwidth 0 filtering"
+    );
+    assert_eq!(listed[0].candidate.file_path(), outline.to_str());
+    assert_eq!(
+        listed[0].candidate.metadata.size,
+        PlatformFontSize::Scalable
+    );
+    assert_eq!(
+        listed[0].candidate.identity.backend,
+        FontBackendKind::DirectWrite
+    );
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn entity_listing_classifies_unknown_bitmap_strikes_before_size_filter() {
+    let bitmap = neomacs_test_fonts::spleen_2_2_0().otb();
+    let resolver = FontResolver::new(Box::new(FileSizeListingBackend {
+        candidates: vec![
+            unknown_windows_file_candidate(bitmap.to_str().expect("fixture path")),
+            unknown_windows_file_candidate("/fixture/does-not-exist-font.ttf"),
+        ],
+    }));
+    let query = FontEntityQuery::new(FontFamilyName::new("Windows Size Fixture"));
+    let constraints = FontEntityListConstraints {
+        pixel_size: Some(16),
+        ..Default::default()
+    };
+    let listed = resolver.list_entities(&query, &constraints, None, None);
+    assert_eq!(
+        listed.len(),
+        1,
+        "an unreadable file does not become an arbitrary-size font"
+    );
+    assert_eq!(
+        listed[0].candidate.metadata.size,
+        PlatformFontSize::Fixed {
+            device_ppem_26_6: 16 * 64
+        }
+    );
+    let wrong_size = FontEntityListConstraints {
+        pixel_size: Some(30),
+        ..Default::default()
+    };
+    assert!(
+        resolver
+            .list_entities(&query, &wrong_size, None, None)
+            .is_empty()
+    );
+    let scalable_only = FontEntityListConstraints {
+        average_width: Some(0),
+        ..Default::default()
+    };
+    assert!(
+        resolver
+            .list_entities(&query, &scalable_only, None, None)
+            .is_empty()
+    );
+}
+
+struct DeferredListingBackend {
+    finalizations: Arc<AtomicUsize>,
+}
+impl FontBackend for DeferredListingBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::CoreText
+    }
+    fn list_families(&self) -> Vec<FontFamilyName> {
+        Vec::new()
+    }
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+    fn family_prefers_monospace(&self, _: &str) -> bool {
+        false
+    }
+    fn list_candidates(&self, _: &FontCandidateQuery) -> Vec<FontCandidate> {
+        let mut native = candidate("Native Listing Fixture", 400, FontSlant::Normal, 100);
+        native.matched.identity = ResolvedFontIdentity::from_native_with_variations(
+            FontBackendKind::CoreText,
+            "coretext:ListingFixture".to_owned(),
+            0,
+            None,
+            Vec::new(),
+        );
+        native.matched.locator = PlatformFontCandidateLocator::Native;
+        vec![native]
+    }
+    fn finalize_match(&self, candidate: PlatformFontCandidate) -> Option<PlatformFontMatch> {
+        self.finalizations.fetch_add(1, Ordering::Relaxed);
+        let asset =
+            FontMemoryAsset::new(candidate.identity.stable_key.clone(), Arc::new(vec![1]), 0)?;
+        candidate.into_memory_match(asset)
+    }
+    fn advance_catalog_generation(&mut self) {}
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+#[test]
+fn entity_listing_defers_native_asset_materialization() {
+    let finalizations = Arc::new(AtomicUsize::new(0));
+    let resolver = FontResolver::new(Box::new(DeferredListingBackend {
+        finalizations: Arc::clone(&finalizations),
+    }));
+    let listed = resolver.list_entities(
+        &FontEntityQuery::default(),
+        &FontEntityListConstraints::default(),
+        None,
+        Some(1),
+    );
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        finalizations.load(Ordering::Relaxed),
+        0,
+        "listing metadata must not copy native font bytes"
+    );
+    let exact = listed
+        .into_iter()
+        .next()
+        .expect("listed candidate")
+        .candidate;
+    let expected_identity = exact.identity.clone();
+    let materialized = resolver
+        .materialize_font_candidate(exact)
+        .expect("exact selected native asset");
+    assert_eq!(finalizations.load(Ordering::Relaxed), 1);
+    assert_eq!(materialized.identity, expected_identity);
+}
+
+#[test]
+fn entity_listing_matches_recorded_bitmap_adstyle_case_insensitively() {
+    let mut ja = fixed_size_candidate(13);
+    ja.matched.metadata.adstyle = Some("ja".to_owned());
+    let mut ko = fixed_size_candidate(13);
+    ko.matched.metadata.adstyle = Some("ko".to_owned());
+    let ordinary = fixed_size_candidate(13);
+    let resolver = FontResolver::new(Box::new(CandidateBackend {
+        candidates: vec![ko, ja, ordinary],
+    }));
+    let query = FontEntityQuery::default();
+    let constraints = FontEntityListConstraints {
+        adstyle: Some("JA".to_owned()),
+        ..Default::default()
+    };
+    let listed = resolver.list_entities(&query, &constraints, None, Some(1));
+    assert_eq!(
+        listed.len(),
+        1,
+        "a recorded bitmap additional style must match"
+    );
+    assert_eq!(listed[0].candidate.metadata.adstyle.as_deref(), Some("ja"));
+    for adstyle in [None, Some(String::new())] {
+        let constraints = FontEntityListConstraints {
+            adstyle,
+            ..Default::default()
+        };
+        assert_eq!(
+            resolver
+                .list_entities(&query, &constraints, None, None)
+                .len(),
+            3
+        );
+    }
+    let missing = FontEntityListConstraints {
+        adstyle: Some("missing".to_owned()),
+        ..Default::default()
+    };
+    assert!(
+        resolver
+            .list_entities(&query, &missing, None, None)
+            .is_empty()
+    );
 }

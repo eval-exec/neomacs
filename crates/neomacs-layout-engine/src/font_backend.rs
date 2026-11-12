@@ -110,6 +110,8 @@ impl PlatformFontDesignMetrics {
 /// Selector metadata for one exact native font.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlatformFontMetadata {
+    /// GNU additional style for bitmap fonts; separate from weight/slant/width.
+    pub adstyle: Option<String>,
     pub foundry: Option<String>,
     pub family: String,
     pub weight: Option<u16>,

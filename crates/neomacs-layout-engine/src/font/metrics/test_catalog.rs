@@ -165,6 +165,7 @@ impl TestFontCatalog {
                         identity,
                         locator: PlatformFontCandidateLocator::File(asset),
                         metadata: PlatformFontMetadata {
+                            adstyle: None,
                             foundry: None,
                             family,
                             weight: Some(face.weight.0),

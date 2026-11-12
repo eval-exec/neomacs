@@ -1298,45 +1298,116 @@ fn core_font_entity_match(
     catalog: &mut FontEntityCatalog,
     entity: neomacs_layout_engine::font::resolver::ResolvedFontEntity,
 ) -> ResolvedFontSpecMatch {
+    let handle = catalog.intern(entity.matched.clone());
+    core_font_entity_metadata_match(
+        handle,
+        &entity.matched.identity,
+        &entity.matched.metadata,
+        entity.registry.as_deref(),
+    )
+}
+
+fn core_font_entity_metadata_match(
+    handle: Option<FontEntityHandle>,
+    identity: &neomacs_display_protocol::font::ResolvedFontIdentity,
+    metadata: &neomacs_layout_engine::font_backend::PlatformFontMetadata,
+    registry: Option<&str>,
+) -> ResolvedFontSpecMatch {
     ResolvedFontSpecMatch {
-        coverage_handle: catalog.intern(entity.matched.clone()),
-        family: LispString::from_utf8(entity.matched.family()),
-        foundry: entity
-            .matched
-            .metadata
+        coverage_handle: handle,
+        family: LispString::from_utf8(&metadata.family),
+        foundry: metadata
             .foundry
             .as_ref()
             .map(|foundry| LispString::from_utf8(foundry)),
-        registry: entity
-            .registry
-            .as_ref()
-            .map(|registry| LispString::from_utf8(registry)),
-        file: entity
-            .matched
-            .identity
+        registry: registry.map(LispString::from_utf8),
+        file: identity
             .file_path
             .as_ref()
             .map(|file| LispString::from_utf8(file)),
-        weight: entity.matched.weight().map(FontWeight::from_css_weight),
-        slant: Some(entity.matched.slant()),
-        width: entity.matched.metadata.width,
-        spacing: entity.matched.metadata.spacing,
-        postscript_name: entity
-            .matched
-            .identity
+        weight: metadata.weight.map(FontWeight::from_css_weight),
+        slant: Some(metadata.slant),
+        width: metadata.width,
+        spacing: metadata.spacing,
+        postscript_name: identity
             .postscript_name
             .as_ref()
             .map(|name| LispString::from_utf8(name)),
     }
 }
 
-/// Entity selections survive ordinary cache invalidation. Repeated selections
-/// share a handle; retained assets keep native-memory faces alive. Indices are
-/// never reused, so an old Lisp entity cannot silently become a different face.
+fn core_listed_font_entity_preview(
+    entity: &neomacs_layout_engine::font::resolver::ListedFontCandidate,
+) -> neovm_core::emacs_core::eval::ListedFontEntity {
+    use neomacs_layout_engine::font_backend::PlatformFontSize;
+    let metadata = &entity.candidate.metadata;
+    neovm_core::emacs_core::eval::ListedFontEntity {
+        driver: entity.driver,
+        adstyle: metadata.adstyle.as_deref().map(LispString::from_utf8),
+        pixel_size: match metadata.size {
+            PlatformFontSize::Scalable => Some(0),
+            PlatformFontSize::Fixed { device_ppem_26_6 } => Some(device_ppem_26_6 >> 6),
+            PlatformFontSize::Unknown => None,
+        },
+        average_width: (metadata.size == PlatformFontSize::Scalable).then_some(0),
+        font: core_font_entity_metadata_match(
+            None,
+            &entity.candidate.identity,
+            metadata,
+            entity.registry.as_deref(),
+        ),
+    }
+}
+
+fn core_listed_font_entities(
+    catalog: &mut FontEntityCatalog,
+    entities: Vec<neomacs_layout_engine::font::resolver::ListedFontCandidate>,
+    maximum: Option<usize>,
+    mut filter: Option<&mut neovm_core::emacs_core::eval::FontListFilter<'_>>,
+) -> Result<
+    Vec<neovm_core::emacs_core::eval::ListedFontEntity>,
+    neovm_core::emacs_core::eval::FontListError,
+> {
+    let mut accepted = Vec::new();
+    for entity in entities {
+        if maximum.is_some_and(|maximum| accepted.len() >= maximum) {
+            break;
+        }
+        // The Lisp acceptance policy sees metadata only. Rejected candidates
+        // never acquire persistent handles or native outline assets.
+        let mut listed = core_listed_font_entity_preview(&entity);
+        if let Some(filter) = filter.as_deref_mut() {
+            if !filter(&listed).map_err(neovm_core::emacs_core::eval::FontListError::Filter)? {
+                continue;
+            }
+        }
+        listed.font.coverage_handle = catalog.intern_discovered(entity.candidate);
+        accepted.push(listed);
+    }
+    Ok(accepted)
+}
+
+enum FontEntityCatalogEntry {
+    Discovered(neomacs_layout_engine::font_backend::PlatformFontCandidate),
+    Materialized(neomacs_layout_engine::font_backend::PlatformFontMatch),
+}
+
+impl FontEntityCatalogEntry {
+    fn identity(&self) -> &neomacs_display_protocol::font::ResolvedFontIdentity {
+        match self {
+            Self::Discovered(font) => &font.identity,
+            Self::Materialized(font) => &font.identity,
+        }
+    }
+}
+
+/// Listing retains only exact metadata and locators. Used fonts retain their
+/// assets across ordinary cache invalidation. Indices are never reused, so an
+/// old Lisp entity cannot silently become a different face.
 #[derive(Default)]
 struct FontEntityCatalog {
     handles: HashMap<neomacs_display_protocol::font::ResolvedFontIdentity, FontEntityHandle>,
-    entries: Vec<neomacs_layout_engine::font_backend::PlatformFontMatch>,
+    entries: Vec<FontEntityCatalogEntry>,
 }
 
 impl FontEntityCatalog {
@@ -1344,21 +1415,68 @@ impl FontEntityCatalog {
         &mut self,
         font: neomacs_layout_engine::font_backend::PlatformFontMatch,
     ) -> Option<FontEntityHandle> {
-        if let Some(handle) = self.handles.get(&font.identity) {
-            return Some(*handle);
+        self.intern_entry(FontEntityCatalogEntry::Materialized(font))
+    }
+
+    fn intern_discovered(
+        &mut self,
+        font: neomacs_layout_engine::font_backend::PlatformFontCandidate,
+    ) -> Option<FontEntityHandle> {
+        self.intern_entry(FontEntityCatalogEntry::Discovered(font))
+    }
+
+    fn intern_entry(&mut self, entry: FontEntityCatalogEntry) -> Option<FontEntityHandle> {
+        if let Some(handle) = self.handles.get(entry.identity()).copied() {
+            if matches!(&entry, FontEntityCatalogEntry::Materialized(_))
+                && let Some(existing @ FontEntityCatalogEntry::Discovered(_)) =
+                    self.entries.get_mut((handle.get() - 1) as usize)
+            {
+                *existing = entry;
+            }
+            return Some(handle);
         }
         let handle =
             FontEntityHandle::new(u32::try_from(self.entries.len()).ok()?.checked_add(1)?)?;
-        self.handles.insert(font.identity.clone(), handle);
-        self.entries.push(font);
+        self.handles.insert(entry.identity().clone(), handle);
+        self.entries.push(entry);
         Some(handle)
+    }
+
+    fn discovered(
+        &self,
+        handle: FontEntityHandle,
+    ) -> Option<&neomacs_layout_engine::font_backend::PlatformFontCandidate> {
+        match self.entries.get((handle.get() - 1) as usize)? {
+            FontEntityCatalogEntry::Discovered(font) => Some(font),
+            FontEntityCatalogEntry::Materialized(_) => None,
+        }
+    }
+
+    fn promote(
+        &mut self,
+        handle: FontEntityHandle,
+        font: neomacs_layout_engine::font_backend::PlatformFontMatch,
+    ) -> bool {
+        let Some(entry) = self.entries.get_mut((handle.get() - 1) as usize) else {
+            return false;
+        };
+        if entry.identity() != &font.identity {
+            return false;
+        }
+        if matches!(entry, FontEntityCatalogEntry::Discovered(_)) {
+            *entry = FontEntityCatalogEntry::Materialized(font);
+        }
+        true
     }
 
     fn get(
         &self,
         handle: FontEntityHandle,
     ) -> Option<&neomacs_layout_engine::font_backend::PlatformFontMatch> {
-        self.entries.get((handle.get() - 1) as usize)
+        match self.entries.get((handle.get() - 1) as usize)? {
+            FontEntityCatalogEntry::Discovered(_) => None,
+            FontEntityCatalogEntry::Materialized(font) => Some(font),
+        }
     }
 }
 
@@ -2586,9 +2704,12 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         request: neovm_core::emacs_core::eval::FontSpecListQuery,
         prefer: Option<neovm_core::emacs_core::eval::FontSpecListQuery>,
         maximum: Option<usize>,
-    ) -> Result<Vec<neovm_core::emacs_core::eval::ListedFontEntity>, String> {
+        filter: Option<&mut neovm_core::emacs_core::eval::FontListFilter<'_>>,
+    ) -> Result<
+        Vec<neovm_core::emacs_core::eval::ListedFontEntity>,
+        neovm_core::emacs_core::eval::FontListError,
+    > {
         use neomacs_layout_engine::font::resolver::FontEntityListConstraints;
-        use neomacs_layout_engine::font_backend::PlatformFontSize;
         let constraints =
             |query: &neovm_core::emacs_core::eval::FontSpecListQuery| FontEntityListConstraints {
                 driver: query.driver,
@@ -2619,25 +2740,9 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             preferred
                 .as_ref()
                 .map(|(query, constraints)| (query, constraints)),
-            maximum,
+            if filter.is_some() { None } else { maximum },
         );
-        Ok(entities
-            .into_iter()
-            .map(|entity| {
-                let pixel_size = match entity.matched.metadata.size {
-                    PlatformFontSize::Scalable => Some(0),
-                    PlatformFontSize::Fixed { device_ppem_26_6 } => Some(device_ppem_26_6 >> 6),
-                    PlatformFontSize::Unknown => None,
-                };
-                neovm_core::emacs_core::eval::ListedFontEntity {
-                    driver: entity.driver,
-                    average_width: (entity.matched.metadata.size == PlatformFontSize::Scalable)
-                        .then_some(0),
-                    pixel_size,
-                    font: core_font_entity_match(&mut self.font_entities, entity),
-                }
-            })
-            .collect())
+        core_listed_font_entities(&mut self.font_entities, entities, maximum, filter)
     }
 
     fn font_character_coverage(
@@ -2649,6 +2754,17 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         };
         let coverage = match request.target {
             FontCoverageTarget::Entity(handle) => {
+                if let Some(candidate) = self.font_entities.discovered(handle).cloned() {
+                    let Some(font) = self
+                        .synchronized_font_metrics()
+                        .materialize_font_candidate(candidate)
+                    else {
+                        return Ok(FontCoverage::NeedsOpening);
+                    };
+                    if !self.font_entities.promote(handle, font) {
+                        return Ok(FontCoverage::NeedsOpening);
+                    }
+                }
                 let Some(font) = self.font_entities.get(handle).cloned() else {
                     return Ok(FontCoverage::NeedsOpening);
                 };
