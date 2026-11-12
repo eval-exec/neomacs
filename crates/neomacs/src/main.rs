@@ -1266,6 +1266,70 @@ impl ResolvedSurfaceMemo {
     }
 }
 
+fn font_entity_query(
+    request: &FontSpecResolveRequest,
+) -> neomacs_layout_engine::font::resolver::FontEntityQuery {
+    let family = request
+        .family
+        .as_ref()
+        .and_then(LispString::as_utf8_str)
+        .and_then(neomacs_layout_engine::font_backend::FontFamilyName::new);
+    let mut query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(family)
+        .with_selection(request.selection);
+    if let Some(registry) = request.registry.as_ref().and_then(LispString::as_utf8_str) {
+        query = query.with_registry(registry);
+    }
+    if let Some(language) = request.lang.as_ref().and_then(LispString::as_utf8_str) {
+        query = query.with_language(language);
+    }
+    if let Some(weight) = request.weight {
+        query = query.with_weight(weight.css_weight());
+    }
+    if let Some(slant) = request.slant {
+        query = query.with_slant(slant);
+    }
+    if let Some(width) = request.width {
+        query = query.with_width(width);
+    }
+    query
+}
+
+fn core_font_entity_match(
+    catalog: &mut FontEntityCatalog,
+    entity: neomacs_layout_engine::font::resolver::ResolvedFontEntity,
+) -> ResolvedFontSpecMatch {
+    ResolvedFontSpecMatch {
+        coverage_handle: catalog.intern(entity.matched.clone()),
+        family: LispString::from_utf8(entity.matched.family()),
+        foundry: entity
+            .matched
+            .metadata
+            .foundry
+            .as_ref()
+            .map(|foundry| LispString::from_utf8(foundry)),
+        registry: entity
+            .registry
+            .as_ref()
+            .map(|registry| LispString::from_utf8(registry)),
+        file: entity
+            .matched
+            .identity
+            .file_path
+            .as_ref()
+            .map(|file| LispString::from_utf8(file)),
+        weight: entity.matched.weight().map(FontWeight::from_css_weight),
+        slant: Some(entity.matched.slant()),
+        width: entity.matched.metadata.width,
+        spacing: entity.matched.metadata.spacing,
+        postscript_name: entity
+            .matched
+            .identity
+            .postscript_name
+            .as_ref()
+            .map(|name| LispString::from_utf8(name)),
+    }
+}
+
 /// Entity selections survive ordinary cache invalidation. Repeated selections
 /// share a handle; retained assets keep native-memory faces alive. Indices are
 /// never reused, so an old Lisp entity cannot silently become a different face.
@@ -2512,59 +2576,68 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         &mut self,
         request: FontSpecResolveRequest,
     ) -> Result<Option<ResolvedFontSpecMatch>, String> {
-        let family = request
-            .family
-            .as_ref()
-            .and_then(LispString::as_utf8_str)
-            .and_then(neomacs_layout_engine::font_backend::FontFamilyName::new);
-        let mut query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(family)
-            .with_selection(request.selection);
-        if let Some(registry) = request.registry.as_ref().and_then(LispString::as_utf8_str) {
-            query = query.with_registry(registry);
-        }
-        if let Some(language) = request.lang.as_ref().and_then(LispString::as_utf8_str) {
-            query = query.with_language(language);
-        }
-        if let Some(weight) = request.weight {
-            query = query.with_weight(weight.css_weight());
-        }
-        if let Some(slant) = request.slant {
-            query = query.with_slant(slant);
-        }
-        if let Some(width) = request.width {
-            query = query.with_width(width);
-        }
+        let query = font_entity_query(&request);
         let entity = self.synchronized_font_metrics().resolve_font_entity(&query);
-        Ok(entity.map(|entity| ResolvedFontSpecMatch {
-            coverage_handle: self.font_entities.intern(entity.matched.clone()),
-            family: LispString::from_utf8(entity.matched.family()),
-            foundry: entity
-                .matched
-                .metadata
-                .foundry
+        Ok(entity.map(|entity| core_font_entity_match(&mut self.font_entities, entity)))
+    }
+
+    fn list_fonts_for_spec(
+        &mut self,
+        request: neovm_core::emacs_core::eval::FontSpecListQuery,
+        prefer: Option<neovm_core::emacs_core::eval::FontSpecListQuery>,
+        maximum: Option<usize>,
+    ) -> Result<Vec<neovm_core::emacs_core::eval::ListedFontEntity>, String> {
+        use neomacs_layout_engine::font::resolver::FontEntityListConstraints;
+        use neomacs_layout_engine::font_backend::PlatformFontSize;
+        let constraints =
+            |query: &neovm_core::emacs_core::eval::FontSpecListQuery| FontEntityListConstraints {
+                driver: query.driver,
+                foundry: query
+                    .foundry
+                    .as_ref()
+                    .and_then(LispString::as_utf8_str)
+                    .map(str::to_owned),
+                adstyle: query
+                    .adstyle
+                    .as_ref()
+                    .and_then(LispString::as_utf8_str)
+                    .map(str::to_owned),
+                pixel_size: query
+                    .size
+                    .map(|size| self.font_sizing.font_opening_size_px(size).get()),
+                spacing: query.spacing,
+                average_width: query.average_width,
+            };
+        let listed_constraints = constraints(&request);
+        let preferred = prefer
+            .as_ref()
+            .map(|query| (font_entity_query(&query.specification), constraints(query)));
+        let query = font_entity_query(&request.specification);
+        let entities = self.synchronized_font_metrics().list_font_entities(
+            &query,
+            &listed_constraints,
+            preferred
                 .as_ref()
-                .map(|foundry| LispString::from_utf8(foundry)),
-            registry: entity
-                .registry
-                .as_ref()
-                .map(|registry| LispString::from_utf8(registry)),
-            file: entity
-                .matched
-                .identity
-                .file_path
-                .as_ref()
-                .map(|file| LispString::from_utf8(file)),
-            weight: entity.matched.weight().map(FontWeight::from_css_weight),
-            slant: Some(entity.matched.slant()),
-            width: entity.matched.metadata.width,
-            spacing: entity.matched.metadata.spacing,
-            postscript_name: entity
-                .matched
-                .identity
-                .postscript_name
-                .as_ref()
-                .map(|name| LispString::from_utf8(name)),
-        }))
+                .map(|(query, constraints)| (query, constraints)),
+            maximum,
+        );
+        Ok(entities
+            .into_iter()
+            .map(|entity| {
+                let pixel_size = match entity.matched.metadata.size {
+                    PlatformFontSize::Scalable => Some(0),
+                    PlatformFontSize::Fixed { device_ppem_26_6 } => Some(device_ppem_26_6 >> 6),
+                    PlatformFontSize::Unknown => None,
+                };
+                neovm_core::emacs_core::eval::ListedFontEntity {
+                    driver: entity.driver,
+                    average_width: (entity.matched.metadata.size == PlatformFontSize::Scalable)
+                        .then_some(0),
+                    pixel_size,
+                    font: core_font_entity_match(&mut self.font_entities, entity),
+                }
+            })
+            .collect())
     }
 
     fn font_character_coverage(

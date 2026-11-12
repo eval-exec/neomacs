@@ -564,6 +564,13 @@ pub(crate) fn registry_hint(registry: &str) -> Option<&'static RegistryHint> {
         .find(|hint| wildcard_casefold_match(&registry, hint.name))
 }
 
+/// ftfont_spec_pattern uses exact symbol shortcuts for Unicode registries;
+/// the legacy charset table separately accepts case-insensitive patterns.
+pub(crate) fn registry_supported_for_listing(registry: &str) -> bool {
+    matches!(registry, "ascii-0" | "iso10646-1" | "unicode-bmp")
+        || registry_hint(registry).is_some()
+}
+
 pub(crate) fn registry_language(registry: &str) -> Option<&'static str> {
     registry_hint(registry).and_then(|hint| hint.lang)
 }

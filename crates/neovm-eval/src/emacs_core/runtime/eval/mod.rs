@@ -2531,6 +2531,31 @@ pub struct FontSpecResolveRequest {
     pub width: Option<FontWidth>,
 }
 
+/// Listing constraints which must not alter the driver's single-font match
+/// and opening operations. An absent size leaves scalable entities unsized.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontSpecListQuery {
+    pub specification: FontSpecResolveRequest,
+    /// GNU compares driver symbols by identity, including uninterned symbols.
+    pub driver: Option<SymId>,
+    pub foundry: Option<neovm_value::heap_types::LispString>,
+    pub adstyle: Option<neovm_value::heap_types::LispString>,
+    pub spacing: Option<i32>,
+    pub size: Option<FontOpeningSize>,
+    pub dpi: Option<u32>,
+    pub average_width: Option<i32>,
+}
+
+/// An enumerated entity retains its catalog size rather than opening a font
+/// at the selected frame's size. GNU uses zero for scalable entities.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedFontEntity {
+    pub font: ResolvedFontSpecMatch,
+    pub driver: Option<SymId>,
+    pub pixel_size: Option<u32>,
+    pub average_width: Option<i32>,
+}
+
 /// GNU separates entity listing/selection from the font driver's `match`
 /// operation. A driver match is authoritative, not another style-filtered
 /// list (notably, ftfont_match deliberately omits Fontconfig style fields).

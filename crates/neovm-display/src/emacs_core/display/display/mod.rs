@@ -2889,10 +2889,10 @@ pub fn builtin_x_list_fonts(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("x-list-fonts", &args, 1, 5)?;
-    if x_window_system_active(eval) {
-        return Ok(Value::NIL);
+    if !x_window_system_active(eval) {
+        return Err(window_system_not_initialized_error());
     }
-    Err(window_system_not_initialized_error())
+    super::font::x_list_fonts(eval, args)
 }
 
 /// (x-parse-geometry STRING) -> alist or nil.
