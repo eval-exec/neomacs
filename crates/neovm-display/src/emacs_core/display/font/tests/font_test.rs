@@ -2586,3 +2586,139 @@ fn font_shape_gstring_preserves_driver_after_noninteger_cluster() {
 fn font_shape_gstring_preserves_driver_after_invalid_coverage() {
     assert_font_shape_driver_survives(ShapeFailure::InvalidCoverage);
 }
+
+struct ListingFontDisplayHost {
+    queries: Rc<RefCell<Vec<neovm_eval::emacs_core::eval::FontSpecListQuery>>>,
+    fonts: Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
+}
+
+impl DisplayHost for ListingFontDisplayHost {
+    fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+    fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+    fn list_fonts_for_spec(
+        &mut self,
+        query: neovm_eval::emacs_core::eval::FontSpecListQuery,
+        _: Option<neovm_eval::emacs_core::eval::FontSpecListQuery>,
+        _: Option<usize>,
+    ) -> Result<Vec<neovm_eval::emacs_core::eval::ListedFontEntity>, String> {
+        self.queries.borrow_mut().push(query);
+        Ok(self.fonts.clone())
+    }
+}
+
+#[test]
+fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_limit() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    let queries = Rc::new(RefCell::new(Vec::new()));
+    let listed = |family, weight| neovm_eval::emacs_core::eval::ListedFontEntity {
+        driver: Some(intern("ftcrhb")),
+        font: ResolvedFontSpecMatch {
+            coverage_handle: None,
+            family: LispString::from_utf8(family),
+            foundry: Some(LispString::from_utf8("SRC")),
+            registry: Some(LispString::from_utf8("iso10646-1")),
+            file: None,
+            weight: Some(weight),
+            slant: Some(FontSlant::Normal),
+            width: Some(FontWidth::Normal),
+            spacing: Some(100),
+            postscript_name: None,
+        },
+        pixel_size: Some(0),
+        average_width: Some(0),
+    };
+    eval.set_display_host(Box::new(ListingFontDisplayHost {
+        queries: Rc::clone(&queries),
+        fonts: vec![
+            listed("Hack", FontWeight::NORMAL),
+            listed("Hack", FontWeight::BOLD),
+        ],
+    }));
+    let pattern = Value::string("-SRC-Hack-regular-normal-normal-*-13-*-*-*-*-0-iso10646-1");
+    let names = x_list_fonts(
+        &mut eval,
+        vec![pattern, Value::NIL, Value::NIL, Value::fixnum(1)],
+    )
+    .unwrap();
+    let names = list_to_vec(&names).unwrap();
+    assert_eq!(names.len(), 1);
+    assert_eq!(
+        names[0].as_utf8_str(),
+        Some("-SRC-Hack-regular-normal-normal-*-13-*-*-*-m-0-iso10646-1")
+    );
+    let captured = queries.borrow();
+    assert_eq!(
+        captured[0]
+            .foundry
+            .as_ref()
+            .and_then(LispString::as_utf8_str),
+        Some("SRC")
+    );
+    assert_eq!(captured[0].average_width, Some(0));
+    drop(captured);
+    eval.set_variable(
+        "face-ignored-fonts",
+        Value::list(vec![Value::string("-regular-")]),
+    );
+    let names = x_list_fonts(
+        &mut eval,
+        vec![Value::string("*"), Value::NIL, Value::NIL, Value::fixnum(1)],
+    )
+    .unwrap();
+    let names = list_to_vec(&names).unwrap();
+    assert_eq!(names.len(), 1);
+    assert!(names[0].as_utf8_str().unwrap().contains("-bold-"));
+    let uninterned = Value::make_symbol("ftcrhb");
+    let driver_spec = font_spec(vec![Value::keyword("type"), uninterned]).unwrap();
+    let entities = list_fonts(&mut eval, vec![driver_spec, Value::NIL, Value::fixnum(1)]).unwrap();
+    let entity = list_to_vec(&entities).unwrap()[0];
+    assert_eq!(
+        font_get(vec![entity, Value::keyword("type")]).unwrap(),
+        Value::symbol("ftcrhb")
+    );
+    assert_eq!(
+        queries.borrow().last().unwrap().driver,
+        uninterned.as_bare_symbol_id()
+    );
+    let unrestricted = font_spec(vec![Value::keyword("type"), Value::NIL]).unwrap();
+    list_fonts(&mut eval, vec![unrestricted, Value::NIL, Value::fixnum(1)]).unwrap();
+    assert_eq!(
+        queries.borrow().last().unwrap().driver,
+        None,
+        "nil means no driver restriction"
+    );
+    // NUM <= 0 returns before PREFER validation; positive NUM validates it.
+    let spec = font_spec(Vec::new()).unwrap();
+    for count in [0, -1] {
+        assert!(
+            list_fonts(
+                &mut eval,
+                vec![spec, Value::NIL, Value::fixnum(count), Value::T]
+            )
+            .unwrap()
+            .is_nil()
+        );
+    }
+    assert!(
+        list_fonts(
+            &mut eval,
+            vec![spec, Value::NIL, Value::fixnum(1), Value::T]
+        )
+        .is_err()
+    );
+    assert!(
+        x_list_fonts(
+            &mut eval,
+            vec![Value::string(
+                "-SRC-Hack-unknown-normal-normal-*-13-*-*-*-*-0-iso10646-1"
+            )]
+        )
+        .is_err()
+    );
+}

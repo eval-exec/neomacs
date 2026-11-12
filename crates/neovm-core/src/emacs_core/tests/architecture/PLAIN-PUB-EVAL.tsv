@@ -2955,6 +2955,14 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontPxProbeResult fie
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontPxProbeResult field max_width
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontPxProbeResult field pixel_size
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontPxProbeResult field space_width
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field adstyle
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field average_width
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field dpi
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field driver
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field foundry
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field size
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field spacing
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field specification
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field family
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field frame_id
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecResolveRequest field lang
@@ -2973,6 +2981,10 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	GuiFrameHostRequest f
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	GuiFrameHostRequest field width
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	GuiFrameHostSize field height
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	GuiFrameHostSize field width
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	ListedFontEntity field average_width
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	ListedFontEntity field driver
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	ListedFontEntity field font
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	ListedFontEntity field pixel_size
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	PopupMenuRequest field entries
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	PopupMenuRequest field frame_id
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	PopupMenuRequest field placement
@@ -3102,9 +3114,11 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct Context
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontEntityMetricsRequest
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontOtfCapability
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontPxProbeResult
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontSpecListQuery
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontSpecResolveRequest
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct GuiFrameHostRequest
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct GuiFrameHostSize
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct ListedFontEntity
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct MenuBarRebuildGeneration
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct PopupMenuRequest
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct ResolvedFontEntityMetrics
