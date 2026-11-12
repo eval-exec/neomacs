@@ -3506,44 +3506,45 @@ If FUNCTION is nil, then it is not called.")
   "Upper limit on `magic-mode-alist' regexp matches.
 Also applies to `magic-fallback-mode-alist'.")
 
-(defun set-auto-mode--find-matching-alist-entry (alist name case-insensitive)
-  "Find first matching entry in ALIST for file NAME.
-
-If CASE-INSENSITIVE, the file system of file NAME is case-insensitive."
-  (let (mode)
-    (while name
-      (let ((newmode
-             (if case-insensitive
-                 ;; Filesystem is case-insensitive.
-                 (let ((case-fold-search t))
-                   (assoc-default name alist 'string-match))
-               ;; Filesystem is case-sensitive.
-               (or
-                ;; First match case-sensitively.
-                (let ((case-fold-search nil))
-                  (assoc-default name alist 'string-match))
-                ;; Fallback to case-insensitive match.
-                (and auto-mode-case-fold
-                     (let ((case-fold-search t))
-                       (assoc-default name alist 'string-match)))))))
-        (when newmode
+(defun set-auto-mode--from-matching-alist-entry (alist name case-insensitive
+                                                   keep-mode-if-same dir-local)
+  "Apply matching entries in ALIST for file NAME.
+CASE-INSENSITIVE non-nil means NAME is on a case-insensitive file system.
+Pass KEEP-MODE-IF-SAME to each mode setter.  When DIR-LOCAL is non-nil,
+validate every non-nil mode before calling it.  Return non-nil if a
+matching handler was accepted."
+  (let (was-set)
+    (while
+        (let* ((newmode
+                (if case-insensitive
+                    ;; Filesystem is case-insensitive.
+                    (let ((case-fold-search t))
+                      (assoc-default name alist 'string-match))
+                  ;; Filesystem is case-sensitive.
+                  (or
+                   ;; First match case-sensitively.
+                   (let ((case-fold-search nil))
+                     (assoc-default name alist 'string-match))
+                   ;; Fallback to case-insensitive match.
+                   (and auto-mode-case-fold
+                        (let ((case-fold-search t))
+                          (assoc-default name alist 'string-match))))))
+               ;; Continuation is independent of MODE: a nil function
+               ;; still strips the matched suffix and resumes the search.
+               (continue-search (and (not (functionp newmode))
+                                     (consp newmode)
+                                     (cadr newmode)))
+               (mode (if continue-search (car newmode) newmode)))
+          (when continue-search
+            (setq name (substring name 0 (match-beginning 0))))
           (when mode
-            ;; We had already found a mode but in a (REGEXP MODE t)
-            ;; entry, so we still have to run MODE.  Let's do it now.
-            ;; FIXME: It's kind of ugly to run the function here.
-            ;; An alternative could be to return a list of functions and
-            ;; callers.
-            (set-auto-mode-0 mode t))
-          (setq mode newmode))
-        (if (and newmode
-                 (not (functionp newmode))
-                 (consp newmode)
-                 (cadr newmode))
-            ;; It's a (REGEXP MODE t): Keep looking but remember the MODE.
-            (setq mode (car newmode)
-                  name (substring name 0 (match-beginning 0)))
-          (setq name nil))))
-    mode))
+            (if (and dir-local
+                     (not (set-auto-mode--dir-local-valid-p mode)))
+                (message "Ignoring invalid mode `%S'" mode)
+              (set-auto-mode-0 mode keep-mode-if-same)
+              (setq was-set t)))
+          continue-search))
+    was-set))
 
 (defun set-auto-mode--apply-alist (alist keep-mode-if-same dir-local)
   "Helper function for `set-auto-mode'.
@@ -3555,8 +3556,7 @@ Return non-nil if the mode was set, nil otherwise.
 DIR-LOCAL non-nil means this call is via directory-locals, and
 extra checks should be done."
   (if buffer-file-name
-      (let (mode
-            (name buffer-file-name)
+      (let ((name buffer-file-name)
             (remote-id (file-remote-p buffer-file-name))
             (case-insensitive-p (file-name-case-insensitive-p
                                  buffer-file-name)))
@@ -3566,15 +3566,8 @@ extra checks should be done."
         (when (and (stringp remote-id)
                    (string-match (regexp-quote remote-id) name))
           (setq name (substring name (match-end 0))))
-        (setq mode (set-auto-mode--find-matching-alist-entry
-                    alist name case-insensitive-p))
-        (when (and dir-local mode
-                   (not (set-auto-mode--dir-local-valid-p mode)))
-          (message "Ignoring invalid mode `%S'" mode)
-          (setq mode nil))
-        (when mode
-          (set-auto-mode-0 mode keep-mode-if-same)
-          t))))
+        (set-auto-mode--from-matching-alist-entry
+         alist name case-insensitive-p keep-mode-if-same dir-local))))
 
 (defun set-auto-mode--dir-local-valid-p (mode)
   "Say whether MODE can be used in a .dir-local.el `auto-mode-alist'."
