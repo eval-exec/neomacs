@@ -64,6 +64,9 @@ mod oracle_window_text_chrome;
 #[path = "oracle_extended_keysyms.rs"]
 mod oracle_extended_keysyms;
 
+#[path = "oracle_face_sentinel_identity.rs"]
+mod oracle_face_sentinel_identity;
+
 #[path = "oracle_face_theme.rs"]
 mod oracle_face_theme;
 

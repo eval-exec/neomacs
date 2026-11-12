@@ -1065,10 +1065,9 @@ pub(crate) const FACE_ATTRIBUTES_VECTOR_LEN: usize = 20;
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn unspecified_face_attributes_vector() -> Value {
-    Value::vector(vec![
-        Value::symbol("unspecified");
-        FACE_ATTRIBUTES_VECTOR_LEN
-    ])
+    // Same boot-time `Qunspecified` as `src/xfaces.c` `make_vector (..., Qunspecified)`.
+    let unspecified = Value::from_sym_id(neovm_value::intern::WellKnown::Unspecified.id());
+    Value::vector(vec![unspecified; FACE_ATTRIBUTES_VECTOR_LEN])
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up

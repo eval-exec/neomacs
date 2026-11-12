@@ -2284,8 +2284,13 @@ pub(crate) fn format_mode_line_from_state(
     }
 
     let format_val = args[0];
-    let face_spec =
-        resolve_mode_line_face_spec(&args, mode_line_window_is_selected(frames, args.get(2)));
+    let face_spec = resolve_mode_line_face_spec(
+        &args,
+        mode_line_window_is_selected(frames, args.get(2)),
+        // Split-state test entry. It has no Context, so it cannot read the
+        // dynamic `symbols-with-pos-enabled` binding.
+        neovm_value::tagged::SymbolMode::Bare,
+    );
     let pctx =
         build_mode_line_percent_context(frames, &*buffers, args.get(2), StoredTarget::NoProperties);
     let mut result = ModeLineRendered::default();
@@ -2608,7 +2613,9 @@ fn try_format_mode_line_display(
             // calls `Fformat_mode_line (format, Qnil, Qnil, Qnil)`,
             // src/xdisp.c:28192), so FACE `t` cannot occur here and the
             // selection answer is irrelevant.
-            ModeLineDisplayDestination::Rows { .. } => resolve_mode_line_face_spec(&args, false),
+            ModeLineDisplayDestination::Rows { .. } => {
+                resolve_mode_line_face_spec(&args, false, eval.symbol_mode())
+            }
             ModeLineDisplayDestination::FrameTitle { .. } => ModeLineFaceSpec {
                 no_props: true,
                 face: None,
@@ -2695,7 +2702,8 @@ pub(crate) fn finish_format_mode_line_in_eval(
             Ok(Value::string(""))
         } else {
             let format_val = args[0];
-            let face_spec = resolve_mode_line_face_spec(args, window_is_selected);
+            let face_spec =
+                resolve_mode_line_face_spec(args, window_is_selected, eval.symbol_mode());
             let output_scope = ModeLineOutputScope::enter(eval, args)?;
             let point_selection = if mode_line_flow_policy::enabled() {
                 mode_line_point::PointSelection::CurrentBuffer
@@ -2764,8 +2772,13 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
         Ok(Value::string(""))
     } else {
         let format_val = args[0];
-        let face_spec =
-            resolve_mode_line_face_spec(args, mode_line_window_is_selected(frames, args.get(2)));
+        let face_spec = resolve_mode_line_face_spec(
+            args,
+            mode_line_window_is_selected(frames, args.get(2)),
+            // Split-state test entry. It has no Context, so it cannot read the
+            // dynamic `symbols-with-pos-enabled` binding.
+            neovm_value::tagged::SymbolMode::Bare,
+        );
         let pctx = build_mode_line_percent_context(
             frames,
             &*buffers,
@@ -4323,10 +4336,26 @@ fn mode_line_face_suppresses_properties(args: &[Value]) -> bool {
 /// `selected_window` BEFORE `Fselect_window` moves the selection
 /// (src/xdisp.c:29059), which is why the caller passes the answer in rather
 /// than re-reading the selection after entering the format walk.
-fn resolve_mode_line_face_spec(args: &[Value], window_is_selected: bool) -> ModeLineFaceSpec {
+fn qdefault_eq(face: Value, mode: neovm_value::tagged::SymbolMode) -> bool {
+    // GNU `Qdefault` (`src/xdisp.c:29046` `EQ (face, Qdefault)`). `default` is a
+    // well-known seed, so `WellKnown::id` stays the position-mapped id across a
+    // pdump restore (`intern/mod.rs` seed prefix). A `OnceLock` filled before
+    // that restore would keep the pre-restore id.
+    neovm_value::value::eq_value_swp(
+        &face,
+        &Value::from_sym_id(WellKnown::Default.id()),
+        matches!(mode, neovm_value::tagged::SymbolMode::Positioned),
+    )
+}
+
+fn resolve_mode_line_face_spec(
+    args: &[Value],
+    window_is_selected: bool,
+    mode: neovm_value::tagged::SymbolMode,
+) -> ModeLineFaceSpec {
     let face = args.get(1).copied().unwrap_or(Value::NIL);
     let no_props = mode_line_face_suppresses_properties(args);
-    let face = if no_props || face.is_nil() || face.is_bare_symbol_named("default") {
+    let face = if no_props || face.is_nil() || qdefault_eq(face, mode) {
         None
     } else if face.is_t() {
         Some(Value::symbol(if window_is_selected {

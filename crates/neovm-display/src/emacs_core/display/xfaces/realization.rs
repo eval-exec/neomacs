@@ -822,7 +822,7 @@ fn merge_default_lface_source(
     let _roots = RealizationRoots::from_values([from, into]);
     if let Some(inherit) = lisp_face_vector_attr(from, LFaceAttr::Inherit)
         && !inherit.is_nil()
-        && !is_reset_like_face_attr_value(&inherit)
+        && !is_reset_like_face_attr_value(&inherit, eval.symbol_mode())
     {
         merge_default_inheritance(eval, frame, inherit, into, &active);
     }
@@ -830,7 +830,7 @@ fn merge_default_lface_source(
         let Some(value) = lisp_face_vector_attr(from, attr) else {
             continue;
         };
-        if is_reset_like_face_attr_value(&value) {
+        if is_reset_like_face_attr_value(&value, eval.symbol_mode()) {
             continue;
         }
         let value = if attr == LFaceAttr::Height && !value.is_fixnum() {
@@ -933,7 +933,12 @@ pub(crate) fn realize_default_after_global_merge(
         let _complete_root = RealizationRoots::from_values([complete]);
         merge_default_lface_source(scope.context(), frame, local, complete, &[]);
         copy_lisp_face_vector_slots(complete, local);
-        sync_face_overrides_from_lisp_face_vector("default", local, false);
+        sync_face_overrides_from_lisp_face_vector(
+            "default",
+            local,
+            false,
+            scope.context().symbol_mode(),
+        );
 
         // Rebuild raw definitions without realize_default_lisp_face_for_frame:
         // GNU uses the merged absolute lface here, not TTY default normalization.

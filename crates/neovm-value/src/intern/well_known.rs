@@ -9,8 +9,11 @@
 //!
 //! The table is one list: the enum variants and [`NAMES`] are expanded from
 //! the same macro invocation, so order and spellings cannot drift. The
-//! compile-time checks below reject duplicate spellings, keyword spellings,
-//! and the three constructor seeds.
+//! compile-time checks below reject duplicate spellings, keyword spellings
+//! outside the face DEFSYM list, and the three constructor seeds. Face
+//! keywords (`:family`, `:ignore-defface`, and the rest of the `xfaces.c`
+//! `DEFSYM`s) are appended at the end of the table. Earlier ids stay put.
+//! `SEED_SYMBOL_COUNT` grows by that suffix only.
 //!
 //! After `(unintern "foo")` the constant still names the original symbol (as
 //! in GNU); the registry merely stops mapping the spelling to it, and Lisp
@@ -67,7 +70,9 @@ macro_rules! well_known_table {
             assert!(WellKnown::COUNT == NAMES.len());
             assert!(WellKnown::COUNT <= (u32::MAX - FIRST_ID) as usize);
             assert!(names_are_unique(NAMES));
+            assert!(names_are_unique(FACE_DEFSYM_KEYWORDS));
             assert!(names_exclude_seeds_and_keywords(NAMES));
+            assert!(face_defsym_keywords_are_seeded(NAMES));
         };
     };
 }
@@ -104,6 +109,70 @@ const fn names_are_unique(names: &[&str]) -> bool {
     true
 }
 
+/// Keyword spellings GNU keeps as `DEFSYM` statics in `src/xfaces.c:7463-7523`.
+/// A leading `:` is otherwise rejected: these are the face sentinels whose
+/// identity must survive `unintern`, same as `Qunspecified`.
+const FACE_DEFSYM_KEYWORDS: &[&str] = &[
+    ":ignore-defface",
+    ":bold",
+    ":italic",
+    ":position",
+    ":color",
+    ":style",
+    ":line-width",
+    ":family",
+    ":foundry",
+    ":width",
+    ":height",
+    ":weight",
+    ":slant",
+    ":underline",
+    ":inverse-video",
+    ":foreground",
+    ":background",
+    ":stipple",
+    ":overline",
+    ":strike-through",
+    ":box",
+    ":font",
+    ":inherit",
+    ":fontset",
+    ":distant-foreground",
+    ":extend",
+];
+
+const fn is_face_defsym_keyword(name: &str) -> bool {
+    let mut index = 0;
+    while index < FACE_DEFSYM_KEYWORDS.len() {
+        if str_eq(name, FACE_DEFSYM_KEYWORDS[index]) {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+const fn face_defsym_keywords_are_seeded(names: &[&str]) -> bool {
+    let mut index = 0;
+    while index < FACE_DEFSYM_KEYWORDS.len() {
+        let spelling = FACE_DEFSYM_KEYWORDS[index];
+        let mut found = false;
+        let mut cursor = 0;
+        while cursor < names.len() {
+            if str_eq(names[cursor], spelling) {
+                found = true;
+                break;
+            }
+            cursor += 1;
+        }
+        if !found {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
 const fn names_exclude_seeds_and_keywords(names: &[&str]) -> bool {
     let mut index = 0;
     while index < names.len() {
@@ -112,7 +181,7 @@ const fn names_exclude_seeds_and_keywords(names: &[&str]) -> bool {
             return false;
         }
         let bytes = name.as_bytes();
-        if !bytes.is_empty() && bytes[0] == b':' {
+        if !bytes.is_empty() && bytes[0] == b':' && !is_face_defsym_keyword(name) {
             return false;
         }
         index += 1;
@@ -451,4 +520,55 @@ well_known_table! {
 
     // GNU fns.c retains Qiv_auto even after Lisp uninterns its spelling.
     IvAuto = "iv-auto",
+
+    // Face DEFSYMs (`src/xfaces.c:7463-7523`). Appended so every earlier
+    // `SymId` stays put. These are the static objects `EQ` compares; a later
+    // `unintern` + `intern` allocates a different symbol and must not retarget
+    // the face code. Keyword spellings are the `FACE_DEFSYM_KEYWORDS` list.
+    Unspecified = "unspecified",
+    Reset = "reset",
+    Normal = "normal",
+    Line = "line",
+    DoubleLine = "double-line",
+    Wave = "wave",
+    Dots = "dots",
+    Dashes = "dashes",
+    PressedButton = "pressed-button",
+    ReleasedButton = "released-button",
+    FlatButton = "flat-button",
+    KeywordIgnoreDefface = ":ignore-defface",
+    KeywordBold = ":bold",
+    KeywordItalic = ":italic",
+    KeywordPosition = ":position",
+    KeywordColor = ":color",
+    KeywordStyle = ":style",
+    KeywordLineWidth = ":line-width",
+    KeywordFamily = ":family",
+    KeywordFoundry = ":foundry",
+    KeywordWidth = ":width",
+    KeywordHeight = ":height",
+    KeywordWeight = ":weight",
+    KeywordSlant = ":slant",
+    KeywordUnderline = ":underline",
+    KeywordInverseVideo = ":inverse-video",
+    KeywordForeground = ":foreground",
+    KeywordBackground = ":background",
+    KeywordStipple = ":stipple",
+    KeywordOverline = ":overline",
+    KeywordStrikeThrough = ":strike-through",
+    KeywordBox = ":box",
+    KeywordFont = ":font",
+    KeywordInherit = ":inherit",
+    KeywordFontset = ":fontset",
+    KeywordDistantForeground = ":distant-foreground",
+    KeywordExtend = ":extend",
+
+    // Static `Qtab_line_inactive` / `Qtab_line_active`
+    // (src/xfaces.c:7541-7542). `lookup_basic_face` loads those objects
+    // (src/xfaces.c:5198-5199) and `realize_named_face` realizes them
+    // (src/xfaces.c:5980-5981). Appended so every earlier `SymId` stays put.
+    // A later unintern + intern allocates a different symbol and must not
+    // retarget the role. `Qmargin` is the earlier `WellKnown::Margin`.
+    TabLineInactive = "tab-line-inactive",
+    TabLineActive = "tab-line-active",
 }

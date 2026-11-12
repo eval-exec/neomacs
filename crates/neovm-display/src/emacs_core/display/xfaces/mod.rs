@@ -122,7 +122,7 @@ pub fn builtin_frame_face_hash_table(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn unspecified_face_attributes_vector() -> Value {
-    Value::vector(vec![Value::symbol("unspecified"); LFACE_VECTOR_SIZE])
+    Value::vector(vec![unspecified_face_symbol(); LFACE_VECTOR_SIZE])
 }
 
 fn face_attr_key_name(value: &Value) -> Option<&str> {
@@ -136,7 +136,7 @@ fn face_attr_key_name(value: &Value) -> Option<&str> {
 pub fn builtin_face_attributes_as_vector(args: Vec<Value>) -> EvalResult {
     crate::emacs_core::display::expect_args("face-attributes-as-vector", &args, 1)?;
 
-    let mut attrs = vec![Value::symbol("unspecified"); LFACE_VECTOR_SIZE];
+    let mut attrs = vec![unspecified_face_symbol(); LFACE_VECTOR_SIZE];
     let Some(plist) = list_to_vec(&args[0]) else {
         return Ok(Value::vector(attrs));
     };
@@ -354,7 +354,7 @@ pub(crate) fn upsert_frame_face_hash_entry(table: Value, key: Value, value: Valu
     });
 }
 
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::FxHashSet as HashSet;
 use std::sync::{Arc, OnceLock};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -873,7 +873,7 @@ fn non_empty_lisp_string(value: Value) -> bool {
         .is_some_and(|string| !string.is_empty())
 }
 
-fn valid_face_underline_value(value: Value) -> bool {
+fn valid_face_underline_value(value: Value, mode: neovm_value::tagged::SymbolMode) -> bool {
     if value.is_nil() || value == Value::T {
         return true;
     }
@@ -899,20 +899,17 @@ fn valid_face_underline_value(value: Value) -> bool {
             Value::NIL
         };
 
-        if key.is_nil() || (val.is_nil() && !key.is_bare_symbol_named(":position")) {
+        // GNU xfaces.c:3396-3416 compares these keywords and style symbols with EQ.
+        if key.is_nil() || (val.is_nil() && !face_id_eq(key, position_kw_id(), mode)) {
             return false;
         }
-        if key.is_bare_symbol_named(":color")
-            && !(val.is_bare_symbol_named("foreground-color") || non_empty_lisp_string(val))
+        if face_id_eq(key, color_kw_id(), mode)
+            && !(face_id_eq(val, WellKnown::ForegroundColor.id(), mode)
+                || non_empty_lisp_string(val))
         {
             return false;
         }
-        if key.is_bare_symbol_named(":style")
-            && val
-                .as_bare_symbol_name()
-                .and_then(UnderlineStyle::from_symbol)
-                .is_none()
-        {
+        if face_id_eq(key, style_kw_id(), mode) && eq_underline_style(val, mode).is_none() {
             return false;
         }
     }
@@ -928,7 +925,7 @@ fn valid_box_line_width(value: Value) -> bool {
         && value.cons_cdr().as_fixnum().is_some_and(|width| width != 0)
 }
 
-fn valid_face_box_value(value: Value) -> bool {
+fn valid_face_box_value(value: Value, mode: neovm_value::tagged::SymbolMode) -> bool {
     if value == Value::T || value.is_nil() {
         return true;
     }
@@ -958,21 +955,17 @@ fn valid_face_box_value(value: Value) -> bool {
         let val = list.cons_car();
         list = list.cons_cdr();
 
-        if key.is_bare_symbol_named(":line-width") {
+        // GNU xfaces.c:3496-3518 compares box plist keys and styles with EQ.
+        if face_id_eq(key, line_width_kw_id(), mode) {
             if !valid_box_line_width(val) {
                 return false;
             }
-        } else if key.is_bare_symbol_named(":color") {
+        } else if face_id_eq(key, color_kw_id(), mode) {
             if !val.is_nil() && !non_empty_lisp_string(val) {
                 return false;
             }
-        } else if key.is_bare_symbol_named(":style") {
-            if !val.is_nil()
-                && val
-                    .as_bare_symbol_name()
-                    .and_then(BoxStyle::from_symbol)
-                    .is_none()
-            {
+        } else if face_id_eq(key, style_kw_id(), mode) {
+            if !val.is_nil() && eq_box_style(val, mode).is_none() {
                 return false;
             }
         } else {
@@ -1248,7 +1241,7 @@ pub fn clear_created_lisp_face(name: &str) {
     });
 }
 
-fn merge_defaults_overrides_into_selected(face_name: &str) {
+fn merge_defaults_overrides_into_selected(face_name: &str, mode: neovm_value::tagged::SymbolMode) {
     let face = face_symbol_id(face_name);
     FACE_ATTR_STATE.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -1256,7 +1249,11 @@ fn merge_defaults_overrides_into_selected(face_name: &str) {
         if let Some(attrs) = defaults {
             let selected = state.selected_overrides.entry(face).or_default();
             for (attr, value) in attrs {
-                if value.is_bare_symbol_named("unspecified")
+                // `unspecified` is `UNSPECIFIEDP` (`EQ` to the boot-time seed).
+                // There is no `Qrelative` in xfaces.c; the relative skip stays
+                // a name check. The caller passes its dynamic
+                // `symbols-with-pos-enabled` binding.
+                if face_value_is_sentinel(value, FaceSentinel::Unspecified, mode)
                     || value.is_bare_symbol_named("relative")
                 {
                     continue;
@@ -1423,15 +1420,6 @@ fn resolve_face_designator(
     }
 }
 
-fn known_resolved_face_name(resolved: ResolvedFaceDesignator) -> Option<ResolvedFaceName> {
-    let name = resolved.name()?;
-    if is_known_lisp_face_name(name.name()) || is_created_lisp_face(name.name()) {
-        Some(name)
-    } else {
-        None
-    }
-}
-
 fn resolve_copy_source_face_symbol(
     eval: &neovm_eval::emacs_core::eval::Context,
     face: &Value,
@@ -1450,7 +1438,7 @@ fn resolve_face_name_for_domain(
     eval: &neovm_eval::emacs_core::eval::Context,
     face: &Value,
     defaults_frame: bool,
-) -> Result<String, Flow> {
+) -> Result<ResolvedFaceName, Flow> {
     match resolve_face_designator(eval, *face, FaceAliasCyclePolicy::Signal)? {
         ResolvedFaceDesignator::String(name) => {
             if face_exists_for_domain(name, defaults_frame) {
@@ -1467,7 +1455,7 @@ fn resolve_face_name_for_domain(
         }
         ResolvedFaceDesignator::Symbol(name) => {
             if face_exists_for_domain(name, defaults_frame) {
-                Ok(name.name().to_owned())
+                Ok(name)
             } else {
                 Err(invalid_face_error(*face))
             }
@@ -1512,16 +1500,289 @@ fn invalid_face_error(face: Value) -> Flow {
     signal("error", data)
 }
 
-/// The `unspecified' symbol used to fill empty Lisp face slots.  GNU keeps it
-/// as the staticpro'd `Qunspecified' and never re-interns it; cache the
-/// interned `SymId' once so realising a face does not re-intern "unspecified"
-/// for every slot.  `make_lisp_face_vector' fills ~30 slots and Doom realises
-/// hundreds of faces, so this was ~5% of startup CPU.  Safe at runtime: the
-/// cache is first populated after the pdump is loaded (same pattern as
-/// `cached_symbol_id!' in eval.rs).
-fn unspecified_face_symbol() -> Value {
-    static ID: OnceLock<SymId> = OnceLock::new();
-    Value::from_sym_id(*ID.get_or_init(|| intern("unspecified")))
+/// Face sentinels are `WellKnown` seeds, the same contract as GNU `DEFSYM`.
+///
+/// `WellKnown::id` is a compile-time index into the process-global registry.
+/// It does not change when `unintern` drops the spelling or when a later
+/// `intern` allocates a new symbol. `EpochSym` re-interned on a miss, so the
+/// new symbol became `Qunspecified`. The seed prefix is mapped by position
+/// across pdump restore (`intern/mod.rs` `SEED_SYMBOL_COUNT`), so these ids
+/// are also stable across a dump load. A use site is one id compare: no
+/// hash and no atomic.
+#[inline]
+const fn unspecified_id() -> SymId {
+    WellKnown::Unspecified.id()
+}
+
+#[inline]
+const fn ignore_defface_id() -> SymId {
+    WellKnown::KeywordIgnoreDefface.id()
+}
+
+#[inline]
+const fn reset_id() -> SymId {
+    WellKnown::Reset.id()
+}
+
+#[inline]
+const fn normal_id() -> SymId {
+    WellKnown::Normal.id()
+}
+
+#[inline]
+const fn line_id() -> SymId {
+    WellKnown::Line.id()
+}
+
+#[inline]
+const fn double_line_id() -> SymId {
+    WellKnown::DoubleLine.id()
+}
+
+#[inline]
+const fn wave_id() -> SymId {
+    WellKnown::Wave.id()
+}
+
+#[inline]
+const fn dots_id() -> SymId {
+    WellKnown::Dots.id()
+}
+
+#[inline]
+const fn dashes_id() -> SymId {
+    WellKnown::Dashes.id()
+}
+
+#[inline]
+const fn pressed_button_id() -> SymId {
+    WellKnown::PressedButton.id()
+}
+
+#[inline]
+const fn released_button_id() -> SymId {
+    WellKnown::ReleasedButton.id()
+}
+
+#[inline]
+const fn flat_button_id() -> SymId {
+    WellKnown::FlatButton.id()
+}
+
+#[inline]
+const fn bold_kw_id() -> SymId {
+    WellKnown::KeywordBold.id()
+}
+
+#[inline]
+const fn italic_kw_id() -> SymId {
+    WellKnown::KeywordItalic.id()
+}
+
+#[inline]
+const fn position_kw_id() -> SymId {
+    WellKnown::KeywordPosition.id()
+}
+
+#[inline]
+const fn color_kw_id() -> SymId {
+    WellKnown::KeywordColor.id()
+}
+
+#[inline]
+const fn style_kw_id() -> SymId {
+    WellKnown::KeywordStyle.id()
+}
+
+#[inline]
+const fn line_width_kw_id() -> SymId {
+    WellKnown::KeywordLineWidth.id()
+}
+
+/// Pre-resolved `QCfamily` … `QCextend` ids. Index is `LFaceAttr` (starts at 1).
+/// Slot 0 is unused. GNU dispatches these with `EQ` (`src/xfaces.c:4247-4286`).
+const LFACE_KEYWORD_IDS: [SymId; 20] = [
+    // Index 0 is not an `LFaceAttr`. Nil's seed id fills the slot so the
+    // array stays a plain id table. `Family as u8 == 1` is asserted below.
+    unsafe { SymId::from_raw(0) },
+    WellKnown::KeywordFamily.id(),
+    WellKnown::KeywordFoundry.id(),
+    WellKnown::KeywordWidth.id(),
+    WellKnown::KeywordHeight.id(),
+    WellKnown::KeywordWeight.id(),
+    WellKnown::KeywordSlant.id(),
+    WellKnown::KeywordUnderline.id(),
+    WellKnown::KeywordInverseVideo.id(),
+    WellKnown::KeywordForeground.id(),
+    WellKnown::KeywordBackground.id(),
+    WellKnown::KeywordStipple.id(),
+    WellKnown::KeywordOverline.id(),
+    WellKnown::KeywordStrikeThrough.id(),
+    WellKnown::KeywordBox.id(),
+    WellKnown::KeywordFont.id(),
+    WellKnown::KeywordInherit.id(),
+    WellKnown::KeywordFontset.id(),
+    WellKnown::KeywordDistantForeground.id(),
+    WellKnown::KeywordExtend.id(),
+];
+
+const _: () = assert!(LFaceAttr::Family as u8 == 1);
+const _: () = assert!(LFaceAttr::Extend as u8 == 19);
+
+#[inline]
+const fn lface_keyword_id(attr: LFaceAttr) -> SymId {
+    LFACE_KEYWORD_IDS[attr as usize]
+}
+
+pub(crate) fn unspecified_face_symbol() -> Value {
+    Value::from_sym_id(unspecified_id())
+}
+
+fn ignore_defface_symbol() -> Value {
+    Value::from_sym_id(ignore_defface_id())
+}
+
+fn reset_face_symbol() -> Value {
+    Value::from_sym_id(reset_id())
+}
+
+/// The three face sentinels. Each variant is one `WellKnown` seed, captured
+/// when the symbol table is built. That is the same object GNU keeps in the
+/// static `Qunspecified` / `QCignore_defface` / `Qreset` (`src/xfaces.c:296-304`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FaceSentinel {
+    Unspecified,
+    IgnoreDefface,
+    Reset,
+}
+
+/// Classify by symbol identity. A later `intern` of the same spelling is
+/// `None`: `unintern` does not change the seed, and the new symbol is not
+/// `EQ` to it.
+fn classify_face_sentinel(
+    value: Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> Option<FaceSentinel> {
+    if face_id_eq(value, unspecified_id(), mode) {
+        Some(FaceSentinel::Unspecified)
+    } else if face_id_eq(value, ignore_defface_id(), mode) {
+        Some(FaceSentinel::IgnoreDefface)
+    } else if face_id_eq(value, reset_id(), mode) {
+        Some(FaceSentinel::Reset)
+    } else {
+        None
+    }
+}
+
+fn face_value_is_sentinel(
+    value: Value,
+    sentinel: FaceSentinel,
+    mode: neovm_value::tagged::SymbolMode,
+) -> bool {
+    classify_face_sentinel(value, mode) == Some(sentinel)
+}
+
+/// `UNSPECIFIEDP` or `IGNORE_DEFFACE_P`. `RESET_P` is not relative
+/// (`src/xfaces.c:4206`, `4221`).
+fn face_value_is_relative_sentinel(value: Value, mode: neovm_value::tagged::SymbolMode) -> bool {
+    matches!(
+        classify_face_sentinel(value, mode),
+        Some(FaceSentinel::Unspecified | FaceSentinel::IgnoreDefface)
+    )
+}
+
+/// GNU `EQ` (`src/lisp.h:1316-1324`): identical objects, and a symbol-with-pos
+/// only when `symbols-with-pos-enabled` is on. The cycle check and the face
+/// sentinel compares share this helper. An uninterned symbol never matches
+/// the interned one. `face_inheritance_cycle` uses `EQ`
+/// (`src/xfaces.c:2465-2466`, `2483-2484`).
+#[inline]
+fn same_object(a: Value, b: Value, mode: neovm_value::tagged::SymbolMode) -> bool {
+    neovm_value::value::eq_value_swp(
+        &a,
+        &b,
+        matches!(mode, neovm_value::tagged::SymbolMode::Positioned),
+    )
+}
+
+/// `EQ` against a cached sentinel. `symbols-with-pos-enabled` is the caller's
+/// dynamic binding (`Context::symbol_mode`), matching GNU `EQ`.
+#[inline]
+fn face_id_eq(value: Value, id: SymId, mode: neovm_value::tagged::SymbolMode) -> bool {
+    same_object(value, Value::from_sym_id(id), mode)
+}
+
+/// Object identity with symbol-with-pos transparency off.
+///
+/// Used only where this function has no `Context`, so it cannot read the
+/// dynamic `symbols-with-pos-enabled` binding. Realization
+/// (`lisp_value_to_face_attr_resolved`, `runtime_unspecified_lisp_face_attr`)
+/// is that site: the helper is also called from font code that has no
+/// evaluator. The setter rewrites an `EQ`-matching `unspecified` to the
+/// interned object before storing it. A style symbol inside a stored
+/// underline or box plist is compared bare here for the same reason.
+#[inline]
+fn face_id_eq_bare(value: Value, id: SymId) -> bool {
+    same_object(
+        value,
+        Value::from_sym_id(id),
+        neovm_value::tagged::SymbolMode::Bare,
+    )
+}
+
+/// GNU underline style symbols are `EQ` (`src/xfaces.c:3411-3416`, `6783-6792`).
+fn eq_underline_style(
+    value: Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> Option<UnderlineStyle> {
+    if face_id_eq(value, line_id(), mode) {
+        Some(UnderlineStyle::Line)
+    } else if face_id_eq(value, double_line_id(), mode) {
+        Some(UnderlineStyle::DoubleLine)
+    } else if face_id_eq(value, wave_id(), mode) {
+        Some(UnderlineStyle::Wave)
+    } else if face_id_eq(value, dots_id(), mode) {
+        Some(UnderlineStyle::Dots)
+    } else if face_id_eq(value, dashes_id(), mode) {
+        Some(UnderlineStyle::Dashes)
+    } else {
+        None
+    }
+}
+
+/// GNU box style symbols are `EQ` (`src/xfaces.c:3512-3516`).
+fn eq_box_style(value: Value, mode: neovm_value::tagged::SymbolMode) -> Option<BoxStyle> {
+    if face_id_eq(value, pressed_button_id(), mode) {
+        Some(BoxStyle::Pressed)
+    } else if face_id_eq(value, released_button_id(), mode) {
+        Some(BoxStyle::Raised)
+    } else if face_id_eq(value, flat_button_id(), mode) {
+        Some(BoxStyle::Flat)
+    } else {
+        None
+    }
+}
+
+/// Attribute keyword dispatch is `EQ` against `QCfamily` and the rest
+/// (`src/xfaces.c:4247-4286`), not a compare of the symbol's name.
+fn lface_attr_eq(attr: Value, mode: neovm_value::tagged::SymbolMode) -> Option<LFaceAttr> {
+    LFACE_ATTRS
+        .iter()
+        .copied()
+        .find(|candidate| face_id_eq(attr, lface_keyword_id(*candidate), mode))
+}
+
+fn set_face_attr_eq(attr: Value, mode: neovm_value::tagged::SymbolMode) -> Option<SetFaceAttr> {
+    if let Some(attr) = lface_attr_eq(attr, mode) {
+        return Some(SetFaceAttr::LFace(attr));
+    }
+    if face_id_eq(attr, bold_kw_id(), mode) {
+        return Some(SetFaceAttr::Alias(SetFaceAttrAlias::Bold));
+    }
+    if face_id_eq(attr, italic_kw_id(), mode) {
+        return Some(SetFaceAttr::Alias(SetFaceAttrAlias::Italic));
+    }
+    None
 }
 
 /// Present a stored lface slot the way `internal-get-lisp-face-attribute` does.
@@ -1532,8 +1793,13 @@ fn unspecified_face_symbol() -> Value {
 /// unchanged (`src/xfaces.c:3183`). The getter is what turns the sentinel
 /// back into `unspecified` (`src/xfaces.c:4288-4289`). Merge still sees the
 /// stored sentinel (`src/xfaces.c:4340-4343`). `reset` is not rewritten.
-fn present_stored_lisp_face_attribute(value: Value) -> Value {
-    if value.is_bare_symbol_named(":ignore-defface") {
+fn present_stored_lisp_face_attribute(
+    value: Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> Value {
+    // GNU xfaces.c:4288 `IGNORE_DEFFACE_P` is `EQ`, not the symbol name.
+    // An uninterned symbol named `:ignore-defface` is returned unchanged.
+    if face_value_is_sentinel(value, FaceSentinel::IgnoreDefface, mode) {
         unspecified_face_symbol()
     } else {
         value
@@ -1592,9 +1858,10 @@ fn set_lisp_face_vector_attr_with_font_derivatives(
     attr: LFaceAttr,
     attr_value: Value,
     font_derivation_value: Value,
+    mode: neovm_value::tagged::SymbolMode,
 ) -> Result<(), Flow> {
     set_lisp_face_vector_attr(vector, attr, attr_value);
-    if attr == LFaceAttr::Font && !is_reset_like_face_attr_value(&attr_value) {
+    if attr == LFaceAttr::Font && !is_reset_like_face_attr_value(&attr_value, mode) {
         for (derived_attr, derived_value) in
             derived_face_attrs_from_font_value(&font_derivation_value)
         {
@@ -1609,7 +1876,12 @@ fn set_lisp_face_vector_attr_with_font_derivatives(
     Ok(())
 }
 
-fn sync_face_overrides_from_lisp_face_vector(face_name: &str, vector: Value, defaults_frame: bool) {
+fn sync_face_overrides_from_lisp_face_vector(
+    face_name: &str,
+    vector: Value,
+    defaults_frame: bool,
+    mode: neovm_value::tagged::SymbolMode,
+) {
     clear_face_overrides(face_name, defaults_frame);
     let Some(slots) = vector.as_vector_data() else {
         return;
@@ -1618,8 +1890,8 @@ fn sync_face_overrides_from_lisp_face_vector(face_name: &str, vector: Value, def
         let value = slots
             .get(attr as usize)
             .copied()
-            .unwrap_or_else(|| Value::symbol("unspecified"));
-        if !value.is_bare_symbol_named("unspecified") {
+            .unwrap_or_else(unspecified_face_symbol);
+        if !face_value_is_sentinel(value, FaceSentinel::Unspecified, mode) {
             set_face_override(face_name, attr, value, defaults_frame);
         }
     }
@@ -1652,9 +1924,13 @@ fn face_hash_entry_lisp_vector(entry: Value) -> Option<Value> {
 }
 
 fn runtime_unspecified_lisp_face_attr(attr: LFaceAttr, value: Value) -> bool {
-    value.is_bare_symbol_named("unspecified")
-        || value.is_bare_symbol_named(":ignore-defface")
-        || value.is_bare_symbol_named("reset")
+    // The three symbols are `UNSPECIFIEDP` / `IGNORE_DEFFACE_P` / `RESET_P`.
+    // `unspecified-fg` and `unspecified-bg` are color-name strings
+    // (`src/xfaces.c` `map_tty_color`), not those EQ macros.
+    // Realization (`runtime_face_from_lisp_face_vector`) has no Context.
+    // `symbols-with-pos-enabled` is a dynamic binding, not a process global,
+    // so this compare stays bare. The setter stores the interned sentinel.
+    is_reset_like_face_attr_value(&value, neovm_value::tagged::SymbolMode::Bare)
         || (attr == LFaceAttr::Foreground && value.as_utf8_str() == Some("unspecified-fg"))
         || (attr == LFaceAttr::Background && value.as_utf8_str() == Some("unspecified-bg"))
 }
@@ -1766,8 +2042,7 @@ fn sync_explicit_default_font_attrs_from_vector(
         LFaceAttr::Weight,
         LFaceAttr::Slant,
     ] {
-        let value =
-            lisp_face_vector_attr(vector, attr).unwrap_or_else(|| Value::symbol("unspecified"));
+        let value = lisp_face_vector_attr(vector, attr).unwrap_or_else(unspecified_face_symbol);
         note_explicit_default_font_attr(eval, frame_id, attr, value);
     }
 }
@@ -2007,7 +2282,7 @@ fn build_tty_color_map(
             if let Some(plist) = list_to_vec(&value) {
                 let mut i = 0;
                 while i + 1 < plist.len() {
-                    if plist[i].as_symbol_name(symbol_mode) == Some(":color") {
+                    if face_id_eq(plist[i], color_kw_id(), symbol_mode) {
                         note(
                             plist[i + 1]
                                 .as_utf8_str()
@@ -2292,8 +2567,9 @@ fn display_named_face_exists(
         return false;
     };
 
+    // GNU `merge_named_face` consults the frame eq table. A same-named
+    // uninterned symbol is not that key.
     lookup_frame_lisp_face_vector_by_symbol(eval, frame_id, name.symbol()).is_some()
-        || known_resolved_face_name(resolved).is_some()
 }
 
 /// Return invalid atomic face references nested in a display `face` value, in
@@ -2327,12 +2603,15 @@ pub(crate) fn invalid_display_face_references(
         }
 
         let first = face_ref.cons_car();
-        if first.is_symbol_named("foreground-color", symbol_mode)
-            || first.is_symbol_named("background-color", symbol_mode)
+        // GNU merge_face_ref (xfaces.c:2727-2728) uses EQ for these two symbols.
+        if face_id_eq(first, WellKnown::ForegroundColor.id(), symbol_mode)
+            || face_id_eq(first, WellKnown::BackgroundColor.id(), symbol_mode)
         {
             return;
         }
 
+        // GNU detects a plist by the name's first byte being ':' (xfaces.c:2749-2750),
+        // which is not an EQ test.
         if first
             .as_symbol_name(symbol_mode)
             .is_some_and(|name| name.starts_with(':'))
@@ -2341,7 +2620,7 @@ pub(crate) fn invalid_display_face_references(
             while plist.is_cons() && plist.cons_cdr().is_cons() {
                 let keyword = plist.cons_car();
                 let value = plist.cons_cdr().cons_car();
-                if keyword.is_symbol_named(":inherit", symbol_mode) {
+                if face_id_eq(keyword, lface_keyword_id(LFaceAttr::Inherit), symbol_mode) {
                     collect(eval, frame_id, value, invalid);
                 }
                 plist = plist.cons_cdr().cons_cdr();
@@ -2504,25 +2783,28 @@ fn set_realized_font_for_target(
             LFaceAttr::Font,
             font_value,
             font_value,
+            eval.symbol_mode(),
         )?;
     }
     Ok(())
 }
 
-fn normalize_face_attribute_name(attr: &Value) -> Result<LFaceAttr, Flow> {
-    let name = match attr.kind() {
-        ValueKind::Symbol(id) => resolve_sym(id),
-        ValueKind::Nil => "nil",
-        ValueKind::T => "t",
+fn normalize_face_attribute_name(
+    attr: &Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> Result<LFaceAttr, Flow> {
+    match attr.kind() {
+        ValueKind::Symbol(_) | ValueKind::Nil | ValueKind::T => {}
         _ => {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), *attr],
             ));
         }
-    };
+    }
 
-    if let Some(attr) = LFaceAttr::from_keyword(name) {
+    // GNU xfaces.c:4247-4286 dispatches the attribute keyword with EQ.
+    if let Some(attr) = lface_attr_eq(*attr, mode) {
         Ok(attr)
     } else if attr.is_nil() {
         Err(signal(
@@ -2537,20 +2819,21 @@ fn normalize_face_attribute_name(attr: &Value) -> Result<LFaceAttr, Flow> {
     }
 }
 
-fn normalize_set_face_attribute_name(attr: &Value) -> Result<SetFaceAttr, Flow> {
-    let name = match attr.kind() {
-        ValueKind::Symbol(id) => resolve_sym(id),
-        ValueKind::Nil => "nil",
-        ValueKind::T => "t",
+fn normalize_set_face_attribute_name(
+    attr: &Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> Result<SetFaceAttr, Flow> {
+    match attr.kind() {
+        ValueKind::Symbol(_) | ValueKind::Nil | ValueKind::T => {}
         _ => {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), *attr],
             ));
         }
-    };
+    }
 
-    if let Some(attr) = SetFaceAttr::from_keyword(name) {
+    if let Some(attr) = set_face_attr_eq(*attr, mode) {
         Ok(attr)
     } else if attr.is_nil() {
         Err(signal(
@@ -2581,7 +2864,7 @@ fn default_face_attribute_value(attr: LFaceAttr) -> Value {
         | LFaceAttr::Fontset => Value::NIL,
         LFaceAttr::Foreground => Value::string("unspecified-fg"),
         LFaceAttr::Background => Value::string("unspecified-bg"),
-        LFaceAttr::DistantForeground | LFaceAttr::Font => Value::symbol("unspecified"),
+        LFaceAttr::DistantForeground | LFaceAttr::Font => unspecified_face_symbol(),
     }
 }
 
@@ -2595,7 +2878,9 @@ fn check_face_inheritance_cycle(
     value: Value,
 ) -> Result<(), Flow> {
     let mut visited = HashSet::default();
-    if same_object(value, face) || face_inheritance_cycle(eval, domain, value, face, &mut visited) {
+    if same_object(value, face, eval.symbol_mode())
+        || face_inheritance_cycle(eval, domain, value, face, &mut visited)
+    {
         return Err(signal(
             "error",
             vec![
@@ -2645,11 +2930,13 @@ fn face_inheritance_cycle(
         ) else {
             return false;
         };
-        if same_object(parent, member) || same_object(parent, child) {
+        if same_object(parent, member, eval.symbol_mode())
+            || same_object(parent, child, eval.symbol_mode())
+        {
             return true;
         }
         if !parent.is_nil()
-            && !is_reset_like_face_attr_value(&parent)
+            && !is_reset_like_face_attr_value(&parent, eval.symbol_mode())
             && face_inheritance_cycle(eval, domain, parent, child, visited)
         {
             return true;
@@ -2658,16 +2945,11 @@ fn face_inheritance_cycle(
     false
 }
 
-/// Lisp `eq', as GNU's `EQ' in the cycle check. `==` on `Value` is `equal'.
-fn same_object(a: Value, b: Value) -> bool {
-    a.bits() == b.bits()
-}
-
-fn is_reset_like_face_attr_value(value: &Value) -> bool {
-    value.as_bare_symbol_id().is_some_and(|id| {
-        let s = resolve_sym(id);
-        s == "unspecified" || s == ":ignore-defface" || s == "reset"
-    })
+fn is_reset_like_face_attr_value(value: &Value, mode: neovm_value::tagged::SymbolMode) -> bool {
+    // GNU `UNSPECIFIEDP` / `IGNORE_DEFFACE_P` / `RESET_P` (`src/xfaces.c:296-304`)
+    // are `EQ` against the boot-time seeds. A same-named new symbol is an
+    // ordinary value and must not skip attribute validation.
+    classify_face_sentinel(*value, mode).is_some()
 }
 
 /// `internal-set-lisp-face-attribute`'s `:font` value check
@@ -2757,8 +3039,11 @@ fn apply_derived_font_face_overrides(
 }
 
 fn lisp_face_attribute_base_value(face: &str, attr: LFaceAttr, defaults_frame: bool) -> Value {
+    // Missing overrides are the same object the lface vector was filled with:
+    // the boot-time `unspecified` seed, not a fresh intern of the spelling.
+    // `get_face_override` then agrees with `AREF` of that slot.
     if defaults_frame {
-        return Value::symbol("unspecified");
+        return unspecified_face_symbol();
     }
     if face == "default" {
         return default_face_attribute_value(attr);
@@ -2786,7 +3071,7 @@ fn lisp_face_attribute_base_value(face: &str, attr: LFaceAttr, defaults_frame: b
         ("tool-bar", LFaceAttr::Box) => Value::symbol("t"),
         ("tab-bar", LFaceAttr::Inherit) => Value::symbol("variable-pitch"),
         ("tab-line", LFaceAttr::Inherit) => Value::symbol("variable-pitch"),
-        _ => Value::symbol("unspecified"),
+        _ => unspecified_face_symbol(),
     }
 }
 
@@ -2917,6 +3202,10 @@ fn merge_face_height_value(
     to: Value,
     invalid: Value,
 ) -> Value {
+    let mode = eval
+        .as_deref()
+        .map(|ctx| ctx.symbol_mode())
+        .unwrap_or(neovm_value::tagged::SymbolMode::Bare);
     match from.kind() {
         ValueKind::Fixnum(_) => from,
         ValueKind::Float => match to.kind() {
@@ -2924,7 +3213,7 @@ fn merge_face_height_value(
                 from.xfloat() * height as f64,
             )),
             ValueKind::Float => Value::make_float(from.xfloat() * to.xfloat()),
-            _ if is_reset_like_face_attr_value(&to) => from,
+            _ if is_reset_like_face_attr_value(&to, mode) => from,
             _ => invalid,
         },
         _ => {
@@ -2949,13 +3238,18 @@ fn normalize_face_attr_for_set_with_eval(
         SetFaceAttr::LFace(attr) => attr.keyword(),
         SetFaceAttr::Alias(alias) => alias.keyword(),
     };
+    let mode = eval
+        .as_deref()
+        .map(|ctx| ctx.symbol_mode())
+        .unwrap_or(neovm_value::tagged::SymbolMode::Bare);
     let mut normalized = match attr_name {
         ":foreground" | ":background" | ":distant-foreground" if value.is_nil() => {
-            Value::symbol("unspecified")
+            // GNU `HANDLE_INVALID_NIL_VALUE` assigns `Qunspecified` (`src/xfaces.c:3214`).
+            unspecified_face_symbol()
         }
         _ => value,
     };
-    let is_reset_like = is_reset_like_face_attr_value(&normalized);
+    let is_reset_like = is_reset_like_face_attr_value(&normalized, mode);
 
     match attr_name {
         ":family" | ":foundry" => {
@@ -3095,7 +3389,7 @@ fn normalize_face_attr_for_set_with_eval(
             }
         }
         ":underline" => {
-            if !is_reset_like && !valid_face_underline_value(normalized) {
+            if !is_reset_like && !valid_face_underline_value(normalized, mode) {
                 return Err(signal(
                     "error",
                     vec![Value::string("Invalid face underline"), normalized],
@@ -3110,7 +3404,7 @@ fn normalize_face_attr_for_set_with_eval(
             if normalized == Value::T {
                 normalized = Value::fixnum(1);
             }
-            if !is_reset_like && !valid_face_box_value(normalized) {
+            if !is_reset_like && !valid_face_box_value(normalized, mode) {
                 return Err(signal(
                     "error",
                     vec![Value::string("Invalid face box"), normalized],
@@ -3167,12 +3461,9 @@ pub fn builtin_internal_lisp_face_p(
     expect_min_args("internal-lisp-face-p", &args, 1)?;
     expect_max_args("internal-lisp-face-p", &args, 2)?;
 
-    // Fast path mirroring GNU's `Finternal_lisp_face_p`: resolve the
-    // `face-alias` chain, then perform an allocation-free, symbol-keyed lookup
-    // in the frame face table (2-arg live frame) or the global
-    // `face--new-frame-defaults` table (null frame). GNU never allocates, seeds,
-    // or creates here; neither does this path. The known-face/ensure gate is
-    // retained only as a cold fallback for a table miss.
+    // GNU `Finternal_lisp_face_p` (xfaces.c:3120-3141): resolve aliases, then
+    // `Fgethash` the symbol object. A miss is nil. Strings are interned by
+    // `resolve_face_name`; a symbol is not. No name fallback and no insert.
     let resolved = resolve_face_designator(eval, args[0], FaceAliasCyclePolicy::Signal)?;
     let key = resolved.name().map(ResolvedFaceName::symbol);
 
@@ -3187,30 +3478,15 @@ pub fn builtin_internal_lisp_face_p(
         }
         let frame_id = frame_id_from_designator(frame)
             .expect("live frame designator should decode to frame id");
-        if let Some(vector) =
-            key.and_then(|k| lookup_frame_lisp_face_vector_by_symbol(eval, frame_id, k))
-        {
-            return Ok(vector);
-        }
-        return Ok(match known_resolved_face_name(resolved) {
-            Some(face_name) => lookup_frame_lisp_face_vector(eval, frame_id, face_name.name())
-                .unwrap_or(Value::NIL),
-            None => Value::NIL,
-        });
+        return Ok(key
+            .and_then(|k| lookup_frame_lisp_face_vector_by_symbol(eval, frame_id, k))
+            .unwrap_or(Value::NIL));
     }
 
     // Null-frame (or omitted-frame) global path.
-    if let Some(vector) =
-        key.and_then(|k| crate::emacs_core::xfaces::lookup_face_new_frame_defaults_vector(eval, k))
-    {
-        return Ok(vector);
-    }
-    Ok(match known_resolved_face_name(resolved) {
-        Some(face_name) => {
-            ensure_global_lisp_face_vector(eval, face_name.name()).unwrap_or(Value::NIL)
-        }
-        None => Value::NIL,
-    })
+    Ok(key
+        .and_then(|k| crate::emacs_core::xfaces::lookup_face_new_frame_defaults_vector(eval, k))
+        .unwrap_or(Value::NIL))
 }
 
 /// Eval-backed version of `internal-make-lisp-face` that also ensures the face
@@ -3339,7 +3615,12 @@ pub fn builtin_internal_copy_lisp_face(
     // vector. The public getter, not the copy, presents that slot as
     // `unspecified` (`src/xfaces.c:4288-4289`).
     copy_lisp_face_vector_slots(src_vector, dst_vector);
-    sync_face_overrides_from_lisp_face_vector(&to_name, dst_vector, defaults_frame);
+    sync_face_overrides_from_lisp_face_vector(
+        &to_name,
+        dst_vector,
+        defaults_frame,
+        eval.symbol_mode(),
+    );
 
     let result = args[1];
 
@@ -3397,7 +3678,7 @@ pub fn builtin_internal_set_lisp_face_attribute(
     let face_id = face_symbol
         .as_symbol_id(symbol_mode)
         .expect("a required symbol face resolves to a symbol");
-    let attr_name = normalize_set_face_attribute_name(&args[1])?;
+    let attr_name = normalize_set_face_attribute_name(&args[1], symbol_mode)?;
     let value = args[2];
     if let Some(frame) = args.get(3)
         && !frame.is_nil()
@@ -3467,10 +3748,11 @@ pub fn builtin_internal_set_lisp_face_attribute(
             // doesn't override the explicitly unspecified value
             // (xfaces.c:3262, Finternal_set_lisp_face_attribute).
             if defaults_frame
-                && is_reset_like_face_attr_value(&canonical_value)
-                && canonical_value.is_symbol_named("unspecified", symbol_mode)
+                && face_value_is_sentinel(canonical_value, FaceSentinel::Unspecified, symbol_mode)
             {
-                canonical_value = Value::symbol(":ignore-defface");
+                // xfaces.c:3262: only the boot-time `Qunspecified` becomes
+                // `QCignore_defface` in the new-frame defaults.
+                canonical_value = ignore_defface_symbol();
             }
 
             let mut live_frame_ids = if defaults_frame {
@@ -3508,7 +3790,8 @@ pub fn builtin_internal_set_lisp_face_attribute(
             // terminal live frames returned above before touching their
             // face vector.  This is also why `(set-face-font FACE nil)
             // signals on a terminal in GNU despite the window-system guard.
-            if canonical_attr == LFaceAttr::Font && !is_reset_like_face_attr_value(&canonical_value)
+            if canonical_attr == LFaceAttr::Font
+                && !is_reset_like_face_attr_value(&canonical_value, symbol_mode)
             {
                 validate_font_face_attr_value(&canonical_value)?;
             }
@@ -3522,6 +3805,7 @@ pub fn builtin_internal_set_lisp_face_attribute(
                         canonical_attr,
                         canonical_value,
                         canonical_value,
+                        symbol_mode,
                     )?;
                 }
             } else {
@@ -3547,6 +3831,7 @@ pub fn builtin_internal_set_lisp_face_attribute(
                             canonical_attr,
                             canonical_value,
                             canonical_value,
+                            symbol_mode,
                         )?;
                         if changed && !changed_live_frames.contains(&frame_id) {
                             changed_live_frames.push(frame_id);
@@ -3562,7 +3847,8 @@ pub fn builtin_internal_set_lisp_face_attribute(
                     }
                 }
             }
-            if canonical_attr == LFaceAttr::Font && !is_reset_like_face_attr_value(&canonical_value)
+            if canonical_attr == LFaceAttr::Font
+                && !is_reset_like_face_attr_value(&canonical_value, symbol_mode)
             {
                 apply_derived_font_face_overrides(&face_name, &canonical_value, defaults_frame)?;
             }
@@ -3588,7 +3874,7 @@ pub fn builtin_internal_set_lisp_face_attribute(
     if args.len() >= 3 {
         let value = args[2];
 
-        if let Ok(attr_name) = normalize_set_face_attribute_name(&args[1]) {
+        if let Ok(attr_name) = normalize_set_face_attribute_name(&args[1], symbol_mode) {
             let (canonical_attr, canonical_value) =
                 normalize_face_attr_for_set_with_eval(Some(eval), &face_name, attr_name, value)?;
             let mut public_effective_value = canonical_value;
@@ -3656,8 +3942,7 @@ pub fn builtin_internal_set_lisp_face_attribute(
             }
 
             if let Some(parameter) = frame_parameter_for_face_attribute(&face_name, canonical_attr)
-                && !canonical_value.is_symbol_named("unspecified", symbol_mode)
-                && !canonical_value.is_symbol_named(":ignore-defface", symbol_mode)
+                && !face_value_is_relative_sentinel(canonical_value, symbol_mode)
             {
                 for frame_id in changed_live_frames.iter().copied() {
                     publish_face_attribute_to_frame_parameter(
@@ -3693,16 +3978,34 @@ fn lisp_value_to_face_attr_resolved(
         Underline, UnderlinePosition, UnderlineStyle,
     };
 
-    // "unspecified" symbol = reset the attribute
-    if value.is_bare_symbol_named("unspecified") {
+    // GNU `UNSPECIFIEDP` is EQ against Qunspecified. A same-named symbol
+    // is not that object, and it is not a color name.
+    // This helper has no Context. `symbols-with-pos-enabled` is a dynamic
+    // binding, so the compare stays bare. The setter stores the boot-time
+    // sentinel; a style symbol inside a stored underline/box plist is also
+    // compared bare here for the same reason.
+    if face_value_is_sentinel(
+        value,
+        FaceSentinel::Unspecified,
+        neovm_value::tagged::SymbolMode::Bare,
+    ) {
         return Some(FaceAttrValue::Unspecified);
     }
 
     match attr {
         LFaceAttr::Foreground | LFaceAttr::Background | LFaceAttr::DistantForeground => {
+            // CHECK_STRING runs after the three sentinel EQ tests
+            // (src/xfaces.c:3561-3608). map_tty_color maps only STRINGP
+            // (src/xfaces.c:6620-6648); tty_lookup_color returns false when
+            // !STRINGP (src/xfaces.c:1088). Ignore and Reset stay the default
+            // pixel. Any other symbol, including a fresh symbol named
+            // "unspecified", is not a color.
+            if classify_face_sentinel(value, neovm_value::tagged::SymbolMode::Bare).is_some() {
+                return None;
+            }
             let s = match value.kind() {
                 ValueKind::Cons => value.cons_car().as_utf8_str(),
-                _ => value.as_utf8_str().or_else(|| value.as_bare_symbol_name()),
+                _ => value.as_utf8_str(),
             };
             let s = s?;
             // Parse the lface string to a spec exactly once; realization —
@@ -3766,32 +4069,27 @@ fn lisp_value_to_face_attr_resolved(
                 let mut specification = None;
                 let mut i = 0;
                 while i + 1 < plist.len() {
-                    let key = plist[i].as_bare_symbol_name().unwrap_or("");
+                    let key = plist[i];
                     let val = &plist[i + 1];
-                    match key {
-                        ":style" => {
-                            style = val
-                                .as_bare_symbol_name()
-                                .and_then(UnderlineStyle::from_symbol)
-                                .unwrap_or(UnderlineStyle::Line);
+                    // GNU realize_tty_face (xfaces.c:6770-6792) uses EQ for
+                    // :style, :color, and the style / foreground-color symbols.
+                    if face_id_eq_bare(key, style_kw_id()) {
+                        style = eq_underline_style(*val, neovm_value::tagged::SymbolMode::Bare)
+                            .unwrap_or(UnderlineStyle::Line);
+                    } else if face_id_eq_bare(key, color_kw_id()) {
+                        if face_id_eq_bare(*val, WellKnown::ForegroundColor.id()) {
+                            // GNU xfaces.c:6771-6773 leaves the terminal
+                            // underline slot at zero; this is not a color
+                            // name and must never call tty-color-desc.
+                            color = None;
+                            specification = None;
+                        } else if let Some(s) = val.as_utf8_str() {
+                            let spec = SpecifiedColor::parse(s);
+                            color = resolver.realize(&spec);
+                            specification = Some(spec);
                         }
-                        ":color" => {
-                            if val.is_bare_symbol_named("foreground-color") {
-                                // GNU xfaces.c:6771-6773 leaves the terminal
-                                // underline slot at zero; this is not a color
-                                // name and must never call tty-color-desc.
-                                color = None;
-                                specification = None;
-                            } else if let Some(s) = val.as_utf8_str() {
-                                let spec = SpecifiedColor::parse(s);
-                                color = resolver.realize(&spec);
-                                specification = Some(spec);
-                            }
-                        }
-                        ":position" => {
-                            position = UnderlinePosition::from_lisp(val);
-                        }
-                        _ => {}
+                    } else if face_id_eq_bare(key, position_kw_id()) {
+                        position = UnderlinePosition::from_lisp(val);
                     }
                     i += 2;
                 }
@@ -3858,30 +4156,29 @@ fn lisp_value_to_face_attr_resolved(
                 };
                 let mut i = 0;
                 while i + 1 < plist.len() {
-                    let key = plist[i].as_bare_symbol_name().unwrap_or("");
+                    let key = plist[i];
                     let val = &plist[i + 1];
-                    match key {
-                        ":line-width" => {
-                            if let Some(n) = val.as_fixnum() {
-                                border.width = n as i32;
-                            }
+                    // Keys are EQ (xfaces.c:3496-3516). GNU box :color is
+                    // STRINGP only (xfaces.c:6453-6461). A symbol is not a color.
+                    if face_id_eq_bare(key, line_width_kw_id()) {
+                        if let Some(n) = val.as_fixnum() {
+                            border.width = n as i32;
                         }
-                        ":color" => {
-                            if let Some(s) = val.as_utf8_str().or_else(|| val.as_bare_symbol_name())
-                            {
-                                border.color =
-                                    FaceColorResolver::Standard.realize(&SpecifiedColor::parse(s));
-                            }
+                    } else if face_id_eq_bare(key, color_kw_id()) {
+                        if classify_face_sentinel(*val, neovm_value::tagged::SymbolMode::Bare)
+                            .is_none()
+                            && let Some(s) = val.as_utf8_str()
+                        {
+                            border.color =
+                                FaceColorResolver::Standard.realize(&SpecifiedColor::parse(s));
                         }
-                        ":style" => {
-                            if !val.is_nil()
-                                && let Some(style) =
-                                    val.as_bare_symbol_name().and_then(BoxStyle::from_symbol)
-                            {
-                                border.style = style;
-                            }
+                    } else if face_id_eq_bare(key, style_kw_id()) {
+                        if !val.is_nil()
+                            && let Some(style) =
+                                eq_box_style(*val, neovm_value::tagged::SymbolMode::Bare)
+                        {
+                            border.style = style;
                         }
-                        _ => {}
                     }
                     i += 2;
                 }
@@ -3922,6 +4219,7 @@ pub fn builtin_internal_get_lisp_face_attribute(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_min_args("internal-get-lisp-face-attribute", &args, 2)?;
     expect_max_args("internal-get-lisp-face-attribute", &args, 3)?;
     let defaults_frame = if let Some(frame) = args.get(2) {
@@ -3941,17 +4239,28 @@ pub fn builtin_internal_get_lisp_face_attribute(
         false
     };
 
-    let face_name = resolve_face_name_for_domain(eval, &args[0], defaults_frame)?;
-    let attr_name = normalize_face_attribute_name(&args[1])?;
+    let face = resolve_face_name_for_domain(eval, &args[0], defaults_frame)?;
+    // Keep the queried object. `Value::symbol(name)` would be the current
+    // intern, and a miss would insert that other key into the eq table.
+    let face_sym = face.symbol();
+    let face_is_canonical = neovm_value::intern::is_canonical_id(face.0);
+    let face_name = face.name().to_owned();
+    let attr_name = normalize_face_attribute_name(&args[1], symbol_mode)?;
 
     if defaults_frame {
-        if let Some(vector) = ensure_global_lisp_face_vector(eval, &face_name)
+        let vector = if face_is_canonical {
+            ensure_global_lisp_face_vector(eval, &face_name)
+        } else {
+            lookup_face_new_frame_defaults_vector(eval, face_sym)
+        };
+        if let Some(vector) = vector
             && let Some(value) = lisp_face_vector_attr(vector, attr_name)
         {
-            return Ok(present_stored_lisp_face_attribute(value));
+            return Ok(present_stored_lisp_face_attribute(value, symbol_mode));
         }
         return Ok(present_stored_lisp_face_attribute(
             lisp_face_attribute_value(&face_name, attr_name, true),
+            symbol_mode,
         ));
     }
 
@@ -3989,7 +4298,11 @@ pub fn builtin_internal_get_lisp_face_attribute(
             } else {
                 FrameFaceInitial::Empty
             };
-            ensure_frame_lisp_face_vector(eval, frame_id, &face_name, initial)
+            if face_is_canonical {
+                ensure_frame_lisp_face_vector(eval, frame_id, &face_name, initial)
+            } else {
+                lookup_frame_lisp_face_vector_by_symbol(eval, frame_id, face_sym)
+            }
         })
         .and_then(|vector| lisp_face_vector_attr(vector, attr_name))
         .unwrap_or_else(|| lisp_face_attribute_value(&face_name, attr_name, false));
@@ -4003,7 +4316,7 @@ pub fn builtin_internal_get_lisp_face_attribute(
     // value above (frame lisp vector slot, falling back to the base/override
     // value) is the GNU-faithful answer. A stored `:ignore-defface` is
     // presented as `unspecified` (`src/xfaces.c:4288-4289`).
-    Ok(present_stored_lisp_face_attribute(lisp_value))
+    Ok(present_stored_lisp_face_attribute(lisp_value, symbol_mode))
 }
 
 /// `(internal-lisp-face-attribute-values ATTR)` -- return valid discrete values
@@ -4067,7 +4380,12 @@ pub(crate) fn lisp_faces_equal_in_frame(
     let Some((name_b, vector_b)) = resolved_lface_in_frame(eval, frame_id, face_b) else {
         return false;
     };
-    lface_vectors_equal(vector_a, vector_b, inherit.then_some((name_a, name_b)))
+    lface_vectors_equal(
+        vector_a,
+        vector_b,
+        inherit.then_some((name_a, name_b)),
+        eval.symbol_mode(),
+    )
 }
 
 /// Resolve FACE_NAME through `face-alias` and return its lface vector.
@@ -4096,7 +4414,12 @@ fn resolved_lface_in_frame(
     Some((name, vector))
 }
 
-fn lface_vectors_equal(a: Value, b: Value, inherit_names: Option<(Value, Value)>) -> bool {
+fn lface_vectors_equal(
+    a: Value,
+    b: Value,
+    inherit_names: Option<(Value, Value)>,
+    mode: neovm_value::tagged::SymbolMode,
+) -> bool {
     let unspecified = unspecified_face_symbol();
     let slot =
         |vector: Value, attr: LFaceAttr| lisp_face_vector_attr(vector, attr).unwrap_or(unspecified);
@@ -4123,7 +4446,8 @@ fn lface_vectors_equal(a: Value, b: Value, inherit_names: Option<(Value, Value)>
         slot(child, LFaceAttr::Inherit) == parent_name
             && other_attrs.iter().all(|attr| {
                 let value = slot(child, *attr);
-                value.is_bare_symbol_named("unspecified") || value == slot(parent, *attr)
+                face_value_is_sentinel(value, FaceSentinel::Unspecified, mode)
+                    || value == slot(parent, *attr)
             })
     };
     inherits(a, name_b, b) || inherits(b, name_a, a)
@@ -4143,7 +4467,7 @@ pub fn builtin_internal_lisp_face_empty_p(
     let face = resolve_known_face_name_for_compare(eval, &args[0], defaults_frame)?;
     for attr in LFACE_ATTRS {
         let v = lisp_face_attribute_value(&face, attr, defaults_frame);
-        if !v.is_symbol_named("unspecified", symbol_mode) {
+        if !face_value_is_sentinel(v, FaceSentinel::Unspecified, symbol_mode) {
             return Ok(Value::NIL);
         }
     }
@@ -4168,7 +4492,7 @@ pub fn builtin_internal_merge_in_global_face(
         mark_created_lisp_face(&face_name);
         mark_selected_created_lisp_face(&face_name);
     }
-    merge_defaults_overrides_into_selected(&face_name);
+    merge_defaults_overrides_into_selected(&face_name, symbol_mode);
     let frame_id = frame_id_from_designator(&args[1])
         .expect("validated frame designator should decode to frame id");
     let local_existed = lookup_frame_lisp_face_vector(eval, frame_id, &face_name).is_some();
@@ -4180,13 +4504,19 @@ pub fn builtin_internal_merge_in_global_face(
             let Some(global_value) = lisp_face_vector_attr(global_vector, attr) else {
                 continue;
             };
-            if global_value.is_symbol_named(":ignore-defface", symbol_mode) {
-                set_lisp_face_vector_attr(local_vector, attr, Value::symbol("unspecified"));
-            } else if !global_value.is_symbol_named("unspecified", symbol_mode) {
-                set_lisp_face_vector_attr(local_vector, attr, global_value);
+            // GNU xfaces.c:4339-4343. `IGNORE_DEFFACE_P` / `UNSPECIFIEDP` are
+            // `EQ` against the boot-time seeds, not names.
+            match classify_face_sentinel(global_value, symbol_mode) {
+                Some(FaceSentinel::IgnoreDefface) => {
+                    set_lisp_face_vector_attr(local_vector, attr, unspecified_face_symbol());
+                }
+                Some(FaceSentinel::Unspecified) => {}
+                Some(FaceSentinel::Reset) | None => {
+                    set_lisp_face_vector_attr(local_vector, attr, global_value);
+                }
             }
         }
-        sync_face_overrides_from_lisp_face_vector(&face_name, local_vector, false);
+        sync_face_overrides_from_lisp_face_vector(&face_name, local_vector, false, symbol_mode);
         if face_name == "default" {
             match eval.frame_face_class(frame_id) {
                 Some(FrameFaceClass::Termcap) => {
@@ -4228,27 +4558,24 @@ pub fn builtin_internal_merge_in_global_face(
 /// value is a relative form for ATTRIBUTE.
 #[doc(hidden)]
 pub fn builtin_face_attribute_relative_p(args: Vec<Value>) -> EvalResult {
-    expect_args("face-attribute-relative-p", &args, 2)?;
-    let value_is_relative_reset = args[1]
-        .as_bare_symbol_id()
-        .or_else(|| args[1].as_bare_keyword_id())
-        .is_some_and(|id_| {
-            matches!(
-                resolve_sym(id_),
-                "unspecified" | ":ignore-defface" | "ignore-defface"
-            )
-        });
-    if value_is_relative_reset {
+    // Direct unit calls have no Context. The Lisp subr passes
+    // `Context::symbol_mode` (`symbols-with-pos-enabled`).
+    face_attribute_relative_p(&args, neovm_value::tagged::SymbolMode::Bare)
+}
+
+pub fn face_attribute_relative_p(
+    args: &[Value],
+    mode: neovm_value::tagged::SymbolMode,
+) -> EvalResult {
+    expect_args("face-attribute-relative-p", args, 2)?;
+    // GNU xfaces.c:4206 is `EQ (value, Qunspecified) || EQ (value, QCignore_defface)`.
+    // A symbol named `ignore-defface` without the colon is not that object.
+    if face_value_is_relative_sentinel(args[1], mode) {
         return Ok(Value::T);
     }
 
-    let height_attr = match args[0].kind() {
-        ValueKind::Symbol(id) => {
-            let n = resolve_sym(id);
-            n == "height" || n == ":height"
-        }
-        _ => false,
-    };
+    // GNU xfaces.c:4208 is `EQ (attribute, QCheight)` only.
+    let height_attr = face_id_eq(args[0], lface_keyword_id(LFaceAttr::Height), mode);
     if !height_attr {
         return Ok(Value::NIL);
     }
@@ -4279,23 +4606,16 @@ fn merge_face_attribute_impl(
     eval: Option<&mut neovm_eval::emacs_core::eval::Context>,
     args: &[Value],
 ) -> Value {
-    let value1_is_relative_reset = args[1]
-        .as_bare_symbol_id()
-        .or_else(|| args[1].as_bare_keyword_id())
-        .is_some_and(|id_| {
-            matches!(
-                resolve_sym(id_),
-                "unspecified" | ":ignore-defface" | "ignore-defface"
-            )
-        });
-    if value1_is_relative_reset {
+    let mode = eval
+        .as_deref()
+        .map(|ctx| ctx.symbol_mode())
+        .unwrap_or(neovm_value::tagged::SymbolMode::Bare);
+    // GNU xfaces.c:4221. Same two EQ tests as `face-attribute-relative-p`.
+    if face_value_is_relative_sentinel(args[1], mode) {
         return args[2];
     }
 
-    let height_attr = args[0]
-        .as_bare_symbol_id()
-        .or_else(|| args[0].as_bare_keyword_id())
-        .is_some_and(|id_| matches!(resolve_sym(id_), "height" | ":height"));
+    let height_attr = face_id_eq(args[0], lface_keyword_id(LFaceAttr::Height), mode);
     if height_attr {
         return merge_face_height_value(eval, args[1], args[2], args[1]);
     }
@@ -4850,15 +5170,23 @@ pub fn builtin_face_font(
 
     let defaults_frame = args.get(1).is_some_and(|v| v.is_t());
     if defaults_frame {
-        let face_name = resolve_face_name_for_domain(eval, &args[0], true)?;
+        let face_name = resolve_face_name_for_domain(eval, &args[0], true)?
+            .name()
+            .to_owned();
         let mut styles = Vec::new();
         let weight = lisp_face_attribute_value(&face_name, LFaceAttr::Weight, true);
-        if matches!(weight.as_symbol_name(symbol_mode), Some(name) if name != "normal" && name != "unspecified")
+        // GNU xfaces.c:4440-4445: `!UNSPECIFIEDP` and `!EQ(..., Qnormal)`.
+        // An uninterned symbol named `normal` is not `Qnormal`.
+        if weight.as_symbol_name(symbol_mode).is_some()
+            && !face_value_is_sentinel(weight, FaceSentinel::Unspecified, symbol_mode)
+            && !face_id_eq(weight, normal_id(), symbol_mode)
         {
             styles.push(Value::symbol("bold"));
         }
         let slant = lisp_face_attribute_value(&face_name, LFaceAttr::Slant, true);
-        if matches!(slant.as_symbol_name(symbol_mode), Some(name) if name != "normal" && name != "unspecified")
+        if slant.as_symbol_name(symbol_mode).is_some()
+            && !face_value_is_sentinel(slant, FaceSentinel::Unspecified, symbol_mode)
+            && !face_id_eq(slant, normal_id(), symbol_mode)
         {
             styles.push(Value::symbol("italic"));
         }
@@ -4913,7 +5241,9 @@ pub fn builtin_face_font(
         };
     }
 
-    let face_name = resolve_face_name_for_domain(eval, &args[0], false)?;
+    let face_name = resolve_face_name_for_domain(eval, &args[0], false)?
+        .name()
+        .to_owned();
     let remapping = face_remapping_for_current_buffer(eval);
     let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, false);
     let face = if remapping.is_empty() {

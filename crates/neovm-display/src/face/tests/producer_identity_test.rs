@@ -98,26 +98,28 @@ fn canonical_face_producer_uses_identity_without_intern_roundtrip() {
     assert_eq!(intern_calls(), 0);
 }
 
+/// GNU `lface_from_face_name_no_resolve` is `Fgethash` on an eq table
+/// (`src/xfaces.c:2060-2075`). The uninterned object is not the interned face.
 #[test]
-fn uninterned_face_producer_keeps_legacy_canonical_name_fallback() {
+fn uninterned_face_symbol_misses_the_canonical_eq_entry() {
     let name = "cont9-face-producer-uninterned";
     let mut table = FaceTable::new();
-    table.define(name, foreground(name, Color::rgb(5, 6, 7)));
+    let defined = foreground(name, Color::rgb(5, 6, 7));
+    table.define(name, defined.clone());
     let canonical = Value::symbol(name);
     let value = Value::from_sym_id(intern_uninterned(name));
     assert_ne!(value.bits(), canonical.bits());
     let producer = ProducerSymbolName::from_value(value).unwrap();
     reset_intern_calls();
-    assert_eq!(Value::symbol(&producer).bits(), canonical.bits());
-    assert_eq!(intern_calls(), 1);
-    assert_eq!(
-        table.resolve_reference(value),
-        legacy_reference(&table, value, 0)
-    );
+    assert_eq!(Value::symbol(&producer).bits(), value.bits());
+    assert_eq!(intern_calls(), 0);
+    let resolved = table.resolve_reference(value);
+    assert_ne!(resolved, defined);
+    assert_eq!(resolved.foreground, None);
 }
 
 #[test]
-fn unintern_reintern_invalidates_previously_certified_face_producer() {
+fn unintern_reintern_keeps_the_original_face_symbol_key() {
     let name = "cont9-face-producer-reintern";
     let old_id = intern(name);
     let old_value = Value::from_sym_id(old_id);
@@ -129,13 +131,15 @@ fn unintern_reintern_invalidates_previously_certified_face_producer() {
     let new_value = Value::symbol(name);
     assert_ne!(new_value.bits(), old_value.bits());
     table.define(name, foreground(name, Color::rgb(40, 50, 60)));
-    assert_eq!(Value::symbol(&producer).bits(), new_value.bits());
-    assert_eq!(
-        table.resolve_reference(old_value),
-        legacy_reference(&table, old_value, 0)
-    );
+    reset_intern_calls();
+    assert_eq!(Value::symbol(&producer).bits(), old_value.bits());
+    assert_eq!(intern_calls(), 0);
     assert_eq!(
         table.resolve_reference(old_value).foreground,
+        Some(Color::rgb(10, 20, 30))
+    );
+    assert_eq!(
+        table.resolve_reference(new_value).foreground,
         Some(Color::rgb(40, 50, 60))
     );
     reset_intern_calls();
@@ -147,7 +151,7 @@ fn unintern_reintern_invalidates_previously_certified_face_producer() {
 }
 
 #[test]
-fn utf8_looking_unibyte_and_declared_count_names_keep_legacy_fallback() {
+fn utf8_looking_unibyte_and_declared_count_names_keep_their_symbol_object() {
     for atom in [
         LispString::from_unibyte("cont9-face-é-raw".as_bytes().to_vec()),
         LispString::from_emacs_bytes_with_declared_chars(
@@ -159,23 +163,21 @@ fn utf8_looking_unibyte_and_declared_count_names_keep_legacy_fallback() {
         assert!(is_canonical_id(id));
         let value = Value::from_sym_id(id);
         let producer = ProducerSymbolName::from_value(value).unwrap();
-        let expected = face_symbol_value(producer.spelling());
-        assert_ne!(expected.bits(), value.bits());
+        let spelling_key = face_symbol_value(producer.spelling());
+        assert_ne!(spelling_key.bits(), value.bits());
         let mut table = FaceTable::new();
         table.define(
             producer.spelling(),
             foreground(producer.spelling(), Color::rgb(11, 22, 33)),
         );
+        let identity = foreground("raw-identity", Color::rgb(88, 99, 100));
         table.update_faces(|faces| {
-            faces.insert(value, foreground("raw-identity", Color::rgb(88, 99, 100)));
+            faces.insert(value, identity.clone());
         });
         reset_intern_calls();
-        assert_eq!(Value::symbol(&producer).bits(), expected.bits());
-        assert_eq!(intern_calls(), 1);
-        assert_eq!(
-            table.resolve_reference(value),
-            legacy_reference(&table, value, 0)
-        );
+        assert_eq!(Value::symbol(&producer).bits(), value.bits());
+        assert_eq!(intern_calls(), 0);
+        assert_eq!(table.resolve_reference(value), identity);
     }
 }
 
@@ -277,7 +279,7 @@ fn face_producer_resolution_preserves_lists_plists_depth_and_source_identity() {
 }
 
 #[test]
-fn producer_constructor_preserves_symbol_accounting_tags_and_fallback() {
+fn producer_constructor_preserves_symbol_accounting_and_object_identity() {
     use neovm_value::tagged::gc::MemoryUseCountSlot;
     let _context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for value in [
@@ -285,10 +287,6 @@ fn producer_constructor_preserves_symbol_accounting_tags_and_fallback() {
         Value::symbol(":cont9-account-keyword"),
         Value::NIL,
         Value::T,
-        Value::from_sym_id(intern_uninterned("cont9-account-fallback")),
-        Value::from_sym_id(intern_uninterned(":cont9-account-keyword-fallback")),
-        Value::from_sym_id(intern_uninterned("nil")),
-        Value::from_sym_id(intern_uninterned("t")),
     ] {
         let producer = ProducerSymbolName::from_value(value).unwrap();
         let before = Value::memory_use_counts_snapshot();
@@ -307,6 +305,25 @@ fn producer_constructor_preserves_symbol_accounting_tags_and_fallback() {
             legacy_symbols,
         );
     }
+    for value in [
+        Value::from_sym_id(intern_uninterned("cont9-account-object")),
+        Value::from_sym_id(intern_uninterned(":cont9-account-keyword-object")),
+        Value::from_sym_id(intern_uninterned("nil")),
+        Value::from_sym_id(intern_uninterned("t")),
+    ] {
+        let producer = ProducerSymbolName::from_value(value).unwrap();
+        reset_intern_calls();
+        let before = Value::memory_use_counts_snapshot();
+        let actual = Value::symbol(&producer);
+        let after = Value::memory_use_counts_snapshot();
+        assert_eq!(actual.bits(), value.bits());
+        assert_eq!(intern_calls(), 0);
+        assert_eq!(
+            after[MemoryUseCountSlot::Symbols.index()]
+                .wrapping_sub(before[MemoryUseCountSlot::Symbols.index()]),
+            0,
+        );
+    }
 }
 
 #[test]
@@ -317,10 +334,9 @@ fn public_face_producer_resolver_matches_existing_name_entry() {
         let value = Value::symbol(name);
         assert_eq!(table.resolve_producer(value), Some(table.resolve(name)));
         let uninterned = Value::from_sym_id(intern_uninterned(name));
-        assert_eq!(
-            table.resolve_producer(uninterned),
-            Some(table.resolve(name))
-        );
+        let resolved = table.resolve_producer(uninterned).unwrap();
+        assert_ne!(resolved, table.resolve(name));
+        assert_eq!(resolved.foreground, None);
     }
     assert!(table.resolve_producer(Value::fixnum(2)).is_none());
 }
@@ -384,16 +400,12 @@ fn producer_constructor_observes_completed_cross_thread_unintern_reintern() {
     let before = Value::memory_use_counts_snapshot();
     let actual = Value::symbol(&producer);
     let after = Value::memory_use_counts_snapshot();
-    assert_eq!(actual.bits(), Value::from_sym_id(fresh_id).bits());
-    assert_ne!(actual.bits(), old_value.bits());
-    assert_eq!(
-        intern_calls(),
-        1,
-        "old producer must take the live spelling fallback"
-    );
+    assert_eq!(actual.bits(), old_value.bits());
+    assert_ne!(actual.bits(), Value::from_sym_id(fresh_id).bits());
+    assert_eq!(intern_calls(), 0);
     assert_eq!(
         after[MemoryUseCountSlot::Symbols.index()]
             .wrapping_sub(before[MemoryUseCountSlot::Symbols.index()]),
-        1,
+        0,
     );
 }

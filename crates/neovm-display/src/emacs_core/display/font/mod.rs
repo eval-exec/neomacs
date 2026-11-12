@@ -1031,7 +1031,9 @@ pub(crate) fn update_face_from_frame_parameter(
         let value = if new_value.is_string() {
             new_value
         } else {
-            Value::symbol("unspecified")
+            // GNU `update_face_from_frame_parameter` stores `Qunspecified`
+            // (`src/xfaces.c:3893`), the boot-time object, not a fresh intern.
+            super::xfaces::unspecified_face_symbol()
         };
         set_lisp_face_vector_attr(vector, attr, value);
         realize_default_lisp_face_for_frame(eval, frame_id);

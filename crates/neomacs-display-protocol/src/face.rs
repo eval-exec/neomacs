@@ -8,7 +8,7 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::os::raw::c_int;
 use std::sync::{Arc, OnceLock};
-use strum::{EnumString, IntoStaticStr};
+use strum::{EnumString, IntoStaticStr, VariantArray};
 
 /// Shared, immutable string payload of a realized face.
 ///
@@ -476,6 +476,7 @@ impl BoxBorderStyle {
     IntoPrimitive,
     IntoStaticStr,
     TryFromPrimitive,
+    VariantArray,
 )]
 #[strum(serialize_all = "kebab-case")]
 pub enum BasicFaceId {
@@ -500,6 +501,9 @@ pub enum BasicFaceId {
     TabBar = 18,
     TabLine = 19,
 }
+
+const _: () =
+    assert!(<BasicFaceId as VariantArray>::VARIANTS.len() == BasicFaceId::SENTINEL as usize);
 
 impl BasicFaceId {
     /// One past the last basic face.  Dynamic face IDs start here.

@@ -4114,8 +4114,8 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     crate::emacs_core::display_subrs::register_internal_lisp_face_equal_p(ctx);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "face-attribute-relative-p",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::xfaces::builtin_face_attribute_relative_p(args)
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::xfaces::face_attribute_relative_p(&args, ctx.symbol_mode())
         }),
         SubrArity::new(2, Some(2)),
     )));

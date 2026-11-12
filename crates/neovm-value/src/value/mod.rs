@@ -2696,7 +2696,6 @@ pub trait IntoSymbol {
 pub struct ProducerSymbolName {
     symbol: SymId,
     spelling: &'static str,
-    characters: usize,
 }
 
 static_assertions::assert_impl_all!(ProducerSymbolName: Send, Sync);
@@ -2709,7 +2708,6 @@ impl ProducerSymbolName {
         Some(Self {
             symbol,
             spelling: atom.as_utf8_str()?,
-            characters: atom.schars(),
         })
     }
 
@@ -2721,12 +2719,16 @@ impl ProducerSymbolName {
 
 impl IntoSymbol for &ProducerSymbolName {
     fn into_symbol(self) -> Value {
+        // Face tables are eq-keyed by the symbol object (GNU
+        // `lface_from_face_name_no_resolve`, src/xfaces.c:2060-2075). A
+        // same-spelling object is not that key, so this never interns.
+        if !crate::intern::is_canonical_id(self.symbol) {
+            return TaggedValue::from_sym_id(self.symbol);
+        }
         match self.spelling {
             "nil" => Value::NIL,
             "t" => Value::T,
-            name if self.characters == name.chars().count()
-                && crate::intern::is_canonical_id(self.symbol) =>
-            {
+            name => {
                 // Match the &str constructor's observable accounting and
                 // keyword tag even when the producer avoids another intern.
                 add_wrapping(MemoryUseCountSlot::Symbols, 1);
@@ -2736,9 +2738,6 @@ impl IntoSymbol for &ProducerSymbolName {
                     TaggedValue::from_sym_id(self.symbol)
                 }
             }
-            // Uninterned/replaced IDs and ambiguous name representations
-            // retain the original live canonical-name lookup and accounting.
-            name => name.into_symbol(),
         }
     }
 }

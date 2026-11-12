@@ -148,6 +148,82 @@ fn lisp_value_to_face_attr_realizes_at_the_boundary() {
     }
 }
 
+/// GNU color slots hold a string or one of the three static sentinels.
+/// `map_tty_color` maps only `STRINGP` (`src/xfaces.c:6620-6648`). A symbol
+/// is not a color, including a fresh symbol whose name is `unspecified`
+/// or `red`. The static `Qunspecified` stays `FaceAttrValue::Unspecified`.
+#[test]
+fn uninterned_symbol_named_unspecified_is_not_a_color() {
+    crate::test_utils::init_test_tracing();
+    use crate::face::{Color, FaceAttrValue};
+
+    let seed = Value::from_sym_id(WellKnown::Unspecified.id());
+    let fresh = Value::from_sym_id(neovm_value::intern::intern_uninterned("unspecified"));
+    let red_symbol = Value::from_sym_id(neovm_value::intern::intern_uninterned("red"));
+    assert_ne!(fresh.bits(), seed.bits());
+    assert_eq!(fresh.as_bare_symbol_name(), Some("unspecified"));
+    assert_eq!(red_symbol.as_bare_symbol_name(), Some("red"));
+
+    let resolver = FaceColorResolver::Standard;
+    for attr in [
+        LFaceAttr::Foreground,
+        LFaceAttr::Background,
+        LFaceAttr::DistantForeground,
+    ] {
+        assert!(
+            matches!(
+                lisp_value_to_face_attr_resolved(attr, seed, resolver),
+                Some(FaceAttrValue::Unspecified)
+            ),
+            "{attr:?} static unspecified"
+        );
+        match lisp_value_to_face_attr_resolved(attr, Value::string("red"), resolver) {
+            Some(FaceAttrValue::SpecifiedColor { realized, .. }) => {
+                assert_eq!(realized, Some(Color::rgb(255, 0, 0)));
+            }
+            other => panic!("{attr:?} string red must stay a color, got {other:?}"),
+        }
+        let got = lisp_value_to_face_attr_resolved(attr, fresh, resolver);
+        assert!(
+            got.is_none(),
+            "{attr:?} fresh symbol named unspecified is not a color, got {got:?}"
+        );
+        let named = lisp_value_to_face_attr_resolved(attr, red_symbol, resolver);
+        assert!(
+            named.is_none(),
+            "{attr:?} symbol named red is not a color, got {named:?}"
+        );
+        for sentinel in [
+            Value::from_sym_id(WellKnown::KeywordIgnoreDefface.id()),
+            Value::from_sym_id(WellKnown::Reset.id()),
+        ] {
+            let got = lisp_value_to_face_attr_resolved(attr, sentinel, resolver);
+            assert!(
+                got.is_none(),
+                "{attr:?} ignore/reset is not a color name, got {got:?}"
+            );
+        }
+    }
+
+    // GNU box :color is STRINGP only (src/xfaces.c:6453-6461).
+    let box_symbol = Value::list(vec![Value::keyword(":color"), red_symbol]);
+    match lisp_value_to_face_attr_resolved(LFaceAttr::Box, box_symbol, resolver) {
+        Some(FaceAttrValue::Box(border)) => assert!(
+            border.color.is_none(),
+            "symbol :color painted {:?}",
+            border.color
+        ),
+        other => panic!("expected box, got {other:?}"),
+    }
+    let box_string = Value::list(vec![Value::keyword(":color"), Value::string("red")]);
+    match lisp_value_to_face_attr_resolved(LFaceAttr::Box, box_string, resolver) {
+        Some(FaceAttrValue::Box(border)) => {
+            assert_eq!(border.color, Some(Color::rgb(255, 0, 0)));
+        }
+        other => panic!("string box color must stay, got {other:?}"),
+    }
+}
+
 #[test]
 fn underline_position_t_preserves_gnu_descent_line_semantics() {
     crate::test_utils::init_test_tracing();

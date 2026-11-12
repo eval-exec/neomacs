@@ -1459,7 +1459,6 @@ pub fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
                 style,
             })
         }
-        _ if value.is_bare_symbol_named("unspecified") => FaceDecoration::Unspecified,
         _ => FaceDecoration::Unspecified,
     }
 }

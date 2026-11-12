@@ -762,7 +762,11 @@ fn face_boolean_x_resource_value(
     } else if value.eq_ignore_ascii_case("off") || value.eq_ignore_ascii_case("false") {
         Ok(Some(Value::NIL))
     } else if value.eq_ignore_ascii_case("unspecified") {
-        Ok(Some(Value::symbol("unspecified")))
+        // GNU `face_boolean_x_resource_value` assigns `Qunspecified`
+        // (`src/xfaces.c:4024-4025`), not `intern` of the resource text.
+        Ok(Some(Value::from_sym_id(
+            neovm_value::intern::WellKnown::Unspecified.id(),
+        )))
     } else if signal_on_invalid {
         Err(signal(
             "error",
@@ -803,7 +807,8 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute_from_resource(
     let attr_name = resolve_sym(attr_id);
 
     let converted_value = if resource_value.eq_ignore_ascii_case("unspecified") {
-        Value::symbol("unspecified")
+        // GNU assigns `Qunspecified` (`src/xfaces.c:4043-4044`).
+        Value::from_sym_id(neovm_value::intern::WellKnown::Unspecified.id())
     } else {
         match attr_name {
             ":height" => {

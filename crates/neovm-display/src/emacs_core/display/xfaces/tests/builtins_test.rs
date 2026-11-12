@@ -1803,6 +1803,374 @@ fn internal_merge_in_global_face_copies_defaults_into_selected_face() {
     assert_eq!(got.as_utf8_str(), Some("white"));
 }
 
+fn uninterned_symbol(name: &str) -> Value {
+    let id = neovm_value::intern::make_uninterned_symbol_with_name_value(Value::string(name));
+    Value::from_sym_id(id)
+}
+
+#[test]
+fn internal_merge_in_global_face_keeps_uninterned_ignore_defface() {
+    crate::test_utils::init_test_tracing();
+    let face_name = "__neovm_merge_uninterned_ignore";
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    let frame = Value::make_frame(frame_id.0);
+    builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    let uninterned = uninterned_symbol(":ignore-defface");
+    assert_ne!(uninterned.bits(), Value::symbol(":ignore-defface").bits());
+    assert_eq!(uninterned.as_bare_symbol_name(), Some(":ignore-defface"));
+    // The setter rejects this value for :foreground (CHECK_STRING). Merge
+    // still has to EQ the object already stored in the global vector.
+    let global = builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    set_lisp_face_vector_attr(global, LFaceAttr::Foreground, uninterned);
+    builtin_internal_merge_in_global_face(&mut eval, vec![Value::symbol(face_name), frame])
+        .unwrap();
+    let local = lookup_frame_lisp_face_vector(&eval, frame_id, face_name).expect("local vector");
+    assert_eq!(
+        lisp_face_vector_attr(local, LFaceAttr::Foreground),
+        Some(uninterned),
+        "GNU EQ does not treat an uninterned :ignore-defface as QCignore_defface"
+    );
+}
+
+#[test]
+fn internal_merge_in_global_face_copies_uninterned_unspecified() {
+    crate::test_utils::init_test_tracing();
+    let face_name = "__neovm_merge_uninterned_unspecified";
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    let frame = Value::make_frame(frame_id.0);
+    builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    let uninterned = uninterned_symbol("unspecified");
+    assert_ne!(uninterned.bits(), Value::symbol("unspecified").bits());
+    let global = builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    set_lisp_face_vector_attr(global, LFaceAttr::Foreground, uninterned);
+    builtin_internal_merge_in_global_face(&mut eval, vec![Value::symbol(face_name), frame])
+        .unwrap();
+    let local = lookup_frame_lisp_face_vector(&eval, frame_id, face_name).expect("local vector");
+    assert_eq!(
+        lisp_face_vector_attr(local, LFaceAttr::Foreground),
+        Some(uninterned),
+        "GNU EQ copies an uninterned symbol named unspecified"
+    );
+}
+
+#[test]
+fn internal_set_lisp_face_attribute_keeps_uninterned_unspecified_in_defaults() {
+    crate::test_utils::init_test_tracing();
+    let face_name = "__neovm_set_uninterned_unspecified";
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    let uninterned = uninterned_symbol("unspecified");
+    // xfaces.c:3262 rewrites only EQ(value, Qunspecified). An uninterned
+    // symbol is then an ordinary :foreground and hits CHECK_STRING (3564-3571).
+    let set = builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol(face_name),
+            Value::keyword(":foreground"),
+            uninterned,
+            Value::T,
+        ],
+    )
+    .kinded();
+    let Err(FlowKind::Signal(signal)) = set else {
+        panic!("an uninterned symbol named unspecified is not Qunspecified");
+    };
+    assert_eq!(signal.symbol_name(), "wrong-type-argument");
+    assert_eq!(
+        signal
+            .data
+            .first()
+            .and_then(|value| value.as_bare_symbol_name()),
+        Some("stringp")
+    );
+    let global = builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    assert_eq!(
+        lisp_face_vector_attr(global, LFaceAttr::Foreground)
+            .and_then(|value| value.as_bare_symbol_name()),
+        Some("unspecified"),
+        "the failed set must not store :ignore-defface"
+    );
+    assert_ne!(
+        lisp_face_vector_attr(global, LFaceAttr::Foreground),
+        Some(Value::symbol(":ignore-defface"))
+    );
+}
+
+#[test]
+fn internal_set_lisp_face_attribute_rejects_uninterned_ignore_defface_family() {
+    crate::test_utils::init_test_tracing();
+    let face_name = "__neovm_set_uninterned_ignore_family";
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    let interned = builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol(face_name),
+            Value::keyword(":family"),
+            Value::symbol(":ignore-defface"),
+            Value::T,
+        ],
+    );
+    assert!(
+        interned.is_ok(),
+        "interned :ignore-defface stays a sentinel"
+    );
+
+    let uninterned = builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol(face_name),
+            Value::keyword(":family"),
+            uninterned_symbol(":ignore-defface"),
+            Value::T,
+        ],
+    )
+    .kinded();
+    let Err(FlowKind::Signal(signal)) = uninterned else {
+        panic!("an uninterned :ignore-defface is not IGNORE_DEFFACE_P");
+    };
+    assert_eq!(signal.symbol_name(), "wrong-type-argument");
+}
+
+#[test]
+fn internal_get_lisp_face_attribute_returns_uninterned_ignore_defface() {
+    crate::test_utils::init_test_tracing();
+    let face_name = "__neovm_get_uninterned_ignore";
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    let uninterned = uninterned_symbol(":ignore-defface");
+    let global = builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    set_lisp_face_vector_attr(global, LFaceAttr::Foreground, uninterned);
+    let got = builtin_internal_get_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol(face_name),
+            Value::keyword(":foreground"),
+            Value::T,
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        got, uninterned,
+        "GNU xfaces.c:4288 returns an uninterned :ignore-defface unchanged"
+    );
+    assert_ne!(got, Value::symbol("unspecified"));
+
+    set_lisp_face_vector_attr(
+        global,
+        LFaceAttr::Foreground,
+        Value::symbol(":ignore-defface"),
+    );
+    let presented = builtin_internal_get_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol(face_name),
+            Value::keyword(":foreground"),
+            Value::T,
+        ],
+    )
+    .unwrap();
+    assert_eq!(presented, Value::symbol("unspecified"));
+}
+
+#[test]
+fn face_attribute_relative_p_uninterned_sentinels_are_not_relative() {
+    crate::test_utils::init_test_tracing();
+    let interned = builtin_face_attribute_relative_p(vec![
+        Value::keyword("weight"),
+        Value::symbol(":ignore-defface"),
+    ])
+    .unwrap();
+    assert!(interned.is_truthy());
+
+    let uninterned_unspecified = builtin_face_attribute_relative_p(vec![
+        Value::keyword("weight"),
+        uninterned_symbol("unspecified"),
+    ])
+    .unwrap();
+    assert!(
+        uninterned_unspecified.is_nil(),
+        "an uninterned unspecified is not Qunspecified"
+    );
+    let uninterned_ignore = builtin_face_attribute_relative_p(vec![
+        Value::keyword("weight"),
+        uninterned_symbol(":ignore-defface"),
+    ])
+    .unwrap();
+    assert!(uninterned_ignore.is_nil());
+    // GNU EQ is only QCignore_defface and QCheight (xfaces.c:4206-4208).
+    let bare_ignore = builtin_face_attribute_relative_p(vec![
+        Value::keyword("weight"),
+        Value::symbol("ignore-defface"),
+    ])
+    .unwrap();
+    assert!(bare_ignore.is_nil());
+    let bare_height =
+        builtin_face_attribute_relative_p(vec![Value::symbol("height"), Value::make_float(1.5)])
+            .unwrap();
+    assert!(bare_height.is_nil());
+}
+
+#[test]
+fn merge_face_attribute_keeps_uninterned_unspecified() {
+    crate::test_utils::init_test_tracing();
+    let uninterned = uninterned_symbol("unspecified");
+    let merged = builtin_merge_face_attribute(vec![
+        Value::keyword("foreground"),
+        uninterned,
+        Value::string("blue"),
+    ])
+    .unwrap();
+    assert_eq!(
+        merged, uninterned,
+        "GNU xfaces.c:4221 does not treat an uninterned unspecified as Qunspecified"
+    );
+}
+
+#[test]
+fn internal_lisp_face_empty_p_rejects_uninterned_unspecified() {
+    crate::test_utils::init_test_tracing();
+    let face_name = "__neovm_empty_uninterned_unspecified";
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    // FRAME t rewrites Qunspecified to :ignore-defface, which is already
+    // enough to make empty-p nil. Use the selected-frame domain, where
+    // unspecified stays Qunspecified, and drop any absolute defaults first.
+    clear_face_overrides(face_name, false);
+    clear_face_overrides(face_name, true);
+    let uninterned = uninterned_symbol("unspecified");
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol(face_name),
+            Value::keyword(":weight"),
+            uninterned,
+        ],
+    )
+    .expect("uninterned unspecified is a weight name, not Qunspecified");
+    let empty =
+        builtin_internal_lisp_face_empty_p(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    assert!(
+        empty.is_nil(),
+        "GNU xfaces.c:4568 UNSPECIFIEDP does not match an uninterned symbol"
+    );
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol(face_name),
+            Value::keyword(":weight"),
+            Value::symbol("unspecified"),
+        ],
+    )
+    .expect("interned unspecified clears the weight");
+    let cleared =
+        builtin_internal_lisp_face_empty_p(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    assert!(
+        cleared.is_truthy(),
+        "the face is empty once weight is Qunspecified"
+    );
+}
+
+#[test]
+fn face_font_treats_uninterned_normal_as_bold() {
+    crate::test_utils::init_test_tracing();
+    let face_name = "__neovm_face_font_uninterned_normal";
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol(face_name),
+            Value::keyword(":weight"),
+            uninterned_symbol("normal"),
+            Value::T,
+        ],
+    )
+    .expect("uninterned normal is a valid weight name");
+    let font = builtin_face_font(&mut eval, &[Value::symbol(face_name), Value::T]).unwrap();
+    assert_eq!(
+        font,
+        Value::list(vec![Value::symbol("bold")]),
+        "GNU xfaces.c:4440 EQ(Qnormal) does not match an uninterned symbol"
+    );
+}
+
+#[test]
+fn underline_rejects_uninterned_foreground_color() {
+    crate::test_utils::init_test_tracing();
+    let interned = Value::list(vec![
+        Value::keyword("color"),
+        Value::symbol("foreground-color"),
+    ]);
+    assert!(valid_face_underline_value(
+        interned,
+        neovm_value::tagged::SymbolMode::Bare
+    ));
+    let uninterned = Value::list(vec![
+        Value::keyword("color"),
+        uninterned_symbol("foreground-color"),
+    ]);
+    assert!(
+        !valid_face_underline_value(uninterned, neovm_value::tagged::SymbolMode::Bare),
+        "GNU xfaces.c:3403-3405 EQ(Qforeground_color) rejects a same-named uninterned symbol"
+    );
+}
+
+#[test]
+fn face_attribute_relative_p_honors_symbols_with_pos() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    // The display unit runtime stubs the Lisp subr. This calls the function
+    // that subr passes `Context::symbol_mode` into. GNU EQ (lisp.h) strips a
+    // symbol-with-pos only while `symbols-with-pos-enabled` is on.
+    // SAFETY: this test owns the Context's World on this thread and only
+    // allocates through the heap view.
+    let positioned = unsafe { eval.tagged_heap_mut() }
+        .alloc_symbol_with_pos(Value::symbol("unspecified"), Value::fixnum(3));
+    let attr = Value::keyword("weight");
+    let off = face_attribute_relative_p(&[attr, positioned], neovm_value::tagged::SymbolMode::Bare)
+        .unwrap();
+    assert!(off.is_nil(), "bare EQ does not strip a symbol-with-pos");
+    let on = face_attribute_relative_p(
+        &[attr, positioned],
+        neovm_value::tagged::SymbolMode::Positioned,
+    )
+    .unwrap();
+    assert!(
+        on.is_t(),
+        "GNU xfaces.c:4206 EQ(Qunspecified) honors symbols-with-pos-enabled"
+    );
+}
+
+#[test]
+fn set_lisp_face_attribute_rejects_uninterned_attribute_keyword() {
+    crate::test_utils::init_test_tracing();
+    let face_name = "__neovm_uninterned_attr_keyword";
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
+    let set = builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol(face_name),
+            uninterned_symbol(":weight"),
+            Value::symbol("bold"),
+            Value::T,
+        ],
+    )
+    .kinded();
+    let Err(FlowKind::Signal(signal)) = set else {
+        panic!("an uninterned :weight is not QCweight");
+    };
+    let text = signal
+        .data
+        .first()
+        .and_then(|value| value.as_utf8_str())
+        .unwrap_or("");
+    assert!(text.contains("Invalid face attribute name"), "got {text}");
+}
+
 #[test]
 fn internal_lisp_face_helpers_accept_frame_handles() {
     crate::test_utils::init_test_tracing();

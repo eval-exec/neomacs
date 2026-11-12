@@ -101,7 +101,7 @@ use neomacs_display_protocol::cursor::{CursorBarWidth, CursorKind, CursorSpec};
 use neomacs_display_protocol::face::{BasicFaceId, BoxLineWidth};
 use neomacs_display_protocol::types::{FaceId, Rect};
 use neomacs_display_protocol::{EffectsConfig, PresentedResizeEdge};
-use strum::{EnumString, IntoStaticStr};
+use strum::{EnumString, IntoStaticStr, VariantArray};
 
 // Lazy native key identities only. Every query checks the registry epoch;
 // concurrent mutators share no property values, overlay order or Lisp roots.
@@ -4845,6 +4845,74 @@ pub(crate) const fn basic_face_symbol(
     }
 }
 
+/// Basic-face id of this symbol object, compared by `SymId`.
+///
+/// GNU's face hash and `assq_no_quit` are EQ (`Fgethash`,
+/// src/xfaces.c:2060-2075; `get_lface_attributes`, src/xfaces.c:2141).
+/// The printed spelling is not the key: an uninterned `mode-line-active`
+/// does not share `WellKnown::ModeLineActive`'s id.
+fn basic_face_id_for_symbol_object(value: Value) -> Option<BasicFaceId> {
+    let symbol = value.as_bare_symbol_id()?;
+    BasicFaceId::VARIANTS
+        .iter()
+        .copied()
+        .find(|&face| basic_face_symbol(face).id() == symbol)
+}
+
+/// Cache role for a basic-face id. `tab-line` has a fixed id and no
+/// `BasicFace` role of that spelling (`tab-line-active` / `tab-line-inactive`
+/// are the roles).
+fn realized_basic_role(face_id: BasicFaceId) -> Option<BasicFace> {
+    use BasicFace::*;
+    Some(match face_id {
+        BasicFaceId::Default => Default,
+        BasicFaceId::ModeLineActive => ModeLineActive,
+        BasicFaceId::ModeLineInactive => ModeLineInactive,
+        BasicFaceId::ToolBar => ToolBar,
+        BasicFaceId::Fringe => Fringe,
+        BasicFaceId::HeaderLineActive => HeaderLineActive,
+        BasicFaceId::HeaderLineInactive => HeaderLineInactive,
+        BasicFaceId::ScrollBar => ScrollBar,
+        BasicFaceId::Border => Border,
+        BasicFaceId::Cursor => Cursor,
+        BasicFaceId::Mouse => Mouse,
+        BasicFaceId::Menu => Menu,
+        BasicFaceId::VerticalBorder => VerticalBorder,
+        BasicFaceId::WindowDivider => WindowDivider,
+        BasicFaceId::WindowDividerFirstPixel => WindowDividerFirstPixel,
+        BasicFaceId::WindowDividerLastPixel => WindowDividerLastPixel,
+        BasicFaceId::InternalBorder => InternalBorder,
+        BasicFaceId::ChildFrameBorder => ChildFrameBorder,
+        BasicFaceId::TabBar => TabBar,
+        BasicFaceId::TabLine => return None,
+    })
+}
+
+/// Realized-cache role for the boot-time symbol object only.
+///
+/// `margin`, `tab-line-active`, and `tab-line-inactive` have no
+/// `BasicFaceId`. The role is the static DEFSYM: `Qmargin`
+/// (src/xdisp.c:38309, loaded at src/xfaces.c:5214, realized at 5982) and
+/// `Qtab_line_inactive` / `Qtab_line_active` (src/xfaces.c:7541-7542,
+/// loaded at 5198-5199, realized at 5980-5981). `lookup_interned` follows
+/// the current obarray, so unintern + intern would give the role to the
+/// new symbol and take it from the original.
+fn basic_face_role_for_symbol_object(value: Value) -> Option<BasicFace> {
+    if let Some(face_id) = basic_face_id_for_symbol_object(value) {
+        return realized_basic_role(face_id);
+    }
+    let symbol = value.as_bare_symbol_id()?;
+    if symbol == WellKnown::TabLineActive.id() {
+        Some(BasicFace::TabLineActive)
+    } else if symbol == WellKnown::TabLineInactive.id() {
+        Some(BasicFace::TabLineInactive)
+    } else if symbol == WellKnown::Margin.id() {
+        Some(BasicFace::Margin)
+    } else {
+        None
+    }
+}
+
 impl FaceResolver {
     fn resolve_face_height(&self, height: &FaceHeight, inherited_size: f32) -> f32 {
         let candidate = match height {
@@ -5395,10 +5463,14 @@ impl FaceResolver {
     }
 
     /// Resolve an actual bare symbol without discarding producer identity.
-    /// The existing basic-face hit precedes any symbol constructor accounting.
+    ///
+    /// The basic-face cache and the fixed face id are keyed by the symbol
+    /// object (`basic_face_id_for_symbol_object`), not by `from_name` on the
+    /// spelling. An uninterned object misses both and resolves through the
+    /// eq face table.
     pub(crate) fn resolve_named_face_producer(&self, value: Value) -> Option<ResolvedFace> {
         let name = value.as_bare_symbol_name()?;
-        if let Some(role) = BasicFace::from_name(name)
+        if let Some(role) = basic_face_role_for_symbol_object(value)
             && let Some(faces) = &self.realized_basic_faces
             && let Some(face) = &faces[role]
         {
@@ -5407,7 +5479,7 @@ impl FaceResolver {
         let face = self.face_table.resolve_producer(value)?;
         let mut resolved = self.realize_face(&face);
         resolved.lisp_name = Some(std::sync::Arc::from(name));
-        resolved.face_id = BasicFaceId::from_name(name)
+        resolved.face_id = basic_face_id_for_symbol_object(value)
             .map(u32::from)
             .unwrap_or(BasicFaceId::SENTINEL);
         Some(resolved)
@@ -6098,6 +6170,26 @@ impl FaceResolver {
         }
     }
 
+    /// `assq_no_quit` on `face-remapping-alist` (src/xfaces.c:2141): EQ on the
+    /// symbol object. A same-spelling uninterned symbol misses.
+    fn buffer_face_remapping_specs_eq(
+        remapping: BufferFaceRemapping,
+        face: &Value,
+    ) -> Option<Value> {
+        let mut cursor = remapping.alist()?;
+        loop {
+            if !cursor.is_cons() {
+                return None;
+            }
+            let entry_car = cursor.cons_car();
+            let entry_cdr = cursor.cons_cdr();
+            if entry_car.is_cons() && eq_value(&entry_car.cons_car(), face) {
+                return Some(entry_car.cons_cdr());
+            }
+            cursor = entry_cdr;
+        }
+    }
+
     fn buffer_basic_face_lookup(
         &self,
         remapping: BufferFaceRemapping,
@@ -6117,7 +6209,11 @@ impl FaceResolver {
             .get(face_name)
             .and_then(|face| face.inherit)
             .is_some_and(|inherit| {
-                !inherit.is_nil() && !inherit.is_bare_symbol_named("unspecified")
+                // GNU `UNSPECIFIEDP` is `EQ` to `Qunspecified`, not the spelling.
+                // This path has no `symbols-with-pos-enabled` binding, so the
+                // compare stays bare. `eq_value` is that bare `EQ`.
+                !inherit.is_nil()
+                    && !eq_value(&inherit, &Value::from_sym_id(WellKnown::Unspecified.id()))
             });
 
         // This is GNU `lookup_basic_face`'s fast path: an unrelated, non-nil
@@ -6445,23 +6541,59 @@ impl FaceResolver {
         resolved
     }
 
-    /// Keep a caller-owned named symbol through frame resolution while
-    /// retaining the existing window-remapping interpreter and basic fastpath.
+    /// Keep a caller-owned named symbol through frame resolution.
+    ///
+    /// The basic-face fast path and the remap `assq` both key on the symbol
+    /// object. A canonical interned symbol still uses the name-keyed
+    /// interpreter, because interning that spelling returns the same object.
+    /// An uninterned object is never re-interned and never passed through
+    /// `BasicFaceId::from_name`.
     pub(crate) fn resolve_remapped_named_face_producer(
         &self,
         remapping: BufferFaceRemapping,
         value: Value,
     ) -> Option<ResolvedFace> {
         let name = value.as_bare_symbol_name()?;
-        if let Some(face_id) = BasicFaceId::from_name(name) {
+        if let Some(face_id) = basic_face_id_for_symbol_object(value) {
             return Some(self.resolve_remapped_basic_face(remapping, face_id));
         }
         if remapping.alist().is_none_or(Value::is_nil) {
             return self.resolve_named_face_producer(value);
         }
-        // Nonempty remappings keep their name-keyed memo, diagnostics,
-        // cycle handling and canonical-name constructor exactly as before.
-        Some(self.resolve_remapped_named_face(remapping, name))
+        if value
+            .as_bare_symbol_id()
+            .is_some_and(neovm_core::emacs_core::intern::is_canonical_id)
+        {
+            return Some(self.resolve_remapped_named_face(remapping, name));
+        }
+        if let Some(specs) = Self::buffer_face_remapping_specs_eq(remapping, &value) {
+            return Some(self.realize_exact_symbol_remap(remapping, value, specs));
+        }
+        self.resolve_named_face_producer(value)
+    }
+
+    /// Display merge for an `assq` hit on the exact symbol object.
+    ///
+    /// GNU starts the attribute vector at `unspecified` and merges the alist
+    /// cdr (`get_lface_attributes`, src/xfaces.c:2152-2157). The face's own
+    /// definition is not also merged.
+    fn realize_exact_symbol_remap(
+        &self,
+        remapping: BufferFaceRemapping,
+        value: Value,
+        specs: Value,
+    ) -> ResolvedFace {
+        let base = (*self.default_face).clone();
+        let mut resolved = self
+            .resolve_remapped_face_value_over(remapping, &base, &specs)
+            .unwrap_or(base);
+        resolved.face_id = BasicFaceId::SENTINEL;
+        resolved.canonical_tty_role = None;
+        resolved.tty_space_identity = TtySpaceIdentity::Unknown;
+        if let Some(name) = value.as_bare_symbol_name() {
+            resolved.lisp_name = Some(std::sync::Arc::from(name));
+        }
+        resolved
     }
 
     /// GNU display_mode_line initializes its iterator with the selected

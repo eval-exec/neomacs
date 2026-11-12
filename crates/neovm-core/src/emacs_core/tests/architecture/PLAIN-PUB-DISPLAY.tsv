@@ -277,6 +277,7 @@ crates/neovm-display/src/emacs_core/display/xdisp/text_measurement.rs	field	Text
 crates/neovm-display/src/emacs_core/display/xdisp/text_measurement.rs	field	TextMeasurement field trim
 crates/neovm-display/src/emacs_core/display/xdisp/text_measurement.rs	field	TextMeasurement field window
 crates/neovm-display/src/emacs_core/display/xdisp/text_measurement.rs	field	TextMeasurement field y_limit
+crates/neovm-display/src/emacs_core/display/xfaces/mod.rs	fn	fn face_attribute_relative_p
 crates/neovm-display/src/emacs_core/display/xfaces/mod.rs	fn	fn register_bootstrap_vars
 crates/neovm-display/src/emacs_core/display/xfaces/mod.rs	mod	mod realization
 crates/neovm-display/src/emacs_core/mod.rs	mod	mod chrome_dirty
