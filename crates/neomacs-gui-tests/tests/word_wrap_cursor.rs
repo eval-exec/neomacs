@@ -7,7 +7,9 @@
 
 use neomacs_gui_tests::{
     DisplayHarness, GuiBackend, GuiRunOptions, GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
+    run_input_tool,
 };
+
 use serde_json::Value;
 use std::{
     fs,
@@ -17,17 +19,32 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[derive(Clone, Copy)]
+enum Mode {
+    Fundamental,
+    Org,
+}
+
+impl Mode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Fundamental => "fundamental",
+            Self::Org => "org",
+        }
+    }
+}
+
 #[test]
 fn native_word_wrap_cursor_survives_property_invalidation() {
-    native("fundamental");
+    native(Mode::Fundamental);
 }
 
 #[test]
 fn native_org_word_wrap_cursor_survives_property_invalidation() {
-    native("org");
+    native(Mode::Org);
 }
 
-fn native(mode: &str) {
+fn native(mode: Mode) {
     let root = neomacs_infra::workspace_root();
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
@@ -37,15 +54,15 @@ fn native(mode: &str) {
 
 #[test]
 fn gnu_word_wrap_cursor_survives_property_invalidation() {
-    gnu("fundamental");
+    gnu(Mode::Fundamental);
 }
 
 #[test]
 fn gnu_org_word_wrap_cursor_survives_property_invalidation() {
-    gnu("org");
+    gnu(Mode::Org);
 }
 
-fn gnu(mode: &str) {
+fn gnu(mode: Mode) {
     let oracle = neomacs_test_oracle::gnu::gnu_oracle();
     assert!(
         oracle.is_attested(),
@@ -55,8 +72,9 @@ fn gnu(mode: &str) {
     run(oracle.executable(), "gnu", mode);
 }
 
-fn run(binary: &Path, engine: &str, mode: &str) {
+fn run(binary: &Path, engine: &str, mode: Mode) {
     let root = neomacs_infra::workspace_root();
+    let mode = mode.as_str();
     let artifacts = root.join(format!(
         "target/neomacs-gui-tests/word-wrap-{engine}-{mode}-{}-{}",
         std::process::id(),
@@ -168,6 +186,7 @@ fn exercise(
         )?;
         thread::sleep(Duration::from_millis(150));
     }
+    state = sample()?;
     let edges = &state["inside_edges"];
     if edges[2].as_i64().unwrap() - edges[0].as_i64().unwrap()
         != 10 * state["char_width"].as_i64().unwrap()
@@ -175,12 +194,22 @@ fn exercise(
         return Err(format!("text width did not settle at ten columns: {state}"));
     }
     let mut trace = Vec::new();
-    for expected in 1..=5 {
+    for expected in 1i64..=5 {
         // XTEST to the focused window; --window would send ignored XSendEvent.
         xdotool(env, &["key", "--clearmodifiers", "Right"])?;
         state = wait(artifacts, &finished, || {
             let next = sample().ok()?;
-            (next["moves"] == expected && !next["cursor"].is_null()).then_some(next)
+            // Pinned GNU: points 2..5 cover the remaining a's and space on
+            // row zero; point 6 covers the first b on the continuation row.
+            // Wait for that key's rendered geometry, not just its command.
+            let (column, row) = if expected == 5 { (0, 1) } else { (expected, 0) };
+            (next["moves"] == expected
+                && next["point"] == expected + 1
+                && next["cursor"][1].as_i64()
+                    == next["char_width"].as_i64().map(|width| column * width)
+                && next["cursor"][2].as_i64()
+                    == next["char_height"].as_i64().map(|height| row * height))
+            .then_some(next)
         })?;
         trace.push(state.clone());
     }
@@ -249,11 +278,9 @@ fn wait<T>(
 }
 
 fn xdotool(env: &[(String, String)], args: &[&str]) -> Result<String, String> {
-    let output = Command::new("xdotool")
-        .args(args)
-        .envs(env.iter().map(|(k, v)| (k, v)))
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut command = Command::new("xdotool");
+    command.args(args).envs(env.iter().map(|(k, v)| (k, v)));
+    let output = run_input_tool(command, Duration::from_secs(5));
     if !output.status.success() {
         return Err(format!(
             "xdotool {args:?}: {}",

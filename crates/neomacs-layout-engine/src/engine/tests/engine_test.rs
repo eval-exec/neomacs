@@ -34492,19 +34492,33 @@ fn word_wrap_moved_word_cursor_matches_full_and_replay() {
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     let mut replayed_cursors = Vec::new();
-    let mut replay_count = 0;
+    let mut moved_word_replays = Vec::new();
     for point in (3..=10).chain((3..10).rev()) {
         eval.buffer_manager_mut()
             .get_mut(buffer_id)
             .unwrap()
             .goto_emacs_byte_pos(EmacsBytePos::new(point));
         engine.layout_frame_rust(&mut eval, frame_id);
-        replay_count += engine.last_layout_stats().cursor_only_windows;
+        if (5..=10).contains(&point) {
+            let count = engine.last_layout_stats().cursor_only_windows;
+            moved_word_replays.push((point, count));
+            assert_eq!(
+                count,
+                1,
+                "point {point} in the moved word must exercise cursor-only reuse: {:?}",
+                engine.last_layout_stats()
+            );
+        }
         let trace = selected_window_layout_trace(&eval, &engine, frame_id);
         let cursor = trace.phys_cursor.as_ref().expect("replayed cursor");
         replayed_cursors.push((point, cursor.row, cursor.col));
     }
-    assert!(replay_count > 0, "exercise cursor-only reuse");
+    assert_eq!(
+        moved_word_replays.len(),
+        11,
+        "cover forward and reverse word movement"
+    );
+    eprintln!("moved-word cursor-only replay counts: {moved_word_replays:?}");
     let expected: Vec<_> = (3..=10)
         .chain((3..10).rev())
         .map(|point| {
@@ -34552,6 +34566,52 @@ fn word_wrap_zero_width_cursor_respects_the_source_break() {
             (cursor.row, cursor.col),
             expected,
             "text={text:?}, point={point}"
+        );
+    }
+}
+
+/// GNU's empty-vector origin stays at its original row end when a before
+/// string and the following buffer glyph are rolled onto the continuation.
+#[test]
+fn word_wrap_zero_width_cursor_with_moved_before_string_matches_gnu() {
+    for (point, expected) in [(5, (0, 5)), (6, (1, 2))] {
+        let trace =
+            layout_trace_with_buffer_setup("aaaa Xbbbbbb\n", 88, 240, |buffer, buffer_id, _| {
+                let table = Value::make_char_table(Value::symbol("display-table"), Value::NIL, 6);
+                neovm_core::emacs_core::chartable::ct_set_single(
+                    &table,
+                    'X' as i64,
+                    Value::vector(vec![]),
+                );
+                buffer.set_buffer_local("buffer-display-table", table);
+                buffer.set_buffer_local("truncate-lines", Value::NIL);
+                buffer.set_buffer_local("word-wrap", Value::T);
+                let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
+                    serial: neovm_core::heap_types::OverlaySerialSource::Mint,
+                    plist: Value::NIL,
+                    buffer: Some(buffer_id),
+                    start: 6,
+                    end: 7,
+                    front_advance: false,
+                    rear_advance: false,
+                });
+                buffer.overlays_mut().insert_overlay(overlay);
+                buffer
+                    .overlays_mut()
+                    .overlay_put(overlay, Value::symbol("before-string"), Value::string("zz"))
+                    .unwrap();
+                buffer.goto_emacs_byte_pos(EmacsBytePos::new(point));
+            });
+        let cursor = trace.phys_cursor.as_ref().expect("origin cursor");
+        let first = trace
+            .points
+            .iter()
+            .find(|point| point.buffer_pos == LispCharPos1::ONE)
+            .unwrap();
+        assert_eq!(
+            (cursor.row, cursor.col, cursor.x),
+            (expected.0, expected.1, first.x + expected.1 * first.width),
+            "point={point}"
         );
     }
 }
