@@ -477,6 +477,8 @@ pub(crate) fn display_read_prompt(eval: &mut Context, args: &[Value]) {
 }
 
 pub(crate) fn builtin_read_char(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    // GNU checks `inhibit-interaction` before showing the prompt (src/keyboard.c).
+    crate::emacs_core::minibuffer::barf_if_interaction_inhibited(eval)?;
     display_read_prompt(eval, &args);
     if let Some(value) = builtin_read_char_in_runtime(eval, &args)? {
         return Ok(value);
@@ -622,6 +624,8 @@ pub(crate) fn finish_read_key_sequence_vector_interactive_in_runtime(
 /// In batch mode, reads from `unread-command-events`, returns nil if empty.
 /// In interactive mode, blocks on the input channel via `read_char()`.
 pub(crate) fn builtin_read_event(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    // GNU checks `inhibit-interaction` before showing the prompt (src/keyboard.c).
+    crate::emacs_core::minibuffer::barf_if_interaction_inhibited(eval)?;
     display_read_prompt(eval, &args);
     if let Some(value) = builtin_read_event_in_runtime(eval, &args)? {
         return Ok(value);
@@ -660,6 +664,8 @@ pub(crate) fn finish_read_event_interactive_in_runtime(
 /// In batch mode, consumes `unread-command-events` until a character is found.
 /// In interactive mode, blocks on the input channel, skipping non-character events.
 pub(crate) fn builtin_read_char_exclusive(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    // GNU checks `inhibit-interaction` before showing the prompt (src/keyboard.c).
+    crate::emacs_core::minibuffer::barf_if_interaction_inhibited(eval)?;
     display_read_prompt(eval, &args);
     if let Some(value) = builtin_read_char_exclusive_in_runtime(eval, &args)? {
         return Ok(value);

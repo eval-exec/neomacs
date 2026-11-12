@@ -7447,3 +7447,50 @@ fn invalid_control_letter_error_follows_text_quoting_style_like_gnu() {
         )
     );
 }
+
+/// GNU `Fcall_interactively` (src/callint.c) reads a `c` argument with `Fread_char` and the up
+/// event that follows a down event with `Fread_event`, and both call
+/// `barf_if_interaction_inhibited` first, so neither consumes an unread event.
+#[test]
+fn shared_state_interactive_reads_honour_inhibit_interaction() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.eval_str("(setq inhibit-interaction t unread-command-events (list ?a '(mouse-1)))")
+        .expect("set up input");
+    let expect_inhibited = |result: Result<(), Flow>| match result
+        .expect_err("the read should be inhibited")
+        .into_kind()
+    {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "inhibited-interaction"),
+        other => panic!("expected a signal, got {other:?}"),
+    };
+
+    let lambda = ev
+        .eval_str("(lambda (c) (interactive \"c\") c)")
+        .expect("eval lambda");
+    let mut plan = plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan c lambda");
+    expect_inhibited(
+        resolve_call_interactively_target_and_args_in_vm_runtime(&mut ev, &mut plan).map(|_| ()),
+    );
+
+    let down = ev
+        .eval_str("[(down-mouse-1)]")
+        .expect("down event sequence");
+    let mut context = InteractiveInvocationContext::default();
+    expect_inhibited(interactive_capture_up_event_in_vm_batch_runtime(
+        &mut ev,
+        &down,
+        &mut context,
+    ));
+
+    // Without a down event there is no read, so no error either.
+    let key = ev.eval_str("[?x]").expect("key sequence");
+    interactive_capture_up_event_in_vm_batch_runtime(&mut ev, &key, &mut context)
+        .expect("no up event to read");
+
+    let unread = ev.eval_str("unread-command-events").expect("unread events");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&unread),
+        "(97 (mouse-1))"
+    );
+}

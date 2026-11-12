@@ -461,6 +461,19 @@ pub(crate) fn builtin_read_from_minibuffer(eval: &mut Context, args: Vec<Value>)
     finish_read_from_minibuffer_in_eval(eval, &args)
 }
 
+/// GNU `barf_if_interaction_inhibited` (src/minibuf.c): signal `inhibited-interaction`, without
+/// data, when `inhibit-interaction` is non-nil.  GNU calls it before anything else in
+/// `read-from-minibuffer` and the `read-char` family, so it also stops batch reads from stdin.
+pub(crate) fn barf_if_interaction_inhibited(eval: &Context) -> Result<(), Flow> {
+    if eval
+        .builtin_var_value_by_name("inhibit-interaction")
+        .is_some_and(|v| v.is_truthy())
+    {
+        return Err(signal("inhibited-interaction", vec![]));
+    }
+    Ok(())
+}
+
 fn read_from_stdin_noninteractive(prompt: &str) -> EvalResult {
     print!("{prompt}");
     let _ = std::io::stdout().flush();
@@ -634,6 +647,7 @@ pub(crate) fn builtin_read_from_minibuffer_in_runtime(
     runtime: &mut Context,
     args: &[Value],
 ) -> Result<Option<Value>, Flow> {
+    barf_if_interaction_inhibited(runtime)?;
     expect_min_args("read-from-minibuffer", args, 1)?;
     expect_max_args("read-from-minibuffer", args, 7)?;
     let prompt = expect_lisp_string(&args[0])?;
@@ -676,7 +690,7 @@ pub(crate) fn finish_read_string_in_eval(eval: &mut Context, args: &[Value]) -> 
 }
 
 pub(crate) fn builtin_read_string_in_runtime(
-    runtime: &impl KeyboardInputRuntime,
+    runtime: &Context,
     args: &[Value],
 ) -> Result<Option<Value>, Flow> {
     expect_min_args("read-string", args, 1)?;
@@ -689,6 +703,7 @@ pub(crate) fn builtin_read_string_in_runtime(
     match runtime.minibuffer_input_source() {
         MinibufferInputSource::CommandLoop => Ok(None),
         MinibufferInputSource::StandardInput => {
+            barf_if_interaction_inhibited(runtime)?;
             let prompt_str = expect_lisp_string(&prompt)?;
             read_from_stdin_noninteractive(&crate::emacs_core::emacs_char::to_utf8_lossy(
                 prompt_str.as_bytes(),
@@ -788,7 +803,7 @@ pub(crate) fn finish_completing_read_in_eval(eval: &mut Context, args: &[Value])
 }
 
 pub(crate) fn builtin_completing_read_in_runtime(
-    runtime: &impl KeyboardInputRuntime,
+    runtime: &Context,
     args: &[Value],
 ) -> Result<Option<Value>, Flow> {
     validate_completing_read_arity(args)?;
@@ -800,6 +815,7 @@ pub(crate) fn builtin_completing_read_in_runtime(
     match runtime.minibuffer_input_source() {
         MinibufferInputSource::CommandLoop => Ok(None),
         MinibufferInputSource::StandardInput => {
+            barf_if_interaction_inhibited(runtime)?;
             // Batch/noninteractive: GNU's `Fcompleting_read` routes through
             // `read_minibuf` -> `read_minibuf_noninteractive` (minibuf.c), which
             // writes the prompt to stdout and reads the answer from stdin, exactly
@@ -858,20 +874,6 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     args: &[Value],
     mut run_before_setup_hook: impl FnMut(&mut Context) -> EvalResult,
 ) -> EvalResult {
-    // Check inhibit-interaction — GNU Emacs signals an error when any
-    // interactive read is attempted while this variable is non-nil.
-    if shared
-        .builtin_var_value_by_name("inhibit-interaction")
-        .is_some_and(|v| v.is_truthy())
-    {
-        return Err(signal(
-            "inhibited-interaction",
-            vec![Value::string(
-                "Attempt to interact with user while inhibit-interaction is non-nil",
-            )],
-        ));
-    }
-
     let prompt = expect_lisp_string(&args[0])?;
     let prompt_display = crate::emacs_core::emacs_char::to_utf8_lossy(prompt.as_bytes());
     let initial_input = reader_initial_contents(args.get(1))?;
@@ -1319,7 +1321,7 @@ pub(crate) fn finish_yes_or_no_p_with_minibuffer(
 }
 
 pub(crate) fn builtin_yes_or_no_p_in_runtime(
-    runtime: &impl KeyboardInputRuntime,
+    runtime: &Context,
     args: &[Value],
 ) -> Result<Option<Value>, Flow> {
     validate_yes_or_no_p_args(args)?;
@@ -1327,6 +1329,7 @@ pub(crate) fn builtin_yes_or_no_p_in_runtime(
     match runtime.minibuffer_input_source() {
         MinibufferInputSource::CommandLoop => Ok(None),
         MinibufferInputSource::StandardInput => {
+            barf_if_interaction_inhibited(runtime)?;
             // Batch/noninteractive: GNU's `read_minibuf_noninteractive` (minibuf.c)
             // writes the prompt to stdout and reads the answer from stdin. Mirror
             // that — including the yes/no re-prompt loop — instead of failing before
