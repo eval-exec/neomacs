@@ -80,7 +80,7 @@ struct BatchDef {
 
 const BATCHES: &[BatchDef] = &[
     BatchDef {
-        module: "crate::emacs_core::w32",
+        module: "crate::emacs_core::w32::subrs",
         key: "w32",
         file: "crates/neovm-system/src/emacs_core/system/platform/w32/subrs.rs",
         base_cfg: "windows",

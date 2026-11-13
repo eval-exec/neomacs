@@ -1424,6 +1424,49 @@ mod plan_consistency {
         let steps = parse_plan(PLAN);
         assert!(names.len() > 1_000, "canonical plan lost most of its names");
 
+        // Pin the platform registrar separately from eval-owned w32notify.
+        // Selecting its name family also catches an incorrect cfg or layer.
+        let windows: Vec<_> = names
+            .iter()
+            .filter(|row| row.name.starts_with("w32-"))
+            .map(|row| {
+                (
+                    row.name.as_str(),
+                    row.min,
+                    row.max,
+                    row.layer.as_str(),
+                    row.cfg.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            windows,
+            [
+                ("w32-short-file-name", 1, Some(1), "system", "windows"),
+                ("w32-long-file-name", 1, Some(1), "system", "windows"),
+                ("w32-get-valid-codepages", 0, Some(0), "system", "windows"),
+                ("w32-get-console-codepage", 0, Some(0), "system", "windows"),
+                ("w32-set-console-codepage", 1, Some(1), "system", "windows"),
+                (
+                    "w32-get-console-output-codepage",
+                    0,
+                    Some(0),
+                    "system",
+                    "windows"
+                ),
+                (
+                    "w32-set-console-output-codepage",
+                    1,
+                    Some(1),
+                    "system",
+                    "windows"
+                ),
+                ("w32-get-codepage-charset", 1, Some(1), "system", "windows"),
+                ("w32-shell-execute", 2, Some(4), "system", "windows"),
+            ],
+            "the canonical plan must retain the cfg(windows) registrar"
+        );
+
         let mut seen = std::collections::BTreeSet::new();
         for row in &names {
             assert!(
