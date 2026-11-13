@@ -1245,3 +1245,11 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     file_notify::carrier_tls_fingerprint(h);
     hooks::carrier_tls_fingerprint(h);
 }
+
+// The full registration test runs from core with its canonical factory;
+// the private classification assertions stay in this owner-only fixture.
+#[cfg(feature = "test-support")]
+#[path = "tests/inline_subr_shape_runtime_fixture.rs"]
+mod inline_subr_shape_runtime_fixture;
+#[cfg(feature = "test-support")]
+pub(crate) use inline_subr_shape_runtime_fixture::run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture;

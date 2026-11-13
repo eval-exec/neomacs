@@ -34,6 +34,14 @@ fn c5_jit_epoch_total() -> u64 {
 
 /// TA2 authority fence. Exactly the signed AUTHORITY-ITEMS rows live here.
 pub mod authority {
+    /// R0 / lead 4450: classify entries from core's full production registry.
+    #[cfg(feature = "test-support")]
+    pub fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_for_test(
+        make_context: fn() -> crate::emacs_core::eval::Context,
+    ) {
+        crate::emacs_core::builtins::run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(make_context);
+    }
+
     /// Peer 5701: force the spec-shim comparison policy and restore exact prior overrides.
     /// The opaque guard stays on this thread; no effective-policy readers are exported.
     #[cfg(all(feature = "test-support", feature = "jit"))]

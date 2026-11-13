@@ -214,43 +214,6 @@ fn inline_subr_table_mirrors_the_registry() {
     assert!(crate::emacs_core::eval::inline_subr_function(intern("no-such-subr-xyz")).is_none());
 }
 
-/// Registration classifies each builtin the way GNU `exec_byte_code`
-/// treats it: pure buffer reads run without a call, small fixed-arity subrs
-/// are called straight off the stack, and everything else takes the
-/// by-symbol dispatch.
-#[test]
-fn inline_subr_kinds_follow_the_gnu_inline_opcode_shape() {
-    use crate::emacs_core::eval::{InlineSubrKind, inline_subr};
-    crate::test_utils::init_test_tracing();
-    let _eval = Context::new(crate::test_utils::unit_runtime());
-    let kind = |name: &str| inline_subr(intern(name)).kind;
-    assert_eq!(kind("point"), InlineSubrKind::Point);
-    assert_eq!(kind("point-min"), InlineSubrKind::PointMin);
-    assert_eq!(kind("point-max"), InlineSubrKind::PointMax);
-    assert_eq!(kind("current-buffer"), InlineSubrKind::CurrentBuffer);
-    assert_eq!(kind("aset"), InlineSubrKind::Generic);
-    assert_eq!(kind("fillarray"), InlineSubrKind::Generic);
-    for name in [
-        "car",
-        "char-after",
-        "goto-char",
-        "widen",
-        "bolp",
-        "get-char-property",
-    ] {
-        assert_eq!(kind(name), InlineSubrKind::Direct, "{name}");
-    }
-    for name in [
-        "re-search-forward",
-        "put-text-property",
-        "maphash",
-        "garbage-collect",
-        "no-such-subr-xyz",
-    ] {
-        assert_eq!(kind(name), InlineSubrKind::Generic, "{name}");
-    }
-}
-
 /// assoc, plist-get, copy-sequence and the one-argument float functions as
 /// fixed-arity subrs, and memq/assq/rassq under `symbols-with-pos-enabled`
 /// (the byte compiler's setting): absent and nil optionals agree, arity and

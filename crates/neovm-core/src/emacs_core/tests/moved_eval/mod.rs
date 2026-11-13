@@ -694,3 +694,7 @@ mod emacs_core_runtime_eval_tests_sqlite_runtime_feature_test_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/debug_backtrace_runtime_test.rs"]
 mod emacs_core_runtime_jit_tests_debug_backtrace_runtime_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/fixed_arity_inline_subr_class_b_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_fixed_arity_inline_subr_class_b_test_rs;
