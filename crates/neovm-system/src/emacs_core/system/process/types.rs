@@ -117,6 +117,7 @@ impl ProcessOutputServiceRequest {
         Self::Any { target }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn target_only(target: ProcessId) -> Self {
         Self::TargetOnly(target)
     }

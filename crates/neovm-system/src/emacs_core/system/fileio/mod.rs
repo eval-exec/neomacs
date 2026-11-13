@@ -1570,6 +1570,7 @@ fn lisp_file_name_as_directory(
     file_name_lisp_from_bytes(bytes, filename.is_multibyte())
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn lisp_directory_file_name(
     filename: &neovm_value::heap_types::LispString,
 ) -> neovm_value::heap_types::LispString {

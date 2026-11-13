@@ -43,6 +43,7 @@ pub(crate) fn rewrite_file_url_document(document: &str) -> &str {
 /// on failure, matching the C implementation (GNU's docstring claims a nil
 /// return for success, but the code returns `Qt`; observable behavior wins).
 #[cfg(windows)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn w32_shell_execute(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     use windows_sys::Win32::UI::Shell::{
         SEE_MASK_FLAG_DDEWAIT, SEE_MASK_FLAG_NO_UI, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW,
