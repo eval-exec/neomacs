@@ -368,3 +368,10 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
             .with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),
     );
 }
+
+// Approved private fixtures; core supplies the canonical runtime factory.
+#[cfg(feature = "test-support")]
+#[path = "tests/gc_tls_window_configuration_class_b_driver.rs"]
+mod gc_tls_window_configuration_class_b_driver;
+#[cfg(feature = "test-support")]
+pub(crate) use gc_tls_window_configuration_class_b_driver::run_gc_tls_ownership_window_snapshot_reset_discards_a_dropped_heap_fixture;
