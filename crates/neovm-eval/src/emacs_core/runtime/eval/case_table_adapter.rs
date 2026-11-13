@@ -119,6 +119,7 @@ pub fn current_case_upcase_table(ctx: &mut Context) -> Result<Value, Flow> {
 /// Resolve the override for the current buffer, mirroring GNU's use of the
 /// per-buffer downcase/upcase/canon char-tables (`buffer.h:1648-1663`,
 /// `editfns.c:4440`).
+#[inline]
 pub fn case_table_override_for_current_buffer(
     ctx: &mut Context,
 ) -> Result<CaseTableOverride, Flow> {
