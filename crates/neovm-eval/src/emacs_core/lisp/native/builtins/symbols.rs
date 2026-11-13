@@ -3512,6 +3512,16 @@ fn compare_value_lt_inner(
                 VecLikeType::BoolVector => compare_bool_vectors_for_value_lt(lhs, rhs),
                 VecLikeType::Marker => compare_markers_for_value_lt(eval, lhs, rhs),
                 VecLikeType::Buffer => Ok(compare_buffers_for_value_lt(eval, lhs, rhs)),
+                // GNU orders processes by `process-name`.
+                VecLikeType::Process => match (
+                    process_name_for_value_lt(eval, lhs),
+                    process_name_for_value_lt(eval, rhs),
+                ) {
+                    (Some(left), Some(right)) => {
+                        compare_value_lt_inner(eval, &left, &right, maxdepth)
+                    }
+                    _ => Ok(Ordering::Equal),
+                },
                 VecLikeType::Bignum => unreachable!("bignums are handled in compare_number_values"),
                 _ => Ok(Ordering::Equal),
             }
@@ -3611,6 +3621,14 @@ fn marker_live_buffer_for_value_lt(
     let buffer_id = value.as_marker_data()?.buffer_id()?;
     eval.edit.buffers.get(buffer_id)?;
     Some(buffer_id)
+}
+
+fn process_name_for_value_lt(
+    eval: &crate::emacs_core::eval::Context,
+    value: &Value,
+) -> Option<Value> {
+    let id = value.as_process_id()?;
+    eval.processes().get_any(id).map(|process| process.name)
 }
 
 fn compare_buffers_for_value_lt(

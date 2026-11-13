@@ -8016,6 +8016,25 @@ fn value_lt_compares_buffers_by_live_name_and_dead_before_live() {
         Value::T
     );
 }
+/// GNU `value_cmp` (src/fns.c) orders two processes by `process-name`. This is the process
+/// pair of GNU's fns-value<-ordered.
+#[test]
+fn value_lt_orders_processes_by_name_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((two (make-pipe-process :name " *proc two*"))
+              (one (make-pipe-process :name " *proc one*")))
+          (unwind-protect
+              (list (value< one two) (value< two one) (value< one one)
+                    (sort (list two one) #'value<) (eq (car (sort (list two one) #'value<)) one))
+            (delete-process one)
+            (delete-process two)))"#,
+    );
+    assert_eq!(
+        result,
+        "OK (t nil nil (#<process  *proc one*> #<process  *proc two*>) t)"
+    );
+}
 
 #[test]
 fn pure_dispatch_x_display_placeholder_cluster_matches_compat_contracts() {
