@@ -139,6 +139,7 @@ fn frame_params() -> FrameParams {
         zero_width_vertical_border_edge: neomacs_display_protocol::PresentedResizeEdge::Trailing,
         right_divider_width: 6,
         bottom_divider_width: 5,
+        has_minibuffer_sibling: false,
         divider_fg: 0x303030,
         divider_first_fg: 0x404040,
         divider_last_fg: 0x505050,
@@ -171,6 +172,7 @@ fn presented_window_regions_resolve_all_bands_from_measured_geometry() {
         bottom_edge: 324.0,
         is_rightmost: false,
         is_bottommost: false,
+        divider_corner: crate::neovm_bridge::DividerCornerPolicy::BottomCovers,
         reserve_terminal_right_border_col: false,
     };
     let measured = WindowChromeMetrics {
@@ -236,7 +238,7 @@ fn presented_window_regions_resolve_all_bands_from_measured_geometry() {
     );
     assert_eq!(
         regions.bottom_divider,
-        Some(EvaluatorRect::new(144.0, 319.0, 394.0, 5.0))
+        Some(EvaluatorRect::new(144.0, 319.0, 400.0, 5.0))
     );
     let right_divider = regions.right_divider.expect("right divider");
     for region in [
@@ -401,7 +403,13 @@ fn window_frame_geometry_reserves_terminal_border_column() {
     frame.window_system = false;
     frame.right_divider_width = 0;
 
-    let geometry = WindowFrameGeometryRequest::new(&params, &frame, 200.0).resolve();
+    let geometry = WindowFrameGeometryRequest::new(
+        &params,
+        &frame,
+        200.0,
+        crate::neovm_bridge::DividerCornerPolicy::Overlap,
+    )
+    .resolve();
 
     assert_eq!(geometry.right_edge, 130.0);
     assert_eq!(geometry.bottom_edge, 120.0);
@@ -798,4 +806,139 @@ fn missing_vertical_track_does_not_suppress_horizontal_scroll_bar() {
     let state = builder.finish(80, 24, 8.0, 16.0);
     assert_eq!(state.scroll_bars.len(), 1);
     assert!(state.scroll_bars[0].horizontal);
+}
+
+#[test]
+fn bottom_divider_eligibility_uses_owned_topology_not_a_pixel_gap() {
+    use crate::window_layout::{WindowChromeMetrics, WindowDividerLayout, WindowLayoutBox};
+
+    let params = window_params();
+    let mut frame = frame_params();
+    let bottom = params.bounds.y + params.bounds.height;
+    let geometry = WindowFrameGeometryRequest::new(
+        &params,
+        &frame,
+        bottom,
+        crate::neovm_bridge::DividerCornerPolicy::Overlap,
+    )
+    .resolve();
+    assert!(geometry.is_bottommost);
+
+    // A frame-bottom gap alone does not establish an owned minibuffer sibling.
+    frame.has_minibuffer_sibling = false;
+    assert!(!geometry.has_bottom_divider(&params, &frame));
+
+    frame.has_minibuffer_sibling = true;
+    assert!(geometry.has_bottom_divider(&params, &frame));
+    let regions = WindowLayoutBox::resolve(
+        &params,
+        WindowChromeMetrics::from_params(&params),
+        WindowDividerLayout::resolve(&params, &frame, geometry),
+    )
+    .regions();
+    assert_eq!(regions.bottom_divider.unwrap().height, 5.0);
+
+    // Topology remains authoritative even when the sibling's height is zero.
+    frame.height = bottom;
+    let geometry = WindowFrameGeometryRequest::new(
+        &params,
+        &frame,
+        bottom,
+        crate::neovm_bridge::DividerCornerPolicy::Overlap,
+    )
+    .resolve();
+    assert!(geometry.has_bottom_divider(&params, &frame));
+}
+
+#[test]
+fn bottom_divider_eligibility_preserves_internal_and_minibuffer_exclusions() {
+    let mut params = window_params();
+    let mut frame = frame_params();
+    let bottom = params.bounds.y + params.bounds.height;
+    frame.has_minibuffer_sibling = false;
+
+    // Internal boundaries still have dividers in a minibuffer-less frame.
+    let geometry = WindowFrameGeometryRequest::new(
+        &params,
+        &frame,
+        bottom + 20.0,
+        crate::neovm_bridge::DividerCornerPolicy::Overlap,
+    )
+    .resolve();
+    assert!(!geometry.is_bottommost);
+    assert!(geometry.has_bottom_divider(&params, &frame));
+
+    // A minibuffer, including a minibuffer-only root, never owns the divider.
+    params.kind = WindowKind::Minibuffer;
+    frame.has_minibuffer_sibling = true;
+    let geometry = WindowFrameGeometryRequest::new(
+        &params,
+        &frame,
+        bottom,
+        crate::neovm_bridge::DividerCornerPolicy::Overlap,
+    )
+    .resolve();
+    assert!(!geometry.has_bottom_divider(&params, &frame));
+
+    params.kind = WindowKind::Main;
+    frame.bottom_divider_width = 0;
+    let geometry = WindowFrameGeometryRequest::new(
+        &params,
+        &frame,
+        bottom,
+        crate::neovm_bridge::DividerCornerPolicy::Overlap,
+    )
+    .resolve();
+    assert!(!geometry.has_bottom_divider(&params, &frame));
+}
+
+#[test]
+fn divider_corner_rectangles_separate_canonical_hit_and_visual_ownership() {
+    use crate::neovm_bridge::DividerCornerPolicy;
+    use crate::window_layout::{WindowChromeMetrics, WindowDividerLayout, WindowLayoutBox};
+    let params = window_params();
+    let frame = frame_params();
+    let mut previous = None;
+    for policy in [
+        DividerCornerPolicy::BottomCovers,
+        DividerCornerPolicy::RightCovers,
+        DividerCornerPolicy::Overlap,
+    ] {
+        let geometry = WindowFrameGeometryRequest::new(&params, &frame, 200.0, policy).resolve();
+        let layout = WindowLayoutBox::resolve(
+            &params,
+            WindowChromeMetrics::from_params(&params),
+            WindowDividerLayout::resolve(&params, &frame, geometry),
+        );
+        let regions = layout.regions();
+        let right = regions.right_divider.unwrap();
+        let bottom = regions.bottom_divider.unwrap();
+        let x = regions.outer.right() - 0.5;
+        let y = regions.outer.bottom() - 0.5;
+        let contains = |rect: neomacs_display_protocol::types::Rect| {
+            x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
+        };
+        assert!(contains(bottom));
+        assert!(!contains(right));
+        assert_eq!(bottom.width, regions.outer.width);
+        assert_eq!(right.height, regions.outer.height - bottom.height);
+        // Neither body insets nor canonical hit geometry depends on paint order.
+        if let Some(previous) = previous {
+            assert_eq!(regions, previous);
+        }
+        previous = Some(regions);
+        let paint = layout.divider_paint();
+        assert_eq!(
+            contains(paint.bottom.unwrap()),
+            policy != DividerCornerPolicy::RightCovers
+        );
+        assert_eq!(
+            contains(paint.right.unwrap()),
+            policy != DividerCornerPolicy::BottomCovers
+        );
+        assert_eq!(
+            paint.right_paints_last(),
+            policy == DividerCornerPolicy::Overlap
+        );
+    }
 }

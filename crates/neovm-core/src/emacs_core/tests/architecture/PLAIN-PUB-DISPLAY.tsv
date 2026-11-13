@@ -614,6 +614,7 @@ crates/neovm-display/src/window/mod.rs	use	use WindowStartMarker
 crates/neovm-display/src/window/mod.rs	use	use WindowTotal
 crates/neovm-display/src/window/mod.rs	use	use WindowTree
 crates/neovm-display/src/window/mod.rs	use	use WindowTreePath
+crates/neovm-display/src/window/mod.rs	use	use WindowTreeRoute
 crates/neovm-display/src/window/mod.rs	use	use WindowVisibleBufferSpan
 crates/neovm-display/src/window/mod.rs	use	use WordWrapCategories
 crates/neovm-display/src/window/mod.rs	use	use WordWrapDirection

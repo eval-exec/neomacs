@@ -352,9 +352,13 @@ impl<'run> QueryRun<'run> {
             purpose,
         )
         .ok_or(MeasurementFailure::SourceChanged)?;
-        let geometry =
-            WindowFrameGeometryRequest::new(&inputs.window, &inputs.frame, inputs.main_area_bottom)
-                .resolve();
+        let geometry = WindowFrameGeometryRequest::new(
+            &inputs.window,
+            &inputs.frame,
+            inputs.main_area_bottom,
+            inputs.divider_corner,
+        )
+        .resolve();
         let layout = WindowLayoutBox::resolve(
             &inputs.window,
             WindowChromeMetrics::from_params(&inputs.window),
@@ -389,9 +393,13 @@ impl<'run> QueryRun<'run> {
         )
         .ok_or(MeasurementFailure::SourceChanged)?;
         chrome.validate_owner(frame, &inputs.window)?;
-        let geometry =
-            WindowFrameGeometryRequest::new(&inputs.window, &inputs.frame, inputs.main_area_bottom)
-                .resolve();
+        let geometry = WindowFrameGeometryRequest::new(
+            &inputs.window,
+            &inputs.frame,
+            inputs.main_area_bottom,
+            inputs.divider_corner,
+        )
+        .resolve();
         let layout = WindowLayoutBox::resolve(
             &inputs.window,
             chrome.metrics(),

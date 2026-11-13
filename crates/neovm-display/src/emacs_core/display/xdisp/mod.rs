@@ -2127,12 +2127,94 @@ impl WindowLineSelector {
     }
 }
 
-fn window_text_pixel_size_includes_mode_line(mode_lines: Option<&Value>) -> bool {
-    mode_lines.is_some_and(|mode| {
-        mode.is_t()
-            || mode.is_bare_symbol_named("t")
-            || WindowLineSelector::from_lisp_value(*mode).is_some()
-    })
+/// GNU xdisp.c:12012-12048 adds only the requested, actually present bands.
+/// Reuse the public height queries' measured chrome/fallback policy rather
+/// than assuming each selector means one default-height mode line.
+fn window_text_pixel_size_chrome_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    window_id: WindowId,
+    buffer_id: BufferId,
+    mode_lines: Value,
+) -> Result<i64, Flow> {
+    if mode_lines.is_nil() {
+        return Ok(0);
+    }
+    let all = mode_lines.is_t();
+    // GNU tests EQ: uninterned symbols with these names are not selectors.
+    let selector = [
+        WindowLineSelector::ModeLine,
+        WindowLineSelector::HeaderLine,
+        WindowLineSelector::TabLine,
+    ]
+    .into_iter()
+    .find(|selector| {
+        let name: &'static str = (*selector).into();
+        mode_lines == Value::symbol(name)
+    });
+    if !all && selector.is_none() {
+        return Ok(0);
+    }
+    // Presence is live, even when a prior snapshot still has nonzero heights.
+    let presence = {
+        let frames = eval.frame_manager();
+        let frame = frames
+            .get(frame_id)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame is not live")]))?;
+        let window = frame
+            .find_window(window_id)
+            .ok_or_else(|| signal("error", vec![Value::string("Window is not live")]))?;
+        let buffer = eval
+            .edit
+            .buffers
+            .get(buffer_id)
+            .ok_or_else(|| signal("error", vec![Value::string("Window buffer is not live")]))?;
+        WindowChromePresence::resolve(
+            window,
+            buffer,
+            frame,
+            frames.is_minibuffer_window_id(window_id),
+        )
+    };
+    let window = Value::make_window(window_id.0);
+    let mut height = 0;
+    for (selected, line) in [
+        (WindowLineSelector::TabLine, WindowChromeLine::TabLine),
+        (WindowLineSelector::HeaderLine, WindowChromeLine::HeaderLine),
+        (WindowLineSelector::ModeLine, WindowChromeLine::ModeLine),
+    ] {
+        if !(all || selector == Some(selected)) || !presence.contains(line) {
+            continue;
+        }
+        let measured = match selected {
+            WindowLineSelector::ModeLine => {
+                super::window_cmds::builtin_window_mode_line_height(eval, vec![window])?
+            }
+            WindowLineSelector::HeaderLine => {
+                super::window_cmds::builtin_window_header_line_height(eval, &[window])?
+            }
+            WindowLineSelector::TabLine => {
+                super::window_cmds::builtin_window_tab_line_height(eval, &[window])?
+            }
+        };
+        let measured = neovm_value::error::expect_fixnum(&measured)?;
+        // A completed absent-band publication may still report zero after
+        // the live format was enabled. GNU's text measurement renders that
+        // band afresh; it does not reuse the public cached-height answer.
+        // Until that measurement is available, preserve the existing default
+        // font estimate only for this requested, live-present unmeasured band.
+        let measured = if measured == 0 {
+            eval.frame_manager()
+                .get(frame_id)
+                .ok_or_else(|| signal("error", vec![Value::string("Frame is not live")]))?
+                .char_height
+                .max(1.0) as i64
+        } else {
+            measured
+        };
+        height += measured;
+    }
+    Ok(height)
 }
 
 // ---------------------------------------------------------------------------
@@ -6587,12 +6669,14 @@ pub fn builtin_window_text_pixel_size_ctx(
     }
 
     let width = text_metrics.max_width.ceil() as i64;
-    let mode_line_rows = if window_text_pixel_size_includes_mode_line(args.get(5)) {
-        1.0
-    } else {
-        0.0
-    };
-    let height = (text_metrics.height + mode_line_rows * char_h).ceil() as i64;
+    let chrome_height = window_text_pixel_size_chrome_height(
+        eval,
+        fid,
+        wid,
+        buf_id,
+        args.get(5).copied().unwrap_or(Value::NIL),
+    )?;
+    let height = text_metrics.height.ceil() as i64 + chrome_height;
 
     if let Some(reported_start) = reported_start {
         Ok(Value::list(vec![

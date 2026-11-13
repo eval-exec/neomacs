@@ -7834,3 +7834,6 @@ fn window_text_pixel_size_reports_gnus_negative_width_for_a_retracted_from_row()
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_test.rs"]
 mod mode_line_min_width_boundary_test;
+
+#[path = "window_text_chrome_test.rs"]
+mod window_text_chrome_test;

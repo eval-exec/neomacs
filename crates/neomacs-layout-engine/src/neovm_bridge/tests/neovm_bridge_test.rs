@@ -4626,3 +4626,45 @@ fn unmatched_remapping_still_shares_named_specs() {
         "a remapped fold never serves the unmatched memo entry"
     );
 }
+
+#[test]
+fn frame_params_capture_owned_minibuffer_sibling_without_height_heuristics() {
+    let runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut buffers = BufferManager::new();
+    let buffer = buffers.create_buffer("*divider-topology*");
+    let mut frames = FrameManager::new();
+    let host = frames.create_frame("minibuffer-host", 800, 600, buffer);
+    let target = frames.create_frame("divider-target", 800, 600, buffer);
+    let borrowed = frames.get(host).unwrap().minibuffer_window.unwrap();
+    let faces = FaceTable::new();
+
+    let captured =
+        frame_params_from_neovm(frames.get(target).unwrap(), &faces, runtime.variables());
+    assert!(captured.has_minibuffer_sibling);
+
+    frames
+        .get_mut(target)
+        .unwrap()
+        .minibuffer_leaf
+        .as_mut()
+        .unwrap()
+        .bounds_mut()
+        .height = 0.0;
+    let captured =
+        frame_params_from_neovm(frames.get(target).unwrap(), &faces, runtime.variables());
+    assert!(
+        captured.has_minibuffer_sibling,
+        "zero height does not remove ownership"
+    );
+
+    // Borrowing an actual minibuffer ID does not make it a root sibling here.
+    let frame = frames.get_mut(target).unwrap();
+    frame.minibuffer_leaf = None;
+    frame.minibuffer_window = Some(borrowed);
+    let captured = frame_params_from_neovm(frame, &faces, runtime.variables());
+    assert!(!captured.has_minibuffer_sibling);
+
+    frame.minibuffer_window = None;
+    let captured = frame_params_from_neovm(frame, &faces, runtime.variables());
+    assert!(!captured.has_minibuffer_sibling);
+}

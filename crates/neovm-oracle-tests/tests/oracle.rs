@@ -58,6 +58,9 @@ mod oracle_dual_width_text;
 #[path = "oracle_eob_overlay_motion.rs"]
 mod oracle_eob_overlay_motion;
 
+#[path = "oracle_window_text_chrome.rs"]
+mod oracle_window_text_chrome;
+
 #[path = "oracle_extended_keysyms.rs"]
 mod oracle_extended_keysyms;
 

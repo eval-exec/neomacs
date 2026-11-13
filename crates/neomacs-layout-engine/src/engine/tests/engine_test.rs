@@ -18438,7 +18438,7 @@ fn layout_frame_rust_mixed_window_scroll_bars_keep_shared_border_owned() {
 }
 
 #[test]
-fn layout_frame_rust_bottom_divider_does_not_separate_root_from_minibuffer() {
+fn layout_frame_rust_bottom_divider_separates_root_from_owned_minibuffer() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
@@ -18466,12 +18466,36 @@ fn layout_frame_rust_bottom_divider_does_not_separate_root_from_minibuffer() {
         .last_frame_display_state
         .as_ref()
         .expect("display state");
-    assert!(
-        state.borders.iter().all(
-            |border| border.window_id.get() != selected_window.0 as i64 || border.height != 6.0
-        ),
-        "GNU does not draw a bottom window divider between a bottommost root window and the minibuffer"
-    );
+    let info = state
+        .window_infos
+        .iter()
+        .find(|info| info.window_id.get() == selected_window.0 as i64)
+        .expect("root window info");
+    let neomacs_display_protocol::PresentedWindowGeometry::Complete { regions, .. } = info.geometry
+    else {
+        panic!("root window has complete geometry");
+    };
+    let bottom = regions
+        .bottom_divider
+        .expect("divider above owned minibuffer");
+    assert_eq!(bottom.height, 6.0);
+    // The divider is emitted as first/inner/last color bands. Assert its
+    // coverage, without requiring those bands to be one six-pixel quad.
+    let x = bottom.x + bottom.width / 2.0;
+    for row in 0..6 {
+        let y = bottom.y + row as f32 + 0.5;
+        assert!(
+            state.borders.iter().any(|border| {
+                border.window_id.get() == selected_window.0 as i64
+                    && x >= border.x
+                    && x < border.x + border.width
+                    && y >= border.y
+                    && y < border.y + border.height
+            }),
+            "GNU retains the complete divider above an owned minibuffer: row {row}, borders {:?}",
+            state.borders
+        );
+    }
 }
 
 #[test]
@@ -38562,3 +38586,6 @@ mod narrow_root_eob_test;
 
 #[path = "overlay_string_word_wrap_progress_test.rs"]
 mod overlay_string_word_wrap_progress_test;
+
+#[path = "divider_corner_review_test.rs"]
+mod divider_corner_review_test;

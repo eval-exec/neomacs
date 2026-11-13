@@ -614,6 +614,7 @@ struct LiveWindowLayoutInputs {
     window: WindowParams,
     source: WindowDisplaySource,
     main_area_bottom: f32,
+    divider_corner: super::neovm_bridge::DividerCornerPolicy,
 }
 
 fn live_window_frame_metadata(
@@ -658,7 +659,7 @@ fn collect_live_window_layout_inputs(
     // repeating a full-frame bridge walk would cost O(windows) per leaf. The
     // root window's canonical bounds supply the same main-area bottom as the
     // maximum of its partitioned leaves.
-    let (frame, mut window, main_area_bottom) = {
+    let (frame, mut window, main_area_bottom, divider_corner) = {
         let (live_frame, live_window) = evaluator
             .frame_manager()
             .frame_and_window_at_path(frame_id, window_path)?;
@@ -728,6 +729,7 @@ fn collect_live_window_layout_inputs(
             ),
             window,
             root_bounds.y + root_bounds.height,
+            super::neovm_bridge::divider_corner_at_path(live_frame, window_path)?,
         )
     };
     if let Some(metrics) = accepted_chrome.get(&DisplayWindowId::new(window.window_id)) {
@@ -748,6 +750,7 @@ fn collect_live_window_layout_inputs(
         window,
         source,
         main_area_bottom,
+        divider_corner,
     })
 }
 
@@ -1582,6 +1585,7 @@ impl LayoutEngine {
         frame_params: &FrameParams,
         window_geometry: crate::display_frame_output::WindowFrameGeometry,
         info: &WindowInfo,
+        divider_paint: crate::window_layout::WindowDividerPaint,
         effective_default_face: Option<&crate::display_face_policy::EffectiveWindowDefaultFace>,
         face_resolver: &super::neovm_bridge::FaceResolver,
         face_attempt: &FrameFaceAttempt,
@@ -1594,6 +1598,7 @@ impl LayoutEngine {
                 frame_params,
                 window_geometry,
                 info,
+                divider_paint,
                 effective_default_face,
             ),
             ChromeRowRenderServices::new(font_metrics, face_resolver, &mut decoration_face_ids),
@@ -2268,48 +2273,78 @@ impl LayoutEngine {
             // to discard it below. Normal redisplay snapshots the whole frame
             // once, then uses these paths for O(depth) leaf recollection after
             // Lisp boundaries.
-            let (frame_params, mut window_params_list, query_main_area_bottom) =
-                if let Some(target) = query_window {
-                    let target = neovm_core::window::WindowId(target.0);
-                    let Some(path) = window_paths.get(&target) else {
-                        evaluator.retire_interaction_presentation(presentation_id);
-                        self.reset_frame_attempt_state();
-                        return None;
-                    };
-                    let Some(inputs) = collect_live_window_layout_inputs(
-                        evaluator,
-                        frame_id,
-                        target,
-                        path,
-                        default_metrics.map(|metrics| metrics.ascent),
-                        self.font_sizing,
-                        &window_chrome_metrics,
-                        layout_walk_purpose,
-                    ) else {
-                        evaluator.retire_interaction_presentation(presentation_id);
-                        self.reset_frame_attempt_state();
-                        return None;
-                    };
-                    (
-                        inputs.frame,
-                        vec![inputs.window],
-                        Some(inputs.main_area_bottom),
-                    )
-                } else {
-                    match super::neovm_bridge::collect_layout_params_with_font_sizing(
-                        evaluator,
-                        frame_id,
-                        default_metrics.map(|metrics| metrics.ascent),
-                        self.font_sizing,
-                    ) {
-                        Some((frame, windows)) => (frame, windows, None),
-                        None => {
-                            tracing::error!("layout_frame_rust: frame {:?} not found", frame_id);
-                            evaluator.retire_interaction_presentation(presentation_id);
-                            return None;
-                        }
-                    }
+            let (
+                frame_params,
+                mut window_params_list,
+                query_main_area_bottom,
+                query_divider_corner,
+            ) = if let Some(target) = query_window {
+                let target = neovm_core::window::WindowId(target.0);
+                let Some(path) = window_paths.get(&target) else {
+                    evaluator.retire_interaction_presentation(presentation_id);
+                    self.reset_frame_attempt_state();
+                    return None;
                 };
+                let Some(inputs) = collect_live_window_layout_inputs(
+                    evaluator,
+                    frame_id,
+                    target,
+                    path,
+                    default_metrics.map(|metrics| metrics.ascent),
+                    self.font_sizing,
+                    &window_chrome_metrics,
+                    layout_walk_purpose,
+                ) else {
+                    evaluator.retire_interaction_presentation(presentation_id);
+                    self.reset_frame_attempt_state();
+                    return None;
+                };
+                (
+                    inputs.frame,
+                    vec![inputs.window],
+                    Some(inputs.main_area_bottom),
+                    Some(inputs.divider_corner),
+                )
+            } else {
+                match super::neovm_bridge::collect_layout_params_with_font_sizing(
+                    evaluator,
+                    frame_id,
+                    default_metrics.map(|metrics| metrics.ascent),
+                    self.font_sizing,
+                ) {
+                    Some((frame, windows)) => (frame, windows, None, None),
+                    None => {
+                        tracing::error!("layout_frame_rust: frame {:?} not found", frame_id);
+                        evaluator.retire_interaction_presentation(presentation_id);
+                        return None;
+                    }
+                }
+            };
+
+            // Capture sibling ownership once per frame attempt. Synchronous
+            // queries already captured only their target through its checked path.
+            let divider_corners = if let Some(corner) = query_divider_corner {
+                let Some(params) = window_params_list.first() else {
+                    return None;
+                };
+                let mut corners = rustc_hash::FxHashMap::default();
+                corners.insert(
+                    neovm_core::window::WindowId(params.window_id as u64),
+                    corner,
+                );
+                corners
+            } else {
+                let corners = evaluator
+                    .frame_manager()
+                    .get(frame_id)
+                    .and_then(super::neovm_bridge::divider_corner_policies);
+                let Some(corners) = corners else {
+                    evaluator.retire_interaction_presentation(presentation_id);
+                    self.reset_frame_attempt_state();
+                    return None;
+                };
+                corners
+            };
 
             // GNU seeds desired-window layout from the current matrix's
             // accepted chrome heights, falling back to a face estimate when a
@@ -2497,10 +2532,13 @@ impl LayoutEngine {
                 window_params_list
                     .iter()
                     .map(|params| {
+                        let corner = *divider_corners
+                            .get(&neovm_core::window::WindowId(params.window_id as u64))?;
                         let geometry = WindowFrameGeometryRequest::new(
                             params,
                             &frame_params,
                             main_area_bottom,
+                            corner,
                         )
                         .resolve();
                         let layout_box = WindowLayoutBox::resolve(
@@ -2508,9 +2546,14 @@ impl LayoutEngine {
                             WindowChromeMetrics::from_params(params),
                             WindowDividerLayout::resolve(params, &frame_params, geometry),
                         );
-                        (geometry, layout_box)
+                        Some((geometry, layout_box))
                     })
-                    .collect();
+                    .collect::<Option<Vec<_>>>()
+                    .or_else(|| {
+                        evaluator.retire_interaction_presentation(presentation_id);
+                        self.reset_frame_attempt_state();
+                        None
+                    })?;
 
             // Snapshot the exact accepted partition along with the other
             // incremental-layout inputs. A retry discards this vector, so only
@@ -2866,6 +2909,7 @@ impl LayoutEngine {
                     window: planned_params.clone(),
                     source: window_sources[window_index],
                     main_area_bottom,
+                    divider_corner: window_layout_inputs[window_index].0.divider_corner,
                 };
 
                 // Earlier leaves may have evaluated arbitrary mode/header-line
@@ -2930,6 +2974,7 @@ impl LayoutEngine {
                     &live_inputs.window,
                     &live_inputs.frame,
                     live_inputs.main_area_bottom,
+                    live_inputs.divider_corner,
                 )
                 .resolve();
                 let mut layout_box = WindowLayoutBox::resolve(
@@ -3155,6 +3200,7 @@ impl LayoutEngine {
                                 &live_inputs.window,
                                 &live_inputs.frame,
                                 live_inputs.main_area_bottom,
+                                live_inputs.divider_corner,
                             )
                             .resolve();
                             layout_box = WindowLayoutBox::resolve(
@@ -3321,6 +3367,7 @@ impl LayoutEngine {
                         &live_inputs.frame,
                         window_geometry,
                         &info,
+                        accepted_layout_box.divider_paint(),
                         effective_default_face.as_ref(),
                         &face_resolver,
                         &face_attempt,
