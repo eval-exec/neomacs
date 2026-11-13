@@ -14,7 +14,7 @@
 
 use super::{RasterContent, RasterGlyphImage};
 use cosmic_text::{CacheKey, CacheKeyFlags, Font};
-use objc2_core_foundation::{CFArray, CFData, CFRetained, CGPoint};
+use objc2_core_foundation::{CFArray, CFData, CFRetained, CFString, CGPoint};
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGColorSpace, CGContext, CGImageAlphaInfo, CGImageByteOrderInfo,
 };
@@ -145,6 +145,21 @@ fn intern_backing(
     data
 }
 
+// `CTFontCopyPostScriptName` is documented as non-null, but CoreText can
+// return NULL; the generated objc2 wrapper panics in that case (#673). Keep
+// absence an Option so a collection member that has no name is skipped
+// instead of aborting the atlas.
+#[allow(non_snake_case)]
+unsafe extern "C-unwind" {
+    fn CTFontCopyPostScriptName(font: &CTFont) -> Option<NonNull<CFString>>;
+}
+
+fn font_postscript_name(font: &CTFont) -> Option<String> {
+    // SAFETY: `font` is a live CoreText object and the Copy result is owned.
+    let name = unsafe { CTFontCopyPostScriptName(font) }?;
+    Some(unsafe { CFRetained::from_raw(name) }.to_string())
+}
+
 fn open_exact_font(data: &CFData, postscript_name: &str, size: f32) -> Option<CFRetained<CTFont>> {
     // SAFETY: CoreText returns an array of CTFontDescriptor objects, retained
     // here and by each typed get. Descriptors refer to these bytes, not to a
@@ -155,12 +170,16 @@ fn open_exact_font(data: &CFData, postscript_name: &str, size: f32) -> Option<CF
         )
     };
     for index in 0..descriptors.len() {
-        let descriptor = descriptors.get(index)?;
+        // One unreadable descriptor must not abandon the remaining members of
+        // these bytes: `?` here ended the whole exact-face search.
+        let Some(descriptor) = descriptors.get(index) else {
+            continue;
+        };
         // SAFETY: null requests the identity transform; the descriptor is live.
         let font = unsafe { CTFont::with_font_descriptor(&descriptor, size.into(), ptr::null()) };
         // Select the exact collection member. Never substitute a best-match
         // family when the selected face is missing from these bytes.
-        if unsafe { font.post_script_name() }.to_string() == postscript_name {
+        if font_postscript_name(&font).as_deref() == Some(postscript_name) {
             return Some(font);
         }
     }
