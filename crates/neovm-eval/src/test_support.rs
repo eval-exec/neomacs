@@ -34,6 +34,17 @@ fn c5_jit_epoch_total() -> u64 {
 
 /// TA2 authority fence. Exactly the signed AUTHORITY-ITEMS rows live here.
 pub mod authority {
+    /// Peer 5699: run the private-state fixture with core's real Context factory.
+    /// The driver retains the original assertions; no private handle escapes.
+    #[cfg(feature = "test-support")]
+    pub fn run_vm_kmacro_builtins_use_shared_runtime_state_for_test(
+        make_context: fn() -> crate::emacs_core::eval::Context,
+    ) {
+        crate::emacs_core::bytecode::vm::run_vm_kmacro_builtins_use_shared_runtime_state_fixture(
+            make_context,
+        );
+    }
+
     /// P1-CLASSES-ALL-CRATES FENCE: reset the symbol writer thread-locals.
     /// A reset is a write (N2), so the fence is the only cross-crate route.
     pub fn reset_symbols_thread_locals_for_test() {

@@ -11033,3 +11033,11 @@ mod arithmetic_shape_boundary_tests;
 #[cfg(test)]
 #[path = "tests/cons_tagged_displacement_test.rs"]
 mod cons_tagged_displacement_tests;
+
+// The cross-crate keyboard-macro test supplies core's canonical constructor.
+// Only this fixture is compiled for dependency test-support builds.
+#[cfg(feature = "test-support")]
+#[path = "tests/vm_kmacro_runtime_fixture.rs"]
+mod kmacro_runtime_fixture;
+#[cfg(feature = "test-support")]
+pub(crate) use kmacro_runtime_fixture::run_vm_kmacro_builtins_use_shared_runtime_state_fixture;

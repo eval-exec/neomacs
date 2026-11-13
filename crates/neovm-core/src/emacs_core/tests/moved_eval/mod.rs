@@ -648,3 +648,8 @@ mod emacs_core_runtime_eval_tests_hub_read_surface_test_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/eval/tests/hub_retained_leaf_test.rs"]
 mod emacs_core_runtime_eval_tests_hub_retained_leaf_test_rs;
+
+// Class-(b) fixtures require core's canonical upper-layer registrars.
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/vm_shared_runtime_test.rs"]
+mod emacs_core_runtime_bytecode_tests_vm_shared_runtime_test_rs;
