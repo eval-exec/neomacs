@@ -305,6 +305,8 @@ mod tests {
         let mut first = ready();
         let token = take_layout_query_adapter(&mut first, 7);
         let mut second = ready();
+        // Meet the restore precondition so the foreign-token owner check runs.
+        let _second_token = take_layout_query_adapter(&mut second, 8);
         restore_layout_query_adapter(&mut second, 8, token);
     }
 
