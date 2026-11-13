@@ -1,10 +1,27 @@
 use super::*;
+use crate::emacs_core::eval::Context;
+use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_value::intern::WellKnown;
 
 // ===========================================================================
 // Misc
 // ===========================================================================
+
+/// Canonical production/unit descriptor. GNU fns.c Fidentity is 1..1 and
+/// noninteractive; retain the existing ContextVec entry shape.
+#[doc(hidden)]
+pub const fn identity_subr_spec() -> SubrSpec {
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "identity",
+        NativeFn::ContextVec(identity_entry),
+        SubrArity::new(1, Some(1)),
+    ))
+}
+
+fn identity_entry(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    builtin_identity(args)
+}
 
 #[doc(hidden)]
 pub fn builtin_identity(args: Vec<Value>) -> EvalResult {

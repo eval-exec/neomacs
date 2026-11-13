@@ -4498,6 +4498,7 @@ dependencies = [
  "stacker",
  "static_assertions",
  "strum",
+ "syn 3.0.9",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.20",

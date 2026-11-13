@@ -280,8 +280,8 @@ fn open_delimiter(text: &str, from: usize, open: u8) -> Result<usize, String> {
         .ok_or_else(|| format!("no `{}` after byte {from}", open as char))
 }
 
-/// Index of the delimiter matching `open_index`, skipping strings, char
-/// literals and comments. `open`/`close` must be a `{`/`}` or `[`/`]` pair.
+/// Index of the matching brace, bracket or parenthesis, skipping strings
+/// and comments.
 fn matching_delimiter(text: &str, open_index: usize, open: u8, close: u8) -> Result<usize, String> {
     let bytes = text.as_bytes();
     let mut depth = 0usize;
@@ -795,10 +795,299 @@ fn eval_event_for(method: &str) -> Option<&'static str> {
 }
 
 enum Event {
-    Direct { at: usize, spec_at: usize },
+    Direct { at: usize, spec: ParsedSpec },
     Batch { at: usize, module: String },
     Eval { at: usize, id: &'static str },
     DisplayStep { at: usize, id: String },
+}
+
+/// A direct registration is either its existing literal descriptor expression
+/// or a literal zero-argument provider path. Bound the argument first: never
+/// borrow a constructor from the following statement/registration.
+fn registration_spec(repo_root: &Path, argument: &str) -> Result<ParsedSpec, String> {
+    use syn::parse::Parser;
+    let expressions = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated
+        .parse_str(argument)
+        .map_err(|error| format!("malformed descriptor argument: {error}"))?;
+    if expressions.len() != 1 {
+        return Err("registration requires exactly one descriptor".to_owned());
+    }
+    // Historical literal registrations may attach these metadata builders.
+    // An arbitrary expression containing a literal is not a declaration.
+    let mut root = &expressions[0];
+    loop {
+        match root {
+            syn::Expr::MethodCall(method) => {
+                if ![
+                    "requires_eval_state",
+                    "interactive",
+                    "placeholder",
+                    "disabled_command",
+                    "leaf",
+                ]
+                .iter()
+                .any(|name| method.method == *name)
+                {
+                    return Err("unsupported descriptor metadata builder".to_owned());
+                }
+                root = &method.receiver;
+            }
+            syn::Expr::Const(expression) if expression.attrs.is_empty() => {
+                let [syn::Stmt::Expr(tail, None)] = expression.block.stmts.as_slice() else {
+                    return Err("inline const descriptor requires one tail expression".to_owned());
+                };
+                root = tail;
+            }
+            _ => break,
+        }
+    }
+    if let syn::Expr::Macro(expression) = root {
+        if !path_is(
+            &expression.mac.path,
+            &["crate", "emacs_core", "subr", "world_subr"],
+        ) {
+            return Err("unsupported literal descriptor macro".to_owned());
+        }
+        let literal: syn::Expr = syn::parse2(expression.mac.tokens.clone())
+            .map_err(|error| format!("inline descriptor: {error}"))?;
+        return literal_spec(&literal, "inline descriptor");
+    }
+    provider_spec(repo_root, argument)
+}
+
+/// Closed provider grammar: one flat, eval-owned builtin module, one public
+/// const zero-argument function, and one world-marked literal descriptor as
+/// its entire tail expression. There is no provider/name/metadata catalog:
+/// the same actual descriptor definition is read here and called at runtime.
+fn provider_spec(repo_root: &Path, call: &str) -> Result<ParsedSpec, String> {
+    let path = call
+        .strip_suffix("()")
+        .and_then(|path| path.strip_prefix("neovm_eval::emacs_core::builtins::"))
+        .ok_or_else(|| format!("unsupported descriptor expression `{call}`"))?;
+    let parts: Vec<_> = path.split("::").collect();
+    let identifier = |part: &str| {
+        let mut bytes = part.bytes();
+        matches!(bytes.next(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'))
+            && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    };
+    if parts.len() != 2 || !parts.iter().all(|part| identifier(part)) {
+        return Err(format!("unsupported descriptor provider path `{call}`"));
+    }
+    let modules = read(
+        repo_root,
+        "crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs",
+    )?;
+    let modules = syn::parse_file(&modules).map_err(|error| error.to_string())?;
+    if modules
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+    {
+        return Err(format!(
+            "{call}: cfg-gated builtin module file is unsupported"
+        ));
+    }
+    let declarations: Vec<_> = modules
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Mod(module) if module.ident == parts[0] => Some(module),
+            _ => None,
+        })
+        .collect();
+    if declarations.len() != 1
+        || !matches!(declarations[0].vis, syn::Visibility::Public(_))
+        || declarations[0].unsafety.is_some()
+        || declarations[0].content.is_some()
+        || declarations[0]
+            .attrs
+            .iter()
+            .any(|attr| !attr.path().is_ident("doc"))
+    {
+        return Err(format!(
+            "{call}: provider module must be an unconditional public file module"
+        ));
+    }
+    let relative = format!(
+        "crates/neovm-eval/src/emacs_core/lisp/native/builtins/{}.rs",
+        parts[0]
+    );
+    let source = read(repo_root, &relative)?;
+    let file = syn::parse_file(&source).map_err(|error| format!("{relative}: {error}"))?;
+    if file
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+    {
+        return Err(format!("{call}: cfg-gated provider file is unsupported"));
+    }
+    let providers: Vec<_> = file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Fn(function) if function.sig.ident == parts[1] => Some(function),
+            _ => None,
+        })
+        .collect();
+    if providers.len() != 1 {
+        return Err(format!(
+            "{call}: expected exactly one provider definition in {relative}"
+        ));
+    }
+    let provider = providers[0];
+    let signature = &provider.sig;
+    if !matches!(provider.vis, syn::Visibility::Public(_))
+        || provider.modifiers.defaultness.is_some()
+        || signature.constness.is_none()
+        || signature.asyncness.is_some()
+        || !matches!(signature.safety, syn::Safety::Default)
+        || signature.abi.is_some()
+        || !signature.generics.params.is_empty()
+        || signature.generics.where_clause.is_some()
+        || !signature.inputs.is_empty()
+        || signature.variadic.is_some()
+        || !matches!(&signature.output,
+            syn::ReturnType::Type(_, ty) if matches!(ty.as_ref(),
+                syn::Type::Path(path) if path.qself.is_none() && path.path.is_ident("SubrSpec")))
+        || provider
+            .attrs
+            .iter()
+            .any(|attr| !attr.path().is_ident("doc"))
+    {
+        return Err(format!(
+            "{call}: expected unconditional pub const fn () -> SubrSpec"
+        ));
+    }
+    let [syn::Stmt::Expr(syn::Expr::Macro(expression), None)] = provider.block.stmts.as_slice()
+    else {
+        return Err(format!(
+            "{call}: provider must return one world_subr! literal"
+        ));
+    };
+    if !expression.attrs.is_empty()
+        || !path_is(
+            &expression.mac.path,
+            &["crate", "emacs_core", "subr", "world_subr"],
+        )
+    {
+        return Err(format!("{call}: unsupported descriptor macro"));
+    }
+    let expression: syn::Expr =
+        syn::parse2(expression.mac.tokens.clone()).map_err(|error| format!("{call}: {error}"))?;
+    literal_spec(&expression, call)
+}
+
+/// Read the literal descriptor AST itself, never a later textual constructor.
+fn literal_spec(expression: &syn::Expr, call: &str) -> Result<ParsedSpec, String> {
+    let syn::Expr::Call(constructor) = expression else {
+        return Err(format!("{call}: expected one literal SubrSpec constructor"));
+    };
+    let syn::Expr::Path(path) = constructor.func.as_ref() else {
+        return Err(format!("{call}: unsupported descriptor constructor"));
+    };
+    let segments = &path.path.segments;
+    if path.qself.is_some()
+        || path.path.leading_colon.is_some()
+        || segments.len() != 2
+        || segments[0].ident != "SubrSpec"
+        || segments
+            .iter()
+            .any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
+    {
+        return Err(format!("{call}: unsupported descriptor constructor"));
+    }
+    let Some(syn::Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Str(name),
+        ..
+    })) = constructor.args.first()
+    else {
+        return Err(format!("{call}: descriptor name must be a literal"));
+    };
+    let kind = segments[1].ident.to_string();
+    let arity_expression = constructor.args.get(2);
+    let number = |expression: &syn::Expr| match expression {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Int(value),
+            ..
+        }) => value.base10_parse::<u16>().ok(),
+        _ => None,
+    };
+    let arity = || -> Option<(u16, Option<u16>)> {
+        if kind == "new" {
+            let syn::Expr::Call(arity) = arity_expression? else {
+                return None;
+            };
+            let syn::Expr::Path(path) = arity.func.as_ref() else {
+                return None;
+            };
+            if path.qself.is_some()
+                || !path_is(&path.path, &["SubrArity", "new"])
+                || arity.args.len() != 2
+            {
+                return None;
+            }
+            let min = number(&arity.args[0])?;
+            let max = match &arity.args[1] {
+                syn::Expr::Path(path) if path.qself.is_none() && path.path.is_ident("None") => None,
+                syn::Expr::Call(some) if some.args.len() == 1 => {
+                    let syn::Expr::Path(path) = some.func.as_ref() else {
+                        return None;
+                    };
+                    if path.qself.is_some() || !path.path.is_ident("Some") {
+                        return None;
+                    }
+                    Some(number(&some.args[0])?)
+                }
+                _ => return None,
+            };
+            Some((min, max))
+        } else {
+            let max = kind.strip_prefix("fixed")?.parse::<u16>().ok()?;
+            if max > 6 {
+                return None;
+            }
+            if max == 0 && constructor.args.len() == 2 {
+                return Some((0, Some(0)));
+            }
+            let syn::Expr::Path(path) = arity_expression? else {
+                return None;
+            };
+            if path.qself.is_some() || path.path.segments.len() != 2 {
+                return None;
+            }
+            let minimum = &path.path.segments;
+            if path.path.leading_colon.is_some()
+                || minimum
+                    .iter()
+                    .any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
+                || minimum[0].ident != format!("FixedMin{max}")
+            {
+                return None;
+            }
+            Some((
+                fixed_minimum_value(&minimum[1].ident.to_string())?,
+                Some(max),
+            ))
+        }
+    };
+    let (min, max) = arity().ok_or_else(|| format!("{call}: unsupported literal arity"))?;
+    if (kind != "fixed0" && constructor.args.len() != 3) || max.is_some_and(|max| min > max) {
+        return Err(format!("{call}: malformed descriptor arity"));
+    }
+    Ok(ParsedSpec {
+        name: name.value(),
+        min,
+        max,
+        cfg: "always".to_owned(),
+    })
+}
+
+fn path_is(path: &syn::Path, expected: &[&str]) -> bool {
+    path.leading_colon.is_none()
+        && path.segments.len() == expected.len()
+        && path.segments.iter().zip(expected).all(|(segment, name)| {
+            segment.ident == *name && matches!(segment.arguments, syn::PathArguments::None)
+        })
 }
 
 /// Scan the core manifest's `register_subrs` body for every registration
@@ -810,29 +1099,15 @@ fn manifest_events(repo_root: &Path) -> Result<(Vec<Event>, String), String> {
         .ok_or_else(|| "core manifest has no register_subrs".to_owned())?;
     let body = brace_block_after(&source, fn_at)?;
     let body_start = body.as_ptr() as usize - source.as_ptr() as usize;
-    let body_end = body_start + body.len();
-
     let mut events = Vec::new();
-    let mut direct_positions = Vec::new();
-    for offset in body.match_indices("ctx.register_subr(") {
-        direct_positions.push(body_start + offset.0);
-    }
-    for (index, position) in direct_positions.iter().copied().enumerate() {
-        let limit = direct_positions.get(index + 1).copied().unwrap_or(body_end);
-        let segment = &source[position..limit];
-        let spec_at = segment
-            .find("SubrSpec::")
-            .map(|offset| position + offset)
-            .ok_or_else(|| {
-                format!(
-                    "direct registration at manifest line {} has no SubrSpec",
-                    line_of(&source, position)
-                )
-            })?;
-        events.push(Event::Direct {
-            at: position,
-            spec_at,
-        });
+    for (offset, _) in body.match_indices("ctx.register_subr(") {
+        let position = body_start + offset;
+        let open = position + "ctx.register_subr".len();
+        let close = matching_delimiter(&source, open, b'(', b')')?;
+        let argument = source[open + 1..close].trim();
+        let spec = registration_spec(repo_root, argument)
+            .map_err(|error| format!("manifest line {}: {error}", line_of(&source, position)))?;
+        events.push(Event::Direct { at: position, spec });
     }
     for offset in body.match_indices("::register_subrs(ctx);") {
         let end = body_start + offset.0;
@@ -963,8 +1238,7 @@ fn canonical_items(repo_root: &Path) -> Result<Vec<Item>, String> {
     let mut items = Vec::new();
     for event in events {
         match event {
-            Event::Direct { at, spec_at } => {
-                let (spec, _) = parse_subr_spec_at(&source, spec_at, spec_at, "always")?;
+            Event::Direct { at, spec } => {
                 let row = upper_row(&upper, &spec).map_err(|error| {
                     format!(
                         "manifest line {} direct registration: {error}",
@@ -1505,4 +1779,218 @@ pub fn generate(repo_root: &Path, check: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+
+    const PROVIDER_CALL: &str = "neovm_eval::emacs_core::builtins::misc_pure::identity_subr_spec()";
+    const PROVIDER_FILE: &str =
+        "crates/neovm-eval/src/emacs_core/lisp/native/builtins/misc_pure.rs";
+    const PROVIDER: &str = r#"
+        #[doc(hidden)]
+        pub const fn identity_subr_spec() -> SubrSpec {
+            crate::emacs_core::subr::world_subr!(SubrSpec::new(
+                "identity", NativeFn::ContextVec(identity_entry), SubrArity::new(1, Some(1)),
+            ))
+        }
+    "#;
+
+    fn fixture(manifest: &str, provider: &str) -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        for (relative, text) in [
+            (CORE_MANIFEST, manifest),
+            (PROVIDER_FILE, provider),
+            (
+                "crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs",
+                "#[doc(hidden)] pub mod misc_pure;",
+            ),
+        ] {
+            let path = root.path().join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn registration_cannot_borrow_a_later_unregistered_literal() {
+        let root = fixture(
+            r#"
+            pub(crate) fn register_subrs(ctx: &mut Context) {
+                ctx.register_subr(unknown_provider());
+                let unused = SubrSpec::new("wrong", entry, SubrArity::new(0, None));
+            }
+        "#,
+            "",
+        );
+        assert!(
+            manifest_events(root.path()).is_err(),
+            "unknown call must fail closed"
+        );
+    }
+
+    #[test]
+    fn provider_resolution_preserves_manifest_order_and_multiplicity() {
+        let manifest = format!(
+            r#"
+            pub(crate) fn register_subrs(ctx: &mut Context) {{
+                ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
+                    "before", entry, SubrArity::new(0, None))));
+                ctx.register_subr({PROVIDER_CALL});
+                ctx.register_subr({PROVIDER_CALL});
+                ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
+                    "after", entry, SubrArity::new(2, Some(3)))));
+            }}
+        "#
+        );
+        let root = fixture(&manifest, PROVIDER);
+        let (events, _) = manifest_events(root.path()).unwrap();
+        let resolved: Vec<_> = events
+            .into_iter()
+            .map(|event| match event {
+                Event::Direct { spec, .. } => (spec.name, spec.min, spec.max, spec.cfg),
+                _ => panic!("unexpected event"),
+            })
+            .collect();
+        assert_eq!(
+            resolved,
+            vec![
+                ("before".into(), 0, None, "always".into()),
+                ("identity".into(), 1, Some(1), "always".into()),
+                ("identity".into(), 1, Some(1), "always".into()),
+                ("after".into(), 2, Some(3), "always".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_inline_const_world_descriptor_preserves_leaf_shape() {
+        // Exact production get-char-property shape, including its outer
+        // const block and the metadata chain on the world-marked fixed ABI.
+        let argument = r#"const {
+            crate::emacs_core::subr::world_subr!(SubrSpec::fixed3(
+                "get-char-property",
+                crate::emacs_core::textprop_entries::builtin_get_char_property_3,
+                FixedMin3::Two,
+            ))
+            .leaf(&leaves::GET_CHAR_PROPERTY)
+        },"#;
+        let spec = registration_spec(Path::new("unused"), argument).unwrap();
+        assert_eq!(
+            (spec.name.as_str(), spec.min, spec.max, spec.cfg.as_str()),
+            ("get-char-property", 2, Some(3), "always")
+        );
+        for invalid in [
+            argument.replace("const {", "{"),
+            argument.replace("const {", "const { let side_effect = 0;"),
+            argument.replace(
+                ".leaf(&leaves::GET_CHAR_PROPERTY)",
+                ".leaf(&leaves::GET_CHAR_PROPERTY);",
+            ),
+            argument.replace(".leaf(&leaves::GET_CHAR_PROPERTY)", ".unknown_metadata()"),
+        ] {
+            assert!(
+                registration_spec(Path::new("unused"), &invalid).is_err(),
+                "accepted {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_provider_calls_and_definitions_fail_closed() {
+        let root = fixture("", PROVIDER);
+        for call in [
+            "alias()",
+            "neovm_eval::emacs_core::builtins::misc_pure::identity_subr_spec(1)",
+            "neovm_eval::emacs_core::builtins::misc_pure::identity_subr_spec::<u8>()",
+            "neovm_eval::emacs_core::builtins::misc_pure::MISSING()",
+            "neovm_eval::emacs_core::builtins::misc_pure::identity_subr_spec().requires_eval_state()",
+        ] {
+            assert!(
+                registration_spec(root.path(), call).is_err(),
+                "accepted {call}"
+            );
+        }
+        for provider in [
+            PROVIDER.replace("pub const fn", "pub fn"),
+            PROVIDER.replace("identity_subr_spec()", "identity_subr_spec(x: usize)"),
+            PROVIDER.replace("#[doc(hidden)]", "#[cfg(unix)]"),
+            PROVIDER.replace("crate::emacs_core::subr::world_subr!", "alias!"),
+            PROVIDER.replace("SubrSpec::new(", "{ let side_effect = 0; SubrSpec::new("),
+            PROVIDER.replace("Some(1)", "Some(MAX)"),
+            PROVIDER.replace("Some(1)", "Some(0)"),
+            PROVIDER.replace("\"identity\"", "NAME"),
+            format!("{PROVIDER}\n{PROVIDER}"),
+            format!("// {}", PROVIDER.replace('\n', "\n// ")),
+            PROVIDER.replace(
+                "            crate::",
+                "            let side_effect = 0;\n            crate::",
+            ),
+        ] {
+            std::fs::write(root.path().join(PROVIDER_FILE), &provider).unwrap();
+            assert!(
+                registration_spec(root.path(), PROVIDER_CALL).is_err(),
+                "accepted {provider}"
+            );
+        }
+        std::fs::write(root.path().join(PROVIDER_FILE), PROVIDER).unwrap();
+        for module in [
+            "#[cfg(unix)] pub mod misc_pure;",
+            "pub use elsewhere as misc_pure;",
+            "#[path = \"elsewhere.rs\"] pub mod misc_pure;",
+            "pub mod misc_pure {}",
+            "pub mod misc_pure; pub mod misc_pure;",
+        ] {
+            std::fs::write(
+                root.path()
+                    .join("crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs"),
+                module,
+            )
+            .unwrap();
+            assert!(
+                registration_spec(root.path(), PROVIDER_CALL).is_err(),
+                "accepted {module}"
+            );
+        }
+    }
+
+    #[test]
+    fn core_identity_event_resolves_the_single_production_descriptor() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = read(&root, CORE_MANIFEST).unwrap();
+        assert_eq!(
+            source
+                .matches(&format!("ctx.register_subr({PROVIDER_CALL});"))
+                .count(),
+            1
+        );
+        let (events, _) = manifest_events(&root).unwrap();
+        let direct: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Direct { spec, .. } => Some(spec),
+                _ => None,
+            })
+            .collect();
+        let index = direct
+            .iter()
+            .position(|spec| spec.name == "identity")
+            .unwrap();
+        assert_eq!(
+            direct.iter().filter(|spec| spec.name == "identity").count(),
+            1
+        );
+        assert_eq!(direct[index - 1].name, "string");
+        assert_eq!(direct[index + 1].name, "ngettext");
+        assert_eq!(
+            (
+                direct[index].min,
+                direct[index].max,
+                direct[index].cfg.as_str()
+            ),
+            (1, Some(1), "always")
+        );
+    }
 }

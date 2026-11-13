@@ -838,6 +838,7 @@ mod unit_runtime {
         }
 
         Some(match name {
+            "identity" => crate::emacs_core::builtins::misc_pure::identity_subr_spec(),
             "current-time" => SubrSpec::new(
                 "current-time",
                 NativeFn::ContextVec(builtin_current_time_in_context),
@@ -870,6 +871,52 @@ mod unit_runtime {
             ),
             _ => return None,
         })
+    }
+
+    #[test]
+    fn unit_identity_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::misc_pure::identity_subr_spec;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{NoEvalPolicy, SubrArity};
+        let expected = identity_subr_spec();
+        let actual = misc_family_subr("identity").expect("real unit identity descriptor");
+        assert_eq!(actual.name(), expected.name());
+        assert_eq!(actual.arity(), expected.arity());
+        assert_eq!(actual.arity(), SubrArity::new(1, Some(1)));
+        assert_eq!(actual.dispatch_kind(), expected.dispatch_kind());
+        assert!(actual.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(actual.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(actual.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(actual.command_default(), expected.command_default());
+        assert!(actual.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let Some(SubrFn::Many(expected_fn)) = expected.function() else {
+            panic!("ContextVec ABI");
+        };
+        let Some(SubrFn::Many(actual_fn)) = actual.function() else {
+            panic!("unit ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let entry = crate::emacs_core::eval::lookup_global_subr_entry(neovm_value::intern::intern(
+            "identity",
+        ))
+        .expect("registered unit identity");
+        let Some(SubrFn::Many(registered_fn)) = entry.function else {
+            panic!("registered ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(registered_fn, expected_fn));
+        assert_eq!((entry.min_args, entry.max_args), (1, Some(1)));
+        assert_eq!(entry.dispatch_kind, expected.dispatch_kind());
+        assert!(entry.interactive_spec.is_none());
+        assert_eq!(
+            context
+                .eval_str("(let ((x (list 1))) (eq x (identity x)))")
+                .unwrap(),
+            neovm_value::value::Value::T
+        );
     }
 
     /// String subrs whose bodies live in this crate. The unit runtime binds
