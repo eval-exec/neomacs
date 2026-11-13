@@ -337,8 +337,10 @@ pub fn canonical_host_active_trace_for_test() -> Vec<crate::emacs_core::subr::Su
 ///
 /// One set per crate: eval and the layers below it are REAL; every upper
 /// layer slot is either an ABSENT-LAYER refusal (PANIC), a recorded
-/// absent-by-construction no-op, or one of the three structural ASSERT-EMPTY
-/// checks. The proof is minted only by the one production publication entry,
+/// absent-by-construction no-op, or a structural ASSERT-EMPTY check. The
+/// sqlite, dbus, and timefns carried slots are empty markers: this runtime
+/// cannot see those system thread-locals. The proof is minted only by the
+/// one production publication entry,
 /// [`hooks_proof::install_eval_hooks`], after the full set is installed.
 #[cfg(test)]
 mod unit_runtime {

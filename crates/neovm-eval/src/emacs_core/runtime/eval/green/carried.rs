@@ -142,3 +142,129 @@ impl CarriedState {
         }
     }
 }
+
+#[cfg(test)]
+mod carriers_round_trip {
+    use super::CARRIERS;
+    use crate::emacs_core::eval::{Context, ThreadingMode};
+
+    /// Every carrier a green park executes, including one added later.
+    /// A panicking stub fails here instead of in the 213-test bucket.
+    #[test]
+    fn every_carrier_round_trips_in_the_unit_runtime() {
+        let _green =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+        assert!(!CARRIERS.is_empty());
+        for (placeholder, swap) in CARRIERS {
+            let mut slot = placeholder();
+            swap(&mut *slot);
+            swap(&mut *slot);
+        }
+    }
+}
+
+/// Empty carried slots for the unlinked upper layers (peer rulings 5685/5690).
+///
+/// A park stores the placeholder and a resume swaps it back: the same pair
+/// `green/carried.rs` runs for sqlite, dbus, terminal, and timefns.
+#[cfg(test)]
+mod absent_carried_world_state {
+    use std::any::Any;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use crate::emacs_core::eval::lifecycle::{
+        dbusbind_swap_world_state, dbusbind_world_state_placeholder,
+        live_terminal_ids_in_keyboard_poll_order, sqlite_swap_world_state,
+        sqlite_world_state_placeholder, terminal_swap_world_state,
+        terminal_world_state_placeholder, timefns_swap_world_state,
+        timefns_world_state_placeholder,
+    };
+    use crate::emacs_core::eval::{Context, ThreadingMode};
+
+    fn green() -> Context {
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())
+    }
+
+    fn panic_text(payload: Box<dyn Any + Send>) -> String {
+        match payload.downcast::<String>() {
+            Ok(text) => *text,
+            Err(payload) => match payload.downcast::<&str>() {
+                Ok(text) => (*text).to_owned(),
+                Err(_) => "<non-string panic>".to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_green_park_resume_round_trips_the_empty_slots() {
+        let _green = green();
+        let carriers: [(fn() -> Box<dyn Any>, fn(&mut dyn Any)); 4] = [
+            (sqlite_world_state_placeholder, sqlite_swap_world_state),
+            (dbusbind_world_state_placeholder, dbusbind_swap_world_state),
+            (terminal_world_state_placeholder, terminal_swap_world_state),
+            (timefns_world_state_placeholder, timefns_swap_world_state),
+        ];
+        for (placeholder, swap) in carriers {
+            let mut slot = placeholder();
+            swap(&mut *slot);
+            swap(&mut *slot);
+        }
+    }
+
+    #[test]
+    fn a_terminal_behaviour_hook_still_panics_absent() {
+        let _green = green();
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            let _ = live_terminal_ids_in_keyboard_poll_order();
+        }));
+        let text = panic_text(err.expect_err("terminal live-ids must still panic"));
+        assert!(
+            text.contains("ABSENT-LAYER display::terminal.live_terminal_ids"),
+            "terminal hook panic was {text}"
+        );
+    }
+
+    #[test]
+    fn a_sqlite_subr_still_panics_absent() {
+        let mut ctx = green();
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            let _ = ctx.eval_str("(sqlitep nil)");
+        }));
+        let text = panic_text(err.expect_err("sqlitep must still panic"));
+        assert!(
+            text.contains("ABSENT-LAYER system::sqlitep"),
+            "sqlite subr panic was {text}"
+        );
+    }
+
+    #[test]
+    fn a_mismatched_slot_panics() {
+        let _green = green();
+        let swaps: [(fn(&mut dyn Any), &str); 4] = [
+            (
+                sqlite_swap_world_state,
+                "ABSENT-LAYER system::sqlite.world_state_swap (non-empty slot)",
+            ),
+            (
+                dbusbind_swap_world_state,
+                "ABSENT-LAYER system::dbusbind.world_state_swap (non-empty slot)",
+            ),
+            (
+                terminal_swap_world_state,
+                "ABSENT-LAYER display::terminal.world_state_swap (non-empty slot)",
+            ),
+            (
+                timefns_swap_world_state,
+                "ABSENT-LAYER system::timefns.world_state_swap (non-empty slot)",
+            ),
+        ];
+        for (swap, marker) in swaps {
+            let err = catch_unwind(AssertUnwindSafe(|| {
+                let mut foreign: Box<dyn Any> = Box::new(0x5151_u64);
+                swap(&mut *foreign);
+            }));
+            let text = panic_text(err.expect_err(marker));
+            assert!(text.contains(marker), "panic was {text}, wanted {marker}");
+        }
+    }
+}

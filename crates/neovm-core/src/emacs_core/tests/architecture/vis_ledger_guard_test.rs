@@ -1995,12 +1995,13 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 /// 22:54:30Z H2/H2a, peer 00:15:30Z T1-T4).
 ///
 /// The signed table lives as one macro_rules body: `eval_absent_layer_slots!`
-/// expands a fixed `absent_layer_slots` module of 152 slot functions (135
+/// expands a fixed `absent_layer_slots` module of 152 slot functions (127
 /// marker PANICs, 12 absent-by-construction UNLINKED slots — nine unit no-ops
 /// plus three valued T7 slots: the signal self-pipe and the terminal
 /// print-handle return `None`, and the case-table sync returns
 /// `CASE_TABLES_SYNC_OK` — 2 structural
-/// ASSERT-EMPTY checks, 2 T2 per-thread handle slots, 1 T3 marker slot). This
+/// ASSERT-EMPTY checks, 2 T2 per-thread handle slots, 1 T3 marker slot, and
+/// 8 typed empty carried-state slots (peer 5685/5690)). This
 /// guard parses that body and proves, statically:
 /// - every slot body is exactly a marker panic, an exactly-one-call unlinked
 ///   no-op, a recorded unlinked call followed by the honest absent value (a
@@ -2021,6 +2022,9 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 ///   get_or_init (T2), the fontset alias is an uninterned ABSENT-LAYER marker
 ///   symbol and never NIL (T3), and the bootstrap binder binds each upper
 ///   name to an uninterned ABSENT-LAYER marker (T4);
+/// - the eight carried-state slots construct the private zero-sized marker
+///   or pass their exact per-layer marker and slot to the validated typed
+///   ASSERT-EMPTY helper;
 /// - T1: eval's dependency sections contain no system/display/core edge, so
 ///   the six absent-by-construction upper states cannot exist in its test
 ///   binary.
@@ -2143,6 +2147,8 @@ struct AbsentLayerSlotSummary {
     assert_empty: Vec<(String, String)>,
     handle: Vec<(String, String, String)>,
     marker: Vec<(String, String)>,
+    /// Placeholder names carry no marker; swaps carry their exact refusal marker.
+    carried: Vec<(String, Option<String>)>,
 }
 
 const ABSENT_LAYER_HELPERS: &[&str] = &[
@@ -2155,7 +2161,96 @@ const ABSENT_LAYER_HELPERS: &[&str] = &[
     "absent_terminal_registry_handle",
     "absent_fontset_alias_marker",
     "bind_absent_bootstrap_vars",
+    "empty_world_state_placeholder",
+    "empty_world_state_swap",
 ];
+
+/// The only carried-state wrappers authorized by peer 5685/5690. A placeholder
+/// has no refusal marker; its paired swap must use exactly the named marker.
+const ABSENT_LAYER_CARRIED_SLOTS: &[(&str, Option<&str>)] = &[
+    ("sqlite_world_state_placeholder", None),
+    (
+        "sqlite_world_state_swap",
+        Some("ABSENT-LAYER system::sqlite.world_state_swap (non-empty slot)"),
+    ),
+    ("dbusbind_world_state_placeholder", None),
+    (
+        "dbusbind_world_state_swap",
+        Some("ABSENT-LAYER system::dbusbind.world_state_swap (non-empty slot)"),
+    ),
+    ("timefns_world_state_placeholder", None),
+    (
+        "timefns_world_state_swap",
+        Some("ABSENT-LAYER system::timefns.world_state_swap (non-empty slot)"),
+    ),
+    ("terminal_world_state_placeholder", None),
+    (
+        "terminal_swap_world_state",
+        Some("ABSENT-LAYER display::terminal.world_state_swap (non-empty slot)"),
+    ),
+];
+
+/// Compare parsed signatures and bodies, not token spelling: formatting is
+/// irrelevant, but another argument, type, statement, or cfg is not allowed.
+fn validate_carried_function(function: &syn::ItemFn, expected: &str) -> Result<(), String> {
+    let expected: syn::ItemFn = syn::parse_str(expected)
+        .map_err(|error| format!("invalid signed carried-state function: {error}"))?;
+    if function.sig != expected.sig
+        || function.vis != expected.vis
+        || function.block != expected.block
+        || function
+            .attrs
+            .iter()
+            .any(|attr| !attr.path().is_ident("doc"))
+    {
+        return Err(format!(
+            "ABSENT-LAYER: carried-state function `{}` must have its signed typed body and signature",
+            function.sig.ident,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_carried_slot(function: &syn::ItemFn, marker: Option<&str>) -> Result<(), String> {
+    let name = &function.sig.ident;
+    let expected = match marker {
+        None => format!(
+            "pub(crate) fn {name}() -> Box<dyn std::any::Any> {{ empty_world_state_placeholder() }}"
+        ),
+        Some(marker) => format!(
+            "pub(crate) fn {name}(slot: &mut dyn std::any::Any) {{ empty_world_state_swap({marker:?}, slot,); }}"
+        ),
+    };
+    validate_carried_function(function, &expected)
+}
+
+fn validate_carried_helpers(items: &[syn::Item]) -> Result<(), String> {
+    let marker = items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Struct(item) if item.ident == "AbsentLayerWorldState" => Some(item),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            "ABSENT-LAYER: private AbsentLayerWorldState marker is missing".to_string()
+        })?;
+    if !matches!(marker.vis, syn::Visibility::Inherited)
+        || !matches!(marker.fields, syn::Fields::Unit)
+        || !marker.generics.params.is_empty()
+        || marker.generics.where_clause.is_some()
+        || marker.attrs.iter().any(|attr| !attr.path().is_ident("doc"))
+    {
+        return Err("ABSENT-LAYER: AbsentLayerWorldState must be a private unit struct".into());
+    }
+    validate_carried_function(
+        absent_layer_helper(items, "empty_world_state_placeholder")?,
+        "fn empty_world_state_placeholder() -> Box<dyn std::any::Any> { Box::new(AbsentLayerWorldState) }",
+    )?;
+    validate_carried_function(
+        absent_layer_helper(items, "empty_world_state_swap")?,
+        "fn empty_world_state_swap(marker: &'static str, slot: &mut dyn std::any::Any) { absent_layer_assert_empty(marker, slot.is::<AbsentLayerWorldState>()); }",
+    )
+}
 
 fn absent_layer_call(stmt: &syn::Stmt) -> Option<(String, Option<String>)> {
     let syn::Stmt::Expr(syn::Expr::Call(call), _) = stmt else {
@@ -2206,6 +2301,14 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
         };
         let name = function.sig.ident.to_string();
         if ABSENT_LAYER_HELPERS.contains(&name.as_str()) {
+            continue;
+        }
+        if let Some((_, marker)) = ABSENT_LAYER_CARRIED_SLOTS
+            .iter()
+            .find(|(slot, _)| *slot == name)
+        {
+            validate_carried_slot(function, *marker)?;
+            summary.carried.push((name, marker.map(str::to_owned)));
             continue;
         }
         let stmts = &function.block.stmts;
@@ -2286,20 +2389,34 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
 }
 
 fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Result<(), String> {
-    if summary.panic.len() != 135
+    if summary.panic.len() != 127
         || summary.unlinked.len() != 12
         || summary.assert_empty.len() != 2
         || summary.handle.len() != 2
         || summary.marker.len() != 1
+        || summary.carried.len() != 8
     {
         return Err(format!(
-            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER (pinned 135/12/2/2/1)",
+            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 127/12/2/2/1/8)",
             summary.panic.len(),
             summary.unlinked.len(),
             summary.assert_empty.len(),
             summary.handle.len(),
-            summary.marker.len()
+            summary.marker.len(),
+            summary.carried.len()
         ));
+    }
+    let carried: BTreeMap<&str, Option<&str>> = summary
+        .carried
+        .iter()
+        .map(|(name, marker)| (name.as_str(), marker.as_deref()))
+        .collect();
+    for (name, marker) in ABSENT_LAYER_CARRIED_SLOTS {
+        if carried.get(name) != Some(marker) {
+            return Err(format!(
+                "ABSENT-LAYER: carried-state slot `{name}` is missing or unsigned"
+            ));
+        }
     }
     let unlinked: BTreeMap<&str, (&str, Option<&str>)> = summary
         .unlinked
@@ -2442,6 +2559,12 @@ fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Resul
     );
     markers.extend(summary.handle.iter().map(|(_, marker, _)| marker.as_str()));
     markers.extend(summary.marker.iter().map(|(_, marker)| marker.as_str()));
+    markers.extend(
+        summary
+            .carried
+            .iter()
+            .filter_map(|(_, marker)| marker.as_deref()),
+    );
     for marker in markers {
         if !marker.starts_with("ABSENT-LAYER ") || !marker.contains("::") {
             return Err(format!(
@@ -2911,6 +3034,7 @@ fn validate_take_hits_helper(function: &syn::ItemFn) -> Result<(), String> {
 }
 
 fn validate_absent_layer_helpers(items: &[syn::Item]) -> Result<(), String> {
+    validate_carried_helpers(items)?;
     validate_absent_layer_hit_enum(items)?;
     validate_take_hits_helper(absent_layer_helper(items, ABSENT_LAYER_HIT_TAKER)?)?;
     validate_record_hit(absent_layer_helper(items, "record_hit")?)?;
@@ -6551,6 +6675,62 @@ mod tests {
     #[test]
     fn unit_runtime_slot_table_matches_the_signed_shapes() {
         unit_runtime_slot_violation(&workspace_root()).expect("the AbsentLayer slot table");
+    }
+
+    #[test]
+    fn unit_runtime_carried_state_mutations() {
+        let source = read(
+            &workspace_root().join("crates/neovm-eval/src/emacs_core/runtime/eval/absent_layer.rs"),
+        )
+        .expect("the shared absent-layer source");
+        let original = absent_layer_module_items(&source).expect("the shared slot module");
+        let check = |items: &[syn::Item]| {
+            let summary = classify_absent_layer_slots(items)?;
+            validate_absent_layer_slot_summary(&summary)?;
+            validate_carried_helpers(items)
+        };
+        check(&original).expect("the signed typed carried-state contract");
+        for replacement in [
+            // Every swap's layer-specific refusal marker is pinned.
+            r#"pub(crate) fn terminal_swap_world_state(slot: &mut dyn std::any::Any) {
+                empty_world_state_swap("ABSENT-LAYER system::terminal.wrong", slot);
+            }"#,
+            // The shared helper must test the private marker type, not another type.
+            "fn empty_world_state_swap(marker: &'static str, slot: &mut dyn std::any::Any) { absent_layer_assert_empty(marker, slot.is::<u64>()); }",
+            // A placeholder must construct exactly the zero-sized marker.
+            "fn empty_world_state_placeholder() -> Box<dyn std::any::Any> { Box::new(0_u64) }",
+            // Neither a wrapper nor the shared helper may silently accept a slot.
+            "pub(crate) fn terminal_swap_world_state(slot: &mut dyn std::any::Any) {}",
+            "fn empty_world_state_swap(marker: &'static str, slot: &mut dyn std::any::Any) {}",
+            // A typed swap cannot ignore its incoming slot and check another value.
+            "fn empty_world_state_swap(marker: &'static str, slot: &mut dyn std::any::Any) { absent_layer_assert_empty(marker, true); }",
+        ] {
+            let replacement: syn::ItemFn = syn::parse_str(replacement).expect("mutation function");
+            let name = replacement.sig.ident.clone();
+            let mut items = original.clone();
+            let item = items
+                .iter_mut()
+                .find(|item| matches!(item, syn::Item::Fn(function) if function.sig.ident == name))
+                .expect("the function being mutated");
+            *item = syn::Item::Fn(replacement);
+            let error = check(&items).expect_err("a changed carried-state contract must fail");
+            assert!(error.contains("carried-state function"), "{name}: {error}");
+        }
+        for replacement in [
+            "pub struct AbsentLayerWorldState;",
+            "struct AbsentLayerWorldState(u64);",
+            "struct AbsentLayerWorldState<T>(T);",
+        ] {
+            let replacement: syn::ItemStruct =
+                syn::parse_str(replacement).expect("marker mutation");
+            let mut items = original.clone();
+            let item = items.iter_mut().find(|item| {
+                matches!(item, syn::Item::Struct(marker) if marker.ident == "AbsentLayerWorldState")
+            }).expect("the private marker being mutated");
+            *item = syn::Item::Struct(replacement);
+            let error = check(&items).expect_err("the marker must remain a private unit struct");
+            assert!(error.contains("private unit struct"), "{error}");
+        }
     }
 
     #[test]

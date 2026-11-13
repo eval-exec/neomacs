@@ -42,6 +42,7 @@ macro_rules! eval_absent_layer_slots {
             use neovm_value::error::{EvalResult, Flow};
             use neovm_value::heap_types::{LispString, ProcessId};
             use neovm_value::value::Value;
+            use std::any::Any;
             use std::sync::{Mutex, OnceLock};
 
             /// Honest absent value for `case_tables_sync`: an eval-only
@@ -254,28 +255,52 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_assert_empty("ABSENT-LAYER system::dynamic_module.collect_gc_roots", roots.len() == before);
             }
 
+            /// Empty carried World state for an unlinked upper layer.
+            ///
+            /// This runtime has no `neovm-system` or `neovm-display` dependency,
+            /// so it cannot observe those layers' thread-locals. The carried slot is this
+            /// marker. A slot from any other registrar fails ASSERT-EMPTY.
+            struct AbsentLayerWorldState;
+
+            fn empty_world_state_placeholder() -> Box<dyn std::any::Any> {
+                Box::new(AbsentLayerWorldState)
+            }
+
+            fn empty_world_state_swap(marker: &'static str, slot: &mut dyn std::any::Any) {
+                absent_layer_assert_empty(marker, slot.is::<AbsentLayerWorldState>());
+            }
+
             pub(crate) fn sqlite_world_state_placeholder() -> Box<dyn std::any::Any> {
-                absent_layer_panic("ABSENT-LAYER system::sqlite.world_state_placeholder");
+                empty_world_state_placeholder()
             }
 
             pub(crate) fn sqlite_world_state_swap(slot: &mut dyn std::any::Any) {
-                absent_layer_panic("ABSENT-LAYER system::sqlite.world_state_swap");
+                empty_world_state_swap(
+                    "ABSENT-LAYER system::sqlite.world_state_swap (non-empty slot)",
+                    slot,
+                );
             }
 
             pub(crate) fn dbusbind_world_state_placeholder() -> Box<dyn std::any::Any> {
-                absent_layer_panic("ABSENT-LAYER system::dbusbind.world_state_placeholder");
+                empty_world_state_placeholder()
             }
 
             pub(crate) fn dbusbind_world_state_swap(slot: &mut dyn std::any::Any) {
-                absent_layer_panic("ABSENT-LAYER system::dbusbind.world_state_swap");
+                empty_world_state_swap(
+                    "ABSENT-LAYER system::dbusbind.world_state_swap (non-empty slot)",
+                    slot,
+                );
             }
 
             pub(crate) fn timefns_world_state_placeholder() -> Box<dyn std::any::Any> {
-                absent_layer_panic("ABSENT-LAYER system::timefns.world_state_placeholder");
+                empty_world_state_placeholder()
             }
 
             pub(crate) fn timefns_world_state_swap(slot: &mut dyn std::any::Any) {
-                absent_layer_panic("ABSENT-LAYER system::timefns.world_state_swap");
+                empty_world_state_swap(
+                    "ABSENT-LAYER system::timefns.world_state_swap (non-empty slot)",
+                    slot,
+                );
             }
 
             pub(crate) fn dbusbind_drain_events(ctx: &mut Context) -> Result<usize, Flow> {
@@ -412,11 +437,14 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn terminal_world_state_placeholder() -> Box<dyn std::any::Any> {
-                absent_layer_panic("ABSENT-LAYER display::terminal.world_state_placeholder");
+                empty_world_state_placeholder()
             }
 
             pub(crate) fn terminal_swap_world_state(slot: &mut dyn std::any::Any) {
-                absent_layer_panic("ABSENT-LAYER display::terminal.swap_world_state");
+                empty_world_state_swap(
+                    "ABSENT-LAYER display::terminal.world_state_swap (non-empty slot)",
+                    slot,
+                );
             }
 
             pub(crate) fn terminal_live_terminal_ids() -> Vec<u64> {
