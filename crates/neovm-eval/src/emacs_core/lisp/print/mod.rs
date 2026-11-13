@@ -1,5 +1,9 @@
 //! Value printing (Lisp representation).
 
+mod preprocess_entry;
+#[doc(hidden)]
+pub use preprocess_entry::builtin_print_preprocess;
+
 mod float_output;
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use float_output::FloatNotation;

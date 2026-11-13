@@ -820,6 +820,7 @@ mod unit_runtime {
             builtin_this_single_command_keys, builtin_waiting_for_user_input_p_ctx,
         };
         use crate::emacs_core::misc::{builtin_make_list, builtin_string_to_unibyte};
+        use crate::emacs_core::print::builtin_print_preprocess;
         use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
         use neovm_value::error::EvalResult;
         use neovm_value::value::Value;
@@ -832,6 +833,11 @@ mod unit_runtime {
         }
 
         Some(match name {
+            "print--preprocess" => SubrSpec::new(
+                "print--preprocess",
+                NativeFn::ContextVec(builtin_print_preprocess),
+                SubrArity::new(1, Some(1)),
+            ),
             "this-single-command-keys" => SubrSpec::new(
                 "this-single-command-keys",
                 NativeFn::ContextVec(builtin_this_single_command_keys),
