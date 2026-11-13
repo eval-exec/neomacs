@@ -8889,6 +8889,70 @@ fn local_seqpacket_creation_error() -> Option<i32> {
     }
 }
 
+/// `bind([::1]:0)` errno when this host has no IPv6 loopback.
+///
+/// GNU `make-network-process` reports `file-error` from `bind`
+/// (`src/process.c:3545-3546`, `report_file_error` "Cannot bind server
+/// socket"). `networking.enableIPv6=false` fails that bind with
+/// `EADDRNOTAVAIL`. Any other errno is a different failure and must not
+/// select the disabled-IPv6 expectation.
+#[cfg(unix)]
+fn ipv6_loopback_bind_error() -> Option<i32> {
+    match std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)) {
+        Ok(listener) => {
+            drop(listener);
+            None
+        }
+        Err(error) => {
+            let errno = error.raw_os_error().expect("ipv6 bind errno");
+            assert_eq!(
+                errno,
+                libc::EADDRNOTAVAIL,
+                "unexpected ipv6 loopback bind error: {error}"
+            );
+            Some(errno)
+        }
+    }
+}
+
+/// Whether `getaddrinfo("localhost", AF_INET6, SOCK_DGRAM)` returns an address.
+///
+/// GNU `network-lookup-address-info` uses those hints and returns nil when
+/// `getaddrinfo` fails (`src/process.c:4766-4786`). `EAI_NONAME` is the
+/// no-address answer attested with IPv6 disabled. Any other error is not
+/// that arm.
+#[cfg(unix)]
+fn localhost_ipv6_address_present() -> bool {
+    let node = std::ffi::CString::new("localhost").expect("localhost");
+    // SAFETY: `addrinfo` is a plain C struct. Zeroed hints are empty.
+    let mut hints: libc::addrinfo = unsafe { std::mem::zeroed() };
+    hints.ai_family = libc::AF_INET6;
+    hints.ai_socktype = libc::SOCK_DGRAM;
+    let mut resolved: *mut libc::addrinfo = std::ptr::null_mut();
+    // SAFETY: `node` is a NUL-terminated C string, `hints` is initialized,
+    // and `resolved` is a valid out-pointer. `freeaddrinfo` runs only on the
+    // pointer `getaddrinfo` wrote.
+    let rc = unsafe { libc::getaddrinfo(node.as_ptr(), std::ptr::null(), &hints, &mut resolved) };
+    if rc == 0 {
+        let present = !resolved.is_null();
+        if !resolved.is_null() {
+            unsafe { libc::freeaddrinfo(resolved) };
+        }
+        assert!(
+            present,
+            "getaddrinfo returned success with no localhost ipv6 address"
+        );
+        true
+    } else {
+        assert_eq!(
+            rc,
+            libc::EAI_NONAME,
+            "unexpected localhost ipv6 lookup error: {rc}"
+        );
+        false
+    }
+}
+
 #[test]
 fn make_network_process_validates_gnu_keyword_domains() {
     crate::test_utils::init_test_tracing();
@@ -8974,18 +9038,23 @@ fn make_network_process_numeric_family_constants_match_gnu() {
     crate::test_utils::init_test_tracing();
     let af_inet6 = libc::AF_INET6;
     let af_unix = libc::AF_UNIX;
+    // `condition-case` keeps the other two elements observable when `bind`
+    // fails. On an IPv6-capable host the handler does not run, so the server
+    // element stays `(listen t t t t)`.
     let result = eval_one(&format!(
         r#"(list
-            (let ((p (make-network-process
-                      :name "np-family6" :server t :service 0 :family {af_inet6})))
-              (unwind-protect
-                  (let ((local (process-contact p :local)))
-                    (list (process-status p)
-                          (vectorp local)
-                          (= (length local) 9)
-                          (= (aref local 8) (process-contact p :service))
-                          (= (process-contact p :family) {af_inet6})))
-                (delete-process p)))
+            (condition-case err
+                (let ((p (make-network-process
+                          :name "np-family6" :server t :service 0 :family {af_inet6})))
+                  (unwind-protect
+                      (let ((local (process-contact p :local)))
+                        (list (process-status p)
+                              (vectorp local)
+                              (= (length local) 9)
+                              (= (aref local 8) (process-contact p :service))
+                              (= (process-contact p :family) {af_inet6})))
+                    (delete-process p)))
+              (error err))
             (condition-case err
                 (make-network-process
                  :name "np-family-local-int" :server t :service 0 :family {af_unix})
@@ -8996,10 +9065,17 @@ fn make_network_process_numeric_family_constants_match_gnu() {
               (error err)))"#
     ));
 
+    let ipv6_server = match ipv6_loopback_bind_error() {
+        None => "(listen t t t t)".to_string(),
+        Some(errno) => format!(
+            "(file-error \"Cannot bind server socket\" \"{}\")",
+            native_errno_message(errno)
+        ),
+    };
     assert_eq!(
         result,
         format!(
-            "OK ((listen t t t t) wrong-type-argument (error \"127.0.0.1/0 {}\"))",
+            "OK ({ipv6_server} wrong-type-argument (error \"127.0.0.1/0 {}\"))",
             // SAFETY: gai_strerror returns a static NUL-terminated error message.
             unsafe { std::ffi::CStr::from_ptr(libc::gai_strerror(libc::EAI_FAMILY)) }
                 .to_string_lossy()
@@ -10721,9 +10797,24 @@ fn process_network_interface_and_signal_runtime_surface() {
         results[0],
         "OK ((process-connection nil nil nil nil) (format-network-address t t (1 . 2) nil) (network-interface-list t t (0 . 2) nil) (network-interface-info t t (1 . 1) nil) (network-lookup-address-info t t (1 . 3) nil) (signal-names t t (0 . 0) nil))"
     );
+    // Fifth predicate after the interface-name errors is
+    // `(vectorp (car (network-lookup-address-info "localhost" 'ipv6)))`.
+    // GNU returns nil when that lookup finds no address, and t when it does.
+    let ipv6_localhost = cfg_select! {
+        unix => {
+            if localhost_ipv6_address_present() {
+                "t"
+            } else {
+                "nil"
+            }
+        }
+        _ => "t",
+    };
     assert_eq!(
         results[1],
-        "OK (\"127.0.0.1:80\" \"127.0.0.1\" \"[0:0:0:0:0:0:0:1]:80\" \"0:0:0:0:0:0:0:1\" \"x\" nil nil nil nil (wrong-number-of-arguments format-network-address 0) t t t t t t t (wrong-number-of-arguments network-interface-list 3) (error \"Unsupported address family\") t t t t t t t t t t (wrong-type-argument stringp nil) (error \"interface name too long\") (error \"interface name too long\") (error \"interface name too long\") t t t t t t t t t t t t t t t (error \"Unsupported family\") t t (error \"Unsupported hints value\") (wrong-type-argument stringp 1) t t t (wrong-number-of-arguments signal-names 1) (void-function process-connection))"
+        format!(
+            "OK (\"127.0.0.1:80\" \"127.0.0.1\" \"[0:0:0:0:0:0:0:1]:80\" \"0:0:0:0:0:0:0:1\" \"x\" nil nil nil nil (wrong-number-of-arguments format-network-address 0) t t t t t t t (wrong-number-of-arguments network-interface-list 3) (error \"Unsupported address family\") t t t t t t t t t t (wrong-type-argument stringp nil) (error \"interface name too long\") (error \"interface name too long\") (error \"interface name too long\") t t t t {ipv6_localhost} t t t t t t t t t t (error \"Unsupported family\") t t (error \"Unsupported hints value\") (wrong-type-argument stringp 1) t t t (wrong-number-of-arguments signal-names 1) (void-function process-connection))"
+        )
     );
 }
 
