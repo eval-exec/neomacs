@@ -170,7 +170,11 @@ fn open_exact_font(data: &CFData, postscript_name: &str, size: f32) -> Option<CF
         )
     };
     for index in 0..descriptors.len() {
-        let descriptor = descriptors.get(index)?;
+        // One unreadable descriptor must not abandon the remaining members of
+        // these bytes: `?` here ended the whole exact-face search.
+        let Some(descriptor) = descriptors.get(index) else {
+            continue;
+        };
         // SAFETY: null requests the identity transform; the descriptor is live.
         let font = unsafe { CTFont::with_font_descriptor(&descriptor, size.into(), ptr::null()) };
         // Select the exact collection member. Never substitute a best-match
