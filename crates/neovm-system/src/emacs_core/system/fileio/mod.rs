@@ -17,7 +17,7 @@ use std::ffi::CString;
 #[cfg(target_vendor = "apple")]
 use std::ffi::CStr;
 use std::fs;
-use std::io::{ErrorKind, Seek, SeekFrom, Write};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -6582,42 +6582,66 @@ pub fn builtin_insert_file_contents(
         }
     }
 
-    let contents_bytes = match fs::read(lisp_file_name_to_path_buf(&resolved)) {
-        Ok(contents) => contents,
-        Err(err) => {
-            if visit {
-                let _ = eval
-                    .edit
-                    .buffers
-                    .set_buffer_file_name(current_id, Value::heap_string(resolved.clone()));
-                let _ = eval
-                    .edit
-                    .buffers
-                    .set_buffer_modified_flag(current_id, false);
-                // GNU src/fileio.c:4194-4208: a file it was told to VISIT but
-                // could not open still records a modtime --
-                // `mtime = time_error_value (save_errno)` -- and only signals
-                // after storing it (src/fileio.c:5307-5313).  That is why
-                // `find-file' of a NEW file leaves `visited-file-modtime' at
-                // -1 rather than 0, and why the first change to that buffer
-                // records `(t . -1)'.
-                if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
-                    buf.set_visited_file_modtime(VisitedFileModtime::from_open_error(&err));
-                    buf.set_modtime_size(None);
-                }
-                if empty_undo_list_p {
+    let contents_bytes = {
+        // Only a failed open completes the failed VISIT bookkeeping. GNU
+        // rejects directories after fstat, before that completion path.
+        let mut file = match fs::File::open(lisp_file_name_to_path_buf(&resolved)) {
+            Ok(file) => file,
+            Err(err) => {
+                if visit {
                     let _ = eval
                         .edit
                         .buffers
-                        .configure_buffer_undo_list(current_id, Value::NIL);
+                        .set_buffer_file_name(current_id, Value::heap_string(resolved.clone()));
+                    let _ = eval
+                        .edit
+                        .buffers
+                        .set_buffer_modified_flag(current_id, false);
+                    // GNU src/fileio.c:4194-4208: a file it was told to VISIT but
+                    // could not open still records a modtime --
+                    // `mtime = time_error_value (save_errno)` -- and only signals
+                    // after storing it (src/fileio.c:5307-5313).  That is why
+                    // `find-file' of a NEW file leaves `visited-file-modtime' at
+                    // -1 rather than 0, and why the first change to that buffer
+                    // records `(t . -1)'.
+                    if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
+                        buf.set_visited_file_modtime(VisitedFileModtime::from_open_error(&err));
+                        buf.set_modtime_size(None);
+                    }
+                    if empty_undo_list_p {
+                        let _ = eval
+                            .edit
+                            .buffers
+                            .configure_buffer_undo_list(current_id, Value::NIL);
+                    }
                 }
+                return Err(signal_file_action_error_value(
+                    err,
+                    "Opening input file",
+                    Value::heap_string(resolved.clone()),
+                ));
             }
-            return Err(signal_file_action_error_value(
+        };
+        let metadata = file.metadata().map_err(|err| {
+            signal_file_action_error_value(
                 err,
-                "Opening input file",
+                "Input file status",
+                Value::heap_string(resolved.clone()),
+            )
+        })?;
+        if metadata.is_dir() {
+            return Err(signal_file_action_error_value(
+                std::io::Error::from_raw_os_error(libc::EISDIR),
+                "Read error",
                 Value::heap_string(resolved.clone()),
             ));
         }
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents).map_err(|err| {
+            signal_file_action_error_value(err, "Read error", Value::heap_string(resolved.clone()))
+        })?;
+        // Close the handle before decoding and Lisp callbacks, as fs::read did.
+        contents
     };
     let file_len = contents_bytes.len() as i64;
 
