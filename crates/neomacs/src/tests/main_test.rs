@@ -2014,6 +2014,144 @@ fn parse_startup_options_consumes_script_flag_with_rewrite() {
 }
 
 #[test]
+fn parse_startup_options_quick_precedes_rewritten_script_action() {
+    // GNU emacs.c:1708-1717 re-sorts after --script (priority 100) becomes
+    // -scriptload (priority 0), leaving quick (55) for Lisp's early scan.
+    let program = "owned-neomacs-parser-probe";
+    let file = "owned-script.el";
+    for quick in ["-Q", "--quick", "-quick"] {
+        for args in [
+            [quick, "--batch", "--script", file, "a", "b"],
+            ["--batch", quick, "--script", file, "a", "b"],
+        ] {
+            let startup =
+                parse_startup_options(std::iter::once(program).chain(args).map(str::to_owned))
+                    .expect("quick/script options should parse");
+            assert_eq!(
+                startup.forwarded_args,
+                [program, quick, "-scriptload", file, "a", "b"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>(),
+                "quick flag must reach Lisp before its script action: {args:?}",
+            );
+            assert!(startup.noninteractive);
+            assert_eq!(startup.frontend, FrontendKind::Tty);
+            assert!(startup.no_site_lisp);
+        }
+    }
+}
+
+#[test]
+fn parse_startup_options_script_keeps_option_looking_operands() {
+    // Script file names and --eval operands are data, even when spelled like
+    // options. Reordering must preserve both pairs and the terminator region.
+    let startup = parse_startup_options(
+        [
+            "owned-neomacs-parser-probe",
+            "--quick",
+            "--batch",
+            "--script",
+            "-Q",
+            "--eval",
+            "--script",
+            "--",
+            "-Q",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    )
+    .expect("option-looking operands should remain attached");
+    assert_eq!(
+        startup.forwarded_args,
+        [
+            "owned-neomacs-parser-probe",
+            "--quick",
+            "-scriptload",
+            "-Q",
+            "--eval",
+            "--script",
+            "--",
+            "-Q",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn parse_startup_options_script_preserves_quick_after_terminator() {
+    // The paired CLI control sees ("--" "-Q") inside the script. A blanket
+    // removal of quick-looking arguments would incorrectly consume this data.
+    let startup = parse_startup_options(
+        [
+            "owned-neomacs-parser-probe",
+            "--script",
+            "owned-script.el",
+            "--",
+            "-Q",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    )
+    .expect("script terminator data should parse");
+    assert_eq!(
+        startup.forwarded_args,
+        [
+            "owned-neomacs-parser-probe",
+            "-scriptload",
+            "owned-script.el",
+            "--",
+            "-Q"
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn parse_startup_options_quick_precedes_rewritten_scripteval_action() {
+    // GNU emacs.c:2132-2140 also re-sorts the -x -> -scripteval rewrite.
+    // This checks ordinary file operands, not GNU's undocumented inline forms.
+    let program = "owned-neomacs-parser-probe";
+    for args in [
+        ["-Q", "-x", "owned-script.el", "a"],
+        ["-x", "owned-script.el", "-Q", "a"],
+    ] {
+        let startup =
+            parse_startup_options(std::iter::once(program).chain(args).map(str::to_owned))
+                .expect("quick/scripteval options should parse");
+        assert_eq!(
+            startup.forwarded_args,
+            [program, "-Q", "-scripteval", "owned-script.el", "a"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+            "quick must precede the rewritten script evaluator: {args:?}",
+        );
+        assert!(startup.noninteractive);
+        assert!(startup.no_site_lisp);
+        assert_eq!(startup.frontend, FrontendKind::Tty);
+    }
+}
+
+#[test]
+fn parse_startup_options_accepts_display_shaped_eval_operand() {
+    // This is a valid native option/value pair; any Lisp evaluation error
+    // belongs to the later phase, rather than a second native arity check.
+    let startup = parse_startup_options(
+        ["neomacs", "--batch", "--eval", "-d"]
+            .into_iter()
+            .map(str::to_owned),
+    )
+    .expect("native parsing accepts an option-shaped Elisp operand");
+    assert!(startup.noninteractive);
+    assert_eq!(startup.frontend, FrontendKind::Tty);
+}
+
+#[test]
 fn parse_startup_options_script_missing_value_errors() {
     let err = parse_startup_options(["neomacs".to_string(), "--script".to_string()])
         .expect_err("--script with no value should fail");
