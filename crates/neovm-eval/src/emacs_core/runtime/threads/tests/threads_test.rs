@@ -1701,17 +1701,20 @@ fn test_thread_last_error_is_published_when_signaled_thread_exits() {
     let _ = builtin_thread_last_error(&mut eval, vec![Value::T]).unwrap();
 
     let thread = builtin_make_thread(&mut eval, vec![Value::symbol("car")]).unwrap();
+    let pending_error = builtin_thread_last_error(&mut eval, vec![]).unwrap();
+    assert!(pending_error.is_nil());
+
+    // GNU records the error when the worker runs, after acquiring the global
+    // lock. Joining supplies the release point and waits for that publication.
+    // Internal errors are not re-raised by join, which returns the result.
+    let join_result = builtin_thread_join(&mut eval, vec![thread]);
+    assert_eq!(join_result.unwrap(), Value::NIL);
+
     let published = builtin_thread_last_error(&mut eval, vec![]).unwrap();
     assert_eq!(
         super::super::print::print_value(&published),
         "(wrong-number-of-arguments #<subr car> 0)"
     );
-
-    // Internal thread errors are not re-raised by join (GNU semantics); the
-    // error stays in thread-last-error (asserted above) and join returns the
-    // thread's result.
-    let join_result = builtin_thread_join(&mut eval, vec![thread]);
-    assert!(join_result.is_ok());
 
     let _ = builtin_thread_last_error(&mut eval, vec![Value::T]).unwrap();
     let cleared = builtin_thread_last_error(&mut eval, vec![]).unwrap();
