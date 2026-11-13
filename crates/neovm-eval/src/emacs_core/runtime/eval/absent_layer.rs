@@ -417,12 +417,16 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER display::terminal.configure_window_system_runtime");
             }
 
+            /// The unlinked display layer has no installed terminal TLS handle to forget.
             pub(crate) fn terminal_park_carrier_tls() {
-                absent_layer_panic("ABSENT-LAYER display::terminal.park_carrier_tls");
+                absent_layer_unlinked("ABSENT-LAYER display::terminal.park_carrier_tls");
             }
 
+            /// Display's fingerprint folds its installed registry heap identity, or
+            /// zero when no handle is installed. No display TLS can exist here, so
+            /// the absent identity is exactly zero; the fold itself is still required.
             pub(crate) fn terminal_carrier_tls_fingerprint(acc: &mut u64) {
-                absent_layer_panic("ABSENT-LAYER display::terminal.carrier_tls_fingerprint");
+                neovm_value::tls_fingerprint::mix(acc, 0);
             }
 
             pub(crate) fn terminal_reset_thread_locals() {
@@ -460,8 +464,11 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_unlinked("ABSENT-LAYER display::terminal.install_registry_handle");
             }
 
+            /// Only display's TLS clone and native records change in the linked
+            /// implementation. The incoming lower registry is not mutated and
+            /// need not be empty; neither display destination can exist here.
             pub(crate) fn terminal_install_owner_registry_handle(handle: &TerminalRegistryHandle) {
-                absent_layer_panic("ABSENT-LAYER display::terminal.install_owner_registry_handle");
+                absent_layer_unlinked("ABSENT-LAYER display::terminal.install_owner_registry_handle");
             }
 
             pub(crate) fn fontset_alias_alist_startup_value() -> Value {

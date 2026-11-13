@@ -430,3 +430,73 @@ pub(crate) fn carrier_tls_reset_and_check() {
         );
     }
 }
+
+#[cfg(test)]
+mod absent_terminal_tls_tests {
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::eval::data::terminal_state::{
+        TerminalLispRegistry, TerminalRegistryHandle,
+    };
+    use crate::emacs_core::eval::lifecycle::{
+        install_owner_terminal_registry_handle, terminal_park_carrier_tls,
+    };
+    use neovm_value::value::Value;
+
+    fn nonempty_registry() -> TerminalRegistryHandle {
+        let mut registry = TerminalLispRegistry::default();
+        registry
+            .ensure_terminal(701)
+            .params
+            .push((Value::fixnum(11), Value::fixnum(22)));
+        registry.ensure_terminal(702);
+        TerminalRegistryHandle::new(registry)
+    }
+
+    fn registry_contents(
+        handle: &TerminalRegistryHandle,
+    ) -> (usize, Vec<u64>, Vec<(u64, Value, Vec<(Value, Value)>)>) {
+        let registry = handle.borrow();
+        let mut terminals: Vec<_> = registry
+            .terminals
+            .iter()
+            .map(|(id, terminal)| (*id, terminal.handle, terminal.params.clone()))
+            .collect();
+        terminals.sort_by_key(|(id, _, _)| *id);
+        (
+            handle.heap_identity(),
+            registry.creation_order.clone(),
+            terminals,
+        )
+    }
+
+    #[test]
+    fn absent_terminal_owner_install_preserves_the_nonempty_lower_registry() {
+        let _context = Context::new(crate::test_utils::unit_runtime());
+        let handle = nonempty_registry();
+        let before = registry_contents(&handle);
+        install_owner_terminal_registry_handle(&handle);
+        assert_eq!(registry_contents(&handle), before);
+    }
+
+    #[test]
+    fn absent_terminal_park_preserves_the_nonempty_lower_registry() {
+        let _context = Context::new(crate::test_utils::unit_runtime());
+        let handle = nonempty_registry();
+        let before = registry_contents(&handle);
+        terminal_park_carrier_tls();
+        assert_eq!(registry_contents(&handle), before);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn absent_terminal_fingerprint_folds_the_zero_heap_identity_once() {
+        let _context = Context::new(crate::test_utils::unit_runtime());
+        let seed = neovm_value::tls_fingerprint::SEED;
+        let mut expected = seed;
+        neovm_value::tls_fingerprint::mix(&mut expected, 0);
+        assert_ne!(expected, seed, "folding an absent identity is observable");
+        let mut actual = seed;
+        crate::emacs_core::eval::lifecycle::terminal_carrier_tls_fingerprint(&mut actual);
+        assert_eq!(actual, expected);
+    }
+}

@@ -1995,12 +1995,13 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 /// 22:54:30Z H2/H2a, peer 00:15:30Z T1-T4).
 ///
 /// The signed table lives as one macro_rules body: `eval_absent_layer_slots!`
-/// expands a fixed `absent_layer_slots` module of 141 slot functions (112
-/// marker PANICs, 12 absent-by-construction UNLINKED slots — nine unit no-ops
+/// expands a fixed `absent_layer_slots` module of 141 slot functions (109
+/// marker PANICs, 14 absent-by-construction UNLINKED slots — eleven unit no-ops
 /// plus three valued T7 slots: the signal self-pipe and the terminal
 /// print-handle return `None`, and the case-table sync returns
-/// `CASE_TABLES_SYNC_OK` — 6 ASSERT-EMPTY contracts (2 structural
-/// checks and 4 exact state bodies from peers 5687/5708), 2 T2 per-thread
+/// `CASE_TABLES_SYNC_OK` — 7 ASSERT-EMPTY contracts (2 structural
+/// checks, 4 exact state bodies from peers 5687/5708, and the zero-identity
+/// fingerprint fold from peer 5711), 2 T2 per-thread
 /// handle slots, 1 T3 marker slot, and 8 typed empty carried-state slots
 /// (peer 5685/5690)). This
 /// guard parses that body and proves, statically:
@@ -2009,7 +2010,7 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 ///   plain path such as `None` or the const `CASE_TABLES_SYNC_OK`), a single
 ///   marker-carrying assert-empty check, or the signed
 ///   handle/marker wrapper shape (a bare empty/default body is red);
-/// - the 12 UNLINKED names, markers and honest values, the 6 ASSERT-EMPTY
+/// - the 14 UNLINKED names, markers and honest values, the 7 ASSERT-EMPTY
 ///   names and markers, and the 2+1 handle/marker slots are exactly the
 ///   signed ones; every marker is unique and carries the `ABSENT-LAYER `
 ///   prefix;
@@ -2030,6 +2031,8 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 ///   fontset snapshots have three empty vectors and generation zero,
 ///   restore asserts every field is empty, and the absent module-call
 ///   environment reports false; no other silent default is accepted;
+/// - peer 5711: the absent terminal TLS has no handle to park or install,
+///   and its fingerprint folds zero exactly once rather than omitting the fold;
 /// - T1: eval's dependency sections contain no system/display/core edge, so
 ///   the six absent-by-construction upper states cannot exist in its test
 ///   binary.
@@ -2225,11 +2228,16 @@ fn validate_carried_function(function: &syn::ItemFn, expected: &str) -> Result<(
     validate_signed_state_function(function, expected, "carried-state")
 }
 
-/// Exact upper-state contracts signed in peers 5687/5708. The signal writer,
+/// Exact upper-state contracts signed in peers 5687/5708/5711. The signal writer,
 /// fontset registry, and module-call environments are absent from eval's
 /// dependency graph while the load/apply behavior hooks refuse. Their signed
 /// absence is a value contract, not permission for arbitrary default bodies.
 const ABSENT_LAYER_EMPTY_STATE_SLOTS: &[(&str, &str, &str)] = &[
+    (
+        "terminal_carrier_tls_fingerprint",
+        "ABSENT-LAYER display::terminal.carrier_tls_fingerprint",
+        "pub(crate) fn terminal_carrier_tls_fingerprint(acc: &mut u64) { neovm_value::tls_fingerprint::mix(acc, 0); }",
+    ),
     (
         "dynamic_module_module_call_active",
         "ABSENT-LAYER system::dynamic_module.module_call_active",
@@ -2446,15 +2454,15 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
 }
 
 fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Result<(), String> {
-    if summary.panic.len() != 112
-        || summary.unlinked.len() != 12
-        || summary.assert_empty.len() != 6
+    if summary.panic.len() != 109
+        || summary.unlinked.len() != 14
+        || summary.assert_empty.len() != 7
         || summary.handle.len() != 2
         || summary.marker.len() != 1
         || summary.carried.len() != 8
     {
         return Err(format!(
-            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 112/12/6/2/1/8)",
+            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 109/14/7/2/1/8)",
             summary.panic.len(),
             summary.unlinked.len(),
             summary.assert_empty.len(),
@@ -2486,6 +2494,16 @@ fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Resul
     // print-handle return their honest absent value None, and the case-table
     // sync returns its honest absent value CASE_TABLES_SYNC_OK.
     let expected_unlinked = [
+        (
+            "terminal_park_carrier_tls",
+            "ABSENT-LAYER display::terminal.park_carrier_tls",
+            None,
+        ),
+        (
+            "terminal_install_owner_registry_handle",
+            "ABSENT-LAYER display::terminal.install_owner_registry_handle",
+            None,
+        ),
         (
             "dbusbind_reset_thread_locals",
             "ABSENT-LAYER system::dbusbind.reset_thread_locals",
@@ -6760,6 +6778,10 @@ mod tests {
         let snapshot = signed("fontset_snapshot");
         let restore = signed("fontset_restore");
         let mut mutations = vec![
+            // Zero is the absent TLS identity, but its fold cannot be omitted.
+            "pub(crate) fn terminal_carrier_tls_fingerprint(acc: &mut u64) {}".to_owned(),
+            signed("terminal_carrier_tls_fingerprint").replace("mix(acc, 0)", "mix(acc, 1)"),
+            signed("terminal_carrier_tls_fingerprint").replace("mix(acc, 0)", "mix(&mut 0, 0)"),
             // Refused module loading/apply cannot have installed ACTIVE_ENVS.
             signed("dynamic_module_module_call_active").replace("{ false }", "{ true }"),
             // The unlinked signal writer cannot have published a signal.
