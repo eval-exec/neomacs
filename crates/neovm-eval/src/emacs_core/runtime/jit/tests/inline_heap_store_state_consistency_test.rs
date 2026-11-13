@@ -18,7 +18,7 @@ fn storefast_inline_heap_write_on_and_off_share_active_capture_journal() {
     // process instead of changing process environment after initialization.
     let name = format!(
         "{}::storefast_inline_heap_write_on_and_off_share_active_capture_journal",
-        module_path!().strip_prefix("neovm_core::").unwrap()
+        module_path!().strip_prefix("neovm_eval::").unwrap()
     );
     let mut evidence = Vec::new();
     for arm in ["on", "off"] {

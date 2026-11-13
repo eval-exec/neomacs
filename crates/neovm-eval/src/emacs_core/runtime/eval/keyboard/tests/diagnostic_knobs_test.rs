@@ -7,7 +7,8 @@ use std::sync::atomic::Ordering;
 
 const WORKER_MODE: &str = "NEOMACS_HOST_SYNC_TEST_WORKER";
 const EXPECTED: &str = "NEOMACS_HOST_SYNC_TEST_EXPECTED";
-const WORKER_TEST: &str = "keyboard::diagnostic_knobs::tests::process_startup_worker";
+const WORKER_TEST: &str =
+    "emacs_core::eval::keyboard::diagnostic_knobs::tests::process_startup_worker";
 
 #[test]
 fn process_startup_values_keep_exact_one_semantics() {
