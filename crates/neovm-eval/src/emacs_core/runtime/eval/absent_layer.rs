@@ -238,8 +238,10 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER system::dynamic_module.apply_module_function");
             }
 
+            /// ASSERT-EMPTY: only system's module-call guard writes ACTIVE_ENVS.
+            /// Module load/apply stay ABSENT here, so no environment can be active.
             pub(crate) fn dynamic_module_module_call_active() -> bool {
-                absent_layer_panic("ABSENT-LAYER system::dynamic_module.module_call_active");
+                false
             }
 
             pub(crate) fn dynamic_module_collect_gc_roots(roots: &mut Vec<Value>, _heap_identity: usize) {
@@ -478,12 +480,24 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_unlinked("ABSENT-LAYER display::fontset.reset");
             }
 
+            /// ASSERT-EMPTY: the unlinked display registry has no names or entries.
             pub(crate) fn fontset_snapshot() -> FontsetRegistrySnapshot {
-                absent_layer_panic("ABSENT-LAYER display::fontset.snapshot");
+                FontsetRegistrySnapshot {
+                    ordered_names: Vec::new(),
+                    alias_to_name: Vec::new(),
+                    fontsets: Vec::new(),
+                    generation: 0,
+                }
             }
 
             pub(crate) fn fontset_restore(snapshot: FontsetRegistrySnapshot) {
-                absent_layer_panic("ABSENT-LAYER display::fontset.restore");
+                absent_layer_assert_empty(
+                    "ABSENT-LAYER display::fontset.restore (non-empty registry)",
+                    snapshot.ordered_names.is_empty()
+                        && snapshot.alias_to_name.is_empty()
+                        && snapshot.fontsets.is_empty()
+                        && snapshot.generation == 0,
+                );
             }
 
             pub(crate) fn command_window_configuration_capture(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
@@ -618,8 +632,9 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER system::input.os_signal_pending");
             }
 
+            /// ASSERT-EMPTY: only system's absent OS handler writes TERMINATION_SIGNAL.
             pub(crate) fn input_take_termination_signal() -> Option<i32> {
-                absent_layer_panic("ABSENT-LAYER system::input.take_termination_signal");
+                None
             }
 
             pub(crate) fn input_drain_pending_os_signals(ctx: &mut Context) -> Result<(), Flow> {

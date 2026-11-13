@@ -1995,20 +1995,21 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 /// 22:54:30Z H2/H2a, peer 00:15:30Z T1-T4).
 ///
 /// The signed table lives as one macro_rules body: `eval_absent_layer_slots!`
-/// expands a fixed `absent_layer_slots` module of 141 slot functions (116
+/// expands a fixed `absent_layer_slots` module of 141 slot functions (112
 /// marker PANICs, 12 absent-by-construction UNLINKED slots — nine unit no-ops
 /// plus three valued T7 slots: the signal self-pipe and the terminal
 /// print-handle return `None`, and the case-table sync returns
-/// `CASE_TABLES_SYNC_OK` — 2 structural
-/// ASSERT-EMPTY checks, 2 T2 per-thread handle slots, 1 T3 marker slot, and
-/// 8 typed empty carried-state slots (peer 5685/5690)). This
+/// `CASE_TABLES_SYNC_OK` — 6 ASSERT-EMPTY contracts (2 structural
+/// checks and 4 exact state bodies from peers 5687/5708), 2 T2 per-thread
+/// handle slots, 1 T3 marker slot, and 8 typed empty carried-state slots
+/// (peer 5685/5690)). This
 /// guard parses that body and proves, statically:
 /// - every slot body is exactly a marker panic, an exactly-one-call unlinked
 ///   no-op, a recorded unlinked call followed by the honest absent value (a
 ///   plain path such as `None` or the const `CASE_TABLES_SYNC_OK`), a single
 ///   marker-carrying assert-empty check, or the signed
 ///   handle/marker wrapper shape (a bare empty/default body is red);
-/// - the 12 UNLINKED names, markers and honest values, the 2 ASSERT-EMPTY
+/// - the 12 UNLINKED names, markers and honest values, the 6 ASSERT-EMPTY
 ///   names and markers, and the 2+1 handle/marker slots are exactly the
 ///   signed ones; every marker is unique and carries the `ABSENT-LAYER `
 ///   prefix;
@@ -2025,6 +2026,10 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 /// - the eight carried-state slots construct the private zero-sized marker
 ///   or pass their exact per-layer marker and slot to the validated typed
 ///   ASSERT-EMPTY helper;
+/// - peers 5687/5708: termination-signal reads return exactly None,
+///   fontset snapshots have three empty vectors and generation zero,
+///   restore asserts every field is empty, and the absent module-call
+///   environment reports false; no other silent default is accepted;
 /// - T1: eval's dependency sections contain no system/display/core edge, so
 ///   the six absent-by-construction upper states cannot exist in its test
 ///   binary.
@@ -2190,11 +2195,16 @@ const ABSENT_LAYER_CARRIED_SLOTS: &[(&str, Option<&str>)] = &[
     ),
 ];
 
-/// Compare parsed signatures and bodies, not token spelling: formatting is
-/// irrelevant, but another argument, type, statement, or cfg is not allowed.
-fn validate_carried_function(function: &syn::ItemFn, expected: &str) -> Result<(), String> {
+/// Compare parsed signatures and bodies using the source's canonical
+/// punctuation. Whitespace is irrelevant; another argument, type, statement,
+/// or cfg is not allowed.
+fn validate_signed_state_function(
+    function: &syn::ItemFn,
+    expected: &str,
+    contract: &str,
+) -> Result<(), String> {
     let expected: syn::ItemFn = syn::parse_str(expected)
-        .map_err(|error| format!("invalid signed carried-state function: {error}"))?;
+        .map_err(|error| format!("invalid signed {contract} function: {error}"))?;
     if function.sig != expected.sig
         || function.vis != expected.vis
         || function.block != expected.block
@@ -2204,12 +2214,51 @@ fn validate_carried_function(function: &syn::ItemFn, expected: &str) -> Result<(
             .any(|attr| !attr.path().is_ident("doc"))
     {
         return Err(format!(
-            "ABSENT-LAYER: carried-state function `{}` must have its signed typed body and signature",
+            "ABSENT-LAYER: {contract} function `{}` must have its signed typed body and signature",
             function.sig.ident,
         ));
     }
     Ok(())
 }
+
+fn validate_carried_function(function: &syn::ItemFn, expected: &str) -> Result<(), String> {
+    validate_signed_state_function(function, expected, "carried-state")
+}
+
+/// Exact upper-state contracts signed in peers 5687/5708. The signal writer,
+/// fontset registry, and module-call environments are absent from eval's
+/// dependency graph while the load/apply behavior hooks refuse. Their signed
+/// absence is a value contract, not permission for arbitrary default bodies.
+const ABSENT_LAYER_EMPTY_STATE_SLOTS: &[(&str, &str, &str)] = &[
+    (
+        "dynamic_module_module_call_active",
+        "ABSENT-LAYER system::dynamic_module.module_call_active",
+        "pub(crate) fn dynamic_module_module_call_active() -> bool { false }",
+    ),
+    (
+        "input_take_termination_signal",
+        "ABSENT-LAYER system::input.take_termination_signal",
+        "pub(crate) fn input_take_termination_signal() -> Option<i32> { None }",
+    ),
+    (
+        "fontset_snapshot",
+        "ABSENT-LAYER display::fontset.snapshot",
+        "pub(crate) fn fontset_snapshot() -> FontsetRegistrySnapshot { FontsetRegistrySnapshot { ordered_names: Vec::new(), alias_to_name: Vec::new(), fontsets: Vec::new(), generation: 0, } }",
+    ),
+    (
+        "fontset_restore",
+        "ABSENT-LAYER display::fontset.restore (non-empty registry)",
+        r#"pub(crate) fn fontset_restore(snapshot: FontsetRegistrySnapshot) {
+            absent_layer_assert_empty(
+                "ABSENT-LAYER display::fontset.restore (non-empty registry)",
+                snapshot.ordered_names.is_empty()
+                    && snapshot.alias_to_name.is_empty()
+                    && snapshot.fontsets.is_empty()
+                    && snapshot.generation == 0,
+            );
+        }"#,
+    ),
+];
 
 fn validate_carried_slot(function: &syn::ItemFn, marker: Option<&str>) -> Result<(), String> {
     let name = &function.sig.ident;
@@ -2311,6 +2360,14 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
             summary.carried.push((name, marker.map(str::to_owned)));
             continue;
         }
+        if let Some((_, marker, expected)) = ABSENT_LAYER_EMPTY_STATE_SLOTS
+            .iter()
+            .find(|(slot, _, _)| *slot == name)
+        {
+            validate_signed_state_function(function, expected, "ASSERT-EMPTY state")?;
+            summary.assert_empty.push((name, (*marker).to_owned()));
+            continue;
+        }
         let stmts = &function.block.stmts;
         let calls: Vec<(String, Option<String>)> =
             stmts.iter().filter_map(absent_layer_call).collect();
@@ -2389,15 +2446,15 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
 }
 
 fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Result<(), String> {
-    if summary.panic.len() != 116
+    if summary.panic.len() != 112
         || summary.unlinked.len() != 12
-        || summary.assert_empty.len() != 2
+        || summary.assert_empty.len() != 6
         || summary.handle.len() != 2
         || summary.marker.len() != 1
         || summary.carried.len() != 8
     {
         return Err(format!(
-            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 116/12/2/2/1/8)",
+            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 112/12/6/2/1/8)",
             summary.panic.len(),
             summary.unlinked.len(),
             summary.assert_empty.len(),
@@ -2500,10 +2557,14 @@ fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Resul
             "ABSENT-LAYER core::sqlite.install_finalizer_table",
         ),
     ];
-    for (name, marker) in expected_assert_empty {
+    for (name, marker) in expected_assert_empty.into_iter().chain(
+        ABSENT_LAYER_EMPTY_STATE_SLOTS
+            .iter()
+            .map(|(name, marker, _)| (*name, *marker)),
+    ) {
         if assert_empty.get(name) != Some(&marker) {
             return Err(format!(
-                "ABSENT-LAYER: ASSERT-EMPTY slot `{name}` must assert with marker \"{marker}\" (H2a)"
+                "ABSENT-LAYER: ASSERT-EMPTY slot `{name}` must have its signed empty-state contract for \"{marker}\" (H2a/5687/5708)"
             ));
         }
     }
@@ -6675,6 +6736,78 @@ mod tests {
     #[test]
     fn unit_runtime_slot_table_matches_the_signed_shapes() {
         unit_runtime_slot_violation(&workspace_root()).expect("the AbsentLayer slot table");
+    }
+
+    #[test]
+    fn unit_runtime_empty_state_mutations() {
+        let source = read(
+            &workspace_root().join("crates/neovm-eval/src/emacs_core/runtime/eval/absent_layer.rs"),
+        )
+        .expect("the shared absent-layer source");
+        let original = absent_layer_module_items(&source).expect("the shared slot module");
+        let check = |items: &[syn::Item]| {
+            let summary = classify_absent_layer_slots(items)?;
+            validate_absent_layer_slot_summary(&summary)
+        };
+        check(&original).expect("the signed empty-state contracts");
+        let signed = |name: &str| {
+            ABSENT_LAYER_EMPTY_STATE_SLOTS
+                .iter()
+                .find(|(slot, _, _)| *slot == name)
+                .expect("the named signed contract")
+                .2
+        };
+        let snapshot = signed("fontset_snapshot");
+        let restore = signed("fontset_restore");
+        let mut mutations = vec![
+            // Refused module loading/apply cannot have installed ACTIVE_ENVS.
+            signed("dynamic_module_module_call_active").replace("{ false }", "{ true }"),
+            // The unlinked signal writer cannot have published a signal.
+            signed("input_take_termination_signal").replace("{ None }", "{ Some(15) }"),
+            // Every snapshot field, including its epoch, must be empty.
+            snapshot.replace(
+                "ordered_names: Vec::new()",
+                r#"ordered_names: vec![LispString::from_utf8("fontset-nonempty")]"#,
+            ),
+            snapshot.replace(
+                "alias_to_name: Vec::new()",
+                r#"alias_to_name: vec![(LispString::from_utf8("alias"), LispString::from_utf8("name"))]"#,
+            ),
+            snapshot.replace(
+                "fontsets: Vec::new()",
+                r#"fontsets: vec![(LispString::from_utf8("fontset-nonempty"), FontsetDataSnapshot::default())]"#,
+            ),
+            snapshot.replace("generation: 0", "generation: 1"),
+            "pub(crate) fn fontset_restore(snapshot: FontsetRegistrySnapshot) {}".to_owned(),
+            restore.replace(
+                "ABSENT-LAYER display::fontset.restore (non-empty registry)",
+                "ABSENT-LAYER display::fontset.wrong",
+            ),
+        ];
+        // Removing any one conjunct must fail, even when all others remain.
+        for field in [
+            "snapshot.ordered_names.is_empty()",
+            "snapshot.alias_to_name.is_empty()",
+            "snapshot.fontsets.is_empty()",
+            "snapshot.generation == 0",
+        ] {
+            mutations.push(restore.replace(field, "true"));
+        }
+        for replacement in mutations {
+            let replacement: syn::ItemFn = syn::parse_str(&replacement).expect("state mutation");
+            let name = replacement.sig.ident.clone();
+            let mut items = original.clone();
+            let item = items
+                .iter_mut()
+                .find(|item| matches!(item, syn::Item::Fn(function) if function.sig.ident == name))
+                .expect("the state slot being mutated");
+            *item = syn::Item::Fn(replacement);
+            let error = check(&items).expect_err("a changed empty-state contract must fail");
+            assert!(
+                error.contains("ASSERT-EMPTY state function"),
+                "{name}: {error}"
+            );
+        }
     }
 
     #[test]

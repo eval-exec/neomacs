@@ -1746,3 +1746,134 @@ mod upper_subrs_generated_drift {
         );
     }
 }
+
+/// ASSERT-EMPTY contracts for upper-layer state the eval unit runtime cannot own.
+#[cfg(test)]
+mod absent_signal_and_fontset_state {
+    use std::any::Any;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::eval::data::fontset_state::{
+        FontsetDataSnapshot, FontsetRegistrySnapshot,
+    };
+    use crate::emacs_core::eval::input_hooks::take_termination_signal;
+    use crate::emacs_core::eval::lifecycle::{
+        fontset_list_value, fontset_registry_snapshot, restore_fontset_registry,
+    };
+    use neovm_value::heap_types::LispString;
+
+    fn empty_fontset() -> FontsetRegistrySnapshot {
+        FontsetRegistrySnapshot {
+            ordered_names: Vec::new(),
+            alias_to_name: Vec::new(),
+            fontsets: Vec::new(),
+            generation: 0,
+        }
+    }
+
+    fn panic_text(payload: Box<dyn Any + Send>) -> String {
+        match payload.downcast::<String>() {
+            Ok(text) => *text,
+            Err(payload) => match payload.downcast::<&str>() {
+                Ok(text) => (*text).to_owned(),
+                Err(_) => "<non-string panic>".to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn an_unlinked_signal_handler_has_no_termination_signal() {
+        let _context = Context::new(super::unit_runtime());
+        assert_eq!(take_termination_signal(), None);
+        assert_eq!(take_termination_signal(), None);
+    }
+
+    #[test]
+    fn an_unlinked_fontset_round_trips_an_empty_snapshot() {
+        let _context = Context::new(super::unit_runtime());
+        assert_eq!(fontset_registry_snapshot(), empty_fontset());
+        restore_fontset_registry(fontset_registry_snapshot());
+        assert_eq!(fontset_registry_snapshot(), empty_fontset());
+    }
+
+    #[test]
+    fn an_unlinked_fontset_rejects_every_nonempty_snapshot_field() {
+        let _context = Context::new(super::unit_runtime());
+        let name = LispString::from_utf8("fontset-nonempty");
+        let mut snapshots = [
+            empty_fontset(),
+            empty_fontset(),
+            empty_fontset(),
+            empty_fontset(),
+        ];
+        snapshots[0].ordered_names.push(name.clone());
+        snapshots[1]
+            .alias_to_name
+            .push((name.clone(), name.clone()));
+        snapshots[2]
+            .fontsets
+            .push((name, FontsetDataSnapshot::default()));
+        snapshots[3].generation = 1;
+        for snapshot in snapshots {
+            let err = catch_unwind(AssertUnwindSafe(|| restore_fontset_registry(snapshot)));
+            let text = panic_text(err.expect_err("nonempty fontset must be refused"));
+            assert!(
+                text.contains("ABSENT-LAYER display::fontset.restore (non-empty registry)"),
+                "fontset restore panic was {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unlinked_fontset_behaviour_hook_still_panics_absent() {
+        let _context = Context::new(super::unit_runtime());
+        let err = catch_unwind(AssertUnwindSafe(fontset_list_value));
+        let text = panic_text(err.expect_err("fontset list must still panic"));
+        assert!(text.contains("ABSENT-LAYER display::fontset.list_value"));
+    }
+}
+
+/// Module frames cannot exist without the unlinked system module loader.
+#[cfg(test)]
+mod absent_module_call_state {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::eval::lifecycle::{
+        dynamic_module_apply_module_function, dynamic_module_call_active, load_module,
+    };
+    use neovm_value::value::Value;
+
+    #[test]
+    fn an_unlinked_module_call_cannot_be_active() {
+        let _context = Context::new(super::unit_runtime());
+        assert!(!dynamic_module_call_active());
+    }
+
+    #[test]
+    fn module_load_and_apply_still_panic_absent() {
+        let mut context = Context::new(super::unit_runtime());
+        let load = catch_unwind(AssertUnwindSafe(|| {
+            load_module(&mut context, "unlinked-test-module.so".into())
+        }));
+        let apply = catch_unwind(AssertUnwindSafe(|| {
+            dynamic_module_apply_module_function(&mut context, Value::NIL, Vec::new())
+        }));
+        for (result, marker) in [
+            (load, "ABSENT-LAYER system::dynamic_module.load_module"),
+            (
+                apply,
+                "ABSENT-LAYER system::dynamic_module.apply_module_function",
+            ),
+        ] {
+            let payload = result.expect_err(marker);
+            let text = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .expect("named ABSENT panic");
+            assert!(text.contains(marker), "panic was {text}, wanted {marker}");
+        }
+    }
+}
