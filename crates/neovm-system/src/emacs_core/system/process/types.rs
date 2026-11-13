@@ -3949,7 +3949,6 @@ pub(super) fn unbound_unix_datagram_socket(
     Ok(socket.into())
 }
 
-use super::GreenSelectHandle;
 use super::child_status::{
     ObservedProcess, Recording, STATUS_NOTIFY_STAMPED, STATUS_NOTIFY_WALKS, SweepableChild,
     UnrecordedStatusRead, UpdateStatusSite, record_status_notify_visits,
@@ -4266,8 +4265,6 @@ pub trait SystemProcessExt {
     );
 
     // Methods declared beside their state files (A3b-3).
-    fn prepare_green_main_wait(&self, deadline: Instant) -> MainNativePreparation;
-    fn green_select_handle(&self) -> Option<GreenSelectHandle>;
     /// GNU `handle_child_signal`'s `FOR_EACH_PROCESS` arm (src/process.c:
     /// 7734-7763), run at a safe point instead of in the handler.
     ///
@@ -7232,31 +7229,7 @@ impl SystemProcessExt for ProcessManager {
         proc.coding_state.store_decoder(decoder);
     }
 
-    // Methods whose state files are green_select.rs / child_status.rs (A3b-3).
-    fn prepare_green_main_wait(&self, deadline: Instant) -> MainNativePreparation {
-        match self.green_select_handle() {
-            Some(select) => select.prepare_main_wait(deadline),
-            None => MainNativePreparation::Scheduler,
-        }
-    }
-
-    fn green_select_handle(&self) -> Option<GreenSelectHandle> {
-        let latch = &self.wait_backend.notification_pending;
-        let wake = latch
-            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
-            .require_native()
-            .ok()?;
-        Some(GreenSelectHandle {
-            wake: Arc::clone(wake),
-            notification_pending: Arc::clone(latch),
-            #[cfg(unix)]
-            signal_source: self.wait_backend.poller.as_ref().and_then(|poller| {
-                self.wait_backend
-                    .signal_fd
-                    .map(|fd| (Arc::clone(poller), fd))
-            }),
-        })
-    }
+    // Child-status methods (A3b-3); green-select capture is inherent in eval.
     /// GNU `handle_child_signal`'s `FOR_EACH_PROCESS` arm (src/process.c:
     /// 7734-7763), run at a safe point instead of in the handler.
     ///

@@ -59,9 +59,7 @@ pub(crate) mod sys;
 pub mod sys;
 use sys::ChildStatusSource;
 
-#[doc(hidden)]
-pub mod green_select;
-pub use green_select::{GreenSelectHandle, MainNativePreparation};
+pub use neovm_eval::emacs_core::eval::process_hooks::GreenSelectHandle;
 
 mod executable;
 pub(super) use executable::{ExecutableLookupMode, ExecutableSearch};

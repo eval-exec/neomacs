@@ -7408,6 +7408,7 @@ pub mod case_tables;
 pub mod display_query_hooks;
 pub mod font_shape;
 mod gc_pacing;
+mod green_select;
 pub mod hooks_proof;
 pub mod input_hooks;
 pub mod interactive_registry;

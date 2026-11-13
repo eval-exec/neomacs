@@ -3206,7 +3206,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	type	type PerfRecord
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	enum	enum MainWaitPreparation
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	enum	enum SelectArm
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn delete_process
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl MainWaitHooks::new
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl NativeWaitGuard::from_raw
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl NativeWaitGuard::wait_with
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl NativeWaitToken::from_raw
@@ -3218,7 +3217,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl Select
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl SelectArmToken::raw
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl SelectHandleToken::from_raw
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl SelectHandleToken::raw
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl SelectHooks::new
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn open_channel_for_module
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn prepare_main_wait
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn print_process_handle
@@ -3230,14 +3228,12 @@ crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn select_wait
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn terminate_and_defer_reaping
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn unlink_owned_unix_listener_for_exit
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn wait_notifier
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct MainWaitHooks
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct NativeWaitGuard
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct NativeWaitToken
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct ProcessHooks
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct SelectArmGuard
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct SelectArmToken
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct SelectHandleToken
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct SelectHooks
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	type	type DeleteProcess
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	type	type OpenChannelForModule
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	type	type PrintProcessHandle
@@ -4607,3 +4603,9 @@ crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn curren
 crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn standard_case_table_for_admission
 crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn sync_current_buffer_case_table_state
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	mod	mod case_table_adapter
+crates/neovm-eval/src/emacs_core/runtime/eval/green_select.rs	fn	fn impl GreenSelectHandle::arm
+crates/neovm-eval/src/emacs_core/runtime/eval/green_select.rs	fn	fn impl GreenSelectHandle::notify
+crates/neovm-eval/src/emacs_core/runtime/eval/green_select.rs	fn	fn impl GreenSelectHandle::wait_registered
+crates/neovm-eval/src/emacs_core/runtime/eval/green_select.rs	fn	fn impl ProcessManager::green_select_handle
+crates/neovm-eval/src/emacs_core/runtime/eval/green_select.rs	struct	struct GreenSelectHandle
+crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	use	use GreenSelectHandle

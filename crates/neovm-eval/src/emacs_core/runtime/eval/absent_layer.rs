@@ -23,16 +23,11 @@ macro_rules! eval_absent_layer_slots {
             use $crate::emacs_core::eval::keyboard::{FrontendWebViewEvent, IdleTransitionPolicy, InputEvent};
             use $crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
             use $crate::emacs_core::eval::call_interactively::CallInteractivelyPlan;
-            use $crate::emacs_core::eval::process_hooks::{
-                MainWaitPreparation, NativeWaitToken, SelectArm, SelectArmToken, SelectHandleToken,
-            };
             use $crate::emacs_core::eval::data::process_state::{ChildOwnership, WaitNotifier};
-            use $crate::emacs_core::eval::MainNativeHandoff;
             use $crate::emacs_core::eval::perf::PerfOp;
             use $crate::emacs_core::eval::lifecycle::WindowConfigurationRestoreOptions;
             use $crate::emacs_core::reader::{MinibufferBufferUnwind, MinibufferSessionUnwind};
             use $crate::emacs_core::eval::data::layout_input::BufferLayoutInputState;
-            use $crate::host_effect::wake::{ControlDestination, ControlNudge, ControlWake, ControlWakeOutcome};
             use neovm_edit::buffer::{BufferId, BufferManager};
             use neovm_edit::emacs_core::display_metrics::{
                 InvisibleRunContext, LineWrap, MeasuredMotion, MotionEngine, MotionRequest, WindowBodyCellSize, WindowId,
@@ -613,50 +608,6 @@ macro_rules! eval_absent_layer_slots {
 
             pub(crate) fn process_terminate_and_defer_reaping(ownership: &mut ChildOwnership, signal: i32) {
                 absent_layer_panic("ABSENT-LAYER system::process.terminate_and_defer_reaping");
-            }
-
-            pub(crate) fn select_handle(ctx: &mut Context) -> Option<SelectHandleToken> {
-                absent_layer_panic("ABSENT-LAYER system::process.select.handle");
-            }
-
-            pub(crate) fn select_notify(token: SelectHandleToken) {
-                absent_layer_panic("ABSENT-LAYER system::process.select.notify");
-            }
-
-            pub(crate) fn select_nudge(token: SelectHandleToken, destination: ControlDestination, nudge: ControlNudge) {
-                absent_layer_panic("ABSENT-LAYER system::process.select.nudge");
-            }
-
-            pub(crate) fn select_control_source(token: SelectHandleToken) -> Option<std::sync::Arc<ControlWake>> {
-                absent_layer_panic("ABSENT-LAYER system::process.select.control_source");
-            }
-
-            pub(crate) fn select_wait_until(token: SelectHandleToken, deadline: std::time::Instant) -> bool {
-                absent_layer_panic("ABSENT-LAYER system::process.select.wait_until");
-            }
-
-            pub(crate) fn select_arm(token: SelectHandleToken) -> SelectArm {
-                absent_layer_panic("ABSENT-LAYER system::process.select.arm");
-            }
-
-            pub(crate) fn select_wait_registered(token: SelectHandleToken, arm: SelectArmToken, deadline: std::time::Instant) -> bool {
-                absent_layer_panic("ABSENT-LAYER system::process.select.wait_registered");
-            }
-
-            pub(crate) fn select_cancel_arm(arm: SelectArmToken) {
-                absent_layer_panic("ABSENT-LAYER system::process.select.cancel_arm");
-            }
-
-            pub(crate) fn main_wait_prepare(ctx: &mut Context, deadline: std::time::Instant) -> MainWaitPreparation {
-                absent_layer_panic("ABSENT-LAYER system::process.main_wait.prepare");
-            }
-
-            pub(crate) fn main_wait_wait(token: NativeWaitToken, handoff: &mut MainNativeHandoff<'_>) -> std::io::Result<ControlWakeOutcome> {
-                absent_layer_panic("ABSENT-LAYER system::process.main_wait.wait");
-            }
-
-            pub(crate) fn main_wait_cancel(token: NativeWaitToken) {
-                absent_layer_panic("ABSENT-LAYER system::process.main_wait.cancel");
             }
 
             pub(crate) fn input_interrupt_for_input_event_if_requested(ctx: &mut Context, event: InputEvent) -> Result<bool, Flow> {

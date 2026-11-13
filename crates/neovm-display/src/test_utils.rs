@@ -324,7 +324,7 @@ mod unit_runtime {
         LifecycleHooks, TerminalHooks, WindowTreeHooks, WorldStateHooks, XfacesHooks,
     };
     use neovm_eval::emacs_core::eval::perf::PerfHooks;
-    use neovm_eval::emacs_core::eval::process_hooks::{MainWaitHooks, ProcessHooks, SelectHooks};
+    use neovm_eval::emacs_core::eval::process_hooks::ProcessHooks;
     use neovm_eval::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
     use neovm_eval::test_utils::CanonicalEvalStep;
     use neovm_value::display_vocab::FrameId;
@@ -1247,20 +1247,6 @@ mod unit_runtime {
         s::sqlite_reset,
     );
 
-    static SELECT: SelectHooks = SelectHooks::new(
-        s::select_handle,
-        s::select_notify,
-        s::select_nudge,
-        s::select_control_source,
-        s::select_wait_until,
-        s::select_arm,
-        s::select_wait_registered,
-        s::select_cancel_arm,
-    );
-
-    static MAIN_WAIT: MainWaitHooks =
-        MainWaitHooks::new(s::main_wait_prepare, s::main_wait_wait, s::main_wait_cancel);
-
     static PROCESS: ProcessHooks = ProcessHooks::new(
         s::process_unlink,
         s::process_delete,
@@ -1268,8 +1254,6 @@ mod unit_runtime {
         s::process_print_handle,
         s::process_wait_notifier,
         s::process_terminate_and_defer_reaping,
-        SELECT,
-        MAIN_WAIT,
     );
 
     static INPUT: InputHooks = InputHooks::new(

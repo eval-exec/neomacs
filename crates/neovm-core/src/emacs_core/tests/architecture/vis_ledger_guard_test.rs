@@ -1995,7 +1995,7 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 /// 22:54:30Z H2/H2a, peer 00:15:30Z T1-T4).
 ///
 /// The signed table lives as one macro_rules body: `eval_absent_layer_slots!`
-/// expands a fixed `absent_layer_slots` module of 152 slot functions (127
+/// expands a fixed `absent_layer_slots` module of 141 slot functions (116
 /// marker PANICs, 12 absent-by-construction UNLINKED slots — nine unit no-ops
 /// plus three valued T7 slots: the signal self-pipe and the terminal
 /// print-handle return `None`, and the case-table sync returns
@@ -2389,7 +2389,7 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
 }
 
 fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Result<(), String> {
-    if summary.panic.len() != 127
+    if summary.panic.len() != 116
         || summary.unlinked.len() != 12
         || summary.assert_empty.len() != 2
         || summary.handle.len() != 2
@@ -2397,7 +2397,7 @@ fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Resul
         || summary.carried.len() != 8
     {
         return Err(format!(
-            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 127/12/2/2/1/8)",
+            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 116/12/2/2/1/8)",
             summary.panic.len(),
             summary.unlinked.len(),
             summary.assert_empty.len(),

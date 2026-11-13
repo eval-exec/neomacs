@@ -1,17 +1,21 @@
 //! The Green scheduler's owned OS wait handle. It carries no process map,
 //! Lisp value, or World borrow: only poll readiness and its control owner.
 
-use super::{Arc, Instant, Ordering};
-use neovm_eval::host_effect::contracts::ReadDeadline;
-use neovm_eval::host_effect::wake::native_wait::{NativeWaitPreparationError, PreparedNativeWait};
-use neovm_eval::host_effect::wake::{
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
+
+use super::data::process_state::ProcessManager;
+use crate::host_effect::contracts::ReadDeadline;
+use crate::host_effect::wake::native_wait::{NativeWaitPreparationError, PreparedNativeWait};
+use crate::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, ControlWake, ControlWakeOutcome,
     HostClosure, NativePollOwner, NotificationLatch, WaitRegistration,
 };
 
 #[derive(Debug)]
 #[doc(hidden)]
-pub enum MainNativePreparation {
+pub(crate) enum MainNativePreparation {
     Prepared(PreparedNativeWait),
     Ready,
     Scheduler,
@@ -31,7 +35,7 @@ static_assertions::assert_impl_all!(GreenSelectHandle: Send, Sync);
 
 impl GreenSelectHandle {
     /// Cold native-service capture of this backend's existing readiness owner.
-    pub fn control_source(&self) -> Arc<ControlWake> {
+    pub(crate) fn control_source(&self) -> Arc<ControlWake> {
         Arc::clone(&self.wake)
     }
 
@@ -44,7 +48,7 @@ impl GreenSelectHandle {
         );
     }
 
-    pub fn nudge(&self, destination: ControlDestination, reason: ControlNudge) {
+    pub(crate) fn nudge(&self, destination: ControlDestination, reason: ControlNudge) {
         match self.wake.handle().nudge(destination, reason) {
             ControlNudgeOutcome::Notified
             | ControlNudgeOutcome::AlreadyPending
@@ -87,7 +91,7 @@ impl GreenSelectHandle {
                 return MainNativePreparation::Scheduler;
             }
         };
-        if crate::emacs_core::os_signal::pending()
+        if super::ASYNC_ATTENTION.is_raised(super::AsyncSource::OsSignal)
             || self.notification_pending.swap(false, Ordering::AcqRel)
             || wait.poll().is_some()
             || self.prepare_signal_source().is_err()
@@ -102,7 +106,7 @@ impl GreenSelectHandle {
         self.wake.arm(ControlDestination::IdleScheduler)
     }
 
-    pub fn wait_until(&self, deadline: Instant) -> bool {
+    pub(crate) fn wait_until(&self, deadline: Instant) -> bool {
         match self.arm() {
             Ok(registration) => self.wait_registered(&registration, deadline),
             Err(_) => true,
@@ -112,7 +116,7 @@ impl GreenSelectHandle {
     /// Arm before the caller's next authoritative-state check. One native
     /// lease prevents main's future native pump and idle scheduler competing.
     pub fn wait_registered(&self, registration: &WaitRegistration, deadline: Instant) -> bool {
-        if crate::emacs_core::os_signal::pending()
+        if super::ASYNC_ATTENTION.is_raised(super::AsyncSource::OsSignal)
             || self.notification_pending.swap(false, Ordering::AcqRel)
         {
             return true;
@@ -150,5 +154,35 @@ impl GreenSelectHandle {
             | ControlWakeOutcome::NativeReady
             | ControlWakeOutcome::HostClosed(_) => true,
         }
+    }
+}
+
+// The backend is eval-owned; capture the same native readiness owner for
+// direct scheduler dispatch and upper-layer callers.
+impl ProcessManager {
+    pub(crate) fn prepare_green_main_wait(&self, deadline: Instant) -> MainNativePreparation {
+        match self.green_select_handle() {
+            Some(select) => select.prepare_main_wait(deadline),
+            None => MainNativePreparation::Scheduler,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn green_select_handle(&self) -> Option<GreenSelectHandle> {
+        let latch = &self.wait_backend.notification_pending;
+        let wake = latch
+            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
+            .require_native()
+            .ok()?;
+        Some(GreenSelectHandle {
+            wake: Arc::clone(wake),
+            notification_pending: Arc::clone(latch),
+            #[cfg(unix)]
+            signal_source: self.wait_backend.poller.as_ref().and_then(|poller| {
+                self.wait_backend
+                    .signal_fd
+                    .map(|fd| (Arc::clone(poller), fd))
+            }),
+        })
     }
 }

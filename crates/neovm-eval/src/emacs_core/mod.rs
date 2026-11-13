@@ -74,14 +74,6 @@ pub mod var_docs;
 // module tree is now their home.
 pub use eval::Context;
 
-// Scheduler lib tests still name the pre-split path
-// `crate::emacs_core::process_hooks::select_handle_for_manager`. The function
-// lives on the eval hook module; this alias is the route those call sites
-// already use. cfg(test) only, so it is not a production surface.
-#[cfg(test)]
-pub(crate) mod process_hooks {
-    pub(crate) use super::eval::process_hooks::select_handle_for_manager;
-}
 pub use print::{
     format_eval_result, format_eval_result_bytes_with_eval, format_eval_result_with_eval,
     print_value, print_value_bytes, print_value_bytes_with_eval, print_value_with_buffers,

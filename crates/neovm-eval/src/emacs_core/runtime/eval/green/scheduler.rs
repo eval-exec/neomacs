@@ -4506,9 +4506,9 @@ mod tests {
         let control = Control::default();
         let _main = control.register_main();
         let _worker = control.register_worker(worker);
-        control.install_select(crate::emacs_core::process_hooks::select_handle_for_manager(
-            &manager,
-        ));
+        control.install_select(
+            crate::emacs_core::eval::process_hooks::select::register_manager(&manager),
+        );
         let key = host_key();
         let phase = ServicePhase::Continuing(ContinuationEligibility::Released);
         {
@@ -5256,9 +5256,9 @@ mod tests {
             let control = Control::default();
             let _main = control.register_main();
             let _worker = control.register_worker(worker);
-            control.install_select(crate::emacs_core::process_hooks::select_handle_for_manager(
-                &manager,
-            ));
+            control.install_select(
+                crate::emacs_core::eval::process_hooks::select::register_manager(&manager),
+            );
             {
                 let mut state = control.state();
                 Control::set_wait(&mut state, ThreadKey::Main, original);

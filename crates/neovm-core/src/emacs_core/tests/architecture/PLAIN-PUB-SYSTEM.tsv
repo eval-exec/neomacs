@@ -391,21 +391,11 @@ crates/neovm-system/src/emacs_core/system/process/builtins.rs	fn	fn builtin_set_
 crates/neovm-system/src/emacs_core/system/process/builtins.rs	fn	fn builtin_signal_names
 crates/neovm-system/src/emacs_core/system/process/builtins.rs	fn	fn builtin_signal_process
 crates/neovm-system/src/emacs_core/system/process/builtins.rs	fn	fn builtin_stop_process
-crates/neovm-system/src/emacs_core/system/process/green_select.rs	enum	enum MainNativePreparation
-crates/neovm-system/src/emacs_core/system/process/green_select.rs	fn	fn impl GreenSelectHandle::arm
-crates/neovm-system/src/emacs_core/system/process/green_select.rs	fn	fn impl GreenSelectHandle::control_source
-crates/neovm-system/src/emacs_core/system/process/green_select.rs	fn	fn impl GreenSelectHandle::notify
-crates/neovm-system/src/emacs_core/system/process/green_select.rs	fn	fn impl GreenSelectHandle::nudge
-crates/neovm-system/src/emacs_core/system/process/green_select.rs	fn	fn impl GreenSelectHandle::wait_registered
-crates/neovm-system/src/emacs_core/system/process/green_select.rs	fn	fn impl GreenSelectHandle::wait_until
-crates/neovm-system/src/emacs_core/system/process/green_select.rs	struct	struct GreenSelectHandle
 crates/neovm-system/src/emacs_core/system/process/mod.rs	fn	fn impl ProcessInputEndpoint::select
 crates/neovm-system/src/emacs_core/system/process/mod.rs	mod	mod builtins
-crates/neovm-system/src/emacs_core/system/process/mod.rs	mod	mod green_select
 crates/neovm-system/src/emacs_core/system/process/mod.rs	mod	mod reap
 crates/neovm-system/src/emacs_core/system/process/mod.rs	mod	mod types
 crates/neovm-system/src/emacs_core/system/process/mod.rs	use	use GreenSelectHandle
-crates/neovm-system/src/emacs_core/system/process/mod.rs	use	use MainNativePreparation
 crates/neovm-system/src/emacs_core/system/process/reap.rs	fn	fn impl DeferredChildId::next
 crates/neovm-system/src/emacs_core/system/process/reap.rs	trait	trait ChildOwnershipIo
 crates/neovm-system/src/emacs_core/system/process/sys/child_exit_event.rs	enum	enum ChildExitNotification
