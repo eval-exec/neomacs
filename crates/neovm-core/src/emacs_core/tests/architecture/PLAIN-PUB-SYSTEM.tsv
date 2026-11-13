@@ -633,7 +633,6 @@ crates/neovm-system/src/emacs_core/system/sqlite/mod.rs	use	use swap_world_state
 crates/neovm-system/src/emacs_core/system/sqlite/mod.rs	use	use transaction
 crates/neovm-system/src/emacs_core/system/sqlite/mod.rs	use	use version
 crates/neovm-system/src/emacs_core/system/sqlite/mod.rs	use	use world_state_placeholder
-crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn builtin_current_time_in_context
 crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn builtin_current_time_string
 crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn builtin_current_time_zone
 crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn builtin_decode_time
@@ -645,7 +644,6 @@ crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn builtin_time_conv
 crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn builtin_time_equal_p
 crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn builtin_time_less_p
 crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn builtin_time_subtract
-crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn lisp_time_output_from_context
 crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn reset_timefns_thread_locals
 crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn swap_world_state
 crates/neovm-system/src/emacs_core/system/timefns/mod.rs	fn	fn world_state_placeholder

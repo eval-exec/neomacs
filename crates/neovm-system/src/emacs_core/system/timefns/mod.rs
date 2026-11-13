@@ -5,10 +5,10 @@
 //! output encoders — moved below the evaluator with the stage-3 split
 //! (C16): `neovm_value::time_core`. This module keeps the evaluator-bound
 //! layer: the subrs, the calendar and zone machinery (encode-time,
-//! decode-time, current-time-zone), the world-state swap for tests, and
-//! the `current-time-list` selector (`lisp_time_output_from_context`),
-//! and re-exports the core's public surface so every historical
-//! `timefns::` path is unchanged.
+//! decode-time, current-time-zone), and the world-state swap for tests; it
+//! re-exports the lower layers' public surfaces so every historical
+//! `timefns::` path is unchanged. The `current-time` entry and its
+//! evaluator-backed `current-time-list` selector live in `neovm-eval`.
 
 // ---------------------------------------------------------------------------
 // Conversion-core facade (stage-3 C16): the moved substrate's public surface
@@ -21,20 +21,10 @@ pub use neovm_value::time_core::{
     time_spec_invalid, time_value_seconds_and_nanos, value_to_integer,
 };
 
-/// `current-time-list` selects the timestamp representation (GNU
-/// `timefns.c`): the selector reads a dynamically bound variable through
-/// the evaluator, so it stays above the split as a free function.
 #[doc(hidden)]
-pub fn lisp_time_output_from_context(eval: &Context) -> Result<LispTimeOutput, Flow> {
-    eval.eval_symbol_by_id(intern("current-time-list"))
-        .map(|value| {
-            if value.is_truthy() {
-                LispTimeOutput::LegacyList
-            } else {
-                LispTimeOutput::TicksHz
-            }
-        })
-}
+pub use neovm_eval::emacs_core::builtins::misc_eval::{
+    builtin_current_time_in_context, lisp_time_output_from_context,
+};
 
 use malachite::integer::Integer;
 use neovm_eval::emacs_core::eval::Context;
@@ -1006,11 +996,6 @@ fn parse_time_convert_form(
         },
         _ => Err(invalid_time_frequency_error(form)),
     }
-}
-#[doc(hidden)]
-pub fn builtin_current_time_in_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
-    expect_args("current-time", &args, 0)?;
-    Ok(current_time_value(lisp_time_output_from_context(eval)?))
 }
 /// `(float-time &optional TIME)` -> float seconds since epoch.
 ///

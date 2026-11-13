@@ -8,6 +8,7 @@ pub use neovm_value::error::{
 };
 use neovm_value::symbol::Obarray;
 use neovm_value::tagged::value::SymbolMode;
+use neovm_value::time_core::{LispTimeOutput, current_time_value};
 
 /// GNU `process.c:Fwaiting_for_user_input_p`: read the command input wait state.
 /// Core and the eval unit runtime register this same evaluator-backed entry.
@@ -45,6 +46,60 @@ pub fn builtin_this_single_command_keys(
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_this_single_command_keys_impl(eval.read_command_keys(), args)
+}
+
+/// `current-time-list` selects the timestamp representation (GNU
+/// `timefns.c`): the selector reads a dynamically bound variable through
+/// the evaluator, so it lives beside Context as a free function.
+#[doc(hidden)]
+#[inline]
+pub fn lisp_time_output_from_context(eval: &super::eval::Context) -> Result<LispTimeOutput, Flow> {
+    eval.eval_symbol_by_id(intern("current-time-list"))
+        .map(|value| {
+            if value.is_truthy() {
+                LispTimeOutput::LegacyList
+            } else {
+                LispTimeOutput::TicksHz
+            }
+        })
+}
+
+#[doc(hidden)]
+pub fn builtin_current_time_in_context(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("current-time", &args, 0)?;
+    Ok(current_time_value(lisp_time_output_from_context(eval)?))
+}
+
+#[cfg(test)]
+mod current_time_tests {
+    use super::*;
+    use crate::emacs_core::eval::Context;
+    use neovm_value::value::list_to_vec;
+
+    #[test]
+    fn current_time_unit_runtime_observes_dynamic_output_selection() {
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
+        let list = eval
+            .eval_str("(let ((current-time-list t)) (current-time))")
+            .expect("current-time list output");
+        let fields = list_to_vec(&list).expect("proper timestamp list");
+        assert_eq!(fields.len(), 4);
+        assert!(fields.iter().all(|field| field.is_integer()));
+
+        let pair = eval
+            .eval_str("(let ((current-time-list nil)) (current-time))")
+            .expect("current-time ticks/hz output");
+        assert!(pair.is_cons());
+        assert!(pair.cons_car().is_integer());
+        assert!(pair.cons_cdr().is_integer());
+        assert_eq!(
+            lisp_time_output_from_context(&eval).unwrap(),
+            LispTimeOutput::LegacyList
+        );
+    }
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]

@@ -817,7 +817,8 @@ mod unit_runtime {
     /// the same entry shape production registers in `subrs.rs`.
     fn misc_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
         use crate::emacs_core::builtins::{
-            builtin_this_single_command_keys, builtin_waiting_for_user_input_p_ctx,
+            builtin_current_time_in_context, builtin_this_single_command_keys,
+            builtin_waiting_for_user_input_p_ctx,
         };
         use crate::emacs_core::misc::{builtin_make_list, builtin_string_to_unibyte};
         use crate::emacs_core::print::builtin_print_preprocess;
@@ -833,6 +834,11 @@ mod unit_runtime {
         }
 
         Some(match name {
+            "current-time" => SubrSpec::new(
+                "current-time",
+                NativeFn::ContextVec(builtin_current_time_in_context),
+                SubrArity::new(0, Some(0)),
+            ),
             "print--preprocess" => SubrSpec::new(
                 "print--preprocess",
                 NativeFn::ContextVec(builtin_print_preprocess),
