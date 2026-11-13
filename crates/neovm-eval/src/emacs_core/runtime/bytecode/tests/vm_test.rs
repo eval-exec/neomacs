@@ -4847,51 +4847,6 @@ fn vm_buffer_identity_builtins_use_shared_runtime_state() {
 }
 
 #[test]
-fn vm_sqlite_runtime_uses_direct_dispatch() {
-    crate::test_utils::init_test_tracing();
-    assert_eq!(
-        vm_eval_str(
-            r##"(let ((db (sqlite-open)))
-                  (list
-                   (sqlite-available-p)
-                   (fboundp 'sqlitep)
-                   (fboundp 'sqlite-open)
-                   (sqlitep db)
-                   (equal (sqlite-select db "pragma busy_timeout") '((0)))
-                   (sqlite-close db)))"##
-        ),
-        r#"OK (t t t t t t)"#
-    );
-}
-
-#[test]
-fn vm_sqlite_preserves_i64_errors_and_result_set_lifetime() {
-    crate::test_utils::init_test_tracing();
-    assert_eq!(
-        vm_eval_str(
-            r##"(let* ((db (sqlite-open))
-                       (set (sqlite-select
-                             db
-                             "select 9223372036854775807 union all select 2"
-                             nil
-                             'set))
-                       (prepare-error
-                        (condition-case error-data
-                            (sqlite-execute db "select * from sqlite_missing")
-                          (sqlite-error error-data))))
-                  (sqlite-close db)
-                  (list
-                   (sqlite-next set)
-                   (sqlite-next set)
-                   (sqlite-next set)
-                   prepare-error
-                   (sqlite-close db)))"##
-        ),
-        r#"OK ((9223372036854775807) (2) nil (sqlite-error ("SQL logic error" "no such table: sqlite_missing" 1 1)) t)"#
-    );
-}
-
-#[test]
 fn vm_base64_json_ccl_and_runtime_clusters_use_direct_dispatch() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
@@ -5062,12 +5017,6 @@ fn vm_map_char_table_uses_direct_dispatch() {
         "OK ((97 98 word) (122 122 symbol))"
     );
 }
-
-// The decoding fixtures below select GNU's integer FACE=0/NOPROP target
-// when their contract is formatted text. Default STRING now correctly carries
-// element properties; the strict test above and the native attribution/oracle
-// families cover those without stripping any property from an output. Tests
-// whose contract concerns text properties retain their original FACE target.
 
 #[test]
 fn vm_gui_display_capability_builtins_use_live_window_system_state() {

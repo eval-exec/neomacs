@@ -1315,25 +1315,6 @@ fn a_threads_face_and_display_changes_reach_main() {
     assert!(ev.display_var_change_count() > display);
 }
 
-#[test]
-fn d1_a_thread_uses_a_sqlite_handle_opened_by_another() {
-    let mut ev = green();
-    // GNU 31.1 here was built without sqlite; any GNU with sqlite answers
-    // the row the other thread inserted.
-    assert_eq!(
-        eval(
-            &mut ev,
-            "(progn
-               (setq tgd1-db (sqlite-open))
-               (sqlite-execute tgd1-db \"create table t (x)\")
-               (sqlite-execute tgd1-db \"insert into t values (42)\")
-               (thread-join (make-thread
-                             (lambda () (sqlite-select tgd1-db \"select x from t\")))))"
-        ),
-        "((42))"
-    );
-}
-
 fn select_parks() -> usize {
     super::switch::SELECT_PARKS.load(std::sync::atomic::Ordering::Relaxed)
 }

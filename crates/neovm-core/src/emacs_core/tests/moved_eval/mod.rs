@@ -686,3 +686,7 @@ mod emacs_core_runtime_jit_tests_green_release_class_b_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/bytecode/tests/vm_shared_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_shared_runtime_test_rs;
+
+#[cfg(all(test, feature = "sqlite"))]
+#[path = "emacs_core/runtime/eval/tests/sqlite_runtime_feature_test.rs"]
+mod emacs_core_runtime_eval_tests_sqlite_runtime_feature_test_rs;
