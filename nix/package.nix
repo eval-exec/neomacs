@@ -195,7 +195,9 @@ craneLib.buildPackage (
       # complete runtime set afterward so executable-local dlopen still works
       # without exporting package library paths to every child process.
       test -x "$out/bin/.neomacs-wrapped"
-      patchelf --add-rpath "${pkgs.lib.makeLibraryPath runtimeLibs}" "$out/bin/.neomacs-wrapped"
+      # Keep the executable's private libraries ahead of caller LD paths,
+      # preserving the old wrapper's priority without changing child envs.
+      patchelf --force-rpath --add-rpath "${pkgs.lib.makeLibraryPath runtimeLibs}" "$out/bin/.neomacs-wrapped"
     '';
 
     setupHook = ./setup-hook.sh;
