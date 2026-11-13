@@ -20,6 +20,11 @@ use neovm_core::window::DisplayFrameExt;
 use neovm_core::window::DisplayFrameManagerExt;
 use std::cmp::Ordering;
 
+mod divider_corners;
+pub(crate) use divider_corners::{
+    DividerCornerPolicy, divider_corner_at_path, divider_corner_policies,
+};
+
 mod borrowed_buffer;
 mod buffer_snapshot;
 pub(crate) use borrowed_buffer::BorrowedLayoutBuffer;
@@ -675,6 +680,10 @@ pub fn frame_params_from_neovm(
         },
         right_divider_width: frame.effective_divider_width(FrameDivider::Right) as i32,
         bottom_divider_width: frame.effective_divider_width(FrameDivider::Bottom) as i32,
+        has_minibuffer_sibling: frame
+            .minibuffer_leaf
+            .as_ref()
+            .is_some_and(|minibuffer| minibuffer.id() != frame.root_window().id()),
         divider_fg: face_fg_pixel(face_table, FixedFace::WindowDivider, fg),
         divider_first_fg: face_fg_pixel(face_table, FixedFace::WindowDividerFirstPixel, fg),
         divider_last_fg: face_fg_pixel(face_table, FixedFace::WindowDividerLastPixel, fg),

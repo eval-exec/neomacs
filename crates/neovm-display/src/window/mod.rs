@@ -145,10 +145,11 @@ pub use neovm_value::display_vocab::FrameVisibility;
 
 pub use neovm_eval::emacs_core::eval::data::window_state::{
     ModeLineBase, WindowCellDimensions, WindowRedisplayState, WindowStartCommit, WindowTreePath,
+    WindowTreeRoute,
 };
 pub(crate) use neovm_eval::emacs_core::eval::data::window_state::{
     WindowLayoutSelectionState, WindowLayoutValueIdentity, WindowLayoutVariableState,
-    WindowParameters, WindowTreeRoute,
+    WindowParameters,
 };
 
 /// Root-relative frame placement used by redisplay backends.

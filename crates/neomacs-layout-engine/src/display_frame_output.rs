@@ -9,9 +9,10 @@ use crate::font::metrics::FontMetrics;
 use crate::frame_face_arena::{
     FrameFaceAttempt, FrameFaceSeal, FrameFaceStillShared, FrameFaceTableAttempt,
 };
-use crate::neovm_bridge::ResolvedFace;
+use crate::neovm_bridge::{DividerCornerPolicy, ResolvedFace};
 use crate::output::builder::DisplayOutputBuilder;
 use crate::types::{FrameParams, WindowParams};
+use crate::window_layout::WindowDividerPaint;
 use crate::window_output::TextWindowOutputTarget;
 use neomacs_display_protocol::frame_chrome::{
     ChromeBandRequest, ChromeLayoutError, FrameChrome, FrameSize, PresentationId,
@@ -42,13 +43,26 @@ pub(crate) struct WindowFrameGeometry {
     pub(crate) bottom_edge: f32,
     pub(crate) is_rightmost: bool,
     pub(crate) is_bottommost: bool,
+    pub(crate) divider_corner: DividerCornerPolicy,
     pub(crate) reserve_terminal_right_border_col: bool,
+}
+
+impl WindowFrameGeometry {
+    /// GNU window.h: a bottommost regular window still owns a divider when
+    /// the frame root has a separate minibuffer sibling. The minibuffer
+    /// itself never owns a bottom divider.
+    pub(crate) fn has_bottom_divider(self, params: &WindowParams, frame: &FrameParams) -> bool {
+        !params.is_minibuffer()
+            && frame.bottom_divider_width > 0
+            && (!self.is_bottommost || frame.has_minibuffer_sibling)
+    }
 }
 
 pub(crate) struct WindowFrameGeometryRequest<'a> {
     params: &'a WindowParams,
     frame_params: &'a FrameParams,
     main_area_bottom: f32,
+    divider_corner: DividerCornerPolicy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -462,11 +476,13 @@ impl<'a> WindowFrameGeometryRequest<'a> {
         params: &'a WindowParams,
         frame_params: &'a FrameParams,
         main_area_bottom: f32,
+        divider_corner: DividerCornerPolicy,
     ) -> Self {
         Self {
             params,
             frame_params,
             main_area_bottom,
+            divider_corner,
         }
     }
 
@@ -486,6 +502,7 @@ impl<'a> WindowFrameGeometryRequest<'a> {
             bottom_edge,
             is_rightmost,
             is_bottommost,
+            divider_corner: self.divider_corner,
             reserve_terminal_right_border_col,
         }
     }
@@ -768,6 +785,7 @@ pub(crate) struct WindowFrameDecorationsRenderRequest<'a> {
     frame_params: &'a FrameParams,
     geometry: WindowFrameGeometry,
     info: &'a WindowInfo,
+    divider_paint: WindowDividerPaint,
     effective_default_face: Option<&'a EffectiveWindowDefaultFace>,
 }
 
@@ -777,6 +795,7 @@ impl<'a> WindowFrameDecorationsRenderRequest<'a> {
         frame_params: &'a FrameParams,
         geometry: WindowFrameGeometry,
         info: &'a WindowInfo,
+        divider_paint: WindowDividerPaint,
         effective_default_face: Option<&'a EffectiveWindowDefaultFace>,
     ) -> Self {
         Self {
@@ -784,6 +803,7 @@ impl<'a> WindowFrameDecorationsRenderRequest<'a> {
             frame_params,
             geometry,
             info,
+            divider_paint,
             effective_default_face,
         }
     }
@@ -795,8 +815,14 @@ impl<'a> WindowFrameDecorationsRenderRequest<'a> {
     ) {
         WindowScrollBarsRenderRequest::new(self.params, self.info)
             .render_and_apply(state.reborrow());
-        self.render_right_divider(state.reborrow(), render_services.reborrow());
-        self.render_bottom_divider(state);
+        if self.divider_paint.right_paints_last() {
+            self.render_bottom_divider(state.reborrow());
+            self.render_right_divider(state, render_services);
+        } else {
+            // This also preserves the legacy zero-width GUI/TTY border order.
+            self.render_right_divider(state.reborrow(), render_services.reborrow());
+            self.render_bottom_divider(state);
+        }
     }
 
     fn render_right_divider(
@@ -809,23 +835,18 @@ impl<'a> WindowFrameDecorationsRenderRequest<'a> {
         }
 
         if self.frame_params.right_divider_width > 0 {
-            let width = self.frame_params.right_divider_width as f32;
-            let height = self.params.bounds.height
-                - if self.frame_params.bottom_divider_width > 0 && !self.geometry.is_bottommost {
-                    self.frame_params.bottom_divider_width as f32
-                } else {
-                    0.0
-                };
-            WindowDividerRectsRenderRequest::new(
-                self.params.window_id,
-                self.geometry.right_edge - width,
-                self.params.bounds.y,
-                width,
-                height.max(0.0),
-                WindowDividerOrientation::Vertical,
-                self.frame_params,
-            )
-            .render_and_apply(state);
+            if let Some(rect) = self.divider_paint.right {
+                WindowDividerRectsRenderRequest::new(
+                    self.params.window_id,
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height,
+                    WindowDividerOrientation::Vertical,
+                    self.frame_params,
+                )
+                .render_and_apply(state);
+            }
             return;
         }
 
@@ -851,26 +872,15 @@ impl<'a> WindowFrameDecorationsRenderRequest<'a> {
     }
 
     fn render_bottom_divider(&self, state: FrameOutputTarget<'_>) {
-        if self.params.is_minibuffer()
-            || self.geometry.is_bottommost
-            || self.frame_params.bottom_divider_width <= 0
-        {
+        let Some(rect) = self.divider_paint.bottom else {
             return;
-        }
-
-        let height = self.frame_params.bottom_divider_width as f32;
-        let width = self.params.bounds.width
-            - if self.frame_params.right_divider_width > 0 && !self.geometry.is_rightmost {
-                self.frame_params.right_divider_width as f32
-            } else {
-                0.0
-            };
+        };
         WindowDividerRectsRenderRequest::new(
             self.params.window_id,
-            self.params.bounds.x,
-            self.geometry.bottom_edge - height,
-            width.max(0.0),
-            height,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
             WindowDividerOrientation::Horizontal,
             self.frame_params,
         )
