@@ -19,6 +19,10 @@ enum Probe {
     HookError,
     SafeHookDebugger,
     SafeHookDebugOnSignal,
+    HookThrowAbort,
+    HookOuterHandler,
+    HookNoCatch,
+    HookUnintern,
     #[cfg(target_os = "linux")]
     ChildHangup,
 }
@@ -47,6 +51,14 @@ impl Probe {
             Self::SafeHookDebugOnSignal => {
                 include_str!("fixtures/kill_emacs_shutdown/safe-hook-debug-on-signal.el")
             }
+            Self::HookThrowAbort => {
+                include_str!("fixtures/kill_emacs_shutdown/hook-throw-abort.el")
+            }
+            Self::HookOuterHandler => {
+                include_str!("fixtures/kill_emacs_shutdown/hook-outer-handler.el")
+            }
+            Self::HookNoCatch => include_str!("fixtures/kill_emacs_shutdown/hook-no-catch.el"),
+            Self::HookUnintern => include_str!("fixtures/kill_emacs_shutdown/hook-unintern.el"),
             #[cfg(target_os = "linux")]
             Self::ChildHangup => include_str!("fixtures/kill_emacs_shutdown/child-hangup.el"),
         }
@@ -79,6 +91,18 @@ impl Probe {
                 "kill-hook-error",
                 "kill-hook-next",
                 "save:first+second",
+            ],
+            Self::HookThrowAbort => &[
+                "HOOK-THROW",
+                "RETURN=thrown",
+                "STILL-ALIVE",
+                "SECOND-KILL-HOOK",
+            ],
+            Self::HookOuterHandler => &["HOOK-BAD", "HOOK-NEXT=(probe-next)"],
+            Self::HookNoCatch => &["HOOK-NOCATCH", "HOOK-NEXT=(probe-next)"],
+            Self::HookUnintern => &[
+                "SETUP original=t replacement=nil distinct=t",
+                "ORIGINAL-HOOK",
             ],
             Self::SafeHookDebugger => &["next"],
             Self::SafeHookDebugOnSignal => &["debugger", "next"],
@@ -297,6 +321,22 @@ fn shutdown_sends_child_sighup_before_the_second_auto_save() {
     assert_shutdown_parity(Probe::ChildHangup);
 }
 
+// These extend the observer set; the six original shutdown rows stay intact.
+#[test]
+fn shutdown_kill_hook_throw_aborts_before_dying_and_a_second_kill_succeeds() {
+    assert_shutdown_parity(Probe::HookThrowAbort);
+}
+
+#[test]
+fn shutdown_kill_hook_barrier_blocks_outer_handler_bind() {
+    assert_shutdown_parity(Probe::HookOuterHandler);
+}
+
+#[test]
+fn shutdown_kill_hook_no_catch_error_removes_function_and_continues() {
+    assert_shutdown_parity(Probe::HookNoCatch);
+}
+
 // Raw subprocesses preserve the debugger's native signal context. The common
 // value harness adds an outer condition-case that can mask this regression.
 #[test]
@@ -307,4 +347,9 @@ fn safe_hook_barrier_suppresses_ordinary_debugger() {
 #[test]
 fn safe_hook_barrier_preserves_debug_on_signal() {
     assert_shutdown_parity(Probe::SafeHookDebugOnSignal);
+}
+
+#[test]
+fn shutdown_kill_hook_uses_original_symbol_after_unintern() {
+    assert_shutdown_parity(Probe::HookUnintern);
 }

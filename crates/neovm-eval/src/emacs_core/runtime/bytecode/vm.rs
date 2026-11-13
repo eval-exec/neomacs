@@ -2772,12 +2772,12 @@ impl<'a> crate::emacs_core::hook_runtime::HookRuntime for Vm<'a> {
         )
     }
 
-    fn remove_hook_function_after_error(&mut self, hook_sym: SymId, function: Value) {
+    fn remove_hook_function_after_error(&mut self, hook_sym: SymId, function: Value) -> EvalResult {
         crate::emacs_core::hook_runtime::HookRuntime::remove_hook_function_after_error(
             &mut *self.ctx,
             hook_sym,
             function,
-        );
+        )
     }
 
     fn with_hook_root_scope<T>(

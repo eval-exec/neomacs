@@ -1635,7 +1635,7 @@ fn named_hook_call(
                 hook_runtime::call_safe_hook_callable(eval, function, args, authorization)?
             {
                 eval.report_safe_hook_error(symbol, function, &signal)?;
-                eval.remove_hook_function_after_error(symbol, function);
+                eval.remove_hook_function_after_error(symbol, function)?;
             }
             Ok(Value::NIL)
         }

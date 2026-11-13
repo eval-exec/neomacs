@@ -571,4 +571,7 @@ well_known_table! {
     // retarget the role. `Qmargin` is the earlier `WellKnown::Margin`.
     TabLineInactive = "tab-line-inactive",
     TabLineActive = "tab-line-active",
+
+    // emacs.c:3483: Fkill_emacs retains this original DEFSYM after unintern.
+    KillEmacsHook = "kill-emacs-hook",
 }

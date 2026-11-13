@@ -210,7 +210,7 @@ impl Context {
     ///
     /// A call that arrives while that hook is already running re-enters,
     /// as GNU `Fkill_emacs` does (`emacs.c:2954`, no recursion guard). The
-    /// hook list runs again through the ordinary walker. Lisp call depth
+    /// hook list runs again through the native safe walker. Lisp call depth
     /// stops the recursion at `max-lisp-eval-depth`. The nested shutdown
     /// error propagates, so this frame does not publish over the inner
     /// request. A call that arrives while Dying skips the hook and publishes
@@ -233,14 +233,17 @@ impl Context {
     /// Run the hook, then publish `request` unless a nested kill-emacs already
     /// published and returned [`Flow::shutdown`].
     fn finish_kill_emacs_hook(&mut self, request: ShutdownRequest) -> EvalResult {
-        if let Err(flow) = self.run_hook_if_bound("kill-emacs-hook")
-            && flow.is_shutdown()
+        if let Err(flow) =
+            self.safe_run_hook_if_bound(neovm_value::intern::WellKnown::KillEmacsHook.id())
         {
+            // A matched throw or an error in safe-hook recovery aborts this
+            // pre-shutdown call. A nested kill may already have crossed the
+            // native shutdown boundary or published its own request; keep it.
+            if self.shutdown_phase == ShutdownPhase::InProgress && self.shutdown_request.is_none() {
+                self.shutdown_phase = ShutdownPhase::Running;
+            }
             return Err(flow);
         }
-        // `shut_down_emacs` (`emacs.c:3107-3110`) nils `Vrun_hooks`
-        // and sets `Vinhibit_redisplay`. Neither assignment is specbound.
-        self.enter_shut_down();
         self.shutdown_after_hooks_are_dead(request)
     }
 
@@ -260,6 +263,10 @@ impl Context {
         if let Some(published) = self.shutdown_request {
             return Err(Flow::shutdown(published));
         }
+        // Every entry to GNU shut_down_emacs repeats the native shutdown
+        // assignments, even when a previous auto-save handler escaped. The
+        // Dying boundary is permanent: only pre-boundary hook exits roll back.
+        self.enter_shut_down();
         // GNU calls `Fdo_auto_save (Qt, Qnil)` directly after disabling
         // hooks (`emacs.c:3107-3110`, `:3157`). Resolve the canonical subr,
         // independently of a redefined or unbound Lisp function cell.
@@ -330,7 +337,7 @@ impl Context {
     }
 
     /// Run a hook with `safe-run-hooks` semantics: each hook
-    /// function is wrapped in a `condition-case` so a broken
+    /// function is wrapped in a native Qt `condition-case` so a broken
     /// function is removed from the hook instead of re-firing on
     /// every subsequent command. Mirrors GNU
     /// `safe_run_hooks (Qhook_name)` at
@@ -359,11 +366,11 @@ impl Context {
         // function, and swallows Signal errors. This never goes
         // through Lisp — matching GNU's keyboard.c which calls the
         // C function, not the Lisp wrapper.
-        // `safe_run_hook_funcall` only swallows ordinary `error`
-        // signals.  Nonlocal exits like `throw`/`quit` still escape
-        // the command loop, and `read-char-from-minibuffer` relies on
-        // that when its local `post-command-hook` calls
-        // `exit-minibuffer`.
+        // The per-function Qt handler blocks outer handlers and ordinary
+        // debugging. Signals (including no-catch from an unmatched throw)
+        // are reported and the broken function is removed. A throw to a
+        // matching outer catch still escapes, as does a nonlocal exit from
+        // the recovery handler after the Qt barrier has been removed.
         let specpdl_count = self.specpdl.len();
         self.try_specbind_or_unwind_to(
             specpdl_count,

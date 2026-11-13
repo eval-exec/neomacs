@@ -21,7 +21,7 @@ pub(crate) trait HookRuntime {
         function: Value,
         signal: &neovm_value::error::SignalData,
     ) -> EvalResult;
-    fn remove_hook_function_after_error(&mut self, hook_sym: SymId, function: Value);
+    fn remove_hook_function_after_error(&mut self, hook_sym: SymId, function: Value) -> EvalResult;
     fn with_hook_root_scope<T>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, Flow>,
@@ -65,8 +65,8 @@ impl HookRuntime for Context {
             .expect("`message` must remain a registered builtin")
     }
 
-    fn remove_hook_function_after_error(&mut self, hook_sym: SymId, function: Value) {
-        remove_hook_function_after_error_in_context(self, hook_sym, function);
+    fn remove_hook_function_after_error(&mut self, hook_sym: SymId, function: Value) -> EvalResult {
+        remove_hook_function_after_error_in_context(self, hook_sym, function)
     }
 
     fn with_hook_root_scope<T>(
@@ -313,12 +313,16 @@ fn remove_hook_function_after_error_in_context(
     ctx: &mut Context,
     hook_sym: SymId,
     function: Value,
-) {
+) -> EvalResult {
     if let Some(hook_value) = hook_value_by_id(ctx, hook_sym)
         && let Some(new_value) = remove_eq_from_hook_list(hook_value, function)
     {
-        let _ = ctx.try_set_runtime_binding_by_id(hook_sym, new_value);
-        return;
+        // GNU safe_run_hooks_error calls native Fset after its Qt handler
+        // has been popped. Watchers and their nonlocal exits remain real.
+        return ctx.with_hook_root_scope(|ctx| {
+            ctx.push_hook_root(new_value);
+            builtins::builtin_set_2(ctx, Value::from_sym_id(hook_sym), new_value)
+        });
     }
 
     let default_value = ctx
@@ -326,17 +330,13 @@ fn remove_hook_function_after_error_in_context(
         .default_value(hook_sym)
         .unwrap_or(Value::NIL);
     if let Some(new_value) = remove_eq_from_hook_list(default_value, function) {
-        let symbol = Value::from_sym_id(hook_sym);
-        if let Err(flow) = super::data::set_default(ctx, vec![symbol, new_value]) {
-            let rendered = crate::emacs_core::print::format_flow_with_eval(ctx, &flow);
-            tracing::warn!(
-                "failed to remove broken hook function {} from default {}: {}",
-                function,
-                neovm_value::intern::resolve_sym(hook_sym),
-                rendered
-            );
-        }
+        return ctx.with_hook_root_scope(|ctx| {
+            ctx.push_hook_root(new_value);
+            let symbol = Value::from_sym_id(hook_sym);
+            super::data::set_default(ctx, vec![symbol, new_value])
+        });
     }
+    Ok(Value::NIL)
 }
 
 /// Run a hook with error recovery. Mirrors GNU
@@ -397,7 +397,7 @@ fn safe_run_hook_value_authorized<R: HookRuntime>(
             if let Some(signal) = call_safe_hook_callable(runtime, func, hook_args, authorization)?
             {
                 let _ = runtime.report_safe_hook_error(hook_sym, func, &signal)?;
-                runtime.remove_hook_function_after_error(hook_sym, func);
+                runtime.remove_hook_function_after_error(hook_sym, func)?;
             }
         }
         Ok(Value::NIL)
@@ -822,7 +822,13 @@ mod hook_walk_authorization_tests {
             Ok(Value::NIL)
         }
 
-        fn remove_hook_function_after_error(&mut self, _hook_sym: SymId, _function: Value) {}
+        fn remove_hook_function_after_error(
+            &mut self,
+            _hook_sym: SymId,
+            _function: Value,
+        ) -> EvalResult {
+            Ok(Value::NIL)
+        }
 
         fn with_hook_root_scope<T>(
             &mut self,

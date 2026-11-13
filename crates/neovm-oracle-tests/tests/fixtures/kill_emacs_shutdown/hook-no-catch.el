@@ -1,0 +1,10 @@
+;;; -*- lexical-binding: t; -*-
+(setq probe-log (getenv "SHUTDOWN_LOG"))
+(defun probe-record (line)
+  (let ((coding-system-for-write 'utf-8-unix))
+    (write-region (concat line "\n") nil probe-log t 'silent)))
+(setq auto-save-list-file-name nil)
+(defun probe-nocatch () (probe-record "HOOK-NOCATCH") (throw 'nonexistent 1))
+(defun probe-next () (probe-record (format "HOOK-NEXT=%S" kill-emacs-hook)))
+(setq kill-emacs-hook (list #'probe-nocatch #'probe-next))
+(kill-emacs 0)

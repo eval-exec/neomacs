@@ -1,0 +1,11 @@
+;;; -*- lexical-binding: t; -*-
+(setq probe-log (getenv "SHUTDOWN_LOG"))
+(defun probe-record (line)
+  (let ((coding-system-for-write 'utf-8-unix))
+    (write-region (concat line "\n") nil probe-log t 'silent)))
+(setq auto-save-list-file-name nil)
+(defun probe-bad () (probe-record "HOOK-BAD") (error "kboom"))
+(defun probe-next () (probe-record (format "HOOK-NEXT=%S" kill-emacs-hook)))
+(setq kill-emacs-hook (list #'probe-bad #'probe-next))
+(handler-bind ((error (lambda (_condition) (probe-record "OUTER-HB"))))
+  (kill-emacs 0))

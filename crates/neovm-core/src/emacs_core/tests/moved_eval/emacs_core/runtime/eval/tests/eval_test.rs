@@ -29687,3 +29687,105 @@ fn read_file_name_completion_ignore_case_is_left_to_the_lisp_defcustom() {
         "custom.el's declaration makes the Lisp option special"
     );
 }
+
+/// GNU's matching catch escapes from the pre-shutdown hook (emacs.c:3018).
+/// The Rust phase is internal; it must again permit a normal live session.
+#[test]
+fn kill_emacs_matching_hook_throw_restores_running_without_request() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = runtime_startup_context();
+    neovm_eval::test_support::authority::set_noninteractive_for_test(&mut eval, true);
+    let result = eval.eval_str(
+        r#"(progn
+             (setq kill-emacs-hook (list (lambda () (throw 'stop-shutdown 'escaped))))
+             (catch 'stop-shutdown (kill-emacs 7)))"#,
+    );
+    assert_eq!(eval.shutdown_phase, ShutdownPhase::Running);
+    assert!(
+        eval.shutdown_request().is_none(),
+        "an aborted hook must not publish exit"
+    );
+    assert_eq!(format_eval_result(&result), "OK escaped");
+    let second = eval.eval_str("(progn (setq kill-emacs-hook nil) (kill-emacs 9))");
+    assert!(
+        matches!(second, Err(neovm_value::error::EvalError::Shutdown(request)) if request.exit_code == 9)
+    );
+    assert_eq!(eval.shutdown_phase, ShutdownPhase::Dying);
+    assert_eq!(
+        eval.shutdown_request().map(|request| request.exit_code),
+        Some(9)
+    );
+}
+
+/// The recovery handler runs after the per-function Qt frame is removed.
+/// Its own watcher error escapes just like GNU Fset in safe_run_hooks_error.
+#[test]
+fn kill_emacs_recovery_watcher_error_restores_running_without_request() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = runtime_startup_context();
+    neovm_eval::test_support::authority::set_noninteractive_for_test(&mut eval, true);
+    let result = eval.eval_str(
+        r#"(progn
+             (setq shutdown-recovery-events nil)
+             (defun shutdown-recovery-bad ()
+               (setq shutdown-recovery-events (cons 'bad shutdown-recovery-events))
+               (error "body-boom"))
+             (defun shutdown-recovery-next ()
+               (setq shutdown-recovery-events (cons 'next shutdown-recovery-events)))
+             (defun shutdown-recovery-watcher (_symbol _value operation _where)
+               (when (eq operation 'set)
+                 (setq shutdown-recovery-events (cons 'watcher shutdown-recovery-events))
+                 (error "remove-boom")))
+             (setq kill-emacs-hook '(shutdown-recovery-bad shutdown-recovery-next))
+             (add-variable-watcher 'kill-emacs-hook #'shutdown-recovery-watcher)
+             (condition-case err (kill-emacs 7)
+               (error (list (car err) (cdr err)))))"#,
+    );
+    assert_eq!(eval.shutdown_phase, ShutdownPhase::Running);
+    assert!(
+        eval.shutdown_request().is_none(),
+        "a recovery error must not publish exit"
+    );
+    assert_eq!(format_eval_result(&result), "OK (error (\"remove-boom\"))");
+    assert_eq!(
+        format_eval_result(&eval.eval_str("(reverse shutdown-recovery-events)")),
+        "OK (bad watcher)"
+    );
+    let second = eval.eval_str(
+        "(progn (remove-variable-watcher 'kill-emacs-hook #'shutdown-recovery-watcher)
+                (setq kill-emacs-hook nil) (kill-emacs 9))",
+    );
+    assert!(
+        matches!(second, Err(neovm_value::error::EvalError::Shutdown(request)) if request.exit_code == 9)
+    );
+}
+
+/// A nested kill that really enters Dying is a shutdown, not an aborted
+/// pre-Dying hook. An outer frame must not reset its published request.
+#[test]
+fn kill_emacs_nested_published_request_survives_outer_unwind() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = runtime_startup_context();
+    neovm_eval::test_support::authority::set_noninteractive_for_test(&mut eval, true);
+    let result = eval.eval_str(
+        r#"(progn
+             (setq shutdown-nested-count 0)
+             (setq kill-emacs-hook
+                   (list (lambda ()
+                           (setq shutdown-nested-count (1+ shutdown-nested-count))
+                           (when (= shutdown-nested-count 1) (kill-emacs 23)))))
+             (kill-emacs 7))"#,
+    );
+    assert!(
+        matches!(result, Err(neovm_value::error::EvalError::Shutdown(request)) if request.exit_code == 23)
+    );
+    assert_eq!(eval.shutdown_phase, ShutdownPhase::Dying);
+    assert_eq!(
+        eval.shutdown_request().map(|request| request.exit_code),
+        Some(23)
+    );
+    assert_eq!(
+        eval.obarray().symbol_value_copied("shutdown-nested-count"),
+        Some(Value::fixnum(2))
+    );
+}
