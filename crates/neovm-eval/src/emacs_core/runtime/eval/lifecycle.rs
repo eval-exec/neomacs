@@ -1426,7 +1426,7 @@ pub fn xfaces_park_carrier_tls() {
 }
 
 /// Debug-only fingerprint of the face-attribute registry carrier state.
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub fn xfaces_carrier_tls_fingerprint(h: &mut u64) {
     if let Some(fingerprint) = lifecycle_hooks().xfaces().carrier_tls_fingerprint() {
         fingerprint(h);

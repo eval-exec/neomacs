@@ -218,12 +218,23 @@ macro_rules! eval_absent_layer_slots {
                 }
             }
 
+            /// Only system's module-call guards write ACTIVE_ENVS and MODULE_CTX;
+            /// load/apply refuse here. Lower GLOBAL_REFS has its own real park and
+            /// Context restore path and must not be reset by this absent hook.
             pub(crate) fn dynamic_module_reset() {
-                absent_layer_panic("ABSENT-LAYER system::dynamic_module.reset");
+                absent_layer_unlinked("ABSENT-LAYER system::dynamic_module.reset");
             }
 
+            /// Match the system fingerprint's order: absent ACTIVE_ENVS length,
+            /// the REAL lower registry identity, then absent MODULE_CTX pointer.
+            #[cfg(debug_assertions)]
             pub(crate) fn dynamic_module_fingerprint(acc: &mut u64) {
-                absent_layer_panic("ABSENT-LAYER system::dynamic_module.fingerprint");
+                neovm_value::tls_fingerprint::mix(acc, 0);
+                neovm_value::tls_fingerprint::mix(
+                    acc,
+                    $crate::emacs_core::eval::data::dynamic_module_registry::dynamic_module_registry_heap_identity().unwrap_or(0) as u64,
+                );
+                neovm_value::tls_fingerprint::mix(acc, 0);
             }
 
             pub(crate) fn dynamic_module_panic_message(err: &(dyn std::any::Any + Send)) -> String {
@@ -579,12 +590,17 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER display::window_tree.frame_parameter_entry");
             }
 
+            /// Display's FACE_ATTR_STATE slot cannot exist in this runtime;
+            /// parking only forgets that TLS clone, never the lower registry.
             pub(crate) fn xfaces_park_carrier_tls() {
-                absent_layer_panic("ABSENT-LAYER display::xfaces.park_carrier_tls");
+                absent_layer_unlinked("ABSENT-LAYER display::xfaces.park_carrier_tls");
             }
 
+            /// Display folds installed_heap_identity().unwrap_or(0). Its TLS
+            /// cannot exist here, so fold zero exactly once, without skipping it.
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             pub(crate) fn xfaces_carrier_tls_fingerprint(acc: &mut u64) {
-                absent_layer_panic("ABSENT-LAYER display::xfaces.carrier_tls_fingerprint");
+                neovm_value::tls_fingerprint::mix(acc, 0);
             }
 
             pub(crate) fn xfaces_current_registry_handle() -> FontRegistryHandle {

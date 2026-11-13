@@ -500,3 +500,219 @@ mod absent_terminal_tls_tests {
         assert_eq!(actual, expected);
     }
 }
+
+#[cfg(test)]
+mod lifecycle_carrier_protocol_tests {
+    use std::any::Any;
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::eval::data::dynamic_module_registry::{
+        dynamic_module_registry_heap_identity, park_dynamic_module_registry, with_global_refs,
+    };
+    use crate::emacs_core::eval::lifecycle;
+
+    fn restore_after<T>(
+        context: &mut Context,
+        owner: bool,
+        run: impl FnOnce(&mut Context) -> T,
+    ) -> T {
+        // Restore only after catch_unwind has ended the first unwind. A Drop
+        // guard that itself reached an unbound hook could otherwise abort.
+        let result = catch_unwind(AssertUnwindSafe(|| run(context)));
+        let restored = catch_unwind(AssertUnwindSafe(|| {
+            if owner {
+                context.setup_owner_thread_locals();
+            } else {
+                context.setup_thread_locals();
+            }
+        }));
+        if let Err(payload) = restored {
+            resume_unwind(payload);
+        }
+        match result {
+            Ok(value) => value,
+            Err(payload) => resume_unwind(payload),
+        }
+    }
+
+    fn panic_text(payload: Box<dyn Any + Send>) -> String {
+        match payload.downcast::<String>() {
+            Ok(text) => *text,
+            Err(payload) => match payload.downcast::<&str>() {
+                Ok(text) => (*text).to_owned(),
+                Err(_) => "<non-string panic>".to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn absent_xfaces_park_preserves_the_lower_face_registry() {
+        let context = Context::new(crate::test_utils::unit_runtime());
+        context.font_registry.borrow_mut().face_set_generation = 19;
+        let identity = context.font_registry.heap_identity();
+        lifecycle::xfaces_park_carrier_tls();
+        assert_eq!(context.font_registry.borrow().face_set_generation, 19);
+        assert_eq!(context.font_registry.heap_identity(), identity);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn absent_xfaces_fingerprint_folds_zero_once() {
+        let _context = Context::new(crate::test_utils::unit_runtime());
+        let seed = neovm_value::tls_fingerprint::SEED;
+        let mut expected = seed;
+        neovm_value::tls_fingerprint::mix(&mut expected, 0);
+        assert_ne!(expected, seed);
+        let mut actual = seed;
+        lifecycle::xfaces_carrier_tls_fingerprint(&mut actual);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn absent_xfaces_behavior_still_refuses_face_creation() {
+        let mut context = Context::new(crate::test_utils::unit_runtime());
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            context.eval_str("(internal-make-lisp-face 'carrier-protocol-face)")
+        }));
+        let text = panic_text(result.expect_err("xfaces behavior remains unavailable"));
+        assert!(
+            text.contains("ABSENT-LAYER display::internal-make-lisp-face"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn absent_dynamic_reset_does_not_park_or_replace_global_refs() {
+        let mut context = Context::new(crate::test_utils::unit_runtime());
+        // A real lower registry with a vacant global-ref slot needs no FFI
+        // pointer or fake upper module environment.
+        context.dynamic_module_registry.borrow_mut().push(None);
+        let identity = context.dynamic_module_registry.heap_identity();
+        assert_eq!(dynamic_module_registry_heap_identity(), Some(identity));
+        restore_after(&mut context, true, |_| {
+            lifecycle::reset_dynamic_module_carrier_tls();
+            assert_eq!(dynamic_module_registry_heap_identity(), Some(identity));
+            assert_eq!(with_global_refs(|slot| slot.borrow().len()), 1);
+            park_dynamic_module_registry();
+            assert_eq!(dynamic_module_registry_heap_identity(), None);
+            lifecycle::reset_dynamic_module_carrier_tls();
+            assert_eq!(dynamic_module_registry_heap_identity(), None);
+        });
+        assert_eq!(dynamic_module_registry_heap_identity(), Some(identity));
+        assert_eq!(with_global_refs(|slot| slot.borrow().len()), 1);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn absent_dynamic_fingerprint_folds_the_real_lower_identity_between_zeros() {
+        fn expected(identity: u64) -> u64 {
+            let mut hash = neovm_value::tls_fingerprint::SEED;
+            for word in [0, identity, 0] {
+                neovm_value::tls_fingerprint::mix(&mut hash, word);
+            }
+            hash
+        }
+        let mut context = Context::new(crate::test_utils::unit_runtime());
+        let identity = context.dynamic_module_registry.heap_identity() as u64;
+        assert_ne!(identity, 0);
+        assert_ne!(expected(identity), expected(0));
+        restore_after(&mut context, true, |_| {
+            let mut live = neovm_value::tls_fingerprint::SEED;
+            lifecycle::dynamic_module_carrier_tls_fingerprint(&mut live);
+            assert_eq!(live, expected(identity));
+            park_dynamic_module_registry();
+            assert_eq!(dynamic_module_registry_heap_identity(), None);
+            let mut parked = neovm_value::tls_fingerprint::SEED;
+            lifecycle::dynamic_module_carrier_tls_fingerprint(&mut parked);
+            assert_eq!(parked, expected(0));
+        });
+        assert_eq!(
+            dynamic_module_registry_heap_identity(),
+            Some(identity as usize)
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    static PROBE_RESETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    #[cfg(debug_assertions)]
+    const PROBE_NAME: &str = "5714-executing-carrier-protocol";
+    #[cfg(debug_assertions)]
+    const PROBE_FINGERPRINT: u64 = 0x5714_5a5a_f01d_0001;
+
+    #[cfg(debug_assertions)]
+    fn reset_probe() {
+        PROBE_RESETS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    #[cfg(debug_assertions)]
+    fn fingerprint_probe() -> u64 {
+        PROBE_FINGERPRINT
+    }
+
+    #[cfg(debug_assertions)]
+    struct ProbeRegistration;
+    #[cfg(debug_assertions)]
+    impl Drop for ProbeRegistration {
+        fn drop(&mut self) {
+            super::CARRIER_TLS_RESETS
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .retain(|entry| entry.name != PROBE_NAME);
+            super::TLS_SNAPSHOT_ARMED.store(false, std::sync::atomic::Ordering::SeqCst);
+            super::SNAPSHOT_REFERENCE.with(|slot| slot.set(None));
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn every_lifecycle_carrier_tls_phase_executes_and_restores_the_owner() {
+        use std::sync::atomic::Ordering;
+        crate::test_utils::init_test_tracing();
+        let hooks = crate::test_utils::unit_runtime();
+        // Capture on this fresh carrier before constructing its first Context.
+        let without_probe = super::snapshot_carrier_tls();
+        let _registration = ProbeRegistration;
+        PROBE_RESETS.store(0, Ordering::SeqCst);
+        super::register_carrier_tls_reset(super::CarrierTlsReset::with_fingerprint(
+            PROBE_NAME,
+            reset_probe,
+            fingerprint_probe,
+        ));
+        let mut expected = without_probe;
+        neovm_value::tls_fingerprint::mix(&mut expected, PROBE_FINGERPRINT);
+        assert_ne!(expected, without_probe);
+        assert_eq!(
+            super::snapshot_carrier_tls(),
+            expected,
+            "registered fingerprint must be folded"
+        );
+        super::arm_carrier_tls_snapshot();
+        super::carrier_tls_job_started();
+        let reference = super::SNAPSHOT_REFERENCE
+            .with(|slot| slot.get())
+            .expect("fresh reference");
+        assert_eq!(reference, expected);
+        let mut context = Context::new(hooks);
+        let identity = context.dynamic_module_registry.heap_identity();
+        for (cycle, owner) in [false, true].into_iter().enumerate() {
+            restore_after(&mut context, owner, |_| {
+                super::park_carrier_tls();
+                assert_eq!(dynamic_module_registry_heap_identity(), None);
+                assert_eq!(PROBE_RESETS.load(Ordering::SeqCst), cycle);
+                super::carrier_tls_idle_state_and_check();
+                // The registered reset is deferred until reuse, exactly once
+                // for each completed park; the actual protocol enforces it.
+                super::reset_carrier_tls();
+                assert_eq!(PROBE_RESETS.load(Ordering::SeqCst), cycle + 1);
+                super::carrier_tls_reset_and_check();
+                assert_eq!(super::snapshot_carrier_tls(), reference);
+            });
+            assert_eq!(dynamic_module_registry_heap_identity(), Some(identity));
+            assert_eq!(
+                neovm_value::tagged::gc::current_tagged_heap_identity(),
+                Some(identity)
+            );
+        }
+        assert_eq!(PROBE_RESETS.load(Ordering::SeqCst), 2);
+    }
+}

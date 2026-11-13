@@ -1137,10 +1137,15 @@ mod unit_runtime {
     // Display-owned lifecycle groups are REAL (D1). The system/core groups
     // (dynamic-module, sqlite/dbusbind/timefns World state, fileio, the command
     // seams and the two system resets) stay the signed absent-layer bodies.
+    #[cfg(debug_assertions)]
+    const DYNAMIC_MODULE_FINGERPRINT: Option<fn(&mut u64)> = Some(s::dynamic_module_fingerprint);
+    #[cfg(not(debug_assertions))]
+    const DYNAMIC_MODULE_FINGERPRINT: Option<fn(&mut u64)> = None;
+
     static LIFECYCLE: LifecycleHooks = LifecycleHooks::new(
         DynamicModuleHooks::new(
             s::dynamic_module_reset,
-            Some(s::dynamic_module_fingerprint),
+            DYNAMIC_MODULE_FINGERPRINT,
             s::dynamic_module_panic_message,
             s::dynamic_module_load_module,
             s::dynamic_module_apply_module_function,

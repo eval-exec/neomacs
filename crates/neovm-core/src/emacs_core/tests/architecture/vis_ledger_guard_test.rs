@@ -1995,13 +1995,13 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 /// 22:54:30Z H2/H2a, peer 00:15:30Z T1-T4).
 ///
 /// The signed table lives as one macro_rules body: `eval_absent_layer_slots!`
-/// expands a fixed `absent_layer_slots` module of 141 slot functions (109
-/// marker PANICs, 14 absent-by-construction UNLINKED slots — eleven unit no-ops
+/// expands a fixed `absent_layer_slots` module of 141 slot functions (105
+/// marker PANICs, 16 absent-by-construction UNLINKED slots — thirteen unit no-ops
 /// plus three valued T7 slots: the signal self-pipe and the terminal
 /// print-handle return `None`, and the case-table sync returns
-/// `CASE_TABLES_SYNC_OK` — 7 ASSERT-EMPTY contracts (2 structural
+/// `CASE_TABLES_SYNC_OK` — 9 ASSERT-EMPTY contracts (2 structural
 /// checks, 4 exact state bodies from peers 5687/5708, and the zero-identity
-/// fingerprint fold from peer 5711), 2 T2 per-thread
+/// fingerprint fold from peer 5711, and the 2 exact folds from peer 5714), 2 T2 per-thread
 /// handle slots, 1 T3 marker slot, and 8 typed empty carried-state slots
 /// (peer 5685/5690)). This
 /// guard parses that body and proves, statically:
@@ -2010,7 +2010,7 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 ///   plain path such as `None` or the const `CASE_TABLES_SYNC_OK`), a single
 ///   marker-carrying assert-empty check, or the signed
 ///   handle/marker wrapper shape (a bare empty/default body is red);
-/// - the 14 UNLINKED names, markers and honest values, the 7 ASSERT-EMPTY
+/// - the 16 UNLINKED names, markers and honest values, the 9 ASSERT-EMPTY
 ///   names and markers, and the 2+1 handle/marker slots are exactly the
 ///   signed ones; every marker is unique and carries the `ABSENT-LAYER `
 ///   prefix;
@@ -2033,6 +2033,9 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 ///   environment reports false; no other silent default is accepted;
 /// - peer 5711: the absent terminal TLS has no handle to park or install,
 ///   and its fingerprint folds zero exactly once rather than omitting the fold;
+/// - peer 5714: xfaces folds one absent identity; dynamic-module folds
+///   zero, the actual lower GLOBAL_REFS identity, then zero. The reset must
+///   not absorb the lower registry's real park/restore protocol;
 /// - T1: eval's dependency sections contain no system/display/core edge, so
 ///   the six absent-by-construction upper states cannot exist in its test
 ///   binary.
@@ -2214,7 +2217,13 @@ fn validate_signed_state_function(
         || function
             .attrs
             .iter()
-            .any(|attr| !attr.path().is_ident("doc"))
+            .filter(|attr| !attr.path().is_ident("doc"))
+            .collect::<Vec<_>>()
+            != expected
+                .attrs
+                .iter()
+                .filter(|attr| !attr.path().is_ident("doc"))
+                .collect::<Vec<_>>()
     {
         return Err(format!(
             "ABSENT-LAYER: {contract} function `{}` must have its signed typed body and signature",
@@ -2228,11 +2237,30 @@ fn validate_carried_function(function: &syn::ItemFn, expected: &str) -> Result<(
     validate_signed_state_function(function, expected, "carried-state")
 }
 
-/// Exact upper-state contracts signed in peers 5687/5708/5711. The signal writer,
+/// Exact upper-state contracts signed in peers 5687/5708/5711/5714. The signal writer,
 /// fontset registry, and module-call environments are absent from eval's
 /// dependency graph while the load/apply behavior hooks refuse. Their signed
 /// absence is a value contract, not permission for arbitrary default bodies.
 const ABSENT_LAYER_EMPTY_STATE_SLOTS: &[(&str, &str, &str)] = &[
+    (
+        "xfaces_carrier_tls_fingerprint",
+        "ABSENT-LAYER display::xfaces.carrier_tls_fingerprint",
+        r#"#[cfg(any(test, debug_assertions, feature = "test-support"))]
+        pub(crate) fn xfaces_carrier_tls_fingerprint(acc: &mut u64) { neovm_value::tls_fingerprint::mix(acc, 0); }"#,
+    ),
+    (
+        "dynamic_module_fingerprint",
+        "ABSENT-LAYER system::dynamic_module.fingerprint",
+        r#"#[cfg(debug_assertions)]
+        pub(crate) fn dynamic_module_fingerprint(acc: &mut u64) {
+            neovm_value::tls_fingerprint::mix(acc, 0);
+            neovm_value::tls_fingerprint::mix(
+                acc,
+                crate::emacs_core::eval::data::dynamic_module_registry::dynamic_module_registry_heap_identity().unwrap_or(0) as u64,
+            );
+            neovm_value::tls_fingerprint::mix(acc, 0);
+        }"#,
+    ),
     (
         "terminal_carrier_tls_fingerprint",
         "ABSENT-LAYER display::terminal.carrier_tls_fingerprint",
@@ -2454,15 +2482,15 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
 }
 
 fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Result<(), String> {
-    if summary.panic.len() != 109
-        || summary.unlinked.len() != 14
-        || summary.assert_empty.len() != 7
+    if summary.panic.len() != 105
+        || summary.unlinked.len() != 16
+        || summary.assert_empty.len() != 9
         || summary.handle.len() != 2
         || summary.marker.len() != 1
         || summary.carried.len() != 8
     {
         return Err(format!(
-            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 109/14/7/2/1/8)",
+            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 105/16/9/2/1/8)",
             summary.panic.len(),
             summary.unlinked.len(),
             summary.assert_empty.len(),
@@ -2494,6 +2522,16 @@ fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Resul
     // print-handle return their honest absent value None, and the case-table
     // sync returns its honest absent value CASE_TABLES_SYNC_OK.
     let expected_unlinked = [
+        (
+            "xfaces_park_carrier_tls",
+            "ABSENT-LAYER display::xfaces.park_carrier_tls",
+            None,
+        ),
+        (
+            "dynamic_module_reset",
+            "ABSENT-LAYER system::dynamic_module.reset",
+            None,
+        ),
         (
             "terminal_park_carrier_tls",
             "ABSENT-LAYER display::terminal.park_carrier_tls",
@@ -6778,6 +6816,19 @@ mod tests {
         let snapshot = signed("fontset_snapshot");
         let restore = signed("fontset_restore");
         let mut mutations = vec![
+            // The mixed fingerprint must keep the real lower identity call.
+            signed("dynamic_module_fingerprint").replace(
+                "crate::emacs_core::eval::data::dynamic_module_registry::dynamic_module_registry_heap_identity().unwrap_or(0) as u64",
+                "0",
+            ),
+            signed("dynamic_module_fingerprint").replace(
+                "#[cfg(debug_assertions)]", "#[cfg(test)]",
+            ),
+            signed("dynamic_module_fingerprint").replace(
+                "neovm_value::tls_fingerprint::mix(acc, 0);", "",
+            ),
+            signed("xfaces_carrier_tls_fingerprint").replace("mix(acc, 0)", "mix(acc, 1)"),
+            signed("xfaces_carrier_tls_fingerprint").replace("neovm_value::tls_fingerprint::mix(acc, 0);", ""),
             // Zero is the absent TLS identity, but its fold cannot be omitted.
             "pub(crate) fn terminal_carrier_tls_fingerprint(acc: &mut u64) {}".to_owned(),
             signed("terminal_carrier_tls_fingerprint").replace("mix(acc, 0)", "mix(acc, 1)"),
