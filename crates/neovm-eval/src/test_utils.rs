@@ -484,6 +484,7 @@ mod unit_runtime {
                             .or_else(|| symbols_family_subr(row.name))
                             .or_else(|| strings_family_subr(row.name))
                             .or_else(|| misc_family_subr(row.name))
+                            .or_else(|| editfns_family_subr(row.name))
                         {
                             let arity = spec.arity();
                             assert_eq!(
@@ -782,6 +783,44 @@ mod unit_runtime {
         &DISPLAY_SERVICE,
         &FILE_NOTIFY,
     );
+
+    /// Editfns subrs whose bodies live in `neovm-edit`. The unit runtime
+    /// binds the same entry shape production registers in `subrs.rs`.
+    fn editfns_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
+        use crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec;
+        use crate::emacs_core::subr::{FixedMin2, NativeFn, SubrArity, SubrSpec};
+        use neovm_edit::emacs_core::editfns::{
+            builtin_delete_region_2, builtin_erase_buffer, builtin_following_char_0,
+        };
+        use neovm_value::error::EvalResult;
+        use neovm_value::value::Value;
+
+        fn bind_erase_buffer(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_erase_buffer(ctx, args)
+        }
+        fn bind_delete_region(ctx: &mut Context, start: Value, end: Value) -> EvalResult {
+            builtin_delete_region_2(ctx, start, end)
+        }
+        fn bind_following_char(ctx: &mut Context) -> EvalResult {
+            builtin_following_char_0(ctx)
+        }
+
+        Some(match name {
+            "erase-buffer" => SubrSpec::new(
+                "erase-buffer",
+                NativeFn::ContextVec(bind_erase_buffer),
+                SubrArity::new(0, Some(0)),
+            )
+            .disabled_command()
+            .interactive(BuiltinInteractiveSpec::String("*")),
+            "delete-region" => {
+                SubrSpec::fixed2("delete-region", bind_delete_region, FixedMin2::Two)
+                    .interactive(BuiltinInteractiveSpec::String("r"))
+            }
+            "following-char" => SubrSpec::fixed0("following-char", bind_following_char),
+            _ => return None,
+        })
+    }
 
     /// Misc subrs whose bodies live in this crate. The unit runtime binds
     /// the same entry shape production registers in `subrs.rs`.
