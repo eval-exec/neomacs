@@ -20759,3 +20759,32 @@ fn secure_hash_and_md5_keep_original_iv_auto_after_reinterning() {
         )
     );
 }
+
+/// GNU `value_cmp` (src/fns.c) compares two symbols with position by name, whether
+/// `symbols-with-pos-enabled` is set or not, and a symbol with position with a bare symbol
+/// only when it is set; otherwise that is a `type-mismatch`. This is GNU's
+/// fns-value<-symbol-with-pos.
+#[test]
+fn value_lt_compares_symbols_with_position_by_name_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(let* ((a1 (position-symbol 'a 1)) (a2 (position-symbol 'a 2))
+               (b1 (position-symbol 'b 1)) (b2 (position-symbol 'b 2))
+               (cmp (lambda (x y)
+                      (condition-case nil (value< x y) (type-mismatch 'mismatch)))))
+          (list
+           (mapcar (lambda (enabled)
+                     (let ((symbols-with-pos-enabled enabled))
+                       (list (funcall cmp a1 b2) (funcall cmp b1 a2) (funcall cmp a2 b1)
+                             (funcall cmp a1 a2) (funcall cmp a1 a1))))
+                   '(nil t))
+           (list (funcall cmp a1 'a) (funcall cmp 'a b1))
+           (let ((symbols-with-pos-enabled t))
+             (list (funcall cmp a1 'b) (funcall cmp 'a b1) (funcall cmp 'b a1)
+                   (funcall cmp a1 'a) (funcall cmp 'a a1)))))"#,
+    );
+    assert_eq!(
+        result,
+        "OK (((t nil t nil nil) (t nil t nil nil)) (mismatch mismatch) (t t nil nil nil))"
+    );
+}

@@ -3473,6 +3473,26 @@ fn compare_value_lt_inner(
         return Ok(Ordering::Greater);
     }
 
+    // GNU `value_cmp` (src/fns.c): two symbols with position compare by name whether
+    // `symbols-with-pos-enabled` is set or not. Against anything else, a symbol with
+    // position counts as its bare symbol only while it is set (`SYMBOLP` and the
+    // `Lisp_Vectorlike` fallback); otherwise the types mismatch.
+    let symbols_with_pos_enabled = eval.symbols_with_pos_enabled;
+    match (lhs.as_symbol_with_pos_sym(), rhs.as_symbol_with_pos_sym()) {
+        (Some(left), Some(right)) => {
+            return compare_value_lt_inner(eval, &left, &right, maxdepth);
+        }
+        (Some(left), None) if symbols_with_pos_enabled && !rhs.is_veclike() => {
+            return compare_value_lt_inner(eval, &left, rhs, maxdepth);
+        }
+        (None, Some(right))
+            if symbols_with_pos_enabled && symbol_name_for_value_lt(lhs).is_some() =>
+        {
+            return compare_value_lt_inner(eval, lhs, &right, maxdepth);
+        }
+        _ => {}
+    }
+
     if let (Some(left), Some(right)) =
         (symbol_name_for_value_lt(lhs), symbol_name_for_value_lt(rhs))
     {
