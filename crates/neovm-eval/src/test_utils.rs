@@ -483,6 +483,7 @@ mod unit_runtime {
                             .or_else(|| arithmetic_family_subr(row.name))
                             .or_else(|| symbols_family_subr(row.name))
                             .or_else(|| strings_family_subr(row.name))
+                            .or_else(|| misc_family_subr(row.name))
                         {
                             let arity = spec.arity();
                             assert_eq!(
@@ -781,6 +782,36 @@ mod unit_runtime {
         &DISPLAY_SERVICE,
         &FILE_NOTIFY,
     );
+
+    /// Misc subrs whose bodies live in this crate. The unit runtime binds
+    /// the same entry shape production registers in `subrs.rs`.
+    fn misc_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
+        use crate::emacs_core::misc::{builtin_make_list, builtin_string_to_unibyte};
+        use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+        use neovm_value::error::EvalResult;
+        use neovm_value::value::Value;
+
+        fn bind_make_list(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_make_list(args)
+        }
+        fn bind_string_to_unibyte(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_string_to_unibyte(args)
+        }
+
+        Some(match name {
+            "make-list" => SubrSpec::new(
+                "make-list",
+                NativeFn::ContextVec(bind_make_list),
+                SubrArity::new(2, Some(2)),
+            ),
+            "string-to-unibyte" => SubrSpec::new(
+                "string-to-unibyte",
+                NativeFn::ContextVec(bind_string_to_unibyte),
+                SubrArity::new(1, Some(1)),
+            ),
+            _ => return None,
+        })
+    }
 
     /// String subrs whose bodies live in this crate. The unit runtime binds
     /// the same entry shape production registers in `subrs.rs`.
