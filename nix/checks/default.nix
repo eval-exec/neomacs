@@ -11,6 +11,7 @@ let
   productionCapabilities = package.productionCapabilities;
   startupContract = import ./startup-contract.nix;
   subprocessEnvironmentContract = import ./subprocess-environment-contract.nix;
+  subprocessLibraryPriorityContract = import ./subprocess-library-priority-contract.nix;
   outputContract =
     assert lib.assertMsg (pkgs ? neomacs) "overlays.default must expose pkgs.neomacs";
     assert lib.assertMsg (
@@ -102,6 +103,14 @@ let
         ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux (subprocessEnvironmentContract {
           executable = "${checkedPackage}/bin/neomacs";
           printenv = "${pkgs.coreutils}/bin/printenv";
+          env = "${pkgs.coreutils}/bin/env";
+          timeout = "${pkgs.coreutils}/bin/timeout";
+        })}
+
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux (subprocessLibraryPriorityContract {
+          executable = "${checkedPackage}/bin/neomacs";
+          printenv = "${pkgs.coreutils}/bin/printenv";
+          ncursesLibrary = "${lib.getLib pkgs.ncurses}/lib/libncursesw.so.6";
           env = "${pkgs.coreutils}/bin/env";
           timeout = "${pkgs.coreutils}/bin/timeout";
         })}
