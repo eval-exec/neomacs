@@ -603,7 +603,7 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
     // 0 means "look at the first user token".
     let mut parsed: Vec<String> = args.into_iter().collect();
 
-    // GNU emacs.c:1502 — sort_args runs once before the main matching
+    // GNU emacs.c:1502 — sort_args runs before the main matching
     // pass so the parser walks argv in canonical priority order. This
     // also has the effect of moving option/value pairs in front of
     // file-name args, matching how lisp/startup.el's `command-line` and
@@ -619,6 +619,7 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
     let mut frontend = FrontendKind::Gui;
     let mut terminal_device = None;
     let mut noninteractive = false;
+    let mut script_rewritten = false;
     let mut daemon = None;
     let mut temacs_mode = None;
     let mut dump_file_override = None;
@@ -631,8 +632,8 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
 
     while idx + 1 < parsed.len() {
         // GNU walks argv left-to-right inside `main()` after `sort_args`
-        // has reordered things. We don't reorder yet (that's Phase 2), so
-        // we walk the original token order. Each `argmatch` call looks at
+        // has reordered things. Keep this array fixed while idx is live.
+        // Each `argmatch` call looks at
         // `parsed[idx + 1]`; on a match it advances `idx` past the
         // consumed entry/entries. On no-match we drop to the catch-all
         // forwarding branch and bump `idx` ourselves.
@@ -743,6 +744,7 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
                 frontend = FrontendKind::Tty;
                 forwarded_args.push("-scriptload".to_string());
                 forwarded_args.push(script_file);
+                script_rewritten = true;
                 continue;
             }
             ArgMatch::MissingValue => {
@@ -764,6 +766,7 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
                 frontend = FrontendKind::Tty;
                 no_site_lisp = true;
                 forwarded_args.push("-scripteval".to_string());
+                script_rewritten = true;
                 continue;
             }
             ArgMatch::NoMatch => {}
@@ -922,6 +925,13 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
         // No standard option matched at this position: forward verbatim.
         forwarded_args.push(parsed[idx + 1].clone());
         idx += 1;
+    }
+
+    // GNU re-sorts after --script/-x become lower-priority Lisp actions
+    // (emacs.c:1711-1716,2137-2139). Restore that order once native matching
+    // is finished, while the forwarded option/operand pairs are still intact.
+    if script_rewritten {
+        sort_args(&mut forwarded_args)?;
     }
 
     if daemon.is_some() {

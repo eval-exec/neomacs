@@ -19,8 +19,8 @@
 //!   each argv element.
 //! - [`sort_args`] — ports `emacs.c:2796-2945`. Reorders argv so that
 //!   higher-priority options come first while keeping option/value pairs
-//!   together and deduping zero-arg duplicates. Called once near the top
-//!   of `parse_startup_options` so the rest of the parser (and Lisp's
+//!   together and deduping zero-arg duplicates. Called before native matching
+//!   and again after native script rewrites so the parser (and Lisp's
 //!   `command-line` / `command-line-1`) sees argv in GNU's canonical
 //!   order regardless of how the user typed it.
 
