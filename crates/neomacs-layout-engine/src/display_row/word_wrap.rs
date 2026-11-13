@@ -6,7 +6,9 @@ use crate::display_row::builder::{
 };
 use crate::display_row::face_state::DisplayRowExtendFace;
 use crate::display_row::walk_state::WordWrapRenderState;
-use crate::display_source::{DisplaySourceTextOrigin, DisplaySourceTextPosition};
+use crate::display_source::{
+    DisplaySourceResumeCursor, DisplaySourceTextOrigin, DisplaySourceTextPosition,
+};
 use neovm_core::buffer::LispCharPos1;
 
 fn buffer_slot_window_source_position(
@@ -48,7 +50,7 @@ pub(crate) fn record_text_progress(
             if word_wrap.can_record_candidate(ch) {
                 word_wrap.record_candidate_at(
                     ch,
-                    source_position,
+                    DisplaySourceResumeCursor::AfterOverlayStrings(source_position),
                     output_display_point_start + char_offset,
                     (row_first, previous_charpos),
                     // Wide-character padding and composition make source and

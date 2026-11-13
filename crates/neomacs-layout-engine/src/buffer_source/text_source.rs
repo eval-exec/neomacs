@@ -13,8 +13,8 @@ use crate::display_item::{
 use crate::display_property::DisplayPropertyClassification;
 use crate::display_source::{
     DisplayItemSource, DisplayPropertySourceCursorAction, DisplayPropertySourceFaces,
-    DisplayPropertySourcePlan, DisplaySourceContext, LispStringSourceStack,
-    TextSourceCharClassification, classify_text_source_char,
+    DisplayPropertySourcePlan, DisplaySourceContext, DisplaySourceResumeCursor,
+    LispStringSourceStack, TextSourceCharClassification, classify_text_source_char,
     display_item_kind_for_text_source_char_with_tty_mapping,
 };
 use crate::neovm_bridge::{
@@ -469,17 +469,19 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         self.char_pos = char_pos.min(self.end).min(accessible_end);
     }
 
-    /// Restore a word-wrap checkpoint.  Any insertion element produced at or
-    /// after the checkpoint was also removed by the glyph checkpoint and must
-    /// be surfaced again on the continuation row.
-    pub(crate) fn rewind_for_word_wrap_to(&mut self, char_pos: CharPos0) {
-        self.reset_to(char_pos);
-        if self
-            .overlay_strings_produced_at
-            .is_some_and(|anchor| anchor >= self.char_pos)
-        {
-            self.overlay_strings_produced_at = None;
-        }
+    /// Restore both the text position and the saved insertion phase.
+    /// Strings retained by an AFTER checkpoint must not be produced again,
+    /// even if the cursor has visited a later insertion since that checkpoint.
+    pub(crate) fn rewind_for_word_wrap_to(&mut self, cursor: DisplaySourceResumeCursor) {
+        self.reset_to(CharPos0::new(cursor.position().charpos().max(0) as usize));
+        self.overlay_strings_produced_at = match cursor {
+            DisplaySourceResumeCursor::BeforeOverlayStrings(_) => None,
+            // The marker also determines box terminals: an empty insertion
+            // stop must not claim that an overlay string was actually emitted.
+            DisplaySourceResumeCursor::AfterOverlayStrings(_) => self
+                .overlay_strings_at(self.char_pos)
+                .map(|_| self.char_pos),
+        };
     }
 
     #[cfg(test)]

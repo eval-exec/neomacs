@@ -323,12 +323,11 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                 // above, the row's drawn glyphs + display points) back to the word
                 // boundary; reseat the producer at the SAME boundary so the
                 // candidate char is RE-produced on the continuation row. The
-                // producer's position IS its resume state, so this is a plain
-                // reseat — it used to also have to drop a stale queued run
-                // remainder (candidate + 1) that would otherwise replay first and
-                // drop the candidate char from the layout.
+                // checkpoint also retains whether overlay strings at that
+                // boundary were already drawn. Restoring a bare position would
+                // replay those strings while retaining their glyphs.
                 source_walk.rewind_source_consumption(
-                    BufferSourceRewind::WordWrap(source_position),
+                    BufferSourceRewind::WordWrap(wrap_break.source_cursor()),
                     invisible_text_checkpoint,
                 );
                 source_walk

@@ -740,7 +740,9 @@ fn cursor_capture_state_captures_once_and_refines_matching_main_char_width() {
 fn cursor_word_wrap_boundary() -> crate::display_row::walk_state::WordWrapBreakCandidate {
     let mut boundary = crate::display_row::walk_state::WordWrapBreakCandidate::default();
     boundary.record_at(
-        crate::display_source::DisplaySourceTextPosition::new(5, 5),
+        crate::display_source::DisplaySourceResumeCursor::AfterOverlayStrings(
+            crate::display_source::DisplaySourceTextPosition::new(5, 5),
+        ),
         0,
         (None, None),
         Default::default(),
@@ -38557,3 +38559,6 @@ mod overlay_string_window_wrap_test;
 #[cfg(test)]
 #[path = "narrow_root_eob_test.rs"]
 mod narrow_root_eob_test;
+
+#[path = "overlay_string_word_wrap_progress_test.rs"]
+mod overlay_string_word_wrap_progress_test;
