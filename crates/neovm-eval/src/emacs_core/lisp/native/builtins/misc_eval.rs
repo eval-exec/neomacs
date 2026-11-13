@@ -9,6 +9,17 @@ pub use neovm_value::error::{
 use neovm_value::symbol::Obarray;
 use neovm_value::tagged::value::SymbolMode;
 
+/// GNU `process.c:Fwaiting_for_user_input_p`: read the command input wait state.
+/// Core and the eval unit runtime register this same evaluator-backed entry.
+#[doc(hidden)]
+pub fn builtin_waiting_for_user_input_p_ctx(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("waiting-for-user-input-p", &args, 0)?;
+    Ok(Value::bool_val(eval.waiting_for_user_input()))
+}
+
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_pos_property(
     eval: &mut super::eval::Context,

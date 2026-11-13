@@ -446,13 +446,7 @@ pub(crate) fn builtin_waiting_for_user_input_p(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_waiting_for_user_input_p_ctx(
-    eval: &mut Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("waiting-for-user-input-p", &args, 0)?;
-    Ok(Value::bool_val(eval.waiting_for_user_input()))
-}
+pub(crate) use neovm_eval::emacs_core::builtins::builtin_waiting_for_user_input_p_ctx;
 
 // ---------------------------------------------------------------------------
 // 17. read-char

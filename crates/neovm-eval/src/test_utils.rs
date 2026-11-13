@@ -811,6 +811,7 @@ mod unit_runtime {
     /// Misc subrs whose bodies live in this crate. The unit runtime binds
     /// the same entry shape production registers in `subrs.rs`.
     fn misc_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
+        use crate::emacs_core::builtins::builtin_waiting_for_user_input_p_ctx;
         use crate::emacs_core::misc::{builtin_make_list, builtin_string_to_unibyte};
         use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
         use neovm_value::error::EvalResult;
@@ -824,6 +825,11 @@ mod unit_runtime {
         }
 
         Some(match name {
+            "waiting-for-user-input-p" => SubrSpec::new(
+                "waiting-for-user-input-p",
+                NativeFn::ContextVec(builtin_waiting_for_user_input_p_ctx),
+                SubrArity::new(0, Some(0)),
+            ),
             "make-list" => SubrSpec::new(
                 "make-list",
                 NativeFn::ContextVec(bind_make_list),
