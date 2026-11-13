@@ -786,16 +786,20 @@ pub fn builtin_network_interface_info(
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_network_interface_info_impl(args: Vec<Value>) -> EvalResult {
     expect_args("network-interface-info", &args, 1)?;
-    let ifname_raw = expect_string_strict(&args[0])?;
-    // Match C-string interface-name handling: embedded NUL truncates lookup.
-    let ifname = ifname_raw.split('\0').next().unwrap_or_default();
-    // Emacs applies IFNAMSIZ-style byte limits, not character counts.
-    if ifname.len() >= 16 {
+    let ifname_raw = args[0]
+        .as_lisp_string()
+        .ok_or_else(|| signal_wrong_type_string(args[0]))?;
+    // GNU process.c:4499-4501 checks the whole string's SBYTES against
+    // sizeof ifr_name before copying it. Count stored bytes, including NULs,
+    // before decoding the name or letting the kernel interpret its first NUL.
+    if ifname_raw.sbytes() >= 16 {
         return Err(signal(
             "error",
-            vec![Value::string("interface name too long")],
+            vec![Value::string("Interface name too long")],
         ));
     }
+    let ifname_raw = neovm_value::emacs_char::to_utf8_lossy(ifname_raw.as_bytes());
+    let ifname = ifname_raw.split('\0').next().unwrap_or_default();
 
     if let Some(host_entries) = sys::interface_snapshot() {
         let mut first_match: Option<HostInterfaceEntry> = None;

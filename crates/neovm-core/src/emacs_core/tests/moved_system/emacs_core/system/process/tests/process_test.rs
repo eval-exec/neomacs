@@ -10813,8 +10813,33 @@ fn process_network_interface_and_signal_runtime_surface() {
     assert_eq!(
         results[1],
         format!(
-            "OK (\"127.0.0.1:80\" \"127.0.0.1\" \"[0:0:0:0:0:0:0:1]:80\" \"0:0:0:0:0:0:0:1\" \"x\" nil nil nil nil (wrong-number-of-arguments format-network-address 0) t t t t t t t (wrong-number-of-arguments network-interface-list 3) (error \"Unsupported address family\") t t t t t t t t t t (wrong-type-argument stringp nil) (error \"interface name too long\") (error \"interface name too long\") (error \"interface name too long\") t t t t {ipv6_localhost} t t t t t t t t t t (error \"Unsupported family\") t t (error \"Unsupported hints value\") (wrong-type-argument stringp 1) t t t (wrong-number-of-arguments signal-names 1) (void-function process-connection))"
+            "OK (\"127.0.0.1:80\" \"127.0.0.1\" \"[0:0:0:0:0:0:0:1]:80\" \"0:0:0:0:0:0:0:1\" \"x\" nil nil nil nil (wrong-number-of-arguments format-network-address 0) t t t t t t t (wrong-number-of-arguments network-interface-list 3) (error \"Unsupported address family\") t t t t t t t t t t (wrong-type-argument stringp nil) (error \"Interface name too long\") (error \"Interface name too long\") (error \"Interface name too long\") t t t t {ipv6_localhost} t t t t t t t t t t (error \"Unsupported family\") t t (error \"Unsupported hints value\") (wrong-type-argument stringp 1) t t t (wrong-number-of-arguments signal-names 1) (void-function process-connection))"
         )
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn network_interface_info_checks_full_name_bytes_before_nul() {
+    // GNU 31.1 process.c:4499-4501 checks SBYTES before lispstpcpy.
+    crate::test_utils::init_test_tracing();
+    let results = eval_all(
+        r#"(list
+             (condition-case err
+                 (network-interface-info (concat "abc" (string 0) "defghijklmnopq"))
+               (error err))
+             (condition-case err
+                 (network-interface-info (concat "lo" (string 0) "abcdefghijklm"))
+               (error err))
+             (equal (network-interface-info (concat "lo" (string 0) "x"))
+                    (network-interface-info "lo"))
+             (condition-case err
+                 (network-interface-info (concat (make-string 14 ?a) (unibyte-string 233)))
+               (error err)))"#,
+    );
+    assert_eq!(
+        results[0],
+        "OK ((error \"Interface name too long\") (error \"Interface name too long\") t nil)"
     );
 }
 

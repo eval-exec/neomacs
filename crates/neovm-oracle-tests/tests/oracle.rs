@@ -124,6 +124,9 @@ mod oracle_mode_line_flow;
 #[path = "oracle_mode_line_live_spine.rs"]
 mod oracle_mode_line_live_spine;
 
+#[path = "oracle_network_interface_info.rs"]
+mod oracle_network_interface_info;
+
 #[path = "oracle_org_mode.rs"]
 mod oracle_org_mode;
 
