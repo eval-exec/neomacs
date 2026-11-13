@@ -827,6 +827,12 @@ pub(crate) fn force_inline_for_test(on: Option<bool>) {
     FORCE_INLINE.with(|f| f.set(on));
 }
 
+/// Save and replace the thread's inline override for a scoped fixture.
+#[cfg(feature = "test-support")]
+pub(crate) fn replace_inline_override_for_test(on: Option<bool>) -> Option<bool> {
+    FORCE_INLINE.with(|slot| slot.replace(on))
+}
+
 #[cfg(test)]
 #[path = "tests/inline_v2_test.rs"]
 mod v2_tests;

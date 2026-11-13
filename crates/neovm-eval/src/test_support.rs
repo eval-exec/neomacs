@@ -34,6 +34,13 @@ fn c5_jit_epoch_total() -> u64 {
 
 /// TA2 authority fence. Exactly the signed AUTHORITY-ITEMS rows live here.
 pub mod authority {
+    /// Peer 5701: force the spec-shim comparison policy and restore exact prior overrides.
+    /// The opaque guard stays on this thread; no effective-policy readers are exported.
+    #[cfg(all(feature = "test-support", feature = "jit"))]
+    pub fn spec_shim_policy_scope_for_test(slow: bool) -> impl Drop {
+        crate::emacs_core::jit::compile::spec_shim_policy_scope_for_test(slow)
+    }
+
     /// Peer 5699: run the private-state fixture with core's real Context factory.
     /// The driver retains the original assertions; no private handle escapes.
     #[cfg(feature = "test-support")]

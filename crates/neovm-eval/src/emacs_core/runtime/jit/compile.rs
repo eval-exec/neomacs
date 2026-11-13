@@ -369,6 +369,34 @@ pub(crate) fn jit_force_slow_spec() -> bool {
     }
 }
 
+/// Force the two spec-shim backtrace runs without exporting policy readers.
+/// Restore the prior overrides, including environment-selected `None`, on unwind.
+#[cfg(feature = "test-support")]
+pub(crate) fn spec_shim_policy_scope_for_test(slow: bool) -> impl Drop {
+    struct Restore {
+        direct: Option<bool>,
+        inline: Option<bool>,
+        profit: ProfitGateTestPolicy,
+        slow: Option<bool>,
+        _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+    }
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            replace_direct_call_override_for_test(self.direct);
+            crate::emacs_core::jit::inline::replace_inline_override_for_test(self.inline);
+            replace_profit_gate_for_test(self.profit);
+            FORCE_SLOW_SPEC_TEST_OVERRIDE.with(|slot| slot.set(self.slow));
+        }
+    }
+    Restore {
+        direct: replace_direct_call_override_for_test(Some(false)),
+        inline: crate::emacs_core::jit::inline::replace_inline_override_for_test(Some(false)),
+        profit: replace_profit_gate_for_test(ProfitGateTestPolicy::Bypass),
+        slow: FORCE_SLOW_SPEC_TEST_OVERRIDE.with(|slot| slot.replace(Some(slow))),
+        _thread: std::marker::PhantomData,
+    }
+}
+
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static FORCE_SLOW_SPEC_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =

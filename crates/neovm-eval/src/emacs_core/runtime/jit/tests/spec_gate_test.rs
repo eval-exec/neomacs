@@ -863,23 +863,6 @@ fn armed_shim_byte_limit_refuses_with_gnu_overflow_data() {
 /// (c) `debug-on-error` sees the same backtrace on the armed spec shim as on
 /// the slow spec path. Distinct from `debug-on-next-call`, which leaves the
 /// fast path before the call.
-#[test]
-fn debug_on_error_backtrace_matches_the_slow_spec_path() {
-    crate::test_utils::init_test_tracing();
-    let fast = debug_on_error_backtrace(false);
-    let slow = debug_on_error_backtrace(true);
-    assert!(
-        fast.0.contains("neo-eieio-dbg"),
-        "the callee frame is on the armed backtrace: {}",
-        fast.0
-    );
-    assert_eq!(
-        fast.0, slow.0,
-        "debug-on-error backtrace changed on the shim"
-    );
-    assert!(fast.1 >= 1, "the erroring call took the armed fast path");
-    assert_eq!(slow.1, 0, "the slow path never counts a shim fast run");
-}
 
 fn debug_on_error_backtrace(slow: bool) -> (String, u64) {
     let _policy = SpecShimPolicy::enter(slow);

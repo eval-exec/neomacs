@@ -690,3 +690,7 @@ mod emacs_core_runtime_bytecode_tests_vm_shared_runtime_test_rs;
 #[cfg(all(test, feature = "sqlite"))]
 #[path = "emacs_core/runtime/eval/tests/sqlite_runtime_feature_test.rs"]
 mod emacs_core_runtime_eval_tests_sqlite_runtime_feature_test_rs;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/debug_backtrace_runtime_test.rs"]
+mod emacs_core_runtime_jit_tests_debug_backtrace_runtime_test_rs;

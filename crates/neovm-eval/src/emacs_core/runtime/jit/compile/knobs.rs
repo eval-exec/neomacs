@@ -1127,6 +1127,12 @@ pub(crate) fn force_direct_call_for_test(on: Option<bool>) {
     DIRECT_CALL_TEST_OVERRIDE.with(|c| c.set(on));
 }
 
+/// Save and replace the thread's direct-call override for a scoped fixture.
+#[cfg(feature = "test-support")]
+pub(crate) fn replace_direct_call_override_for_test(on: Option<bool>) -> Option<bool> {
+    DIRECT_CALL_TEST_OVERRIDE.with(|slot| slot.replace(on))
+}
+
 /// Force memory-ABI direct calls on/off on the current compiler thread
 /// (tests only); `None` returns to the environment's.
 #[cfg(any(test, feature = "test-support"))]
