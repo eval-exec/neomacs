@@ -698,3 +698,7 @@ mod emacs_core_runtime_jit_tests_debug_backtrace_runtime_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/builtins/tests/fixed_arity_inline_subr_class_b_test.rs"]
 mod emacs_core_lisp_native_builtins_tests_fixed_arity_inline_subr_class_b_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/vm_round2_runtime_test.rs"]
+mod emacs_core_runtime_bytecode_tests_vm_round2_runtime_test_rs;
