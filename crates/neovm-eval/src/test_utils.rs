@@ -481,6 +481,7 @@ mod unit_runtime {
                         );
                         if let Some(spec) = buffer_family_subr(row.name)
                             .or_else(|| arithmetic_family_subr(row.name))
+                            .or_else(|| symbols_family_subr(row.name))
                         {
                             let arity = spec.arity();
                             assert_eq!(
@@ -779,6 +780,54 @@ mod unit_runtime {
         &DISPLAY_SERVICE,
         &FILE_NOTIFY,
     );
+
+    /// Symbol and closure subrs whose bodies live in this crate. The unit
+    /// runtime binds the same entry shape production registers in `subrs.rs`.
+    fn symbols_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
+        use crate::emacs_core::builtins::{
+            builtin_make_byte_code, builtin_make_closure, builtin_obarray_make, builtin_record,
+        };
+        use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+        use neovm_value::error::EvalResult;
+        use neovm_value::value::Value;
+
+        fn bind_make_byte_code(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_make_byte_code(args)
+        }
+        fn bind_make_closure(_ctx: &mut Context, args: &[Value]) -> EvalResult {
+            builtin_make_closure(args)
+        }
+        fn bind_record(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_record(args)
+        }
+        fn bind_obarray_make(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_obarray_make(args)
+        }
+
+        Some(match name {
+            "make-byte-code" => SubrSpec::new(
+                "make-byte-code",
+                NativeFn::ContextVec(bind_make_byte_code),
+                SubrArity::new(4, None),
+            ),
+            "make-closure" => SubrSpec::new(
+                "make-closure",
+                NativeFn::ContextSlice(bind_make_closure),
+                SubrArity::new(1, None),
+            ),
+            "record" => SubrSpec::new(
+                "record",
+                NativeFn::ContextVec(bind_record),
+                SubrArity::new(1, None),
+            ),
+            "obarray-make" => SubrSpec::new(
+                "obarray-make",
+                NativeFn::ContextVec(bind_obarray_make),
+                SubrArity::new(0, Some(1)),
+            ),
+            _ => return None,
+        })
+    }
 
     /// Arithmetic subrs whose bodies live in this crate. The unit runtime
     /// binds the same entry shape production registers in `subrs.rs`.
