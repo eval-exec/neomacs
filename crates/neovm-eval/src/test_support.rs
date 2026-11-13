@@ -34,6 +34,14 @@ fn c5_jit_epoch_total() -> u64 {
 
 /// TA2 authority fence. Exactly the signed AUTHORITY-ITEMS rows live here.
 pub mod authority {
+    // PEER5726: private leaf contracts execute with core canonical factories.
+    #[cfg(all(feature = "test-support", feature = "vm-profile"))]
+    pub fn run_buffer_local_value_leaf_matches_the_builtin_on_every_variable_shape_for_test(
+        make_context: fn() -> crate::emacs_core::eval::Context,
+    ) {
+        crate::emacs_core::builtins::leaves::run_buffer_local_value_leaf_matches_the_builtin_on_every_variable_shape_fixture(make_context);
+    }
+
     /// R0 / lead 4450: classify entries from core's full production registry.
     #[cfg(feature = "test-support")]
     pub fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_for_test(

@@ -565,44 +565,6 @@ fn symbol_value_leaf_matches_its_opcode_arm_on_every_variable_shape() {
     assert_eq!(checked, 88, "every variable shape, buffer and symbol mode");
 }
 
-/// `buffer-local-value` over variable × buffer, from buffers `a` and `b`,
-/// against the registered builtin.
-#[test]
-fn buffer_local_value_leaf_matches_the_builtin_on_every_variable_shape() {
-    use crate::emacs_core::eval::{VarCacheEvent, var_cache_event_count};
-    let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    variable_setup(&mut ctx);
-    let variables = pool(&mut ctx, VARIABLES);
-    let buffers = pool(
-        &mut ctx,
-        &[
-            "(get-buffer \" leaf-vars-a\")",
-            "(get-buffer \" leaf-vars-b\")",
-            "(let ((b (get-buffer-create \" leaf-vars-dead\"))) (kill-buffer b) b)",
-            "nil",
-            "5",
-        ],
-    );
-    let hits0 = var_cache_event_count(VarCacheEvent::ReadLocalized);
-    for current in [" leaf-vars-a", " leaf-vars-b"] {
-        ctx.eval_str(&format!("(set-buffer {current:?})"))
-            .expect("set-buffer");
-        for (i, &v) in variables.iter().enumerate() {
-            for (j, &b) in buffers.iter().enumerate() {
-                let what = format!(
-                    "(buffer-local-value {} buffer#{j}) in {current:?}",
-                    VARIABLES[i]
-                );
-                check(&mut ctx, &BUFFER_LOCAL_VALUE, &[v, b], false, &what);
-            }
-        }
-    }
-    assert!(
-        var_cache_event_count(VarCacheEvent::ReadLocalized) > hits0,
-        "the leaf's cached tier answered some reads"
-    );
-}
-
 /// The first leaf batch's read-only and allocating leaves over the pool
 /// (pairs for `rassq`), with `symbols-with-pos-enabled` off and on, against
 /// the registered builtins.

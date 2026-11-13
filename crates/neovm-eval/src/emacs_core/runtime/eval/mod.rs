@@ -7906,3 +7906,6 @@ impl Context {
 pub(crate) use green::run_a_sim_worlds_waits_never_slice_fixture;
 #[cfg(feature = "test-support")]
 pub(crate) use green::run_fd_readiness_wakes_a_green_select_while_a_peer_yields_fixture;
+
+#[cfg(all(feature = "test-support", feature = "vm-profile", not(test)))]
+pub(crate) use var_fast::{VarCacheEvent, var_cache_event_count};

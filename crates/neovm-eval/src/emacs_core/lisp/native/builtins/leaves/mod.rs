@@ -536,3 +536,9 @@ pub(crate) fn string_lessp(ctx: &Context, a: Value, b: Value) -> LeafResult {
 #[cfg(test)]
 #[path = "tests/equivalence_test.rs"]
 mod equivalence_tests;
+
+#[cfg(all(feature = "test-support", feature = "vm-profile"))]
+#[path = "tests/equivalence_round2_runtime_fixture.rs"]
+mod equivalence_round2_runtime_fixture;
+#[cfg(all(feature = "test-support", feature = "vm-profile"))]
+pub(crate) use equivalence_round2_runtime_fixture::run_buffer_local_value_leaf_matches_the_builtin_on_every_variable_shape_fixture;

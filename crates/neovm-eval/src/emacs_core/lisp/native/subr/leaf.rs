@@ -161,9 +161,9 @@ impl LeafEntry {
     /// Call the body with `args`, nil-padded to [`Self::slots`] (the
     /// fixed-arity dispatcher's convention). For tests and the debug
     /// harness; compiled code calls the body through its trampoline.
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "test-support", feature = "vm-profile")))]
     #[doc(hidden)]
-    pub fn call(self, ctx: &Context, args: &[Value]) -> LeafResult {
+    pub(crate) fn call(self, ctx: &Context, args: &[Value]) -> LeafResult {
         let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
         match self {
             LeafEntry::L1(f) => f(ctx, arg(0)),
@@ -603,7 +603,7 @@ impl LeafActive {
 /// Run a leaf body as compiled code does in a debug build: under
 /// [`LeafActive`], witnesses checked on the way out. The harnesses call
 /// leaves through this.
-#[cfg(test)]
+#[cfg(any(test, all(feature = "test-support", feature = "vm-profile")))]
 pub(crate) fn call_checked(spec: &'static LeafSpec, ctx: &Context, args: &[Value]) -> LeafResult {
     let active = LeafActive::enter(spec, ctx);
     let result = spec.entry.call(ctx, args);
@@ -625,3 +625,4 @@ pub(crate) fn reset_carrier_tls() {
 pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(h, LEAF_BY_SUBR.with(|slot| slot.borrow().len() as u64));
 }
+
