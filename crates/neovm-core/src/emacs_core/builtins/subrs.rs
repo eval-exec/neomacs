@@ -1176,12 +1176,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextSlice(|ctx, args| crate::emacs_core::buffer::builtin_overlayp(ctx, args)),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
-        "bobp",
-        |ctx: &mut crate::emacs_core::eval::Context| {
-            crate::emacs_core::navigation::builtin_bobp_0(&ctx.edit.buffers)
-        },
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::buffer_subrs::BOBP_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "eobp",
         |ctx: &mut crate::emacs_core::eval::Context| {

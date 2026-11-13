@@ -801,6 +801,7 @@ mod unit_runtime {
         }
 
         Some(match name {
+            "bobp" => crate::emacs_core::builtins::buffer_subrs::BOBP_SUBR,
             "erase-buffer" => SubrSpec::new(
                 "erase-buffer",
                 NativeFn::ContextVec(bind_erase_buffer),
@@ -815,6 +816,62 @@ mod unit_runtime {
             "following-char" => SubrSpec::fixed0("following-char", bind_following_char),
             _ => return None,
         })
+    }
+
+    #[test]
+    fn unit_bobp_uses_canonical_registered_entry() {
+        use crate::emacs_core::builtins::buffer_subrs::BOBP_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity};
+
+        let expected = BOBP_SUBR;
+        let bound = editfns_family_subr("bobp").expect("unit bobp descriptor");
+        assert_eq!(expected.name(), "bobp");
+        assert_eq!(expected.arity(), SubrArity::new(0, Some(0)));
+        assert_eq!(bound.name(), expected.name());
+        assert_eq!(bound.arity(), expected.arity());
+        assert_eq!(bound.dispatch_kind(), expected.dispatch_kind());
+        assert!(bound.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(bound.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(bound.command_default(), expected.command_default());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(bound.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let (Some(SubrFn::A0(expected_fn)), Some(SubrFn::A0(bound_fn))) =
+            (expected.function(), bound.function())
+        else {
+            panic!("bobp retains fixed0 ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(bound_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let id = neovm_value::intern::intern("bobp");
+        let actual =
+            crate::emacs_core::eval::lookup_global_subr_entry(id).expect("registered unit bobp");
+        let Some(SubrFn::A0(actual_fn)) = actual.function else {
+            panic!("registered fixed0 ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+        assert_eq!((actual.min_args, actual.max_args), (0, Some(0)));
+        assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+        assert!(actual.interactive_spec.is_none());
+        assert_eq!(
+            crate::emacs_core::subr::no_eval_policy(id),
+            expected.no_eval_policy()
+        );
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert!(
+            context
+                .obarray_view()
+                .get_property("bobp", "disabled")
+                .unwrap_or(Value::NIL)
+                .is_nil()
+        );
+        assert_eq!(actual_fn(&mut context).unwrap(), Value::T);
+        context.eval_str("(insert \"x\")").expect("advance point");
+        assert_eq!(actual_fn(&mut context).unwrap(), Value::NIL);
     }
 
     /// Misc descriptors owned by this crate, including lower host-generic bodies.

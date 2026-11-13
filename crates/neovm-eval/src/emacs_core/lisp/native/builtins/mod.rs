@@ -406,6 +406,8 @@ pub(super) use neovm_value::value;
 // --- Submodules ---
 #[doc(hidden)]
 pub mod arithmetic;
+#[doc(hidden)]
+pub mod buffer_subrs;
 mod buffer_text_backend;
 #[doc(hidden)]
 pub mod collections;
