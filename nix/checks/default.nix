@@ -10,6 +10,7 @@ let
   system = pkgs.stdenv.hostPlatform.system;
   productionCapabilities = package.productionCapabilities;
   startupContract = import ./startup-contract.nix;
+  subprocessEnvironmentContract = import ./subprocess-environment-contract.nix;
   outputContract =
     assert lib.assertMsg (pkgs ? neomacs) "overlays.default must expose pkgs.neomacs";
     assert lib.assertMsg (
@@ -96,6 +97,14 @@ let
           ${checkedPackage.gstreamerRuntime.inspect} decodebin >/dev/null
           ${checkedPackage.gstreamerRuntime.inspect} playbin >/dev/null
         ''}
+
+        # Linux must preserve subprocess environments before startup changes HOME.
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux (subprocessEnvironmentContract {
+          executable = "${checkedPackage}/bin/neomacs";
+          printenv = "${pkgs.coreutils}/bin/printenv";
+          env = "${pkgs.coreutils}/bin/env";
+          timeout = "${pkgs.coreutils}/bin/timeout";
+        })}
 
         ${startupContract {
           executable = "${checkedPackage}/bin/neomacs";

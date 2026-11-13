@@ -109,6 +109,12 @@ craneLib.buildPackage (
     src = source;
     inherit cargoArtifacts;
 
+    nativeBuildInputs =
+      commonArgs.nativeBuildInputs
+      ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+        pkgs.patchelf
+      ];
+
     # A dumped build environment can turn build-only inputs into runtime
     # dependencies even when the executable never links them. Let Nix's
     # output reference scan reject that regression after fixup hooks run.
@@ -178,10 +184,18 @@ craneLib.buildPackage (
       ln -s neomacsclient "$out/bin/emacsclient"
 
       wrapProgram "$out/bin/neomacs" \
-        --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath runtimeLibs}" \
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--prefix LD_LIBRARY_PATH : \"${pkgs.lib.makeLibraryPath runtimeLibs}\""} \
         --set-default RUST_LOG info \
         --set-default NEOMACS_RUNTIME_ROOT "$out/share/neomacs" \
         ${lib.concatStringsSep " \\\n        " linuxWrapArgs}
+    '';
+
+    postFixup = lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+      # Standard fixup shrinks search paths to DT_NEEDED libraries. Add the
+      # complete runtime set afterward so executable-local dlopen still works
+      # without exporting package library paths to every child process.
+      test -x "$out/bin/.neomacs-wrapped"
+      patchelf --add-rpath "${pkgs.lib.makeLibraryPath runtimeLibs}" "$out/bin/.neomacs-wrapped"
     '';
 
     setupHook = ./setup-hook.sh;
