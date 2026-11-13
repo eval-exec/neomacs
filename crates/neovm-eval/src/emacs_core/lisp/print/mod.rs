@@ -1944,7 +1944,12 @@ fn write_value_stateful_rooted(
     let attention = match &mut state.context {
         PrinterContext::Standalone(_) => Ok(()),
         PrinterContext::Evaluator(context) => {
-            if !context.maybe_quit_hot_ok() {
+            // One hot check, one slow poll: attention that arrives after the
+            // check must not reach `maybe_quit_slow` before the flush, because
+            // its Lisp hooks would then print behind a missing prefix.
+            if context.maybe_quit_hot_ok() {
+                Ok(())
+            } else {
                 flush_print_output_to_accumulator(
                     context,
                     out,
@@ -1952,8 +1957,8 @@ fn write_value_stateful_rooted(
                     &mut state.world_sink_touched,
                     state.world_active,
                 );
+                context.maybe_quit_slow()
             }
-            context.maybe_quit()
         }
     };
     if let Err(flow) = attention {
