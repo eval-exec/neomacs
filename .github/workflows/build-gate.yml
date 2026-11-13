@@ -84,26 +84,38 @@ jobs:
       # The harness spawn-architecture tripwire and the canonical-environment
       # tests live in neomacs-test-env; no other job runs them, so an unpinned
       # harness spawn could reach main. This leg already installs nextest.
+      # Each later step is independent evidence while the workspace check is known-red on the neovm-eval lib-test target.
       - name: Test harness spawn architecture
-        if: matrix.label == 'linux-x86_64'
+        if: ${{ !cancelled() && matrix.label == 'linux-x86_64' }}
         run: cargo nextest run --locked -p neomacs-test-env
 
       - name: Test DirectWrite native font replay
-        if: matrix.label == 'windows-msvc-x86_64'
+        if: ${{ !cancelled() && matrix.label == 'windows-msvc-x86_64' }}
         shell: bash
         run: >-
           cargo nextest run -p neomacs-layout-engine
           font_backend::windows::tests
 
+      - name: Test Windows w32 and readonly-delete rows
+        if: ${{ !cancelled() && matrix.label == 'windows-msvc-x86_64' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TERM_COLOR=never
+          cargo nextest run -p neovm-core --lib \
+            -E 'test(/windows_attribute_watch_observes_readonly_clear_before_delete|platform_w32_tests_w32_test_rs::/)' \
+            --no-tests=fail 2>&1 | tee nextest-w32-rows.txt
+          grep -E 'Summary \[.*\] 7 tests run:' nextest-w32-rows.txt
+
       - name: Test CoreText Thin-only font matching
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         run: >-
           cargo nextest run --locked -p neomacs-layout-engine --lib
           -E 'test(registered_coretext_thin_fixture_enumerates_and_opens_with_normal_preference)'
           --no-tests=fail
 
       - name: cargo check minimal capability build
-        if: matrix.label == 'linux-x86_64'
+        if: ${{ !cancelled() && matrix.label == 'linux-x86_64' }}
         run: cargo check -p neomacs --no-default-features
 
       # Every formerly ignored test now lives behind an explicit feature.
@@ -113,7 +125,7 @@ jobs:
       # of the default set; keep each opt-in set building so the mechanisms
       # cannot rot.
       - name: cargo check opt-in test mechanisms
-        if: matrix.label == 'linux-x86_64'
+        if: ${{ !cancelled() && matrix.label == 'linux-x86_64' }}
         run: |
           cargo check -p neovm-core --tests --features perf-probes,contract-fixtures
           cargo check -p neomacs-layout-engine --tests --features perf-probes
@@ -121,7 +133,7 @@ jobs:
           cargo check -p neomacs --tests --features release-pdump-tests
 
       - name: Test SQLite-disabled capability surface
-        if: matrix.label == 'linux-x86_64'
+        if: ${{ !cancelled() && matrix.label == 'linux-x86_64' }}
         run: >-
           cargo nextest run -p neovm-core --no-default-features
           -E 'test(disabled_build_exposes_only_gnu_capability_probes)'
