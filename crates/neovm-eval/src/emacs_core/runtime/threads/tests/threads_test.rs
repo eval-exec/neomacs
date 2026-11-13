@@ -719,7 +719,7 @@ fn parked_caller_specpdl_remains_gc_rooted_while_worker_runs() {
 }
 
 #[test]
-fn failed_thread_entry_discards_unreturned_thread() {
+fn failed_sim_thread_entry_discards_registered_thread() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let symbol = neovm_value::intern::intern("undo-limit");
@@ -728,21 +728,30 @@ fn failed_thread_entry_discards_unreturned_thread() {
         .expect("undo-limit has a forwarded default");
     eval.try_specbind(symbol, Value::fixnum(5))
         .expect("bind valid undo-limit");
+    let rejected = Value::string("bad");
     super::super::eval::set_default_toplevel_value(
         &mut eval,
-        vec![Value::from_sym_id(symbol), Value::string("bad")],
+        vec![Value::from_sym_id(symbol), rejected],
     )
     .expect("install rejected saved value");
     let before = eval.threads.all_thread_ids();
 
+    // Sim creation returns before the worker enters its runtime. Exercise
+    // the rejected restore at the deferred-entry seam, not at construction.
+    let worker = builtin_make_thread(&mut eval, vec![Value::NIL])
+        .expect("creation defers worker runtime entry");
+    let worker_id = expect_thread_id(&eval.threads, &worker).expect("registered worker");
+    assert!(eval.threads.thread_is_pending_sim_run(worker_id));
     assert!(matches!(
-        builtin_make_thread(&mut eval, vec![Value::NIL]).kinded_ref(),
-        Err(FlowRef::Signal(_))
+        run_pending_sim_thread(&mut eval, worker_id).kinded_ref(),
+        Err(FlowRef::Signal(signal))
+            if signal.symbol_name() == "wrong-type-argument"
+                && signal.data == vec![Value::symbol("integerp"), rejected]
     ));
     assert_eq!(
         eval.threads.all_thread_ids(),
         before,
-        "a thread whose runtime entry failed was never returned to Lisp"
+        "a thread whose deferred runtime entry failed leaves the live registry"
     );
 
     super::super::eval::set_default_toplevel_value(
@@ -1987,7 +1996,7 @@ fn sim_thread_creation_roots_the_preserved_local_values() {
 }
 
 #[test]
-fn failed_sim_thread_creation_preserves_an_absent_local_entry() {
+fn failed_sim_thread_entry_preserves_an_absent_local_entry() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new_with_threading(
         super::super::eval::ThreadingMode::Sim,
@@ -1999,9 +2008,10 @@ fn failed_sim_thread_creation_preserves_an_absent_local_entry() {
         .expect("undo-limit has a forwarded default");
     eval.try_specbind(forwarded, Value::fixnum(5))
         .expect("valid binding");
+    let rejected = Value::string("rejected");
     super::super::eval::set_default_toplevel_value(
         &mut eval,
-        vec![Value::from_sym_id(forwarded), Value::string("rejected")],
+        vec![Value::from_sym_id(forwarded), rejected],
     )
     .expect("save a rejected forwarded restore");
     let local_depth = eval.specpdl.len();
@@ -2015,9 +2025,17 @@ fn failed_sim_thread_creation_preserves_an_absent_local_entry() {
     eval.eval_str("(kill-local-variable 'sim-creation-local)")
         .expect("remove local");
     let before = eval.threads.all_thread_ids();
+    // Sim creation returns before the worker enters its runtime. Exercise
+    // the rejected restore at the deferred-entry seam, not at construction.
+    let worker = builtin_make_thread(&mut eval, vec![Value::NIL])
+        .expect("creation defers worker runtime entry");
+    let worker_id = expect_thread_id(&eval.threads, &worker).expect("registered worker");
+    assert!(eval.threads.thread_is_pending_sim_run(worker_id));
     assert!(matches!(
-        builtin_make_thread(&mut eval, vec![Value::NIL]).kinded_ref(),
-        Err(FlowRef::Signal(_))
+        run_pending_sim_thread(&mut eval, worker_id).kinded_ref(),
+        Err(FlowRef::Signal(signal))
+            if signal.symbol_name() == "wrong-type-argument"
+                && signal.data == vec![Value::symbol("integerp"), rejected]
     ));
     assert_eq!(eval.threads.all_thread_ids(), before);
     eval.eval_str("(set (make-local-variable 'sim-creation-local) 'replacement)")
