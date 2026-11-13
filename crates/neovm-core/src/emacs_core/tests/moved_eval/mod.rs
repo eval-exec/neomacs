@@ -650,6 +650,13 @@ mod emacs_core_runtime_eval_tests_hub_read_surface_test_rs;
 mod emacs_core_runtime_eval_tests_hub_retained_leaf_test_rs;
 
 // Class-(b) fixtures require core's canonical upper-layer registrars.
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+#[path = "emacs_core/lisp/native/builtins/file_notify/tests/native_runtime_class_b_test.rs"]
+mod emacs_core_lisp_native_builtins_file_notify_tests_native_runtime_class_b_test_rs;
+
 #[cfg(test)]
 #[path = "emacs_core/runtime/bytecode/tests/vm_shared_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_shared_runtime_test_rs;

@@ -45,6 +45,27 @@ pub mod authority {
         );
     }
 
+    /// Peer 5699: run the private-state fixture with core's real Context factory.
+    /// The driver retains the original assertions; no private handle escapes.
+    #[cfg(all(feature = "test-support", target_os = "linux"))]
+    pub fn run_inotify_rename_delivers_an_ordered_cookie_pair_for_test(
+        make_context: fn() -> crate::emacs_core::eval::Context,
+    ) {
+        crate::emacs_core::builtins::file_notify::run_inotify_rename_delivers_an_ordered_cookie_pair_fixture(make_context);
+    }
+
+    /// Peer 5699: run the private-state fixture with core's real Context factory.
+    /// The driver retains the original assertions; no private handle escapes.
+    #[cfg(all(
+        feature = "test-support",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    pub fn run_native_callback_can_remove_its_own_watch_for_test(
+        make_context: fn() -> crate::emacs_core::eval::Context,
+    ) {
+        crate::emacs_core::builtins::file_notify::run_native_callback_can_remove_its_own_watch_fixture(make_context);
+    }
+
     /// P1-CLASSES-ALL-CRATES FENCE: reset the symbol writer thread-locals.
     /// A reset is a write (N2), so the fence is the only cross-crate route.
     pub fn reset_symbols_thread_locals_for_test() {

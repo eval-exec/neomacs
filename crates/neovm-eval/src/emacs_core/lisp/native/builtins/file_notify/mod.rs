@@ -196,3 +196,18 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
         FILE_NOTIFY_STATE.with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),
     );
 }
+
+// Approved private fixtures; core supplies the canonical runtime factory.
+#[cfg(all(
+    feature = "test-support",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+#[path = "tests/native_runtime_class_b_driver.rs"]
+mod native_runtime_class_b_driver;
+#[cfg(all(feature = "test-support", target_os = "linux"))]
+pub(crate) use native_runtime_class_b_driver::run_inotify_rename_delivers_an_ordered_cookie_pair_fixture;
+#[cfg(all(
+    feature = "test-support",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+pub(crate) use native_runtime_class_b_driver::run_native_callback_can_remove_its_own_watch_fixture;
