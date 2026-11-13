@@ -13,7 +13,6 @@
 //! the child's generator makes.
 
 use crate::emacs_core::{Context, format_eval_result};
-use std::process::Command;
 
 const PROBE_ENV: &str = "NEOVM_RANDOM_SEED_PROBE";
 const PROBE_MARKER: &str = "RANDOM-SEED-PROBE ";
@@ -43,7 +42,7 @@ fn probe_in_fresh_process(name: &str) -> String {
     let module = module_path!();
     let module = module.split_once("::").map_or(module, |(_, rest)| rest);
     let exe = std::env::current_exe().expect("test binary path");
-    let output = Command::new(exe)
+    let output = crate::test_utils::canonical_test_command(&exe)
         .arg("--exact")
         .arg(format!("{module}::{name}"))
         .arg("--nocapture")

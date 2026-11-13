@@ -7583,7 +7583,7 @@ fn auto_save_error_never_writes_bel_in_batch() {
     let module = module_path!();
     let module = module.split_once("::").map_or(module, |(_, rest)| rest);
     let exe = std::env::current_exe().expect("test binary path");
-    let output = std::process::Command::new(exe)
+    let output = crate::test_utils::canonical_test_command(&exe)
         .arg("--exact")
         .arg(format!("{module}::{name}"))
         .arg("--nocapture")
