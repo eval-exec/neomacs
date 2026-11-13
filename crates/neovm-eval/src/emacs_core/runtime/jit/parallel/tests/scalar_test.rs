@@ -266,7 +266,16 @@ fn nmjit_n4_native_descriptor_source_guard_test() {
     );
     assert_eq!(native.matches(".atomic_load(").count(), 1);
     assert!(native.contains("activation.publication()"));
-    assert!(execution.contains("pub(crate) fn publication(&self) -> PublicationView<'_>"));
+    // The value extraction (7b915d972c98, TOKEN-USE A3 ledger row)
+    // made this cross-crate consumer public. Authority still comes from the
+    // borrowed activation: the view lifetime stays tied to `&self`, and the
+    // accessor returns only the registry's immutable publication slot.
+    assert!(
+        execution.contains("#[doc(hidden)]\n    pub fn publication(&self) -> PublicationView<'_>")
+    );
+    assert!(execution.contains(
+        "pub fn publication(&self) -> PublicationView<'_> {\n        self.registry.symbols.tables.publication()\n    }"
+    ));
     assert!(!native.contains("spine_addr"));
     assert!(!native.contains("initial_symbols"));
 }
