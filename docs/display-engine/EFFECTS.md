@@ -11,7 +11,6 @@ share one universal options struct.
                     :radius 48)
 
 (neomacs-effect-get 'cursor-glow)
-(neomacs-effect-reset 'cursor-glow)
 (neomacs-effect-names)
 ```
 

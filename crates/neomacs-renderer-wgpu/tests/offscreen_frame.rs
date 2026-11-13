@@ -1750,8 +1750,8 @@ fn retained_static_reused_across_cursor_colors() {
     let Some(mut h) = try_harness() else {
         return;
     };
-    // The default config cycles cursor color from time; disable it so the
-    // frame's explicit cursor colors drive the pixels for this test.
+    // Keep time-based cursor color cycling disabled so the frame's explicit
+    // cursor colors drive the pixels for this test.
     h.renderer.effects.cursor_color_cycle.enabled = false;
     let frame_a = frame_with_cursor(Color::rgb(1.0, 0.0, 0.0)); // red cursor
     let frame_b = frame_with_cursor(Color::rgb(0.0, 0.4, 1.0)); // blue cursor
