@@ -2478,6 +2478,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	type	type Interrupt
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	type	type OsSignalPending
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	type	type SignalWakePipeReadFd
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	type	type TakeTerminationSignal
+crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	const	const FORWARD_CHAR_INTERACTIVE_SPEC
+crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	const	const WIDEN_INTERACTIVE_SPEC
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	enum	enum BuiltinInteractiveSpec
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	enum	enum WhereIsDefinitionKey
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	field	InteractiveSpec field spec

@@ -94,6 +94,15 @@ pub enum BuiltinInteractiveSpec {
     Form(fn() -> Value),
 }
 
+/// Production `forward-char` interactive metadata, shared with the unit runtime.
+/// Moved from the canonical core subr declaration; GNU `cmds.c` declares "^p".
+pub const FORWARD_CHAR_INTERACTIVE_SPEC: BuiltinInteractiveSpec =
+    BuiltinInteractiveSpec::String("^p");
+
+/// Production `widen` interactive metadata, shared with the unit runtime.
+/// Moved from the canonical core subr declaration; GNU `editfns.c` declares "".
+pub const WIDEN_INTERACTIVE_SPEC: BuiltinInteractiveSpec = BuiltinInteractiveSpec::String("");
+
 impl BuiltinInteractiveSpec {
     #[doc(hidden)]
     pub fn into_spec_value(self) -> Value {

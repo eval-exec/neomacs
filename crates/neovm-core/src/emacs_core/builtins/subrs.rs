@@ -464,7 +464,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::fixed0("widen", |ctx| builtin_widen_0(ctx)))
-            .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),
+            .interactive(
+                neovm_eval::emacs_core::eval::interactive_registry::WIDEN_INTERACTIVE_SPEC,
+            ),
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
         "buffer-modified-p",
@@ -1248,7 +1250,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
             crate::emacs_core::navigation::builtin_forward_char_1,
             FixedMin1::Zero,
         ))
-        .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("^p")),
+        .interactive(
+            neovm_eval::emacs_core::eval::interactive_registry::FORWARD_CHAR_INTERACTIVE_SPEC,
+        ),
     );
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(

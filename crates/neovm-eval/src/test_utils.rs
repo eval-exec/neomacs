@@ -1019,14 +1019,18 @@ mod unit_runtime {
     /// binds the same entry shape production registers in `subrs.rs`.
     fn buffer_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
         use crate::emacs_core::builtins::goto_char_interactive_spec;
-        use crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec;
+        use crate::emacs_core::eval::interactive_registry::{
+            BuiltinInteractiveSpec, FORWARD_CHAR_INTERACTIVE_SPEC, WIDEN_INTERACTIVE_SPEC,
+        };
         use crate::emacs_core::subr::{FixedMin1, FixedMin2, NativeFn, SubrArity, SubrSpec};
         use neovm_edit::emacs_core::buffer::{
-            builtin_current_buffer_0, builtin_get_buffer, builtin_get_buffer_create,
-            builtin_get_file_buffer, builtin_goto_char_1, builtin_insert, builtin_insert_byte,
-            builtin_kill_all_local_variables, builtin_narrow_to_region_2, builtin_ntake,
-            builtin_point_max_0, builtin_point_min_0, builtin_set_buffer_1,
+            builtin_char_after_1, builtin_current_buffer_0, builtin_get_buffer,
+            builtin_get_buffer_create, builtin_get_file_buffer, builtin_goto_char_1,
+            builtin_insert, builtin_insert_byte, builtin_kill_all_local_variables,
+            builtin_narrow_to_region_2, builtin_ntake, builtin_point_0, builtin_point_max_0,
+            builtin_point_min_0, builtin_set_buffer_1, builtin_widen_0,
         };
+        use neovm_edit::emacs_core::navigation::{builtin_bolp_0, builtin_forward_char_1};
         use neovm_value::error::EvalResult;
         use neovm_value::value::Value;
 
@@ -1044,6 +1048,15 @@ mod unit_runtime {
         }
         fn bind_set_buffer(ctx: &mut Context, arg: Value) -> EvalResult {
             builtin_set_buffer_1(ctx, arg)
+        }
+        fn bind_char_after(ctx: &mut Context, arg: Value) -> EvalResult {
+            builtin_char_after_1(&mut ctx.edit.buffers, arg)
+        }
+        fn bind_bolp(ctx: &mut Context) -> EvalResult {
+            builtin_bolp_0(&ctx.edit.buffers)
+        }
+        fn bind_point(ctx: &mut Context) -> EvalResult {
+            builtin_point_0(&mut ctx.edit.buffers)
         }
         fn bind_point_min(ctx: &mut Context) -> EvalResult {
             builtin_point_min_0(&mut ctx.edit.buffers)
@@ -1088,6 +1101,16 @@ mod unit_runtime {
             ),
             "current-buffer" => SubrSpec::fixed0("current-buffer", bind_current_buffer),
             "set-buffer" => SubrSpec::fixed1("set-buffer", bind_set_buffer, FixedMin1::One),
+            "char-after" => SubrSpec::fixed1("char-after", bind_char_after, FixedMin1::Zero),
+            "bolp" => SubrSpec::fixed0("bolp", bind_bolp),
+            "widen" => {
+                SubrSpec::fixed0("widen", builtin_widen_0).interactive(WIDEN_INTERACTIVE_SPEC)
+            }
+            "point" => SubrSpec::fixed0("point", bind_point),
+            "forward-char" => {
+                SubrSpec::fixed1("forward-char", builtin_forward_char_1, FixedMin1::Zero)
+                    .interactive(FORWARD_CHAR_INTERACTIVE_SPEC)
+            }
             "point-min" => SubrSpec::fixed0("point-min", bind_point_min),
             "point-max" => SubrSpec::fixed0("point-max", bind_point_max),
             "goto-char" => SubrSpec::fixed1("goto-char", bind_goto_char, FixedMin1::One)
