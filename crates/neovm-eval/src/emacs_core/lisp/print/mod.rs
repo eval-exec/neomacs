@@ -1220,7 +1220,11 @@ fn is_print_circle_candidate(value: &Value, print_gensym: bool) -> bool {
         }
         ValueKind::Veclike(VecLikeType::Record) => true,
         ValueKind::Veclike(VecLikeType::HashTable) => true,
-        ValueKind::Veclike(VecLikeType::Obarray) => true,
+        // GNU print.c:1337-1345 lists CLOSUREP, CHAR_TABLE_P,
+        // SUB_CHAR_TABLE_P, HASH_TABLE_P, FONTP and RECORDP. Obarrays are
+        // PVEC_OBARRAY (not VECTORP) and are absent from that list, so a
+        // repeated obarray is never labelled; font objects are candidates.
+        ValueKind::Veclike(VecLikeType::Font) => true,
         ValueKind::Veclike(VecLikeType::CharTable) => true,
         ValueKind::Veclike(VecLikeType::SubCharTable) => true,
         ValueKind::Veclike(VecLikeType::Lambda) => true,
@@ -1264,7 +1268,8 @@ fn object_identity_key(value: &Value) -> Option<u64> {
         | ValueKind::String
         | ValueKind::Veclike(VecLikeType::Lambda)
         | ValueKind::Veclike(VecLikeType::Macro)
-        | ValueKind::Veclike(VecLikeType::ByteCode) => Some(value.bits() as u64),
+        | ValueKind::Veclike(VecLikeType::ByteCode)
+        | ValueKind::Veclike(VecLikeType::Font) => Some(value.bits() as u64),
         ValueKind::Symbol(id) => {
             // Use a distinct namespace to avoid collisions with heap pointer keys.
             // Set the high bit to separate from pointer keys.
@@ -1467,13 +1472,6 @@ fn print_preprocess(
                     stack.push(entry.key);
                 }
             }
-            ValueKind::Veclike(VecLikeType::Obarray) => {
-                if let Some(obarray) = obj.as_obarray_obj() {
-                    for item in obarray.buckets.iter().rev() {
-                        stack.push(*item);
-                    }
-                }
-            }
             ValueKind::Veclike(VecLikeType::Lambda) => {
                 if let Some(slots) = obj.closure_slots() {
                     stack.extend(slots.iter().rev().copied());
@@ -1585,13 +1583,6 @@ fn print_preprocess_external_with_t_removal(
                 for (_, entry) in table.data.keyed_entries_in_slot_order().into_iter().rev() {
                     stack.push(entry.value);
                     stack.push(entry.key);
-                }
-            }
-            ValueKind::Veclike(VecLikeType::Obarray) => {
-                if let Some(obarray) = obj.as_obarray_obj() {
-                    for item in obarray.buckets.iter().rev() {
-                        stack.push(*item);
-                    }
                 }
             }
             ValueKind::Veclike(VecLikeType::Lambda) => {
@@ -1823,7 +1814,8 @@ pub(crate) fn default_cycle_candidate_key(value: &Value) -> Option<u64> {
         | ValueKind::Veclike(VecLikeType::HashTable)
         | ValueKind::Veclike(VecLikeType::Lambda)
         | ValueKind::Veclike(VecLikeType::Macro)
-        | ValueKind::Veclike(VecLikeType::ByteCode) => object_identity_key(value),
+        | ValueKind::Veclike(VecLikeType::ByteCode)
+        | ValueKind::Veclike(VecLikeType::Font) => object_identity_key(value),
         ValueKind::String if string_print_circle_candidate(value) => object_identity_key(value),
         _ => None,
     }
