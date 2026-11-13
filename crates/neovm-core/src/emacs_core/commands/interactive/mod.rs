@@ -3374,20 +3374,10 @@ pub(crate) fn builtin_this_command_keys_vector_impl(
     Ok(Value::vector(Vec::<Value>::new()))
 }
 
-fn single_command_key_vector_in_state(read_command_keys: &[Value]) -> Value {
-    if !read_command_keys.is_empty() {
-        return Value::vector(read_command_keys.to_vec());
-    }
-    Value::vector(Vec::<Value>::new())
-}
-
-pub(crate) fn builtin_this_single_command_keys_impl(
-    read_command_keys: &[Value],
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("this-single-command-keys", &args, 0)?;
-    Ok(single_command_key_vector_in_state(read_command_keys))
-}
+pub(crate) use neovm_eval::emacs_core::builtins::builtin_this_single_command_keys;
+#[allow(unused_imports)] // preserve the historical in-crate helper path
+pub(crate) use neovm_eval::emacs_core::builtins::builtin_this_single_command_keys_impl;
+use neovm_eval::emacs_core::builtins::single_command_key_vector_in_state;
 
 pub(crate) fn builtin_this_single_command_raw_keys_impl(
     read_raw_command_keys: &[Value],
@@ -3395,11 +3385,6 @@ pub(crate) fn builtin_this_single_command_raw_keys_impl(
 ) -> EvalResult {
     expect_args("this-single-command-raw-keys", &args, 0)?;
     Ok(single_command_key_vector_in_state(read_raw_command_keys))
-}
-
-/// `(this-single-command-keys)` -> vector of keys that invoked current command.
-pub(crate) fn builtin_this_single_command_keys(eval: &mut Context, args: Vec<Value>) -> EvalResult {
-    builtin_this_single_command_keys_impl(eval.read_command_keys(), args)
 }
 
 /// `(this-single-command-raw-keys)` -> vector of raw keys for current command.

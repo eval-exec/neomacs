@@ -6679,6 +6679,21 @@ fn vm_compiled_this_single_command_keys_uses_live_eval_key_context() {
         .expect("this-single-command-keys should execute");
 
     assert_eq!(result, Value::vector(vec![Value::fixnum(97)]));
+
+    eval.set_read_command_keys(Vec::new());
+    let empty = eval
+        .eval_str("(this-single-command-keys)")
+        .expect("empty this-single-command-keys should execute");
+    assert_eq!(empty, Value::vector(Vec::<Value>::new()));
+}
+
+#[test]
+fn vm_compiled_this_single_command_keys_rejects_arguments() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        vm_eval_str("(condition-case err (this-single-command-keys nil) (error (car err)))"),
+        "OK wrong-number-of-arguments"
+    );
 }
 
 #[test]

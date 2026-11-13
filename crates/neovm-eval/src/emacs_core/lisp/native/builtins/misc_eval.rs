@@ -20,6 +20,33 @@ pub fn builtin_waiting_for_user_input_p_ctx(
     Ok(Value::bool_val(eval.waiting_for_user_input()))
 }
 
+#[doc(hidden)]
+#[inline]
+pub fn single_command_key_vector_in_state(read_command_keys: &[Value]) -> Value {
+    if !read_command_keys.is_empty() {
+        return Value::vector(read_command_keys.to_vec());
+    }
+    Value::vector(Vec::<Value>::new())
+}
+
+#[doc(hidden)]
+pub fn builtin_this_single_command_keys_impl(
+    read_command_keys: &[Value],
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("this-single-command-keys", &args, 0)?;
+    Ok(single_command_key_vector_in_state(read_command_keys))
+}
+
+/// `(this-single-command-keys)` -> vector of keys that invoked current command.
+#[doc(hidden)]
+pub fn builtin_this_single_command_keys(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_this_single_command_keys_impl(eval.read_command_keys(), args)
+}
+
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_pos_property(
     eval: &mut super::eval::Context,
