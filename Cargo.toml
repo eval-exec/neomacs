@@ -540,8 +540,10 @@ strip = "none"
 # Never vendor dependencies into this repository. Always fork the crate on
 # GitHub and make changes on the fork's `patch` branch. Reference an exact Git
 # revision here and document the branch beside each dependency.
-# Fork branch: patch (includes Wayland/X11 fixes, continuous XI2 units, and Windows precision touchpad panning).
-winit = { git = "https://github.com/eval-exec/winit", rev = "2290f91c602f8efdf102972457a25e8b6e36f90c" }
+# Fork branch: patch (includes Wayland/X11 fixes, continuous XI2 units,
+# Windows precision touchpad panning, Windows Ctrl+Alt command-chord key
+# values, and native input event timestamps).
+winit = { git = "https://github.com/eval-exec/winit", rev = "598fe4b1bf0ac36746d49085a680645d5ef99230" }
 # Fork branch: patch (based on the 0.12.0 release, 1bddc226).
 # hide() pins the decoration buffer scale to 1 before detaching, so Weston does
 # not reject the coalesced state with wl_surface invalid_size at scale 2 (decorated fullscreen).

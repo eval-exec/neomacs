@@ -3025,6 +3025,56 @@ fn translate_key_keeps_unmapped_native_keys() {
     );
 }
 
+/// Windows folds Ctrl+Alt into AltGr, and winit's Windows backend reports
+/// the layout's key value with those command modifiers removed, so
+/// `Ctrl+Alt+n` arrives as `n`.  GNU's `make_lispy_event` cooks it to
+/// `C-M-n` (`src/keyboard.c:6328-6337`); issue #756.
+#[test]
+fn ctrl_alt_letter_cooks_to_gnu_c_m_letter() {
+    let key = RenderApp::translate_key_input(&Key::Character(SmolStr::new("n"))).unwrap();
+    let event = neovm_core::keyboard::render_key_transport_to_input_event(
+        key,
+        NEOMACS_CTRL_MASK | NEOMACS_META_MASK,
+        true,
+        42,
+    )
+    .unwrap();
+    let neovm_core::keyboard::InputEvent::KeyPress {
+        key,
+        emacs_frame_id,
+    } = event
+    else {
+        panic!("expected a key press");
+    };
+    assert_eq!(emacs_frame_id, 42);
+    assert_eq!(key.to_description(), "C-M-n");
+    // The integer GNU's `(kbd "C-M-n")` produces.
+    assert_eq!(key.to_emacs_event_value().as_int(), Some(0x800_000e));
+}
+
+/// `Ctrl+Alt+Shift+3` is the same chord as `(kbd "C-M-#")` in GNU Emacs: the
+/// shifted layout character carries the punctuation, and `make_ctrl_char`
+/// keeps Ctrl only for characters with a basic control code, so Shift does
+/// not survive as a separate modifier bit (`src/keyboard.c:2178-2211`).
+/// winit delivers the shifted key `#`; issue #756.
+#[test]
+fn ctrl_alt_shift_3_cooks_to_gnu_c_m_hash() {
+    let key = RenderApp::translate_key_input(&Key::Character(SmolStr::new("#"))).unwrap();
+    let event = neovm_core::keyboard::render_key_transport_to_input_event(
+        key,
+        NEOMACS_CTRL_MASK | NEOMACS_META_MASK | crate::backend::wgpu::NEOMACS_SHIFT_MASK,
+        true,
+        42,
+    )
+    .unwrap();
+    let neovm_core::keyboard::InputEvent::KeyPress { key, .. } = event else {
+        panic!("expected a key press");
+    };
+    assert_eq!(key.to_description(), "C-M-#");
+    // The integer GNU's `(kbd "C-M-#")` produces.
+    assert_eq!(key.to_emacs_event_value().as_int(), Some(0xc00_0023));
+}
+
 /// Modifiers are not key events — they arrive through `ModifiersChanged` — and
 /// the mapping says so with an arm of its own instead of relying on an
 /// unlisted key falling through to zero.  `Hyper` is in the list because
