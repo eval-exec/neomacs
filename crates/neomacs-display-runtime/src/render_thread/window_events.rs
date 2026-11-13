@@ -529,6 +529,7 @@ impl RenderApp {
                 device_id,
                 delta,
                 phase,
+                ..
             } => {
                 self.handle_mouse_wheel(window_id, device_id, delta, phase);
             }

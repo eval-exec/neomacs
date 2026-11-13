@@ -34,6 +34,7 @@ fn startup_input_keeps_pointer_and_newer_keyboard_in_native_order() {
         device_id: None,
         delta: MouseScrollDelta::LineDelta(0.0, -1.0),
         phase: TouchPhase::Moved,
+        timestamp: None,
     };
     input.defer_input(wheel.clone()).unwrap();
     let commit = WindowEvent::Ime(Ime::Commit("after wheel".into()));
@@ -63,6 +64,7 @@ fn startup_input_replays_default_quit_chord_before_first_scene() {
             device_id: None,
             delta: MouseScrollDelta::LineDelta(0.0, -1.0),
             phase: TouchPhase::Moved,
+            timestamp: None,
         },
         WindowEvent::ModifiersChanged(ModifiersState::CONTROL.into()),
         WindowEvent::KeyboardInput {
@@ -78,6 +80,7 @@ fn startup_input_replays_default_quit_chord_before_first_scene() {
                 key_without_modifiers: Key::Character("g".into()),
             },
             is_synthetic: false,
+            timestamp: None,
         },
         WindowEvent::ModifiersChanged(Modifiers::default()),
         WindowEvent::Focused(false),
