@@ -1626,21 +1626,19 @@ fn named_hook_call(
     authorization: &crate::emacs_core::hook_runtime::HookWalkAuthorization<'_>,
 ) -> EvalResult {
     use crate::emacs_core::hook_runtime::HookRuntime;
-    match eval.call_hook_callable(function, args, authorization) {
-        Err(flow) => {
-            if mode == NamedHookCall::Safe
-                && let Some(signal) = flow.as_signal()
+    match mode {
+        NamedHookCall::Ordinary => eval
+            .call_hook_callable(function, args, authorization)
+            .map(|_| Value::NIL),
+        NamedHookCall::Safe => {
+            if let Some(signal) =
+                hook_runtime::call_safe_hook_callable(eval, function, args, authorization)?
             {
-                // The owned carrier keeps the signal's in-flight roots live
-                // while error reporting can call arbitrary Lisp and collect.
-                eval.report_safe_hook_error(symbol, function, signal)?;
+                eval.report_safe_hook_error(symbol, function, &signal)?;
                 eval.remove_hook_function_after_error(symbol, function);
-                Ok(Value::NIL)
-            } else {
-                Err(flow)
             }
+            Ok(Value::NIL)
         }
-        Ok(_) => Ok(Value::NIL),
     }
 }
 

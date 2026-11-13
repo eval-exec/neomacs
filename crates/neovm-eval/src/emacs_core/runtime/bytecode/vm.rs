@@ -2744,6 +2744,10 @@ impl<'a> crate::emacs_core::hook_runtime::HookRuntime for Vm<'a> {
         self.ctx
     }
 
+    fn hook_context_mut(&mut self) -> &mut crate::emacs_core::eval::Context {
+        self.ctx
+    }
+
     fn call_hook_callable(
         &mut self,
         function: Value,

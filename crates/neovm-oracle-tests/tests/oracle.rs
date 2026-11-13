@@ -148,6 +148,9 @@ mod oracle_prefix_help;
 #[path = "oracle_read_file_name_completion_ignore_case.rs"]
 mod oracle_read_file_name_completion_ignore_case;
 
+#[path = "oracle_safe_hooks.rs"]
+mod oracle_safe_hooks;
+
 #[path = "oracle_shift_selection.rs"]
 mod oracle_shift_selection;
 

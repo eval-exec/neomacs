@@ -1,0 +1,16 @@
+;;; -*- lexical-binding: t; -*-
+(setq probe-log (getenv "SHUTDOWN_LOG"))
+(defun probe-record (line)
+  (let ((coding-system-for-write 'utf-8-unix))
+    (write-region (concat line "\n") nil probe-log t 'silent)))
+(setq auto-save-list-file-name nil)
+(defun probe-bad () (error "boom"))
+(defun probe-next () (probe-record "next"))
+(setq auto-save-hook '(probe-bad probe-next))
+(let ((debug-on-error t)
+      (debug-on-signal t)
+      (debugger (lambda (&rest _args) (probe-record "debugger"))))
+  (do-auto-save t))
+;; Prevent the canonical shutdown auto-save from recording the good hook again.
+(setq auto-save-hook nil)
+(kill-emacs 0)

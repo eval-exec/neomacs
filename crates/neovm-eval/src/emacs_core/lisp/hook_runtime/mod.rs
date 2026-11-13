@@ -1,5 +1,5 @@
 use super::builtins;
-use super::eval::Context;
+use super::eval::{ConditionFrame, Context, ResumeTarget};
 #[doc(hidden)]
 pub use neovm_value::error::{EvalResult, Flow, FlowKind, FlowResultExt};
 use neovm_value::intern::{SymId, intern};
@@ -8,6 +8,7 @@ use neovm_value::value::*;
 
 pub(crate) trait HookRuntime {
     fn hook_context(&self) -> &Context;
+    fn hook_context_mut(&mut self) -> &mut Context;
     fn call_hook_callable(
         &mut self,
         function: Value,
@@ -30,6 +31,10 @@ pub(crate) trait HookRuntime {
 
 impl HookRuntime for Context {
     fn hook_context(&self) -> &Context {
+        self
+    }
+
+    fn hook_context_mut(&mut self) -> &mut Context {
         self
     }
 
@@ -389,20 +394,52 @@ fn safe_run_hook_value_authorized<R: HookRuntime>(
             runtime.push_hook_root(arg);
         }
         for func in funcs {
-            match runtime
-                .call_hook_callable(func, hook_args, authorization)
-                .kinded()
+            if let Some(signal) = call_safe_hook_callable(runtime, func, hook_args, authorization)?
             {
-                Ok(_) => {}
-                Err(FlowKind::Signal(ref sig)) => {
-                    let _ = runtime.report_safe_hook_error(hook_sym, func, sig)?;
-                    runtime.remove_hook_function_after_error(hook_sym, func);
-                }
-                Err(flow) => return Err(Flow::from_kind(flow)),
+                let _ = runtime.report_safe_hook_error(hook_sym, func, &signal)?;
+                runtime.remove_hook_function_after_error(hook_sym, func);
             }
         }
         Ok(Value::NIL)
     })
+}
+
+/// GNU keyboard.c:1944-1961 installs internal_condition_case_n(Qt) for
+/// each function, not the whole walk. Preserve the caller's interpreter or
+/// VM adapter and keep caught signal roots owned until reporting finishes.
+/// The handler is removed before safe_run_hooks_error: reporting/removal
+/// failures must escape this boundary. A normal callback value is discarded.
+pub(crate) fn call_safe_hook_callable<R: HookRuntime>(
+    runtime: &mut R,
+    function: Value,
+    args: &[Value],
+    authorization: &HookWalkAuthorization<'_>,
+) -> Result<Option<Box<neovm_value::error::SignalData>>, Flow> {
+    let condition_stack_base = runtime.hook_context().condition_stack_len();
+    // Same native Qt callable-boundary identity used by Context::safe_funcall.
+    let resume = ResumeTarget::SafeFuncall {
+        condition_stack_base,
+    };
+    runtime
+        .hook_context_mut()
+        .push_condition_frame(ConditionFrame::ConditionCase {
+            conditions: Value::T,
+            resume: resume.clone(),
+        });
+    let result = runtime.call_hook_callable(function, args, authorization);
+    let result = runtime
+        .hook_context_mut()
+        .dispatch_signal_result_if_needed(result);
+    runtime
+        .hook_context_mut()
+        .truncate_condition_stack(condition_stack_base);
+    match result.kinded() {
+        Ok(_) => Ok(None),
+        Err(FlowKind::Signal(signal)) if signal.selected_resume().as_ref() == Some(&resume) => {
+            Ok(Some(signal))
+        }
+        Err(flow) => Err(Flow::from_kind(flow)),
+    }
 }
 
 pub(crate) fn run_hook_value_until_success<R: HookRuntime>(
@@ -750,6 +787,10 @@ mod hook_walk_authorization_tests {
     impl HookRuntime for CountingRuntime {
         fn hook_context(&self) -> &Context {
             &self.ctx
+        }
+
+        fn hook_context_mut(&mut self) -> &mut Context {
+            &mut self.ctx
         }
 
         fn call_hook_callable(

@@ -17,6 +17,8 @@ enum Probe {
     Sentinels,
     HookOrder,
     HookError,
+    SafeHookDebugger,
+    SafeHookDebugOnSignal,
     #[cfg(target_os = "linux")]
     ChildHangup,
 }
@@ -39,6 +41,12 @@ impl Probe {
             Self::Sentinels => include_str!("fixtures/kill_emacs_shutdown/sentinels.el"),
             Self::HookOrder => include_str!("fixtures/kill_emacs_shutdown/order.el"),
             Self::HookError => include_str!("fixtures/kill_emacs_shutdown/order-error.el"),
+            Self::SafeHookDebugger => {
+                include_str!("fixtures/kill_emacs_shutdown/safe-hook-debugger.el")
+            }
+            Self::SafeHookDebugOnSignal => {
+                include_str!("fixtures/kill_emacs_shutdown/safe-hook-debug-on-signal.el")
+            }
             #[cfg(target_os = "linux")]
             Self::ChildHangup => include_str!("fixtures/kill_emacs_shutdown/child-hangup.el"),
         }
@@ -72,6 +80,8 @@ impl Probe {
                 "kill-hook-next",
                 "save:first+second",
             ],
+            Self::SafeHookDebugger => &["next"],
+            Self::SafeHookDebugOnSignal => &["debugger", "next"],
             #[cfg(target_os = "linux")]
             Self::ChildHangup => &[
                 "READY",
@@ -285,4 +295,16 @@ fn shutdown_batch_hook_error_does_not_skip_the_next_hook() {
 #[cfg(target_os = "linux")]
 fn shutdown_sends_child_sighup_before_the_second_auto_save() {
     assert_shutdown_parity(Probe::ChildHangup);
+}
+
+// Raw subprocesses preserve the debugger's native signal context. The common
+// value harness adds an outer condition-case that can mask this regression.
+#[test]
+fn safe_hook_barrier_suppresses_ordinary_debugger() {
+    assert_shutdown_parity(Probe::SafeHookDebugger);
+}
+
+#[test]
+fn safe_hook_barrier_preserves_debug_on_signal() {
+    assert_shutdown_parity(Probe::SafeHookDebugOnSignal);
 }
