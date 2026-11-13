@@ -4,14 +4,31 @@ use neomacs_gui_tests::{
 use std::{fs, path::PathBuf, time::Duration};
 
 #[cfg(target_os = "linux")]
+fn apply_gpu_driver_environment(
+    command: &mut std::process::Command,
+    display_environment: &[(String, String)],
+    driver_files: &std::ffi::OsStr,
+) {
+    command
+        .envs(display_environment.iter().map(|(key, value)| (key, value)))
+        .env("VK_DRIVER_FILES", driver_files)
+        .env("VK_ICD_FILENAMES", driver_files);
+}
+
+#[cfg(target_os = "linux")]
 fn find_lavapipe_manifest(explicit: Option<PathBuf>, roots: &[PathBuf]) -> Option<PathBuf> {
     explicit.or_else(|| {
+        let architecture = match std::env::consts::ARCH {
+            "x86" => "i686",
+            architecture => architecture,
+        };
+        let host_manifest = format!("lvp_icd.{architecture}.json");
         roots
             .iter()
             .flat_map(|root| {
                 // Mesa now ships the architecture-independent name; older
                 // distributions retain the architecture suffix.
-                ["lvp_icd.json", "lvp_icd.x86_64.json"].map(|name| root.join(name))
+                [host_manifest.as_str(), "lvp_icd.json"].map(|name| root.join(name))
             })
             .find(|path| path.is_file())
     })
@@ -38,7 +55,11 @@ fn lavapipe_manifest_discovery_uses_available_files_and_preserves_override() {
     let generic = roots[1].join("lvp_icd.json");
     fs::write(&generic, "{}").unwrap();
     // A directory cannot impersonate an installed ICD manifest.
-    let legacy = roots[0].join("lvp_icd.x86_64.json");
+    let architecture = match std::env::consts::ARCH {
+        "x86" => "i686",
+        architecture => architecture,
+    };
+    let legacy = roots[0].join(format!("lvp_icd.{architecture}.json"));
     fs::create_dir(&legacy).unwrap();
     assert_eq!(find_lavapipe_manifest(None, &roots), Some(generic));
     fs::remove_dir(&legacy).unwrap();
@@ -144,6 +165,7 @@ fn check_pending_gpu(action: GpuStartupAction) {
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
     let mut command = Command::new(binary);
+    let mut driver_files = manifest.clone().into_os_string();
     command
         .current_dir(&root)
         .arg("-Q")
@@ -156,7 +178,6 @@ fn check_pending_gpu(action: GpuStartupAction) {
             },
         )
         .env("WGPU_BACKEND", "vulkan")
-        .env("VK_DRIVER_FILES", &manifest)
         .env("NEOMACS_GUI_GPU_READY_FILE", artifacts.join("lisp-ready"))
         .env("RUST_LOG", "info")
         .stdout(fs::File::create(artifacts.join("stdout.log")).unwrap())
@@ -169,26 +190,29 @@ fn check_pending_gpu(action: GpuStartupAction) {
             | GpuStartupAction::ImageSizeWhilePending
     ) {
         let driver = find_lavapipe_manifest(
-            std::env::var_os("NEOMACS_GUI_VULKAN_ICD").map(PathBuf::from),
+            std::env::var_os("NEOMACS_GUI_VULKAN_ICD")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    session
+                        .env()
+                        .iter()
+                        .find(|(key, _)| key == "VK_DRIVER_FILES")
+                        .map(|(_, value)| PathBuf::from(value))
+                }),
             &[
                 PathBuf::from("/run/opengl-driver/share/vulkan/icd.d"),
                 PathBuf::from("/usr/share/vulkan/icd.d"),
             ],
         )
         .expect("set NEOMACS_GUI_VULKAN_ICD to a usable native driver manifest");
-        command
-            .env(
-                "VK_DRIVER_FILES",
-                std::env::join_paths([&manifest, &driver]).unwrap(),
-            )
-            .arg("-l")
-            .arg(root.join(
-                if matches!(action, GpuStartupAction::ImageSizeWhilePending) {
-                    "crates/neomacs-gui-tests/fixtures/startup-gpu-image-size.el"
-                } else {
-                    "crates/neomacs-gui-tests/fixtures/startup-gpu-resize.el"
-                },
-            ));
+        driver_files = std::env::join_paths([&manifest, &driver]).unwrap();
+        command.arg("-l").arg(root.join(
+            if matches!(action, GpuStartupAction::ImageSizeWhilePending) {
+                "crates/neomacs-gui-tests/fixtures/startup-gpu-image-size.el"
+            } else {
+                "crates/neomacs-gui-tests/fixtures/startup-gpu-resize.el"
+            },
+        ));
         Some(driver)
     } else {
         if matches!(action, GpuStartupAction::LoseDisplay) {
@@ -218,9 +242,9 @@ fn check_pending_gpu(action: GpuStartupAction) {
                 artifacts.join("gpu-released"),
             );
     }
-    for (key, value) in session.env() {
-        command.env(key, value);
-    }
+    // Scenario-specific blocked/mixed ICDs must override the owned display's
+    // ordinary software default, including the legacy loader spelling.
+    apply_gpu_driver_environment(&mut command, session.env(), &driver_files);
     let mut child = command.spawn().unwrap();
     let result = (|| -> Result<(), String> {
         let tasks = PathBuf::from(format!("/proc/{}/task", child.id()));
@@ -768,4 +792,43 @@ fn empty_native_font_catalog_reports_startup_failure_without_a_window() {
             || stderr.contains("no usable initial GUI font was found"),
         "missing font-catalog diagnostic: {stdout}\n{stderr}",
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pending_gpu_fault_driver_overrides_owned_xvfb_defaults_for_both_loader_variables() {
+    let defaults = vec![
+        ("DISPLAY".to_owned(), "127.0.0.1:123".to_owned()),
+        (
+            "VK_DRIVER_FILES".to_owned(),
+            "/mesa/lvp_icd.x86_64.json".to_owned(),
+        ),
+        (
+            "VK_ICD_FILENAMES".to_owned(),
+            "/mesa/lvp_icd.x86_64.json".to_owned(),
+        ),
+    ];
+    for override_files in [
+        "/fixture/blocked.json",
+        "/fixture/blocked.json:/mesa/lvp_icd.x86_64.json",
+    ] {
+        let mut command = std::process::Command::new("not-executed");
+        apply_gpu_driver_environment(
+            &mut command,
+            &defaults,
+            std::ffi::OsStr::new(override_files),
+        );
+        for key in ["VK_DRIVER_FILES", "VK_ICD_FILENAMES"] {
+            let actual = command.get_envs().find(|(name, _)| *name == key).unwrap().1;
+            assert_eq!(actual, Some(std::ffi::OsStr::new(override_files)));
+        }
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == "DISPLAY")
+                .unwrap()
+                .1,
+            Some(std::ffi::OsStr::new("127.0.0.1:123")),
+        );
+    }
 }

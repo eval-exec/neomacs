@@ -484,6 +484,64 @@ pub fn start_local_xvfb_with_size(
     start_xvfb_with_transport(artifact_root, width, height, XTransport::Local)
 }
 
+// Select only the software ICD already named by the caller. This affects
+// clients of an owned Linux Xvfb, never the process-global Vulkan environment.
+#[cfg(target_os = "linux")]
+fn xvfb_lavapipe_icd(
+    driver_files: Option<&std::ffi::OsStr>,
+    icd_files: Option<&std::ffi::OsStr>,
+    keep_caller_selection: bool,
+) -> Option<PathBuf> {
+    if keep_caller_selection {
+        return None;
+    }
+    let architecture = match std::env::consts::ARCH {
+        "x86" => "i686",
+        architecture => architecture,
+    };
+    let host_manifest = format!("lvp_icd.{architecture}.json");
+    for files in [driver_files, icd_files].into_iter().flatten() {
+        // Keep the modern loader variable's priority, but never load a
+        // foreign-architecture manifest just because it occurs first.
+        for name in [host_manifest.as_str(), "lvp_icd.json"] {
+            if let Some(path) = std::env::split_paths(files)
+                .find(|path| path.file_name() == Some(std::ffi::OsStr::new(name)))
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn xvfb_vulkan_environment() -> Vec<(String, String)> {
+    let driver_files = std::env::var_os("VK_DRIVER_FILES");
+    let icd_files = std::env::var_os("VK_ICD_FILENAMES");
+    let keep = std::env::var_os("NEOMACS_XVFB_KEEP_VK_ICD").is_some_and(|value| value == "1");
+    let selected = xvfb_lavapipe_icd(driver_files.as_deref(), icd_files.as_deref(), keep);
+    if let Some(path) = selected {
+        return match path.into_os_string().into_string() {
+            Ok(path) => vec![
+                ("VK_DRIVER_FILES".to_owned(), path.clone()),
+                ("VK_ICD_FILENAMES".to_owned(), path),
+            ],
+            Err(_) => {
+                eprintln!(
+                    "neomacs-infra: owned Xvfb lavapipe ICD path is not UTF-8; keeping caller Vulkan settings"
+                );
+                Vec::new()
+            }
+        };
+    }
+    if !keep {
+        eprintln!(
+            "neomacs-infra: owned Xvfb has no host-compatible lavapipe ICD entry in VK_DRIVER_FILES or VK_ICD_FILENAMES; keeping caller Vulkan settings"
+        );
+    }
+    Vec::new()
+}
+
 fn start_xvfb_with_transport(
     artifact_root: &Path,
     width: u32,
@@ -601,7 +659,7 @@ fn start_xvfb_on(
         &authority_path,
         Duration::from_secs(5),
     )? {
-        return Ok(pending.into_session(vec![
+        let environment = vec![
             ("DISPLAY".to_string(), display),
             ("XAUTHORITY".to_string(), path_to_string(&authority_path)),
             // Winit 0.31 chooses Wayland before X11 and no longer reads
@@ -611,7 +669,14 @@ fn start_xvfb_on(
             ("WAYLAND_SOCKET".to_string(), String::new()),
             ("GDK_BACKEND".to_string(), "x11".to_string()),
             locale_pin(),
-        ]));
+        ];
+        #[cfg(target_os = "linux")]
+        let environment = {
+            let mut environment = environment;
+            environment.extend(xvfb_vulkan_environment());
+            environment
+        };
+        return Ok(pending.into_session(environment));
     }
     let diagnostics = read_log_tail(&stderr_path);
     Err(io::Error::new(
@@ -921,5 +986,123 @@ mod bench_tests {
         assert_eq!(env.get("LC_ALL"), Some(&"C.UTF-8"));
         assert!(root.path().join(WESTON_BENCH_LOG_FILE).is_file());
         drop(session);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod xvfb_vulkan_tests {
+    use super::xvfb_lavapipe_icd;
+    use std::ffi::OsStr;
+    use std::path::PathBuf;
+
+    #[test]
+    fn owned_xvfb_prefers_driver_list_lavapipe_over_other_icds_and_legacy_list() {
+        let architecture = match std::env::consts::ARCH {
+            "x86" => "i686",
+            architecture => architecture,
+        };
+        let host = format!("/mesa/lvp_icd.{architecture}.json");
+        let driver = format!("/mesa/intel_icd.json:{host}:/mesa/radeon_icd.json");
+        let legacy = format!("/legacy/lvp_icd.{architecture}.json");
+        let generic_first = format!("/mesa/intel_icd.json:/mesa/lvp_icd.json:{host}");
+        assert_eq!(
+            xvfb_lavapipe_icd(
+                Some(OsStr::new(&generic_first)),
+                Some(OsStr::new(&legacy)),
+                false,
+            ),
+            Some(PathBuf::from(&host))
+        );
+        assert_eq!(
+            xvfb_lavapipe_icd(Some(OsStr::new(&driver)), Some(OsStr::new(&legacy)), false),
+            Some(PathBuf::from(&host))
+        );
+        assert_eq!(
+            xvfb_lavapipe_icd(
+                Some(OsStr::new("/mesa/intel_icd.json")),
+                Some(OsStr::new(&legacy)),
+                false,
+            ),
+            Some(PathBuf::from(&legacy))
+        );
+        // A generic entry in the modern variable still wins over the
+        // architecture-specific entry in the legacy variable.
+        assert_eq!(
+            xvfb_lavapipe_icd(
+                Some(OsStr::new("/mesa/lvp_icd.json")),
+                Some(OsStr::new(&legacy)),
+                false,
+            ),
+            Some(PathBuf::from("/mesa/lvp_icd.json"))
+        );
+    }
+
+    #[test]
+    fn owned_xvfb_foreign_first_prefers_host_architecture_manifest() {
+        let architecture = match std::env::consts::ARCH {
+            "x86" => "i686",
+            architecture => architecture,
+        };
+        let foreign = if architecture == "aarch64" {
+            "x86_64"
+        } else {
+            "aarch64"
+        };
+        let host = PathBuf::from(format!("/mesa/lvp_icd.{architecture}.json"));
+        let files = std::env::join_paths([
+            PathBuf::from(format!("/foreign/lvp_icd.{foreign}.json")),
+            PathBuf::from("/generic/lvp_icd.json"),
+            host.clone(),
+        ])
+        .unwrap();
+        assert_eq!(xvfb_lavapipe_icd(Some(&files), None, false), Some(host));
+    }
+
+    #[test]
+    fn owned_xvfb_foreign_architecture_only_leaves_caller_selection_untouched() {
+        let architecture = match std::env::consts::ARCH {
+            "x86" => "i686",
+            architecture => architecture,
+        };
+        let foreign = if architecture == "aarch64" {
+            "x86_64"
+        } else {
+            "aarch64"
+        };
+        let files = format!("/foreign/lvp_icd.{foreign}.json");
+        assert_eq!(
+            xvfb_lavapipe_icd(Some(OsStr::new(&files)), None, false),
+            None
+        );
+        assert_eq!(
+            xvfb_lavapipe_icd(None, Some(OsStr::new(&files)), false),
+            None
+        );
+    }
+
+    #[test]
+    fn owned_xvfb_without_lavapipe_leaves_caller_selection_untouched() {
+        for driver in [
+            None,
+            Some(OsStr::new("")),
+            Some(OsStr::new("/mesa/intel_icd.json")),
+            Some(OsStr::new(
+                "/mesa/not_lvp_icd.json:/mesa/lvp_icd..json:/mesa/lvp_icd.x86_64.json.bak",
+            )),
+        ] {
+            assert_eq!(xvfb_lavapipe_icd(driver, None, false), None);
+        }
+    }
+
+    #[test]
+    fn owned_xvfb_opt_out_keeps_mixed_caller_lists_unchanged() {
+        assert_eq!(
+            xvfb_lavapipe_icd(
+                Some(OsStr::new("/mesa/intel_icd.json:/mesa/lvp_icd.x86_64.json")),
+                Some(OsStr::new("/legacy/lvp_icd.aarch64.json")),
+                true,
+            ),
+            None
+        );
     }
 }
