@@ -7560,7 +7560,9 @@ fn auto_save_error_ring_bell_does_not_signal_inside_a_keyboard_macro() {
     builtin_do_auto_save(&mut eval, vec![]).expect("ring_bell never signals a user-error");
 }
 
+#[cfg(unix)]
 const BELL_PROBE_ENV: &str = "NEOVM_AUTO_SAVE_BELL_PROBE";
+#[cfg(unix)]
 const BELL_PROBE_MARKER: &str = "AUTO-SAVE-BELL-PROBE ";
 
 /// `ring_bell` does not write BEL in batch: `auto_save_error` reaches the
