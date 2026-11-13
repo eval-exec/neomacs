@@ -95,6 +95,15 @@ pub mod authority {
         );
     }
 
+    /// Peer 5699: run the private-state fixture with core's real Context factory.
+    /// The driver retains the original assertions; no private handle escapes.
+    #[cfg(feature = "test-support")]
+    pub fn run_gui_service_keeps_deadline_and_pending_input_order_for_test(
+        make_context: fn() -> crate::emacs_core::eval::Context,
+    ) {
+        crate::emacs_core::eval::Context::run_gui_service_keeps_deadline_and_pending_input_order_fixture(make_context);
+    }
+
     /// P1-CLASSES-ALL-CRATES FENCE: reset the symbol writer thread-locals.
     /// A reset is a write (N2), so the fence is the only cross-crate route.
     pub fn reset_symbols_thread_locals_for_test() {

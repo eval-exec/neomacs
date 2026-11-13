@@ -1,5 +1,7 @@
 //! Bounded GUI service opportunities between completed commands.
 use super::*;
+#[cfg(feature = "test-support")]
+use std::{cell::Cell, rc::Rc};
 
 impl crate::emacs_core::Context {
     #[doc(hidden)]
@@ -50,6 +52,50 @@ impl crate::emacs_core::Context {
         self.command_loop.gui_display_deadline =
             Some(now + period.max(service_started.elapsed().saturating_mul(2)));
         Ok(())
+    }
+    // Core supplies its canonical Context factory; private assertions stay with the owner.
+    #[cfg(feature = "test-support")]
+    pub(crate) fn run_gui_service_keeps_deadline_and_pending_input_order_fixture(
+        make_context: fn() -> Self,
+    ) {
+        let mut eval = make_context();
+        eval.eval_str("(setq inhibit-redisplay nil)").unwrap();
+        let captures = Rc::new(Cell::new(0));
+        let observed = captures.clone();
+        eval.display_idle_maintenance_fn = Some(Box::new(move |_| {
+            observed.set(observed.get() + 1);
+            (None, true)
+        }));
+        let paints = Rc::new(Cell::new(0));
+        let observed = paints.clone();
+        eval.redisplay_fn = Some(Box::new(move |_| observed.set(observed.get() + 1)));
+        for ch in ['a', 'b'] {
+            eval.command_loop.unread_key(KeyEvent::char(ch));
+        }
+        let now = Instant::now();
+        eval.service_gui_command_boundary_at(now).unwrap();
+        eval.service_gui_command_boundary_at(now + Duration::from_millis(8))
+            .unwrap();
+        assert_eq!(captures.get(), 0);
+        eval.service_gui_command_boundary_at(now + Duration::from_millis(20))
+            .unwrap();
+        assert_eq!(captures.get(), 1);
+        assert_eq!(paints.get(), 1);
+        eval.service_gui_command_boundary_at(now + Duration::from_millis(21))
+            .unwrap();
+        assert_eq!(captures.get(), 1);
+        assert_eq!(
+            eval.command_loop.read_key_event(),
+            Some(Value::fixnum('a' as i64))
+        );
+        assert_eq!(
+            eval.command_loop.read_key_event(),
+            Some(Value::fixnum('b' as i64))
+        );
+        eval.service_gui_command_boundary_at(now + Duration::from_millis(50))
+            .unwrap();
+        assert_eq!(captures.get(), 1, "idle wait owns idle maintenance");
+        assert!(eval.command_loop.gui_display_deadline.is_none());
     }
 }
 
