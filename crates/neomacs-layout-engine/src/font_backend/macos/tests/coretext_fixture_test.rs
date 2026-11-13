@@ -226,3 +226,22 @@ fn coretext_font_names_are_reported_as_options() {
     assert!(font_family_name(&font).is_some());
     assert!(font_postscript_name(&font).is_some());
 }
+
+/// The audited raw declarations must agree with the objc2 wrappers on a font
+/// CoreText can describe. This pins the extern signature and the Copy-reference
+/// ownership; NULL is exactly the case the wrappers cannot express.
+#[test]
+fn raw_name_copies_match_the_objc2_wrappers_on_a_describable_font() {
+    let name = objc2_core_foundation::CFString::from_str("Helvetica");
+    // SAFETY: null is the documented identity matrix and the wrapper owns the
+    // Create result for the duration of the test.
+    let font = unsafe { objc2_core_text::CTFont::with_name(&name, 12.0, std::ptr::null()) };
+    assert_eq!(
+        font_family_name(&font),
+        Some(unsafe { font.family_name() }.to_string())
+    );
+    assert_eq!(
+        font_postscript_name(&font),
+        Some(unsafe { font.post_script_name() }.to_string())
+    );
+}
