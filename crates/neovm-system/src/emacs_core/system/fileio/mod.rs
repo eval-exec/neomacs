@@ -31,6 +31,7 @@ use neovm_edit::buffer::{
 };
 use neovm_value::heap_types::LispString;
 
+use neovm_eval::emacs_core::eval::AutoSaveNativeWritePolicy;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::intern::WellKnown;
@@ -779,16 +780,27 @@ enum WriteRegionVisit {
 }
 
 impl WriteRegionVisit {
-    fn from_lisp(eval: &Context, argument: Value, output_file: &LispString) -> Self {
-        if argument.is_t() {
+    fn from_lisp(
+        eval: &mut Context,
+        argument: Value,
+        output_file: &LispString,
+    ) -> Result<Self, Flow> {
+        Ok(if argument.is_t() {
             Self::Visit(output_file.clone())
-        } else if let Some(visit_file) = argument.as_lisp_string() {
-            Self::Visit(resolve_filename_lisp_for_eval(eval, visit_file))
+        } else if argument.is_string() {
+            // GNU expands a string VISIT before handler dispatch and before
+            // selecting the default lock name, just as it expands FILENAME.
+            let expanded = builtin_expand_file_name(eval, vec![argument, Value::NIL])?;
+            eval.push_specpdl_root(expanded);
+            let visited =
+                resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(&expanded)?);
+            root_native_string_properties(eval, &visited);
+            Self::Visit(visited)
         } else if argument.is_nil() {
             Self::ReportOnly(output_file.clone())
         } else {
             Self::Quiet(output_file.clone())
-        }
+        })
     }
 
     pub fn file_name(&self) -> &LispString {
@@ -5612,7 +5624,7 @@ impl WriteAnnotationStream {
         Value::list(pairs)
     }
 
-    fn merge_callback_result(&mut self, result: Value) -> Result<(), Flow> {
+    fn merge_callback_result(&mut self, eval: &mut Context, result: Value) -> Result<(), Flow> {
         let pairs = list_to_vec(&result).ok_or_else(|| {
             signal(
                 LispCondition::WrongTypeArgument,
@@ -5637,11 +5649,20 @@ impl WriteAnnotationStream {
                 )
             })?;
             let payload_value = pair.cons_cdr();
+            // Later callbacks can unlink this pair from the result list,
+            // replace its cdr, and collect. The native stream retains both
+            // the pair and its original text/property snapshot until the
+            // complete native write root checkpoint retires.
+            eval.push_specpdl_root(pair);
+            eval.push_specpdl_root(payload_value);
             let payload = payload_value
                 .as_lisp_string()
                 .cloned()
                 .map(WriteAnnotationPayload::Text)
                 .unwrap_or(WriteAnnotationPayload::NoText);
+            if let WriteAnnotationPayload::Text(text) = &payload {
+                root_native_string_properties(eval, text);
+            }
             self.entries.push(WriteAnnotation {
                 position: WriteAnnotationPosition(LispCharPos1::new(position)),
                 payload,
@@ -5835,6 +5856,40 @@ impl PreparedWriteRegion {
     }
 }
 
+// A native write can run arbitrary handlers and annotation callbacks. Keep
+// its root suffix scoped through Flow returns and Rust panic without an
+// escaping Context pointer or a new evaluator interface.
+struct NativeWriteRoots<'owner> {
+    eval: &'owner mut Context,
+    mark: neovm_eval::emacs_core::eval::SpecpdlRootScopeState,
+}
+
+impl<'owner> NativeWriteRoots<'owner> {
+    fn enter(eval: &'owner mut Context) -> Self {
+        let mark = eval.save_specpdl_roots();
+        Self { eval, mark }
+    }
+
+    fn context(&mut self) -> &mut Context {
+        self.eval
+    }
+}
+
+impl Drop for NativeWriteRoots<'_> {
+    fn drop(&mut self) {
+        self.eval.restore_specpdl_roots(self.mark);
+    }
+}
+
+// Rust owns a native string's bytes and copied interval table; the Lisp values
+// in that table still need roots if a callback detaches the original properties.
+// Capture those values without allocating a second heap string.
+fn root_native_string_properties(eval: &mut Context, text: &LispString) {
+    neovm_value::gc_trace::GcTrace::trace_roots_with(text, &mut |value| {
+        eval.push_specpdl_root(value);
+    });
+}
+
 fn prepare_write_region(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     original_buffer: BufferId,
@@ -5854,7 +5909,10 @@ fn prepare_write_region(
         });
     }
 
-    let mut source =
+    // Preserve the caller's original explicit range. build_annotations has
+    // its own callback bounds; intermediate buffer switches do not replace
+    // the caller's range if callbacks ultimately return to this buffer.
+    let original_source =
         WriteRegionSource::buffer_region(&eval.edit.buffers, original_buffer, start, end)?;
     let mut callback_start = start;
     let mut callback_end = end;
@@ -5863,47 +5921,112 @@ fn prepare_write_region(
     let functions = neovm_eval::emacs_core::hook_runtime::collect_hook_functions_in_state(
         eval, hook_sym, hook_value, true,
     );
-    let root_scope = eval.save_specpdl_roots();
     eval.push_specpdl_root(Value::list(functions.clone()));
     let mut annotations = WriteAnnotationStream::default();
 
-    let collection_result = (|| -> Result<(), Flow> {
-        for function in functions {
-            eval.set_variable(
-                "write-region-annotations-so-far",
-                annotations.as_lisp_list(),
-            );
-            let buffer_before = current_buffer_id_or_error(&eval.edit.buffers)?;
-            let result = eval.apply(function, vec![callback_start, callback_end])?;
-            eval.push_specpdl_root(result);
-            let buffer_after = current_buffer_id_or_error(&eval.edit.buffers)?;
-            if buffer_after != buffer_before {
-                annotation_buffers.push(buffer_after);
-                source =
-                    WriteRegionSource::whole_accessible_buffer(&eval.edit.buffers, buffer_after)?;
-                let buf = eval
-                    .edit
-                    .buffers
-                    .get(buffer_after)
-                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-                callback_start = Value::from_fixnum(buf.point_min_position().into());
-                callback_end = Value::from_fixnum(buf.point_max_position().into());
-                annotations.clear();
+    let collection_result =
+        (|| -> Result<(), Flow> {
+            for function in functions {
+                eval.set_variable(
+                    "write-region-annotations-so-far",
+                    annotations.as_lisp_list(),
+                );
+                let buffer_before = current_buffer_id_or_error(&eval.edit.buffers)?;
+                let result = eval.apply(function, vec![callback_start, callback_end])?;
+                eval.push_specpdl_root(result);
+                let buffer_after = current_buffer_id_or_error(&eval.edit.buffers)?;
+                if buffer_after != buffer_before {
+                    annotation_buffers.push(buffer_after);
+                    let buf =
+                        eval.edit.buffers.get(buffer_after).ok_or_else(|| {
+                            signal("error", vec![Value::string("No current buffer")])
+                        })?;
+                    callback_start = Value::from_fixnum(buf.point_min_position().into());
+                    callback_end = Value::from_fixnum(buf.point_max_position().into());
+                    annotations.clear();
+                }
+                annotations.merge_callback_result(eval, result)?;
             }
-            annotations.merge_callback_result(result)?;
-        }
-        Ok(())
-    })();
+            // GNU build_annotations (5933): callbacks above may recursively
+            // clear auto_saving, so choose the format from CURRENT owner policy.
+            let auto_format = eval.visible_variable_value_or_nil("buffer-auto-save-file-format");
+            let formats = if native_auto_save_active(eval) && !auto_format.is_t() {
+                auto_format
+            } else {
+                eval.visible_variable_value_or_nil("buffer-file-format")
+            };
+            eval.push_specpdl_root(formats);
+            let mut tail = formats;
+            let mut cycle = neovm_value::list_scan::GnuTailCycle::new(formats);
+            let mut count = 0;
+            while tail.is_cons() {
+                eval.push_specpdl_root(tail);
+                eval.push_specpdl_root(cycle.tortoise());
+                let format = tail.cons_car();
+                eval.set_variable(
+                    "write-region-annotations-so-far",
+                    annotations.as_lisp_list(),
+                );
+                let before = current_buffer_id_or_error(&eval.edit.buffers)?;
+                let result = eval.funcall_general(
+                    Value::symbol("format-annotate-function"),
+                    vec![
+                        format,
+                        callback_start,
+                        callback_end,
+                        Value::make_buffer(original_buffer),
+                        Value::fixnum(count),
+                    ],
+                )?;
+                eval.push_specpdl_root(result);
+                let after = current_buffer_id_or_error(&eval.edit.buffers)?;
+                if after != before {
+                    // Unlike ordinary annotation hooks, GNU's format phase does
+                    // not enqueue the selected buffer for post-annotation hooks.
+                    let buffer =
+                        eval.edit.buffers.get(after).ok_or_else(|| {
+                            signal("error", vec![Value::string("No current buffer")])
+                        })?;
+                    callback_start = Value::from_fixnum(buffer.point_min_position().into());
+                    callback_end = Value::from_fixnum(buffer.point_max_position().into());
+                    annotations.clear();
+                }
+                // GNU merges only a cons result from format annotations; nil or
+                // another non-cons result means no additional annotation stream.
+                if result.is_cons() {
+                    annotations.merge_callback_result(eval, result)?;
+                }
+                count += 1;
+                tail = tail.cons_cdr();
+                if tail.is_cons() {
+                    cycle.check(tail)?;
+                }
+                eval.maybe_quit()?;
+            }
+            Ok(())
+        })();
     if let Err(error) = collection_result {
-        eval.restore_specpdl_roots(root_scope);
         // GNU's only unwind here is `build_annotations_unwind`, which resets
         // `write-region-annotation-buffers` and does not select a buffer:
         // a buffer an annotation function selected before signaling stays
         // current (fileio.c:5596-5600, P4.10).
         return Err(error);
     }
-    let content = source.apply_annotations(&eval.edit.buffers, &annotations)?;
-    eval.restore_specpdl_roots(root_scope);
+    // GNU write_region (5594-5620) chooses its final source only after
+    // build_annotations has returned: final buffer identity and ORIGINAL
+    // START=nil decide whether to read the current accessible bounds.
+    // Use that same late origin for annotation offsets and coding bounds.
+    let materialized = (|| -> Result<(WriteRegionSource, LispString), Flow> {
+        let final_buffer = current_buffer_id_or_error(&eval.edit.buffers)?;
+        let source = if final_buffer != original_buffer || start.is_nil() {
+            WriteRegionSource::whole_accessible_buffer(&eval.edit.buffers, final_buffer)?
+        } else {
+            original_source
+        };
+        let content = source.apply_annotations(&eval.edit.buffers, &annotations)?;
+        Ok((source, content))
+    })();
+    let (source, content) = materialized?;
 
     Ok(PreparedWriteRegion {
         content,
@@ -6903,6 +7026,12 @@ fn select_write_region_coding_system(
     filename: Value,
 ) -> Result<neovm_text::encoding::RuntimeCodingSystem, Flow> {
     let symbol_mode = eval.symbol_mode();
+    if native_auto_save_active(eval) && !buffer_file_is_auto_save_file(eval, buffer_id) {
+        // GNU5355: do not invoke a selector or use coding-system-for-write.
+        return Ok(neovm_text::encoding::RuntimeCodingSystem::from_symbol(
+            intern("utf-8-emacs-unix"),
+        ));
+    }
     let fallback = resolve_write_coding_system_symbol(eval, buffer_id, WriteCodingFallback::Utf8);
     // GNU `choose_write_coding_system': a bound `coding-system-for-write' is
     // used as is, and only confirmed with the selector -- restricted to it,
@@ -7062,69 +7191,18 @@ pub fn builtin_write_region(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let symbol_mode = eval.symbol_mode();
     expect_min_args("write-region", &args, 3)?;
     expect_max_args("write-region", &args, 7)?;
-    // GNU `Fwrite_region` runs `Fexpand_file_name` on FILENAME first, dispatching
-    // the expand-file-name magic handler before the write-region handler.
-    let expanded = builtin_expand_file_name(eval, vec![args[2], Value::NIL])?;
-    let resolved = resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(&expanded)?);
-    let visit_argument = args.get(4).copied().unwrap_or(Value::NIL);
-    let visit = WriteRegionVisit::from_lisp(eval, visit_argument, &resolved);
-    let default_lock_name = visit.file_name().clone();
-
-    // GNU `Fwrite_region`, immediately after `Fexpand_file_name` and before the
-    // file-name-handler dispatch:
-    //
-    //   if (!NILP (mustbenew) && !EQ (mustbenew, Qexcl))
-    //     barf_or_query_if_file_exists (filename, false, "overwrite", true, true);
-    //
-    // `excl` is handled later via the `O_EXCL` open flag (it produces an
-    // EEXIST -> `file-already-exists` error at write time); every other
-    // non-nil MUSTBENEW asks for interactive confirmation here.
-    let mustbenew = args.get(6).copied().unwrap_or(Value::NIL);
-    let mustbenew_is_excl = mustbenew
-        .as_symbol_name(symbol_mode)
-        .is_some_and(|name| name == "excl");
-    if !mustbenew.is_nil() && !mustbenew_is_excl {
-        barf_or_query_if_file_exists(eval, &resolved, false, "overwrite", true, true)?;
+    // The complete native write owns these roots: annotation collection,
+    // coding selection and post-annotation cleanup can all call Lisp/GC.
+    let mut roots = NativeWriteRoots::enter(eval);
+    let eval = roots.context();
+    for argument in &args {
+        eval.push_specpdl_root(*argument);
     }
-
-    let op = Value::symbol("write-region");
-    let handler = find_file_name_handler_lisp_for_eval(eval, &resolved, op);
-    if !handler.is_nil() {
-        // GNU calls the handler with the full arglist
-        // (START END FILENAME APPEND VISIT LOCKNAME MUSTBENEW), defaulting
-        // LOCKNAME to FILENAME.
-        let mut call_args = Vec::with_capacity(8);
-        call_args.push(op);
-        call_args.extend_from_slice(&args);
-        while call_args.len() < 8 {
-            call_args.push(Value::NIL);
-        }
-        call_args[3] = Value::heap_string(resolved.clone());
-        if call_args[6].is_nil() {
-            call_args[6] = Value::heap_string(default_lock_name.clone());
-        }
-        return eval.funcall_general(handler, call_args);
-    }
-    if handler.is_nil()
-        && let Some(visit_arg) = args.get(4).and_then(|value| eval.lisp_string(*value))
-    {
-        let visit_handler = find_file_name_handler_lisp_for_eval(eval, visit_arg, op);
-        if !visit_handler.is_nil() {
-            let mut call_args = Vec::with_capacity(args.len() + 1);
-            call_args.push(op);
-            call_args.extend_from_slice(&args);
-            while call_args.len() < 8 {
-                call_args.push(Value::NIL);
-            }
-            call_args[3] = Value::heap_string(resolved.clone());
-            if call_args[6].is_nil() {
-                call_args[6] = Value::heap_string(default_lock_name.clone());
-            }
-            return eval.funcall_general(visit_handler, call_args);
-        }
+    let call = prepare_write_region_call(eval, &args)?;
+    if let Some(result) = dispatch_write_region_handler(eval, &args, &call)? {
+        return Ok(result);
     }
 
     // GNU `write_region` (fileio.c:5582-5594): once no handler took the
@@ -7137,12 +7215,97 @@ pub fn builtin_write_region(
     let result = write_region_without_handler(
         restriction.context(),
         &args,
+        call.resolved,
+        call.visit,
+        call.default_lock_name,
+        call.mustbenew_is_excl,
+    );
+    restriction.finish(result)
+}
+
+// Shared native entry preamble. Both the Lisp subr and auto_save_1 reach
+// the canonical file-name-handler boundary without consulting the mutable
+// Lisp write-region function cell. All auto-save targets use this same entry.
+struct WriteRegionCall {
+    resolved: LispString,
+    visit: WriteRegionVisit,
+    default_lock_name: LispString,
+    mustbenew_is_excl: bool,
+}
+
+fn prepare_write_region_call(eval: &mut Context, args: &[Value]) -> Result<WriteRegionCall, Flow> {
+    let symbol_mode = eval.symbol_mode();
+    let expanded = builtin_expand_file_name(eval, vec![args[2], Value::NIL])?;
+    eval.push_specpdl_root(expanded);
+    let resolved = resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(&expanded)?);
+    root_native_string_properties(eval, &resolved);
+    let mustbenew = args.get(6).copied().unwrap_or(Value::NIL);
+    let mustbenew_is_excl = mustbenew
+        .as_symbol_name(symbol_mode)
+        .is_some_and(|name| name == "excl");
+    // GNU confirms overwrite after FILENAME expansion, before VISIT expansion.
+    if !mustbenew.is_nil() && !mustbenew_is_excl {
+        barf_or_query_if_file_exists(eval, &resolved, false, "overwrite", true, true)?;
+    }
+    let visit =
+        WriteRegionVisit::from_lisp(eval, args.get(4).copied().unwrap_or(Value::NIL), &resolved)?;
+    let default_lock_name = visit.file_name().clone();
+    Ok(WriteRegionCall {
         resolved,
         visit,
         default_lock_name,
         mustbenew_is_excl,
-    );
-    restriction.finish(result)
+    })
+}
+
+fn dispatch_write_region_handler(
+    eval: &mut Context,
+    args: &[Value],
+    call: &WriteRegionCall,
+) -> Result<Option<Value>, Flow> {
+    let operation = Value::symbol("write-region");
+    let mut handler = find_file_name_handler_lisp_for_eval(eval, &call.resolved, operation);
+    // GNU's fallback lookup uses the original string VISIT argument; its
+    // expanded value is retained separately for LOCKNAME and visiting state.
+    if handler.is_nil()
+        && let Some(visit) = args
+            .get(4)
+            .and_then(|value| value.as_lisp_string())
+            .cloned()
+    {
+        handler = find_file_name_handler_lisp_for_eval(eval, &visit, operation);
+    }
+    if handler.is_nil() {
+        return Ok(None);
+    }
+    let mut full_args = Vec::with_capacity(8);
+    full_args.push(operation);
+    full_args.extend_from_slice(args);
+    full_args.resize(8, Value::NIL);
+    full_args[3] = Value::heap_string(call.resolved.clone());
+    if full_args[6].is_nil() {
+        full_args[6] = Value::heap_string(call.default_lock_name.clone());
+    }
+    let result = eval.funcall_general(handler, full_args)?;
+    // GNU's handled branch still commits visiting state in whatever buffer
+    // the handler leaves current. Errors/original throws leave before here.
+    if let Some(visited) = call.visit.visited_file() {
+        let current = current_buffer_id_or_error(&eval.edit.buffers)?;
+        finish_write_region_visit(eval, current, visited);
+    }
+    Ok(Some(result))
+}
+
+fn finish_write_region_visit(eval: &mut Context, current: BufferId, visited: &LispString) {
+    let _ = eval.edit.buffers.set_buffer_modified_flag(current, false);
+    if let Some(buffer) = eval.edit.buffers.get_mut(current) {
+        let saved_size = i64::try_from(buffer.total_char_len().get()).unwrap_or(i64::MAX);
+        buffer.set_buffer_local("buffer-saved-size", Value::fixnum(saved_size));
+    }
+    let _ = eval
+        .edit
+        .buffers
+        .set_buffer_file_name(current, Value::heap_string(visited.clone()));
 }
 
 /// The native half of `write-region`, run inside the caller's
@@ -7207,13 +7370,19 @@ fn write_region_without_handler(
         args.get(1).copied().unwrap_or(Value::NIL),
     )?;
     let content = prepared.content.clone();
+    // A coding selector can remove the original buffer/annotation string's
+    // properties and collect. Root the materialized snapshot's own interval
+    // values until encoding and cleanup finish, not only the original text.
+    root_native_string_properties(eval, &content);
 
     // GNU `Fwrite_region` runs the chosen coding system through
     // `Fcheck_coding_system`; an explicit but unknown `coding-system-for-write`
     // (e.g. `utf-8-sig`) signals `coding-system-error` before anything is
     // written.  Validate it here so we don't silently produce an empty file.
     let coding_for_write = eval.visible_variable_value_or_nil("coding-system-for-write");
-    if !coding_for_write.is_nil()
+    if !(native_auto_save_active(eval)
+        && !buffer_file_is_auto_save_file(eval, prepared.source.coding_buffer()))
+        && !coding_for_write.is_nil()
         && let Some(name) = coding_for_write.as_symbol_name(symbol_mode)
         && name != "nil"
         && !eval.coding_systems().is_known_or_derived(name)
@@ -7249,7 +7418,13 @@ fn write_region_without_handler(
         }
         _ => default_lock_name,
     };
-    super::filelock::lock_file(eval, &lock_name)?;
+    root_native_string_properties(eval, &lock_name);
+    let file_locked = if native_auto_save_active(eval) {
+        false
+    } else {
+        super::filelock::lock_file(eval, &lock_name)?;
+        true
+    };
 
     // --- Write encoded bytes and handle fsync ---
     let write_result = (|| {
@@ -7257,7 +7432,7 @@ fn write_region_without_handler(
             encoded.bytes(),
             &resolved_path,
             append_mode,
-            DEFAULT_FILE_CREATION_MODE,
+            native_write_creation_mode(eval),
         )
         .map_err(|err| {
             // GNU `Fwrite_region` reports *any* open failure via
@@ -7278,7 +7453,7 @@ fn write_region_without_handler(
         let inhibit_fsync = eval
             .visible_variable_value_or_nil("write-region-inhibit-fsync")
             .is_truthy();
-        if !inhibit_fsync {
+        if !native_auto_save_active(eval) && !inhibit_fsync {
             file.sync_all().map_err(|err| {
                 signal_file_action_error_value(
                     err,
@@ -7332,7 +7507,11 @@ fn write_region_without_handler(
     // Always attempt the matching unlock, including write and annotation
     // cleanup errors. Preserve the primary write error first, then the post
     // annotation error, if cleanup also fails.
-    let unlock_result = super::filelock::unlock_file(eval, &lock_name);
+    let unlock_result = if file_locked {
+        super::filelock::unlock_file(eval, &lock_name)
+    } else {
+        Ok(Value::NIL)
+    };
     let visiting_modtime = match (write_result, post_annotation_result, unlock_result) {
         (Err(write_error), _, _) => return Err(write_error),
         (Ok(_), Err(annotation_error), _) => return Err(annotation_error),
@@ -7340,15 +7519,11 @@ fn write_region_without_handler(
         (Ok(visiting_modtime), Ok(_), Ok(_)) => visiting_modtime,
     };
 
+    // GNU5836 reads the flag AFTER annotation/cleanup callbacks.
+    let auto_saving_into_visited_file =
+        native_auto_save_active(eval) && buffer_file_is_auto_save_file(eval, current_id);
     if let Some(visit_path) = visit.visited_file().cloned() {
-        let _ = eval
-            .edit
-            .buffers
-            .set_buffer_file_name(current_id, Value::heap_string(visit_path));
-        let _ = eval
-            .edit
-            .buffers
-            .set_buffer_modified_flag(current_id, false);
+        finish_write_region_visit(eval, current_id, &visit_path);
         if let Some((sec, nsec, size)) = visiting_modtime
             && let Some(buf) = eval.edit.buffers.get_mut(current_id)
         {
@@ -7357,11 +7532,23 @@ fn write_region_without_handler(
         }
     }
 
+    if auto_saving_into_visited_file
+        && (visit.visited_file().is_some() || !visit.reports_completion())
+    {
+        if visit.visited_file().is_none() && !visit.reports_completion() {
+            let _ = eval
+                .edit
+                .buffers
+                .set_buffer_modified_flag(current_id, false);
+        }
+        super::filelock::unlock_file(eval, &lock_name)?;
+    }
+
     eval.set_variable(
         "last-coding-system-used",
         Value::symbol(encoded.coding_system()),
     );
-    if visit.reports_completion() && !eval.noninteractive() {
+    if !native_auto_save_active(eval) && visit.reports_completion() && !eval.noninteractive() {
         let completion =
             WriteRegionCompletion::from_append_argument(args.get(3).copied().unwrap_or(Value::NIL));
         neovm_eval::emacs_core::builtins::builtin_message(
@@ -7480,6 +7667,80 @@ pub(crate) fn builtin_find_file_noselect(
 // src/fileio.c:6406-6408), which is also the gate Fdo_auto_save applies
 // to every buffer.  do-auto-save therefore never names a buffer.
 
+fn native_auto_save_active(eval: &Context) -> bool {
+    matches!(
+        eval.auto_save_native_write_policy(),
+        AutoSaveNativeWritePolicy::Active { .. }
+    )
+}
+
+fn native_write_creation_mode(eval: &Context) -> u32 {
+    match eval.auto_save_native_write_policy() {
+        AutoSaveNativeWritePolicy::Active { creation_mode } => creation_mode,
+        AutoSaveNativeWritePolicy::Ordinary { .. } => DEFAULT_FILE_CREATION_MODE,
+    }
+}
+
+fn set_auto_save_mode_bits(eval: &mut Context, mode: u32) {
+    let next = match eval.auto_save_native_write_policy() {
+        AutoSaveNativeWritePolicy::Active { .. } => AutoSaveNativeWritePolicy::Active {
+            creation_mode: mode,
+        },
+        AutoSaveNativeWritePolicy::Ordinary { .. } => AutoSaveNativeWritePolicy::Ordinary {
+            preserved_mode: mode,
+        },
+    };
+    eval.replace_auto_save_native_write_policy(next);
+}
+
+fn buffer_file_is_auto_save_file(eval: &Context, buffer: BufferId) -> bool {
+    let Some(buffer) = eval.edit.buffers.get(buffer) else {
+        return false;
+    };
+    // GNU Fstring_equal accepts symbols, including nil, as their names.
+    let nil_name = LispString::from_utf8("nil");
+    buffer.file_name_lisp_string().unwrap_or(&nil_name)
+        == buffer
+            .auto_save_file_name_lisp_string()
+            .unwrap_or(&nil_name)
+}
+
+struct AutoSaveNativeScope<'owner> {
+    eval: &'owner mut Context,
+}
+
+impl<'owner> AutoSaveNativeScope<'owner> {
+    fn enter(eval: &'owner mut Context) -> Self {
+        let mode = match eval.auto_save_native_write_policy() {
+            AutoSaveNativeWritePolicy::Active { creation_mode } => creation_mode,
+            AutoSaveNativeWritePolicy::Ordinary { preserved_mode } => preserved_mode,
+        };
+        eval.replace_auto_save_native_write_policy(AutoSaveNativeWritePolicy::Active {
+            creation_mode: mode,
+        });
+        Self { eval }
+    }
+
+    fn context(&mut self) -> &mut Context {
+        self.eval
+    }
+}
+
+impl Drop for AutoSaveNativeScope<'_> {
+    fn drop(&mut self) {
+        let mode = match self.eval.auto_save_native_write_policy() {
+            AutoSaveNativeWritePolicy::Active { creation_mode } => creation_mode,
+            AutoSaveNativeWritePolicy::Ordinary { preserved_mode } => preserved_mode,
+        };
+        // GNU do_auto_save_unwind ALWAYS clears auto_saving. A nested call
+        // must not restore an outer active flag or stale prior mode bits.
+        self.eval
+            .replace_auto_save_native_write_policy(AutoSaveNativeWritePolicy::Ordinary {
+                preserved_mode: mode,
+            });
+    }
+}
+
 /// The permission bits GNU `auto_save_1` (src/fileio.c:6249-6273) stores in
 /// `auto_save_mode_bits`, which `write_region` then passes to open(2) for
 /// the auto-save file.
@@ -7544,44 +7805,51 @@ fn auto_save_file_modes(
     }
 }
 
-/// GNU `auto_save_1` (src/fileio.c:6249-6273), run with BUF_ID current:
-/// compute the auto-save file's modes, then write the buffer to TARGET.
-///
-/// The text is copied only after the modes are known, as GNU's
-/// `write_region` reads the buffer only once `auto_save_1` has asked for
-/// them.  A `file-modes` or `expand-file-name` handler may edit the buffer
-/// meanwhile, and the file must hold the text whose modification tick
-/// `do-auto-save` then records as auto-saved.
-fn auto_save_1(
-    eval: &mut Context,
-    buf_id: BufferId,
-    visited_file: Option<&LispString>,
-    target: &LispString,
-) -> Result<(), Flow> {
-    let creation_mode = auto_save_creation_mode(eval, visited_file)?;
-    // A handler that killed the buffer leaves nothing to write.
-    let Some(buf) = eval.edit.buffers.get(buf_id) else {
-        return Ok(());
+/// GNU `auto_save_1` (src/fileio.c:6249-6273): compute native auto-save mode
+/// bits, then call the canonical Rust write-region primitive directly with
+/// seven arguments. Lisp's mutable write-region function cell is bypassed;
+/// its canonical handlers/coding/annotations/native policy are preserved.
+fn auto_save_1(eval: &mut Context) -> Result<(), Flow> {
+    set_auto_save_mode_bits(eval, DEFAULT_FILE_CREATION_MODE);
+    let visited_file = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .and_then(|buffer| buffer.file_name_lisp_string().cloned());
+    let creation_mode = auto_save_creation_mode(eval, visited_file.as_ref())?;
+    // A file-modes callback may have recursively cleared the active flag.
+    set_auto_save_mode_bits(eval, creation_mode);
+    // GNU reads the current buffer slot after modes callbacks. Do not capture
+    // an old target or preexpand it before the canonical native primitive.
+    let target = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .map(|buffer| buffer.auto_save_file_name_value())
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let visit = if eval
+        .visible_variable_value_or_nil("auto-save-visited-file-name")
+        .is_nil()
+    {
+        Value::symbol("lambda")
+    } else {
+        Value::T
     };
-    let mut content = Vec::new();
-    buf.copy_emacs_byte_range_to(buf.full_emacs_byte_range(), &mut content);
-    write_bytes_to_file_with_mode(
-        &content,
-        &lisp_file_name_to_path_buf(target),
-        FileWriteMode::Truncate,
-        creation_mode,
-    )
-    .map_err(|err| {
-        // The same report as `write-region`'s: GNU's `write_region` signals
-        // `("Opening output file" ...)` when open(2) fails
-        // (src/fileio.c:5656).
-        signal_file_action_error_value(
-            err,
-            "Opening output file",
-            Value::heap_string(target.clone()),
-        )
-    })?;
-    Ok(())
+    let args = vec![
+        Value::NIL,
+        Value::NIL,
+        target,
+        Value::NIL,
+        visit,
+        Value::NIL,
+        Value::NIL,
+    ];
+    let mut roots = NativeWriteRoots::enter(eval);
+    let eval = roots.context();
+    for argument in &args {
+        eval.push_specpdl_root(*argument);
+    }
+    builtin_write_region(eval, args).map(|_| ())
 }
 
 /// Batch `message1` text. GNU prints this on stderr (`xdisp.c:12591`).
@@ -7815,9 +8083,9 @@ pub fn builtin_do_auto_save(
     eval.safe_run_hook_if_bound(AUTO_SAVE_HOOK.id())?;
     let raise_after_hook = read_minibuffer_auto_raise(eval);
 
-    let auto_save_visited = eval
-        .builtin_var_value_by_name("auto-save-visited-file-name")
-        .is_some_and(|v| v.is_truthy());
+    // GNU6387 enables native auto-save policy only after the normal hook.
+    let mut native_scope = AutoSaveNativeScope::enter(eval);
+    let eval = native_scope.context();
 
     // Collect buffer ids to process
     let buffer_ids: Vec<neovm_edit::buffer::BufferId> = if current_only {
@@ -7888,18 +8156,9 @@ pub fn builtin_do_auto_save(
             )
         };
 
-        // Determine which file to write to
-        let target = if auto_save_visited {
-            // Save to visited file if auto-save-visited-file-name is set
-            file_name.clone()
-        } else {
-            auto_save_name.clone()
-        };
-
-        let Some(target_path) = target else {
-            // GNU's gate above already required STRINGP (auto_save_file_name);
-            // only `auto-save-visited-file-name' can make the target nil
-            // here (no visited file), and GNU skips that buffer too.
+        // GNU auto_save_1 always passes auto_save_file_name to Fwrite_region.
+        // auto-save-visited-file-name changes VISIT (lambda/t), not this name.
+        let Some(_auto_save_name) = auto_save_name else {
             continue;
         };
 
@@ -7965,7 +8224,7 @@ pub fn builtin_do_auto_save(
             auto_save_say(eval, "Auto-saving...");
         }
         let before_secs = auto_save_unix_secs();
-        let result = match auto_save_1(eval, buf_id, file_name.as_ref(), &target_path) {
+        let result = match auto_save_1(eval) {
             Err(flow) if flow.is_signal() => {
                 auto_save_error_occurred = true;
                 auto_save_error(eval, &flow)

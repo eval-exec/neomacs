@@ -511,6 +511,12 @@ fn assert_shutdown_probe_exit_artifacts(
         // Drain both pipes concurrently; kill and reap a timed-out editor.
         let output = output_with_timeout_pinned(&mut command, Duration::from_secs(30))
             .unwrap_or_else(|error| panic!("{engine}: shutdown child failed: {error:?}"));
+        eprintln!(
+            "SHUTDOWN_ORACLE engine={engine} form={form}\nstatus={}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
         assert_eq!(
             output.status.code(),
             Some(expected_exit_code),
@@ -525,6 +531,7 @@ fn assert_shutdown_probe_exit_artifacts(
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(error) => panic!("{engine}: cannot read {name}: {error}"),
             };
+            eprintln!("SHUTDOWN_ORACLE engine={engine} artifact={name} bytes={bytes:?}");
             assert_eq!(
                 bytes.as_deref(),
                 *expected_bytes,
@@ -736,4 +743,171 @@ fn nested_kill_emacs_hook_reenters_with_the_inner_exit_code() {
         5,
         &[("log.txt", Some(b"HOOK 1\nHOOK 2\nSECOND-HOOK\n"))],
     );
+}
+
+// Canonical write-region dispatch from explicit and native-shutdown auto-save.
+// GNU 31.1 fileio.c:6249-6273/6478-6482 and emacs.c:3107-3157;
+// expectation evidence: pinned GNU auto-save-handler r1 and r3.
+#[cfg(test)]
+fn assert_auto_save_write_region_handler_oracle_pair(
+    form: &str,
+    expected: &[(&str, Option<&[u8]>)],
+) {
+    let oracle = neomacs_test_oracle::gnu::gnu_oracle();
+    assert!(
+        oracle.is_attested(),
+        "auto-save handler parity requires the pinned GNU attestation; operator opt-out is not evidence"
+    );
+    eprintln!("AUTO_SAVE_HANDLER_ORACLE reference={}", oracle.stamp());
+    assert_shutdown_probe_artifacts(form, expected);
+}
+
+#[cfg(test)]
+fn auto_save_write_region_handler_oracle_form(action: &str, visit: bool, tail: &str) -> String {
+    let visited = if visit { "t" } else { "nil" };
+    format!(
+        r#"(progn
+  (let ((subject-pid (emacs-pid)))
+    (princ (format "AUTO_SAVE_HANDLER_SUBJECT_PID=%s\n" subject-pid))
+    (if (<= subject-pid 1) (error "oracle subject must not be PID namespace init")))
+  (setq auto-save-list-file-name nil create-lockfiles nil
+        asr-oracle-count 0 asr-oracle-action '{action}
+        asr-oracle-root (file-name-as-directory (getenv "NEOVM_ORACLE_TEST_TMPDIR"))
+        asr-oracle-target (expand-file-name "handled-save" asr-oracle-root)
+        asr-oracle-trace (expand-file-name "handler.trace" asr-oracle-root))
+  (make-directory (expand-file-name "sub" asr-oracle-root) t)
+  (fset 'asr-oracle-note
+    (lambda (value)
+      (let ((write-region-annotate-functions nil)
+            (write-region-post-annotation-function nil)
+            (buffer-file-format nil) (buffer-auto-save-file-format nil))
+        (write-region (concat (prin1-to-string value) "\n") nil
+                      asr-oracle-trace t 'silent))))
+  (fset 'asr-oracle-delegate
+    (lambda (operation arguments)
+      (let ((inhibit-file-name-handlers
+             (cons 'asr-oracle-handler
+                   (and (eq inhibit-file-name-operation operation)
+                        inhibit-file-name-handlers)))
+            (inhibit-file-name-operation operation))
+        (apply operation arguments))))
+  (fset 'asr-oracle-handler
+    (lambda (operation &rest arguments)
+      (if (eq operation 'write-region)
+          (progn
+            (setq asr-oracle-count (1+ asr-oracle-count))
+            ;; Keep every canonical argument observable. Only the two
+            ;; case-private absolute paths become equality predicates.
+            (asr-oracle-note
+             (list 'ARGS operation (length arguments)
+                   (nth 0 arguments) (nth 1 arguments)
+                   (equal (nth 2 arguments) asr-oracle-target)
+                   (nth 3 arguments) (nth 4 arguments)
+                   (equal (nth 5 arguments) asr-oracle-target)
+                   (nth 6 arguments)))
+            (cond ((eq asr-oracle-action 'throw)
+                   (throw 'asr-oracle-escape 'handler-escaped))
+                  ((eq asr-oracle-action 'mutation)
+                   (goto-char (point-max)) (insert "handler-edit\n")
+                   (asr-oracle-delegate operation arguments))
+                  (t 'handled)))
+        (asr-oracle-delegate operation arguments))))
+  (setq file-name-handler-alist
+        (cons (cons (concat "\\`" (regexp-quote asr-oracle-target) "\\'")
+                    'asr-oracle-handler)
+              file-name-handler-alist)
+        auto-save-hook (list (lambda () (asr-oracle-note 'AUTO_SAVE_HOOK))))
+  (set-buffer (get-buffer-create "asr-oracle-subject"))
+  (setq asr-oracle-subject (current-buffer)
+        default-directory asr-oracle-root
+        buffer-file-name (expand-file-name "ordinary-file" asr-oracle-root)
+        buffer-auto-save-file-name "sub/../handled-save"
+        auto-save-visited-file-name {visited})
+  (insert "seed\n") (set-buffer-modified-p t)
+  {tail})"#
+    )
+}
+
+#[test]
+fn auto_save_write_region_handler_oracle_running_mutation_and_full_arguments() {
+    let form = auto_save_write_region_handler_oracle_form(
+        "mutation",
+        false,
+        r#"
+  (asr-oracle-note (list 'RETURN (do-auto-save t t)))
+  (asr-oracle-note (list 'STATE asr-oracle-count buffer-saved-size
+                         (recent-auto-save-p) (buffer-modified-p)))
+  (setq buffer-auto-save-file-name nil)
+  (set-buffer-modified-p nil)
+  (kill-emacs 0)"#,
+    );
+    assert_auto_save_write_region_handler_oracle_pair(&form, &[
+        ("handler.trace", Some(b"AUTO_SAVE_HOOK\n(ARGS write-region 7 nil nil t nil lambda t nil)\n(RETURN nil)\n(STATE 1 18 t autosaved)\n")),
+        ("handled-save", Some(b"seed\nhandler-edit\n")),
+    ]);
+}
+
+#[test]
+fn auto_save_write_region_handler_oracle_running_original_matched_throw() {
+    let form = auto_save_write_region_handler_oracle_form(
+        "throw",
+        false,
+        r#"
+  (set-buffer (get-buffer-create "asr-oracle-controller"))
+  (asr-oracle-note (list 'RETURN (catch 'asr-oracle-escape (do-auto-save t nil))))
+  (asr-oracle-note (list 'STATE asr-oracle-count
+                         (eq (current-buffer) asr-oracle-subject)
+                         buffer-saved-size (recent-auto-save-p) (buffer-modified-p)))
+  (setq buffer-auto-save-file-name nil)
+  (set-buffer-modified-p nil)
+  (kill-emacs 0)"#,
+    );
+    assert_auto_save_write_region_handler_oracle_pair(&form, &[
+        ("handler.trace", Some(b"AUTO_SAVE_HOOK\n(ARGS write-region 7 nil nil t nil lambda t nil)\n(RETURN handler-escaped)\n(STATE 1 t 0 nil t)\n")),
+        ("handled-save", None),
+    ]);
+}
+
+#[test]
+fn auto_save_write_region_handler_oracle_shutdown_full_arguments_without_hook() {
+    let form = auto_save_write_region_handler_oracle_form(
+        "return",
+        true,
+        r#"
+  (setq buffer-auto-save-file-name asr-oracle-target)
+  (set-buffer (get-buffer-create "asr-oracle-controller"))
+  (kill-emacs 0)"#,
+    );
+    assert_auto_save_write_region_handler_oracle_pair(
+        &form,
+        &[
+            (
+                "handler.trace",
+                Some(b"(ARGS write-region 7 nil nil t nil t t nil)\n"),
+            ),
+            ("handled-save", None),
+        ],
+    );
+}
+
+#[test]
+fn auto_save_write_region_handler_oracle_shutdown_original_matched_throw() {
+    let form = auto_save_write_region_handler_oracle_form(
+        "throw",
+        false,
+        r#"
+  (setq buffer-auto-save-file-name asr-oracle-target)
+  (set-buffer (get-buffer-create "asr-oracle-controller"))
+  (asr-oracle-note (list 'RETURN (catch 'asr-oracle-escape (kill-emacs 0))))
+  (asr-oracle-note (list 'STATE asr-oracle-count
+                         (eq (current-buffer) asr-oracle-subject)
+                         buffer-saved-size (recent-auto-save-p) (buffer-modified-p)))
+  (setq buffer-auto-save-file-name nil)
+  (set-buffer-modified-p nil)
+  (kill-emacs 0)"#,
+    );
+    assert_auto_save_write_region_handler_oracle_pair(&form, &[
+        ("handler.trace", Some(b"(ARGS write-region 7 nil nil t nil lambda t nil)\n(RETURN handler-escaped)\n(STATE 1 t 0 nil t)\n")),
+        ("handled-save", None),
+    ]);
 }

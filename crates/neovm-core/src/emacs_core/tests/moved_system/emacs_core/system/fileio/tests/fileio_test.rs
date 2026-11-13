@@ -8767,3 +8767,883 @@ fn decoding_panic_cleans_dynamic_suffix_and_roots_but_keeps_inverse_state() {
         "retired undo snapshot must not leak a GC root"
     );
 }
+
+// These rows live in the executing Core target, not a lower-crate lib-test.
+// All temporary native files stay under this workspace's tmp/v10x directory.
+fn auto_save_write_handler_fixture() -> (tempfile::TempDir, Context, std::path::PathBuf) {
+    auto_save_write_handler_fixture_with_context(crate::test_utils::new_context())
+}
+
+fn auto_save_write_handler_fixture_with_context(
+    mut eval: Context,
+) -> (tempfile::TempDir, Context, std::path::PathBuf) {
+    let base = crate::test_utils::workspace_root().join("tmp/v10x");
+    fs::create_dir_all(&base).unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix("auto-save-handler-")
+        .tempdir_in(&base)
+        .unwrap();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    let target = dir.path().join("handled-save");
+    let visited = dir.path().join("ordinary-file");
+    fs::write(&visited, b"on disk\n").unwrap();
+    eval.obarray_mut().set_symbol_value(
+        "asr-directory",
+        Value::string(format!("{}/", dir.path().display())),
+    );
+    eval.obarray_mut()
+        .set_symbol_value("asr-target", Value::string(target.to_string_lossy()));
+    eval.obarray_mut()
+        .set_symbol_value("asr-visited", Value::string(visited.to_string_lossy()));
+    eval.eval_str(
+        r#"
+        (setq auto-save-list-file-name nil create-lockfiles nil
+              asr-write-count 0 asr-write-args nil asr-action 'return
+              asr-nested-active nil asr-inner-outcome nil)
+        (fset 'asr-delegate (lambda (operation arguments)
+          (let ((inhibit-file-name-handlers
+                 (cons 'asr-file-handler
+                       (and (eq inhibit-file-name-operation operation)
+                            inhibit-file-name-handlers)))
+                (inhibit-file-name-operation operation))
+            (apply operation arguments))))
+        (fset 'asr-file-handler (lambda (operation &rest arguments)
+          (if (eq operation 'write-region)
+              (progn
+                (setq asr-write-count (1+ asr-write-count)
+                      asr-write-args arguments)
+                (cond ((eq asr-action 'throw)
+                       (throw 'asr-escape 'handler-escaped))
+                      ((memq asr-action '(nested-return nested-throw))
+                       (if asr-nested-active
+                           (if (eq asr-action 'nested-throw)
+                               (throw 'asr-inner-escape 'inner-escaped)
+                             'handled)
+                         (let ((asr-nested-active t))
+                           (setq asr-inner-outcome
+                                 (catch 'asr-inner-escape
+                                   (do-auto-save t t)
+                                   'inner-returned))
+                           (asr-delegate operation arguments))))
+                      ((eq asr-action 'delegate)
+                       (asr-delegate operation arguments))
+                      ((eq asr-action 'mutate)
+                       (goto-char (point-max))
+                       (insert "handler-edit\n")
+                       (asr-delegate operation arguments))
+                      (t 'handled)))
+            (asr-delegate operation arguments))))
+        (set-buffer (get-buffer-create "asr-core-subject"))
+        (setq default-directory asr-directory
+              buffer-file-name asr-visited
+              buffer-auto-save-file-name "sub/../handled-save"
+              auto-save-visited-file-name nil)
+        (insert "seed\n")
+        (set-buffer-modified-p t)
+        (setq file-name-handler-alist
+              (list (cons (concat "\\`" (regexp-quote asr-target) "\\'")
+                          'asr-file-handler)))
+    "#,
+    )
+    .expect("install real write-region handler fixture");
+    (dir, eval, target)
+}
+
+fn assert_auto_save_write_handler_args(visited: bool) {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.obarray_mut().set_symbol_value(
+        "auto-save-visited-file-name",
+        if visited { Value::T } else { Value::NIL },
+    );
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
+        .expect("native auto-save handler pass");
+    let actual = eval.eval_str("asr-write-args").unwrap();
+    eprintln!(
+        "AUTO_SAVE_HANDLER visited={visited} args={actual:?} target_exists={}",
+        target.exists()
+    );
+    let expected = Value::list(vec![
+        Value::NIL,
+        Value::NIL,
+        Value::string(target.to_string_lossy()),
+        Value::NIL,
+        if visited {
+            Value::T
+        } else {
+            Value::symbol("lambda")
+        },
+        Value::string(target.to_string_lossy()),
+        Value::NIL,
+    ]);
+    assert_eq!(
+        actual, expected,
+        "GNU passes the complete canonical seven arguments"
+    );
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(1));
+    assert!(!target.exists(), "a returning magic handler owns the write");
+    let current = eval.edit.buffers.current_buffer().unwrap();
+    assert_eq!(
+        current.get_buffer_local("buffer-saved-size"),
+        Some(Value::fixnum(5))
+    );
+    if visited {
+        assert_eq!(
+            current.file_name_runtime_string_owned().as_deref(),
+            Some(target.to_string_lossy().as_ref())
+        );
+        assert!(
+            !current.is_modified(),
+            "VISIT=t commits successful handler visiting state"
+        );
+    } else {
+        assert!(
+            current.is_modified(),
+            "ordinary auto-save does not become a real save"
+        );
+        assert_eq!(current.autosave_modified_tick(), current.modified_tick());
+    }
+}
+
+#[test]
+fn auto_save_write_region_handler_receives_expanded_full_args_lambda() {
+    assert_auto_save_write_handler_args(false);
+}
+
+#[test]
+fn auto_save_write_region_handler_receives_full_args_visit_t_without_retargeting() {
+    assert_auto_save_write_handler_args(true);
+}
+
+#[test]
+fn auto_save_write_region_handler_mutation_is_written_and_marked_once() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(setq asr-action 'mutate)").unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("handler edit/delegation");
+    eprintln!(
+        "AUTO_SAVE_MUTATION count={:?} target={target:?}",
+        eval.eval_str("asr-write-count").unwrap()
+    );
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(1));
+    assert_eq!(fs::read(&target).unwrap(), b"seed\nhandler-edit\n");
+    let current = eval.edit.buffers.current_buffer().unwrap();
+    assert_eq!(current.autosave_modified_tick(), current.modified_tick());
+    assert_eq!(
+        current.get_buffer_local("buffer-saved-size"),
+        Some(Value::fixnum(18))
+    );
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).unwrap();
+    assert_eq!(
+        eval.eval_str("asr-write-count").unwrap(),
+        Value::fixnum(1),
+        "no second write without another edit"
+    );
+}
+
+#[test]
+fn auto_save_write_region_handler_original_matched_throw_escapes_before_marking() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(setq asr-action 'throw)").unwrap();
+    let subject = eval.edit.buffers.current_buffer_id().unwrap();
+    let before = eval
+        .edit
+        .buffers
+        .get(subject)
+        .unwrap()
+        .autosave_modified_tick();
+    let controller = eval.edit.buffers.create_buffer("asr-controller");
+    eval.switch_current_buffer(controller).unwrap();
+    let result = eval
+        .eval_str("(catch 'asr-escape (do-auto-save t nil) 'did-not-throw)")
+        .unwrap();
+    eprintln!(
+        "AUTO_SAVE_THROW result={result:?} count={:?}",
+        eval.eval_str("asr-write-count").unwrap()
+    );
+    assert_eq!(result, Value::symbol("handler-escaped"));
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(1));
+    assert!(!target.exists());
+    assert_eq!(
+        eval.edit.buffers.current_buffer_id(),
+        Some(subject),
+        "GNU leaves before restoring the controller"
+    );
+    let buffer = eval.edit.buffers.get(subject).unwrap();
+    assert_eq!(buffer.autosave_modified_tick(), before);
+    assert!(buffer.is_modified());
+}
+
+#[test]
+fn auto_save_write_region_handler_dispatch_is_native_despite_redefined_function_cell() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(fset 'write-region (lambda (&rest arguments) (error \"shadow write-region must not run\")))").unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("direct native dispatcher");
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(1));
+    assert!(!target.exists());
+}
+
+#[test]
+fn write_region_successful_handler_keeps_return_value_and_visit_bookkeeping() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    let result = builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string("sub/../handled-save"),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .unwrap();
+    assert_eq!(result, Value::symbol("handled"));
+    let buffer = eval.edit.buffers.current_buffer().unwrap();
+    assert!(!buffer.is_modified());
+    assert_eq!(
+        buffer.file_name_runtime_string_owned().as_deref(),
+        Some(target.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        buffer.get_buffer_local("buffer-saved-size"),
+        Some(Value::fixnum(5))
+    );
+    assert!(!target.exists());
+}
+
+#[test]
+fn write_region_handler_expands_string_visit_before_selecting_default_lockname() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    let visit = target.with_file_name("visit-as");
+    eval.obarray_mut()
+        .set_symbol_value("asr-expanded-visit", Value::string(visit.to_string_lossy()));
+    eval.eval_str(
+        r#"
+      (setq asr-visit-expansions 0)
+      (fset 'asr-visit-expander (lambda (operation &rest arguments)
+        (if (eq operation 'expand-file-name)
+            (progn (setq asr-visit-expansions (1+ asr-visit-expansions)) asr-expanded-visit)
+          (error "unexpected visit operation"))))
+      (setq file-name-handler-alist
+            (cons (cons "\\`asr-visit:" 'asr-visit-expander) file-name-handler-alist))
+    "#,
+    )
+    .unwrap();
+    let original_visit = Value::string("asr-visit:relative");
+    let result = builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string("sub/../handled-save"),
+            Value::NIL,
+            original_visit,
+        ],
+    )
+    .unwrap();
+    assert_eq!(result, Value::symbol("handled"));
+    assert_eq!(
+        eval.eval_str("asr-visit-expansions").unwrap(),
+        Value::fixnum(1)
+    );
+    assert_eq!(
+        eval.eval_str("asr-write-args").unwrap(),
+        Value::list(vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            original_visit,
+            Value::string(visit.to_string_lossy()),
+            Value::NIL
+        ])
+    );
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .unwrap()
+            .file_name_runtime_string_owned()
+            .as_deref(),
+        Some(visit.to_string_lossy().as_ref())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_save_write_region_handler_delegation_preserves_visited_creation_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let _modes = DefaultFileModesScope::set(0o777);
+    let (dir, mut eval, target) = auto_save_write_handler_fixture();
+    fs::set_permissions(
+        dir.path().join("ordinary-file"),
+        fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+    eval.eval_str("(setq asr-action 'delegate)").unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("actual delegated auto-save");
+    eprintln!(
+        "AUTO_SAVE_DELEGATED_MODE count={:?} mode={:o}",
+        eval.eval_str("asr-write-count").unwrap(),
+        file_permission_bits(&target)
+    );
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(1));
+    assert_eq!(fs::read(&target).unwrap(), b"seed\n");
+    assert_eq!(
+        file_permission_bits(&target),
+        0o640,
+        "delegation inherits native auto-save creation mode"
+    );
+    // Identical valid START/END/VISIT arguments in an ordinary call must not
+    // infer auto-save. Its fresh output uses the regular0666 creation mode.
+    fs::remove_file(&target).unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        file_permission_bits(&target),
+        0o666,
+        "normal return restored ordinary native write policy"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_save_write_region_matched_throw_restores_delegated_native_write_policy() {
+    use std::os::unix::fs::PermissionsExt;
+    let _modes = DefaultFileModesScope::set(0o777);
+    let (dir, mut eval, target) = auto_save_write_handler_fixture();
+    fs::set_permissions(
+        dir.path().join("ordinary-file"),
+        fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+    eval.eval_str("(setq asr-action 'throw)").unwrap();
+    assert_eq!(
+        eval.eval_str("(catch 'asr-escape (do-auto-save t t) 'did-not-throw)")
+            .unwrap(),
+        Value::symbol("handler-escaped")
+    );
+    assert!(!target.exists());
+    eval.eval_str("(setq asr-action 'delegate)").unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        file_permission_bits(&target),
+        0o666,
+        "original Flow restored ordinary policy before reaching its catch"
+    );
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(2));
+}
+
+#[cfg(unix)]
+fn assert_recursive_auto_save_handler_native_policy(action: &str, outcome: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let _modes = DefaultFileModesScope::set(0o755);
+    let (dir, mut eval, target) = auto_save_write_handler_fixture();
+    fs::set_permissions(
+        dir.path().join("ordinary-file"),
+        fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+    eval.obarray_mut()
+        .set_symbol_value("asr-action", Value::symbol(action));
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
+        .expect("outer handler resumes after inner native scope");
+    eprintln!(
+        "AUTO_SAVE_RECURSIVE action={action} mode={:o} count={:?}",
+        file_permission_bits(&target),
+        eval.eval_str("asr-write-count").unwrap()
+    );
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(2));
+    assert_eq!(
+        eval.eval_str("asr-inner-outcome").unwrap(),
+        Value::symbol(outcome)
+    );
+    assert_eq!(fs::read(&target).unwrap(), b"seed\n");
+    assert_eq!(
+        file_permission_bits(&target),
+        0o644,
+        "GNU clears auto_saving after inner return/Flow; outer delegation is ordinary, not a restored0640 scope"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_save_write_region_recursive_normal_return_clears_native_active_flag() {
+    assert_recursive_auto_save_handler_native_policy("nested-return", "inner-returned");
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_save_write_region_recursive_matched_throw_clears_native_active_flag() {
+    assert_recursive_auto_save_handler_native_policy("nested-throw", "inner-escaped");
+}
+
+// GNU policy-r2 attests format/coding in the pinned batch oracle. Its separate
+// initialized real -nw PTY rows establish the interactive Wrote positive control;
+// the bare GNU batch echo state was not used as that positive control.
+fn assert_auto_save_file_format_policy(
+    auto_formats: &str,
+    expected: &[u8],
+    expected_format: Option<&str>,
+) {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str(
+        r#"
+      (setq asr-action 'delegate asr-format-args nil
+            buffer-file-format '(asr-normal))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (setq asr-format-args (list format start end original index))
+          (list (cons 1 (if (eq format 'asr-auto) "A" "N")))))
+    "#,
+    )
+    .unwrap();
+    let auto_formats = eval
+        .eval_str(auto_formats)
+        .expect("format value in the subject heap");
+    eval.set_variable("buffer-auto-save-file-format", auto_formats);
+    let original = eval.edit.buffers.current_buffer_id().unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
+        .expect("canonical native format annotation");
+    assert_eq!(fs::read(&target).unwrap(), expected);
+    let actual_args = eval.eval_str("asr-format-args").unwrap();
+    eprintln!("AUTO_SAVE_FORMAT bytes={expected:?} args={actual_args:?}");
+    let expected_args = expected_format.map_or(Value::NIL, |format| {
+        Value::list(vec![
+            Value::symbol(format),
+            Value::NIL,
+            Value::NIL,
+            Value::make_buffer(original),
+            Value::fixnum(0),
+        ])
+    });
+    assert_eq!(
+        actual_args, expected_args,
+        "GNU calls the actual format hook with all five arguments"
+    );
+}
+
+#[test]
+fn auto_save_write_region_uses_auto_save_file_format_list() {
+    assert_auto_save_file_format_policy("'(asr-auto)", b"Aseed\n", Some("asr-auto"));
+}
+
+#[test]
+fn auto_save_write_region_nil_auto_save_file_format_suppresses_normal_format() {
+    assert_auto_save_file_format_policy("nil", b"seed\n", None);
+}
+
+#[test]
+fn auto_save_write_region_t_auto_save_file_format_uses_normal_format() {
+    assert_auto_save_file_format_policy("t", b"Nseed\n", Some("asr-normal"));
+}
+
+#[test]
+fn write_region_ordinary_uses_buffer_file_format_despite_auto_save_format() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str(
+        r#"
+      (setq asr-action 'delegate asr-format-args nil
+            buffer-file-format '(asr-normal)
+            buffer-auto-save-file-format '(asr-auto))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (setq asr-format-args (list format start end original index))
+          (list (cons 1 (if (eq format 'asr-auto) "A" "N")))))
+    "#,
+    )
+    .unwrap();
+    let original = eval.edit.buffers.current_buffer_id().unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+        ],
+    )
+    .expect("ordinary canonical format annotation");
+    assert_eq!(fs::read(&target).unwrap(), b"Nseed\n");
+    assert_eq!(
+        eval.eval_str("asr-format-args").unwrap(),
+        Value::list(vec![
+            Value::symbol("asr-normal"),
+            Value::NIL,
+            Value::NIL,
+            Value::make_buffer(original),
+            Value::fixnum(0),
+        ])
+    );
+}
+
+fn assert_auto_save_write_coding_policy(equal_names: bool, invalid_coding: bool) {
+    let (_dir, mut eval, target) =
+        auto_save_write_handler_fixture_with_context(crate::test_utils::runtime_startup_context());
+    eval.eval_str(
+        r#"
+      (erase-buffer) (insert "é\n")
+      (setq asr-action 'delegate)
+    "#,
+    )
+    .unwrap();
+    if equal_names {
+        eval.eval_str("(setq buffer-file-name asr-target buffer-auto-save-file-name asr-target)")
+            .unwrap();
+    }
+    eval.set_variable(
+        "coding-system-for-write",
+        Value::symbol(if invalid_coding {
+            "asr-no-such-coding-system"
+        } else {
+            "utf-16le-unix"
+        }),
+    );
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("GNU auto-save coding choice");
+    let (expected_bytes, expected_coding): (&[u8], &str) = if equal_names {
+        (&[0xe9, 0, 0x0a, 0], "utf-16le-unix")
+    } else {
+        (&[0xc3, 0xa9, 0x0a], "utf-8-emacs-unix")
+    };
+    eprintln!(
+        "AUTO_SAVE_CODING equal={equal_names} invalid={invalid_coding} bytes={:?}",
+        fs::read(&target).unwrap()
+    );
+    assert_eq!(fs::read(&target).unwrap(), expected_bytes);
+    assert_eq!(
+        eval.eval_str("last-coding-system-used").unwrap(),
+        Value::symbol(expected_coding)
+    );
+}
+
+#[test]
+fn auto_save_write_region_distinct_names_force_utf8_before_bound_coding() {
+    assert_auto_save_write_coding_policy(false, false);
+}
+
+#[test]
+fn auto_save_write_region_distinct_names_ignore_invalid_bound_coding() {
+    assert_auto_save_write_coding_policy(false, true);
+}
+
+#[test]
+fn auto_save_write_region_equal_names_preserve_bound_coding() {
+    assert_auto_save_write_coding_policy(true, false);
+}
+
+#[test]
+fn write_region_ordinary_distinct_names_preserve_bound_coding() {
+    let (_dir, mut eval, target) =
+        auto_save_write_handler_fixture_with_context(crate::test_utils::runtime_startup_context());
+    eval.eval_str(
+        r#"
+      (erase-buffer) (insert "é\n")
+      (setq asr-action 'delegate coding-system-for-write 'utf-16le-unix)
+    "#,
+    )
+    .unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+        ],
+    )
+    .expect("ordinary write obeys bound coding");
+    assert_eq!(fs::read(&target).unwrap(), &[0xe9, 0, 0x0a, 0]);
+    assert_eq!(
+        eval.eval_str("last-coding-system-used").unwrap(),
+        Value::symbol("utf-16le-unix")
+    );
+}
+
+#[test]
+fn auto_save_write_region_active_visit_t_suppresses_native_wrote_message() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(setq asr-action 'delegate auto-save-visited-file-name t noninteractive nil)")
+        .unwrap();
+    assert!(eval.current_message_text().is_none());
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
+        .expect("active canonical visiting write");
+    assert_eq!(fs::read(&target).unwrap(), b"seed\n");
+    assert!(
+        eval.current_message_text().is_none(),
+        "GNU active VISIT=t emits no native Wrote message"
+    );
+}
+
+#[test]
+fn write_region_ordinary_interactive_visit_t_reports_native_wrote_message() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(setq asr-action 'delegate noninteractive nil)")
+        .unwrap();
+    assert!(eval.current_message_text().is_none());
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("ordinary interactive native visiting write");
+    assert_eq!(fs::read(&target).unwrap(), b"seed\n");
+    let expected = format!("Wrote {}", target.display());
+    assert_eq!(
+        eval.current_message_text().as_deref(),
+        Some(expected.as_str())
+    );
+}
+
+#[test]
+fn write_region_ordinary_batch_visit_t_suppresses_native_wrote_message() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(setq asr-action 'delegate noninteractive t)")
+        .unwrap();
+    assert!(eval.current_message_text().is_none());
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("ordinary batch native visiting write");
+    assert_eq!(fs::read(&target).unwrap(), b"seed\n");
+    assert!(
+        eval.current_message_text().is_none(),
+        "GNU batch mode suppresses Wrote even outside auto-save"
+    );
+}
+
+// These bodies mirror the five GNU final-source probes. Apply only after the
+// parent's GNU attestation completes; all paths use the actual native entry.
+#[test]
+fn auto_save_write_region_nil_start_captures_same_buffer_format_append() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str(
+        r#"
+      (setq asr-action 'delegate buffer-auto-save-file-format '(asr-append))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (goto-char (point-max)) (insert "tail\n") nil))
+    "#,
+    )
+    .unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("format append auto-save");
+    assert_eq!(fs::read(&target).unwrap(), b"seed\ntail\n");
+}
+
+#[test]
+fn auto_save_write_region_nil_start_uses_late_narrowing_and_annotation_origin() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str(
+        r#"
+      (erase-buffer) (insert "abcdef\n")
+      (setq asr-action 'delegate buffer-auto-save-file-format '(asr-narrow))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (narrow-to-region 3 6)
+          (list (cons 3 "X") (cons 5 "Y"))))
+    "#,
+    )
+    .unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("format narrowing auto-save");
+    assert_eq!(
+        fs::read(&target).unwrap(),
+        b"XcdYe",
+        "annotation coordinates use the final accessible beginning"
+    );
+}
+
+fn install_auto_save_post_annotation_control(eval: &mut Context, text: &str) -> (Value, Value) {
+    eval.set_variable("asr-replacement-text", Value::string(text));
+    eval.eval_str(
+        r#"
+      (setq asr-action 'delegate asr-original (current-buffer) asr-post-buffers nil)
+      (fset 'asr-record-post
+        (lambda () (setq asr-post-buffers (cons (current-buffer) asr-post-buffers))))
+      (set-buffer (get-buffer-create "asr-final-source-replacement"))
+      (erase-buffer) (insert asr-replacement-text)
+      (setq asr-replacement (current-buffer)
+            write-region-post-annotation-function 'asr-record-post)
+      (set-buffer asr-original)
+      (setq write-region-post-annotation-function 'asr-record-post)
+    "#,
+    )
+    .unwrap();
+    (
+        eval.eval_str("asr-original").unwrap(),
+        eval.eval_str("asr-replacement").unwrap(),
+    )
+}
+
+#[test]
+fn auto_save_write_region_format_switch_does_not_enqueue_extra_post_annotation_buffer() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    let (original, _replacement) = install_auto_save_post_annotation_control(&mut eval, "FORMAT\n");
+    eval.eval_str(
+        r#"
+      (setq buffer-auto-save-file-format '(asr-switch))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (set-buffer asr-replacement) nil))
+    "#,
+    )
+    .unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
+        .expect("format replacement auto-save");
+    assert_eq!(fs::read(&target).unwrap(), b"FORMAT\n");
+    assert_eq!(
+        eval.eval_str("asr-post-buffers").unwrap(),
+        Value::list(vec![original])
+    );
+    assert_eq!(eval.eval_str("(current-buffer)").unwrap(), original);
+}
+
+#[test]
+fn write_region_regular_annotation_switch_enqueues_replacement_post_annotation_buffer() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    let (original, replacement) = install_auto_save_post_annotation_control(&mut eval, "HOOK\n");
+    eval.eval_str(
+        r#"
+      (fset 'asr-switch-annotation
+        (lambda (start end) (set-buffer asr-replacement) nil))
+      (setq write-region-annotate-functions '(asr-switch-annotation))
+    "#,
+    )
+    .unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::fixnum(1),
+            Value::fixnum(6),
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+        ],
+    )
+    .expect("ordinary annotation replacement");
+    assert_eq!(fs::read(&target).unwrap(), b"HOOK\n");
+    // Recording prepends, so this proves actual cleanup order replacement,
+    // then original; the format callback control above has only original.
+    assert_eq!(
+        eval.eval_str("asr-post-buffers").unwrap(),
+        Value::list(vec![original, replacement])
+    );
+}
+
+#[test]
+fn write_region_explicit_range_survives_format_switch_away_and_back() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str(
+        r#"
+      (erase-buffer) (insert "abcdef\n")
+      (setq asr-action 'delegate asr-original (current-buffer) asr-format-trace nil)
+      (set-buffer (get-buffer-create "asr-format-other"))
+      (erase-buffer) (insert "OTHER\n")
+      (setq asr-replacement (current-buffer))
+      (set-buffer asr-original)
+      (setq buffer-file-format '(asr-away asr-back))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (setq asr-format-trace (cons (list format start end original index) asr-format-trace))
+          (set-buffer (if (eq format 'asr-away) asr-replacement asr-original)) nil))
+    "#,
+    )
+    .unwrap();
+    let original = eval.eval_str("asr-original").unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::fixnum(2),
+            Value::fixnum(4),
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+        ],
+    )
+    .expect("away/back format writer");
+    assert_eq!(
+        fs::read(&target).unwrap(),
+        b"bc",
+        "only the final buffer identity decides whether the caller's explicit range is replaced"
+    );
+    assert_eq!(
+        eval.eval_str("(nreverse asr-format-trace)").unwrap(),
+        Value::list(vec![
+            Value::list(vec![
+                Value::symbol("asr-away"),
+                Value::fixnum(2),
+                Value::fixnum(4),
+                original,
+                Value::fixnum(0)
+            ]),
+            Value::list(vec![
+                Value::symbol("asr-back"),
+                Value::fixnum(1),
+                Value::fixnum(7),
+                original,
+                Value::fixnum(1)
+            ]),
+        ])
+    );
+}
+
+#[test]
+fn auto_save_materialized_annotation_property_survives_coding_selector_gc() {
+    // GNU31.1 attested sameform: (saved 1 1 1), Aseed\n. A weak-key
+    // table is the observer, not an ownership root. On loss the selector
+    // throws BEFORE encoding, so this regression never depends on reading
+    // a reclaimed property value or on a native crash.
+    let base = crate::test_utils::workspace_root().join("tmp/v10x");
+    fs::create_dir_all(&base).expect("workspace probe directory");
+    let directory = tempfile::Builder::new()
+        .prefix("materialized-property-")
+        .tempdir_in(&base)
+        .expect("materialized property directory");
+    let target = directory.path().join("auto-save-target");
+    fs::write(&target, b"old\n").expect("seed the equal visited/auto-save target");
+    let mut eval = crate::test_utils::new_context();
+    let form = include_str!("fileio_materialized_properties_probe.el").replace(
+        "@TARGET@",
+        &format!("{:?}", target.to_str().expect("UTF-8 fixture path")),
+    );
+    let result = eval.eval_str(&form);
+    assert_eq!(
+        format_eval_result(&result),
+        "OK (saved 1 1 1)",
+        "materialized annotation properties must remain roots through the coding selector's full GC",
+    );
+    assert_eq!(fs::read(&target).expect("read auto-save bytes"), b"Aseed\n");
+}

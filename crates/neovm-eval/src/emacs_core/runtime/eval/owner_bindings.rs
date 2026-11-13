@@ -20,10 +20,11 @@
 //! bindings stay rooted without reading its Context. A slot write first
 //! notes the value it overwrites for a running mark (SATB).
 //!
-//! No production path creates an owner yet: a slab exists only once a
-//! projected variable is bound, and only tests project variables.
+//! The same cold per-owner allocation holds native Green-seat and file-I/O
+//! policy state. An owner may allocate its slab before binding any projected
+//! variable; those native fields contain no Lisp values to trace.
 
-use super::{Context, NativeUnwindAction, SpecBinding};
+use super::{AutoSaveNativeWritePolicy, Context, NativeUnwindAction, SpecBinding};
 use neovm_edit::buffer::{BufferId, BufferManager};
 use neovm_value::error::Flow;
 use neovm_value::forward::{
@@ -240,8 +241,8 @@ impl OwnerBindingRef {
     }
 }
 
-/// One owner's bindings: the slots holding its current binding per variable
-/// and channel, and its binding stack.
+/// One owner's cold native state and bindings: the current variable slots
+/// and binding stack, Green seat, and native file-I/O policy.
 ///
 /// Owned by the World's [`OwnerSlabRegistry`], mutated only by its owner,
 /// and read by the collector's root phase.
@@ -268,6 +269,9 @@ pub struct OwnerSlab {
     /// This owner's seat in a Green runtime (round 3d): its Lisp thread's
     /// key, channel and, while it runs, the World's Baton.
     green: Option<Box<super::green::GreenSeat>>,
+    /// GNU fileio.c's auto-saving flag and mode bits, local to this owner.
+    /// No Lisp argument, manager reference or native handle is retained.
+    native_fileio: AutoSaveNativeWritePolicy,
     _thread_confined: PhantomData<*const ()>,
 }
 
@@ -314,6 +318,7 @@ impl OwnerSlab {
             debugger: None,
             parked: Vec::new(),
             green: None,
+            native_fileio: AutoSaveNativeWritePolicy::Ordinary { preserved_mode: 0 },
             _thread_confined: PhantomData,
         }
     }
@@ -785,9 +790,9 @@ impl Drop for OwnerSlabRegistry {
     }
 }
 
-/// A Context's owner slab, or none while the Context has bound no projected
-/// variable. Occupies the former reserved opcode-epoch word: same size,
-/// alignment and (absent) niche, so no Context offset moves.
+/// A Context's owner slab, or none before it needs native owner state or
+/// a projected variable binding. Occupies the former reserved opcode-epoch
+/// word: same size, alignment and (absent) niche, so no Context offset moves.
 #[repr(transparent)]
 #[doc(hidden)]
 pub struct OwnerSlot(Option<NonNull<OwnerSlab>>);
@@ -803,7 +808,7 @@ impl std::fmt::Debug for OwnerSlot {
 }
 
 impl OwnerSlot {
-    /// No owner bindings: every Context starts so.
+    /// No owner slab: every Context starts so.
     pub(crate) const DORMANT: Self = Self(None);
 
     /// Install SLAB, which the World's registry owns.
@@ -813,8 +818,7 @@ impl OwnerSlot {
         self.0 = Some(slab);
     }
 
-    /// Whether no slab is installed (the Context has bound no projected
-    /// variable).
+    /// Whether no native owner state or projected binding has needed a slab.
     #[inline(always)]
     #[doc(hidden)]
     pub fn is_dormant(&self) -> bool {
@@ -953,6 +957,31 @@ fn set_makes_local(projection: &ThreadProjectionDescriptor) -> bool {
 }
 
 impl Context {
+    /// Copy this owner's native write policy without activating an owner slab.
+    /// GNU's static auto-save mode bits begin at zero; a dormant owner has
+    /// exactly that ordinary state. Independent owners of one World do not
+    /// share an active auto-save operation.
+    #[doc(hidden)]
+    pub fn auto_save_native_write_policy(&self) -> AutoSaveNativeWritePolicy {
+        self.owner.slab().map_or(
+            AutoSaveNativeWritePolicy::Ordinary { preserved_mode: 0 },
+            |slab| slab.native_fileio,
+        )
+    }
+
+    /// Replace only this owner's native file-I/O policy, returning its prior
+    /// value. The system file-I/O scope owns GNU's entry/exit transitions;
+    /// in particular, nested exit clears Active while preserving the CURRENT
+    /// mode, rather than restoring the state returned by this method.
+    /// No slab borrow is retained while a caller invokes Lisp or native I/O.
+    #[doc(hidden)]
+    pub fn replace_auto_save_native_write_policy(
+        &mut self,
+        policy: AutoSaveNativeWritePolicy,
+    ) -> AutoSaveNativeWritePolicy {
+        std::mem::replace(&mut self.ensure_owner_slab().native_fileio, policy)
+    }
+
     /// This owner's slab, made and registered with the World on first use.
     pub(crate) fn ensure_owner_slab(&mut self) -> &mut OwnerSlab {
         if self.owner.slab().is_none() {

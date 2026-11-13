@@ -3203,6 +3203,23 @@ pub enum ShutdownPhase {
 const _: () = assert!(std::mem::size_of::<ShutdownPhase>() == 1);
 const _: () = assert!(std::mem::align_of::<ShutdownPhase>() == 1);
 
+/// Native auto-save write policy owned by one Context's cold owner slab.
+///
+/// GNU fileio.c keeps `auto_saving` and `auto_save_mode_bits` separately.
+/// Leaving any `do-auto-save`, including a nested one, clears the active
+/// flag without restoring the previous flag or creation mode. Keep the
+/// inactive mode explicit so that callbacks cannot accidentally restore an
+/// outer active operation. This state contains no Lisp values and is never
+/// serialized into a portable dump.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoSaveNativeWritePolicy {
+    /// Ordinary native writes ignore the retained auto-save mode bits.
+    Ordinary { preserved_mode: u32 },
+    /// Auto-save native writes use the mode computed from the visited file.
+    Active { creation_mode: u32 },
+}
+
 /// The evaluator state owned by the mutator thread that constructs it.
 ///
 /// Host hooks, Rc leases and active TLS registry views remain on that thread.
