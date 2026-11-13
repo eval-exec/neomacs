@@ -430,4 +430,88 @@ mod tests {
             "previous manual"
         );
     }
+
+    /// '@' at end of line is the Texinfo @NL command, and CRLF makes it '@\r'.
+    /// macOS uses /bin/bash 3.2; the script must run there without bash 4.
+    /// On Windows dev hosts the test runs `bash` from PATH, so it is Git Bash or WSL depending on PATH.
+    #[test]
+    fn info_manual_sources_use_lf_line_endings() {
+        let repo = crate::repository_root();
+        let script = repo.join("scripts/check-info-manual-eol.sh");
+        let bash = manual_eol_bash();
+        let listed = std::process::Command::new(&bash)
+            .arg(&script)
+            .arg("--list-entries")
+            .current_dir(&repo)
+            .output()
+            .unwrap_or_else(|error| panic!("run {}: {error}", bash.display()));
+        assert!(
+            listed.status.success(),
+            "--list-entries failed: {}",
+            String::from_utf8_lossy(&listed.stderr)
+        );
+        let expected = inventory_entry_list(&repo);
+        assert_eq!(
+            String::from_utf8(listed.stdout).unwrap(),
+            expected,
+            "check-info-manual-eol.sh --list-entries drifted from inventory()"
+        );
+        let sources = std::process::Command::new(&bash)
+            .arg(&script)
+            .arg("--list-sources")
+            .current_dir(&repo)
+            .output()
+            .unwrap_or_else(|error| panic!("run {}: {error}", bash.display()));
+        assert!(
+            sources.status.success(),
+            "--list-sources failed: {}",
+            String::from_utf8_lossy(&sources.stderr)
+        );
+        let source_list = String::from_utf8(sources.stdout).unwrap();
+        for manual in inventory(&repo.join("docs"), Path::new("generated")).unwrap() {
+            for asset in &manual.assets {
+                let rel = repo_rel(&repo, asset);
+                assert!(
+                    source_list.lines().any(|line| line == rel),
+                    "walker omitted inventory asset {rel}"
+                );
+            }
+        }
+        let status = std::process::Command::new(&bash)
+            .arg(&script)
+            .current_dir(&repo)
+            .status()
+            .unwrap_or_else(|error| panic!("run {}: {error}", bash.display()));
+        assert!(
+            status.success(),
+            "Info manual sources must have git attribute eol=lf ({})",
+            script.display()
+        );
+    }
+
+    fn manual_eol_bash() -> PathBuf {
+        if cfg!(target_os = "macos") {
+            PathBuf::from("/bin/bash")
+        } else {
+            PathBuf::from("bash")
+        }
+    }
+
+    fn repo_rel(repo: &Path, path: &Path) -> String {
+        let relative = path.strip_prefix(repo).unwrap_or(path);
+        relative
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    fn inventory_entry_list(repo: &Path) -> String {
+        let mut listed = String::new();
+        for manual in inventory(&repo.join("docs"), Path::new("generated")).unwrap() {
+            listed.push_str(&repo_rel(repo, &manual.source));
+            listed.push('\n');
+        }
+        listed
+    }
 }

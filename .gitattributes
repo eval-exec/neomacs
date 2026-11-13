@@ -34,6 +34,20 @@ test/manual/etags/html-src/algrthms.html whitespace=cr-at-eol
 # Shared Info inventory is consumed as LF-delimited artifact names by packagers.
 docs/info-manuals.list text eol=lf
 
+# '@' at the end of a line is the Texinfo @NL command. The "Multiple
+# Spaces" node says @NL inserts a single space. A Windows checkout that
+# rewrites these to CRLF turns @NL into '@\r', and texinfo 7.2 stops at
+# the first one (docs/emacs/search.texi:1427).
+# The patterns cover every committed input of xtask info_manuals: the
+# @include closure, emacsver.texi.in, and the Org files the export reads.
+*.texi text eol=lf
+*.texi.in text eol=lf
+docs/misc/*.org text eol=lf
+# @image includes FILENAME.txt verbatim in Info output (Texinfo "Image
+# Syntax"). objects.texi names @image{elisp_type_hierarchy,,,,.jpg}; a
+# CRLF copy of this text is inserted into elisp.info.
+docs/lispref/elisp_type_hierarchy.txt text eol=lf
+
 # The todo-mode file format includes trailing whitespace.
 *.tod[aorty] -whitespace=blank-at-eol
 

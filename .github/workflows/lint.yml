@@ -78,6 +78,7 @@ jobs:
             scripts/test-docker-runtime-context.sh \
             scripts/test-generate-release-notes.sh \
             scripts/test-info-manuals.sh \
+            scripts/check-info-manual-eol.sh \
             scripts/check-native-font-boundaries.sh \
             scripts/lib/macos-macho.sh \
             scripts/vendor-macos-runtime.sh \
@@ -99,6 +100,7 @@ jobs:
             scripts/test-docker-runtime-context.sh \
             scripts/test-generate-release-notes.sh \
             scripts/test-info-manuals.sh \
+            scripts/check-info-manual-eol.sh \
             scripts/check-native-font-boundaries.sh \
             scripts/ci/build-main-cache.sh \
             scripts/test-main-cache.sh \
@@ -120,6 +122,13 @@ jobs:
 
       - name: Test Info manual packaging contracts
         run: ./scripts/test-info-manuals.sh
+
+      # '@' at end of line is the Texinfo @NL command (a single space).
+      # CRLF turns it into '@\r' and fails Windows fresh-build at
+      # search.texi:1427; this check fails on Linux when the eol
+      # attribute is dropped.
+      - name: Check Info manual sources stay LF
+        run: ./scripts/check-info-manual-eol.sh
 
       - name: Check native font dependency boundaries
         run: ./scripts/check-native-font-boundaries.sh
