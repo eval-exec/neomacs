@@ -1,8 +1,10 @@
 //! Downloaded, integrity-checked font assets used only by tests.
 //!
-//! The source archive is pinned by both release URL and SHA-256.  Tests cache
-//! the verified files below the workspace's `./tmp` directory so no binary
-//! fixtures need to be committed.
+//! The source archive is pinned by both release URL and SHA-256. Verified
+//! files live in [`font_fixture_cache_root`], shared across worktrees and
+//! cargo target directories. No font binaries are committed. A download that
+//! fails panics with a `FIXTURE-FETCH:` prefix carrying the URL, the pinned
+//! SHA-256, and the I/O error.
 
 /// Runtime workspace root: nextest's NEXTEST_WORKSPACE_ROOT when present,
 /// the compile-time constant otherwise (see neomacs-infra).
@@ -11,6 +13,7 @@ pub fn workspace_root() -> std::path::PathBuf {
 }
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -22,6 +25,68 @@ use flate2::write::GzEncoder;
 use fs4::FileExt;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+/// Directory of sha-verified font fixtures, shared by every worktree.
+///
+/// `NEOMACS_FONT_FIXTURE_CACHE` selects the directory. Otherwise it is
+/// `$XDG_CACHE_HOME/neomacs/font-fixtures`, or
+/// `$HOME/.cache/neomacs/font-fixtures` when `XDG_CACHE_HOME` is unset. The
+/// workspace `tmp/font-fixtures` directory is only the last resort, used when
+/// neither home nor XDG is set.
+///
+/// A hit is re-hashed before it is trusted. `cargo xtask font-fixtures`
+/// fills the directory once; a later test process does not download again.
+#[must_use]
+pub fn font_fixture_cache_root() -> PathBuf {
+    resolve_font_fixture_cache_root(
+        std::env::var_os("NEOMACS_FONT_FIXTURE_CACHE"),
+        std::env::var_os("XDG_CACHE_HOME"),
+        std::env::var_os("HOME"),
+        workspace_root(),
+    )
+}
+
+pub(crate) fn resolve_font_fixture_cache_root(
+    explicit: Option<OsString>,
+    xdg_cache_home: Option<OsString>,
+    home: Option<OsString>,
+    workspace: PathBuf,
+) -> PathBuf {
+    fn nonempty(value: Option<OsString>) -> Option<PathBuf> {
+        value.filter(|item| !item.is_empty()).map(PathBuf::from)
+    }
+    if let Some(path) = nonempty(explicit) {
+        return path;
+    }
+    if let Some(xdg) = nonempty(xdg_cache_home) {
+        return xdg.join("neomacs").join("font-fixtures");
+    }
+    if let Some(home) = nonempty(home) {
+        return home.join(".cache").join("neomacs").join("font-fixtures");
+    }
+    workspace.join("tmp").join("font-fixtures")
+}
+
+/// Text of a classified fixture failure. Gates grep for the prefix.
+pub(crate) fn fixture_fetch_message(
+    url: &str,
+    sha256: &str,
+    error: &impl std::fmt::Display,
+) -> String {
+    format!("FIXTURE-FETCH: url={url} sha256={sha256} error={error}")
+}
+
+fn panic_fixture_fetch(url: &str, sha256: &str, error: &FixtureError) -> ! {
+    let (url, sha256) = match error {
+        FixtureError::Fixture {
+            url: failed_url,
+            sha256: failed_sha,
+            ..
+        } => (*failed_url, *failed_sha),
+        _ => (url, sha256),
+    };
+    panic!("{}", fixture_fetch_message(url, sha256, error))
+}
 
 const RELEASE_NAME: &str = "spleen-2.2.0";
 const RELEASE_URL: &str =
@@ -180,7 +245,13 @@ pub fn plemol_jp_console_nf_regular() -> &'static Path {
     static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
     FIXTURE
         .get_or_init(|| {
-            prepare_plemol_jp().unwrap_or_else(|error| panic!("PlemolJP fixture: {error}"))
+            prepare_plemol_jp().unwrap_or_else(|error| {
+                panic_fixture_fetch(
+                    "https://github.com/yuru7/PlemolJP/releases/download/v3.1.0/PlemolJP_NF_v3.1.0.zip",
+                    "015142b7ce4fb497ea6eb14567c435b69450eb5028fb7d29c032d1ffb3854abb",
+                    &error,
+                )
+            })
         })
         .as_path()
 }
@@ -189,7 +260,7 @@ fn prepare_plemol_jp() -> Result<PathBuf, FixtureError> {
     const FONT_SHA: &str = "0dadabb6766f13e31787d26d73467dd613a777e509a8214bc898333299dd4be4";
     const ZIP_SHA: &str = "015142b7ce4fb497ea6eb14567c435b69450eb5028fb7d29c032d1ffb3854abb";
     const ENTRY: &str = "PlemolJP_NF_v3.1.0/PlemolJPConsole_NF/PlemolJPConsoleNF-Regular.ttf";
-    let root = workspace_root().join("tmp/font-fixtures");
+    let root = font_fixture_cache_root();
     create_dir_all(&root)?;
     let lock_path = root.join(".plemol-jp-v3.1.0.lock");
     let lock = open_lock(&lock_path)?;
@@ -210,6 +281,8 @@ fn prepare_plemol_jp() -> Result<PathBuf, FixtureError> {
         )
         .map_err(|source| FixtureError::Fixture {
             name: "PlemolJP_NF_v3.1.0.zip".to_owned(),
+            url: "https://github.com/yuru7/PlemolJP/releases/download/v3.1.0/PlemolJP_NF_v3.1.0.zip",
+            sha256: ZIP_SHA,
             source,
         })?;
         let file = File::open(&archive).map_err(|source| FixtureError::Io {
@@ -240,7 +313,7 @@ fn prepare_plemol_jp() -> Result<PathBuf, FixtureError> {
                 actual,
             });
         }
-        let partial = destination.with_extension("partial");
+        let partial = partial_download_path(&destination);
         write_all(&partial, &bytes)?;
         fs::rename(&partial, &destination).map_err(|source| FixtureError::Io {
             path: destination.clone(),
@@ -294,7 +367,7 @@ impl SpleenFixtures {
 }
 
 /// Download and verify the pinned fixture archive on first use in this test
-/// process, then return paths within the workspace-local cache.
+/// process, then return paths within the shared fixture cache.
 ///
 /// # Panics
 ///
@@ -304,7 +377,7 @@ impl SpleenFixtures {
 pub fn spleen_2_2_0() -> &'static SpleenFixtures {
     SPLEEN_FIXTURES.get_or_init(|| {
         prepare_spleen_fixtures()
-            .unwrap_or_else(|error| panic!("failed to prepare pinned Spleen test fonts: {error}"))
+            .unwrap_or_else(|error| panic_fixture_fetch(RELEASE_URL, RELEASE_SHA256, &error))
     })
 }
 
@@ -319,9 +392,6 @@ pub fn woff2_collection() -> &'static Path {
                 WOFF2_COLLECTION_URL,
                 WOFF2_COLLECTION_SHA256,
             )
-            .unwrap_or_else(|error| {
-                panic!("failed to prepare pinned WOFF2 collection fixture: {error}")
-            })
         })
         .as_path()
 }
@@ -337,9 +407,6 @@ pub fn noto_color_emoji_2_051() -> &'static Path {
                 NOTO_COLOR_EMOJI_URL,
                 NOTO_COLOR_EMOJI_SHA256,
             )
-            .unwrap_or_else(|error| {
-                panic!("failed to prepare pinned Noto Color Emoji test font: {error}")
-            })
         })
         .as_path()
 }
@@ -359,9 +426,6 @@ pub fn noto_color_emoji_colrv1() -> &'static Path {
                 NOTO_COLOR_EMOJI_COLRV1_URL,
                 NOTO_COLOR_EMOJI_COLRV1_SHA256,
             )
-            .unwrap_or_else(|error| {
-                panic!("failed to prepare pinned COLRv1 Noto Color Emoji test font: {error}")
-            })
         })
         .as_path()
 }
@@ -375,10 +439,7 @@ pub fn noto_color_emoji_colrv1() -> &'static Path {
 #[must_use]
 pub fn nabla_color_colrv1() -> &'static Path {
     NABLA_FIXTURE
-        .get_or_init(|| {
-            prepare_pinned_file(NABLA_NAME, NABLA_URL, NABLA_SHA256)
-                .unwrap_or_else(|error| panic!("failed to prepare pinned Nabla test font: {error}"))
-        })
+        .get_or_init(|| prepare_pinned_file(NABLA_NAME, NABLA_URL, NABLA_SHA256))
         .as_path()
 }
 
@@ -393,9 +454,6 @@ pub fn mplus_1_code_thin() -> &'static Path {
                 MPLUS_1_CODE_THIN_URL,
                 MPLUS_1_CODE_THIN_SHA256,
             )
-            .unwrap_or_else(|error| {
-                panic!("failed to prepare pinned M PLUS Thin test font: {error}")
-            })
         })
         .as_path()
 }
@@ -414,9 +472,6 @@ pub fn noto_sans_mono_variable() -> &'static Path {
                 NOTO_SANS_MONO_VARIABLE_URL,
                 NOTO_SANS_MONO_VARIABLE_SHA256,
             )
-            .unwrap_or_else(|error| {
-                panic!("failed to prepare pinned variable Noto Sans Mono test font: {error}")
-            })
         })
         .as_path()
 }
@@ -433,9 +488,6 @@ pub fn noto_sans_arabic_variable() -> &'static Path {
                 NOTO_SANS_ARABIC_VARIABLE_URL,
                 NOTO_SANS_ARABIC_VARIABLE_SHA256,
             )
-            .unwrap_or_else(|error| {
-                panic!("failed to prepare pinned variable Noto Sans Arabic test font: {error}")
-            })
         })
         .as_path()
 }
@@ -451,9 +503,6 @@ pub fn noto_sans_hebrew_variable() -> &'static Path {
                 NOTO_SANS_HEBREW_VARIABLE_URL,
                 NOTO_SANS_HEBREW_VARIABLE_SHA256,
             )
-            .unwrap_or_else(|error| {
-                panic!("failed to prepare pinned variable Noto Sans Hebrew test font: {error}")
-            })
         })
         .as_path()
 }
@@ -468,9 +517,6 @@ pub fn noto_serif_variable() -> &'static Path {
                 NOTO_SERIF_VARIABLE_URL,
                 NOTO_SERIF_VARIABLE_SHA256,
             )
-            .unwrap_or_else(|error| {
-                panic!("failed to prepare pinned Noto Serif test font: {error}")
-            })
         })
         .as_path()
 }
@@ -501,12 +547,18 @@ impl DesktopFontFixtures {
 #[must_use]
 pub fn desktop_fonts() -> &'static DesktopFontFixtures {
     DESKTOP_FONTS_FIXTURE.get_or_init(|| {
-        prepare_desktop_fonts().unwrap_or_else(|error| panic!("desktop font fixtures: {error}"))
+        prepare_desktop_fonts().unwrap_or_else(|error| {
+            panic_fixture_fetch(
+                UBUNTU_FONTS_ARCHIVE_URL,
+                UBUNTU_FONTS_ARCHIVE_SHA256,
+                &error,
+            )
+        })
     })
 }
 
 fn prepare_desktop_fonts() -> Result<DesktopFontFixtures, FixtureError> {
-    let cache_root = workspace_root().join("tmp/font-fixtures");
+    let cache_root = font_fixture_cache_root();
     create_dir_all(&cache_root)?;
     let lock_path = cache_root.join(".desktop-fonts.lock");
     let lock = open_lock(&lock_path)?;
@@ -535,6 +587,8 @@ fn prepare_desktop_fonts_locked(cache_root: &Path) -> Result<DesktopFontFixtures
     )
     .map_err(|source| FixtureError::Fixture {
         name: format!("{UBUNTU_FONTS_RELEASE}.orig.tar.gz"),
+        url: UBUNTU_FONTS_ARCHIVE_URL,
+        sha256: UBUNTU_FONTS_ARCHIVE_SHA256,
         source,
     })?;
     let dejavu_archive = neomacs_infra::pinned::pinned_file_with_limit(
@@ -545,6 +599,8 @@ fn prepare_desktop_fonts_locked(cache_root: &Path) -> Result<DesktopFontFixtures
     )
     .map_err(|source| FixtureError::Fixture {
         name: format!("{DEJAVU_FONTS_RELEASE}.zip"),
+        url: DEJAVU_FONTS_ARCHIVE_URL,
+        sha256: DEJAVU_FONTS_ARCHIVE_SHA256,
         source,
     })?;
     if directory.exists() {
@@ -633,7 +689,7 @@ fn extract_verified_zip_member(
         path: archive_path.to_path_buf(),
         source,
     })?;
-    let mut entry = match zip.by_name(member) {
+    let entry = match zip.by_name(member) {
         Ok(entry) => entry,
         Err(zip::result::ZipError::FileNotFound) => {
             return Err(FixtureError::MissingArchiveEntry {
@@ -662,6 +718,19 @@ fn extract_verified_zip_member(
     write_verified(destination, &bytes, sha256)
 }
 
+/// Temp path beside `destination`.
+///
+/// The suffix is appended to the whole file name. Replacing the extension
+/// would store `spleen-8x16.bdf` and `spleen-8x16.pcf` in one partial file.
+pub(crate) fn partial_download_path(destination: &Path) -> PathBuf {
+    let mut name = destination
+        .file_name()
+        .unwrap_or(std::ffi::OsStr::new("fixture"))
+        .to_os_string();
+    name.push(".partial");
+    destination.with_file_name(name)
+}
+
 fn write_verified(
     destination: &Path,
     bytes: &[u8],
@@ -675,7 +744,7 @@ fn write_verified(
             actual,
         });
     }
-    let partial = destination.with_extension("partial");
+    let partial = partial_download_path(destination);
     write_all(&partial, bytes)?;
     fs::rename(&partial, destination).map_err(|source| FixtureError::Io {
         path: destination.to_path_buf(),
@@ -690,14 +759,14 @@ pub fn lxgw_wenkai_nerd_regular_1_522() -> &'static Path {
     LXGW_NERD_REGULAR_FIXTURE
         .get_or_init(|| {
             prepare_lxgw_nerd_regular().unwrap_or_else(|error| {
-                panic!("failed to prepare pinned LXGW WenKai Nerd test font: {error}")
+                panic_fixture_fetch(LXGW_NERD_ARCHIVE_URL, LXGW_NERD_ARCHIVE_SHA256, &error)
             })
         })
         .as_path()
 }
 
 fn prepare_lxgw_nerd_regular() -> Result<PathBuf, FixtureError> {
-    let cache = workspace_root().join("tmp/font-fixtures");
+    let cache = font_fixture_cache_root();
     create_dir_all(&cache)?;
     let lock_path = cache.join(format!(".{LXGW_NERD_RELEASE}.lock"));
     let lock = open_lock(&lock_path)?;
@@ -706,6 +775,12 @@ fn prepare_lxgw_nerd_regular() -> Result<PathBuf, FixtureError> {
         source,
     })?;
     let result = (|| {
+        let directory = cache.join(LXGW_NERD_RELEASE);
+        create_dir_all(&directory)?;
+        let destination = directory.join(LXGW_NERD_REGULAR);
+        if destination.is_file() && verify_sha256(&destination, LXGW_NERD_REGULAR_SHA256).is_ok() {
+            return Ok(destination);
+        }
         let archive_path = neomacs_infra::pinned::pinned_file_with_limit(
             &format!("{LXGW_NERD_RELEASE}.tar.gz"),
             LXGW_NERD_ARCHIVE_URL,
@@ -714,14 +789,10 @@ fn prepare_lxgw_nerd_regular() -> Result<PathBuf, FixtureError> {
         )
         .map_err(|source| FixtureError::Fixture {
             name: format!("{LXGW_NERD_RELEASE}.tar.gz"),
+            url: LXGW_NERD_ARCHIVE_URL,
+            sha256: LXGW_NERD_ARCHIVE_SHA256,
             source,
         })?;
-        let directory = cache.join(LXGW_NERD_RELEASE);
-        create_dir_all(&directory)?;
-        let destination = directory.join(LXGW_NERD_REGULAR);
-        if destination.is_file() && verify_sha256(&destination, LXGW_NERD_REGULAR_SHA256).is_ok() {
-            return Ok(destination);
-        }
         let file = File::open(&archive_path).map_err(|source| FixtureError::Io {
             path: archive_path.clone(),
             source,
@@ -747,7 +818,7 @@ fn prepare_lxgw_nerd_regular() -> Result<PathBuf, FixtureError> {
             if entry.size() > MAX_PINNED_FIXTURE_BYTES {
                 return Err(FixtureError::InvalidArchiveEntry(path.into_owned()));
             }
-            let partial = directory.join(format!(".{LXGW_NERD_REGULAR}.partial"));
+            let partial = partial_download_path(&destination);
             let mut output = File::create(&partial).map_err(|source| FixtureError::Io {
                 path: partial.clone(),
                 source,
@@ -757,12 +828,6 @@ fn prepare_lxgw_nerd_regular() -> Result<PathBuf, FixtureError> {
                 source,
             })?;
             verify_sha256(&partial, LXGW_NERD_REGULAR_SHA256)?;
-            if destination.exists() {
-                fs::remove_file(&destination).map_err(|source| FixtureError::Io {
-                    path: destination.clone(),
-                    source,
-                })?;
-            }
             fs::rename(&partial, &destination).map_err(|source| FixtureError::Io {
                 path: destination.clone(),
                 source,
@@ -798,6 +863,8 @@ enum FixtureError {
     #[error("pinned fixture {name}: {source}")]
     Fixture {
         name: String,
+        url: &'static str,
+        sha256: &'static str,
         #[source]
         source: neomacs_infra::pinned::PinnedError,
     },
@@ -814,7 +881,7 @@ enum FixtureError {
 }
 
 fn prepare_spleen_fixtures() -> Result<SpleenFixtures, FixtureError> {
-    let cache_root = workspace_root().join("tmp/font-fixtures");
+    let cache_root = font_fixture_cache_root();
     create_dir_all(&cache_root)?;
 
     let lock_path = cache_root.join(format!(".{RELEASE_NAME}.lock"));
@@ -832,18 +899,70 @@ fn prepare_spleen_fixtures() -> Result<SpleenFixtures, FixtureError> {
     result
 }
 
-fn prepare_pinned_file(
+fn prepare_pinned_file(name: &'static str, url: &'static str, sha256: &'static str) -> PathBuf {
+    match install_pinned_file(name, url, sha256) {
+        Ok(path) => path,
+        Err(error) => panic_fixture_fetch(url, sha256, &error),
+    }
+}
+
+/// Return the shared-cache copy of `name`, downloading only when that copy is
+/// missing or its SHA-256 does not match the pin.
+fn install_pinned_file(
     name: &'static str,
     url: &'static str,
     sha256: &'static str,
 ) -> Result<PathBuf, FixtureError> {
-    neomacs_infra::pinned::pinned_file(name, url, sha256).map_err(|source| FixtureError::Fixture {
-        name: name.to_owned(),
+    let cache = font_fixture_cache_root();
+    create_dir_all(&cache)?;
+    let lock_path = cache.join(format!(".{name}.lock"));
+    let lock = open_lock(&lock_path)?;
+    lock.lock().map_err(|source| FixtureError::Io {
+        path: lock_path.clone(),
         source,
-    })
+    })?;
+    let result = (|| {
+        let destination = cache.join(name);
+        if destination.is_file() && verify_sha256(&destination, sha256).is_ok() {
+            return Ok(destination);
+        }
+        let fetched = neomacs_infra::pinned::pinned_file(name, url, sha256).map_err(|source| {
+            FixtureError::Fixture {
+                name: name.to_owned(),
+                url,
+                sha256,
+                source,
+            }
+        })?;
+        if fetched == destination {
+            return Ok(destination);
+        }
+        let bytes = read_all(&fetched)?;
+        let partial = partial_download_path(&destination);
+        write_all(&partial, &bytes)?;
+        verify_sha256(&partial, sha256)?;
+        fs::rename(&partial, &destination).map_err(|source| FixtureError::Io {
+            path: destination.clone(),
+            source,
+        })?;
+        Ok(destination)
+    })();
+    FileExt::unlock(&lock).map_err(|source| FixtureError::Io {
+        path: lock_path,
+        source,
+    })?;
+    result
 }
 
 fn prepare_spleen_fixtures_locked(cache_root: &Path) -> Result<SpleenFixtures, FixtureError> {
+    let fixture_root = cache_root.join(RELEASE_NAME);
+    // A sha-matching extract is the whole fixture. Downloading the archive
+    // first would miss the shared cache and touch the network again.
+    if all_extracted_files_match(&fixture_root)? {
+        ensure_gzipped_pcf(&fixture_root)?;
+        return Ok(SpleenFixtures { root: fixture_root });
+    }
+
     let archive = neomacs_infra::pinned::pinned_file(
         &format!("{RELEASE_NAME}.tar.gz"),
         RELEASE_URL,
@@ -851,13 +970,12 @@ fn prepare_spleen_fixtures_locked(cache_root: &Path) -> Result<SpleenFixtures, F
     )
     .map_err(|source| FixtureError::Fixture {
         name: format!("{RELEASE_NAME}.tar.gz"),
+        url: RELEASE_URL,
+        sha256: RELEASE_SHA256,
         source,
     })?;
 
-    let fixture_root = cache_root.join(RELEASE_NAME);
-    if !all_extracted_files_match(&fixture_root)? {
-        extract_verified_fonts(&archive, &fixture_root)?;
-    }
+    extract_verified_fonts(&archive, &fixture_root)?;
     ensure_gzipped_pcf(&fixture_root)?;
 
     Ok(SpleenFixtures { root: fixture_root })
@@ -970,7 +1088,7 @@ fn ensure_gzipped_pcf(root: &Path) -> Result<(), FixtureError> {
         path: source_path.clone(),
         source,
     })?;
-    let partial = gzip_path.with_extension("gz.partial");
+    let partial = partial_download_path(&gzip_path);
     let output = File::create(&partial).map_err(|source| FixtureError::Io {
         path: partial.clone(),
         source,
@@ -984,12 +1102,6 @@ fn ensure_gzipped_pcf(root: &Path) -> Result<(), FixtureError> {
         path: partial.clone(),
         source,
     })?;
-    if gzip_path.exists() {
-        fs::remove_file(&gzip_path).map_err(|source| FixtureError::Io {
-            path: gzip_path.clone(),
-            source,
-        })?;
-    }
     fs::rename(&partial, &gzip_path).map_err(|source| FixtureError::Io {
         path: gzip_path.clone(),
         source,
@@ -1071,3 +1183,42 @@ mod tests;
 
 mod layout_fonts;
 pub use layout_fonts::*;
+
+/// Download and sha-verify every pinned fixture into [`font_fixture_cache_root`].
+///
+/// A missing download panics with `FIXTURE-FETCH:` and the pin that failed.
+/// `cargo xtask font-fixtures` runs this once so later test processes reuse
+/// the verified files with the network blocked.
+pub fn prefetch_all_fixtures() {
+    std::hint::black_box(plemol_jp_console_nf_regular());
+    std::hint::black_box(spleen_2_2_0());
+    std::hint::black_box(woff2_collection());
+    std::hint::black_box(noto_color_emoji_2_051());
+    std::hint::black_box(noto_color_emoji_colrv1());
+    std::hint::black_box(nabla_color_colrv1());
+    std::hint::black_box(mplus_1_code_thin());
+    std::hint::black_box(noto_sans_mono_variable());
+    std::hint::black_box(noto_sans_arabic_variable());
+    std::hint::black_box(noto_sans_hebrew_variable());
+    std::hint::black_box(noto_serif_variable());
+    std::hint::black_box(desktop_fonts());
+    std::hint::black_box(lxgw_wenkai_nerd_regular_1_522());
+    std::hint::black_box(noto_sans_variable());
+    std::hint::black_box(noto_sans_italic_variable());
+    std::hint::black_box(hack_italic_3_003());
+    std::hint::black_box(noto_sans_cjk_variable());
+    std::hint::black_box(jetbrains_mono_regular_2_304());
+    std::hint::black_box(jetbrains_mono_bold_2_304());
+    std::hint::black_box(jetbrains_mono_italic_2_304());
+    std::hint::black_box(jetbrains_mono_nerd_regular_3_4_0());
+    std::hint::black_box(jetbrains_mono_nerd_bold_3_4_0());
+    std::hint::black_box(jetbrains_mono_nerd_italic_3_4_0());
+    std::hint::black_box(symbols_nerd_mono_3_4_0());
+    std::hint::black_box(dejavu_2_37());
+    std::hint::black_box(ubuntu_0_83());
+    std::hint::black_box(noto_sans_devanagari_variable());
+    std::hint::black_box(noto_sans_thai_variable());
+    std::hint::black_box(iosevka_33_2_9());
+    std::hint::black_box(hack_regular_3_003());
+    std::hint::black_box(hack_bold_3_003());
+}

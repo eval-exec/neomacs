@@ -1,6 +1,78 @@
 use crate::*;
 
 #[test]
+fn font_fixture_cache_root_prefers_the_explicit_directory() {
+    let workspace = std::path::PathBuf::from("/work");
+    let resolved = resolve_font_fixture_cache_root(
+        Some("/shared/fonts".into()),
+        Some("/xdg".into()),
+        Some("/home/tester".into()),
+        workspace,
+    );
+    assert_eq!(resolved, std::path::PathBuf::from("/shared/fonts"));
+}
+
+#[test]
+fn font_fixture_cache_root_uses_xdg_then_home_then_the_workspace() {
+    let workspace = std::path::PathBuf::from("/work");
+    let xdg = resolve_font_fixture_cache_root(
+        None,
+        Some("/xdg".into()),
+        Some("/home/tester".into()),
+        workspace.clone(),
+    );
+    assert_eq!(xdg, std::path::PathBuf::from("/xdg/neomacs/font-fixtures"));
+    let home =
+        resolve_font_fixture_cache_root(None, None, Some("/home/tester".into()), workspace.clone());
+    assert_eq!(
+        home,
+        std::path::PathBuf::from("/home/tester/.cache/neomacs/font-fixtures")
+    );
+    let fallback = resolve_font_fixture_cache_root(None, Some("".into()), None, workspace.clone());
+    assert_eq!(
+        fallback,
+        std::path::PathBuf::from("/work/tmp/font-fixtures")
+    );
+}
+
+#[test]
+fn pins_that_share_a_stem_keep_distinct_partial_paths() {
+    let cache = std::path::Path::new("/cache");
+    let names = [
+        "spleen-8x16.bdf",
+        "spleen-8x16.pcf",
+        "spleen-8x16.otb",
+        "spleen-8x16.woff",
+        "spleen-8x16.woff2",
+    ];
+    let partials: Vec<_> = names
+        .iter()
+        .map(|name| partial_download_path(&cache.join(name)))
+        .collect();
+    for (name, partial) in names.iter().zip(&partials) {
+        assert_eq!(partial, &cache.join(format!("{name}.partial")), "{name}");
+    }
+    for index in 0..partials.len() {
+        for other in (index + 1)..partials.len() {
+            assert_ne!(partials[index], partials[other]);
+        }
+    }
+}
+
+#[test]
+fn fixture_fetch_message_names_the_url_the_pin_and_the_io_error() {
+    let message = fixture_fetch_message(
+        "https://example.invalid/font.zip",
+        "abc123",
+        &"unexpected end of file",
+    );
+    assert_eq!(
+        message,
+        "FIXTURE-FETCH: url=https://example.invalid/font.zip sha256=abc123 error=unexpected end of file"
+    );
+}
+
+#[test]
 fn downloads_and_verifies_every_public_fixture() {
     let fixtures = spleen_2_2_0();
     for path in [
