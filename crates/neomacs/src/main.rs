@@ -4617,7 +4617,6 @@ fn run_gui_evaluator_worker(
     if let Some(request) = evaluator.shutdown_request() {
         if startup.daemon.is_some() {
             secondary_ttys.close_all();
-            evaluator.close_processes_for_exit();
         }
         let exit = EvaluatorExit {
             exit_code: request.exit_code,
@@ -5344,7 +5343,6 @@ pub fn run(mode: RuntimeMode) {
     if let Some(request) = evaluator.shutdown_request() {
         if startup.daemon.is_some() {
             daemon_tty_cleanup.close_all();
-            evaluator.close_processes_for_exit();
         }
         if request.restart {
             if startup.daemon.is_some() {

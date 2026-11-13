@@ -7,7 +7,7 @@
 
 #![allow(private_interfaces)] // host_effect/switch vocabulary becomes eval-owned at W5/E13
 use crate::emacs_core::eval::process_hooks::ProcessHooks;
-use crate::emacs_core::process::SystemProcessExt;
+use crate::emacs_core::process::{ProcessContextExt, SystemProcessExt};
 use crate::heap_types::ProcessId;
 
 fn unlink_owned_unix_listener_for_exit(ctx: &mut crate::emacs_core::eval::Context, id: ProcessId) {
@@ -23,6 +23,12 @@ fn unlink_owned_unix_listener_for_exit(ctx: &mut crate::emacs_core::eval::Contex
 
 fn delete_process(ctx: &mut crate::emacs_core::eval::Context, id: ProcessId) -> bool {
     ctx.processes_mut().delete_process(id)
+}
+
+fn shutdown_processes_for_exit(
+    ctx: &mut crate::emacs_core::eval::Context,
+) -> Result<(), crate::emacs_core::error::Flow> {
+    ProcessContextExt::shutdown_processes_for_exit(ctx)
 }
 
 fn open_channel_for_module(
@@ -53,6 +59,7 @@ fn terminate_and_defer_reaping(
 static CANONICAL_PROCESS_HOOKS: ProcessHooks = ProcessHooks::new(
     unlink_owned_unix_listener_for_exit,
     delete_process,
+    shutdown_processes_for_exit,
     open_channel_for_module,
     print_process_handle,
     wait_notifier,

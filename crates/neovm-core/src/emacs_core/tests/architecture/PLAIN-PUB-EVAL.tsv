@@ -581,7 +581,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	type	type CaseTable
 crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	type	type CaseTableSync
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::body_redisplay_revision
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::chrome_dirty
-crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::close_processes_for_exit
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::configure_daemon
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::context_instance_id
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::defer_mode_line_display_flow

@@ -2,13 +2,49 @@
 //! after kill-emacs can observe unlock/unlink or final process cleanup.
 #![cfg(unix)]
 
+#[cfg(target_os = "linux")]
+#[path = "shutdown_native_child.rs"]
+mod shutdown_native_child;
+#[cfg(target_os = "linux")]
+use shutdown_native_child::{
+    ChildAfterEditor, HupDisposition, NativeChild, NativeObservation,
+    prepare_native_child_supervision,
+};
+
 use crate::common::{self, OracleMode, oracle_sandbox::OracleSandbox};
+use neomacs_test_env::bounded_temp_dir;
+use std::ffi::OsString;
+use std::os::unix::fs::FileTypeExt;
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Child, ExitStatus, Stdio},
     time::{Duration, Instant},
 };
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug)]
+enum IgnoredHupProbe {
+    Pipe,
+    ForegroundDaemonPipe,
+    Pty,
+    PtyWithStderr,
+    ExplicitDeleteControl,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+struct NativeChildSpec {
+    disposition: HupDisposition,
+    after_editor: ChildAfterEditor,
+    helper: &'static str,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum EditorMode {
+    Batch,
+    ForegroundDaemon,
+}
 
 #[derive(Clone, Copy, Debug)]
 enum Probe {
@@ -19,6 +55,10 @@ enum Probe {
     HookError,
     SafeHookDebugger,
     SafeHookDebugOnSignal,
+    PipeServerSentinels,
+    DaemonUnixListener,
+    #[cfg(target_os = "linux")]
+    IgnoredChildHangup(IgnoredHupProbe),
     HookThrowAbort,
     HookOuterHandler,
     HookNoCatch,
@@ -33,12 +73,53 @@ struct Observation {
     artifact_before: Option<bool>,
     artifact_after: Option<bool>,
     events: Vec<String>,
+    #[cfg(target_os = "linux")]
+    native_child: Option<NativeObservation>,
 }
 
 impl Probe {
+    fn editor_mode(self) -> EditorMode {
+        match self {
+            Self::DaemonUnixListener => EditorMode::ForegroundDaemon,
+            #[cfg(target_os = "linux")]
+            Self::IgnoredChildHangup(IgnoredHupProbe::ForegroundDaemonPipe) => {
+                EditorMode::ForegroundDaemon
+            }
+            _ => EditorMode::Batch,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn native_child_spec(self) -> Option<NativeChildSpec> {
+        match self {
+            Self::IgnoredChildHangup(kind) => Some(NativeChildSpec {
+                disposition: HupDisposition::Ignored,
+                after_editor: match kind {
+                    IgnoredHupProbe::ExplicitDeleteControl => ChildAfterEditor::Exited,
+                    IgnoredHupProbe::Pipe
+                    | IgnoredHupProbe::ForegroundDaemonPipe
+                    | IgnoredHupProbe::Pty
+                    | IgnoredHupProbe::PtyWithStderr => ChildAfterEditor::Alive,
+                },
+                helper: include_str!("fixtures/kill_emacs_shutdown/ignored-hup-child.py"),
+            }),
+            _ => None,
+        }
+    }
+
     fn script(self) -> &'static str {
         match self {
             Self::Unlock => include_str!("fixtures/kill_emacs_shutdown/lock-release.el"),
+            Self::DaemonUnixListener => {
+                include_str!("fixtures/kill_emacs_shutdown/daemon-unix-listener.el")
+            }
+            Self::PipeServerSentinels => {
+                include_str!("fixtures/kill_emacs_shutdown/pipe-server-sentinels.el")
+            }
+            #[cfg(target_os = "linux")]
+            Self::IgnoredChildHangup(_) => {
+                include_str!("fixtures/kill_emacs_shutdown/ignored-hup-child.el")
+            }
             Self::AutoSaveList => {
                 include_str!("fixtures/kill_emacs_shutdown/auto-save-list-unlink.el")
             }
@@ -65,12 +146,25 @@ impl Probe {
     }
 
     fn checkpoint(self) -> bool {
-        matches!(self, Self::Unlock | Self::AutoSaveList)
+        matches!(
+            self,
+            Self::Unlock | Self::AutoSaveList | Self::DaemonUnixListener
+        )
     }
 
     fn expected(self) -> Observation {
         let events: &[&str] = match self {
             Self::Unlock | Self::AutoSaveList => &[],
+            Self::DaemonUnixListener => &["user-unix-listener-created"],
+            #[cfg(target_os = "linux")]
+            Self::IgnoredChildHangup(_) => &[],
+            Self::PipeServerSentinels => &[
+                "sentinel:control-pipe",
+                "sentinel:control-server",
+                "kill-hook",
+                "autosave-old-status:closed/closed",
+                "after-new-delete",
+            ],
             Self::Sentinels => &[
                 "sentinel:control",
                 "kill-hook",
@@ -118,8 +212,22 @@ impl Probe {
         Observation {
             exit: Some(0),
             artifact_before: self.checkpoint().then_some(true),
-            artifact_after: self.checkpoint().then_some(false),
+            artifact_after: self
+                .checkpoint()
+                .then_some(matches!(self, Self::DaemonUnixListener)),
             events: events.iter().map(|s| (*s).into()).collect(),
+            #[cfg(target_os = "linux")]
+            native_child: match self {
+                Self::IgnoredChildHangup(kind) => Some(NativeObservation::IgnoredHup {
+                    disposition_before_go: true,
+                    child_alive_after_editor_exit: !matches!(
+                        kind,
+                        IgnoredHupProbe::ExplicitDeleteControl
+                    ),
+                    child_alive_later: !matches!(kind, IgnoredHupProbe::ExplicitDeleteControl),
+                }),
+                _ => None,
+            },
         }
     }
 }
@@ -127,6 +235,8 @@ impl Probe {
 struct RunningEditor {
     child: Child,
     root: PathBuf,
+    #[cfg(target_os = "linux")]
+    native_child: Option<NativeChild>,
 }
 
 impl RunningEditor {
@@ -177,16 +287,32 @@ impl Drop for RunningEditor {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
-        // The bounded helper watches this editor's lifetime and exits when
-        // its parent changes, including when this guard kills the editor.
+        #[cfg(target_os = "linux")]
+        if let Some(child) = &self.native_child {
+            // Editor is stopped/reaped first. Adopted children retain their
+            // captured pidfd identity; never signal a recorded numeric PID.
+            if let Err(error) = child.cleanup() {
+                eprintln!("owned native child cleanup failed: {error}");
+            }
+        }
+        // A setup failure before capture remains independently bounded:
+        // helpers watch the editor parent before GO and have a timeout.
     }
 }
 
 fn observe(probe: Probe, binary: &Path) -> Observation {
     let case = OracleSandbox::create_fixture_tempdir().unwrap();
     let root = case.path();
+    let editor_mode = probe.editor_mode();
+    // Use the existing bounded TempBase policy (<=32-byte base) so both
+    // private socket paths fit Unix sun_path, independent of workspace depth.
+    let socket_namespace = match editor_mode {
+        EditorMode::Batch => None,
+        EditorMode::ForegroundDaemon => Some(bounded_temp_dir("nv-shut-").unwrap()),
+    };
     let target = root.join("visited.txt");
     let artifact = match probe {
+        Probe::DaemonUnixListener => socket_namespace.as_ref().unwrap().path().join("user.sock"),
         Probe::Unlock => root.join(".#visited.txt"),
         _ => root.join("auto-save-list"),
     };
@@ -204,6 +330,13 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
         )
         .unwrap();
     }
+    #[cfg(target_os = "linux")]
+    let native_spec = probe.native_child_spec();
+    #[cfg(target_os = "linux")]
+    if let Some(spec) = native_spec {
+        prepare_native_child_supervision().expect("pidfd/P_PIDFD fixture prerequisites");
+        fs::write(root.join("child.py"), spec.helper).unwrap();
+    }
     let sandbox = OracleSandbox::new(
         probe.script(),
         &[],
@@ -212,8 +345,32 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
     .unwrap();
     let mut command = sandbox.pinned_command(binary);
     sandbox.configure(&mut command);
+    match editor_mode {
+        EditorMode::Batch => {
+            command.env_remove("SHUTDOWN_EXPECT_FOREGROUND_DAEMON");
+            command.args(["--batch", "--quick", "--load"]);
+        }
+        EditorMode::ForegroundDaemon => {
+            let directory = socket_namespace.as_ref().unwrap().path();
+            let daemon_socket = directory.join("daemon.sock");
+            assert!(
+                daemon_socket.as_os_str().len() < 104,
+                "bounded daemon socket path"
+            );
+            assert!(
+                directory.join("user.sock").as_os_str().len() < 104,
+                "bounded user socket path"
+            );
+            // A fresh absolute daemon name isolates the server from any
+            // system/default server. OracleSandbox already pins private HOME.
+            let mut daemon = OsString::from("--fg-daemon=");
+            daemon.push(&daemon_socket);
+            command.arg("--quick").arg(daemon).arg("--load");
+            command.env("SHUTDOWN_PROBE_SOCKET_ROOT", directory);
+            command.env("SHUTDOWN_EXPECT_FOREGROUND_DAEMON", "1");
+        }
+    }
     command
-        .args(["--batch", "--quick", "--load"])
         .arg(&script)
         .env("SHUTDOWN_TARGET", &target)
         .env("SHUTDOWN_ARTIFACT", &artifact)
@@ -227,9 +384,27 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
         .stdin(Stdio::null())
         .stdout(fs::File::create(root.join("stdout")).unwrap())
         .stderr(fs::File::create(root.join("stderr")).unwrap());
+    #[cfg(target_os = "linux")]
+    if let Probe::IgnoredChildHangup(kind) = probe {
+        match kind {
+            IgnoredHupProbe::Pty => {
+                command.env("SHUTDOWN_PROBE_PTY", "1");
+            }
+            IgnoredHupProbe::PtyWithStderr => {
+                command.env("SHUTDOWN_PROBE_PTY", "1");
+                command.env("SHUTDOWN_PROBE_SPLIT_STDERR", "1");
+            }
+            IgnoredHupProbe::ExplicitDeleteControl => {
+                command.env("SHUTDOWN_PROBE_DELETE_CONTROL", "1");
+            }
+            IgnoredHupProbe::Pipe | IgnoredHupProbe::ForegroundDaemonPipe => {}
+        }
+    }
     let mut editor = RunningEditor {
         child: command.spawn().unwrap(),
         root: root.into(),
+        #[cfg(target_os = "linux")]
+        native_child: None,
     };
     let before = if probe.checkpoint() {
         editor.checkpoint(&root.join("ready"));
@@ -239,6 +414,15 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
             "native artifact absent before kill: {}",
             editor.diagnostics()
         );
+        if matches!(probe, Probe::DaemonUnixListener) {
+            assert!(
+                fs::symlink_metadata(&artifact)
+                    .unwrap()
+                    .file_type()
+                    .is_socket(),
+                "daemon user listener must be a native Unix socket"
+            );
+        }
         if matches!(probe, Probe::Unlock) {
             assert!(
                 fs::symlink_metadata(&artifact)
@@ -252,7 +436,36 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
     } else {
         None
     };
+    #[cfg(target_os = "linux")]
+    if let Some(spec) = native_spec {
+        editor.checkpoint(&root.join("ready"));
+        editor.native_child = Some(
+            NativeChild::capture(root, editor.child.id(), spec.disposition)
+                .expect("capture owned native child before GO"),
+        );
+        editor
+            .native_child
+            .as_ref()
+            .unwrap()
+            .validate_before_go()
+            .expect("native child disposition before GO");
+        fs::write(root.join("go"), "go\n").unwrap();
+    }
     let status = editor.wait();
+    #[cfg(target_os = "linux")]
+    let native_child = editor.native_child.as_ref().map(|child| {
+        child
+            .observe_after_editor_exit(root, native_spec.unwrap().after_editor)
+            .expect("native child observation after editor exit")
+    });
+    #[cfg(target_os = "linux")]
+    if let Some(child) = &editor.native_child {
+        child.cleanup().expect("reap captured child through pidfd");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        editor.native_child = None;
+    }
     let events = match fs::read_to_string(root.join("events.log")) {
         Ok(text) => text.lines().map(str::to_owned).collect(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => vec![],
@@ -261,10 +474,14 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
     let result = Observation {
         exit: status.code(),
         artifact_before: before,
-        artifact_after: probe
-            .checkpoint()
-            .then(|| fs::symlink_metadata(&artifact).is_ok()),
+        artifact_after: probe.checkpoint().then(|| {
+            fs::symlink_metadata(&artifact).is_ok_and(|metadata| {
+                !matches!(probe, Probe::DaemonUnixListener) || metadata.file_type().is_socket()
+            })
+        }),
         events,
+        #[cfg(target_os = "linux")]
+        native_child,
     };
     eprintln!(
         "{probe:?} {} -> {result:?}\n{}",
@@ -352,4 +569,48 @@ fn safe_hook_barrier_preserves_debug_on_signal() {
 #[test]
 fn shutdown_kill_hook_uses_original_symbol_after_unintern() {
     assert_shutdown_parity(Probe::HookUnintern);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn shutdown_keeps_hup_ignoring_pipe_child_alive() {
+    assert_shutdown_parity(Probe::IgnoredChildHangup(IgnoredHupProbe::Pipe));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn shutdown_keeps_hup_ignoring_pty_child_alive() {
+    assert_shutdown_parity(Probe::IgnoredChildHangup(IgnoredHupProbe::Pty));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn shutdown_keeps_hup_ignoring_pty_split_stderr_child_alive() {
+    assert_shutdown_parity(Probe::IgnoredChildHangup(IgnoredHupProbe::PtyWithStderr));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn shutdown_explicit_delete_still_kills_hup_ignoring_child_control() {
+    assert_shutdown_parity(Probe::IgnoredChildHangup(
+        IgnoredHupProbe::ExplicitDeleteControl,
+    ));
+}
+
+#[test]
+fn shutdown_closes_pipe_and_server_before_autosave_without_sentinels() {
+    assert_shutdown_parity(Probe::PipeServerSentinels);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn shutdown_foreground_daemon_keeps_hup_ignoring_child_alive() {
+    assert_shutdown_parity(Probe::IgnoredChildHangup(
+        IgnoredHupProbe::ForegroundDaemonPipe,
+    ));
+}
+
+#[test]
+fn shutdown_foreground_daemon_preserves_user_unix_listener_path() {
+    assert_shutdown_parity(Probe::DaemonUnixListener);
 }

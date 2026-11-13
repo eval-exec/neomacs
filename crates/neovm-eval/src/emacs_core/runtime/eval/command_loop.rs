@@ -197,15 +197,6 @@ impl Context {
         });
     }
 
-    /// Close owned network listeners and terminate children after kill-emacs
-    /// hooks, without running Lisp sentinels after the shutdown boundary.
-    pub fn close_processes_for_exit(&mut self) {
-        for id in self.processes.list_processes() {
-            crate::emacs_core::eval::process_hooks::unlink_owned_unix_listener_for_exit(self, id);
-            crate::emacs_core::eval::process_hooks::delete_process(self, id);
-        }
-    }
-
     /// Run `kill-emacs-hook`, then enter Dying and publish `request`.
     ///
     /// A call that arrives while that hook is already running re-enters,
@@ -289,6 +280,9 @@ impl Context {
         // assignments, even when a previous auto-save handler escaped. The
         // Dying boundary is permanent: only pre-boundary hook exits roll back.
         self.enter_shut_down();
+        // GNU emacs.c:3154: sentinel inhibition precedes process teardown,
+        // and process teardown precedes the canonical shutdown auto-save.
+        super::process_hooks::shutdown_processes_for_exit(self)?;
         // GNU calls `Fdo_auto_save (Qt, Qnil)` directly after disabling
         // hooks (`emacs.c:3107-3110`, `:3157`). Resolve the canonical subr,
         // independently of a redefined or unbound Lisp function cell.

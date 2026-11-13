@@ -5896,7 +5896,13 @@ impl SystemProcessExt for ProcessManager {
         let Some(proc) = self.processes.get_mut(&id) else {
             return false;
         };
-        if proc.kind != ProcessKind::Real || process_status_is_exit_or_signal(&proc.status) {
+        if proc.kind != ProcessKind::Real
+            || process_status_is_exit_or_signal(&proc.status)
+            || !matches!(
+                process_output_source(proc),
+                Some(ProcessOutputSource::Pty | ProcessOutputSource::ChildStdout)
+            )
+        {
             return false;
         }
         // GNU `kill_buffer_processes` only SENDS the hangup
@@ -5908,7 +5914,14 @@ impl SystemProcessExt for ProcessManager {
         // action must never write status (unlike `delete-process`, whose
         // synchronous `(signal . SIGKILL)` stamp IS GNU behavior,
         // process.c:1145).
-        kill_real_process_child(proc, signal_hup_number());
+        // HUP is best effort: GNU never falls back to SIGKILL, waits, or
+        // synthesizes a status when the group signal fails. Ownership is
+        // checked by deliver_process_signal, never by a stale numeric PID.
+        let _ = deliver_process_signal(
+            proc,
+            signal_hup_number(),
+            ProcessSignalRecipient::ProcessGroup,
+        );
         true
     }
 
@@ -7471,6 +7484,7 @@ pub trait ProcessContextExt {
     fn sync_process_read_config_from_visible_variables(&mut self);
     fn exited_process_disposition(&self) -> ExitedProcessDisposition;
     fn kill_buffer_processes(&mut self, buffer_id: BufferId) -> Result<(), Flow>;
+    fn shutdown_processes_for_exit(&mut self) -> Result<(), Flow>;
     fn run_async_process_callback_preserving_state(
         &mut self,
         callback: Value,
@@ -7720,6 +7734,27 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             self.visible_variable_value_or_nil("delete-exited-processes")
                 .is_truthy(),
         )
+    }
+
+    /// GNU kill_buffer_processes(nil), called after sentinel inhibition.
+    #[cold]
+    fn shutdown_processes_for_exit(&mut self) -> Result<(), Flow> {
+        for id in self.processes().list_processes() {
+            let Some(kind) = self.processes().get(id).map(|process| process.kind) else {
+                continue;
+            };
+            match kind {
+                ProcessKind::Real => {
+                    self.processes_mut().hangup_real_process_for_buffer_kill(id);
+                }
+                ProcessKind::Network | ProcessKind::Serial | ProcessKind::Pipe => {
+                    // Use the canonical delete transition. Sentinel inhibition
+                    // lives in Eval and remains authoritative for callbacks.
+                    self.delete_process_running_its_sentinel(id, true)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn kill_buffer_processes(&mut self, buffer_id: BufferId) -> Result<(), Flow> {

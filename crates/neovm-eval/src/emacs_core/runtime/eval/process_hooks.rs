@@ -186,6 +186,7 @@ pub type TerminateAndDeferReaping = fn(&mut ChildOwnership, i32);
 pub struct ProcessHooks {
     unlink: UnlinkOwnedUnixListener,
     delete: DeleteProcess,
+    shutdown: fn(&mut Context) -> Result<(), Flow>,
     open_channel: OpenChannelForModule,
     print_handle: PrintProcessHandle,
     wait_notifier: WaitNotifierHook,
@@ -198,6 +199,7 @@ impl ProcessHooks {
     pub const fn new(
         unlink: UnlinkOwnedUnixListener,
         delete: DeleteProcess,
+        shutdown: fn(&mut Context) -> Result<(), Flow>,
         open_channel: OpenChannelForModule,
         print_handle: PrintProcessHandle,
         wait_notifier: WaitNotifierHook,
@@ -206,6 +208,7 @@ impl ProcessHooks {
         Self {
             unlink,
             delete,
+            shutdown,
             open_channel,
             print_handle,
             wait_notifier,
@@ -251,6 +254,12 @@ pub fn unlink_owned_unix_listener_for_exit(ctx: &mut Context, id: ProcessId) {
 /// Terminate and reap ID without running its sentinel.
 pub fn delete_process(ctx: &mut Context, id: ProcessId) -> bool {
     (process_hooks().delete)(ctx, id)
+}
+
+/// GNU kill_buffer_processes(nil), after global sentinel inhibition.
+#[cold]
+pub(crate) fn shutdown_processes_for_exit(ctx: &mut Context) -> Result<(), Flow> {
+    (process_hooks().shutdown)(ctx)
 }
 
 /// Open the dynamic-module channel to PROCESS.

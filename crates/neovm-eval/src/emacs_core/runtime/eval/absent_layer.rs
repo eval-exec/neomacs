@@ -623,6 +623,10 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER system::process.delete");
             }
 
+            pub(crate) fn process_shutdown(ctx: &mut Context) -> Result<(), Flow> {
+                absent_layer_panic("ABSENT-LAYER system::process.shutdown");
+            }
+
             pub(crate) fn process_open_channel(ctx: &mut Context, process: Value) -> Result<std::ffi::c_int, Flow> {
                 absent_layer_panic("ABSENT-LAYER system::process.open_channel");
             }

@@ -1253,6 +1253,7 @@ mod unit_runtime {
     static PROCESS: ProcessHooks = ProcessHooks::new(
         s::process_unlink,
         s::process_delete,
+        s::process_shutdown,
         s::process_open_channel,
         s::process_print_handle,
         s::process_wait_notifier,
