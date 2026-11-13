@@ -999,21 +999,60 @@ fn resume_tty_signals_non_text_terminal_error() {
     }
 }
 
+fn assert_x_open_connection_stringp(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+    invalid: Value,
+) {
+    match builtin_x_open_connection(eval, args).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("stringp"), invalid]);
+        }
+        other => panic!("expected wrong-type-argument stringp, got {other:?}"),
+    }
+}
+
 #[test]
 fn x_open_connection_requires_string_display_arg() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let bad = builtin_x_open_connection(&mut eval, vec![Value::NIL]);
-    assert!(bad.is_err());
+    assert_x_open_connection_stringp(&mut eval, vec![Value::NIL], Value::NIL);
 }
 
 #[test]
-fn x_open_connection_eval_accepts_x_host_startup() {
+fn x_open_connection_checks_xrm_string_before_open() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    assert_x_open_connection_stringp(
+        &mut eval,
+        vec![Value::string(":987"), Value::fixnum(42)],
+        Value::fixnum(42),
+    );
+}
+
+#[test]
+fn x_open_connection_active_arm_rejects_non_string_display() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    eval.set_variable("initial-window-system", Value::symbol("x"));
+    for invalid in [Value::NIL, Value::fixnum(42), Value::symbol("not-a-string")] {
+        assert_x_open_connection_stringp(&mut eval, vec![invalid], invalid);
+    }
+    assert_x_open_connection_stringp(
+        &mut eval,
+        vec![Value::string(":987"), Value::fixnum(42)],
+        Value::fixnum(42),
+    );
+}
+
+#[test]
+fn x_open_connection_active_arm_returns_nil_for_string_display() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("initial-window-system", Value::symbol("x"));
     assert!(
-        builtin_x_open_connection(&mut eval, vec![Value::NIL])
+        builtin_x_open_connection(&mut eval, vec![Value::string(":987")])
             .unwrap()
             .is_nil()
     );

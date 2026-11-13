@@ -3222,74 +3222,57 @@ pub fn builtin_x_display_set_last_user_time(
     x_optional_display_query_error_eval(eval, "x-display-set-last-user-time", query_args)
 }
 
-/// Open Lisp-visible display state only after the daemon's native host admits
-/// the requested connection and all resource arguments have been validated.
+/// Check DISPLAY and a non-nil XRM-STRING, then admit a daemon connection.
+///
+/// GNU `Fx_open_connection` runs both `CHECK_STRING`s before `x_term_init`
+/// (`src/xfns.c:7645-7647`). A typed DISPLAY on the non-daemon GUI arm still
+/// returns nil; refusing an unopenable name there is a separate change.
 #[doc(hidden)]
 pub fn builtin_x_open_connection(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("x-open-connection", &args, 1, 3)?;
-    if eval.daemon().is_some() {
-        // GNU Fx_open_connection checks both strings before x_term_init can
-        // publish the connection or its keyboard (src/xfns.c:7645-7647).
-        if !args[0].is_string() {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("stringp"), args[0]],
-            ));
+    if !args[0].is_string() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), args[0]],
+        ));
+    }
+    let resources = match args.get(1) {
+        Some(value) if !value.is_nil() => {
+            if !value.is_string() {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), *value],
+                ));
+            }
+            Some(display_string_text(value).expect("checked string"))
         }
-        let resources = args
-            .get(1)
-            .filter(|value| !value.is_nil())
-            .map(|value| {
-                display_string_text(value).ok_or_else(|| {
-                    signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("stringp"), *value],
-                    )
-                })
-            })
-            .transpose()?;
+        _ => None,
+    };
+    if eval.daemon().is_some() {
         ensure_daemon_graphical_connection(eval, Some(args[0]))?;
-        if let Some(resources) = resources
+        if let Some(resources) = resources.as_deref()
             && let Some(host) = eval.display_host.as_mut()
         {
-            host.set_gui_resource_database(&resources);
+            host.set_gui_resource_database(resources);
         }
         return Ok(Value::NIL);
     }
     if x_window_system_active(eval) {
-        if let Some(resources) = args.get(1).filter(|value| !value.is_nil()) {
-            let resources = display_string_text(resources).ok_or_else(|| {
-                signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("stringp"), *resources],
-                )
-            })?;
-            if let Some(host) = eval.display_host.as_mut() {
-                host.set_gui_resource_database(&resources);
-            }
+        if let Some(resources) = resources.as_deref()
+            && let Some(host) = eval.display_host.as_mut()
+        {
+            host.set_gui_resource_database(resources);
         }
         return Ok(Value::NIL);
     }
-    match args[0].kind() {
-        ValueKind::Nil => Err(signal(
-            "error",
-            vec![Value::string("Display nil can’t be opened")],
-        )),
-        ValueKind::String => {
-            let display = display_string_text(&args[0]).expect("checked string");
-            Err(signal(
-                "error",
-                vec![Value::string(format!("Display {display} can’t be opened"))],
-            ))
-        }
-        _ => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("stringp"), args[0]],
-        )),
-    }
+    let display = display_string_text(&args[0]).expect("checked string");
+    Err(signal(
+        "error",
+        vec![Value::string(format!("Display {display} can’t be opened"))],
+    ))
 }
 
 /// Validate a daemon's requested native display before changing terminal state

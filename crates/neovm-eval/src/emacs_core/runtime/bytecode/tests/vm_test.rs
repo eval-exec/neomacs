@@ -9513,12 +9513,12 @@ fn vm_x_connection_builtins_use_shared_runtime_state() {
             r#"(let ((f (selected-frame)))
                  (setq initial-window-system 'x)
                  (list
-                  (x-open-connection nil)
+                  (condition-case err (x-open-connection nil) (error err))
                   (condition-case err (x-close-connection f) (error err))
                   (condition-case err (x-close-connection "x") (error err))
                   (condition-case err (x-open-connection "x") (error err))))"#
         ),
-        r#"OK (nil (error "Window system frame should be used") (error "Display x can’t be opened") nil)"#
+        r#"OK ((wrong-type-argument stringp nil) (error "Window system frame should be used") (error "Display x can’t be opened") nil)"#
     );
 }
 
