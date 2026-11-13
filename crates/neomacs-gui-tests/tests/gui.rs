@@ -233,3 +233,6 @@ mod wayland_shm_pool_growth;
 
 #[path = "category_word_wrap.rs"]
 mod category_word_wrap;
+
+#[path = "printer_quit.rs"]
+mod printer_quit;

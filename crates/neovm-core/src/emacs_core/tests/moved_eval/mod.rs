@@ -309,6 +309,11 @@ mod emacs_core_lisp_print_tests_graph_recursive_closure_units_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/print/tests/graph_tail_units.rs"]
 mod emacs_core_lisp_print_tests_graph_tail_units_rs;
+// Issue #590: quit requested during print traversal reaches the surrounding
+// handler. New test, not a re-home.
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/printer_quit_units.rs"]
+mod emacs_core_lisp_print_tests_printer_quit_units_rs;
 
 // Remaining printer re-homes of the same P1 EVAL wave F1 batch (boot/oracle
 // helpers live in this crate).  Bodies byte-identical; only use paths and

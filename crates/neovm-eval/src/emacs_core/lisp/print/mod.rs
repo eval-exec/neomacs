@@ -759,7 +759,8 @@ impl Drop for PrintEvaluationGuard<'_> {
 
 /// Owns roots while exclusively borrowing the caller's per-print state.
 /// The context cannot change until Drop restores the saved scope. Rooting is
-/// needed only on the evaluator path capable of invoking Lisp callbacks.
+/// needed on every evaluator path: quit polling can run Lisp signal/shutdown
+/// hooks even when no unreadable-object callback is installed.
 #[must_use = "dropping the guard releases temporary printer roots"]
 struct PrintValueRootsGuard<'s, 'a> {
     state: &'s mut PrintState<'a>,
@@ -776,19 +777,15 @@ impl std::fmt::Debug for PrintValueRootsGuard<'_, '_> {
 impl<'s, 'a> PrintValueRootsGuard<'s, 'a> {
     #[doc(hidden)]
     pub fn new(state: &'s mut PrintState<'a>, values: impl IntoIterator<Item = Value>) -> Self {
-        let scope = if state.options.unreadable_function.is_some() {
-            match &mut state.context {
-                PrinterContext::Standalone(_) => None,
-                PrinterContext::Evaluator(context) => {
-                    let scope = context.save_specpdl_roots();
-                    for value in values {
-                        context.push_specpdl_root(value);
-                    }
-                    Some(scope)
+        let scope = match &mut state.context {
+            PrinterContext::Standalone(_) => None,
+            PrinterContext::Evaluator(context) => {
+                let scope = context.save_specpdl_roots();
+                for value in values {
+                    context.push_specpdl_root(value);
                 }
+                Some(scope)
             }
-        } else {
-            None
         };
         Self { state, scope }
     }
@@ -1936,6 +1933,36 @@ fn write_value_stateful_rooted(
     state: &mut PrintState,
 ) {
     if state.failure.is_some() {
+        return;
+    }
+    // GNU print.c checks maybe_quit before visiting each object. Keep control
+    // flow in the evaluator so inhibit-quit and pending shutdown retain their
+    // normal semantics, including after a Lisp printer callback. The slow path
+    // can run Lisp (shutdown hooks, `throw-on-input` handlers), and GNU has
+    // already written the rendered prefix to `print_buffer` when it polls, so
+    // an accumulating sink is flushed before the poll.
+    let attention = match &mut state.context {
+        PrinterContext::Standalone(_) => Ok(()),
+        PrinterContext::Evaluator(context) => {
+            // One hot check, one slow poll: attention that arrives after the
+            // check must not reach `maybe_quit_slow` before the flush, because
+            // its Lisp hooks would then print behind a missing prefix.
+            if context.maybe_quit_hot_ok() {
+                Ok(())
+            } else {
+                flush_print_output_to_accumulator(
+                    context,
+                    out,
+                    &mut state.world_sink_flushed,
+                    &mut state.world_sink_touched,
+                    state.world_active,
+                );
+                context.maybe_quit_slow()
+            }
+        }
+    };
+    if let Err(flow) = attention {
+        state.failure = Some(flow);
         return;
     }
     if let Err(error) = validate_live_number_table(value, state) {

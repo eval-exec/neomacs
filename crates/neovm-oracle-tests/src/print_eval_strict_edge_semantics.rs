@@ -92,3 +92,52 @@ fn oracle_number_to_string_wrong_type() {
     let (o, n) = crate::common::eval_oracle_and_neovm_expect(r#"(number-to-string 'sym)"#, expect);
     assert_err_kind(&o, &n, "wrong-type-argument");
 }
+
+#[test]
+fn oracle_printer_quit_during_traversal_and_inhibit_quit() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    // A quit requested by an unreadable-object callback must be delivered
+    // inside the surrounding print call, before its following object is
+    // visited. Two markers make that observable: the callback counts visits,
+    // so delayed delivery would report two. Cover ordinary/circle printing and
+    // interpreted/compiled callers; inhibiting quit must preserve the complete
+    // output, the pending flag and both visits.
+    let form = r#"(progn
+      (defvar neovm--issue590-visits 0)
+      (defun neovm--issue590-print-with-pending-quit (circle inhibit)
+        (let ((print-circle circle)
+              (print-level nil)
+              (print-length nil)
+              (quit-flag nil)
+              (inhibit-quit inhibit)
+              (neovm--issue590-visits 0)
+              (print-unreadable-function
+               (lambda (_object _escape)
+                 (setq neovm--issue590-visits (1+ neovm--issue590-visits))
+                 (setq quit-flag t)
+                 "Q")))
+          (if inhibit
+              (let* ((text (prin1-to-string (vector (make-marker) (make-marker))))
+                     (pending quit-flag))
+                (setq quit-flag nil)
+                (list text pending neovm--issue590-visits))
+            (let ((printed (condition-case nil
+                               (prin1-to-string (vector (make-marker) (make-marker)))
+                             (quit 'caught))))
+              (list printed neovm--issue590-visits)))))
+      (let ((interpreted
+             (mapcar (lambda (circle)
+                       (list (neovm--issue590-print-with-pending-quit circle nil)
+                             (neovm--issue590-print-with-pending-quit circle t)))
+                     '(nil t))))
+        (byte-compile 'neovm--issue590-print-with-pending-quit)
+        (list interpreted
+              (mapcar (lambda (circle)
+                        (list (neovm--issue590-print-with-pending-quit circle nil)
+                              (neovm--issue590-print-with-pending-quit circle t)))
+                      '(nil t)))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((((caught 1) (\"[Q Q]\" t 2)) ((caught 1) (\"[Q Q]\" t 2))) (((caught 1) (\"[Q Q]\" t 2)) ((caught 1) (\"[Q Q]\" t 2))))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
