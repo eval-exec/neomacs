@@ -1937,10 +1937,24 @@ fn write_value_stateful_rooted(
     }
     // GNU print.c checks maybe_quit before visiting each object. Keep control
     // flow in the evaluator so inhibit-quit and pending shutdown retain their
-    // normal semantics, including after a Lisp printer callback.
+    // normal semantics, including after a Lisp printer callback. The slow path
+    // can run Lisp (shutdown hooks, `throw-on-input` handlers), and GNU has
+    // already written the rendered prefix to `print_buffer` when it polls, so
+    // an accumulating sink is flushed before the poll.
     let attention = match &mut state.context {
         PrinterContext::Standalone(_) => Ok(()),
-        PrinterContext::Evaluator(context) => context.maybe_quit(),
+        PrinterContext::Evaluator(context) => {
+            if !context.maybe_quit_hot_ok() {
+                flush_print_output_to_accumulator(
+                    context,
+                    out,
+                    &mut state.world_sink_flushed,
+                    &mut state.world_sink_touched,
+                    state.world_active,
+                );
+            }
+            context.maybe_quit()
+        }
     };
     if let Err(flow) = attention {
         state.failure = Some(flow);
