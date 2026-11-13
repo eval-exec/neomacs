@@ -10,6 +10,7 @@ let
   system = pkgs.stdenv.hostPlatform.system;
   productionCapabilities = package.productionCapabilities;
   startupContract = import ./startup-contract.nix;
+  versionedEmacsContract = import ./versioned-emacs-contract.nix;
   subprocessEnvironmentContract = import ./subprocess-environment-contract.nix;
   subprocessLibraryPriorityContract = import ./subprocess-library-priority-contract.nix;
   outputContract =
@@ -54,6 +55,13 @@ let
         test -x ${checkedPackage}/bin/neomacsclient
         test -L ${checkedPackage}/bin/emacs
         test -L ${checkedPackage}/bin/emacsclient
+        ${versionedEmacsContract {
+          executable = "${checkedPackage}/bin/emacs-${checkedPackage.gnuEmacsVersion}";
+          compatibilityVersion = checkedPackage.gnuEmacsVersion;
+          runtimeRoot = "${checkedPackage}/share/neomacs";
+          env = "${pkgs.coreutils}/bin/env";
+          timeout = "${pkgs.coreutils}/bin/timeout";
+        }}
         test -d ${checkedPackage}/share/neomacs/lisp
         test -d ${checkedPackage}/share/neomacs/etc
         test -f ${checkedPackage}/share/emacs/site-lisp/site-start.el

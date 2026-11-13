@@ -8,6 +8,8 @@
 }:
 let
   inherit (pkgs) lib;
+  gnuEmacsVersion =
+    (builtins.fromTOML (builtins.readFile (source + "/parity-reference.toml"))).emacs_version;
   craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
   cargoSrc = craneLib.cleanCargoSource source;
   productionCapabilities = import ./production-capabilities.nix {
@@ -181,6 +183,7 @@ craneLib.buildPackage (
       install -m 0644 "$final_pdump" "$out/bin/neomacs-$fingerprint.pdump"
 
       ln -s neomacs "$out/bin/emacs"
+      ln -s neomacs "$out/bin/emacs-${gnuEmacsVersion}"
       ln -s neomacsclient "$out/bin/emacsclient"
 
       wrapProgram "$out/bin/neomacs" \
@@ -203,7 +206,7 @@ craneLib.buildPackage (
     setupHook = ./setup-hook.sh;
 
     passthru = {
-      inherit gstreamerRuntime productionCapabilities;
+      inherit gnuEmacsVersion gstreamerRuntime productionCapabilities;
     };
 
     meta = {
