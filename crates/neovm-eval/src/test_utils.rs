@@ -485,6 +485,7 @@ mod unit_runtime {
                             .or_else(|| strings_family_subr(row.name))
                             .or_else(|| misc_family_subr(row.name))
                             .or_else(|| editfns_family_subr(row.name))
+                            .or_else(|| propertize_family_subr(row.name))
                         {
                             let arity = spec.arity();
                             assert_eq!(
@@ -783,6 +784,28 @@ mod unit_runtime {
         &DISPLAY_SERVICE,
         &FILE_NOTIFY,
     );
+
+    /// `propertize`, whose body lives in this crate. The unit runtime binds
+    /// the same entry shape production registers in `subrs.rs`.
+    fn propertize_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
+        use crate::emacs_core::builtins::builtin_propertize;
+        use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+        use neovm_value::error::EvalResult;
+        use neovm_value::value::Value;
+
+        fn bind_propertize(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_propertize(args)
+        }
+
+        Some(match name {
+            "propertize" => SubrSpec::new(
+                "propertize",
+                NativeFn::ContextVec(bind_propertize),
+                SubrArity::new(1, None),
+            ),
+            _ => return None,
+        })
+    }
 
     /// Editfns subrs whose bodies live in `neovm-edit`. The unit runtime
     /// binds the same entry shape production registers in `subrs.rs`.
