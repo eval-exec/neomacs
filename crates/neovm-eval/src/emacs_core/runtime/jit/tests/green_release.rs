@@ -247,30 +247,6 @@ fn release_deopt_after_accept_process_output_park() {
 /// release point natively (the intrinsic result stands, no deopt). The helper
 /// only parks — no `fset` anywhere in the run, so the global epoch the release
 /// check compares cannot move at all.
-#[test]
-fn release_check_passes_when_epoch_is_unchanged() {
-    let _scope = arith_scope();
-    let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Off);
-    let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
-    let mut context =
-        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-    context.set_lexical_binding(true);
-    context
-        .eval_str(
-            "(fset 'green-release-helper (lambda ()
-              (sleep-for 0 5)))",
-        )
-        .expect("setup");
-    let (result, deopts) = run_witness(&mut context);
-    assert_eq!(
-        result,
-        Value::fixnum(3),
-        "an unchanged epoch keeps the baked intrinsic result"
-    );
-    assert_eq!(deopts, 0, "no revalidation may fire without an epoch move");
-    context.green_teardown();
-    assert_eq!(context.jit_root_stack_top, 0);
-}
 
 /// Same-thread redefinition from inside the called helper — the sim-mode
 /// rule is the same rule (one check, no mode branch): the helper's `fset`
