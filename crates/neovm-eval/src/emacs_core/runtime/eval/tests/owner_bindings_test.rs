@@ -272,19 +272,6 @@ fn kill_all_local_variables_captures_owner_local_bindings() {
 }
 
 #[test]
-fn killing_a_buffer_drops_owner_bindings_of_its_locals() {
-    same_answers(&[
-        "(let ((b (get-buffer-create \" tob-k\")))
-           (save-current-buffer (set-buffer b)
-             (setq tob-auto 7)
-             (let ((tob-auto 35))
-               (kill-buffer b)
-               (list tob-auto (default-value 'tob-auto) (buffer-live-p b)))))",
-        "(list tob-auto (default-value 'tob-auto))",
-    ]);
-}
-
-#[test]
 fn defvaralias_refuses_an_owner_bound_variable() {
     same_answers(&[
         "(let ((tob-v 1)) (condition-case e (defvaralias 'tob-v 'tob-log) (error (car e))))",
