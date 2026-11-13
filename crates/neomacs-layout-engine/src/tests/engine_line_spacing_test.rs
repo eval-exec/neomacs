@@ -1297,6 +1297,25 @@ fn hidden_partial_cursor_on_reused_row_matches_fresh() {
     );
 }
 
+/// Body-text row starts after the same scroll the partial-edit fixture uses.
+fn partial_edit_body_starts(text: &str) -> Vec<i64> {
+    let (mut eval, frame, buffer, window) = incr_editing_frame(text, 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    scroll_window_to(&mut eval, frame, window, buffer, 1, 21);
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    engine.layout_frame_rust(&mut eval, frame);
+    let mut starts: Vec<i64> = engine
+        .retained_window_matrices
+        .values()
+        .flat_map(|matrix| matrix.matrix.rows.iter())
+        .filter(|row| row.enabled && row.role == neomacs_display_protocol::GlyphRowRole::Text)
+        .map(|row| row.start_charpos as i64)
+        .collect();
+    starts.sort_unstable();
+    starts
+}
+
 /// Hidden point rows above or below a localized edit must retain canonical
 /// cursor facts while the edit plan actually reuses retained rows.
 #[test]
@@ -1314,8 +1333,32 @@ fn hidden_partial_edit_cursor_on_reused_rows_matches_fresh() {
     let _restore = Restore;
     set_edit_sync_mode_for_test(Some(EditSyncMode::Sync));
     set_prove_first_for_test(Some(true));
-    for dirty_line in [2, 9, 14] {
-        let (mut eval, frame, buffer, window) = incr_editing_frame(&"abc\n".repeat(80), 800, 240);
+    let text = "abc\n".repeat(80);
+    let starts = partial_edit_body_starts(&text);
+    let origin = *starts.first().expect("the 800x240 window has a body row");
+    let last = *starts.last().expect("the 800x240 window has a body row");
+    // `dirty_line` N inserts at the start of buffer line N+1 (`goto-char` N*4+1).
+    let last_in_window = (last - origin) / 4;
+    assert!(
+        last_in_window < 14,
+        "buffer line 15 is below this window: body_starts={starts:?} rows={}",
+        starts.len()
+    );
+    assert!(
+        last_in_window > 9,
+        "dirty_line 9 must stay inside the window, and dedup must keep it distinct \
+         from the last visible line: body_starts={starts:?}"
+    );
+    // In-window lines replay as a partial edit. Line 15 (dirty_line 14) is
+    // below the matrix, so the edit is a full layout and still matches fresh.
+    let mut in_window = vec![2, 9, last_in_window];
+    in_window.dedup();
+    let cases = in_window
+        .into_iter()
+        .map(|line| (line, 1))
+        .chain(std::iter::once((14, 0)));
+    for (dirty_line, edit_windows) in cases {
+        let (mut eval, frame, buffer, window) = incr_editing_frame(&text, 800, 240);
         realize_test_gui_frame(&mut eval, frame);
         eval.buffer_manager_mut()
             .current_buffer_mut()
@@ -1333,10 +1376,21 @@ fn hidden_partial_edit_cursor_on_reused_rows_matches_fresh() {
         engine.layout_frame_rust(&mut eval, frame);
         assert_eq!(
             engine.last_layout_stats().edit_windows,
-            1,
+            edit_windows,
             "dirty_line={dirty_line}"
         );
-        assert!(engine.last_layout_stats().reused_rows > 0);
+        if edit_windows == 1 {
+            assert!(
+                engine.last_layout_stats().reused_rows > 0,
+                "dirty_line={dirty_line}"
+            );
+        } else {
+            assert_eq!(
+                engine.last_layout_stats().full_windows,
+                1,
+                "an edit below the window is a full layout: dirty_line={dirty_line}"
+            );
+        }
         let actual = eval
             .frame_manager()
             .get(frame)
