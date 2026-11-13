@@ -1,12 +1,9 @@
 //! Cold case-table read/sync table (stage-4 W4/E12).
 //!
-//! The case-table authority stays in the core command layer
-//! (`commands/casetab_entries`): it binds the raw obarray legacy write, the
-//! green standard-table setter, the cached standard table and the tagged-heap
-//! identity (stage-3b R0/T5). The evaluator's per-operation search and string
-//! paths read the current canon/upcase tables and sync the current buffer's
-//! table through this one cold PC2 table, installed by core at
-//! `Context::new_inner` and `Context::from_dump`.
+//! The production adapter is `case_table_adapter` (one copy). This module is
+//! only the cold hook table: search, string, and sync paths call the installed
+//! hooks, and core publishes that table at `Context::new_inner` and
+//! `Context::from_dump`. The text engine stays in `neovm-text`.
 //!
 //! Frequency (E4 proof — every slot is read once per case-sensitive operation
 //! at a hoisted call site, never inside a per-char matcher loop):

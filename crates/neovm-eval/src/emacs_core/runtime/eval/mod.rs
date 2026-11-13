@@ -7403,6 +7403,7 @@ pub(crate) mod boot_vars;
 pub use boot_vars::xdisp::register_bootstrap_vars as register_xdisp_bootstrap_vars_for_test;
 pub mod buffer_kill;
 pub mod call_interactively;
+pub mod case_table_adapter;
 pub mod case_tables;
 pub mod display_query_hooks;
 pub mod font_shape;

@@ -4597,3 +4597,13 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	struct	struct
 crates/neovm-eval/src/emacs_core/runtime/owned_roots/mod.rs	fn	fn impl Context::owned_root_retainer
 crates/neovm-eval/src/emacs_core/runtime/owned_roots/mod.rs	fn	fn impl OwnedRootRetainer::retain
 crates/neovm-eval/src/emacs_core/runtime/owned_roots/mod.rs	struct	struct OwnedRootRetainer
+crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn builtin_current_case_table
+crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn builtin_set_case_table
+crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn builtin_set_standard_case_table
+crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn builtin_standard_case_table
+crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn case_table_override_for_current_buffer
+crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn current_case_canon_table
+crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn current_case_upcase_table
+crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn standard_case_table_for_admission
+crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn sync_current_buffer_case_table_state
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	mod	mod case_table_adapter

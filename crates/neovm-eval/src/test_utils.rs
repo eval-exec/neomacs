@@ -687,11 +687,11 @@ mod unit_runtime {
         CallInteractivelyHooks::new(s::call_interactively_resolve);
 
     static CASE_TABLES: CaseTableHooks = CaseTableHooks::new(
-        s::case_tables_canon,
-        s::case_tables_upcase,
-        s::case_tables_sync,
-        s::case_tables_standard,
-        s::case_tables_override_for_current_buffer,
+        crate::emacs_core::eval::case_table_adapter::current_case_canon_table,
+        crate::emacs_core::eval::case_table_adapter::current_case_upcase_table,
+        crate::emacs_core::eval::case_table_adapter::sync_current_buffer_case_table_state,
+        crate::emacs_core::eval::case_table_adapter::standard_case_table_for_admission,
+        crate::emacs_core::eval::case_table_adapter::case_table_override_for_current_buffer,
     );
 
     static BUFFER_KILL: BufferKillHooks = BufferKillHooks::new(s::buffer_kill_before);
