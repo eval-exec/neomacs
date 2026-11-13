@@ -710,3 +710,7 @@ mod emacs_core_runtime_eval_tests_watcher_redispatch_round2_runtime_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/misc/tests/misc_round2_runtime_test.rs"]
 mod emacs_core_lisp_native_misc_tests_misc_round2_runtime_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/subr/tests/info_round2_runtime_test.rs"]
+mod emacs_core_lisp_native_subr_tests_info_round2_runtime_test_rs;
