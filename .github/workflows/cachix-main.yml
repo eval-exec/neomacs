@@ -1,0 +1,77 @@
+name: publish Nix main cache
+
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Keep an expensive active build; coalesce pending requests for the same ref.
+concurrency:
+  group: cachix-main-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-main-closure:
+    name: publish Nix main closure (${{ matrix.system }})
+    if: >-
+      github.repository == 'eval-exec/neomacs' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    env:
+      NIX_SYSTEM: ${{ matrix.system }}
+    steps:
+      # Every native job builds the same immutable event commit. Manual runs
+      # on another branch are rejected by the job gate, not treated as main.
+      - name: Checkout the main snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Nix
+        uses: ./.github/actions/setup-nix
+
+      - name: Install Cachix without automatic pushing
+        uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: eval-exec
+          skipPush: true
+          useDaemon: false
+          skipAddingSubstituter: true
+
+      - name: Build only the main runtime package
+        id: nix-main
+        run: ./scripts/ci/build-main-cache.sh
+
+      # The write token first exists in this step, after the selected closure
+      # was built. No daemon/store scan, development roots, or permanent pins.
+      - name: Push only the main runtime closure
+        shell: bash
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          FULL_PATH: ${{ steps.nix-main.outputs.full-path }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$FULL_PATH" | cachix push eval-exec
+          {
+            printf '### Published Nix main snapshot\n\n'
+            printf -- '- Commit: %s\n' "$GITHUB_SHA"
+            printf -- '- Native system: %s\n' "$NIX_SYSTEM"
+            printf -- '- Runtime root: %s\n' "$FULL_PATH"
+            printf '\nPin this commit to select this published package. Unpinned cache entries may expire.\n'
+          } >> "$GITHUB_STEP_SUMMARY"

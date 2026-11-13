@@ -87,6 +87,8 @@ jobs:
             scripts/package-deb.sh \
             scripts/package-rpm.sh \
             scripts/test-linux-release-artifacts.sh \
+            scripts/ci/build-main-cache.sh \
+            scripts/test-main-cache.sh \
             scripts/ci/setup-linux.sh
           sh -n install.sh
           bash -n \
@@ -98,6 +100,8 @@ jobs:
             scripts/test-generate-release-notes.sh \
             scripts/test-info-manuals.sh \
             scripts/check-native-font-boundaries.sh \
+            scripts/ci/build-main-cache.sh \
+            scripts/test-main-cache.sh \
             scripts/lib/macos-macho.sh \
             scripts/vendor-macos-runtime.sh \
             scripts/test-macos-dependency-closure.sh
@@ -107,6 +111,9 @@ jobs:
 
       - name: Test release dispatch contract
         run: ./scripts/test-dispatch-release-event.sh
+
+      - name: Test main cache build boundary
+        run: ./scripts/test-main-cache.sh
 
       - name: Test release-note generation contract
         run: ./scripts/test-generate-release-notes.sh

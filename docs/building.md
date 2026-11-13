@@ -296,6 +296,26 @@ extra-trusted-public-keys = nix-wpe-webkit.cachix.org-1:ItCjHkz1Y5QcwqI9cTGNWHzc
 
 ### Build with Nix
 
+The [main-cache workflow](../.github/workflows/cachix-main.yml) is scheduled to
+start daily at 04:41 UTC and publishes the full `neomacs` runtime package to
+`eval-exec.cachix.org` after successful builds. Maintainers can also run it
+manually on `main`. It builds one fixed commit on
+`x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`. Each successful native
+publish job records its commit and store path in the run summary.
+
+For a prebuilt snapshot, use the full commit from a successful publish job for
+your platform:
+
+```bash
+nix profile install --accept-flake-config \
+  'github:eval-exec/neomacs/<published-commit>#neomacs'
+```
+
+The latest `main` commit may be newer than the daily build, and unpinned cache
+entries can expire. Nix builds from source when a required path is unavailable.
+Release-tag publication remains separate. This publisher uploads runtime
+closures, not development shells, checks, or every intermediate build path.
+
 **Option 1** — Trust the `nixConfig` in `flake.nix` (simplest):
 
 ```bash

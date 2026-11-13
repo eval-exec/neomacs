@@ -2,6 +2,16 @@
 
 Date: 2026-09-04
 
+> **Current policy (2026-11-13, #748):** This research note records the original
+> proposal. Its release-only restriction and recommendations for permanent
+> pins, minimal packages, and four Nix systems are superseded. The current
+> [release publisher](../../.github/workflows/cachix-release.yml) and separate
+> [daily/manual main publisher](../../.github/workflows/cachix-main.yml) each
+> upload only the full `neomacs` runtime closure, unpinned, on the three systems
+> advertised by `flake.nix`. Write tokens remain confined to the final explicit
+> upload step. See [building.md](../building.md#build-with-nix) for selecting a
+> published main commit; cache retention is not permanent.
+
 Scope: publish only the runtime closures of explicitly named Nix package outputs for an exact GitHub release tag. Development shells, checks, ordinary CI builds, dependency-only derivations, flake-input archives, and incidental store paths are deliberately out of scope.
 
 ## Recommendation
