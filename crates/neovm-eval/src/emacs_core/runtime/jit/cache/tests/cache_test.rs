@@ -189,6 +189,7 @@ fn retier_unlinks_the_fast_leaf_from_callers_spec_slots() {
 /// for good, as before.
 #[test]
 fn unprofitable_body_is_deferred_then_compiled_once_hot_enough() {
+    crate::test_utils::init_test_tracing();
     use crate::emacs_core::jit::{Plan, force_profit_defer_for_test, hot_threshold};
     if !super::super::compile::jit_profit_gate_on() {
         return; // NEOVM_JIT_PROFIT=off: nothing is ever unprofitable
@@ -196,15 +197,16 @@ fn unprofitable_body_is_deferred_then_compiled_once_hot_enough() {
     let mut ev =
         crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut crate::emacs_core::eval::Context;
-    // (lambda () (length "abc")): one builtin call, no arithmetic → the gate refuses it.
+    // (lambda () (eval 3)): `eval` stays outside the CBSym intrinsic policy,
+    // so this real builtin call, with no arithmetic, remains unprofitable.
     let body = || {
         nullary_fn(
             vec![
                 Op::Constant(0),
-                Op::CallBuiltinSym(neovm_value::intern::intern("length"), 1),
+                Op::CallBuiltinSym(neovm_value::intern::intern("eval"), 1),
                 Op::Return,
             ],
-            vec![Value::string("abc")],
+            vec![Value::fixnum(3)],
         )
     };
     // Factor 0: the veto — NotCompilable, remembered on the runtime.
@@ -241,9 +243,8 @@ fn unprofitable_body_is_deferred_then_compiled_once_hot_enough() {
     );
     assert_eq!(cache_entry_kind_for_test(id), "deferred");
     // The deferral runs out: the compile runs with the gate bypassed and
-    // the body is cached as compiled. (Its native run's builtin dispatch is
-    // not this test's claim — the minimal harness cannot serve `length`
-    // through the generic shim path — so the run's outcome is not asserted.)
+    // the body is cached as compiled. Native execution's result is separate
+    // from this cache state-machine claim.
     rt.set_heat_for_test(hot_threshold().saturating_mul(4));
     assert!(matches!(rt.dispatch_sized(3), Plan::Compiled));
     let _ = crate::emacs_core::jit::test_support::run_compiled(ctx, &f, Value::NIL, &[]);
@@ -263,6 +264,45 @@ fn unprofitable_body_is_deferred_then_compiled_once_hot_enough() {
         }
     }
     force_profit_defer_for_test(None);
+}
+
+/// H3a made the real `length` declaration available in the minimal harness.
+/// Its CBSym Tier-B call has been exempt from the profitability call count
+/// since R2; it must not masquerade as an unprofitable-body fixture.
+#[test]
+fn length_body_is_tier_b_profitable_and_not_call_heavy() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::jit::compile::{self, ProfitGateTestPolicy};
+
+    struct RestoreProfitGate(ProfitGateTestPolicy);
+    impl Drop for RestoreProfitGate {
+        fn drop(&mut self) {
+            compile::replace_profit_gate_for_test(self.0);
+        }
+    }
+
+    let ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
+    let _restore = RestoreProfitGate(compile::replace_profit_gate_for_test(
+        ProfitGateTestPolicy::Enforce,
+    ));
+    let f = nullary_fn(
+        vec![
+            Op::Constant(0),
+            Op::CallBuiltinSym(neovm_value::intern::intern("length"), 1),
+            Op::Return,
+        ],
+        vec![Value::string("abc")],
+    );
+    assert!(matches!(
+        compile::calls::named_builtin_call(&f.ops[1]).map(|call| call.kind),
+        Some(compile::SpecCalleeKind::CbsymTierB)
+    ));
+    assert!(!compile::body_is_call_heavy(&f.ops, &f.constants));
+    let leaf = compile::compile_bytecode_function_with(&f, Some(&ev.obarray))
+        .expect("the original length body passes the enforced profitability gate");
+    assert!(!leaf.profit_gate_bypassed);
+    assert!(!leaf.call_heavy);
 }
 
 /// A baseline leaf that inlined a bit-op records `logand` as an inline
