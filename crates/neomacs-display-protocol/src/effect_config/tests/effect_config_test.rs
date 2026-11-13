@@ -51,6 +51,39 @@ fn cursor_color_cycle_rate_round_trips_through_the_effect_registry() {
 }
 
 #[test]
+fn cursor_color_cycle_opt_in_survives_updates_and_reset_restores_opt_out() {
+    let defaults = VisualConfig::default();
+    assert!(!defaults.effects.cursor_color_cycle.enabled);
+    let enabled = defaults
+        .apply_effects(&[EffectOperation::set(
+            "cursor-color-cycle",
+            [("enabled", EffectValue::Bool(true))],
+        )])
+        .unwrap();
+    let updated = enabled
+        .apply_effects(&[EffectOperation::set(
+            "cursor-color-cycle",
+            [("fps", EffectValue::Integer(12))],
+        )])
+        .unwrap();
+    let restored: VisualConfig =
+        serde_json::from_value(serde_json::to_value(&updated).unwrap()).unwrap();
+    assert!(restored.effects.cursor_color_cycle.enabled);
+    assert_eq!(restored.effects.cursor_color_cycle.fps.get(), 12);
+    assert!(
+        restored
+            .effect_values("cursor-color-cycle")
+            .unwrap()
+            .contains(&("enabled".to_owned(), EffectValue::Bool(true)))
+    );
+    let reset = restored
+        .apply_effects(&[EffectOperation::reset("cursor-color-cycle")])
+        .unwrap();
+    assert!(!reset.effects.cursor_color_cycle.enabled);
+    assert_eq!(reset.effects.cursor_color_cycle.fps.get(), 24);
+}
+
+#[test]
 fn cursor_color_cycle_rejects_zero_rate_at_the_control_plane() {
     let error = EffectsConfig::default()
         .apply_effects(&[EffectOperation::set(
@@ -578,10 +611,8 @@ fn cursor_candle_flame_defaults() {
 #[test]
 fn cursor_color_cycle_defaults() {
     let c = CursorColorCycleConfig::default();
-    assert!(c.enabled);
-    // The rate is what makes default-on affordable: 24 Hz, not the display
-    // rate. Raising it re-creates the idle-present cost P6.1 removed. See
-    // `default_enabled_fields_match_product_defaults` for the full history.
+    assert!(!c.enabled);
+    // Explicit opt-in retains the 24 Hz cap rather than display-rate updates.
     assert_eq!(c.fps.get(), 24);
     assert_eq!(c.speed, 0.5);
     assert_eq!(c.saturation, 0.8);
@@ -2398,8 +2429,8 @@ fn all_opacity_defaults_are_in_zero_to_one() {
     }
 }
 
-/// The cursor color cycle is the one effect that ships enabled, and its
-/// history is why this assertion is worth reading before changing it.
+/// Decorative effects ship disabled. The cursor color cycle's history is
+/// why this assertion is worth reading before changing it.
 ///
 /// 1. It was default-on by accident: the Rust default said `true` while
 ///    `defcustom neomacs-cursor-color-cycle nil` held the real product
@@ -2415,19 +2446,18 @@ fn all_opacity_defaults_are_in_zero_to_one() {
 ///    compositor-only, and it is withdrawn while unfocused, blinked off,
 ///    or hollow. Measured on a headless two-frame idle session
 ///    (2026-08-12): 11.45 planned frames/s, inside the 24 Hz cap.
+/// 4. Issue #750 restores opt-in deliberately: even capped compositor-only
+///    animation creates standing demand in an otherwise idle focused editor.
+///    Users can still enable it explicitly at the same 24 Hz default rate.
 ///
-/// So default-on here is a decision, not a leaked default. Flipping it in
+/// So default-off here is a decision, not a leaked default. Flipping it in
 /// either direction is a product change: change this assertion deliberately
-/// or not at all, and if a Lisp defcustom is ever reintroduced, the default
-/// must live there rather than in both places.
+/// or not at all. The generated Custom option reads this Rust default;
+/// avoid adding a separate literal Lisp default that can drift from it.
 #[test]
 fn default_enabled_fields_match_product_defaults() {
     let ec = EffectsConfig::default();
-    assert!(
-        ec.cursor_color_cycle.enabled,
-        "the cursor color cycle is the deliberate default-on visual effect"
-    );
-    // Exhaustive check of every other config that has an `enabled` field.
+    // Exhaustive check of every decorative config that has an `enabled` field.
     let enabled_flags: Vec<bool> = vec![
         ec.accent_strip.enabled,
         ec.argyle_pattern.enabled,
@@ -2449,6 +2479,7 @@ fn default_enabled_fields_match_product_defaults() {
         ec.cursor_aurora_borealis.enabled,
         ec.cursor_bubble.enabled,
         ec.cursor_candle_flame.enabled,
+        ec.cursor_color_cycle.enabled,
         ec.cursor_comet.enabled,
         ec.cursor_compass.enabled,
         ec.cursor_compass_needle.enabled,
