@@ -295,6 +295,11 @@ mod emacs_core_lisp_print_tests_graph_closure_units_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/print/tests/graph_gnu.rs"]
 mod emacs_core_lisp_print_tests_graph_gnu_rs;
+// Issue #590: bounded-traversal pins (depth guard, print-circle labels on both
+// bookkeeping paths). New tests, not a re-home.
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/graph_guard_units.rs"]
+mod emacs_core_lisp_print_tests_graph_guard_units_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/print/tests/graph_level_units.rs"]
 mod emacs_core_lisp_print_tests_graph_level_units_rs;
