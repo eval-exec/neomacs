@@ -2217,6 +2217,9 @@ mod unit_runtime {
         Some(match name {
             "number-to-string" => crate::emacs_core::builtins::strings::NUMBER_TO_STRING_SUBR,
             "string-to-multibyte" => crate::emacs_core::builtins::strings::STRING_TO_MULTIBYTE_SUBR,
+            "base64-encode-string" => {
+                crate::emacs_core::builtins::strings::BASE64_ENCODE_STRING_SUBR
+            }
             "concat" => SubrSpec::new(
                 "concat",
                 NativeFn::ContextSlice(bind_concat),
@@ -2404,6 +2407,62 @@ mod unit_runtime {
             assert!(string.is_multibyte());
             assert_eq!(string.as_bytes(), expected_bytes);
         }
+    }
+
+    #[test]
+    fn unit_base64_encode_string_uses_canonical_registered_entry() {
+        use crate::emacs_core::builtins::strings::BASE64_ENCODE_STRING_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity};
+
+        let expected = BASE64_ENCODE_STRING_SUBR;
+        let bound = strings_family_subr("base64-encode-string").expect("unit base64 descriptor");
+        assert_eq!(expected.name(), "base64-encode-string");
+        assert_eq!(expected.arity(), SubrArity::new(1, Some(2)));
+        assert_eq!(bound.name(), expected.name());
+        assert_eq!(bound.arity(), expected.arity());
+        assert_eq!(bound.dispatch_kind(), expected.dispatch_kind());
+        assert!(bound.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(bound.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(bound.command_default(), expected.command_default());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(bound.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(bound_fn))) =
+            (expected.function(), bound.function())
+        else {
+            panic!("base64-encode-string retains ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(bound_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let id = neovm_value::intern::intern("base64-encode-string");
+        let actual = crate::emacs_core::eval::lookup_global_subr_entry(id)
+            .expect("registered unit base64-encode-string");
+        let Some(SubrFn::Many(actual_fn)) = actual.function else {
+            panic!("registered ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+        assert_eq!((actual.min_args, actual.max_args), (1, Some(2)));
+        assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+        assert!(actual.interactive_spec.is_none());
+        assert_eq!(
+            crate::emacs_core::subr::no_eval_policy(id),
+            expected.no_eval_policy()
+        );
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert!(
+            context
+                .obarray_view()
+                .get_property("base64-encode-string", "disabled")
+                .unwrap_or(Value::NIL)
+                .is_nil()
+        );
+        let result = actual_fn(&mut context, vec![Value::string("abc"), Value::T])
+            .expect("unit base64 body");
+        assert_eq!(crate::emacs_core::print::print_value(&result), r#""YWJj""#);
     }
 
     /// Symbol and closure subrs whose bodies live in this crate. The unit

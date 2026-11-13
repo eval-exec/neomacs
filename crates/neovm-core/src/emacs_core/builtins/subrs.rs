@@ -4749,13 +4749,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
 
     // -- Base64/hash --
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "base64-encode-string",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::fns::builtin_base64_encode_string(args)
-        }),
-        SubrArity::new(1, Some(2)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::strings::BASE64_ENCODE_STRING_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "base64-decode-string",
         NativeFn::ContextVec(|_ctx, args| {

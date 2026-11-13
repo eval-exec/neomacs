@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::eval::AllocationFailureContextExt;
+use crate::emacs_core::eval::{AllocationFailureContextExt, Context};
 use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 use malachite::base::num::arithmetic::traits::Abs;
 use malachite::base::num::basic::traits::Zero;
@@ -41,6 +41,21 @@ pub static NUMBER_TO_STRING_SUBR: SubrSpec = crate::emacs_core::subr::world_subr
 // ===========================================================================
 // String operations
 // ===========================================================================
+
+/// The production and unit registrars share this descriptor and entrypoint.
+#[doc(hidden)]
+pub static BASE64_ENCODE_STRING_SUBR: SubrSpec =
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "base64-encode-string",
+        NativeFn::ContextVec(base64_encode_string_entry),
+        SubrArity::new(1, Some(2)),
+    ));
+
+#[inline]
+fn base64_encode_string_entry(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    crate::emacs_core::fns::builtin_base64_encode_string(args)
+}
+
 // substring/concat cores live below the evaluator now (stage-3 C12):
 // `neovm_value::strings_core::{substring_impl, concat_impl}` in neovm-value. The
 // wrappers here keep the subr names, the argument shapes, and the
