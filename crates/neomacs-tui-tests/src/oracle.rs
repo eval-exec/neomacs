@@ -26,9 +26,44 @@
 //! command that builds it.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use sha2::{Digest, Sha256};
+
+/// The TUI canonical environment for an editor identity probe.
+///
+/// The directories live for the process: the pinned HOME and TMPDIR must
+/// still exist when the editor runs. The profile is the TUI one, so the
+/// probe sees the same removed variables (`LANGUAGE`, `LC_CTYPE`,
+/// `EMACSLOADPATH`) as the comparison that consumes the binary.
+fn tui_probe_environment() -> &'static neomacs_test_env::CanonicalEnvironment {
+    static ENVIRONMENT: std::sync::OnceLock<neomacs_test_env::CanonicalEnvironment> =
+        std::sync::OnceLock::new();
+    ENVIRONMENT.get_or_init(|| {
+        let home = neomacs_test_env::bounded_temp_base()
+            .join(format!("tui-oracle-home-{}", std::process::id()));
+        let tmp = neomacs_test_env::bounded_temp_base()
+            .join(format!("tui-oracle-tmp-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap_or_else(|error| {
+            panic!(
+                "create canonical TUI probe HOME {}: {error}",
+                home.display()
+            )
+        });
+        std::fs::create_dir_all(&tmp).unwrap_or_else(|error| {
+            panic!(
+                "create canonical TUI probe TMPDIR {}: {error}",
+                tmp.display()
+            )
+        });
+        neomacs_test_env::CanonicalEnvironment::new(
+            neomacs_test_env::CanonicalProfile::Tui,
+            home,
+            tmp,
+            super::workspace_root(),
+        )
+        .unwrap_or_else(|error| panic!("canonical TUI probe environment: {error}"))
+    })
+}
 
 /// The version `parity-reference.toml` pins and the mode-line oracles print.
 const PINNED_VERSION: &str = "31.1";
@@ -146,7 +181,8 @@ pub fn gnu_oracle_stamp() -> String {
 /// Refuse a GNU that attests by dump fingerprint but carries a non-canonical
 /// Lisp tree. Split out so the classification is unit-testable.
 fn assert_canonical_gnu_doc_tree(program: &Path) {
-    let output = Command::new(program)
+    let output = tui_probe_environment()
+        .command(program)
         .args(["--batch", "--quick", "--eval", DOC_SLOT_PROBE])
         .output()
         .unwrap_or_else(|error| {
@@ -227,7 +263,8 @@ fn check_oracle_identity(program: &Path, version: &str, doc_slot: &str) -> Resul
 ///
 /// When the binary cannot run or does not report a loaded pdump.
 pub fn assert_neomacs_dumped_runtime(program: &Path) {
-    let output = Command::new(program)
+    let output = tui_probe_environment()
+        .command(program)
         .args([
             "--batch",
             "--no-build-details",
