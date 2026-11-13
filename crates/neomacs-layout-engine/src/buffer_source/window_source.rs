@@ -214,6 +214,10 @@ pub(crate) struct BufferWindowSourceRequest {
     accessible_start: i64,
     accessible_end: i64,
     max_rows: usize,
+    /// Physical lines the viewport copy may include. Scroll margin stays on
+    /// `max_rows` (the frame font). A shorter face needs more lines to reach
+    /// the same pixel bottom, so the copy can be wider than `max_rows`.
+    body_read_rows: usize,
     read_budget: BufferWindowReadBudget,
     kind: WindowKind,
     scroll_policy: ScrollPolicy,
@@ -319,11 +323,21 @@ impl BufferWindowSourceRequest {
             accessible_start,
             accessible_end,
             max_rows,
+            body_read_rows: max_rows,
             read_budget: BufferWindowReadBudget::WindowRows,
             kind,
             scroll_policy,
             scroll_margin,
         }
+    }
+
+    /// Widen the viewport copy without changing the scroll-margin row count.
+    ///
+    /// `max_rows` stays the frame-font count. A shorter face needs more
+    /// physical lines to reach the same pixel bottom.
+    pub(crate) fn with_body_read_rows(mut self, rows: usize) -> Self {
+        self.body_read_rows = rows.max(self.max_rows);
+        self
     }
 
     /// Limit only copied bytes for a previously admitted sync walk. Keep the
@@ -527,7 +541,7 @@ impl BufferWindowSourceRequest {
                     ),
                     _ => (
                         text_start_byte as i64,
-                        self.max_rows + 2,
+                        self.body_read_rows + 2,
                         BufferWindowReadBoundary::WindowRows,
                     ),
                 };

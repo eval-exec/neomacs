@@ -583,7 +583,7 @@ impl BufferSourceOutputSetup {
             window_id,
             params.window_id as u64,
             geometry.display_text_row_base,
-            geometry.display_text_rows,
+            geometry.matrix_body_rows,
             geometry.bottom_chrome_rows,
             geometry.matrix_columns.get(),
             params.bounds,
@@ -922,7 +922,7 @@ impl BufferSourceOutputSetup {
             // same vscroll-shifted origin (`text_y - vscroll`) as the buffer walk.
             geometry.row_origin_y(),
             self.body_install_context.display_text_row_base(),
-            geometry.max_rows,
+            self.row_visibility_limit.max_rows,
         )
         .with_continuation_row_prelude(row_prelude_context, params);
         let loop_context = BufferSourceLoopRequestContext::new(
@@ -937,7 +937,7 @@ impl BufferSourceOutputSetup {
             self.row_visibility_limit,
             walk_setup.row_geometry_defaults,
             self.body_install_context.display_text_row_base(),
-            geometry.max_rows,
+            self.row_visibility_limit.max_rows,
             self.row_limit,
             // Frame background = default-face background pixel. Used to gate the
             // trailing `:extend` fill (GNU extend_face_to_end_of_line): a fill
@@ -1404,7 +1404,7 @@ impl BufferSourceOutputSetup {
                     return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
                 };
                 let row_limit = crate::incremental_layout::edit_sync::EditSyncRowLimit::new(
-                    geometry.mode_line_display_row,
+                    geometry.allocated_mode_line_row(),
                 );
                 let placed = if scroll.edit {
                     selected.install_edit(bottom, row_limit)

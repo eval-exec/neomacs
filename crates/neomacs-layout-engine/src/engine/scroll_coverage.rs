@@ -565,7 +565,29 @@ impl LayoutEngine {
                             // The same lower offset as ScrollSurface::clamp_offset;
                             // no glyph materialization is needed to schedule work.
                             let headroom = coverage.viewport.y + coverage.origin - bounds.y;
-                            headroom <= retained.key.char_height * 2.0
+                            // Two physical lines of one short face are fewer
+                            // pixels than `2 * char_height`. The tallest body
+                            // row is that face when the page is uniform, and
+                            // stays the frame font when any row is at least
+                            // that tall. A clipped fragment must not shrink it.
+                            let line = coverage
+                                .content
+                                .matrix
+                                .rows
+                                .iter()
+                                .filter(|row| {
+                                    row.enabled
+                                        && row.height_px > 0.0
+                                        && !RetainedWindowMatrix::is_chrome_role(row.role)
+                                })
+                                .map(|row| row.height_px)
+                                .fold(0.0_f32, f32::max);
+                            let unit = if line > 0.0 && line + 1.0 < retained.key.char_height {
+                                line
+                            } else {
+                                retained.key.char_height
+                            };
+                            headroom <= unit * 2.0
                         })
                     })
                     .unwrap_or(true)
