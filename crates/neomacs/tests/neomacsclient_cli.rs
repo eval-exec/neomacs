@@ -40,6 +40,18 @@ fn socket_tempdir(prefix: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     (system_dir, socket)
 }
 
+/// Windows has no `sun_path` limit. The TCP server-file test only needs the
+/// directory; the returned socket path is unused on this target.
+#[cfg(windows)]
+fn socket_tempdir(prefix: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .expect("tempdir");
+    let socket = dir.path().join("server");
+    (dir, socket)
+}
+
 #[test]
 fn neomacsclient_version_matches_emacs_version() {
     let output = Command::new(env!("CARGO_BIN_EXE_neomacsclient"))
