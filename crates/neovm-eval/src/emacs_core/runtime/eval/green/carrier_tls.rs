@@ -716,3 +716,47 @@ mod lifecycle_carrier_protocol_tests {
         assert_eq!(PROBE_RESETS.load(Ordering::SeqCst), 2);
     }
 }
+
+#[cfg(test)]
+mod perf_carrier_tls_tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use crate::emacs_core::eval::{Context, perf};
+
+    #[test]
+    fn absent_perf_reset_has_no_system_tracing_state_to_drop() {
+        let _context = Context::new(crate::test_utils::unit_runtime());
+        assert!(!perf::enabled());
+        perf::reset_carrier_tls();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn absent_perf_fingerprint_folds_zero_once() {
+        let _context = Context::new(crate::test_utils::unit_runtime());
+        let seed = neovm_value::tls_fingerprint::SEED;
+        let mut expected = seed;
+        neovm_value::tls_fingerprint::mix(&mut expected, 0);
+        assert_ne!(expected, seed, "the zero-state contribution must be folded");
+        let mut actual = seed;
+        perf::carrier_tls_fingerprint(&mut actual);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn absent_perf_record_still_refuses_and_timing_stays_disabled() {
+        let _context = Context::new(crate::test_utils::unit_runtime());
+        assert!(!perf::enabled());
+        assert_eq!(perf::time_op(perf::PerfOp::StringMatch, || 17), 17);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            perf::record_op(perf::PerfOp::StringMatch, std::time::Duration::ZERO);
+        }));
+        let payload = result.expect_err("the absent system counter writer must still refuse");
+        let text = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("<non-string panic>");
+        assert!(text.contains("ABSENT-LAYER system::perf.record"), "{text}");
+    }
+}

@@ -698,8 +698,13 @@ mod unit_runtime {
         DISPLAY_WINDOW,
     );
 
+    #[cfg(debug_assertions)]
+    const PERF_CARRIER_FINGERPRINT: Option<fn(&mut u64)> = Some(s::perf_fingerprint);
+    #[cfg(not(debug_assertions))]
+    const PERF_CARRIER_FINGERPRINT: Option<fn(&mut u64)> = None;
+
     static PERF: PerfHooks =
-        PerfHooks::new(s::perf_record, s::perf_reset, Some(s::perf_fingerprint));
+        PerfHooks::new(s::perf_record, s::perf_reset, PERF_CARRIER_FINGERPRINT);
 
     static WAIT: WaitServiceHooks = WaitServiceHooks {
         service_input_pending_with_timers: s::wait_service_input_pending_with_timers,

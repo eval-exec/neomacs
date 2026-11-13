@@ -801,12 +801,17 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER system::perf.record");
             }
 
+            /// HOTPATH_STATE belongs only to the unlinked system layer; no
+            /// tracing state exists here to replace. The record hook still refuses.
             pub(crate) fn perf_reset() {
-                absent_layer_panic("ABSENT-LAYER system::perf.reset");
+                absent_layer_unlinked("ABSENT-LAYER system::perf.reset");
             }
 
+            /// The system folds op_events and twelve default-zero counters.
+            /// Its Instant is excluded, so absent state contributes exactly zero.
+            #[cfg(debug_assertions)]
             pub(crate) fn perf_fingerprint(acc: &mut u64) {
-                absent_layer_panic("ABSENT-LAYER system::perf.fingerprint");
+                neovm_value::tls_fingerprint::mix(acc, 0);
             }
 
             pub(crate) fn wait_service_input_pending_with_timers(ctx: &mut Context) -> Result<(), Flow> {
