@@ -674,5 +674,10 @@ mod emacs_core_runtime_eval_tests_green_switch_class_b_test_rs;
 mod emacs_core_runtime_eval_keyboard_tests_display_service_class_b_test_rs;
 
 #[cfg(test)]
+#[cfg(feature = "jit")]
+#[path = "emacs_core/runtime/jit/compile/tests/load_containment_class_b_test.rs"]
+mod emacs_core_runtime_jit_compile_tests_load_containment_class_b_test_rs;
+
+#[cfg(test)]
 #[path = "emacs_core/runtime/bytecode/tests/vm_shared_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_shared_runtime_test_rs;
