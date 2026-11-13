@@ -574,4 +574,7 @@ well_known_table! {
 
     // emacs.c:3483: Fkill_emacs retains this original DEFSYM after unintern.
     KillEmacsHook = "kill-emacs-hook",
+
+    // emacs.c:3484: interactive shutdown calls the original function symbol.
+    RunHookQueryErrorWithTimeout = "run-hook-query-error-with-timeout",
 }

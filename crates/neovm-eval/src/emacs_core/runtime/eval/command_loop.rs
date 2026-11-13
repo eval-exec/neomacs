@@ -210,7 +210,7 @@ impl Context {
     ///
     /// A call that arrives while that hook is already running re-enters,
     /// as GNU `Fkill_emacs` does (`emacs.c:2954`, no recursion guard). The
-    /// hook list runs again through the native safe walker. Lisp call depth
+    /// hook runs again through the batch safe walker or interactive query helper. Lisp call depth
     /// stops the recursion at `max-lisp-eval-depth`. The nested shutdown
     /// error propagates, so this frame does not publish over the inner
     /// request. A call that arrives while Dying skips the hook and publishes
@@ -233,9 +233,7 @@ impl Context {
     /// Run the hook, then publish `request` unless a nested kill-emacs already
     /// published and returned [`Flow::shutdown`].
     fn finish_kill_emacs_hook(&mut self, request: ShutdownRequest) -> EvalResult {
-        if let Err(flow) =
-            self.safe_run_hook_if_bound(neovm_value::intern::WellKnown::KillEmacsHook.id())
-        {
+        if let Err(flow) = self.run_kill_emacs_hook() {
             // A matched throw or an error in safe-hook recovery aborts this
             // pre-shutdown call. A nested kill may already have crossed the
             // native shutdown boundary or published its own request; keep it.
@@ -245,6 +243,30 @@ impl Context {
             return Err(flow);
         }
         self.shutdown_after_hooks_are_dead(request)
+    }
+
+    /// GNU Fkill_emacs selects the native safe walker only in batch mode.
+    /// Interactive callers resolve subr.el's query helper by its Lisp symbol,
+    /// so function-cell overrides and the timeout/continuation policy survive.
+    fn run_kill_emacs_hook(&mut self) -> EvalResult {
+        let hook = neovm_value::intern::WellKnown::KillEmacsHook.id();
+        if !self
+            .special_variable_value_by_id(hook)
+            .unwrap_or(Value::NIL)
+            .is_truthy()
+        {
+            return Ok(Value::NIL);
+        }
+        if self.noninteractive {
+            self.safe_run_hook_if_bound(hook)
+        } else {
+            self.apply(
+                Value::from_sym_id(
+                    neovm_value::intern::WellKnown::RunHookQueryErrorWithTimeout.id(),
+                ),
+                vec![Value::from_sym_id(hook)],
+            )
+        }
     }
 
     /// GNU `shut_down_emacs`'s first two assignments (`emacs.c:3107-3110`).
