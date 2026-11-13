@@ -479,6 +479,17 @@ mod unit_runtime {
                             "{}: plan arity",
                             row.name
                         );
+                        if let Some(spec) = buffer_family_subr(row.name) {
+                            let arity = spec.arity();
+                            assert_eq!(
+                                (arity.min(), arity.max()),
+                                (upper_min, upper_max),
+                                "{}: buffer family arity",
+                                row.name
+                            );
+                            ctx.register_subr(spec);
+                            continue;
+                        }
                         ctx.register_subr(crate::emacs_core::subr::SubrSpec::new(
                             row.name,
                             crate::emacs_core::subr::NativeFn::ContextVec(function),
@@ -766,6 +777,112 @@ mod unit_runtime {
         &DISPLAY_SERVICE,
         &FILE_NOTIFY,
     );
+
+    /// Buffer subrs whose bodies live in `neovm-edit`. The unit runtime
+    /// binds the same entry shape production registers in `subrs.rs`.
+    fn buffer_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
+        use crate::emacs_core::builtins::goto_char_interactive_spec;
+        use crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec;
+        use crate::emacs_core::subr::{FixedMin1, FixedMin2, NativeFn, SubrArity, SubrSpec};
+        use neovm_edit::emacs_core::buffer::{
+            builtin_current_buffer_0, builtin_get_buffer, builtin_get_buffer_create,
+            builtin_get_file_buffer, builtin_goto_char_1, builtin_insert, builtin_insert_byte,
+            builtin_kill_all_local_variables, builtin_narrow_to_region_2, builtin_ntake,
+            builtin_point_max_0, builtin_point_min_0, builtin_set_buffer_1,
+        };
+        use neovm_value::error::EvalResult;
+        use neovm_value::value::Value;
+
+        fn bind_get_buffer_create(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_get_buffer_create(ctx, args)
+        }
+        fn bind_get_buffer(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_get_buffer(&mut ctx.edit.buffers, args)
+        }
+        fn bind_get_file_buffer(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_get_file_buffer(ctx, args)
+        }
+        fn bind_current_buffer(ctx: &mut Context) -> EvalResult {
+            builtin_current_buffer_0(&mut ctx.edit.buffers)
+        }
+        fn bind_set_buffer(ctx: &mut Context, arg: Value) -> EvalResult {
+            builtin_set_buffer_1(ctx, arg)
+        }
+        fn bind_point_min(ctx: &mut Context) -> EvalResult {
+            builtin_point_min_0(&mut ctx.edit.buffers)
+        }
+        fn bind_point_max(ctx: &mut Context) -> EvalResult {
+            builtin_point_max_0(&mut ctx.edit.buffers)
+        }
+        fn bind_goto_char(ctx: &mut Context, arg: Value) -> EvalResult {
+            builtin_goto_char_1(ctx, arg)
+        }
+        fn bind_insert(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_insert(ctx, args)
+        }
+        fn bind_insert_byte(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_insert_byte(ctx, args)
+        }
+        fn bind_kill_all_local_variables(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_kill_all_local_variables(ctx, args)
+        }
+        fn bind_narrow_to_region(ctx: &mut Context, start: Value, end: Value) -> EvalResult {
+            builtin_narrow_to_region_2(ctx, start, end)
+        }
+        fn bind_ntake(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_ntake(args)
+        }
+
+        Some(match name {
+            "get-buffer-create" => SubrSpec::new(
+                "get-buffer-create",
+                NativeFn::ContextVec(bind_get_buffer_create),
+                SubrArity::new(1, Some(2)),
+            ),
+            "get-buffer" => SubrSpec::new(
+                "get-buffer",
+                NativeFn::ContextVec(bind_get_buffer),
+                SubrArity::new(1, Some(1)),
+            ),
+            "get-file-buffer" => SubrSpec::new(
+                "get-file-buffer",
+                NativeFn::ContextVec(bind_get_file_buffer),
+                SubrArity::new(1, Some(1)),
+            ),
+            "current-buffer" => SubrSpec::fixed0("current-buffer", bind_current_buffer),
+            "set-buffer" => SubrSpec::fixed1("set-buffer", bind_set_buffer, FixedMin1::One),
+            "point-min" => SubrSpec::fixed0("point-min", bind_point_min),
+            "point-max" => SubrSpec::fixed0("point-max", bind_point_max),
+            "goto-char" => SubrSpec::fixed1("goto-char", bind_goto_char, FixedMin1::One)
+                .interactive(BuiltinInteractiveSpec::Form(goto_char_interactive_spec)),
+            "insert" => SubrSpec::new(
+                "insert",
+                NativeFn::ContextVec(bind_insert),
+                SubrArity::new(0, None),
+            ),
+            "insert-byte" => SubrSpec::new(
+                "insert-byte",
+                NativeFn::ContextVec(bind_insert_byte),
+                SubrArity::new(2, Some(3)),
+            ),
+            "kill-all-local-variables" => SubrSpec::new(
+                "kill-all-local-variables",
+                NativeFn::ContextVec(bind_kill_all_local_variables),
+                SubrArity::new(0, Some(1)),
+            )
+            .requires_eval_state(),
+            "narrow-to-region" => {
+                SubrSpec::fixed2("narrow-to-region", bind_narrow_to_region, FixedMin2::Two)
+                    .interactive(BuiltinInteractiveSpec::String("r"))
+            }
+            "ntake" => SubrSpec::new(
+                "ntake",
+                NativeFn::ContextVec(bind_ntake),
+                SubrArity::new(2, Some(2)),
+            ),
+            _ => return None,
+        })
+    }
 
     /// The one cfg(test) unit runtime (H5a). The proof is minted only by the
     /// production publication entry, after the full set is installed, and
