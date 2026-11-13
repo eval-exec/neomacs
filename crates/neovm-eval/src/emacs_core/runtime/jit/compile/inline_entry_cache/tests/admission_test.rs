@@ -99,6 +99,7 @@ fn physical(body: &FusedBody, osr: Option<usize>) -> Vec<bool> {
 
 #[test]
 fn inline_entry_cache_rejects_context_opaque_and_allocation_effects_in_the_loop() {
+    let _harness = crate::test_utils::unit_harness();
     let _knobs = Knobs::enter();
     for effect in [
         vec![Op::Constant(0), Op::VarSet(2)],
@@ -111,6 +112,7 @@ fn inline_entry_cache_rejects_context_opaque_and_allocation_effects_in_the_loop(
 
 #[test]
 fn inline_entry_cache_rejects_float_and_generic_arithmetic_lowerings() {
+    let _harness = crate::test_utils::unit_harness();
     let _knobs = Knobs::enter();
     let mut body = constant_loop(vec![]);
     assert_eq!(candidates(&body, None), vec![true]);
@@ -127,6 +129,7 @@ fn inline_entry_cache_rejects_float_and_generic_arithmetic_lowerings() {
 
 #[test]
 fn inline_entry_cache_requires_independent_constant_identity_proof() {
+    let _harness = crate::test_utils::unit_harness();
     let _knobs = Knobs::enter();
     let mut body = constant_loop(vec![]);
     assert_eq!(candidates(&body, None), vec![true]);
@@ -152,6 +155,7 @@ fn inline_entry_cache_requires_independent_constant_identity_proof() {
 
 #[test]
 fn inline_entry_cache_allows_preloop_closure_maker_but_retains_fresh_identity() {
+    let _harness = crate::test_utils::unit_harness();
     let _knobs = Knobs::enter();
     let body = fuse(
         vec![
@@ -187,6 +191,7 @@ fn inline_entry_cache_allows_preloop_closure_maker_but_retains_fresh_identity() 
 
 #[test]
 fn inline_entry_physical_admission_rejects_effectful_preludes_but_keeps_loop_flags() {
+    let _harness = crate::test_utils::unit_harness();
     let _knobs = Knobs::enter();
     for prefix in [
         vec![Op::Constant(0), Op::VarSet(2)],
@@ -213,6 +218,7 @@ fn inline_entry_physical_admission_rejects_effectful_preludes_but_keeps_loop_fla
 
 #[test]
 fn inline_entry_physical_admission_uses_the_actual_osr_entry_reachability() {
+    let _harness = crate::test_utils::unit_harness();
     let _knobs = Knobs::enter();
     let body = constant_loop_with_prefix(vec![Op::Constant(0), Op::VarSet(2)], vec![]);
     let header = body
@@ -227,6 +233,7 @@ fn inline_entry_physical_admission_uses_the_actual_osr_entry_reachability() {
 
 #[test]
 fn inline_entry_physical_admission_does_not_trust_snapshot_held_callees() {
+    let _harness = crate::test_utils::unit_harness();
     let _knobs = Knobs::enter();
     let body = fuse(
         vec![
@@ -256,6 +263,7 @@ fn inline_entry_physical_admission_does_not_trust_snapshot_held_callees() {
 
 #[test]
 fn inline_entry_physical_admission_refuses_nonconstant_nested_and_forced_regions() {
+    let _harness = crate::test_utils::unit_harness();
     let _knobs = Knobs::enter();
     let forward = fuse(
         vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],

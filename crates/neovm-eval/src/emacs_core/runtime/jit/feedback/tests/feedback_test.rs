@@ -50,6 +50,7 @@ fn a_symbol_site_is_monomorphic_until_a_second_symbol() {
 #[cfg(feature = "jit")]
 #[test]
 fn instances_of_one_source_are_one_target_and_sources_go_poly_then_mega() {
+    let _harness = crate::test_utils::unit_harness();
     let s = site();
     let f1 = Value::make_bytecode(source(1));
     // A `make-closure` instance shares its prototype's runtime.
@@ -81,6 +82,7 @@ fn instances_of_one_source_are_one_target_and_sources_go_poly_then_mega() {
 
 #[test]
 fn mixing_symbols_sources_and_other_callees_is_megamorphic() {
+    let _harness = crate::test_utils::unit_harness();
     let f = Value::make_bytecode(source(1));
     let sym = Value::symbol("feedback-test-mix");
     for (first, second) in [(f, sym), (sym, f), (f, Value::make_int(3))] {
@@ -102,6 +104,7 @@ fn mixing_symbols_sources_and_other_callees_is_megamorphic() {
 #[cfg(feature = "jit")]
 #[test]
 fn a_site_holds_its_sources_weakly_and_releases_them() {
+    let _harness = crate::test_utils::unit_harness();
     let rt = crate::emacs_core::jit::Runtime::new();
     let state = rt.share_state();
     assert_eq!(Arc::weak_count(&state), 0);
@@ -157,6 +160,7 @@ fn transitions_after_the_window_count_as_late() {
 #[cfg(feature = "jit")]
 #[test]
 fn the_table_classifies_call_sites_by_their_callee() {
+    let _harness = crate::test_utils::unit_harness();
     let constants: Vec<Value> = vec![
         Value::symbol("feedback-test-named"),
         Value::from_sym_id(intern("apply")),

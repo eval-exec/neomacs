@@ -94,6 +94,7 @@ pub(crate) fn fboundp_manifest() -> Result<(), String> {
 
 #[test]
 fn nmjit_n4_native_fboundp_matches_gnu_plain_and_projected() {
+    let _harness = crate::test_utils::unit_harness();
     fboundp_manifest().unwrap();
 }
 

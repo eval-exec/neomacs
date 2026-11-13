@@ -2592,6 +2592,7 @@ fn active_code_view_addresses_the_functions_own_ops_and_constants() {
 
 #[test]
 fn interpreter_function_caches_immutable_bytecode_code() {
+    let _harness = crate::test_utils::unit_harness();
     let value = Value::make_bytecode(ByteCodeFunction::new(LambdaParams::simple(vec![])));
     let code = value
         .get_bytecode_data()

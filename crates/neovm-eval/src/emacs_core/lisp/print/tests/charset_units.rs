@@ -3,6 +3,7 @@ use super::super::*;
 
 #[test]
 fn charset_policy_pruning_preserves_interval_boundaries() {
+    let _harness = crate::test_utils::unit_harness();
     let foo = Value::symbol("foo");
     let bar = Value::symbol("bar");
     let text = Value::string_with_text_properties(

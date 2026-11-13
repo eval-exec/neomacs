@@ -427,6 +427,7 @@ fn tiny_function() -> Value {
 /// field's own bit pattern, the same for every function sharing the source.
 #[test]
 fn the_runtime_word_is_the_field_and_the_constant_base_is_the_pool() {
+    let _harness = crate::test_utils::unit_harness();
     let f = tiny_function();
     crate::emacs_core::eval::push_scratch_gc_root(f);
     let g = tiny_function();
@@ -455,6 +456,7 @@ fn the_runtime_word_is_the_field_and_the_constant_base_is_the_pool() {
 
 #[test]
 fn heap_words_are_where_compiled_code_reads_them() {
+    let _harness = crate::test_utils::unit_harness();
     let v = Value::make_float(2.5);
     let object = (v.bits() & !neovm_value::tagged::value::TAG_MASK) as *const u8;
     // SAFETY: a live float object; its value word is at FLOAT_VALUE_OFFSET.

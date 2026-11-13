@@ -94,6 +94,7 @@ pub(super) fn compile(
 
 #[test]
 fn opt_profit_t1_keeps_legacy_mir_and_retier_selects_opt() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = count_loop(0);
     assert_eq!(
@@ -108,6 +109,7 @@ fn opt_profit_t1_keeps_legacy_mir_and_retier_selects_opt() {
 
 #[test]
 fn opt_profit_selected_retier_matches_the_interpreter() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = count_loop(0);
     let leaf = compile(&f, CompileTier::Upgrade(T2Upgrade::Retier));
@@ -126,6 +128,7 @@ fn opt_profit_selected_retier_matches_the_interpreter() {
 
 #[test]
 fn opt_profit_loops_do_not_exclude_float_feedback() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = count_loop(0);
     f.jit_runtime().widen_numeric(
@@ -141,6 +144,7 @@ fn opt_profit_loops_do_not_exclude_float_feedback() {
 
 #[test]
 fn opt_profit_rejected_helper_is_clif_identical_to_legacy() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = function(vec![Op::StackRef(0), Op::Add1, Op::Return], Vec::new(), 1);
     let tier = CompileTier::Upgrade(T2Upgrade::Retier);
@@ -163,6 +167,7 @@ fn opt_profit_rejected_helper_is_clif_identical_to_legacy() {
 
 #[test]
 fn opt_profit_refused_ssa_returns_to_legacy_mir() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     // This is a qualifying loop, but the existing 1000-op opt construction
     // budget refuses it. Legacy MIR still supports this source shape.
@@ -175,6 +180,7 @@ fn opt_profit_refused_ssa_returns_to_legacy_mir() {
 
 #[test]
 fn opt_profit_legacy_ignores_the_profitability_knob_in_generated_clif() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     force_opt_for_test(Some(OptMode::Legacy), Some(OptAdmit::ALL));
     let f = count_loop(0);
@@ -198,6 +204,7 @@ fn opt_profit_legacy_ignores_the_profitability_knob_in_generated_clif() {
 
 #[test]
 fn opt_profit_existing_reopt_ban_still_prevents_opt_emission() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = count_loop(0);
     f.jit_runtime()
@@ -210,6 +217,7 @@ fn opt_profit_existing_reopt_ban_still_prevents_opt_emission() {
 
 #[test]
 fn opt_profit_osr_cache_matches_interpreter_and_legacy_entry_guards() {
+    let _harness = crate::test_utils::unit_harness();
     use super::super::{Context, NativeRun, Value, Vm};
     use crate::emacs_core::jit::cache;
 

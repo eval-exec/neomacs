@@ -1161,6 +1161,21 @@ pub(crate) use unit_runtime::{
     terminal_delete_noelisp_slot_is_absent, terminal_live_ids_slot_is_absent,
 };
 
+/// Enter an explicitly context-free evaluator unit fixture.
+///
+/// Arm the existing per-thread fallback heap permission and publish the unit
+/// lifecycle/input hook sets. Both initializers are idempotent; publication
+/// is cached in `unit_runtime`'s `OnceLock`. This evaluates no Lisp and does
+/// not allocate a heap until the fixture needs one. The returned proof records
+/// permanent process publication, so dropping it does not undo initialization.
+/// Keep this entry under `cfg(test)`: core's `test-support` dependency build
+/// must retain its production hook set, and other consumers remain unarmed.
+#[cfg(test)]
+pub(crate) fn unit_harness() -> crate::emacs_core::eval::hooks_proof::EvalHooksInstalled {
+    init_test_tracing();
+    unit_runtime::unit_runtime()
+}
+
 /// Drift gate for the H3/H3b snapshots (peer r2 (d)): the checked-in TSVs,
 /// the generated registration source and the compiled tables must agree row
 /// for row. Same parser as `cargo xtask upper-snapshots`.

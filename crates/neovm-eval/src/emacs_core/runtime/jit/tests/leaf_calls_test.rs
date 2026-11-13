@@ -502,6 +502,7 @@ fn leaf_site_signal_edge_keeps_the_residual_alive() {
 /// Each compiled opcode leaf site counts in the exit census.
 #[test]
 fn opcode_leaf_sites_are_counted() {
+    let _harness = crate::test_utils::unit_harness();
     let before = LEAF_STATS[LeafId::Elt.index()]
         .opcode_sites
         .load(Ordering::Relaxed);

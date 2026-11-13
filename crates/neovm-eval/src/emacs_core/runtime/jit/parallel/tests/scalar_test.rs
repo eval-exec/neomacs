@@ -63,6 +63,7 @@ fn samples() -> [ImmediateResult; 6] {
 
 #[test]
 fn nmjit_n4_scalar_constant_returns_in_resident_home() {
+    let _harness = crate::test_utils::unit_harness();
     for expected in samples() {
         with_scalar(
             ScalarProgram::Constant(expected),
@@ -78,6 +79,7 @@ fn nmjit_n4_scalar_constant_returns_in_resident_home() {
 
 #[test]
 fn nmjit_n4_scalar_argument_returns_in_resident_home() {
+    let _harness = crate::test_utils::unit_harness();
     with_scalar(
         ScalarProgram::Argument,
         |code, admission, run, destination| {
@@ -92,6 +94,7 @@ fn nmjit_n4_scalar_argument_returns_in_resident_home() {
 
 #[test]
 fn nmjit_n4_scalar_stale_home_refuses_before_native_entry() {
+    let _harness = crate::test_utils::unit_harness();
     with_scalar(
         ScalarProgram::Constant(ImmediateResult::True),
         |code, admission, run, destination| {
@@ -114,6 +117,7 @@ fn nmjit_n4_scalar_stale_home_refuses_before_native_entry() {
 
 #[test]
 fn nmjit_n4_scalar_code_uses_fresh_activations() {
+    let _harness = crate::test_utils::unit_harness();
     with_scalar(
         ScalarProgram::Argument,
         |code, admission, run, destination| {
@@ -157,6 +161,7 @@ fn nmjit_n4_scalar_status_decode_is_total() {
 
 #[test]
 fn nmjit_n4_scalar_compile_drop_without_entry() {
+    let _harness = crate::test_utils::unit_harness();
     // Code prepared with the real exclusive witness, never entered, then freed
     // only after the fixture returns its collector/keeper and finishes the era.
     with_scalar(
@@ -236,6 +241,7 @@ fn assert_slot_probe(index: usize) {
 
 #[test]
 fn nmjit_n4_native_descriptor_first_and_chunk_boundary() {
+    let _harness = crate::test_utils::unit_harness();
     // Use the backing's own chunk-size definition, then compare with the
     // actual immutable table rather than assuming the fixture's chunk count.
     let chunk = neovm_value::symbol::OBARRAY_CHUNK_SLOTS;
@@ -246,6 +252,7 @@ fn nmjit_n4_native_descriptor_first_and_chunk_boundary() {
 
 #[test]
 fn nmjit_n4_native_descriptor_large_slot_is_a_total_miss() {
+    let _harness = crate::test_utils::unit_harness();
     for index in [usize::MAX, usize::MAX - 1, usize::MAX / 2] {
         assert_slot_probe(index);
     }

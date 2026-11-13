@@ -378,6 +378,7 @@ fn record_numeric_reports_change() {
 /// classifier share.
 #[test]
 fn numeric_feedback_of_operands_classifies() {
+    let _harness = crate::test_utils::unit_harness();
     use neovm_value::value::Value;
     let fix = Value::make_int(3);
     let flo = Value::make_float(1.5);

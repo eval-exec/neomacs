@@ -3,6 +3,7 @@ use neovm_value::intern::intern;
 
 #[test]
 fn p6_typed_slot_decoders_reject_invalid_outer_values() {
+    let _harness = crate::test_utils::unit_harness();
     assert!(matches!(
         FunctionParams::try_from(Value::vector(vec![])),
         Err(BytecodeSlotError::Arglist(_))
@@ -73,6 +74,7 @@ fn p6_typed_dynamic_nil_keeps_zero_argument_optimization_shape() {
 
 #[test]
 fn p6_typed_dynamic_formals_validate_only_when_walked() {
+    let _harness = crate::test_utils::unit_harness();
     let raw = Value::list(vec![Value::fixnum(1)]);
     let FunctionParams::Dynamic(params) = FunctionParams::try_from(raw).unwrap() else {
         panic!("cons slot remains dynamic");
@@ -100,6 +102,7 @@ fn p6_typed_dynamic_formals_validate_only_when_walked() {
 
 #[test]
 fn p6_typed_dynamic_formals_check_markers_and_accept_multiple_rest_names() {
+    let _harness = crate::test_utils::unit_harness();
     for (values, marker_order) in [
         (
             vec![Value::symbol("&optional"), Value::symbol("&optional")],
@@ -145,6 +148,7 @@ fn p6_typed_dynamic_formals_check_markers_and_accept_multiple_rest_names() {
 
 #[test]
 fn p6_typed_dynamic_formals_accept_nil_as_a_symbol() {
+    let _harness = crate::test_utils::unit_harness();
     let FunctionParams::Dynamic(params) =
         FunctionParams::try_from(Value::list(vec![Value::NIL])).unwrap()
     else {
@@ -158,6 +162,7 @@ fn p6_typed_dynamic_formals_accept_nil_as_a_symbol() {
 
 #[test]
 fn p6_typed_constants_view_preserves_original_objects() {
+    let _harness = crate::test_utils::unit_harness();
     let list = Value::list(vec![Value::symbol("hash-table"), Value::fixnum(9)]);
     let raw = Value::vector(vec![list]);
     let constants = ConstantsVector::try_from(raw).unwrap();

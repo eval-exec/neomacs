@@ -117,6 +117,7 @@ fn switch_sites(func: &ir::Func) -> HashSet<ir::Block> {
 
 #[test]
 fn opt_switch_hoist_schedules_entry_and_every_poll_but_declines_reentry() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = SwitchSettings::enter();
     let f = source();
     let mut ir = plan(&f);
@@ -250,6 +251,7 @@ fn opt_switch_hoist_osr_stale_entry_checks_the_interpreter_stack() {
 
 #[test]
 fn opt_switch_hoist_off_and_inline_switch_off_preserve_clif() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = SwitchSettings::enter();
     let f = source();
     let ir = plan(&f);
@@ -379,6 +381,7 @@ fn opt_switch_hoist_symbols_with_pos_miss_still_uses_lookup() {
 
 #[test]
 fn opt_switch_hoist_covers_both_sibling_backedge_polls() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = SwitchSettings::enter();
     let mut f = source();
     f.ops[4] = Op::GotoIfNil(22);

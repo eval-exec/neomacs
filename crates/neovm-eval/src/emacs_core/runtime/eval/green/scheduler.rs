@@ -4499,6 +4499,7 @@ mod tests {
 
     #[test]
     fn ended_owner_continuation_exit_notifies_registered_native_source() {
+        let _harness = crate::test_utils::unit_harness();
         use crate::host_effect::wake::{ControlDestination, ControlNudge, ControlWakeOutcome};
         let worker = ThreadKey::Worker(NonZeroU64::MIN);
         let manager = crate::emacs_core::eval::data::process_state::ProcessManager::new();
@@ -5247,6 +5248,7 @@ mod tests {
 
     #[test]
     fn pending_native_owner_exit_publishes_readiness_before_native_reacquire() {
+        let _harness = crate::test_utils::unit_harness();
         use crate::host_effect::wake::{ControlDestination, ControlNudge, ControlWakeOutcome};
         let worker = ThreadKey::Worker(NonZeroU64::MIN);
         for original in [Wait::Runnable, Wait::Join(worker)] {

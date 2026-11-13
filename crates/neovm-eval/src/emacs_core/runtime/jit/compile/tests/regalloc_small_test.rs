@@ -75,6 +75,7 @@ fn regalloc_small_knob_parsing() {
 
 #[test]
 fn regalloc_small_selection_covers_baseline_and_mir() {
+    let _harness = crate::test_utils::unit_harness();
     let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );

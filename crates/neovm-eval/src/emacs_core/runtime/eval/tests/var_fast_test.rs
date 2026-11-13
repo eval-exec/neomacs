@@ -1129,6 +1129,7 @@ fn bind_once(var: &str, value: Value, cached: bool) -> (bool, String, String, St
 /// and it refuses every other shape without pushing or storing anything.
 #[test]
 fn bind_tier_pushes_the_general_paths_entry() {
+    let _harness = crate::test_utils::unit_harness();
     let taken: &[(&str, Value)] = &[
         ("vft-loc", Value::make_int(200)),
         ("vft-locd", Value::make_int(200)),

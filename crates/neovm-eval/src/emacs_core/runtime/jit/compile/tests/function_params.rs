@@ -35,6 +35,7 @@ fn jit_preserves_dynamic_nil_as_a_zero_argument_function() {
 
 #[test]
 fn jit_declines_dynamic_named_binding_even_with_lexical_metadata() {
+    let _harness = crate::test_utils::unit_harness();
     let arglist = Value::cons(
         Value::from_sym_id(neovm_value::intern::intern("jit-dynamic-parameter")),
         Value::NIL,

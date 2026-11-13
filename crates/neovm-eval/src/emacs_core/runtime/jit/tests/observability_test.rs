@@ -150,6 +150,7 @@ fn jit_obs_force_deopt_counts_every_call() {
 /// rerun, not as a precise deopt.
 #[test]
 fn jit_obs_mir_rerun_deopt_counted() {
+    let _harness = crate::test_utils::unit_harness();
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     let ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];

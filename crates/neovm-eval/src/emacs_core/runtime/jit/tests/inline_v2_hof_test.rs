@@ -9,6 +9,7 @@ use crate::emacs_core::jit::compile::{self, Inline2Mode};
 use neovm_value::value::LambdaParams;
 
 fn lexical(required: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
+    let _harness = crate::test_utils::unit_harness();
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: (0..required)
             .map(|i| neovm_value::intern::intern(&format!("v2-hof-arg-{i}")))

@@ -799,6 +799,7 @@ fn throw_if() -> ByteCodeFunction {
 /// take its body, on the leaf it produced (`mir=` on `[neovm-jit-final-leaf]`).
 #[test]
 fn jit_pipeline_leaf_records_its_mir_verdict() {
+    let _harness = crate::test_utils::unit_harness();
     let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
@@ -842,6 +843,7 @@ fn jit_pipeline_leaf_records_its_mir_verdict() {
 /// With every report knob off no verdict is recorded at all.
 #[test]
 fn jit_pipeline_no_mir_verdict_without_a_report_knob() {
+    let _harness = crate::test_utils::unit_harness();
     force_deopt_for_test(false);
     stats::force_observe_for_test(stats::ObserveOverride::default());
     for f in [add1(), optional_add1(), throw_if()] {

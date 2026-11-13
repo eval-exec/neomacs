@@ -89,10 +89,12 @@ fn assert_store_semantic(store: Op) {
 
 #[test]
 fn setcar_chain_barriers_and_wrong_cons_errors_do_not_retire_speculation() {
+    let _harness = crate::test_utils::unit_harness();
     assert_store_semantic(Op::Setcar);
 }
 
 #[test]
 fn setcdr_chain_barriers_and_wrong_cons_errors_do_not_retire_speculation() {
+    let _harness = crate::test_utils::unit_harness();
     assert_store_semantic(Op::Setcdr);
 }

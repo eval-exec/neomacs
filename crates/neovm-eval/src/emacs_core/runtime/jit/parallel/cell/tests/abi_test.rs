@@ -57,6 +57,7 @@ refused_entry!(malformed, u32::MAX);
 
 #[test]
 fn nmjit_n4_cell_abi_roots_after_lookup_returns() {
+    let _harness = crate::test_utils::unit_harness();
     for backing in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
@@ -79,6 +80,7 @@ fn nmjit_n4_cell_abi_roots_after_lookup_returns() {
 
 #[test]
 fn nmjit_n4_cell_abi_refusal_leaves_previous_home_unchanged() {
+    let _harness = crate::test_utils::unit_harness();
     let entries: [(ParallelEntry, ParallelEntryError); 4] = [
         (absent, ParallelEntryError::NoSlotBacking),
         (wrong_kind, ParallelEntryError::UnexpectedEntryKind),
@@ -109,6 +111,7 @@ fn nmjit_n4_cell_abi_refusal_leaves_previous_home_unchanged() {
 
 #[test]
 fn nmjit_n4_fboundp_abi_matches_gnu_after_function_writes() {
+    let _harness = crate::test_utils::unit_harness();
     use super::super::fboundp_tests::{assert_empty, assert_transitions};
     for backing in [
         PlainSymbolBacking::Unprojected,
@@ -161,6 +164,7 @@ fn nmjit_n4_fboundp_abi_matches_gnu_after_function_writes() {
 
 #[test]
 fn nmjit_n4_named_abi_roots_old_selection_after_lookup_returns() {
+    let _harness = crate::test_utils::unit_harness();
     for backing in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
@@ -191,6 +195,7 @@ fn nmjit_n4_named_abi_roots_old_selection_after_lookup_returns() {
 
 #[test]
 fn nmjit_n4_named_abi_refusals_preserve_activation_and_home() {
+    let _harness = crate::test_utils::unit_harness();
     with_test_prepared_cell_execution(
         PlainSymbolBacking::Unprojected,
         ExecutionTestSeed::UnsupportedFunction,

@@ -918,7 +918,7 @@ pub(crate) fn install_lifecycle_hooks(
 fn lifecycle_hooks() -> &'static LifecycleHooks {
     LIFECYCLE_HOOKS
         .get()
-        .expect("lifecycle hooks install at Context construction")
+        .expect("lifecycle hooks install at Context construction; a test tree must arm it: test_utils::init_test_tracing / unit_harness at fixture entry")
 }
 
 /// Clear the dynamic-module carrier thread-local state on a carrier park.

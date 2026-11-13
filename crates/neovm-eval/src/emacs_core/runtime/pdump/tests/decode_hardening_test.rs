@@ -185,6 +185,7 @@ fn pdump_preserves_typed_enum_decode_sources() {
 
 #[test]
 fn pdump_localized_rebuild_preserves_validated_symbol_flags() {
+    let _harness = crate::test_utils::unit_harness();
     use neovm_value::symbol::{SymbolInterned, SymbolRedirect, SymbolTrappedWrite};
     let _symbols = SymbolRemap::new("pdump-localized-validated-flags");
     for code in u8::MIN..=u8::MAX {

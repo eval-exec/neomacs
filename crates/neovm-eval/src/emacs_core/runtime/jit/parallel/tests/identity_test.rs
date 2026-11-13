@@ -171,10 +171,12 @@ pub(crate) fn named_manifest() -> Result<(), String> {
 }
 #[test]
 fn nmjit_n4_native_named_guard_roots_old_call_and_reselects() {
+    let _harness = crate::test_utils::unit_harness();
     named_manifest().unwrap();
 }
 #[test]
 fn nmjit_n4_native_named_guard_refuses_unsupported_definition() {
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(oracle()[7], "invalid-function");
     with_named(
         PlainSymbolBacking::Unprojected,
@@ -205,6 +207,7 @@ fn nmjit_n4_native_named_guard_refuses_unsupported_definition() {
 }
 #[test]
 fn nmjit_n4_native_named_guard_stale_operand_preserves_home() {
+    let _harness = crate::test_utils::unit_harness();
     with_named(
         PlainSymbolBacking::Unprojected,
         ExecutionTestSeed::WritableFunctionTwin,

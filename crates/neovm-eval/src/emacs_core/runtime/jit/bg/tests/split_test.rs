@@ -123,6 +123,7 @@ fn jit_bg_sync_split_runs_the_corpus() {
 /// OSR variant reuse the label).
 #[test]
 fn jit_bg_sync_split_names_repeated_labels_uniquely() {
+    let _harness = crate::test_utils::unit_harness();
     force_mode_for_test(Some(BgMode::Sync));
     force_deopt_for_test(false);
     stats::force_observe_for_test(stats::ObserveOverride {

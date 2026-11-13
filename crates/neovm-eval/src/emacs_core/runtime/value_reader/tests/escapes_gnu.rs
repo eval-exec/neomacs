@@ -2,6 +2,7 @@ use super::*;
 
 #[test]
 fn shared_decoder_preserves_character_and_string_domains() {
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(read1(r"?\200").as_fixnum(), Some(128));
     assert_eq!(read1(r"?\M-\101").as_fixnum(), Some(0x8000041));
     assert_eq!(read1(r#""\x41;b""#).as_str_owned().as_deref(), Some("A;b"));
@@ -46,6 +47,7 @@ fn shared_decoder_preserves_character_and_string_domains() {
 
 #[test]
 fn modifier_chains_are_iterative_and_control_is_not_idempotent() {
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(read1(r"?\C-\C-a").as_fixnum(), Some(0x4000001));
     assert_eq!(read1(r"?\M-\200").as_fixnum(), Some(0x8000080));
     let source = format!("?{}a", r"\M-".repeat(100_000));

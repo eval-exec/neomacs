@@ -225,18 +225,22 @@ fn cohort(size: CohortSize) {
 }
 #[test]
 fn nmjit_n4_one_owner_native_handoff_roots_survive_two_collections() {
+    let _harness = crate::test_utils::unit_harness();
     cohort(CohortSize::One);
 }
 #[test]
 fn nmjit_n4_two_owner_native_handoff_roots_survive_two_collections() {
+    let _harness = crate::test_utils::unit_harness();
     cohort(CohortSize::Two);
 }
 #[test]
 fn nmjit_n4_four_owner_native_handoff_roots_survive_two_collections() {
+    let _harness = crate::test_utils::unit_harness();
     cohort(CohortSize::Four);
 }
 #[test]
 fn nmjit_n4_owner_cohort_noop_and_body_failure_teardown() {
+    let _harness = crate::test_utils::unit_harness();
     let receipt = with_test_prepared_hof_cohort(
         PlainSymbolBacking::Unprojected,
         HofOperation::Mapcar,

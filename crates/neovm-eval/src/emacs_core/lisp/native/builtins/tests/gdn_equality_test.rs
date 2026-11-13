@@ -2,6 +2,7 @@ use super::*;
 
 #[test]
 fn gdn_delete_retains_input_string_encoding() {
+    let _harness = crate::test_utils::unit_harness();
     let source = Value::heap_string(neovm_value::heap_types::LispString::from_emacs_bytes(vec![
         b'a', b'b', 0xc3, 0xa9,
     ]));
@@ -21,6 +22,7 @@ fn gdn_delete_retains_input_string_encoding() {
 
 #[test]
 fn gdn_reverse_ascii_multibyte_becomes_unibyte() {
+    let _harness = crate::test_utils::unit_harness();
     let source = Value::heap_string(neovm_value::heap_types::LispString::from_emacs_bytes(
         b"ab".to_vec(),
     ));
@@ -31,6 +33,7 @@ fn gdn_reverse_ascii_multibyte_becomes_unibyte() {
 
 #[test]
 fn gdn_equal_car_cycle_terminates() {
+    let _harness = crate::test_utils::unit_harness();
     let a = Value::list(vec![Value::fixnum(1)]);
     let b = Value::list(vec![Value::fixnum(1)]);
     a.set_car(a);
@@ -51,6 +54,7 @@ fn gdn_equal_car_cycle_terminates() {
 
 #[test]
 fn gdn_sequence_equal_depth_error_is_not_false() {
+    let _harness = crate::test_utils::unit_harness();
     let mut a = Value::fixnum(0);
     let mut b = Value::fixnum(0);
     for _ in 0..300 {

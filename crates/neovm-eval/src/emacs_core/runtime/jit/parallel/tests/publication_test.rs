@@ -629,6 +629,7 @@ fn nmjit_n4_four_owner_native_writer_and_intern_publication() {
 }
 #[test]
 fn nmjit_n4_publication_fixture_small_noop_control() {
+    let _harness = crate::test_utils::unit_harness();
     with_test_prepared_publication_cohort(
         PlainSymbolBacking::Unprojected,
         HofOperation::Mapcar,

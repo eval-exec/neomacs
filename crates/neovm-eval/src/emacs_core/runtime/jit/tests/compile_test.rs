@@ -1440,6 +1440,7 @@ fn mir_allocates_escaping_cons() {
 /// picks the tier.
 #[test]
 fn a_compiled_loop_polls_quit_whichever_tier_compiles_it() {
+    let _harness = crate::test_utils::unit_harness();
     let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
@@ -2842,6 +2843,7 @@ fn mir_pure_lowering_matches_interpreter() {
 /// baseline tier, since the pure subset reruns the interpreter from start.
 #[test]
 fn mir_pure_lowering_deopts_on_nonfixnum() {
+    let _harness = crate::test_utils::unit_harness();
     // (lambda (a b) (+ a b)) called with a string -> the fixnum guard fails.
     let ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
     let mir = mir::build_mir(&ops, &[], None, 2).expect("builds");
@@ -3274,6 +3276,7 @@ fn baseline_handler_dispatch_blocks_do_not_trust_the_block_end_store_record() {
 ///     0: (foo) [k acc] 2: (setq acc (cons 1 acc)) ... (switch k (a -> 0) (b -> 2)) (foo) acc
 #[test]
 fn baseline_switch_back_edge_polls_store_their_own_roots() {
+    let _harness = crate::test_utils::unit_harness();
     use neovm_value::value::HashTableTest;
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
@@ -5509,6 +5512,7 @@ fn mul_non_fixnum_deopts() {
 
 #[test]
 fn compiles_type_predicates() {
+    let _harness = crate::test_utils::unit_harness();
     // Inspects only tag bits; never dereferences, so heap values needn't be
     // kept alive (no GC safepoint in the JIT call).
     fn pred(op: Op, v: Value) -> Option<usize> {
@@ -5541,6 +5545,7 @@ fn compiles_type_predicates() {
 
 #[test]
 fn compiles_car_cdr() {
+    let _harness = crate::test_utils::unit_harness();
     // No GC safepoint in the JIT call, so the cons local stays alive across it.
     let cons = Value::cons(Value::make_int(11), Value::make_int(22));
     let car_ops = [Op::Constant(0), Op::Car, Op::Return];
@@ -6119,6 +6124,7 @@ fn two_arg_addition_preserves_args_via_stackref() {
 
 #[test]
 fn compile_bytecode_function_accepts_required_args_when_lexical() {
+    let _harness = crate::test_utils::unit_harness();
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: vec![
             // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -6142,6 +6148,7 @@ fn compile_bytecode_function_accepts_required_args_when_lexical() {
 
 #[test]
 fn compile_bytecode_function_bails_on_dynamic_params() {
+    let _harness = crate::test_utils::unit_harness();
     // Required params but dynamic binding (not lexical, arglist not a
     // fixnum) -> params are not on the stack -> bail.
     let mut dynp = ByteCodeFunction::new(LambdaParams {
@@ -6161,6 +6168,7 @@ fn compile_bytecode_function_bails_on_dynamic_params() {
 
 #[test]
 fn compiles_optional_params_with_nil_padding() {
+    let _harness = crate::test_utils::unit_harness();
     // (lambda (a &optional b) b): frame = [a, b]; missing b is nil-padded.
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -6192,6 +6200,7 @@ fn compiles_optional_params_with_nil_padding() {
 
 #[test]
 fn compiles_rest_param_as_list() {
+    let _harness = crate::test_utils::unit_harness();
     // (lambda (&rest xs) xs): frame = [xs]; surplus args become a list.
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: Vec::new(),
@@ -8159,6 +8168,7 @@ fn wide_arg_call_panic_releases_backtrace_args_cleanly() {
 
 #[test]
 fn ctxless_shim_panic_re_raised_when_gc_locks_poisoned() {
+    let _harness = crate::test_utils::unit_harness();
     // The ctx-less wrapped shims probe the lock-poison half of the
     // unrecoverable check through the thread heap: with a poisoned GC
     // lock the panic must be re-raised (abort at the shim in
@@ -8325,6 +8335,7 @@ fn a_body_that_calls_itself_is_classified_by_identity() {
 /// the full allocator, straight-line entry compiles the fast one.
 #[test]
 fn regalloc_policy_is_forced_then_shape_then_request() {
+    let _harness = crate::test_utils::unit_harness();
     use super::lowering::{RegallocChoice, RegallocPolicy, choose_regalloc};
     let (a, f) = (RegallocPolicy::Auto, RegallocPolicy::Full);
     assert_eq!(
@@ -8395,6 +8406,7 @@ fn regalloc_policy_is_forced_then_shape_then_request() {
 /// is `Full`, and a `Full` request is honored.
 #[test]
 fn entry_compiles_pick_the_allocator_by_shape_and_request() {
+    let _harness = crate::test_utils::unit_harness();
     use super::lowering::{
         RegallocChoice, RegallocPolicy, active_regalloc_choice, forced_regalloc,
     };

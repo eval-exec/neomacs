@@ -57,6 +57,7 @@ fn opt_early_knob_defaults_off_and_modes_are_explicit() {
 
 #[test]
 fn opt_early_off_t1_is_clif_identical_to_legacy_mir() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = count_loop(0);
     force_opt_early_for_test(Some(OptEarlyMode::Off));

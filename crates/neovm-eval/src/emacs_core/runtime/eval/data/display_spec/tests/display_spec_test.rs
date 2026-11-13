@@ -26,6 +26,7 @@ fn collect(value: Value) -> Vec<Value> {
 
 #[test]
 fn display_spec_kind_classifies_every_gnu_head() {
+    let _harness = crate::test_utils::unit_harness();
     // GNU handle_single_display_spec's arms, in its own order.
     let cases: Vec<(Value, DisplaySpecKind)> = vec![
         (
@@ -115,6 +116,7 @@ fn display_spec_kind_classifies_every_gnu_head() {
 
 #[test]
 fn a_margin_head_stays_a_single_spec_even_with_an_area_gnu_rejects() {
+    let _harness = crate::test_utils::unit_harness();
     // GNU's shape test looks at the `margin' head only, so this is ONE spec --
     // iterating it as a list would let the inner string replace the text, which
     // GNU never does (its `location' stays unbound and nothing is displayed).
@@ -153,6 +155,7 @@ fn a_margin_head_stays_a_single_spec_even_with_an_area_gnu_rejects() {
 
 #[test]
 fn a_vector_display_value_iterates_its_elements_like_gnu() {
+    let _harness = crate::test_utils::unit_harness();
     // GNU handle_display_spec's `VECTORP (spec)' arm. Missing it made
     // `(put-text-property … 'display ["X"])' render nothing at all.
     let value = Value::vector(vec![
@@ -173,6 +176,7 @@ fn a_vector_display_value_iterates_its_elements_like_gnu() {
 
 #[test]
 fn a_list_of_specs_iterates_but_a_single_spec_does_not() {
+    let _harness = crate::test_utils::unit_harness();
     // `("LIST")' — car is not a recognized head, so the cons is a LIST of specs.
     let spec_list = list(vec![string("LIST")]);
     assert!(DisplayPropertySpecs::of(spec_list).is_spec_list());
@@ -195,6 +199,7 @@ fn a_list_of_specs_iterates_but_a_single_spec_does_not() {
 
 #[test]
 fn disable_eval_unwraps_to_the_inner_spec_and_forbids_eval() {
+    let _harness = crate::test_utils::unit_harness();
     // `(disable-eval SPEC)' from enriched.el.
     let value = list(vec![symbol("disable-eval"), string("INNER")]);
     let specs = DisplayPropertySpecs::of(value);
@@ -214,6 +219,7 @@ fn disable_eval_unwraps_to_the_inner_spec_and_forbids_eval() {
 
 #[test]
 fn disable_eval_keeps_every_gnu_head_but_not_the_neomacs_media_heads() {
+    let _harness = crate::test_utils::unit_harness();
     // GNU's `(disable-eval SPEC)' only stops Lisp evaluation and keeps "all the
     // other display property features" (lispref, "display property, unsafe
     // evaluation"): every GNU head classifies the same under either policy.
@@ -287,6 +293,7 @@ fn disable_eval_keeps_every_gnu_head_but_not_the_neomacs_media_heads() {
 
 #[test]
 fn a_media_spec_under_disable_eval_is_the_list_of_specs_gnu_sees() {
+    let _harness = crate::test_utils::unit_harness();
     // GNU has no `video' head, so `(disable-eval (video :uri URL))' is a LIST
     // of specs (src/xdisp.c, handle_display_spec) whose elements are `video',
     // `:uri' and the URL string -- and only the string can display anything.
@@ -314,6 +321,7 @@ fn a_media_spec_under_disable_eval_is_the_list_of_specs_gnu_sees() {
 
 #[test]
 fn a_nil_car_keeps_the_value_a_single_spec() {
+    let _harness = crate::test_utils::unit_harness();
     // GNU's shape test excludes a nil car explicitly (`!NILP (XCAR (spec))').
     let value = list(vec![Value::NIL, string("x")]);
     assert!(!DisplayPropertySpecs::of(value).is_spec_list());
@@ -322,6 +330,7 @@ fn a_nil_car_keeps_the_value_a_single_spec() {
 
 #[test]
 fn when_parts_split_form_from_the_inner_spec() {
+    let _harness = crate::test_utils::unit_harness();
     // `(when FORM . VALUE)': the spec continues with the cdr AFTER the form.
     let spec = list(vec![symbol("when"), symbol("t"), string("x")]);
     let (form, inner) = display_spec_when_parts(spec).expect("when spec");

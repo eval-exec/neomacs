@@ -431,6 +431,7 @@ fn the_knob_off_keeps_the_shim_alone() {
 /// epoch) keeps the shim.
 #[test]
 fn a_weak_table_keeps_the_shim() {
+    let _harness = crate::test_utils::unit_harness();
     use neovm_value::value::HashTableWeakness;
     let a = sym("a");
     let table = jump_table(HashTableTest::Eq, &[(a, 0)]);

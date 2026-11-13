@@ -637,6 +637,7 @@ fn jump_table(entries: &[(&str, i64)]) -> Value {
 /// model, the Switch itself; the leaders are exactly the resolved targets.
 #[test]
 fn switch_body_resolves_targets_through_the_gnu_offset_map() {
+    let _harness = crate::test_utils::unit_harness();
     use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
     // (lambda (x) (pcase x ('a 20) ('b 30) (_ 10))), byte offsets 8 and 12
     // naming instructions 5 and 7.
@@ -684,6 +685,7 @@ fn switch_body_resolves_targets_through_the_gnu_offset_map() {
 /// "inconsistent stack depth" (elb-pcase's kernel failed exactly so).
 #[test]
 fn switch_byte_offset_read_as_an_index_was_a_stack_model_error() {
+    let _harness = crate::test_utils::unit_harness();
     use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
     let ops = vec![
         Op::StackRef(0), // 0: [x x]

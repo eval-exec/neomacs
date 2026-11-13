@@ -504,7 +504,7 @@ fn cl_coerce_list_to_vector() {
 
 #[test]
 fn cl_coerce_wrong_type_name() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     assert!(builtin_cl_coerce(vec![Value::NIL, Value::fixnum(0)]).is_err());
 }
 

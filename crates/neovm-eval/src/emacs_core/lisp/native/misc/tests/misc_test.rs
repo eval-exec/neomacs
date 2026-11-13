@@ -486,6 +486,7 @@ fn multibyte_char_to_unibyte_returns_minus_one_for_non_unibyte_unicode() {
 
 #[test]
 fn locale_info_item_domain_matches_gnu_symbols() {
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(
         LocaleInfoItem::from_value(Value::symbol("codeset")),
         Some(LocaleInfoItem::Codeset)

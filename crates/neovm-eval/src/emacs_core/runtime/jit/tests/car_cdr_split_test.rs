@@ -13,6 +13,7 @@ fn run(op: Op, v: Value) -> Option<usize> {
 
 #[test]
 fn guarded_car_cdr_split_cons_nil_and_non_lists() {
+    let _harness = crate::test_utils::unit_harness();
     // No GC safepoint in the JIT call, so the heap locals stay alive across it.
     let cons = Value::cons(Value::make_int(11), Value::make_int(22));
     let string = Value::string("x");
@@ -29,6 +30,7 @@ fn guarded_car_cdr_split_cons_nil_and_non_lists() {
 
 #[test]
 fn forced_deopt_fails_the_car_cdr_guard_for_a_cons_too() {
+    let _harness = crate::test_utils::unit_harness();
     let cons = Value::cons(Value::make_int(11), Value::make_int(22));
     crate::emacs_core::jit::compile::force_deopt_for_test(true);
     let car = run(Op::Car, cons);

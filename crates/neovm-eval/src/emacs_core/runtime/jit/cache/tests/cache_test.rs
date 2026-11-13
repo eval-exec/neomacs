@@ -488,6 +488,7 @@ fn assigns_stable_unique_ids() {
 
 #[test]
 fn runs_with_args_and_rejects_arity_mismatch() {
+    let _harness = crate::test_utils::unit_harness();
     // (lambda (a b) (+ a b)), lexical so params are on the stack.
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: vec![
@@ -549,6 +550,7 @@ fn deopts(obs: &LeafObsSnapshot) -> u64 {
 /// `retired` row; the new leaf starts from zero.
 #[test]
 fn jit_obs_retired_leaf_counts_survive_retier() {
+    let _harness = crate::test_utils::unit_harness();
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     if forced_regalloc().is_some() {
@@ -594,6 +596,7 @@ fn jit_obs_retired_leaf_counts_survive_retier() {
 /// totals instead of vanishing.
 #[test]
 fn jit_obs_clear_folds_counts_into_dropped_totals() {
+    let _harness = crate::test_utils::unit_harness();
     let f = unary_add_one();
     let run = |arg: Value| {
         crate::emacs_core::jit::test_support::run_compiled(
@@ -781,6 +784,7 @@ fn a_different_obarray_generation_clears_the_cache() {
 /// among the GC roots: an outer native frame or a spec slot may still run it.
 #[test]
 fn retired_leaf_is_marked_and_its_constants_stay_rooted() {
+    let _harness = crate::test_utils::unit_harness();
     // An exact native result: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     // (lambda () (car '("reloc-root-probe")))  -- a heap constant in reloc_data

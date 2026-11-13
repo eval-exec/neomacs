@@ -349,6 +349,7 @@ fn opt_ssa_osr_reloaded_nil_preserves_unknown_snapshot_seed() {
 
 #[test]
 fn opt_ssa_literal_identity_reuse_excludes_environment_and_heap_constants() {
+    let _harness = crate::test_utils::unit_harness();
     let func = make_with(
         &[
             Op::Constant(0),
@@ -578,6 +579,7 @@ fn jump_table() -> LispValue {
 
 #[test]
 fn opt_ssa_switch_uses_snapshot_gnu_offset_targets() {
+    let _harness = crate::test_utils::unit_harness();
     let ops = [
         Op::Dup,
         Op::Constant(0),
@@ -706,6 +708,7 @@ fn opt_ssa_mutating_loop_ops_and_calls_are_admitted_with_frames() {
 
 #[test]
 fn opt_ssa_float_sites_keep_polymorphic_number_results() {
+    let _harness = crate::test_utils::unit_harness();
     let func = make(
         &[Op::Constant(0), Op::Add, Op::Return],
         &[LispValue::make_float(1.5)],
@@ -800,6 +803,7 @@ fn opt_ssa_dead_handler_leaders_do_not_block_a_reachable_body() {
 
 #[test]
 fn opt_ssa_fused_v2_regions_intern_exact_caller_replay_frames() {
+    let _harness = crate::test_utils::unit_harness();
     struct InlineGuard;
     impl Drop for InlineGuard {
         fn drop(&mut self) {

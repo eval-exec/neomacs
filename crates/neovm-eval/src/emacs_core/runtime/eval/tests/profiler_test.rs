@@ -153,6 +153,7 @@ fn zero_capacity_discards_samples_without_panicking() {
 
 #[test]
 fn automatic_gc_samples_use_the_gnu_special_bucket() {
+    let _harness = crate::test_utils::unit_harness();
     let mut log = ProfilerLog::new(4, 10);
     log.record_gc(9);
     let table = log.to_value();

@@ -3,6 +3,7 @@ use super::super::*;
 use neovm_value::intern::{intern_uninterned, intern_uninterned_lisp_string};
 #[test]
 fn symbol_escape_distinguishes_nbsp_character_from_raw_a0_byte() {
+    let _harness = crate::test_utils::unit_harness();
     let multibyte = Value::symbol(intern_uninterned("a\u{a0}b"));
     assert_eq!(print_value_bytes(&multibyte), b"a\\\xc2\xa0b");
     let raw = neovm_value::heap_types::LispString::from_unibyte(vec![b'a', 0xa0, b'b']);

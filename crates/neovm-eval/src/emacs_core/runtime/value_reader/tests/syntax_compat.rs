@@ -14,6 +14,7 @@ fn read_result(input: &str) -> Result<Option<(Value, usize)>, ReadError> {
 
 #[test]
 fn rea09_property_triples_replace_and_validate_like_set_text_properties() {
+    let _harness = crate::test_utils::unit_harness();
     let value = read1(r#"#("abc" 0 1 (a b) 0 2 (c d))"#);
     let runs = get_string_text_properties_for_value(value).unwrap();
     assert_eq!(runs.len(), 1);
@@ -52,6 +53,7 @@ fn rea09_property_triples_replace_and_validate_like_set_text_properties() {
 
 #[test]
 fn rea12_read_labels_reject_fixnum_and_machine_integer_overflow() {
+    let _harness = crate::test_utils::unit_harness();
     for input in [
         "#2305843009213693952=(a)",
         "#2305843009213693952#",
@@ -82,6 +84,7 @@ fn rea13_radix_underscore_terminates_integer() {
 
 #[test]
 fn rea32_dot_tokens_require_list_context() {
+    let _harness = crate::test_utils::unit_harness();
     for input in [
         ".?",
         ".#x",
@@ -118,6 +121,7 @@ fn rea33_sub_chartable_validation_order_and_condition() {
 
 #[test]
 fn rea34_reader_error_data_retains_offending_input() {
+    let _harness = crate::test_utils::unit_harness();
     for (input, message) in [
         ("#24x", "#24x"),
         ("#1 =(a)", "#1 "),

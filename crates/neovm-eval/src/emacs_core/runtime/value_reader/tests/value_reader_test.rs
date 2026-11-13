@@ -145,7 +145,7 @@ fn float_nan() {
 ///               (read "1000000000000000000000.") => 1000000000000000000000
 #[test]
 fn integer_trailing_dot_is_not_a_float() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
 
     // "5." => integer 5, not the float 5.0.
     let v = read1("5.");

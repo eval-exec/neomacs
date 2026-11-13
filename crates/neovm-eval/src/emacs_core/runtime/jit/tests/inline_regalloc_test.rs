@@ -172,6 +172,7 @@ fn inline_hof_regalloc_unadmitted_callback_keeps_the_source_allocator() {
 
 #[test]
 fn inline_hof_regalloc_empty_hof_table_keeps_ordinary_inline_policy() {
+    let _harness = crate::test_utils::unit_harness();
     let _knobs = Knobs::enter(Inline2Mode::Closure);
     let callback =
         Value::make_bytecode(lexical(vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]));

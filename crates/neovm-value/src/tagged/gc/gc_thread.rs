@@ -1986,7 +1986,7 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
             // compiles the feature for every dependent, and a crate that
             // never arms it must keep the production panic.
             if !test_fallback_enabled() {
-                panic!("no TaggedHeap set for this thread");
+                panic!("no TaggedHeap set for this thread; a test tree must arm it: test_utils::init_test_tracing / unit_harness at fixture entry");
             }
             TEST_FALLBACK_TAGGED_HEAP.with(|fb| {
                 // Copy the root out first: holding the `RefCell` borrow across
@@ -2010,7 +2010,7 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
             feature = "test-thread-fallback-heap"
         )))]
         {
-            panic!("no TaggedHeap set for this thread");
+            panic!("no TaggedHeap set for this thread; a test tree must arm it: test_utils::init_test_tracing / unit_harness at fixture entry");
         }
     })
 }

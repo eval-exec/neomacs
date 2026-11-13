@@ -70,6 +70,7 @@ fn count_loop() -> ByteCodeFunction {
 }
 #[test]
 fn opt_lower_global_ssa_loop_matches_tier0_and_reports_opt() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = count_loop();
     let leaf = lower(&f, None);
@@ -88,6 +89,7 @@ fn opt_lower_global_ssa_loop_matches_tier0_and_reports_opt() {
 }
 #[test]
 fn opt_lower_diamond_and_else_pop_preserve_global_values() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = function(
         vec![
@@ -114,6 +116,7 @@ fn opt_lower_diamond_and_else_pop_preserve_global_values() {
 }
 #[test]
 fn opt_lower_force_deopt_captures_exact_stack_after_heap_effect() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = function(
         vec![
@@ -162,6 +165,7 @@ fn opt_lower_force_deopt_captures_exact_stack_after_heap_effect() {
 }
 #[test]
 fn opt_lower_osr_prunes_prologue_and_checks_untouched_snapshot() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = count_loop();
     let leaf = lower(&f, Some(1));
@@ -187,6 +191,7 @@ fn opt_lower_osr_prunes_prologue_and_checks_untouched_snapshot() {
 }
 #[test]
 fn opt_legacy_knob_preserves_normalized_clif() {
+    let _harness = crate::test_utils::unit_harness();
     let f = count_loop();
     force_opt_for_test(Some(OptMode::parse(None)), None);
     let original = captured_clif(|| {
@@ -224,6 +229,7 @@ fn opt_knobs_keep_the_backend_default_off_and_admissions_empty() {
 
 #[test]
 fn opt_backend_selects_baseline_at_t1_and_opt_at_upgrade() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = count_loop();
     let compile = |tier| {
@@ -257,6 +263,7 @@ fn opt_backend_selects_baseline_at_t1_and_opt_at_upgrade() {
 
 #[test]
 fn opt_tier2_seam_keeps_rooted_t1_fallback_and_reverts() {
+    let _harness = crate::test_utils::unit_harness();
     use crate::emacs_core::jit::{bg, cache, stats, tier2};
     let _settings = Settings::enter();
     bg::force_mode_for_test(Some(bg::BgMode::Sync));

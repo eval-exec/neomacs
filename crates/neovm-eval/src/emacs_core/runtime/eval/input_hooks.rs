@@ -111,7 +111,7 @@ pub(crate) fn install_input_hooks(
 fn input_hooks() -> &'static InputHooks {
     INPUT_HOOKS
         .get()
-        .expect("input hooks install at Context construction")
+        .expect("input hooks install at Context construction; a test tree must arm it: test_utils::init_test_tracing / unit_harness at fixture entry")
 }
 
 /// Apply the command-loop interrupt policy to EVENT.

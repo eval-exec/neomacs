@@ -173,11 +173,13 @@ pub(crate) fn manifest() -> Result<(), String> {
 }
 #[test]
 fn nmjit_n4_native_hof_maps_singleton_and_revalidates_callback() {
+    let _harness = crate::test_utils::unit_harness();
     manifest().unwrap();
 }
 
 #[test]
 fn nmjit_n4_native_hof_refuses_redefined_unbound_mapper() {
+    let _harness = crate::test_utils::unit_harness();
     for operation in [HofOperation::Mapc, HofOperation::Mapcar] {
         with_native(
             PlainSymbolBacking::Unprojected,
@@ -228,6 +230,7 @@ fn nmjit_n4_native_hof_refuses_redefined_unbound_mapper() {
 }
 #[test]
 fn nmjit_n4_native_hof_refuses_stale_homes() {
+    let _harness = crate::test_utils::unit_harness();
     with_native(
         PlainSymbolBacking::Unprojected,
         HofOperation::Mapcar,
@@ -318,6 +321,7 @@ fn rust_query<'era>(
 }
 #[test]
 fn nmjit_n4_hof_abi_roots_mapping_results_after_paired_lookup() {
+    let _harness = crate::test_utils::unit_harness();
     for operation in [HofOperation::Mapc, HofOperation::Mapcar] {
         with_test_prepared_hof_execution(
             PlainSymbolBacking::Projected,
@@ -339,6 +343,7 @@ fn nmjit_n4_hof_abi_roots_mapping_results_after_paired_lookup() {
 }
 #[test]
 fn nmjit_n4_hof_abi_published_list_mutation_cannot_reuse_captured_element() {
+    let _harness = crate::test_utils::unit_harness();
     with_test_prepared_hof_execution(
         PlainSymbolBacking::Unprojected,
         HofOperation::Mapc,
@@ -371,6 +376,7 @@ fn nmjit_n4_hof_abi_published_list_mutation_cannot_reuse_captured_element() {
 }
 #[test]
 fn nmjit_n4_hof_fixture_noop_and_unwind_teardown() {
+    let _harness = crate::test_utils::unit_harness();
     let receipt = with_test_prepared_hof_execution(
         PlainSymbolBacking::Unprojected,
         HofOperation::Mapcar,

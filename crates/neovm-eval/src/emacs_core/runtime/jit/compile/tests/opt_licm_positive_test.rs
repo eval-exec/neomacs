@@ -195,6 +195,7 @@ fn assert_one_store(ctx: &Context) {
 
 #[test]
 fn opt_licm_native_anticipated_header_guard_replays_full_entry_after_store() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = licm_settings();
     let source = function(
         vec![
@@ -413,6 +414,7 @@ fn opt_licm_native_anticipated_header_guard_replays_full_entry_after_store() {
 
 #[test]
 fn opt_licm_native_scalar_hoist_preserves_compiler_only_cons_across_255_510_gc() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = licm_settings();
     let source = function(
         vec![

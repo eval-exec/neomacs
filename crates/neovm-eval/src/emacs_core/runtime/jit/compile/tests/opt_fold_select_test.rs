@@ -153,6 +153,7 @@ fn mixed_select(local_value: bool, local_on_true: bool) -> ir::Func {
 
 #[test]
 fn opt_fold_select_mixed_local_and_incoming_bool_materializes_gnu_boolean() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let source = function(
         vec![Op::StackRef(1), Op::StackRef(1), Op::Eq, Op::Return],

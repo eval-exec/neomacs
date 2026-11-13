@@ -42,6 +42,7 @@ fn saved_doc_blocks_unquote_with_the_saved_block_rules() {
 
 #[test]
 fn lazy_doc_admission_requires_the_live_identity_and_a_fixnum_cdr() {
+    let _harness = crate::test_utils::unit_harness();
     // Immediate values keep this test free of heap allocation: the witness is
     // the exact object the pair's car holds.
     let witness = Value::T;

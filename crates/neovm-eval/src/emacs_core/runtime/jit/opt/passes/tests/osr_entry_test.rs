@@ -155,6 +155,7 @@ fn first_bignum() -> LispValue {
 
 #[test]
 fn opt_osr_entry_non_fixnum_slot_deoptimizes_at_the_entry() {
+    let _harness = crate::test_utils::unit_harness();
     let mut func = osr_plan(&count_loop_ops(), 1, 2);
     run(&mut func).expect("speculated");
     fold::run(&mut func).expect("folded");
@@ -175,6 +176,7 @@ fn opt_osr_entry_non_fixnum_slot_deoptimizes_at_the_entry() {
 /// fixnum range inside the loop, behave exactly as without the pass.
 #[test]
 fn opt_osr_entry_matches_the_unguarded_loop_at_the_fixnum_boundary() {
+    let _harness = crate::test_utils::unit_harness();
     let mut plain = osr_plan(&count_loop_ops(), 1, 2);
     let mut func = plain.clone();
     run(&mut func).expect("speculated");

@@ -55,6 +55,7 @@ fn delta(before: [u64; stats::DEOPT_CAUSES]) -> Vec<(&'static str, u64)> {
 /// `ArithOperands(Other)`, and all fixnums is an overflow.
 #[test]
 fn classify_arith_float_other_overflow() {
+    let _harness = crate::test_utils::unit_harness();
     let leaf = plain_leaf();
     let arith = [
         Op::Add,
@@ -325,6 +326,7 @@ fn census_counts_a_direct_path_deopt_once() {
 /// `1+` that leaves the fixnum range mid-loop (an overflow).
 #[test]
 fn census_counts_an_osr_deopt_once() {
+    let _harness = crate::test_utils::unit_harness();
     force_deopt_for_test(false);
     // (lambda (start n) (let ((i 0) (x start))
     //   (while (< i n) (setq i (1+ i)) (setq x (1+ x))) i))

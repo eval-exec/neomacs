@@ -186,6 +186,7 @@ fn opt_sink_reference_trace_preserves_fresh_aliases_and_distinct_identity() {
 
 #[test]
 fn opt_sink_reference_zero_trip_keeps_seed_and_overflow_replays_original_frame() {
+    let _harness = crate::test_utils::unit_harness();
     let source = source(
         vec![
             Op::StackRef(1),

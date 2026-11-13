@@ -3,6 +3,7 @@ use std::time::Duration;
 
 #[test]
 fn sleep_blocker_saturates_gnu_timeout_without_duration_panic() {
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(
         sleep_duration_from_blocker(make_sleep_blocker(2.5)),
         Some(Duration::new(2, 500_000_000))

@@ -65,7 +65,7 @@ fn backtrace_max_depth() {
 
 #[test]
 fn backtrace_format_nonempty() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let mut bt = Backtrace::new();
     bt.push(BacktraceFrame {
         function: Value::symbol("+"),
@@ -97,7 +97,7 @@ fn backtrace_format_empty() {
 
 #[test]
 fn backtrace_format_special_form() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let mut bt = Backtrace::new();
     bt.push(BacktraceFrame {
         function: Value::symbol("if"),
@@ -429,7 +429,7 @@ fn help_describe_function_closure() {
 
 #[test]
 fn help_describe_variable() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let output = HelpFormatter::describe_variable(
         "fill-column",
         &Value::fixnum(70),
@@ -441,7 +441,7 @@ fn help_describe_variable() {
 
 #[test]
 fn help_describe_variable_no_doc() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let output = HelpFormatter::describe_variable("x", &Value::NIL, None);
     assert!(output.contains("x's value is nil"));
     assert!(output.contains("Not documented."));

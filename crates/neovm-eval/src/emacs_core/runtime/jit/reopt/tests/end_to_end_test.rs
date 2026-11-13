@@ -628,6 +628,7 @@ fn osr_float_switch_reenters_native() {
 /// still latches the frame onto the interpreter: one transfer only.
 #[test]
 fn osr_deopt_without_invalidation_latches() {
+    let _harness = crate::test_utils::unit_harness();
     force_deopt_for_test(false);
     force_reopt_for_test(Some(knobs_with_heat(5)));
     // (lambda (start n) (let ((i 0) (x start))

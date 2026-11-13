@@ -131,6 +131,7 @@ fn intrinsic_knob_parses() {
 /// With the knob off nothing is emitted: the census stays put.
 #[test]
 fn knob_off_emits_no_intrinsic() {
+    let _harness = crate::test_utils::unit_harness();
     let before: Vec<u64> = Intrinsic::ALL
         .iter()
         .map(|&w| intrinsic_sites_for_test(w))
@@ -288,6 +289,7 @@ fn constant_index_intrinsics_match_their_opcode_arms() {
 /// A dynamic index emits nothing: the site is the leaf call alone.
 #[test]
 fn a_dynamic_index_emits_no_intrinsic() {
+    let _harness = crate::test_utils::unit_harness();
     let sites0 = intrinsic_sites_for_test(Intrinsic::Nth);
     compile_with(
         &opcode_fn(Op::Nth, 2),

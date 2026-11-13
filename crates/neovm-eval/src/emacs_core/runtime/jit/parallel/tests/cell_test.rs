@@ -69,11 +69,13 @@ pub(crate) fn varref_manifest() -> Result<(), String> {
 
 #[test]
 fn nmjit_n4_native_cell_varref_scalar_plain_and_projected() {
+    let _harness = crate::test_utils::unit_harness();
     varref_manifest().unwrap();
 }
 
 #[test]
 fn nmjit_n4_native_cell_managed_values_and_function_definitions() {
+    let _harness = crate::test_utils::unit_harness();
     for backing in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
@@ -101,6 +103,7 @@ fn nmjit_n4_native_cell_managed_values_and_function_definitions() {
 
 #[test]
 fn nmjit_n4_native_cell_void_preserves_previous_root() {
+    let _harness = crate::test_utils::unit_harness();
     for backing in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
@@ -130,6 +133,7 @@ fn nmjit_n4_native_cell_void_preserves_previous_root() {
 
 #[test]
 fn nmjit_n4_native_cell_boundp_reads_after_makunbound() {
+    let _harness = crate::test_utils::unit_harness();
     for backing in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
@@ -152,6 +156,7 @@ fn nmjit_n4_native_cell_boundp_reads_after_makunbound() {
 
 #[test]
 fn nmjit_n4_native_cell_stale_home_refuses_before_lookup() {
+    let _harness = crate::test_utils::unit_harness();
     with_cell(
         CellRead::GlobalValue,
         PlainSymbolBacking::Unprojected,

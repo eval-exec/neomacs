@@ -866,6 +866,7 @@ fn aot_load_miss_falls_through() {
 #[cfg(target_os = "linux")]
 #[test]
 fn aot_hit_serves_without_jitting_through_cache() {
+    let _harness = crate::test_utils::unit_harness();
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use neovm_value::value::LambdaParams;
 
@@ -1983,6 +1984,7 @@ fn pgo_jit_set_and_wrapper_default_off() {
 /// turn a Switch body away (JIT-only) before any analysis reads the table.
 #[test]
 fn aot_switch_bodies_stay_jit_only() {
+    let _harness = crate::test_utils::unit_harness();
     use neovm_value::value::HashTableTest;
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {

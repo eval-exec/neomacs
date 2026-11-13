@@ -6,6 +6,7 @@ static_assertions::assert_not_impl_any!(PrintState<'static>: Send, Sync);
 
 #[test]
 fn charset_pruning_preserves_runs_without_mutating_input() {
+    let _harness = crate::test_utils::unit_harness();
     let foo = Value::symbol("foo");
     let bar = Value::symbol("bar");
     let text = Value::string_with_text_properties(
@@ -49,6 +50,7 @@ fn charset_pruning_preserves_runs_without_mutating_input() {
 
 #[test]
 fn symbol_reader_whitespace_distinguishes_nbsp_from_byte8() {
+    let _harness = crate::test_utils::unit_harness();
     let multibyte = Value::symbol(intern_uninterned("a\u{a0}b"));
     assert_eq!(print_value_bytes(&multibyte), b"a\\\xc2\xa0b");
     let raw = neovm_value::heap_types::LispString::from_unibyte(vec![b'a', 0xa0, b'b']);

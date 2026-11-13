@@ -3,7 +3,7 @@ use super::super::*;
 
 #[test]
 fn packed_subchar_header_uses_storage_slots_for_child_budget() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let value = Value::make_sub_char_table(3, 0, vec![Value::fixnum(42); 128]);
     // Both C ints always print, while their packed storage consumes one slot
     // on 64-bit targets and two on 32-bit targets. Reaching the header's budget

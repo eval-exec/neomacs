@@ -175,6 +175,7 @@ fn direct_compare_branch(clif: &str) -> bool {
 
 #[test]
 fn opt_bool_native_compare_reaches_branch_without_tagged_projection() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     assert!(direct_compare_branch(
         "v35 = icmp.i64 slt v27, v28\n    brif v35, block4, block5"
@@ -226,6 +227,7 @@ fn opt_bool_native_compare_reaches_branch_without_tagged_projection() {
 
 #[test]
 fn opt_bool_native_closed_diamond_uses_i8_phi_and_returns_t_nil() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let source = function(
         vec![
@@ -304,6 +306,7 @@ fn bool_loop() -> ByteCodeFunction {
 
 #[test]
 fn opt_bool_native_loop_phi_keeps_normalized_flags_and_poll_cadence() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let source = bool_loop();
     let enabled = boolean_plan(&source);
@@ -329,6 +332,7 @@ fn opt_bool_native_loop_phi_keeps_normalized_flags_and_poll_cadence() {
 
 #[test]
 fn opt_bool_native_unknown_phi_keeps_arbitrary_lisp_identity() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let source = function(
         vec![
@@ -546,6 +550,7 @@ fn select_plan(local_value: bool, local_on_true: bool) -> ir::Func {
 
 #[test]
 fn opt_bool_native_select_accepts_local_and_incoming_flags_both_arm_orders() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let source = function(
         vec![Op::StackRef(1), Op::StackRef(1), Op::Eq, Op::Return],
@@ -571,6 +576,7 @@ fn opt_bool_native_select_accepts_local_and_incoming_flags_both_arm_orders() {
 
 #[test]
 fn opt_bool_native_mixed_tagged_select_materializes_only_boolean_arm() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let source = function(
         vec![Op::StackRef(1), Op::StackRef(1), Op::Eq, Op::Return],
@@ -735,6 +741,7 @@ fn opt_bool_native_predicates_and_eq_keep_dynamic_positioned_symbol_semantics() 
 
 #[test]
 fn opt_bool_native_return_call_and_store_escape_as_gnu_t_nil() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let source = function(
         vec![
@@ -1097,6 +1104,7 @@ fn opt_bool_native_gc_call_roots_heap_companion_without_external_root() {
 
 #[test]
 fn opt_bool_native_poll_roots_heap_companion_without_external_root() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let source = function(
         vec![
@@ -1160,6 +1168,7 @@ fn opt_bool_native_poll_roots_heap_companion_without_external_root() {
 
 #[test]
 fn opt_bool_native_quit_at_255_and_510_matches_tier0_flow_and_cadence() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     // Set quit when the remaining count reaches 255. For n=510 this occurs
     // after the first due poll, so the second due poll must signal at 510.

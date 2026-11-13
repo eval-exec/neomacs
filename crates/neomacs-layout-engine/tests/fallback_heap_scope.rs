@@ -30,7 +30,8 @@ fn a_crate_without_the_fallback_feature_still_trips_the_no_heap_guard() {
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("<non-string panic payload>");
     assert_eq!(
-        message, "no TaggedHeap set for this thread",
+        message,
+        "no TaggedHeap set for this thread; a test tree must arm it: test_utils::init_test_tracing / unit_harness at fixture entry",
         "the no-heap tripwire must keep its exact message in a crate that \
          never arms the test fallback"
     );

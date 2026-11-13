@@ -267,6 +267,7 @@ fn opt_reps_lift_comparisons_preserve_tagged_and_existing_bool_results() {
 
 #[test]
 fn opt_reps_lift_float_other_feedback_preserve_original_opaque_plans() {
+    let _harness = crate::test_utils::unit_harness();
     for feedback in [NumericFeedback::Float, NumericFeedback::Other] {
         for op in [
             Op::Add,
@@ -699,6 +700,7 @@ fn opt_reps_lift_overflow_and_unary_boundaries_keep_original_deopt_stack() {
 
 #[test]
 fn opt_reps_lift_invalid_input_is_transactional() {
+    let _harness = crate::test_utils::unit_harness();
     let function = arithmetic(Op::Add1, 0);
     let mut func = plan(&function, 0);
     let (inst, _) = operation(&func, &Op::Add1);
@@ -819,6 +821,7 @@ fn counter_source() -> ByteCodeFunction {
 
 #[test]
 fn opt_reps_lift_real_counter_pipeline_proves_two_phis_and_selects_raw() {
+    let _harness = crate::test_utils::unit_harness();
     let function = counter_source();
     let original = plan(&function, 0);
     let header = original.source_states[2].as_ref().unwrap().block;
@@ -903,6 +906,7 @@ fn opt_reps_lift_real_counter_pipeline_proves_two_phis_and_selects_raw() {
 
 #[test]
 fn opt_reps_lift_publish_root_keeps_exact_tagged_view_and_original_result() {
+    let _harness = crate::test_utils::unit_harness();
     let function = arithmetic(Op::Add1, 0);
     let mut original = plan(&function, 0);
     let (arithmetic, result) = operation(&original, &Op::Add1);

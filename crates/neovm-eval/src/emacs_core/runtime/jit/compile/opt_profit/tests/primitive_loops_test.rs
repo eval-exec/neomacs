@@ -21,6 +21,7 @@ fn numeric_loop_ops() -> Vec<Op> {
 
 #[test]
 fn opt_profit_primitive_loops_parses_and_admits_numeric_loops() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     assert_eq!(
         OptProfitMode::parse(Some("primitive-loops")),
@@ -38,6 +39,7 @@ fn opt_profit_primitive_loops_parses_and_admits_numeric_loops() {
 
 #[test]
 fn opt_profit_primitive_loops_still_rejects_explicit_calls() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let mut ops = numeric_loop_ops();
     // Replace the counter's `1+` with an explicit call of the same arity.
@@ -62,6 +64,7 @@ fn opt_profit_primitive_loops_still_rejects_explicit_calls() {
 
 #[test]
 fn opt_profit_primitive_loops_numeric_headers_are_osr_evidence() {
+    let _harness = crate::test_utils::unit_harness();
     let _settings = Settings::enter();
     let f = count_loop(0);
     force_opt_profit_for_test(Some(OptProfitMode::PrimitiveLists));

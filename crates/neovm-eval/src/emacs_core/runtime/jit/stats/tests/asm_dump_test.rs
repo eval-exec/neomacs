@@ -20,6 +20,7 @@ fn jit_asm_dump_label_parts() {
 /// disassembly, and the finalized bytes.
 #[test]
 fn jit_asm_dump_appends_every_compiled_leaf() {
+    let _harness = crate::test_utils::unit_harness();
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     let dir = tempfile::tempdir().expect("tempdir");

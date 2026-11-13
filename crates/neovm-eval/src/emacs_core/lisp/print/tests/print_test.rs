@@ -12,7 +12,7 @@ use neovm_value::value::{
 
 #[test]
 fn print_basic_values() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(print_value(&Value::NIL), "nil");
     assert_eq!(print_value(&Value::T), "t");
     assert_eq!(print_value(&Value::fixnum(42)), "42");
@@ -26,7 +26,7 @@ fn print_basic_values() {
 
 #[test]
 fn print_symbol_escapes_reader_sensitive_chars() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(print_value(&Value::symbol("a b")), "a\\ b");
     assert_eq!(print_value(&Value::symbol("a,b")), "a\\,b");
     assert_eq!(print_value(&Value::symbol("a,@b")), "a\\,@b");
@@ -46,7 +46,7 @@ fn print_symbol_escapes_reader_sensitive_chars() {
 
 #[test]
 fn print_symbol_escapes_numeric_looking_names_like_gnu() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(print_value(&Value::symbol("2")), "\\2");
     assert_eq!(print_value(&Value::symbol("+1")), "\\+1");
     assert_eq!(print_value(&Value::symbol("-1")), "\\-1");
@@ -67,7 +67,7 @@ fn print_symbol_escapes_numeric_looking_names_like_gnu() {
 
 #[test]
 fn print_uninterned_symbols_follow_gnu_default_print_gensym_nil() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(print_value(&Value::symbol(intern_uninterned("foo"))), "foo");
     assert_eq!(
         print_value(&Value::symbol(intern_uninterned(":foo"))),
@@ -78,7 +78,7 @@ fn print_uninterned_symbols_follow_gnu_default_print_gensym_nil() {
 
 #[test]
 fn print_raw_unibyte_uninterned_symbol_bytes_match_gnu_encoding() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let raw_name = neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'a']);
     let sym = Value::symbol(intern_uninterned_lisp_string(&raw_name));
     assert_eq!(print_value_bytes(&sym), vec![0xC1, 0xBF, b'a']);
@@ -86,7 +86,7 @@ fn print_raw_unibyte_uninterned_symbol_bytes_match_gnu_encoding() {
 
 #[test]
 fn print_uninterned_symbols_support_print_gensym_round_trip_syntax() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let options = PrintOptions::with_print_gensym(true);
     assert_eq!(
         print_value_with_options(&Value::symbol(intern_uninterned("foo")), options),
@@ -104,7 +104,7 @@ fn print_uninterned_symbols_support_print_gensym_round_trip_syntax() {
 
 #[test]
 fn print_gensym_raw_unibyte_symbol_bytes_match_gnu_encoding() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let options = PrintOptions::with_print_gensym(true);
     let raw_name = neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'a']);
     let sym = Value::symbol(intern_uninterned_lisp_string(&raw_name));
@@ -116,7 +116,7 @@ fn print_gensym_raw_unibyte_symbol_bytes_match_gnu_encoding() {
 
 #[test]
 fn print_float_nan_preserves_sign() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(print_value(&Value::make_float(f64::NAN)), "0.0e+NaN");
     let neg_nan = f64::from_bits(f64::NAN.to_bits() | (1_u64 << 63));
     assert_eq!(print_value(&Value::make_float(neg_nan)), "-0.0e+NaN");
@@ -124,7 +124,7 @@ fn print_float_nan_preserves_sign() {
 
 #[test]
 fn print_float_nan_payload_tag_round_trip_shape() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let tagged = f64::from_bits((0x7ffu64 << 52) | (1u64 << 51) | 1u64);
     assert_eq!(print_value(&Value::make_float(tagged)), "1.0e+NaN");
 
@@ -155,13 +155,13 @@ fn float_output_format_zero_precision_matches_gnu_print_c() {
 
 #[test]
 fn print_string() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(print_value(&Value::string("hello")), "\"hello\"");
 }
 
 #[test]
 fn print_empty_char_table_uses_gnu_vector_shape() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let table = neovm_text::emacs_core::chartable::make_char_table_with_extra_slots(
         Value::symbol("syntax-table"),
         Value::NIL,
@@ -173,7 +173,7 @@ fn print_empty_char_table_uses_gnu_vector_shape() {
 
 #[test]
 fn print_propertized_string_literal_shape() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let value = Value::string_with_text_properties(
         " ",
         vec![StringTextPropertyRun {
@@ -205,7 +205,7 @@ fn print_propertized_string_literal_shape() {
 
 #[test]
 fn print_propertized_string_properties_keep_buffer_context() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let mut buffers = neovm_edit::buffer::BufferManager::new();
     let buffer_id = buffers
         .find_buffer_by_name("*scratch*")
@@ -229,7 +229,7 @@ fn print_propertized_string_properties_keep_buffer_context() {
 
 #[test]
 fn print_propertized_string_parent_cycle_matches_gnu_default_cycle_path() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let text = Value::string("body");
     let parent = Value::list(vec![Value::symbol("section"), Value::NIL, text]);
     set_string_text_properties_for_value(
@@ -253,7 +253,7 @@ fn print_propertized_string_parent_cycle_matches_gnu_default_cycle_path() {
 
 #[test]
 fn print_circle_preprocess_traverses_string_text_property_plists_like_gnu() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let text = Value::string("body");
     let parent = Value::list(vec![Value::symbol("section"), Value::NIL, text]);
     set_string_text_properties_for_value(
@@ -274,13 +274,13 @@ fn print_circle_preprocess_traverses_string_text_property_plists_like_gnu() {
 
 #[test]
 fn print_string_keeps_non_bmp_visible() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(print_value(&Value::string("\u{10ffff}")), "\"\u{10ffff}\"");
 }
 
 #[test]
 fn print_string_bytes_preserve_non_utf8_payloads() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     assert_eq!(
         print_value_bytes(&Value::heap_string(
             neovm_value::heap_types::LispString::from_emacs_bytes(vec![0xC1, 0xBF],)
@@ -291,7 +291,7 @@ fn print_string_bytes_preserve_non_utf8_payloads() {
 
 #[test]
 fn print_literal_private_use_unicode_does_not_masquerade_as_raw_byte() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let private_use = char::from_u32(0xE0FF).expect("private use scalar");
     assert_eq!(
         print_value_bytes(&Value::string(private_use.to_string())),
@@ -310,7 +310,7 @@ fn print_literal_private_use_unicode_does_not_masquerade_as_raw_byte() {
 /// issue #131 Step B — and are intentionally not covered here.)
 #[test]
 fn private_use_chars_survive_char_extraction_issue_131() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     use crate::emacs_core::builtins::{lisp_string_char_at, lisp_string_char_codes};
     for cp in [0xE300u32, 0xE322, 0xE325, 0xE379, 0xE39A, 0xE3FF] {
         let ch = char::from_u32(cp).expect("private use scalar");
@@ -330,14 +330,14 @@ fn private_use_chars_survive_char_extraction_issue_131() {
 
 #[test]
 fn print_list() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let lst = Value::list(vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)]);
     assert_eq!(print_value(&lst), "(1 2 3)");
 }
 
 #[test]
 fn print_stateful_record_preprocess_uses_record_storage() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let record = Value::make_record(vec![Value::symbol("foo"), Value::fixnum(1)]);
     let options = PrintOptions::new(false, false, Some(10), None);
 
@@ -346,7 +346,7 @@ fn print_stateful_record_preprocess_uses_record_storage() {
 
 #[test]
 fn print_hash_s_literal_shorthand() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let literal = Value::list(vec![
         Value::symbol("make-hash-table-from-literal"),
         Value::list(vec![
@@ -360,7 +360,7 @@ fn print_hash_s_literal_shorthand() {
 
 #[test]
 fn print_hash_table_object_uses_readable_hash_s_shape() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let table = Value::hash_table(HashTableTest::Equal);
     // GNU Emacs prints "test equal" for non-default test (default is eql).
     assert_eq!(print_value(&table), "#s(hash-table test equal)");
@@ -369,7 +369,7 @@ fn print_hash_table_object_uses_readable_hash_s_shape() {
 
 #[test]
 fn print_hash_table_uses_live_slots_after_remhash_reinsert() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let table = Value::hash_table(HashTableTest::Eq);
 
     builtin_puthash(vec![Value::fixnum(1), Value::fixnum(10), table]).unwrap();
@@ -385,7 +385,7 @@ fn print_hash_table_uses_live_slots_after_remhash_reinsert() {
 
 #[test]
 fn print_quote_shorthand_lists() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let quoted = Value::list(vec![Value::symbol("quote"), Value::symbol("foo")]);
     let function = Value::list(vec![Value::symbol("function"), Value::symbol("car")]);
     let quasiquoted = Value::list(vec![
@@ -404,7 +404,7 @@ fn print_quote_shorthand_lists() {
 
 #[test]
 fn print_backquote_preserves_nested_unquote_shorthand_only_in_context() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let nested = Value::list(vec![
         Value::symbol("`"),
         Value::list(vec![
@@ -418,21 +418,21 @@ fn print_backquote_preserves_nested_unquote_shorthand_only_in_context() {
 
 #[test]
 fn print_dotted_pair() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let pair = Value::cons(Value::fixnum(1), Value::fixnum(2));
     assert_eq!(print_value(&pair), "(1 . 2)");
 }
 
 #[test]
 fn print_vector() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let v = Value::vector(vec![Value::fixnum(1), Value::fixnum(2)]);
     assert_eq!(print_value(&v), "[1 2]");
 }
 
 #[test]
 fn print_default_handles_circular_vector_like_gnu() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let vector = Value::vector(vec![Value::NIL]);
     assert!(vector.set_vector_slot(0, vector));
 
@@ -442,7 +442,7 @@ fn print_default_handles_circular_vector_like_gnu() {
 
 #[test]
 fn print_default_handles_circular_cons_like_gnu() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let cell = Value::cons(Value::NIL, Value::NIL);
     cell.set_cdr(cell);
 
@@ -452,7 +452,7 @@ fn print_default_handles_circular_cons_like_gnu() {
 
 #[test]
 fn print_default_bounded_circular_list_uses_gnu_tail_index() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let first = Value::cons(Value::fixnum(1), Value::NIL);
     let second = Value::cons(Value::fixnum(2), Value::NIL);
     first.set_cdr(second);
@@ -465,7 +465,7 @@ fn print_default_bounded_circular_list_uses_gnu_tail_index() {
 
 #[test]
 fn print_default_tail_cycle_uses_gnu_tail_index() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let first = Value::cons(Value::symbol("a"), Value::NIL);
     let second = Value::cons(Value::symbol("b"), Value::NIL);
     let third = Value::cons(Value::symbol("c"), Value::NIL);
@@ -480,7 +480,7 @@ fn print_default_tail_cycle_uses_gnu_tail_index() {
 
 #[test]
 fn print_level_applies_to_conses_not_vectorlike_objects_like_gnu() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let options = PrintOptions::new(false, false, Some(1), None);
     let nested_vector = Value::vector(vec![
         Value::vector(vec![Value::symbol("a"), Value::symbol("b")]),
@@ -501,7 +501,7 @@ fn print_level_applies_to_conses_not_vectorlike_objects_like_gnu() {
 
 #[test]
 fn print_circle_handles_self_referential_records() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let record = Value::make_record(vec![Value::symbol("foo"), Value::NIL]);
     record.with_record_data_mut(|slots| slots[1] = record);
 
@@ -546,7 +546,7 @@ fn print_number_table_cleanup_preserves_only_labeled_entries() {
 
 #[test]
 fn print_default_handles_self_referential_records_like_gnu() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let record = Value::make_record(vec![Value::symbol("foo"), Value::NIL]);
     record.with_record_data_mut(|slots| slots[1] = record);
 
@@ -556,7 +556,7 @@ fn print_default_handles_self_referential_records_like_gnu() {
 
 #[test]
 fn print_default_handles_self_referential_bytecode_constants() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let mut function =
         crate::emacs_core::bytecode::ByteCodeFunction::new(LambdaParams::simple(vec![]));
     function.constants.ensure_owned().push(Value::NIL);
@@ -577,7 +577,7 @@ fn print_default_handles_self_referential_bytecode_constants() {
 
 #[test]
 fn print_default_uses_gnu_depth_for_nested_bytecode_backrefs() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let record = Value::make_record(vec![Value::symbol("foo"), Value::NIL]);
     let mut function =
         crate::emacs_core::bytecode::ByteCodeFunction::new(LambdaParams::simple(vec![]));
@@ -591,7 +591,7 @@ fn print_default_uses_gnu_depth_for_nested_bytecode_backrefs() {
 
 #[test]
 fn print_lambda() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let lam = Value::make_lambda(LambdaData {
         params: LambdaParams::simple(vec![intern("x"), intern("y")]).into(),
         body: vec![Value::list(vec![
@@ -609,7 +609,7 @@ fn print_lambda() {
 
 #[test]
 fn print_lexical_closure_uses_gnu_vector_syntax() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let closure = Value::make_lambda(LambdaData {
         params: LambdaParams::simple(vec![intern("a"), intern("b")]).into(),
         body: vec![Value::list(vec![
@@ -636,7 +636,7 @@ fn print_lexical_closure_uses_gnu_vector_syntax() {
 
 #[test]
 fn print_recursive_closure_uses_backreference() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let binding = Value::cons(Value::symbol("f"), Value::NIL);
     let env = Value::list(vec![binding]);
     let closure = Value::make_lambda(LambdaData {
@@ -658,7 +658,7 @@ fn print_recursive_closure_uses_backreference() {
 
 #[test]
 fn print_frame_handles_use_oracle_style_f_prefix() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let f1 = Value::make_frame(neovm_value::display_vocab::FRAME_ID_BASE);
     let f2 = Value::make_frame(neovm_value::display_vocab::FRAME_ID_BASE + 1);
     let legacy = Value::make_frame(7);
@@ -672,7 +672,7 @@ fn print_frame_handles_use_oracle_style_f_prefix() {
 
 #[test]
 fn print_markers_use_gnu_style_handles() {
-    crate::test_utils::init_test_tracing();
+    let _harness = crate::test_utils::unit_harness();
     let marker = make_marker_value(None, None, false);
     assert_eq!(print_value(&marker), "#<marker in no buffer>");
 
