@@ -540,6 +540,20 @@ fn has_modified_event(events: &[Vec<Value>]) -> bool {
         .any(|fields| fields.get(1) == Some(&Value::symbol("modified")))
 }
 
+/// Set or clear the Windows read-only attribute.
+///
+/// On Windows, `set-file-modes` writes that bit and nothing else
+/// (`set_file_modes_path`). This notify test asserts the watch, not the
+/// builtin's Lisp contract, so the mutation stays in eval with `std::fs`.
+#[cfg(target_os = "windows")]
+fn set_windows_readonly(path: &Path, readonly: bool) {
+    let mut permissions = std::fs::metadata(path)
+        .expect("read fixture metadata")
+        .permissions();
+    permissions.set_readonly(readonly);
+    std::fs::set_permissions(path, permissions).expect("set fixture read-only attribute");
+}
+
 /// GNU's `attribute-change' contract depends on changing the Windows
 /// read-only attribute producing FILE_ACTION_MODIFIED under an
 /// FILE_NOTIFY_CHANGE_ATTRIBUTES watch.
@@ -556,13 +570,8 @@ fn windows_attribute_watch_observes_set_file_modes() {
     let variable = "neovm-test-w32-mode-events";
     let callback = install_windows_event_recorder(&mut eval, variable);
     let descriptor = add_windows_attribute_watch(&mut eval, &file, callback);
-    let file_name = Value::string(file.display().to_string());
 
-    crate::emacs_core::fileio::builtin_set_file_modes(
-        &mut eval,
-        vec![file_name, Value::fixnum(0), Value::symbol("nofollow")],
-    )
-    .expect("make watched file read-only");
+    set_windows_readonly(&file, true);
     let events = service_until(&mut eval, variable, has_modified_event);
     assert!(
         has_modified_event(&events),
@@ -570,47 +579,7 @@ fn windows_attribute_watch_observes_set_file_modes() {
     );
 
     w32notify_rm_watch(vec![descriptor]).expect("remove Windows attribute watch");
-    crate::emacs_core::fileio::builtin_set_file_modes(
-        &mut eval,
-        vec![file_name, Value::fixnum(0o600), Value::symbol("nofollow")],
-    )
-    .expect("restore fixture writability");
-    reset_file_notify_thread_locals();
-}
-
-/// GNU's `sys_unlink' clears the read-only attribute before deleting a file.
-/// That preparation is observable as the second FILE_ACTION_MODIFIED in the
-/// upstream attribute-change ERT scenario.
-#[test]
-#[cfg(target_os = "windows")]
-fn windows_attribute_watch_observes_readonly_clear_before_delete() {
-    crate::test_utils::init_test_tracing();
-    reset_file_notify_thread_locals();
-    let directory = workspace_temp_dir();
-    let file = directory.path().join("readonly-delete.txt");
-    std::fs::write(&file, "contents").expect("seed delete fixture");
-
-    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let file_name = Value::string(file.display().to_string());
-    crate::emacs_core::fileio::builtin_set_file_modes(
-        &mut eval,
-        vec![file_name, Value::fixnum(0), Value::symbol("nofollow")],
-    )
-    .expect("make delete fixture read-only");
-
-    let variable = "neovm-test-w32-delete-events";
-    let callback = install_windows_event_recorder(&mut eval, variable);
-    let descriptor = add_windows_attribute_watch(&mut eval, &file, callback);
-    crate::emacs_core::fileio::builtin_delete_file_internal(&mut eval, vec![file_name])
-        .expect("delete read-only watched file");
-    let events = service_until(&mut eval, variable, has_modified_event);
-    assert!(
-        has_modified_event(&events),
-        "deleting the read-only file did not expose GNU's attribute-clear notification"
-    );
-    assert!(!file.exists(), "read-only file still exists after deletion");
-
-    w32notify_rm_watch(vec![descriptor]).expect("remove Windows attribute watch");
+    set_windows_readonly(&file, false);
     reset_file_notify_thread_locals();
 }
 

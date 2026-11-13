@@ -45,6 +45,10 @@ mod fileio_tests_fileio_test_rs;
 #[path = "emacs_core/system/fileio/tests/fix8_test.rs"]
 mod fileio_tests_fix8_test_rs;
 
+#[cfg(windows)]
+#[path = "emacs_core/system/fileio/tests/windows_attribute_notify_test.rs"]
+mod fileio_tests_windows_attribute_notify_test_rs;
+
 #[path = "emacs_core/system/filelock/tests/filelock_test.rs"]
 mod filelock_tests_filelock_test_rs;
 
