@@ -195,6 +195,17 @@ fn check(
     what: &str,
 ) -> bool {
     let got = run_leaf(ctx, spec, args);
+    check_leaf_outcome(ctx, spec, args, bounce, what, got)
+}
+
+fn check_leaf_outcome(
+    ctx: &mut Context,
+    spec: &'static LeafSpec,
+    args: &[Value],
+    bounce: bool,
+    what: &str,
+    got: Outcome,
+) -> bool {
     if let Outcome::Generic = got {
         assert!(
             bounce,
@@ -521,13 +532,17 @@ fn variable_setup(ctx: &mut Context) {
 /// buffer-local bindings are loaded) and `b`, against `Op::SymbolValue`.
 #[test]
 fn symbol_value_leaf_matches_its_opcode_arm_on_every_variable_shape() {
+    crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::{VarCacheEvent, var_cache_event_count};
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     variable_setup(&mut ctx);
     let variables = pool(&mut ctx, VARIABLES);
-    let hits0 = var_cache_event_count(VarCacheEvent::ReadLocalized)
-        + var_cache_event_count(VarCacheEvent::ReadBufferSlot)
-        + var_cache_event_count(VarCacheEvent::ReadForwarded);
+    let hits = || {
+        var_cache_event_count(VarCacheEvent::ReadLocalized)
+            + var_cache_event_count(VarCacheEvent::ReadBufferSlot)
+            + var_cache_event_count(VarCacheEvent::ReadForwarded)
+    };
+    let mut checked = 0;
     for buffer in [" leaf-vars-a", " leaf-vars-b"] {
         ctx.eval_str(&format!("(set-buffer {buffer:?})"))
             .expect("set-buffer");
@@ -535,17 +550,19 @@ fn symbol_value_leaf_matches_its_opcode_arm_on_every_variable_shape() {
             set_swp(&mut ctx, on);
             for (i, &v) in variables.iter().enumerate() {
                 let what = format!("(symbol-value {}) in {buffer:?} swp={on}", VARIABLES[i]);
-                check(&mut ctx, &SYMBOL_VALUE, &[v], false, &what);
+                // Only the leaf must leave the cached-tier census unchanged.
+                // The VM reference's signal dispatch visibly reads forwarded
+                // hook/debug variables, so it runs outside this interval.
+                let hits0 = hits();
+                let got = run_leaf(&ctx, &SYMBOL_VALUE, &[v]);
+                assert_eq!(hits(), hits0, "{what}: the leaf reached a cached tier");
+                check_leaf_outcome(&mut ctx, &SYMBOL_VALUE, &[v], false, &what, got);
+                checked += 1;
             }
         }
     }
     set_swp(&mut ctx, false);
-    // The leaf is the reference's own body: it never reaches the cached
-    // tiers (their census stays put).
-    let hits = var_cache_event_count(VarCacheEvent::ReadLocalized)
-        + var_cache_event_count(VarCacheEvent::ReadBufferSlot)
-        + var_cache_event_count(VarCacheEvent::ReadForwarded);
-    assert_eq!(hits, hits0);
+    assert_eq!(checked, 88, "every variable shape, buffer and symbol mode");
 }
 
 /// `buffer-local-value` over variable × buffer, from buffers `a` and `b`,
