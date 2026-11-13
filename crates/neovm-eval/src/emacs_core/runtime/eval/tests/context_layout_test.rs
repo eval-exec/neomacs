@@ -2,10 +2,17 @@
 //! rustc chose for main at e5fd507ac9, so moving GNU-global state into the
 //! World moves no field. This pins every offset; a failure means a field
 //! changed size or was added out of place, which shifts the hot set and the
-//! JIT's Context ABI.
+//! JIT's Context ABI. The later native-stack probe and bytecode-position
+//! fields are explicitly included below; test instrumentation is accounted
+//! for separately from the production layout.
 
 use super::Context;
-use crate::emacs_core::eval::data::process_state::NativeConnectObservationSlot;
+use crate::emacs_core::eval::data::minibuffer::MinibufferManager;
+use crate::emacs_core::eval::data::process_state::{
+    BackendWaitEntry, NativeConnectObservationSlot, ProcessManager, ProcessWaitBackend,
+};
+use crate::emacs_core::eval::interactive_registry::InteractiveRegistry;
+use crate::emacs_core::eval::native_stack::NativeStackProbe;
 use neovm_text::emacs_core::regex::MatchData;
 use std::mem::{offset_of, size_of};
 
@@ -22,7 +29,7 @@ fn every_context_offset_is_mains() {
     // only debug/release difference: `read_mask` (`#[cfg(debug_assertions)]
     // read_mask: Cell<u64>`, text/regex/mod.rs:807, consumed by
     // `match_stats::count_first_some_read` at :1541/:1568). Context embeds
-    // MatchData inline at `match_data` (offset 2752); MatchData is 232 bytes in
+    // MatchData inline at `match_data` (offset 2816); MatchData is 232 bytes in
     // debug and 224 in release, so every later field moves by that word in a
     // debug build. Pinning the size of MatchData makes a future layout change
     // fail here instead of being absorbed by the offset adjustment.
@@ -30,21 +37,46 @@ fn every_context_offset_is_mains() {
     assert_eq!(size_of::<MatchData>(), 232, "MatchData size (debug)");
     #[cfg(not(debug_assertions))]
     assert_eq!(size_of::<MatchData>(), 224, "MatchData size (release)");
-    // Native-connect observation adds a separately typed, cfg(test)-only slot
-    // inside ProcessManager. Its owner pins the slot size at compile time, so
-    // a future change cannot be absorbed into the production layout contract.
-    let observation_extra = size_of::<NativeConnectObservationSlot>();
+    // These inline owners retain test-only state. Pin every owner and each
+    // extra independently: subtracting a measured owner size would silently
+    // accept future production or instrumentation growth. The release table
+    // predates these test adjustments (1808505616) and records production
+    // InteractiveRegistry=272, MinibufferManager=80, ProcessManager=200.
+    const INTERACTIVE_EXTRA: usize = 16; // two reverse-index usize counters
+    const MINIBUFFER_EXTRA: usize = 8; // cfg(test) max_depth: usize
+    const WAIT_GATE_EXTRA: usize = 24;
+    const OBSERVATION_EXTRA: usize = 40;
+    type WaitGate = std::sync::Mutex<Option<Box<dyn FnOnce(BackendWaitEntry) + Send>>>;
+    assert_eq!(size_of::<usize>(), 8);
+    assert_eq!(size_of::<InteractiveRegistry>(), 272 + INTERACTIVE_EXTRA);
+    assert_eq!(size_of::<MinibufferManager>(), 80 + MINIBUFFER_EXTRA);
+    assert_eq!(size_of::<WaitGate>(), WAIT_GATE_EXTRA);
+    assert_eq!(size_of::<NativeConnectObservationSlot>(), OBSERVATION_EXTRA);
+    assert_eq!(
+        size_of::<ProcessWaitBackend>(),
+        24 + WAIT_GATE_EXTRA + OBSERVATION_EXTRA
+    );
+    assert_eq!(
+        size_of::<ProcessManager>(),
+        200 + WAIT_GATE_EXTRA + OBSERVATION_EXTRA
+    );
+    // f919779a16 added two usize probe words; 8659f75255 added one bytecode
+    // accounting word (renamed to position in 69eb051e9e). These are real
+    // production fields after jit_stack_limit, so all later pins move by 24.
+    assert_eq!(size_of::<NativeStackProbe>(), 16);
+    const TEST_EXTRA: usize =
+        INTERACTIVE_EXTRA + MINIBUFFER_EXTRA + WAIT_GATE_EXTRA + OBSERVATION_EXTRA;
     #[cfg(debug_assertions)]
     assert_eq!(
         size_of::<Context>(),
-        44632 + observation_extra,
-        "Context size (debug with test observer)"
+        44656 + TEST_EXTRA,
+        "Context size (debug with test instrumentation)"
     );
     #[cfg(not(debug_assertions))]
     assert_eq!(
         size_of::<Context>(),
-        44624 + observation_extra,
-        "Context size (release with test observer)"
+        44648 + TEST_EXTRA,
+        "Context size (release with test instrumentation)"
     );
     let table: &[(usize, usize, &str)] = &[
         (
@@ -500,194 +532,203 @@ fn every_context_offset_is_mains() {
         ),
         (
             10896,
+            offset_of!(Context, native_stack_probe),
+            "native_stack_probe",
+        ),
+        (
+            10912,
+            offset_of!(Context, bytecode_stack_position),
+            "bytecode_stack_position",
+        ),
+        (
+            10920,
             offset_of!(Context, jit_stack_scratch),
             "jit_stack_scratch",
         ),
-        (10952, offset_of!(Context, next_resume_id), "next_resume_id"),
-        (10960, offset_of!(Context, owner), "owner"),
+        (10976, offset_of!(Context, next_resume_id), "next_resume_id"),
+        (10984, offset_of!(Context, owner), "owner"),
         (
-            10968,
+            10992,
             offset_of!(Context, apply_fast_path_epoch),
             "apply_fast_path_epoch",
         ),
         (
-            10976,
+            11000,
             offset_of!(Context, form_head_cache),
             "form_head_cache",
         ),
         (
-            43744,
+            43768,
             offset_of!(Context, lexenv_assq_cache),
             "lexenv_assq_cache",
         ),
         (
-            44256,
+            44280,
             offset_of!(Context, lexenv_special_cache),
             "lexenv_special_cache",
         ),
         (
-            44512,
+            44536,
             offset_of!(Context, macro_expansion_scope_depth),
             "macro_expansion_scope_depth",
         ),
         (
-            44520,
+            44544,
             offset_of!(Context, macro_expansion_mutation_epoch),
             "macro_expansion_mutation_epoch",
         ),
         (
-            44528,
+            44552,
             offset_of!(Context, macro_expand_calls),
             "macro_expand_calls",
         ),
         (
-            44536,
+            44560,
             offset_of!(Context, macro_expand_total_us),
             "macro_expand_total_us",
         ),
         (
-            44544,
+            44568,
             offset_of!(Context, internal_interpreter_environment_symbol),
             "internal_interpreter_environment_symbol",
         ),
         (
-            44548,
+            44572,
             offset_of!(Context, quit_flag_symbol),
             "quit_flag_symbol",
         ),
         (
-            44552,
+            44576,
             offset_of!(Context, inhibit_quit_symbol),
             "inhibit_quit_symbol",
         ),
         (
-            44556,
+            44580,
             offset_of!(Context, throw_on_input_symbol),
             "throw_on_input_symbol",
         ),
         (
-            44560,
+            44584,
             offset_of!(Context, kill_emacs_symbol),
             "kill_emacs_symbol",
         ),
-        (44564, offset_of!(Context, attention), "attention"),
+        (44588, offset_of!(Context, attention), "attention"),
         (
-            44568,
+            44592,
             offset_of!(Context, noninteractive_symbol),
             "noninteractive_symbol",
         ),
         (
-            44572,
+            44596,
             offset_of!(Context, symbols_with_pos_enabled_symbol),
             "symbols_with_pos_enabled_symbol",
         ),
         (
-            44576,
+            44600,
             offset_of!(Context, print_symbols_bare_symbol),
             "print_symbols_bare_symbol",
         ),
         (
-            44580,
+            44604,
             offset_of!(Context, load_read_stream_token),
             "load_read_stream_token",
         ),
         (
-            44584,
+            44608,
             offset_of!(Context, _reserved_debugging_output_file),
             "_reserved_debugging_output_file",
         ),
         (
-            44588,
+            44612,
             offset_of!(Context, compiler_function_overrides_symbol),
             "compiler_function_overrides_symbol",
         ),
         (
-            44592,
+            44616,
             offset_of!(Context, after_pdump_load_hook_pending),
             "after_pdump_load_hook_pending",
         ),
-        (44593, offset_of!(Context, noninteractive), "noninteractive"),
+        (44617, offset_of!(Context, noninteractive), "noninteractive"),
         (
-            44594,
+            44618,
             offset_of!(Context, symbols_with_pos_enabled),
             "symbols_with_pos_enabled",
         ),
         (
-            44595,
+            44619,
             offset_of!(Context, print_symbols_bare),
             "print_symbols_bare",
         ),
         (
-            44596,
+            44620,
             offset_of!(Context, _reserved_message_log_need_newline),
             "_reserved_message_log_need_newline",
         ),
         (
-            44597,
+            44621,
             offset_of!(Context, echo_area_resize_exact_pending),
             "echo_area_resize_exact_pending",
         ),
         (
-            44598,
+            44622,
             offset_of!(Context, _reserved_message_buf_print),
             "_reserved_message_buf_print",
         ),
-        (44599, offset_of!(Context, shutdown_phase), "shutdown_phase"),
+        (44623, offset_of!(Context, shutdown_phase), "shutdown_phase"),
         (
-            44600,
+            44624,
             offset_of!(Context, _reserved_input_mode_interrupt),
             "_reserved_input_mode_interrupt",
         ),
         (
-            44601,
+            44625,
             offset_of!(Context, waiting_for_user_input),
             "waiting_for_user_input",
         ),
-        (44602, offset_of!(Context, gc_pending), "gc_pending"),
+        (44626, offset_of!(Context, gc_pending), "gc_pending"),
         (
-            44603,
+            44627,
             offset_of!(Context, gc_driver_active),
             "gc_driver_active",
         ),
-        (44604, offset_of!(Context, gc_stress), "gc_stress"),
+        (44628, offset_of!(Context, gc_stress), "gc_stress"),
         (
-            44605,
+            44629,
             offset_of!(Context, compiler_function_overrides_active),
             "compiler_function_overrides_active",
         ),
         (
-            44606,
+            44630,
             offset_of!(Context, macro_perf_enabled),
             "macro_perf_enabled",
         ),
-        (44607, offset_of!(Context, custom), "custom"),
+        (44631, offset_of!(Context, custom), "custom"),
         (
-            44608,
+            44632,
             offset_of!(Context, frame_and_buffer_state),
             "frame_and_buffer_state",
         ),
         (
-            44607,
+            44631,
             offset_of!(Context, loadup_dump_mode),
             "loadup_dump_mode",
         ),
     ];
-    // The table pins the shipped release layout. A debug build adds MatchData's
-    // extra word to every field after `match_data`; derive that shift from the
-    // measured type sizes rather than hard-coding it. The cfg(test) native
-    // connect slot shifts only fields after ProcessManager; every original
-    // production offset remains pinned in the table.
-    let match_data = offset_of!(Context, match_data);
-    let processes = offset_of!(Context, processes);
+    // Adjust only for independently pinned test/debug storage. Boundaries
+    // use the table's production coordinates, never actual shifted offsets.
+    // WorldSlot reserves its T's full size, so inline owner instrumentation
+    // shifts exactly the later fields, while every production pin stays fixed.
     let debug_extra = size_of::<MatchData>() - 224;
     let adjusted = |pinned: usize| {
-        let debug_shift = if pinned > match_data { debug_extra } else { 0 };
-        let observation_shift = if pinned > processes {
-            observation_extra
-        } else {
-            0
-        };
-        pinned + debug_shift + observation_shift
+        pinned
+            + if pinned > 2816 { debug_extra } else { 0 }
+            + if pinned > 3296 { INTERACTIVE_EXTRA } else { 0 }
+            + if pinned > 3568 { MINIBUFFER_EXTRA } else { 0 }
+            + if pinned > 9152 {
+                WAIT_GATE_EXTRA + OBSERVATION_EXTRA
+            } else {
+                0
+            }
     };
     let moved: Vec<String> = table
         .iter()
