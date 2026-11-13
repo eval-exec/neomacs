@@ -118,6 +118,9 @@ mod oracle_green_two_owner;
 #[path = "oracle_integer_width.rs"]
 mod oracle_integer_width;
 
+#[path = "oracle_kill_emacs_shutdown.rs"]
+mod oracle_kill_emacs_shutdown;
+
 #[path = "oracle_make_indirect_buffer_validation.rs"]
 mod oracle_make_indirect_buffer_validation;
 

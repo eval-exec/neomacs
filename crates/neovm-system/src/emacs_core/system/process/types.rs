@@ -8331,7 +8331,13 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         sentinel: Value,
         message: &str,
     ) -> Result<(), Flow> {
-        if sentinel.is_nil() {
+        // GNU inhibits sentinel invocation in shut_down_emacs before killing
+        // processes or auto-saving (emacs.c:3155; process.c:7800-7809). This
+        // also covers processes created by an auto-save file handler. Hook
+        // execution is still InProgress, so its sentinels remain eligible.
+        if sentinel.is_nil()
+            || self.shutdown_phase == neovm_eval::emacs_core::eval::ShutdownPhase::Dying
+        {
             return Ok(());
         }
         // GNU has no per-process sentinel recursion guard: `exec_sentinel`
