@@ -1433,11 +1433,50 @@ fn retained_string_face_payload_mutation_matches_fresh_layout() {
     }
 }
 
-/// A moved point or translated retained row cannot certify an old explicit
-/// selection. Hidden overrides must be reselected, and retry must discard rows.
+/// Line box of a relative `:height` on the catalog primary face.
+///
+/// The test frame sets the default face to absolute `:height` 100. At the GNU
+/// X11 fallback of 100 DPI that is 14 px, and a relative height multiplies it.
+/// The cursor copies this face's realized line box (`ascent + descent` of the
+/// font selected for the glyph), not `12 * scale`.
+///
+/// GNU's physical cursor height is that row's box. `display_line` sets
+/// `row->height = it->max_ascent + it->max_descent` (src/xdisp.c:25984) and
+/// `display_and_set_cursor` copies it with
+/// `w->phys_cursor_height = glyph_row->height` (src/xdisp.c:35193), GNU Emacs
+/// 31.1 a360712c9d. The pixel count is UNATTESTED: this is a GUI row, not a
+/// TTY probe.
+fn realized_relative_face_line_box(relative_height: f32) -> u32 {
+    let font_size =
+        crate::font::sizing::face_height_to_gnu_x11_fallback_pixels(100) * relative_height;
+    let mut metrics = crate::font::metrics::test_catalog::metrics_service();
+    let measured = metrics
+        .vertical_metrics_for_realized_face_char(
+            'X',
+            crate::font::metrics::RealizedFaceFontSelection::new(
+                "monospace",
+                400,
+                false,
+                font_size,
+            ),
+        )
+        .expect("catalog primary face has a line box");
+    let rounded = measured.line_height.round();
+    assert!(
+        (measured.line_height - rounded).abs() < 0.01,
+        "relative :height {relative_height} line box must be a whole pixel, got {}",
+        measured.line_height
+    );
+    rounded as u32
+}
+
+/// An 80px frame fits one tall overlay row and not both. Moving point onto
+/// the second overlay scrolls. `set-window-start` of 4 then does not move
+/// the window, so the redisplay is cursor-only. That is why the selection
+/// test uses a 200px frame for a real start change.
 #[test]
-fn hidden_explicit_cursor_reselects_after_point_and_start_changes() {
-    let (mut eval, frame, _, window) =
+fn eighty_px_frame_scrolls_before_the_explicit_start_change() {
+    let (mut eval, frame, _, _window) =
         incr_editing_frame("ab\ncd\nef\ngh\nij\nkl\nmn\nop\n", 800, 80);
     realize_test_gui_frame(&mut eval, frame);
     eval.buffer_manager_mut()
@@ -1448,11 +1487,77 @@ fn hidden_explicit_cursor_reselects_after_point_and_start_changes() {
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
     crate::font::metrics::test_catalog::enable_metrics(&mut engine);
     engine.layout_frame_rust(&mut eval, frame);
+    let window_start = |eval: &mut Context| {
+        eval.eval_str("(window-start)")
+            .unwrap()
+            .as_fixnum()
+            .expect("window-start")
+    };
+    eval.eval_str("(set-window-point (selected-window) 2)")
+        .unwrap();
+    let FrameLayoutAttempt::Prepared(_) = engine.redisplay_frame_attempt(&mut eval, frame) else {
+        panic!("point 2");
+    };
+    let start_before_scroll = window_start(&mut eval);
+    eval.eval_str("(set-window-point (selected-window) 5)")
+        .unwrap();
+    let FrameLayoutAttempt::Prepared(_) = engine.redisplay_frame_attempt(&mut eval, frame) else {
+        panic!("point 5");
+    };
+    let start_after_scroll = window_start(&mut eval);
+    assert_ne!(
+        start_before_scroll, start_after_scroll,
+        "point 5 scrolls an 80px frame that cannot show both overlay rows"
+    );
+    eval.eval_str("(set-window-start (selected-window) 4 t)")
+        .unwrap();
+    let FrameLayoutAttempt::Prepared(_) = engine.redisplay_frame_attempt(&mut eval, frame) else {
+        panic!("set-window-start");
+    };
+    assert_eq!(
+        window_start(&mut eval),
+        start_after_scroll,
+        "set-window-start 4 does not move a window that already scrolled"
+    );
+    assert_eq!(engine.last_layout_stats().full_windows, 0);
+    assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+}
+
+/// A moved point or translated retained row cannot certify an old explicit
+/// selection. Hidden overrides must be reselected, and retry must discard rows.
+#[test]
+fn hidden_explicit_cursor_reselects_after_point_and_start_changes() {
+    // An 80px frame cannot show both overlay rows under the mode line. Moving
+    // point to 5 scrolls, so a later `set-window-start` of 4 does not move the
+    // window and the redisplay is cursor-only. That is the product behavior
+    // `eighty_px_frame_scrolls_before_the_explicit_start_change` pins. 200px
+    // keeps both rows on screen until the start is set explicitly, so this
+    // loop's third step is a real start change.
+    let (mut eval, frame, _, window) =
+        incr_editing_frame("ab\ncd\nef\ngh\nij\nkl\nmn\nop\n", 800, 200);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.buffer_manager_mut()
+        .current_buffer_mut()
+        .unwrap()
+        .set_buffer_local("cursor-type", Value::NIL);
+    eval.eval_str("(progn (overlay-put (make-overlay 1 1) 'before-string (propertize \"X\" 'cursor 2 'face '(:height 2.0))) (overlay-put (make-overlay 4 4) 'before-string (propertize \"X\" 'cursor 2 'face '(:height 1.5))))").unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    engine.layout_frame_rust(&mut eval, frame);
     let mut last = None;
+    // :height 2.0 selects the first overlay while point is in [1, 3).
+    // :height 1.5 selects the second overlay from point 5. Both boxes come
+    // from the realized primary face, not from 12px times the scale.
+    let tall = realized_relative_face_line_box(2.0);
+    let short = realized_relative_face_line_box(1.5);
+    assert!(
+        tall > short,
+        "the 2.0 face must be taller than the 1.5 face"
+    );
     for (change, height) in [
-        ("(set-window-point (selected-window) 2)", 24),
-        ("(set-window-point (selected-window) 5)", 18),
-        ("(set-window-start (selected-window) 4 t)", 18),
+        ("(set-window-point (selected-window) 2)", tall),
+        ("(set-window-point (selected-window) 5)", short),
+        ("(set-window-start (selected-window) 4 t)", short),
     ] {
         eval.eval_str(change).unwrap();
         let FrameLayoutAttempt::Prepared(prepared) =
