@@ -222,6 +222,33 @@ fn script_preserves_literal_quick_option_after_terminator() {
 }
 
 #[test]
+fn scripteval_quick_options_are_consumed_before_evaluation() {
+    let fixture = script_args_fixture();
+    let directory = fixture
+        .path()
+        .canonicalize()
+        .expect("canonical fixture path");
+    let directory = directory.to_str().expect("UTF-8 fixture path");
+    // GNU emacs.c:2132-2140 also re-sorts the -x -> -scripteval rewrite.
+    // The trusted fixture's final princ returns a string, so GNU's script
+    // evaluator exits 0 rather than treating a numeric result as an exit code.
+    for argv in [
+        ["--chdir", directory, "-Q", "-x", "args.el", "a", "b"],
+        ["--chdir", directory, "-x", "args.el", "-Q", "a", "b"],
+    ] {
+        let e = run_oracle_emacs(&argv);
+        assert_eq!(e.status, 0, "GNU -x failed for {argv:?}: {e:?}");
+        assert_eq!(
+            e.stdout, "(\"a\" \"b\")\n",
+            "GNU -x argv for {argv:?}: {e:?}"
+        );
+        let n = run_neomacs(&argv);
+        assert_eq!(n.status, 0, "Neomacs -x failed for {argv:?}: {n:?}");
+        assert_eq!(n.stdout, e.stdout, "-x argv differs for {argv:?}: {n:?}");
+    }
+}
+
+#[test]
 fn no_site_lisp_drops_site_lisp_from_load_path() {
     let argv = [
         "--no-site-lisp",
