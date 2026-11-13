@@ -525,7 +525,6 @@ mod unit_runtime {
         DynamicModuleHooks::new(
             s::dynamic_module_reset,
             DYNAMIC_MODULE_FINGERPRINT,
-            s::dynamic_module_panic_message,
             s::dynamic_module_load_module,
             s::dynamic_module_apply_module_function,
             s::dynamic_module_module_call_active,

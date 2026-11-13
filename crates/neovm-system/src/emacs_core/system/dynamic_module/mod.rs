@@ -637,18 +637,9 @@ fn module_signal_or_throw(
 // modules cannot panic at all. That matches GNU, where a module crashing
 // internally crashes the editor.
 
-/// Best-effort text from a caught panic payload. Shared with the JIT shim
-/// boundary (`jit_shim_contain!` in jit/compile.rs).
+/// Best-effort panic text shared with the evaluator's JIT shim boundary.
 #[doc(hidden)]
-pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(s) = payload.downcast_ref::<&'static str>() {
-        (*s).to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "<opaque panic payload>".to_string()
-    }
-}
+pub use neovm_eval::emacs_core::eval::lifecycle::dynamic_module_panic_message as panic_message;
 
 /// The `Flow` a contained panic turns into: a plain `error` signal (GNU's
 /// module layer signals `error` with a descriptive string for internal module

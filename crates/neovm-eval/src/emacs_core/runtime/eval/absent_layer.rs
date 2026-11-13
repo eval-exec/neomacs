@@ -237,10 +237,6 @@ macro_rules! eval_absent_layer_slots {
                 neovm_value::tls_fingerprint::mix(acc, 0);
             }
 
-            pub(crate) fn dynamic_module_panic_message(err: &(dyn std::any::Any + Send)) -> String {
-                absent_layer_panic("ABSENT-LAYER system::dynamic_module.panic_message");
-            }
-
             pub(crate) fn dynamic_module_load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
                 absent_layer_panic("ABSENT-LAYER system::dynamic_module.load_module");
             }

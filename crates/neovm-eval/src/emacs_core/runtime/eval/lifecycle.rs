@@ -51,13 +51,12 @@ pub type ModuleCallActive = fn() -> bool;
 /// Enumerate the active module-call frames' Value roots.
 pub type CollectModuleGcRoots = fn(&mut Vec<Value>, usize);
 
-/// Dynamic-module lifecycle bodies (carrier hooks, panic text, module load,
+/// Dynamic-module lifecycle bodies (carrier hooks, module load,
 /// module-call dispatch and the active-frame root enumeration).
 #[derive(Clone, Copy)]
 pub struct DynamicModuleHooks {
     reset: fn(),
     fingerprint: Option<fn(&mut u64)>,
-    panic_message: fn(&(dyn Any + Send)) -> String,
     load_module: fn(&mut Context, PathBuf) -> EvalResult,
     apply_module_function: ApplyModuleFunction,
     module_call_active: ModuleCallActive,
@@ -66,11 +65,9 @@ pub struct DynamicModuleHooks {
 
 impl DynamicModuleHooks {
     /// Build the dynamic-module group.
-    #[allow(clippy::too_many_arguments)] // one cold descriptor, one install site
     pub const fn new(
         reset: fn(),
         fingerprint: Option<fn(&mut u64)>,
-        panic_message: fn(&(dyn Any + Send)) -> String,
         load_module: fn(&mut Context, PathBuf) -> EvalResult,
         apply_module_function: ApplyModuleFunction,
         module_call_active: ModuleCallActive,
@@ -79,7 +76,6 @@ impl DynamicModuleHooks {
         Self {
             reset,
             fingerprint,
-            panic_message,
             load_module,
             apply_module_function,
             module_call_active,
@@ -588,11 +584,6 @@ impl DynamicModuleHooks {
     }
 
     #[doc(hidden)]
-    pub fn panic_message(&self) -> fn(&(dyn Any + Send)) -> String {
-        self.panic_message
-    }
-
-    #[doc(hidden)]
     pub fn load_module(&self) -> fn(&mut Context, PathBuf) -> EvalResult {
         self.load_module
     }
@@ -934,9 +925,44 @@ pub fn dynamic_module_carrier_tls_fingerprint(h: &mut u64) {
     }
 }
 
-/// Text of a caught dynamic-module panic payload.
+/// Best-effort text from a caught panic payload, shared by dynamic modules
+/// and the JIT shim boundary. This std-only operation needs no lifecycle hook.
+#[inline]
 pub fn dynamic_module_panic_message(payload: &(dyn Any + Send)) -> String {
-    (lifecycle_hooks().dynamic_module().panic_message())(payload)
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<opaque panic payload>".to_string()
+    }
+}
+
+#[cfg(test)]
+mod panic_payload_tests {
+    use super::dynamic_module_panic_message;
+
+    #[test]
+    fn panic_message_reads_static_str_without_a_context() {
+        assert_eq!(
+            dynamic_module_panic_message(&"borrowed panic"),
+            "borrowed panic"
+        );
+    }
+
+    #[test]
+    fn panic_message_copies_owned_string_without_a_context() {
+        let payload = String::from("owned panic");
+        assert_eq!(dynamic_module_panic_message(&payload), payload);
+    }
+
+    #[test]
+    fn panic_message_labels_opaque_payload_without_a_context() {
+        assert_eq!(
+            dynamic_module_panic_message(&42_u64),
+            "<opaque panic payload>"
+        );
+    }
 }
 
 /// Load a dynamic module from PATH through the core loader.

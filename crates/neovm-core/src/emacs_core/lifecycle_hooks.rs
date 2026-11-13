@@ -136,7 +136,6 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
     DynamicModuleHooks::new(
         crate::emacs_core::dynamic_module::reset_carrier_tls,
         DYNAMIC_MODULE_FINGERPRINT,
-        crate::emacs_core::dynamic_module::panic_message,
         crate::emacs_core::dynamic_module::load_module,
         crate::emacs_core::dynamic_module::apply_module_function,
         crate::emacs_core::dynamic_module::module_call_active,

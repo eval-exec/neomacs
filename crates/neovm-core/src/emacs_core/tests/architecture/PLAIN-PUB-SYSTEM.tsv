@@ -104,7 +104,6 @@ crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	fn	fn impl Modul
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	fn	fn impl ModuleLibrary::open
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	fn	fn load_module
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	fn	fn module_call_active
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	fn	fn panic_message
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	fn	fn reset_carrier_tls
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	struct	struct LoadedModule
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	struct	struct emacs_env
