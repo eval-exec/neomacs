@@ -9,7 +9,7 @@ use crate::display_item::{
     SourceSpan,
 };
 use crate::display_property::DisplayReplacementProperty;
-use crate::display_source::DisplaySourceTextPosition;
+use crate::display_source::{DisplaySourceResumeCursor, DisplaySourceTextPosition};
 use crate::neovm_bridge::{LayoutBufferSnapshot, LayoutBufferView};
 use neomacs_display_protocol::types::FaceId;
 use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos, EmacsByteRange};
@@ -3724,7 +3724,9 @@ fn character_source_reuses_property_boundaries_and_recovers_after_rewinds() {
     // Stops at characters 8,12,16,24,32, despite one-character production.
     assert_eq!(source.property_boundary_queries(), 5);
     let mut context = DisplaySourceContext::empty();
-    source.rewind_for_word_wrap_to(CharPos0::new(2));
+    source.rewind_for_word_wrap_to(DisplaySourceResumeCursor::BeforeOverlayStrings(
+        DisplaySourceTextPosition::new(4, 2),
+    ));
     let replay = source.next_item(&mut context).unwrap();
     assert_eq!(
         replay.span.start,
@@ -3827,4 +3829,39 @@ fn character_source_keeps_narrowed_byte_coordinates_after_lookahead_and_rewinds(
         );
     }
     assert_eq!(source.char_at(end), None);
+}
+
+#[test]
+fn after_overlay_resume_without_an_insertion_preserves_fresh_box_start() {
+    use crate::display_source::DisplaySourceResumeCursor;
+    use neomacs_display_protocol::face::BoxVerticalEdges;
+
+    let (id, snapshot, end) = snapshot_with_text("boxed");
+    let boxed = RenderFaceRef::FaceId(FaceId::new(3));
+    let mut resolver = BoxedFaceResolver;
+    let mut context = DisplaySourceContext::with_face_resolver(&mut resolver);
+    let mut fresh = BufferTextSourceCursor::new(id, &snapshot, CharPos0::ZERO, end, boxed);
+    let expected = fresh.next_item(&mut context).expect("fresh boxed text");
+    assert_eq!(expected.box_vertical_edges, BoxVerticalEdges::Both);
+
+    let mut resumed = BufferTextSourceCursor::new(id, &snapshot, CharPos0::ZERO, end, boxed);
+    resumed
+        .next_item(&mut context)
+        .expect("consume past target");
+    // AFTER is a source seating, not evidence that an insertion existed.
+    // Falsely marking this no-overlay anchor as consumed would suppress the
+    // boxed source's left terminal even though no string ever painted it.
+    resumed.rewind_for_word_wrap_to(DisplaySourceResumeCursor::AfterOverlayStrings(
+        DisplaySourceTextPosition::new(0, 0),
+    ));
+    let actual = resumed.next_item(&mut context).expect("resumed boxed text");
+    assert_eq!(
+        actual.box_vertical_edges,
+        BoxVerticalEdges::Both,
+        "no insertion has consumed the boxed run's left cap"
+    );
+    assert_eq!(
+        actual, expected,
+        "AFTER seating preserves fresh emitted topology"
+    );
 }

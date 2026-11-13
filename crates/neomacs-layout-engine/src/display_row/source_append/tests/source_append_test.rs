@@ -3430,7 +3430,9 @@ fn buffer_text_word_wrap_restores_the_candidate_extend_face_and_pen() {
     let candidate_position = DisplayRowPosition::new(31.0, 4);
     let mut break_candidate = WordWrapBreakCandidate::default();
     break_candidate.record_at(
-        DisplaySourceTextPosition::new(7, 12),
+        crate::display_source::DisplaySourceResumeCursor::AfterOverlayStrings(
+            DisplaySourceTextPosition::new(7, 12),
+        ),
         3,
         (Some(LispCharPos1::new(10)), Some(LispCharPos1::new(12))),
         DisplayRowGlyphCheckpoint::default(),

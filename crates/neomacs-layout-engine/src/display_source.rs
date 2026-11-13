@@ -569,6 +569,30 @@ pub(crate) struct DisplaySourceTextPosition {
     charpos: i64,
 }
 
+/// A buffer seating and whether its overlay-string insertion was consumed.
+///
+/// The same buffer position can describe either side of an insertion. Word-wrap
+/// checkpoints must preserve that distinction together with their glyph state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DisplaySourceResumeCursor {
+    BeforeOverlayStrings(DisplaySourceTextPosition),
+    AfterOverlayStrings(DisplaySourceTextPosition),
+}
+
+impl Default for DisplaySourceResumeCursor {
+    fn default() -> Self {
+        Self::AfterOverlayStrings(DisplaySourceTextPosition::default())
+    }
+}
+
+impl DisplaySourceResumeCursor {
+    pub(crate) const fn position(self) -> DisplaySourceTextPosition {
+        match self {
+            Self::BeforeOverlayStrings(position) | Self::AfterOverlayStrings(position) => position,
+        }
+    }
+}
+
 impl DisplaySourceTextPosition {
     pub(crate) const fn new(byte_idx: usize, charpos: i64) -> Self {
         Self { byte_idx, charpos }

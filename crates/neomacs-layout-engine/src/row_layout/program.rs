@@ -13,6 +13,7 @@ use crate::display_row::face_state::{DisplayRowFace, DisplayRowMeasurementMode};
 use crate::display_row::finalizer::DisplayRowLineEndFinalizer;
 use crate::display_row::geometry::DisplayRowTextAreaOrigin;
 use crate::display_row::metrics::DisplayRowFallbackMetrics;
+use crate::display_source::DisplaySourceResumeCursor;
 use crate::display_text_run_measurement::DisplayTextRunMeasurement;
 use crate::types::LineWrapMode;
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
@@ -968,9 +969,11 @@ impl RowProgram {
             {
                 word_wrap.record_candidate_at(
                     first,
-                    crate::display_source::DisplaySourceTextPosition::new(
-                        byte_pos.get(),
-                        char_pos.get() as i64,
+                    DisplaySourceResumeCursor::BeforeOverlayStrings(
+                        crate::display_source::DisplaySourceTextPosition::new(
+                            byte_pos.get(),
+                            char_pos.get() as i64,
+                        ),
                     ),
                     previous_slots,
                     (None, None),
@@ -1040,9 +1043,11 @@ impl RowProgram {
                 {
                     word_wrap.record_candidate_at(
                         ch,
-                        crate::display_source::DisplaySourceTextPosition::new(
-                            byte_pos.get(),
-                            char_pos.get() as i64,
+                        DisplaySourceResumeCursor::AfterOverlayStrings(
+                            crate::display_source::DisplaySourceTextPosition::new(
+                                byte_pos.get(),
+                                char_pos.get() as i64,
+                            ),
                         ),
                         previous_slots + progress.slots().len(),
                         (None, None),
@@ -1119,11 +1124,19 @@ impl RowProgram {
                     let candidate = word_wrap.candidate();
                     wrap_extend = candidate.row_extend();
                     let boundary = candidate.source_position().charpos();
+                    let replay_insertions = match candidate.source_cursor() {
+                        DisplaySourceResumeCursor::BeforeOverlayStrings(_) => true,
+                        DisplaySourceResumeCursor::AfterOverlayStrings(_) => false,
+                    };
                     let (index, offset) = operations
                         .iter()
                         .enumerate()
                         .find_map(|(index, (item, _))| {
-                            if matches!(item.span.start, DisplaySourcePosition::LispString { .. })
+                            if replay_insertions
+                                && matches!(
+                                    item.span.start,
+                                    DisplaySourcePosition::LispString { .. }
+                                )
                                 && let DisplaySourcePosition::Buffer { char_pos, .. } =
                                     buffer_anchors[index]
                                 && char_pos.get() as i64 == boundary

@@ -23,7 +23,7 @@ use crate::display_row::source_render::TextRowSourceRenderState;
 use crate::display_row::walk_state::{
     HorizontalScrollSkipState, InvisibleTextScanCheckpoint, LineNumberRenderState,
 };
-use crate::display_source::DisplaySourceTextPosition;
+use crate::display_source::{DisplaySourceResumeCursor, DisplaySourceTextPosition};
 use crate::display_source_item_append::DisplaySourceRowAppendState;
 use crate::display_source_progress::DisplaySourceProgressState;
 use crate::display_source_walk::DisplaySourcePositionConsumption;
@@ -39,14 +39,15 @@ pub(crate) struct BufferSourceWalk<'request, B: LayoutBufferView> {
 
 /// Why the buffer producer is being reseated at an overflowing character.
 ///
-/// Word wrap restores a checkpoint taken before every source element at the
-/// boundary, so insertion elements must replay. Character wrap retries only
+/// Word wrap restores the saved position AND its insertion phase: insertions
+/// after the glyph checkpoint replay, while retained ones stay consumed.
+/// Character wrap retries only
 /// the overflowing buffer character and must preserve already-drawn insertion
 /// elements. Keeping the distinction closed prevents a new retry call site
 /// from silently choosing the wrong overlay-string behavior.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BufferSourceRewind {
-    WordWrap(DisplaySourceTextPosition),
+    WordWrap(DisplaySourceResumeCursor),
     CharacterWrap(DisplaySourceTextPosition),
 }
 
@@ -57,7 +58,7 @@ impl BufferSourceRewind {
                 // GNU back_to_wrap restores the complete iterator, including
                 // property stops (xdisp.c:26381-26408). A visibility fact
                 // learned after the saved word boundary cannot cross rewind.
-                checkpoint.rewind_to(position);
+                checkpoint.rewind_to(position.position());
             }
             // This retries only the overflowing character. No previously
             // classified source interval is replayed, so its stop stays valid.
@@ -237,7 +238,7 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
     ) {
         rewind.restore_invisible_checkpoint(invisible_checkpoint);
         match rewind {
-            BufferSourceRewind::WordWrap(position) => self.producer.rewind_word_wrap_to(position),
+            BufferSourceRewind::WordWrap(cursor) => self.producer.rewind_word_wrap_to(cursor),
             BufferSourceRewind::CharacterWrap(position) => {
                 self.producer.rewind_character_wrap_to(position)
             }

@@ -104,7 +104,7 @@ fn assert_snapshot_restore_matches_rewind(text: &str, candidate: DisplaySourceTe
     // The seating saved at the wrap candidate, before the overflow attempt.
     let saved = {
         let mut seated = producer(buffer_id, &snapshot);
-        seated.rewind_word_wrap_to(candidate);
+        seated.rewind_word_wrap_to(DisplaySourceResumeCursor::AfterOverlayStrings(candidate));
         seated.snapshot()
     };
 

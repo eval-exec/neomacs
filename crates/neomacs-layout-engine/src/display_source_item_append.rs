@@ -16,9 +16,9 @@ use crate::display_row::walk_state::{
 use crate::display_source::{
     DisplaySourceAppendContinuation, DisplaySourceAppendItem, DisplaySourceClusterState,
     DisplaySourceItemRequest, DisplaySourceNaturalMeasurementRequest,
-    DisplaySourceRenderPlanRequest, DisplaySourceSpecialDisplayKind, DisplaySourceStepChar,
-    DisplaySourceTextPosition, DisplaySourceTextRange, DisplaySourceTextRequest,
-    DisplaySpecialSourceCharRequest,
+    DisplaySourceRenderPlanRequest, DisplaySourceResumeCursor, DisplaySourceSpecialDisplayKind,
+    DisplaySourceStepChar, DisplaySourceTextPosition, DisplaySourceTextRange,
+    DisplaySourceTextRequest, DisplaySpecialSourceCharRequest,
 };
 use crate::display_source_append_plan::{
     DisplaySourceAppendMeasurementKind, DisplaySourceAppendRenderPlan,
@@ -432,7 +432,10 @@ impl DisplaySourceStepChar {
     ) {
         word_wrap.record_source_candidate(
             self.ch(),
-            DisplaySourceTextPosition::new(self.start_byte_idx(), self.start_charpos()),
+            DisplaySourceResumeCursor::AfterOverlayStrings(DisplaySourceTextPosition::new(
+                self.start_byte_idx(),
+                self.start_charpos(),
+            )),
             source_render,
             row_position,
             row_extend,
@@ -443,12 +446,12 @@ impl DisplaySourceStepChar {
 impl WordWrapRenderState {
     /// Save one GNU-style word-wrap checkpoint before a source character is
     /// appended.  Glyph output, display-point metadata, and the authoritative
-    /// buffer position are captured together so every source producer uses one
-    /// atomic boundary.
+    /// buffer position plus insertion phase are captured together so every
+    /// source producer uses one atomic boundary.
     pub(crate) fn record_source_candidate<FS: crate::neovm_bridge::FaceServices>(
         &mut self,
         ch: char,
-        position: DisplaySourceTextPosition,
+        source_cursor: DisplaySourceResumeCursor,
         source_render: &TextRowSourceRenderState<'_, FS>,
         row_position: DisplayRowPosition,
         row_extend: Option<DisplayRowExtendFace>,
@@ -461,7 +464,7 @@ impl WordWrapRenderState {
             let output_emitter = source_render.output_emitter_ref();
             self.record_candidate_at(
                 ch,
-                position,
+                source_cursor,
                 output_emitter.display_point_len(),
                 output_emitter.current_row_display_positions(),
                 glyph_checkpoint,
