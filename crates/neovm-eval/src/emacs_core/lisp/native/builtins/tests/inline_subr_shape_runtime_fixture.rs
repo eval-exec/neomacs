@@ -57,6 +57,7 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_copy_syntax_table_matches_canonical_descriptor(&mut eval);
     assert_core_base64_encode_string_matches_canonical_descriptor(&mut eval);
     assert_core_bobp_matches_canonical_descriptor(&mut eval);
+    assert_core_buffer_line_statistics_matches_canonical_descriptor(&mut eval);
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
@@ -1448,6 +1449,50 @@ fn assert_core_copy_syntax_table_matches_canonical_descriptor(
     );
     context.symbols_with_pos_enabled = original_mode;
     assert_eq!(context.edit.buffers.current_buffer_id(), current);
+}
+
+fn assert_core_buffer_line_statistics_matches_canonical_descriptor(context: &mut Context) {
+    use crate::emacs_core::builtins::buffer_subrs::BUFFER_LINE_STATISTICS_SUBR;
+    use crate::emacs_core::eval::lookup_global_subr_entry;
+    use crate::emacs_core::eval::subr_abi::SubrFn;
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+    use neovm_value::value::Value;
+
+    let expected = BUFFER_LINE_STATISTICS_SUBR;
+    let id = intern("buffer-line-statistics");
+    let actual = lookup_global_subr_entry(id).expect("core registered buffer-line-statistics");
+    let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(actual_fn))) =
+        (expected.function(), actual.function)
+    else {
+        panic!("buffer-line-statistics retains ContextVec ABI");
+    };
+    assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+    assert_eq!(expected.name(), "buffer-line-statistics");
+    assert_eq!(expected.arity(), SubrArity::new(0, Some(1)));
+    assert_eq!((actual.min_args, actual.max_args), (0, Some(1)));
+    assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+    assert!(actual.interactive_spec.is_none());
+    assert!(expected.interactive_spec().is_none());
+    assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+    assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(expected.leaf_spec().is_none());
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+    assert!(
+        context
+            .obarray_view()
+            .get_property("buffer-line-statistics", "disabled")
+            .unwrap_or(Value::NIL)
+            .is_nil()
+    );
+
+    context
+        .eval_str("(progn (erase-buffer) (insert \"a\\nbb\"))")
+        .expect("statistics fixture");
+    for args in [vec![], vec![Value::NIL]] {
+        let result = actual_fn(context, args).expect("core statistics body");
+        assert_eq!(crate::emacs_core::print::print_value(&result), "(2 2 1.5)");
+    }
 }
 
 fn assert_core_bobp_matches_canonical_descriptor(context: &mut Context) {

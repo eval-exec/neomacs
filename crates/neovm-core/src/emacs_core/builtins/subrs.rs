@@ -266,14 +266,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|ctx, args| builtin_buffer_string(ctx, args)),
         SubrArity::new(0, Some(0)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "buffer-line-statistics",
-        NativeFn::ContextVec(|ctx, args| builtin_buffer_line_statistics(
-            &mut ctx.edit.buffers,
-            args
-        )),
-        SubrArity::new(0, Some(1)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::buffer_subrs::BUFFER_LINE_STATISTICS_SUBR);
     crate::emacs_core::display_subrs::register_buffer_text_pixel_size(ctx);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
         "buffer-substring",

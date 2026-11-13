@@ -2635,6 +2635,67 @@ mod unit_runtime {
         })
     }
 
+    #[test]
+    fn unit_buffer_line_statistics_uses_canonical_registered_entry() {
+        use crate::emacs_core::builtins::buffer_subrs::BUFFER_LINE_STATISTICS_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity};
+
+        let expected = BUFFER_LINE_STATISTICS_SUBR;
+        let bound =
+            buffer_family_subr("buffer-line-statistics").expect("unit statistics descriptor");
+        assert_eq!(expected.name(), "buffer-line-statistics");
+        assert_eq!(expected.arity(), SubrArity::new(0, Some(1)));
+        assert_eq!(bound.name(), expected.name());
+        assert_eq!(bound.arity(), expected.arity());
+        assert_eq!(bound.dispatch_kind(), expected.dispatch_kind());
+        assert!(bound.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(bound.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(bound.command_default(), expected.command_default());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(bound.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(bound_fn))) =
+            (expected.function(), bound.function())
+        else {
+            panic!("buffer-line-statistics retains ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(bound_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let id = neovm_value::intern::intern("buffer-line-statistics");
+        let actual = crate::emacs_core::eval::lookup_global_subr_entry(id)
+            .expect("registered unit buffer-line-statistics");
+        let Some(SubrFn::Many(actual_fn)) = actual.function else {
+            panic!("registered ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+        assert_eq!((actual.min_args, actual.max_args), (0, Some(1)));
+        assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+        assert!(actual.interactive_spec.is_none());
+        assert_eq!(
+            crate::emacs_core::subr::no_eval_policy(id),
+            expected.no_eval_policy()
+        );
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert!(
+            context
+                .obarray_view()
+                .get_property("buffer-line-statistics", "disabled")
+                .unwrap_or(Value::NIL)
+                .is_nil()
+        );
+        context
+            .eval_str("(progn (erase-buffer) (insert \"a\\nbb\"))")
+            .expect("statistics fixture");
+        for args in [vec![], vec![Value::NIL]] {
+            let result = actual_fn(&mut context, args).expect("unit statistics body");
+            assert_eq!(crate::emacs_core::print::print_value(&result), "(2 2 1.5)");
+        }
+    }
+
     /// Buffer subrs whose bodies live in `neovm-edit`. The unit runtime
     /// binds the same entry shape production registers in `subrs.rs`.
     fn buffer_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
@@ -2705,6 +2766,9 @@ mod unit_runtime {
 
         Some(match name {
             "bufferp" => crate::emacs_core::builtins::types::BUFFERP_SUBR,
+            "buffer-line-statistics" => {
+                crate::emacs_core::builtins::buffer_subrs::BUFFER_LINE_STATISTICS_SUBR
+            }
             "get-buffer-create" => SubrSpec::new(
                 "get-buffer-create",
                 NativeFn::ContextVec(bind_get_buffer_create),
