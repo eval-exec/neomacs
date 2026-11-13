@@ -26,7 +26,7 @@ const OPTIONAL_TWO_SLOT: SubrSpec = SubrSpec::fixed2("test-optional-two-slot", t
 fn compiled_subr_batch_is_the_executable_declaration_catalog() {
     assert_eq!(
         subrs::SUBRS.owner(),
-        "neovm_core::emacs_core::subr::tests::subrs"
+        "neovm_eval::emacs_core::subr::tests::subrs"
     );
     assert!(subrs::SUBRS.source_file().ends_with("tests/subrs.rs"));
     assert_eq!(subrs::SUBRS.specs().len(), 1);
