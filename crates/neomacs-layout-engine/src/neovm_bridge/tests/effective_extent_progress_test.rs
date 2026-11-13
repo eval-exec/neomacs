@@ -9,7 +9,7 @@ fn range(start: usize, end: usize) -> EmacsByteRange {
 
 #[test]
 fn effective_extent_progress_four_character_hidden_newline() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let id = eval.buffer_manager().current_buffer().unwrap().id();
     let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
     buffer.insert("a\nb\n");
@@ -53,7 +53,7 @@ fn check_category_boundaries<B: LayoutBufferView>(buffer: &B) {
 
 #[test]
 fn effective_extent_progress_across_irrelevant_categories_and_multibyte_text() {
-    let _runtime = Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     for kind in BufferTextBackendKind::implemented_variants() {
         let mut buffer = Buffer::try_new_standalone_with_text_backend_kind(
             BufferId(700 + u64::from(u8::from(kind))),
@@ -86,7 +86,7 @@ fn effective_extent_progress_across_irrelevant_categories_and_multibyte_text() {
 
 #[test]
 fn effective_extent_progress_across_alias_and_canonical_handoff() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let id = eval.buffer_manager().current_buffer().unwrap().id();
     let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
     buffer.insert("a\nb\nc\nvisible\n");

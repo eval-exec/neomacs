@@ -1,0 +1,394 @@
+//! Cold proof-1 roots. The legacy owner is captured before its heap loan;
+//! frozen World storage is visited only after the rendezvous has stopped all
+//! participants. Neither walk re-enumerates another owner's private slab.
+
+use super::*;
+#[cfg(test)]
+use crate::emacs_core::eval::world::WorldProofEraExt;
+use neovm_value::gc_trace::GcTrace;
+use neovm_value::tagged::gc::{AllStopped, HeapIdentity, RendezvousError};
+use neovm_value::tagged::value::TaggedValue;
+
+#[path = "parallel_admission.rs"]
+mod parallel_admission;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use parallel_admission::OwnedProofProjection;
+pub(crate) use parallel_admission::{OwnedParallelError, OwnedParallelProjection};
+
+use neovm_value::tagged::gc::FrozenFunctionRoots;
+pub(crate) use neovm_value::tagged::gc::FrozenLegacyRoots;
+
+impl Context {
+    /// C4 admits inactive compiled caches, but no suspended legacy Lisp/native
+    /// activation or outstanding job from this owner. Its closed executor can
+    /// create neither while this original Context remains suspended.
+    #[cold]
+    pub(crate) fn function_cells_quiescent(&self) -> bool {
+        use crate::emacs_core::eval::SpecBinding;
+        if self.jit_root_stack_top != 0
+            || self.specpdl.iter().any(|entry| {
+                matches!(
+                    entry,
+                    SpecBinding::Backtrace { .. }
+                        | SpecBinding::Backtrace1 { .. }
+                        | SpecBinding::Backtrace2 { .. }
+                        | SpecBinding::BacktraceNative { .. }
+                )
+            })
+        {
+            return false;
+        }
+        #[cfg(feature = "jit")]
+        if crate::emacs_core::jit::cache::native_depth() != 0
+            || crate::emacs_core::jit::bg::pending_count() != 0
+        {
+            return false;
+        }
+        true
+    }
+
+    #[cold]
+    #[inline(never)]
+    // No external capture factory: a same-heap snapshot could become stale
+    // after arbitrary Context execution. The production transaction is
+    // `admit_owned_parallel` in the child module. It calls this capture and
+    // then `admit_rooted` with no Context execution between them. The fixture
+    // sequences below remain the test-only NIL preclean.
+    pub(crate) fn capture_parallel_legacy_roots(
+        &self,
+        keeper: &Baton,
+    ) -> Result<FrozenLegacyRoots, RendezvousError> {
+        if !keeper.held_here() {
+            return Err(neovm_value::tagged::gc::RegistrationError::WrongThread.into());
+        }
+        if !Arc::ptr_eq(&keeper.world, &self.obarray.lease.0)
+            || keeper.parallel_heap_identity() != self.tagged_heap.heap_identity()
+        {
+            return Err(RendezvousError::Identity);
+        }
+        // A5 has no admission for pre-existing Green Context private slices.
+        // Refuse even an ended runtime rather than guessing at parked roots.
+        if keeper
+            .world
+            .green
+            .try_borrow()
+            .map_err(|_| RendezvousError::Busy)?
+            .is_some()
+        {
+            return Err(RendezvousError::Publication);
+        }
+        let mut words = Vec::new();
+        self.trace_private_roots(&mut words);
+        if let Some(slab) = self.owner.slab() {
+            // Only this original owner; never owner_slabs.trace_roots.
+            slab.trace_roots(&mut |value| words.push(value));
+        }
+        let heap_id = self.tagged_heap.tagged_heap_identity();
+        let epoch = self.tagged_heap.gc_collections();
+        super::super::super::for_each_thread_local_root_source(
+            heap_id,
+            epoch,
+            neovm_value::tagged::gc::CacheRootScan::Parked,
+            |_, collect| collect(&mut words),
+        );
+        // These registries belong to the suspended Context, not to World
+        // storage. Its private walk separately includes in-flight Flow roots.
+        neovm_text::emacs_core::ccl::collect_ccl_registry_gc_roots(&self.ccl_registry, &mut words);
+        neovm_text::emacs_core::charset::collect_charset_registry_gc_roots(
+            &self.charset_registry,
+            &mut words,
+        );
+        crate::emacs_core::eval::data::terminal_state::collect_terminal_registry_gc_roots(
+            &self.terminal_registry,
+            &mut words,
+        );
+        crate::emacs_core::eval::data::face_registry::collect_font_registry_gc_roots(
+            &self.font_registry,
+            &mut words,
+        );
+        crate::emacs_core::builtins::collect_hash_table_test_registry_gc_roots(
+            &self.hash_table_test_registry,
+            &mut words,
+        );
+        crate::emacs_core::builtins::collect_file_notify_registry_gc_roots(
+            &self.file_notify_registry,
+            &mut words,
+        );
+        crate::emacs_core::eval::data::dynamic_module_registry::collect_dynamic_module_registry_gc_roots(
+            &self.dynamic_module_registry,
+            &mut words,
+        );
+        let functions = if self.function_cells_quiescent() {
+            FrozenFunctionRoots::Quiescent
+        } else {
+            FrozenFunctionRoots::MayBeActive
+        };
+        // SAFETY: the complete original Context census was captured above,
+        // while its retained keeper excludes execution. Admission consumes it
+        // before any Context resumes; the quiescence check covers activations
+        // and outstanding compiled jobs.
+        Ok(unsafe { FrozenLegacyRoots::new(keeper.parallel_heap_identity(), words, functions) })
+    }
+}
+
+impl Baton {
+    /// Capture the original manager identities once while this keeper is held.
+    /// The returned proof cannot outlive this retained Baton or cross threads.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn keeper_designator(
+        &self,
+    ) -> Result<
+        neovm_value::symbol::parallel::KeeperWorldDesignator<'_>,
+        neovm_value::tagged::gc::RegistrationError,
+    > {
+        use neovm_value::symbol::parallel::KeeperWorldDesignator;
+        use neovm_value::tagged::gc::RegistrationError;
+        if !self.held_here() {
+            return Err(RegistrationError::WrongThread);
+        }
+        let obarray = std::ptr::NonNull::new(self.world.obarray.get())
+            .ok_or(RegistrationError::Publication)?;
+        let projections = std::ptr::NonNull::from(&self.world.thread_projections);
+        // SAFETY: these original manager allocations and the heap identity
+        // belong to this retained World. The return lifetime borrows this held
+        // Baton, and the proof is confined to this owner thread.
+        Ok(unsafe {
+            KeeperWorldDesignator::new(self.parallel_heap_identity(), obarray, projections)
+        })
+    }
+
+    /// Enumerate frozen shared storage once, after all ACKs, with no Context
+    /// view, heap borrow, owner-slab walk, lazy initialization or Lisp callback.
+    /// Marker unlink slots are valid only for the caller's stopped phase.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn collect_parallel_world_roots(
+        &self,
+        stopped: &mut AllStopped<'_>,
+        out: &mut Vec<TaggedValue>,
+    ) -> Result<Vec<*mut *mut neovm_value::tagged::header::MarkerObj>, RendezvousError> {
+        if !self.held_here() {
+            return Err(neovm_value::tagged::gc::RegistrationError::WrongThread.into());
+        }
+        stopped.check_world_roots(self.parallel_heap_identity())?;
+        if self
+            .world
+            .green
+            .try_borrow()
+            .map_err(|_| RendezvousError::Busy)?
+            .is_some()
+        {
+            return Err(RendezvousError::Publication);
+        }
+        // All symbol/projection access requires the same checked receiver.
+        // Drop it before any collector/table bridge can borrow the stop.
+        {
+            let keeper = self.keeper_designator()?;
+            let symbols = stopped.symbols()?;
+            symbols.append_current_symbol_roots(&keeper, out)?;
+            symbols.append_current_projection_roots(&keeper, out)?;
+        }
+        // SAFETY: the unique keeper retains the World; AllStopped checked this
+        // heap, keeper and every participant's publication. No participant can
+        // access shared managers, no owner/reference loan survives, and only
+        // this keeper enumerates these cells. Derive every reference directly
+        // from its original UnsafeCell. The heap cell is deliberately untouched.
+        let marker_heads = unsafe {
+            let world = &self.world;
+            let mut visit = |value| out.push(value);
+            (&*world.owned_roots.get()).trace_roots(&mut visit);
+            for value in (&*world.treesit.get()).roots() {
+                visit(value);
+            }
+            (&*world.watchers.get()).trace_roots_with(&mut visit);
+            (&*world.autoloads.get()).trace_roots_with(&mut visit);
+            (&*world.frames.get()).trace_roots_with(&mut visit);
+            (&*world.coding_systems.get()).trace_roots_with(&mut visit);
+            let buffers = &*world.buffers.get();
+            buffers.trace_parallel_roots(&mut visit);
+            let global = &*world.global.get();
+            visit(global.cached_system_name);
+            visit(global.selected_global_map.value());
+            for text in global.current_message.iter().chain(
+                global
+                    .last_redisplay_signature
+                    .iter()
+                    .flat_map(|signature| signature.current_message.iter()),
+            ) {
+                text.trace_roots_with(&mut visit);
+            }
+            for call in &global.pending_safe_funcalls {
+                visit(call.function);
+                for value in call.args.iter().copied() {
+                    visit(value);
+                }
+            }
+            super::super::font_shape::trace_gstring_shape_cache(
+                &global.gstring_shape_cache,
+                &mut visit,
+            );
+            global.processes.trace_roots_with(&mut visit);
+            global.registers.trace_roots_with(&mut visit);
+            global.bookmarks.trace_roots_with(&mut visit);
+            global.minibuffers.trace_roots_with(&mut visit);
+            global.abbrevs.trace_roots_with(&mut visit);
+            global.interactive.trace_roots_with(&mut visit);
+            global.xwidgets.trace_roots_with(&mut visit);
+            global.face_table.trace_roots_with(&mut visit);
+            global.threads.trace_roots_with(&mut visit);
+            global.kmacro.trace_roots_with(&mut visit);
+            global.rectangle.trace_roots_with(&mut visit);
+            global.command_loop.trace_roots_with(&mut visit);
+            global.modes.trace_roots_with(&mut visit);
+            buffers.parallel_marker_chain_head_slots()
+        };
+        Ok(marker_heads)
+    }
+}
+
+/// The full World root surface with one explicit synthetic-fixture setting.
+/// GNU's default weak window table is outside A5; no Lisp/window API executes
+/// in the fixture. Reclaim it serially before caller setup, leaving the strict
+/// production supported-type fence unchanged.
+#[cfg(test)]
+fn collection_fixture_context() -> Context {
+    let mut context = Context::new();
+    context.set_variable("window-dead-windows-table", TaggedValue::NIL);
+    context.gc_collect_exact();
+    context
+}
+
+impl Context {
+    /// Prepare a real frozen World and legacy Context before admitting the
+    /// synthetic participants. Setup runs serially; body cannot return an era.
+    #[cfg(test)]
+    pub(crate) fn with_test_collection_era<S, R>(
+        setup: impl FnOnce(&mut Context) -> S,
+        body: impl for<'heap> FnOnce(crate::emacs_core::eval::world::WorldProofEra<'heap>, S) -> R,
+    ) -> R {
+        let mut context = collection_fixture_context();
+        let input = setup(&mut context);
+        let keeper = context
+            .issue_green_baton()
+            .expect("collection fixture keeper");
+        let frozen = context
+            .capture_parallel_legacy_roots(&keeper)
+            .expect("collection fixture frozen legacy roots");
+        let heap: *mut neovm_value::tagged::gc::TaggedHeap =
+            context.tagged_heap.heap_root().as_ptr();
+        // SAFETY: the original Context is serial and suspended, has no live
+        // manager loan/callback, and captured its private roots before this
+        // exclusive heap loan. The retained keeper excludes concurrent mark.
+        let collector = unsafe {
+            (*heap).drain_to_quiescent(|heap| {
+                context.seed_registered_mutator_roots_world_stopped(heap);
+            })
+        }
+        .expect("collection fixture drain");
+        // Compare only the root address while the exclusive collector loan
+        // is retained. Synthetic participants cannot use the serial TLS view.
+        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
+            context.tagged_heap.heap_root(),
+        );
+        let era =
+            crate::emacs_core::eval::world::WorldProofEra::admit_rooted(collector, keeper, frozen)
+                .unwrap_or_else(|failure| {
+                    panic!("collection fixture admission: {:?}", failure.reason)
+                });
+        body(era, input)
+    }
+
+    /// Post-era Context access requires the body to return BOTH successful
+    /// finish capabilities. A poisoned/abandoned era cannot produce this pair;
+    /// there is no unconditional serial access after an arbitrary body return.
+    #[cfg(test)]
+    pub(crate) fn with_test_collection_era_then<S, R>(
+        setup: impl FnOnce(&mut Context) -> S,
+        body: impl for<'heap> FnOnce(
+            crate::emacs_core::eval::world::WorldProofEra<'heap>,
+            S,
+        )
+            -> (neovm_value::tagged::gc::QuiescentCollector<'heap>, Baton, R),
+        after: impl FnOnce(&mut Context, R),
+    ) {
+        let mut context = collection_fixture_context();
+        let input = setup(&mut context);
+        let keeper = context
+            .issue_green_baton()
+            .expect("collection fixture keeper");
+        let frozen = context
+            .capture_parallel_legacy_roots(&keeper)
+            .expect("collection fixture frozen legacy roots");
+        let expected_heap = keeper.parallel_heap_identity();
+        let expected_world = Arc::clone(&keeper.world);
+        let heap: *mut neovm_value::tagged::gc::TaggedHeap =
+            context.tagged_heap.heap_root().as_ptr();
+        // SAFETY: same sole-owner/capture-before-loan proof as the fixture above.
+        let collector = unsafe {
+            (*heap).drain_to_quiescent(|heap| {
+                context.seed_registered_mutator_roots_world_stopped(heap);
+            })
+        }
+        .expect("collection fixture drain");
+        // Compare only the root address while the exclusive collector loan
+        // is retained. Synthetic participants cannot use the serial TLS view.
+        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
+            context.tagged_heap.heap_root(),
+        );
+        let era =
+            crate::emacs_core::eval::world::WorldProofEra::admit_rooted(collector, keeper, frozen)
+                .unwrap_or_else(|failure| {
+                    panic!("collection fixture admission: {:?}", failure.reason)
+                });
+        let (collector, keeper, output) = body(era, input);
+        assert_eq!(collector.heap_identity(), expected_heap);
+        assert_eq!(keeper.parallel_heap_identity(), expected_heap);
+        assert!(Arc::ptr_eq(&keeper.world, &expected_world));
+        assert!(
+            keeper.held_here(),
+            "finished fixture keeper must remain on its owner"
+        );
+        drop(collector);
+        drop(keeper);
+        // Both finish capabilities returned; their loans ended above.
+        context.tagged_heap.install_tagged_heap();
+        after(&mut context, output);
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/parallel_roots_test.rs"]
+mod tests;
+
+// Variant B (peer 07:3xZ): the symbol fixture stays in eval, gated so a
+// test-support dependency build compiles it; its entry points are reachable
+// only through `crate::test_support::authority`.
+#[cfg(any(test, feature = "test-support"))]
+#[path = "tests/symbol_fixture.rs"]
+mod symbol_fixture;
+
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "tests/function_boundary.rs"]
+mod function_boundary;
+
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "tests/intern_boundary.rs"]
+mod intern_boundary;
+
+// SAFETY: Baton is the unique serial-execution authority of its retained
+// World. Era ownership holds the real token by value on its keeper thread;
+// keeper_designator checks held_here before lending original manager identities.
+unsafe impl neovm_value::tagged::gc::EraKeeper for Baton {
+    fn keeper_designator(
+        &self,
+    ) -> Result<
+        neovm_value::symbol::parallel::KeeperWorldDesignator<'_>,
+        neovm_value::tagged::gc::RegistrationError,
+    > {
+        Baton::keeper_designator(self)
+    }
+    fn parallel_heap_identity(&self) -> HeapIdentity {
+        Baton::parallel_heap_identity(self)
+    }
+}

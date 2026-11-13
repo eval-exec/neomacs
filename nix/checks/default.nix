@@ -10,6 +10,9 @@ let
   system = pkgs.stdenv.hostPlatform.system;
   productionCapabilities = package.productionCapabilities;
   startupContract = import ./startup-contract.nix;
+  versionedEmacsContract = import ./versioned-emacs-contract.nix;
+  subprocessEnvironmentContract = import ./subprocess-environment-contract.nix;
+  subprocessLibraryPriorityContract = import ./subprocess-library-priority-contract.nix;
   outputContract =
     assert lib.assertMsg (pkgs ? neomacs) "overlays.default must expose pkgs.neomacs";
     assert lib.assertMsg (
@@ -52,6 +55,13 @@ let
         test -x ${checkedPackage}/bin/neomacsclient
         test -L ${checkedPackage}/bin/emacs
         test -L ${checkedPackage}/bin/emacsclient
+        ${versionedEmacsContract {
+          executable = "${checkedPackage}/bin/emacs-${checkedPackage.gnuEmacsVersion}";
+          compatibilityVersion = checkedPackage.gnuEmacsVersion;
+          runtimeRoot = "${checkedPackage}/share/neomacs";
+          env = "${pkgs.coreutils}/bin/env";
+          timeout = "${pkgs.coreutils}/bin/timeout";
+        }}
         test -d ${checkedPackage}/share/neomacs/lisp
         test -d ${checkedPackage}/share/neomacs/etc
         test -f ${checkedPackage}/share/emacs/site-lisp/site-start.el
@@ -59,6 +69,14 @@ let
         test -d ${checkedPackage}/share/applications
         test -d ${checkedPackage}/share/icons
         test -d ${checkedPackage}/share/info
+        test -s ${checkedPackage}/share/neomacs/info/dir
+        test -s ${checkedPackage}/share/neomacs/info/.neomacs-info-manifest
+        info_files=(${checkedPackage}/share/neomacs/info/*.info)
+        test "''${#info_files[@]}" -eq 66
+        for manual in "''${info_files[@]}"; do
+          test -s "$manual"
+          test -s "${checkedPackage}/share/info/''${manual##*/}"
+        done
         test -d ${checkedPackage}/share/man
         ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
           test -f ${checkedPackage}/share/applications/neomacs.desktop
@@ -89,10 +107,50 @@ let
           ${checkedPackage.gstreamerRuntime.inspect} playbin >/dev/null
         ''}
 
+        # Linux must preserve subprocess environments before startup changes HOME.
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux (subprocessEnvironmentContract {
+          executable = "${checkedPackage}/bin/neomacs";
+          printenv = "${pkgs.coreutils}/bin/printenv";
+          env = "${pkgs.coreutils}/bin/env";
+          timeout = "${pkgs.coreutils}/bin/timeout";
+        })}
+
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux (subprocessLibraryPriorityContract {
+          executable = "${checkedPackage}/bin/neomacs";
+          printenv = "${pkgs.coreutils}/bin/printenv";
+          ncursesLibrary = "${lib.getLib pkgs.ncurses}/lib/libncursesw.so.6";
+          env = "${pkgs.coreutils}/bin/env";
+          timeout = "${pkgs.coreutils}/bin/timeout";
+        })}
+
         ${startupContract {
           executable = "${checkedPackage}/bin/neomacs";
           marker = "nix installed-package contract ok";
         }}
+
+        # Let the wrapper choose its own runtime root. Neither a user INFOPATH
+        # nor another editor's manuals may satisfy the installed Info contract.
+        info_output="$(env -u INFOPATH -u NEOMACS_RUNTIME_ROOT \
+          ${checkedPackage}/bin/neomacs -Q --batch --eval \
+          '(progn
+             (require (quote info))
+             (dolist (manual (quote ("emacs" "eintr" "elisp")))
+               (Info-goto-node (concat "(" manual ")Top"))
+               (unless (and
+                        (equal (file-name-directory (file-truename Info-current-file))
+                               "${checkedPackage}/share/neomacs/info/")
+                        (equal (file-name-base Info-current-file) manual)
+                        (equal (file-name-directory
+                                (file-truename
+                                 (concat "${checkedPackage}/share/neomacs/info/"
+                                         manual ".info")))
+                               "${checkedPackage}/share/neomacs/info/"))
+                 (error "Info used an external manual: %S" Info-current-file)))
+             (Info-goto-node "(elisp)Hooks")
+             (unless (equal Info-current-node "Hooks")
+               (error "Missing installed elisp Hooks node"))
+             (princ "nix installed Info contract ok\n"))')"
+        grep -Fqx 'nix installed Info contract ok' <<<"$info_output"
 
         touch "$out"
       '';

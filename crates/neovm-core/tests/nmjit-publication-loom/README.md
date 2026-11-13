@@ -22,7 +22,7 @@ taskset -c 0-3,14-31 nix develop -c bash -c '
   export CARGO_BUILD_JOBS=6
   export CARGO_TARGET_DIR=/home/exec/nvme-rust-target/v10x-peer-p3sym
   export NMJIT_PREEMPTIONS=2
-  cargo test --manifest-path crates/neovm-core/tests/nmjit-publication-loom/Cargo.toml --locked -- --nocapture --test-threads=1
+  cargo nextest run --manifest-path crates/neovm-core/tests/nmjit-publication-loom/Cargo.toml --locked --no-capture
 '
 ```
 

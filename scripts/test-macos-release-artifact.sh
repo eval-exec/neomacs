@@ -38,6 +38,10 @@ if [[ "$(uname -s)" != Darwin ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=./scripts/lib/macos-tarball.sh
+source "$repo_root/scripts/lib/macos-tarball.sh"
+# shellcheck source=./scripts/lib/info-manuals.sh
+source "$repo_root/scripts/lib/info-manuals.sh"
 mkdir -p "$repo_root/tmp"
 work_dir="$(mktemp -d "$repo_root/tmp/macos-release-test.XXXXXX")"
 active_mount=
@@ -252,6 +256,7 @@ for artifact in "$@"; do
       payload_root="$extract_root"
       ;;
     *.tar.gz)
+      neomacs_audit_macos_tarball "$artifact"
       tar -C "$extract_root" -xzf "$artifact"
       payload_root="$extract_root"
       ;;
@@ -283,6 +288,10 @@ for artifact in "$@"; do
   fi
 
   launch_app "$app"
+  neomacs_validate_info_manuals \
+    "$app/Contents/Resources/neomacs/info" "$app/Contents/MacOS/neomacs"
+  "$repo_root/scripts/verify-info-manuals.sh" \
+    "$app/Contents/MacOS/neomacs" "$app/Contents/Resources/neomacs"
 
   if [[ -n "$active_mount" ]]; then
     hdiutil detach "$active_mount" >/dev/null

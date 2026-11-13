@@ -13,6 +13,7 @@ use crate::display_row::face_state::{DisplayRowFace, DisplayRowMeasurementMode};
 use crate::display_row::finalizer::DisplayRowLineEndFinalizer;
 use crate::display_row::geometry::DisplayRowTextAreaOrigin;
 use crate::display_row::metrics::DisplayRowFallbackMetrics;
+use crate::display_source::DisplaySourceResumeCursor;
 use crate::display_text_run_measurement::DisplayTextRunMeasurement;
 use crate::types::LineWrapMode;
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
@@ -743,6 +744,8 @@ impl RowProgram {
         self.compute_visual_rows_inner(row_limit, cancelled, ResumedRunFonts::Worker(fonts))
     }
 
+    /// Execute captured operations within the row budget using resumed fonts.
+    /// Preserve source/newline geometry and propagate cancellation or layout errors.
     fn compute_visual_rows_inner(
         mut self,
         row_limit: usize,
@@ -966,9 +969,11 @@ impl RowProgram {
             {
                 word_wrap.record_candidate_at(
                     first,
-                    crate::display_source::DisplaySourceTextPosition::new(
-                        byte_pos.get(),
-                        char_pos.get() as i64,
+                    DisplaySourceResumeCursor::BeforeOverlayStrings(
+                        crate::display_source::DisplaySourceTextPosition::new(
+                            byte_pos.get(),
+                            char_pos.get() as i64,
+                        ),
                     ),
                     previous_slots,
                     (None, None),
@@ -1038,9 +1043,11 @@ impl RowProgram {
                 {
                     word_wrap.record_candidate_at(
                         ch,
-                        crate::display_source::DisplaySourceTextPosition::new(
-                            byte_pos.get(),
-                            char_pos.get() as i64,
+                        DisplaySourceResumeCursor::AfterOverlayStrings(
+                            crate::display_source::DisplaySourceTextPosition::new(
+                                byte_pos.get(),
+                                char_pos.get() as i64,
+                            ),
                         ),
                         previous_slots + progress.slots().len(),
                         (None, None),
@@ -1117,11 +1124,19 @@ impl RowProgram {
                     let candidate = word_wrap.candidate();
                     wrap_extend = candidate.row_extend();
                     let boundary = candidate.source_position().charpos();
+                    let replay_insertions = match candidate.source_cursor() {
+                        DisplaySourceResumeCursor::BeforeOverlayStrings(_) => true,
+                        DisplaySourceResumeCursor::AfterOverlayStrings(_) => false,
+                    };
                     let (index, offset) = operations
                         .iter()
                         .enumerate()
                         .find_map(|(index, (item, _))| {
-                            if matches!(item.span.start, DisplaySourcePosition::LispString { .. })
+                            if replay_insertions
+                                && matches!(
+                                    item.span.start,
+                                    DisplaySourcePosition::LispString { .. }
+                                )
                                 && let DisplaySourcePosition::Buffer { char_pos, .. } =
                                     buffer_anchors[index]
                                 && char_pos.get() as i64 == boundary
@@ -1229,7 +1244,7 @@ impl RowProgram {
                         DisplayRowMeasurementMode::LogicalCells
                     }
                 };
-                DisplayRowLineEndFinalizer::new(
+                let finalizer = DisplayRowLineEndFinalizer::new(
                     value,
                     face,
                     self.geometry.right_edge() - position.x_px(),
@@ -1238,18 +1253,14 @@ impl RowProgram {
                     mode,
                     edges,
                     membership,
-                )
-                .finalize(&mut row, &self.faces);
-                if value.line_height != DisplayLineHeightPolicy::Default {
-                    let resolved = crate::display_row::metrics::resolve_line_height(
-                        value.line_height,
-                        (row.height_px, row.ascent_px),
-                        (face_metrics.line_height_px(), face_metrics.ascent_px()),
-                        (
-                            self.geometry.metrics.row_height(),
-                            self.geometry.metrics.ascent(),
-                        ),
-                    );
+                );
+                let finalizer = if mode.uses_concrete_font_geometry() {
+                    terminator_height = minimum.height_px();
+                    finalizer.with_newline_font_metrics(minimum)
+                } else {
+                    finalizer
+                };
+                if let Some(resolved) = finalizer.finalize(&mut row, &self.faces) {
                     terminator_height = resolved.newline_height;
                 }
                 // As in the canonical row transition, line spacing contributes

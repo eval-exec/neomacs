@@ -1,13 +1,13 @@
-error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<ParallelHeapEra<'static, eval::world::green_owner::Baton>>`, but its trait bounds were not satisfied
+error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<ParallelHeapEra<'static, Baton>>`, but its trait bounds were not satisfied
  --> tests/p1rv_ui/era_cannot_cross_threads.rs:8:49
   |
 8 |     ThreadTransfer::<ParallelHeapEra<'static>>::transfer(era);
-  |                                                 ^^^^^^^^ associated function or constant cannot be called due to unsatisfied trait bounds
+  |                                                 ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<ParallelHeapEra<'static, Baton>>` due to unsatisfied trait bounds
   |
- ::: src/tagged/gc/mutator_registration/wrappers.rs
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs
   |
   | pub struct ParallelHeapEra<'heap, K: EraKeeper> {
-  | ----------------------------------------------- doesn't satisfy `_: Send`
+  | ----------------------------------------------- doesn't satisfy `ParallelHeapEra<'static, Baton>: Send`
   |
  ::: tests/p1rv_ui/../thread_safety_ui/support/thread_bounds.rs
   |
@@ -16,52 +16,52 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
   |
   = note: the following trait bounds were not satisfied:
           `Rc<()>: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `NonNull<TaggedHeap>: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut GcHeader: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*const (): Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut HashTableObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut FinalizerObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut *mut MarkerObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut u8: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut ConsCell: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut FloatObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut VecLikeHeader: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut StringObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `Rc<Cell<Vec<TaggedValue>>>: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `Rc<Cell<*const ()>>: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut TaggedHeap: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut VectorObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut ByteCodeObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut LambdaObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut MacroObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut RecordObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut SymbolWithPosObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut MarkerObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `*mut BignumObj: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `NonNull<[Cell<usize>; 8192]>: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `Rc<collection_reads::store_state::WorldObservations>: Send`
-          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`

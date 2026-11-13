@@ -9,7 +9,12 @@ description = "Rust layout engine crate for Neomacs"
 autotests = false
 
 [features]
-default = []
+# Explicit forwards for what neovm-core's dependency edges used to bring in
+# through their enabled defaults.  Kept as features so --no-default-features
+# stays a real no-jit build.
+default = ["jit", "sqlite"]
+jit = ["neovm-core/jit"]
+sqlite = ["neovm-core/sqlite"]
 # Performance probes (the GUI layout benchmark family).  Measurement tools,
 # not correctness tests: compiled out of the default suite and kept building by
 # the build-gate's opt-in feature check.
@@ -61,6 +66,14 @@ wio.workspace = true
 [dev-dependencies]
 neomacs-test-fonts.workspace = true
 neovm-core = { workspace = true, features = ["jit", "redisplay-test-policy"] }
+# The Rows-lifetime fixtures pin their GC mode through value's signed per-heap
+# test fence; this downward dev edge enables that test surface only for tests.
+# Scope proof for the dedicated test-thread fallback heap: this crate's own
+# graph must NOT enable neovm-value's `test-thread-fallback-heap`, and this
+# crate never calls the split crates' test init that arms it per process, so
+# the no-heap tripwire stays armed here even in a unified `--workspace` test
+# build where cargo has unified that dev-dep feature for every member.
+neovm-value = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
 tracing-test.workspace = true
 

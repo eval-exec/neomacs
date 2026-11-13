@@ -136,6 +136,9 @@ neomacs-test-oracle.workspace = true
 neomacs-test-env.workspace = true
 neomacs-layout-engine = { workspace = true, features = ["redisplay-test-policy"] }
 neovm-core = { workspace = true, features = ["redisplay-test-policy"] }
+# The GEN1/GEN0 Rows-observation pins use value's signed per-heap test fence;
+# this downward dev edge enables that test surface only for test builds.
+neovm-value = { workspace = true, features = ["test-support"] }
 neomacs-infra.workspace = true
 tempfile.workspace = true
 stacker.workspace = true

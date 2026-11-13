@@ -9,7 +9,7 @@ use crate::display_item::{
     SourceSpan,
 };
 use crate::display_property::DisplayReplacementProperty;
-use crate::display_source::DisplaySourceTextPosition;
+use crate::display_source::{DisplaySourceResumeCursor, DisplaySourceTextPosition};
 use crate::neovm_bridge::{LayoutBufferSnapshot, LayoutBufferView};
 use neomacs_display_protocol::types::FaceId;
 use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos, EmacsByteRange};
@@ -44,7 +44,7 @@ fn ordinary_run_acquisition_horizon_bounds_payload_without_changing_semantic_end
 
 #[test]
 fn ordinary_run_acquisition_horizon_preserves_complete_display_replacement_extent() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
@@ -85,7 +85,7 @@ fn ordinary_run_acquisition_horizon_preserves_complete_display_replacement_exten
 
 #[test]
 fn ordinary_run_acquisition_horizon_preserves_complete_composition_element() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
@@ -280,7 +280,7 @@ fn character_fallback_keeps_compositions_and_nonbuffer_sources_intact() {
 }
 
 fn snapshot_with_text(text: &str) -> (BufferId, LayoutBufferSnapshot, CharPos0) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -375,7 +375,7 @@ fn buffer_character_lookahead_preserves_encoding_and_cursor_end() {
         } else {
             LispString::from_unibyte(codes.iter().map(|&code| code as u8).collect())
         };
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let id = eval.buffer_manager().current_buffer().unwrap().id();
         let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
         buffer.set_multibyte_value(multibyte);
@@ -397,7 +397,7 @@ fn text_sources_preserve_emacs_non_unicode_and_raw_byte_characters_for_display()
         bytes.extend(character.to_emacs_bytes());
     }
 
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -590,7 +590,7 @@ fn buffer_text_item_source_single_char_maps_one_buffer_character() {
 
 #[test]
 fn buffer_display_replacement_string_source_maps_text_to_buffer_slot() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let replacement_source =
         BufferDisplayReplacementSource::new(BufferId(7), CharPos0::new(3), EmacsBytePos::new(12));
     let string_source = LispStringSourceCursor::new(
@@ -624,7 +624,7 @@ fn buffer_display_replacement_string_source_maps_text_to_buffer_slot() {
 
 #[test]
 fn buffer_display_replacement_string_inherits_buffer_mouse_face() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let replacement_source =
         BufferDisplayReplacementSource::new(BufferId(7), CharPos0::new(3), EmacsBytePos::new(12));
     let pointer = crate::display_item::DisplayPointerAppearance::new(
@@ -659,7 +659,7 @@ fn buffer_display_replacement_string_inherits_buffer_mouse_face() {
 
 #[test]
 fn buffer_display_replacement_string_source_ignores_display_properties_inside_replacement_string() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let replacement_source =
         BufferDisplayReplacementSource::new(BufferId(7), CharPos0::new(3), EmacsBytePos::new(12));
     let value = Value::string_with_text_properties(
@@ -681,7 +681,7 @@ fn buffer_display_replacement_string_source_ignores_display_properties_inside_re
 
 #[test]
 fn lisp_string_source_cursor_emits_text_runs_with_source_spans() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string("abc");
     let mut source = LispStringSourceCursor::new(
         1,
@@ -739,7 +739,7 @@ impl DisplayItemFaceResolver for BoxedFaceResolver {
 fn standalone_boxed_string_publishes_source_terminals_on_its_items() {
     use neomacs_display_protocol::face::BoxVerticalEdges;
 
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut source = LispStringSourceCursor::new(
         1,
         Value::string("x\n"),
@@ -764,7 +764,7 @@ fn standalone_boxed_string_publishes_source_terminals_on_its_items() {
 fn nested_boxed_string_uses_distinct_underlying_faces_at_each_boundary() {
     use neomacs_display_protocol::face::BoxVerticalEdges;
 
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let boxed = RenderFaceRef::FaceId(FaceId::new(3));
     let mut frame = LispStringSourceFrame::new_with_occurrence(
         9,
@@ -997,7 +997,7 @@ impl DisplayItemFaceResolver for ResolvedDisplayPropertyResolver {
 
 #[test]
 fn display_property_source_action_classifies_strings_typed_items_and_resolver_fallback() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let base_face = RenderFaceRef::FaceId(FaceId::new(7));
     let mut resolver = ResolvedDisplayPropertyResolver { seen_face: None };
 
@@ -1088,7 +1088,7 @@ fn display_property_source_action_classifies_strings_typed_items_and_resolver_fa
 
 #[test]
 fn display_property_string_base_face_is_explicit_for_buffer_and_string_sources() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let effective = RenderFaceRef::FaceId(FaceId::new(7));
     let underlying = RenderFaceRef::FaceId(FaceId::new(3));
     let plan = DisplayPropertySourcePlan::new(
@@ -1131,7 +1131,7 @@ fn display_property_string_base_face_is_explicit_for_buffer_and_string_sources()
 
 #[test]
 fn display_property_source_replacement_resolves_direct_media_item() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let media = DisplayMediaReplacement::xwidget(crate::display_item::DisplayXwidgetItem {
         xwidget_id: neomacs_display_protocol::XwidgetId::new(21),
         webview_id: neomacs_display_protocol::WebViewId::new(210),
@@ -1196,7 +1196,7 @@ fn display_property_source_action_builds_cursor_actions() {
 
 #[test]
 fn lisp_string_source_cursor_resolves_face_property() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string_with_text_properties(
         "abc",
         vec![StringTextPropertyRun {
@@ -1228,7 +1228,7 @@ fn lisp_string_source_cursor_resolves_face_property() {
 
 #[test]
 fn lisp_string_source_cursor_renders_explicit_composition_property_replacement() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string_with_text_properties(
         "* H",
         vec![StringTextPropertyRun {
@@ -1259,7 +1259,7 @@ fn lisp_string_source_cursor_renders_explicit_composition_property_replacement()
 
 #[test]
 fn lisp_string_source_cursor_resolves_display_property_through_context() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let display_spec = Value::list(vec![Value::symbol("image")]);
     let value = Value::string_with_text_properties(
         "x",
@@ -1307,7 +1307,7 @@ fn lisp_string_source_cursor_resolves_display_property_through_context() {
 
 #[test]
 fn lisp_string_automatic_compositions_respect_rules_and_object_boundaries() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str(
         r##"(progn
       (setq auto-composition-mode t auto-composition-function 'auto-compose-chars
@@ -1385,7 +1385,7 @@ fn lisp_string_automatic_compositions_respect_rules_and_object_boundaries() {
 
 #[test]
 fn lisp_string_source_cursor_uses_font_lock_face_when_face_is_absent() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string_with_text_properties(
         "xy",
         vec![StringTextPropertyRun {
@@ -1424,7 +1424,7 @@ fn lisp_string_source_cursor_uses_font_lock_face_when_face_is_absent() {
 
 #[test]
 fn lisp_string_source_cursor_parses_display_space_width_as_stretch() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string_with_text_properties(
         "a b",
         vec![StringTextPropertyRun {
@@ -1463,7 +1463,7 @@ fn lisp_string_source_cursor_parses_display_space_width_as_stretch() {
 
 #[test]
 fn lisp_string_source_cursor_parses_display_space_align_to_as_typed_expression() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string_with_text_properties(
         " ",
         vec![StringTextPropertyRun {
@@ -1511,7 +1511,7 @@ fn lisp_string_source_cursor_parses_display_space_align_to_as_typed_expression()
 
 #[test]
 fn lisp_string_source_cursor_emits_explicit_newline_row_breaks() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string("a\nb");
     let mut source = LispStringSourceCursor::new(
         6,
@@ -1528,7 +1528,7 @@ fn lisp_string_source_cursor_emits_explicit_newline_row_breaks() {
 
 #[test]
 fn lisp_string_source_cursor_emits_control_and_glyphless_items() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // U+FFFC (OBJECT REPLACEMENT, So) is printable-but-glyphless so it stays a
     // glyphless item; a non-printable char like U+FFF0 instead escapes to
     // `\`+octal (see the escape-glyph-octal tests).
@@ -1593,7 +1593,7 @@ fn classify_non_printable_c1_and_specials_as_escape_octal() {
 
 #[test]
 fn lisp_string_source_cursor_pushes_display_string_replacement_source() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let replacement = Value::string("YZ");
     let value = Value::string_with_text_properties(
         "axb",
@@ -1626,7 +1626,7 @@ fn lisp_string_source_cursor_pushes_display_string_replacement_source() {
 
 #[test]
 fn lisp_string_source_cursor_ignores_display_properties_inside_display_string_replacement() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let replacement = Value::string_with_text_properties(
         "Y",
         vec![StringTextPropertyRun {
@@ -1658,7 +1658,7 @@ fn lisp_string_source_cursor_ignores_display_properties_inside_display_string_re
 
 #[test]
 fn display_sources_parse_xwidget_display_specs_as_typed_items() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1774,7 +1774,7 @@ fn buffer_text_source_cursor_emits_text_runs_with_buffer_spans() {
 fn snapshot_with_aliased_indent_bars_display(
     configure_alias: bool,
 ) -> (BufferId, LayoutBufferSnapshot, CharPos0) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1870,7 +1870,7 @@ fn buffer_display_property_ignores_aliased_key_without_alias_alist() {
 
 #[test]
 fn buffer_mouse_face_is_resolved_over_the_effective_display_face() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1923,7 +1923,7 @@ fn buffer_mouse_face_is_resolved_over_the_effective_display_face() {
 
 #[test]
 fn typed_display_replacement_keeps_underlying_buffer_mouse_face() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // GNU valid_image_p requires a supported type and a valid source; bare
     // (image) is ignored before replacement/pointer inheritance is reached.
     let image = eval
@@ -1978,7 +1978,7 @@ fn typed_display_replacement_keeps_underlying_buffer_mouse_face() {
 
 #[test]
 fn overlay_mouse_face_uses_the_highest_priority_effective_property() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -2038,7 +2038,7 @@ fn an_overlay_category_decides_priority_against_another_overlay() {
     // -- 1000 here -- and its face therefore stacks ABOVE the face of the
     // overlay whose own priority is 10. Ordering by the overlay's own plist
     // alone put it below, so redisplay showed the wrong face.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(put 'winning-category 'priority 1000)")
         .expect("category priority");
     eval.eval_str("(put 'winning-category 'face 'category-face)")
@@ -2097,7 +2097,7 @@ fn an_overlay_category_decides_priority_against_another_overlay() {
 
 #[test]
 fn overlay_mouse_face_resolves_through_its_category() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(put 'mouse-face-category 'mouse-face 'highlight)")
         .expect("define category mouse-face");
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
@@ -2140,7 +2140,7 @@ fn overlay_mouse_face_resolves_through_its_category() {
 
 #[test]
 fn text_mouse_face_category_is_confined_to_its_effective_property_run() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(put 'text-mouse-face-category 'mouse-face 'highlight)")
         .expect("define category mouse-face");
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
@@ -2178,7 +2178,7 @@ fn text_mouse_face_category_is_confined_to_its_effective_property_run() {
 
 #[test]
 fn text_mouse_face_alias_is_confined_to_its_effective_property_run() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let alias_alist = Value::list(vec![Value::list(vec![
         Value::symbol("mouse-face"),
         Value::symbol("alternate-mouse-face"),
@@ -2219,7 +2219,7 @@ fn text_mouse_face_alias_is_confined_to_its_effective_property_run() {
 
 #[test]
 fn overlay_mouse_face_interrupts_and_then_reveals_text_mouse_face() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2282,7 +2282,7 @@ fn overlay_mouse_face_interrupts_and_then_reveals_text_mouse_face() {
 
 #[test]
 fn text_mouse_face_started_before_the_cursor_keeps_its_maximal_source_range() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2319,7 +2319,7 @@ fn text_mouse_face_started_before_the_cursor_keeps_its_maximal_source_range() {
 
 #[test]
 fn overlay_mouse_face_started_before_the_cursor_keeps_its_maximal_source_range() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2371,7 +2371,7 @@ fn long_overlay_mouse_face_skips_unrelated_offscreen_overlay_endpoints() {
     const BUFFER_LEN: usize = 8_192;
     const CURSOR: usize = BUFFER_LEN / 2;
 
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2436,7 +2436,7 @@ fn short_text_mouse_face_does_not_sweep_unrelated_later_overlays() {
     const TEXT_START: usize = 2_000;
     const OVERLAY_COUNT: usize = 2_000;
 
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2489,7 +2489,7 @@ fn short_text_mouse_face_does_not_sweep_unrelated_later_overlays() {
 
 #[test]
 fn unrelated_property_and_overlay_boundaries_keep_one_mouse_face_extent() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2565,7 +2565,7 @@ fn absent_mouse_face_does_not_request_an_exact_extent() {
         reset_text_mouse_face_extent_query_count, text_mouse_face_extent_query_count,
     };
 
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2609,7 +2609,7 @@ fn absent_mouse_face_skips_overlay_extent_across_unrelated_empty_overlays() {
 
     const LINE_COUNT: usize = 4_096;
 
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2660,7 +2660,7 @@ fn absent_mouse_face_skips_overlay_extent_across_unrelated_empty_overlays() {
 
 #[test]
 fn distinct_mouse_face_extents_keep_distinct_identities() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2692,7 +2692,7 @@ fn distinct_mouse_face_extents_keep_distinct_identities() {
 
 #[test]
 fn cons_priority_uses_gnu_primary_before_nested_subpriority() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2757,7 +2757,7 @@ fn cons_priority_uses_gnu_primary_before_nested_subpriority() {
 
 #[test]
 fn nested_equal_priority_overlay_owns_only_its_effective_segment() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2813,7 +2813,7 @@ fn nested_equal_priority_overlay_owns_only_its_effective_segment() {
 
 #[test]
 fn equal_priority_tie_and_nil_overlay_match_shared_gnu_selection() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -2885,7 +2885,7 @@ fn equal_priority_tie_and_nil_overlay_match_shared_gnu_selection() {
 
 #[test]
 fn lisp_string_mouse_face_survives_display_replacement_mapping() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string_with_text_properties(
         "xy",
         vec![StringTextPropertyRun {
@@ -2918,7 +2918,7 @@ fn lisp_string_mouse_face_survives_display_replacement_mapping() {
 
 #[test]
 fn overlay_string_mouse_faces_are_scoped_to_the_overlay_occurrence() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string_with_text_properties(
         "xy",
         vec![StringTextPropertyRun {
@@ -2984,7 +2984,7 @@ fn overlay_string_mouse_faces_are_scoped_to_the_overlay_occurrence() {
 
 #[test]
 fn display_replacement_string_mouse_faces_are_scoped_to_the_buffer_anchor() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string_with_text_properties(
         "xy",
         vec![StringTextPropertyRun {
@@ -3019,7 +3019,7 @@ fn display_replacement_string_mouse_faces_are_scoped_to_the_buffer_anchor() {
 
 #[test]
 fn buffer_text_source_cursor_renders_explicit_composition_property_replacement() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -3065,7 +3065,7 @@ fn buffer_text_source_cursor_renders_explicit_composition_property_replacement()
 
 #[test]
 fn buffer_text_source_cursor_renders_org_superstar_composition_property() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -3111,7 +3111,7 @@ fn buffer_text_source_cursor_renders_org_superstar_composition_property() {
 
 #[test]
 fn buffer_text_source_cursor_resolves_face_property_runs() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -3157,7 +3157,7 @@ fn buffer_text_source_cursor_resolves_face_property_runs() {
 
 #[test]
 fn buffer_text_source_cursor_pushes_display_string_replacement_source() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -3207,7 +3207,7 @@ fn buffer_text_source_cursor_pushes_display_string_replacement_source() {
 
 #[test]
 fn buffer_text_source_cursor_emits_propertized_display_string_as_atomic_replacement() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -3284,7 +3284,7 @@ fn buffer_text_source_cursor_emits_propertized_display_string_as_atomic_replacem
 
 #[test]
 fn buffer_text_source_cursor_emits_display_space_as_atomic_replacement() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -3354,7 +3354,7 @@ fn buffer_text_source_cursor_emits_display_space_as_atomic_replacement() {
 
 #[test]
 fn buffer_text_source_consumption_keeps_plain_text_run_renderable() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -3392,7 +3392,7 @@ fn buffer_text_source_consumption_keeps_plain_text_run_renderable() {
 
 #[test]
 fn buffer_text_source_cursor_reports_nested_replacement_source_position() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -3591,7 +3591,7 @@ fn typed_buffer_source_events_match_expected_control_and_glyphless_coordinates()
 #[test]
 fn typed_buffer_source_events_match_expected_face_property_coordinates() {
     let text = "abc\ndef\n";
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -3658,7 +3658,7 @@ fn typed_buffer_source_events_match_expected_face_property_coordinates() {
 fn line_spacing_uses_gnu_numeric_and_cons_scaling_rules() {
     use crate::display_item::{DisplayLineSpacingPolicy, DisplayLineSpacingReference};
 
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let float = DisplayLineSpacingPolicy::from_property(Some(Value::make_float(2.0)));
     assert_eq!(float.resolve(13.0, 0.0), 26.0);
 
@@ -3691,7 +3691,7 @@ fn line_spacing_uses_gnu_numeric_and_cons_scaling_rules() {
 
 #[test]
 fn character_source_reuses_property_boundaries_and_recovers_after_rewinds() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
     buffer.insert(&"é".repeat(32));
@@ -3724,7 +3724,9 @@ fn character_source_reuses_property_boundaries_and_recovers_after_rewinds() {
     // Stops at characters 8,12,16,24,32, despite one-character production.
     assert_eq!(source.property_boundary_queries(), 5);
     let mut context = DisplaySourceContext::empty();
-    source.rewind_for_word_wrap_to(CharPos0::new(2));
+    source.rewind_for_word_wrap_to(DisplaySourceResumeCursor::BeforeOverlayStrings(
+        DisplaySourceTextPosition::new(4, 2),
+    ));
     let replay = source.next_item(&mut context).unwrap();
     assert_eq!(
         replay.span.start,
@@ -3743,7 +3745,7 @@ fn character_source_reuses_property_boundaries_and_recovers_after_rewinds() {
 
 #[test]
 fn character_source_reuses_decoded_text_without_extracting_ranges() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
     let text = "aé中🦀".repeat(32);
@@ -3793,7 +3795,7 @@ fn character_source_reuses_decoded_text_without_extracting_ranges() {
 
 #[test]
 fn character_source_keeps_narrowed_byte_coordinates_after_lookahead_and_rewinds() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let id = eval.buffer_manager().current_buffer().unwrap().id();
     let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
     buffer.insert("é中🦀alphaé中🦀omega");
@@ -3827,4 +3829,39 @@ fn character_source_keeps_narrowed_byte_coordinates_after_lookahead_and_rewinds(
         );
     }
     assert_eq!(source.char_at(end), None);
+}
+
+#[test]
+fn after_overlay_resume_without_an_insertion_preserves_fresh_box_start() {
+    use crate::display_source::DisplaySourceResumeCursor;
+    use neomacs_display_protocol::face::BoxVerticalEdges;
+
+    let (id, snapshot, end) = snapshot_with_text("boxed");
+    let boxed = RenderFaceRef::FaceId(FaceId::new(3));
+    let mut resolver = BoxedFaceResolver;
+    let mut context = DisplaySourceContext::with_face_resolver(&mut resolver);
+    let mut fresh = BufferTextSourceCursor::new(id, &snapshot, CharPos0::ZERO, end, boxed);
+    let expected = fresh.next_item(&mut context).expect("fresh boxed text");
+    assert_eq!(expected.box_vertical_edges, BoxVerticalEdges::Both);
+
+    let mut resumed = BufferTextSourceCursor::new(id, &snapshot, CharPos0::ZERO, end, boxed);
+    resumed
+        .next_item(&mut context)
+        .expect("consume past target");
+    // AFTER is a source seating, not evidence that an insertion existed.
+    // Falsely marking this no-overlay anchor as consumed would suppress the
+    // boxed source's left terminal even though no string ever painted it.
+    resumed.rewind_for_word_wrap_to(DisplaySourceResumeCursor::AfterOverlayStrings(
+        DisplaySourceTextPosition::new(0, 0),
+    ));
+    let actual = resumed.next_item(&mut context).expect("resumed boxed text");
+    assert_eq!(
+        actual.box_vertical_edges,
+        BoxVerticalEdges::Both,
+        "no insertion has consumed the boxed run's left cap"
+    );
+    assert_eq!(
+        actual, expected,
+        "AFTER seating preserves fresh emitted topology"
+    );
 }

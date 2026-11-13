@@ -1,0 +1,2752 @@
+use super::*;
+
+use neovm_value::tagged::SymbolMode;
+use regex_automata::{MatchKind, Span};
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
+use std::collections::HashSet;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use crate::fuzz_support::{
+    RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
+};
+use neovm_edit::buffer::syntax_class::SyntaxClass;
+use neovm_value::value::Value;
+
+use neovm_text::emacs_core::regex_emacs::*;
+
+#[test]
+fn prepared_search_context_preserves_marker_bounds_narrowing_and_zero_counts() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(progn
+  (require 'syntax)
+  (let (out)
+    (dolist (text '("xabcbcz" "xa中b中bz"))
+      (dolist (narrow '(nil t))
+        (dolist (marker-bound '(nil t))
+          (dolist (case '(("b" 1) ("b" 2) ("b" -1)
+                          ("b" -2) ("" 0) ("z" 1)))
+            (with-temp-buffer
+              (insert text)
+              (when narrow (narrow-to-region 2 7))
+              (let* ((case-fold-search nil)
+                     (count (nth 1 case))
+                     (bound-pos (if (> count 0) (point-max) (point-min)))
+                     (bound (if marker-bound (copy-marker bound-pos) bound-pos)))
+                (goto-char (if (> count 0) (point-min) (point-max)))
+                (set-match-data '(7 9))
+                (push (list (condition-case err
+                                (re-search-forward (car case) bound t count)
+                              (error (car err)))
+                            (point)
+                            (mapcar (lambda (v) (if (bufferp v) 'buffer v))
+                                    (match-data t))) out)))))))
+    ;; Covered properties take a callback-free early return from preparation;
+    ;; the same pattern is also exercised with callback-capable preparation.
+    (dolist (covered '(nil t))
+      (with-temp-buffer
+        (insert "ab cd")
+        (let ((parse-sexp-lookup-properties t)
+              (case-fold-search nil)
+              (calls 0)
+              (bound (copy-marker 6)))
+          (setq-local syntax-propertize-function
+                      (lambda (_start _end)
+                        (setq calls (1+ calls))
+                        (goto-char 4)
+                        (garbage-collect)))
+          (setq-local syntax-propertize--done (if covered 6 1))
+          (goto-char 1)
+          (push (list (re-search-forward "\\w+" bound t) (point) calls
+                      (mapcar (lambda (v) (if (bufferp v) 'buffer v))
+                              (match-data t))) out))))
+    (nreverse out)))"#,
+    );
+    // GNU Emacs 31.1: 48 combinations of text encoding, narrowing, marker
+    // bounds and search count, plus covered/callback-capable syntax setup.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((4 4 (3 4 buffer)) (6 6 (5 6 buffer)) (5 5 (5 6 buffer)) (3 3 (3 4 buffer)) (8 8 (8 8 ",
+            "buffer)) (8 8 (7 8 buffer)) (4 4 (3 4 buffer)) (6 6 (5 6 buffer)) (5 5 (5 6 buffer)) (3 3 (3 4 ",
+            "buffer)) (8 8 (8 8 buffer)) (8 8 (7 8 buffer)) (4 4 (3 4 buffer)) (6 6 (5 6 buffer)) (5 5 (5 6 ",
+            "buffer)) (3 3 (3 4 buffer)) (7 7 (7 7 buffer)) (nil 2 (7 9)) (4 4 (3 4 buffer)) (6 6 (5 6 ",
+            "buffer)) (5 5 (5 6 buffer)) (3 3 (3 4 buffer)) (7 7 (7 7 buffer)) (nil 2 (7 9)) (5 5 (4 5 ",
+            "buffer)) (7 7 (6 7 buffer)) (6 6 (6 7 buffer)) (4 4 (4 5 buffer)) (8 8 (8 8 buffer)) (8 8 (7 8 ",
+            "buffer)) (5 5 (4 5 buffer)) (7 7 (6 7 buffer)) (6 6 (6 7 buffer)) (4 4 (4 5 buffer)) (8 8 (8 8 ",
+            "buffer)) (8 8 (7 8 buffer)) (5 5 (4 5 buffer)) (7 7 (6 7 buffer)) (6 6 (6 7 buffer)) (4 4 (4 5 ",
+            "buffer)) (7 7 (7 7 buffer)) (nil 2 (7 9)) (5 5 (4 5 buffer)) (7 7 (6 7 buffer)) (6 6 (6 7 ",
+            "buffer)) (4 4 (4 5 buffer)) (7 7 (7 7 buffer)) (nil 2 (7 9)) (3 3 1 (1 3 buffer)) (3 3 0 (1 3 ",
+            "buffer)))",
+        )
+    );
+}
+
+#[test]
+fn prepared_regexp_scoped_gc_preserves_compiled_and_callback_paths() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    // Load syntax support and exercise autoloads before stress: collecting
+    // at every allocation during charprop.el loading tests bootstrap cost,
+    // not the lifetime of a pattern passed through search preparation.
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
+    let warm = eval.eval_str(
+        r#"(progn
+  (require 'syntax)
+  (defun prepared-regexp-scoped-gc ()
+    (let (out)
+      (dolist (lookup '(nil t))
+        (with-temp-buffer
+          (insert "ab cd")
+          (let ((parse-sexp-lookup-properties lookup)
+                (case-fold-search nil)
+                (calls 0))
+            (setq-local syntax-propertize-function
+                        (lambda (_start _end)
+                          (setq calls (1+ calls))
+                          (put-text-property 1 3 'syntax-table (string-to-syntax "."))
+                          (garbage-collect)))
+            (setq-local syntax-propertize--done 1)
+            (goto-char 1)
+            (push (list (re-search-forward "b" 6 t) (> calls 0)) out)
+            (goto-char 1)
+            (push (list (re-search-forward "\\w" 6 t) (> calls 0)) out))))
+      (nreverse out)))
+  (prepared-regexp-scoped-gc))"#,
+    );
+    let expected = "OK ((3 nil) (2 nil) (3 nil) (5 t))";
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&warm),
+        expected
+    );
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
+    let before = eval.gc_count_for_test();
+    let result = eval.eval_str("(prepared-regexp-scoped-gc)");
+    let collections = eval.gc_count_for_test() - before;
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&result),
+        expected
+    );
+    // One explicit callback collection alone must not satisfy the test.
+    assert!(collections > 1, "expected automatic stress collections");
+    eprintln!("prepared-regexp scoped stress collections: {collections}");
+}
+
+#[test]
+fn prepared_regexp_preserves_options_and_gc_during_syntax_propertize() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(progn
+  (require 'syntax)
+(let (out)
+  (dolist (lookup '(nil t))
+    (dolist (case '(("b" 1 6 1 nil)
+                    ("B" 1 6 1 t)
+                    ("[bc]" 1 6 1 nil)
+                    ("\\w" 1 6 1 nil)
+                    ("\\w+" 1 6 1 nil)
+                    ("\\(\\w\\)" 6 1 -1 nil)
+                    ("\\w" 3 6 0 nil)
+                    ("\\w" 3 3 0 nil)
+                    ("z" 1 5 1 nil)))
+      (dolist (noerror '(nil t move))
+        (with-temp-buffer
+          (insert "ab cd")
+          (let ((parse-sexp-lookup-properties lookup)
+                (case-fold-search (nth 4 case))
+                (calls 0))
+            (setq-local syntax-propertize-function
+                        (lambda (start end)
+                          (setq calls (1+ calls))
+                          (put-text-property 1 3 'syntax-table (string-to-syntax "."))
+                          (garbage-collect)))
+            (setq-local syntax-propertize--done 1)
+            (goto-char (nth 1 case))
+            (set-match-data '(7 9))
+            (let ((answer
+                   (condition-case error
+                       (re-search-forward (car case) (nth 2 case) noerror (nth 3 case))
+                     (error (car error)))))
+              (push (list answer (point) (> calls 0)
+                          (mapcar (lambda (value) (if (bufferp value) 'buffer value))
+                                  (match-data t))) out)))))))
+  (nreverse out)))"#,
+    );
+    // GNU Emacs 31.1: plain/translated/captured searches, reverse counts,
+    // zero counts, all noerror modes and syntax properties on/off. The
+    // propertize callback allocates and collects, so prepared patterns must
+    // not bypass the callback or retain a borrowed Lisp string across it.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3",
+            " nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 ",
+            "3 buffer)) (2 2 nil (1 2 buffer)) (2 2 nil (1 2 buffer)) (2 2 nil (1 2 buffer)) (3 3 nil (1 3 buffer",
+            ")) (3 3 nil (1 3 buffer)) (3 3 nil (1 3 buffer)) (5 5 nil (5 6 5 6 buffer)) (5 5 nil (5 6 5 6 buffer",
+            ")) (5 5 nil (5 6 5 6 buffer)) (error 3 nil (7 9)) (error 3 nil (7 9)) (error 3 nil (7 9)) (3 3 nil (",
+            "3 3 buffer)) (3 3 nil (3 3 buffer)) (3 3 nil (3 3 buffer)) (search-failed 1 nil (7 9)) (nil 1 nil (7",
+            " 9)) (nil 5 nil (7 9)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil",
+            " (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 bu",
+            "ffer)) (3 3 nil (2 3 buffer)) (5 5 t (4 5 buffer)) (5 5 t (4 5 buffer)) (5 5 t (4 5 buffer)) (6 6 t ",
+            "(4 6 buffer)) (6 6 t (4 6 buffer)) (6 6 t (4 6 buffer)) (5 5 t (5 6 5 6 buffer)) (5 5 t (5 6 5 6 buf",
+            "fer)) (5 5 t (5 6 5 6 buffer)) (error 3 nil (7 9)) (error 3 nil (7 9)) (error 3 nil (7 9)) (3 3 nil ",
+            "(3 3 buffer)) (3 3 nil (3 3 buffer)) (3 3 nil (3 3 buffer)) (search-failed 1 nil (7 9)) (nil 1 nil (",
+            "7 9)) (nil 5 nil (7 9)))",
+        )
+    );
+}
+
+#[test]
+fn sparse_fastmap_search_agrees_with_exhaustive_candidates() {
+    crate::test_utils::init_test_tracing();
+    let syntax = DefaultSyntaxLookup;
+    for pattern in [
+        "a",
+        "[ab]",
+        "[abc]",
+        "[abcd]",
+        "[^ab]",
+        "é",
+        "[aé]",
+        ".",
+        "\\(a\\|b\\|c\\)",
+        "\\(a\\|b\\|c\\|d\\)",
+        "[abc]$",
+        "[ab]?",
+        "[ab]*c",
+        "\\(a\\)\\1",
+        "[ab]\\{1,2\\}",
+        "\\b[abc]",
+        "^a",
+        "",
+        "\0",
+        "\u{7f}",
+    ] {
+        for case_fold in [false, true] {
+            for posix in [false, true] {
+                let compiled = regex_compile(pattern, posix, case_fold).expect("compile");
+                for text in ["", "a", "zzz", "abca\nd", " éaB中c", "\0a\u{7f}b"] {
+                    let positions: Vec<_> = text
+                        .char_indices()
+                        .map(|(pos, _)| pos)
+                        .chain(std::iter::once(text.len()))
+                        .collect();
+                    for &start in &positions {
+                        for &limit in &positions {
+                            let search = || {
+                                re_search(
+                                    &compiled,
+                                    text.as_bytes(),
+                                    start,
+                                    limit as isize - start as isize,
+                                    &syntax,
+                                    start,
+                                )
+                                .map(|(pos, regs)| (pos, regs.start, regs.end))
+                            };
+                            let expected = with_fastmap_disabled(search);
+                            // Reuse the same compiled pattern over changing text,
+                            // directions and bounds, exercising cached decisions.
+                            assert_eq!(
+                                search(),
+                                expected,
+                                "{pattern:?}, {text:?}, {start} -> {limit}, fold={case_fold}, posix={posix}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn sparse_fastmap_rebuild_does_not_reuse_an_old_skip_byte() {
+    crate::test_utils::init_test_tracing();
+    let syntax = DefaultSyntaxLookup;
+    let mut compiled = regex_compile("a", false, false).expect("compile");
+    let search = |pattern: &CompiledPattern, text: &[u8]| {
+        re_search(pattern, text, 0, text.len() as isize, &syntax, 0)
+            .map(|(pos, regs)| (pos, regs.end[0]))
+    };
+    assert_eq!(search(&compiled, b"xa"), Some((1, 2)));
+    let original = compiled.clone();
+    // Recompute is the compiler's public seam for rebuilding a fastmap.
+    // Change the literal operand without changing bytecode boundaries or
+    // match registers, so any stale skip decision would miss the new byte.
+    assert_eq!(&compiled.bytecode()[..3], &[RegexOp::Exactn as u8, 1, b'a']);
+    neovm_text::test_support::authority::set_compiled_pattern_buffer_byte_for_test(
+        &mut compiled,
+        2,
+        b'b',
+    );
+    recompute_fastmap(&mut compiled, &syntax);
+    assert_eq!(search(&compiled, b"xb"), Some((1, 2)));
+    assert_eq!(search(&compiled, b"xa"), None);
+    assert_eq!(search(&original, b"xa"), Some((1, 2)));
+    assert_eq!(search(&original, b"xb"), None);
+}
+
+#[test]
+fn bounded_search_view_preserves_gnu_boundaries() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let (out)
+  ;; TEXT PATTERN START BOUND FOLD NARROW POSIX
+  (dolist (case '(("aaTAIL" "a$" 1 3 nil nil nil)
+                  ("aa\nTAIL" "a$" 1 3 nil nil nil)
+                  ("aaTAIL" "a\\'" 1 3 nil nil nil)
+                  ("aaTAIL" "a\\b" 1 3 nil nil nil)
+                  ("aaTAIL" "a\\B" 1 3 nil nil nil)
+                  ("aa TAIL" "a\\b" 1 3 nil nil nil)
+                  ("aa_TAIL" "a\\_>" 1 3 nil nil nil)
+                  ("aa TAIL" "a\\_>" 1 3 nil nil nil)
+                  ("aaTAIL" "a\\>" 1 3 nil nil nil)
+                  ("aa TAIL" "a\\>" 1 3 nil nil nil)
+                  ("aaTAIL" "\\b" 3 3 nil nil nil)
+                  ("aaTAIL" "\\B" 3 3 nil nil nil)
+                  ("aa\nTAIL" "^\\(\\)" 2 4 nil nil nil)
+                  ("aa\nTAIL" "^T" 2 4 nil nil nil)
+                  ("aa\nTAIL" "^T" 2 5 nil nil nil)
+                  ("é中日tail" "中\\b" 1 3 nil nil nil)
+                  ("é中日tail" "中\\'" 1 3 nil nil nil)
+                  ("é中日tail" "中$" 1 3 nil nil nil)
+                  ("é中\ntail" "中$" 1 3 nil nil nil)
+                  ("é中 tail" "中\\b" 1 3 nil nil nil)
+                  ("é中 tail" "\\(é中\\)" 1 3 nil nil nil)
+                  ("é中 tail" "\\(é中\\)" 1 2 nil nil nil)
+                  ("AaTAIL" "^aa" 1 3 t nil nil)
+                  ("AaTAIL" "^aa$" 1 3 t nil nil)
+                  ("aaTAIL" "\\(a\\)\\1" 1 3 nil nil nil)
+                  ("aaTAIL" "\\(a\\)\\1$" 1 3 nil nil nil)
+                  ("aaTAIL" "\\(a\\|aa\\)" 1 3 nil nil t)
+                  ("aaTAIL" "\\(a\\|aa\\)" 1 2 nil nil t)
+                  ("aaTAIL" "a\\'" 1 3 nil (1 3) nil)
+                  ("aaTAIL" "a$" 1 3 nil (1 3) nil)
+                  ("aaTAIL" "a\\b" 1 3 nil (1 3) nil)
+                  ("aaTAIL" "a\\B" 1 3 nil (1 3) nil)
+                  ("xxaaTAIL" "\\`aa" 3 5 nil (3 8) nil)
+                  ("xxaaTAIL" "aa\\'" 3 5 nil (3 5) nil)
+                  ("xxaaTAIL" "aa\\'" 3 5 nil (3 8) nil)
+                  ("" "\\'" 1 1 nil nil nil)))
+    (with-temp-buffer
+      (insert (nth 0 case))
+      ;; Park the gap after the tested prefix, before applying narrowing.
+      (goto-char (max 1 (- (point-max) 2)))
+      (insert "x") (delete-char -1)
+      (when (nth 5 case) (apply #'narrow-to-region (nth 5 case)))
+      (goto-char (nth 2 case))
+      (set-match-data '(7 9))
+      (let* ((case-fold-search (nth 4 case))
+             (answer (funcall (if (nth 6 case) #'posix-search-forward
+                               #'re-search-forward)
+                              (nth 1 case) (nth 3 case) t)))
+        (push (list answer (point)
+                    (mapcar (lambda (value) (if (bufferp value) 'buffer value))
+                            (match-data t))) out))))
+  (nreverse out))"#,
+    );
+    // Checked row by row against GNU Emacs 31.1.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((nil 1 (7 9)) (3 3 (2 3 buffer)) (nil 1 (7 9)) (nil 1 (7 9)) (2 2 (1 2 buffer)) (3 3 (2 3 ",
+            "buffer)) (nil 1 (7 9)) (3 3 (2 3 buffer)) (nil 1 (7 9)) (3 3 (2 3 buffer)) (nil 3 (7 9)) (3 3 (3 3 ",
+            "buffer)) (4 4 (4 4 4 4 buffer)) (nil 2 (7 9)) (5 5 (4 5 buffer)) (nil 1 (7 9)) (nil 1 (7 9)) (nil 1 ",
+            "(7 9)) (3 3 (2 3 buffer)) (3 3 (2 3 buffer)) (3 3 (1 3 1 3 buffer)) (nil 1 (7 9)) (3 3 (1 3 buffer))",
+            " (nil 1 (7 9)) (3 3 (1 3 1 2 buffer)) (nil 1 (7 9)) (3 3 (1 3 1 3 buffer)) (2 2 (1 2 1 2 buffer)) (3",
+            " 3 (2 3 buffer)) (3 3 (2 3 buffer)) (3 3 (2 3 buffer)) (2 2 (1 2 buffer)) (5 5 (3 5 buffer)) (5 5 (3",
+            " 5 buffer)) (nil 3 (7 9)) (1 1 (1 1 buffer)))",
+        )
+    );
+}
+
+#[test]
+fn bounded_search_view_preserves_gnu_raw_bytes_and_syntax() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let (out)
+  (dolist (multibyte '(nil t))
+    (with-temp-buffer
+      (set-buffer-multibyte multibyte)
+      (set-syntax-table (copy-syntax-table))
+      (modify-syntax-entry 128 ".")
+      (modify-syntax-entry #x3fff80 ".")
+      (insert (unibyte-string ?a 128 ?b ?T ?A ?I ?L))
+      (dolist (pattern (list "a$" "a\\'" "a\\b" "a\\B" "a." ".\\'"
+                            (concat "a" (unibyte-string 128))))
+        (dolist (bound '(2 3))
+          (goto-char 6) (insert "x") (delete-char -1)
+          (goto-char 1)
+          (set-match-data '(7 9))
+          (let* ((case-fold-search nil)
+                 (answer (re-search-forward pattern bound t)))
+            (push (list answer (point) (match-beginning 0) (match-end 0)) out))))))
+  (with-temp-buffer
+    (set-syntax-table (copy-syntax-table))
+    (modify-syntax-entry #x200000 "w")
+    (insert (string ?a #x200000 ?b ?T ?A ?I ?L))
+    (dolist (pattern '("a$" "a\\'" "a." "a.\\'" "a\\b" "a\\B"))
+      (dolist (bound '(2 3))
+        (goto-char 6) (insert "x") (delete-char -1)
+        (goto-char 1)
+        (set-match-data '(7 9))
+        (let* ((case-fold-search nil)
+               (answer (re-search-forward pattern bound t)))
+          (push (list answer (point) (match-beginning 0) (match-end 0)) out)))))
+  (with-temp-buffer
+    (insert "aXTAIL")
+    (put-text-property 2 3 'syntax-table (string-to-syntax "."))
+    (dolist (lookup '(nil t))
+      (dolist (pattern '("a\\b" "a\\B" "a\\>" "a\\_>"))
+        (goto-char 5) (insert "x") (delete-char -1)
+        (goto-char 1)
+        (set-match-data '(7 9))
+        (let* ((case-fold-search nil)
+               (parse-sexp-lookup-properties lookup)
+               (answer (re-search-forward pattern 2 t)))
+          (push (list answer (point) (match-beginning 0) (match-end 0)) out)))))
+  (nreverse out))"#,
+    );
+    // Checked row by row against GNU Emacs 31.1.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (2 2 1 2) (2 2 1 2) (nil 1 7 9) (nil 1 7 9) (nil",
+            " 1 7 9) (3 3 1 3) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (3 3 1 3) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) ",
+            "(nil 1 7 9) (2 2 1 2) (2 2 1 2) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (3 3 1 3) (nil 1 7 9) (nil 1 7 ",
+            "9) (nil 1 7 9) (3 3 1 3) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (3 3 1 3) (nil ",
+            "1 7 9) (nil 1 7 9) (2 2 1 2) (2 2 1 2) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (2 2 1 2) (nil 1 7 9) ",
+            "(nil 1 7 9) (2 2 1 2) (nil 1 7 9) (2 2 1 2) (2 2 1 2))",
+        )
+    );
+}
+
+#[test]
+fn bounded_search_view_one_character_context_agrees_with_full_text() {
+    crate::test_utils::init_test_tracing();
+    let syntax = DefaultSyntaxLookup;
+    for text in ["", "aaTAIL", "aa TAIL", "a_a\nTAIL", "a\n\nz\n", "é中日\nZ"] {
+        let positions: Vec<_> = text
+            .char_indices()
+            .map(|(pos, _)| pos)
+            .chain(std::iter::once(text.len()))
+            .collect();
+        for pattern in [
+            "",
+            "a",
+            "a$",
+            "a\\'",
+            "\\`",
+            "\\'",
+            "^",
+            "$",
+            "\\b",
+            "\\B",
+            "\\<",
+            "\\>",
+            "\\_<",
+            "\\_>",
+            "a.*",
+            "a.*?",
+            "a?",
+            ".*a$",
+            "\\(a\\)\\1",
+            "\\(a\\|aa\\)",
+            "\\(.*\\)$",
+            "中\\b",
+            "[[:word:]]+",
+        ] {
+            for case_fold in [false, true] {
+                for posix in [false, true] {
+                    let compiled = regex_compile(pattern, posix, case_fold).expect("compile");
+                    for &start in &positions {
+                        for &end in positions.iter().filter(|&&end| end >= start) {
+                            // The full text is the independent oracle. The view
+                            // keeps the next complete character so assertions at
+                            // END see its syntax and do not see a false EOF.
+                            let context_end = positions
+                                .iter()
+                                .copied()
+                                .find(|&pos| pos > end)
+                                .unwrap_or(text.len());
+                            let search = |bytes| {
+                                re_search(
+                                    &compiled,
+                                    bytes,
+                                    start,
+                                    (end - start) as isize,
+                                    &syntax,
+                                    start,
+                                )
+                                .map(|(pos, regs)| (pos, regs.start, regs.end))
+                            };
+                            assert_eq!(
+                                search(&text.as_bytes()[..context_end]),
+                                search(text.as_bytes()),
+                                "{pattern:?} in {text:?}, {start}..={end}, fold={case_fold}, posix={posix}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_search_view_leaves_a_distant_gap_in_place() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(with-temp-buffer
+             (insert (make-string 4000 ?a))
+             (goto-char 2001) (insert "x") (delete-char -1)
+             (goto-char 1)
+             (let* ((case-fold-search nil)
+                    (before (gap-position))
+                    (answer (re-search-forward "z" 9 t)))
+               (list before answer (gap-position) (point))))"#,
+    );
+    // GNU keeps the gap outside the short search span. This also checks
+    // movement cost without depending on a timing threshold.
+    assert_eq!(observed, "OK (2001 nil 2001 1)");
+}
+
+#[test]
+fn test_simple_literal() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let result = search_pattern("hello", "say hello world", 0, false, &syn, 0);
+    assert!(result.is_ok());
+    let r = result.unwrap();
+    assert!(r.is_some());
+    let (pos, regs) = r.unwrap();
+    assert_eq!(pos, 4); // "hello" starts at position 4
+    assert_eq!(regs.end[0], 9); // ends at 9
+}
+
+#[test]
+fn test_dot_matches_any() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let result = search_pattern("h.llo", "say hello world", 0, false, &syn, 0);
+    assert!(result.is_ok());
+    let r = result.unwrap();
+    assert!(r.is_some());
+}
+
+#[test]
+fn test_anchors() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // ^ at beginning
+    let r = match_pattern("^hello", "hello world", 0, false, &syn, 0).unwrap();
+    assert!(r.is_some());
+    // ^ not at beginning
+    let r = match_pattern("^hello", "say hello", 4, false, &syn, 0).unwrap();
+    assert!(r.is_none());
+}
+
+#[test]
+fn test_groups() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let result = search_pattern("\\(hel\\)lo", "hello", 0, false, &syn, 0);
+    assert!(result.is_ok());
+    let (pos, regs) = result.unwrap().unwrap();
+    assert_eq!(pos, 0);
+    assert_eq!(regs.start[1], 0); // group 1 start
+    assert_eq!(regs.end[1], 3); // group 1 end ("hel")
+}
+
+#[test]
+fn test_word_boundary() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let r = search_pattern("\\bhello\\b", "say hello world", 0, false, &syn, 0);
+    assert!(r.is_ok());
+    assert!(r.unwrap().is_some());
+}
+
+#[test]
+fn test_star_repetition() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let r = search_pattern("hel*o", "heo", 0, false, &syn, 0);
+    assert!(r.unwrap().is_some()); // zero l's
+    let r = search_pattern("hel*o", "hello", 0, false, &syn, 0);
+    assert!(r.unwrap().is_some()); // two l's
+    let r = search_pattern("hel*o", "hellllo", 0, false, &syn, 0);
+    assert!(r.unwrap().is_some()); // four l's
+}
+
+#[test]
+fn test_nongreedy_optional_prefers_zero() {
+    // Regression: non-greedy `??` used to fall through into the body first
+    // (greedy order), so `a??` matched one char instead of zero.  GNU
+    // `string-match` semantics — the lazy optional prefers the empty match:
+    //   (string-match "a??" "aaa")   => 0, match-data (0 0)
+    //   (string-match ".??" "xy")    => 0, match-data (0 0)
+    //   (string-match "a??b" "ab")   => 0, match-data (0 2)   [backtracks in]
+    //   (string-match "a??a" "aa")   => 0, match-data (0 1)
+    //   (string-match "x*a??" "xxaa")=> 0, match-data (0 2)
+    //   (string-match "\\(a??\\)b" "ab") => 0, groups (0 2)(0 1)
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+
+    let matched = |pat: &str, text: &str| -> (usize, i64, i64) {
+        let (pos, regs) = search_pattern(pat, text, 0, false, &syn, 0)
+            .expect("compile")
+            .expect("should match");
+        (pos, regs.start[0], regs.end[0])
+    };
+
+    assert_eq!(matched("a??", "aaa"), (0, 0, 0), "a?? prefers empty");
+    assert_eq!(matched(".??", "xy"), (0, 0, 0), ".?? prefers empty");
+    assert_eq!(
+        matched("a??b", "ab"),
+        (0, 0, 2),
+        "a??b backtracks into body"
+    );
+    assert_eq!(matched("a??a", "aa"), (0, 0, 1), "a??a lazy then literal");
+    assert_eq!(matched("a??", ""), (0, 0, 0), "a?? on empty input");
+    assert_eq!(
+        matched("x*a??", "xxaa"),
+        (0, 0, 2),
+        "greedy x* then lazy a??"
+    );
+
+    // Captured group inside a non-greedy optional.
+    let (pos, regs) = search_pattern("\\(a??\\)b", "ab", 0, false, &syn, 0)
+        .expect("compile")
+        .expect("should match");
+    assert_eq!((pos, regs.start[0], regs.end[0]), (0, 0, 2));
+    assert_eq!((regs.start[1], regs.end[1]), (0, 1), "group 1 = the 'a'");
+}
+
+#[test]
+fn test_word_boundary_at_string_edges() {
+    // Regression: GNU treats the beginning and end of the searched region as
+    // *unconditional* word boundaries (regex-emacs.c `case wordbound`, Case 1),
+    // so `\b` succeeds and `\B` fails there regardless of the adjacent char.
+    // neomacs previously computed the boundary from neighbours only, treating
+    // the missing edge char as non-word, so `\b` wrongly failed (and `\B`
+    // matched) at an edge next to a non-word char or in the empty string.
+    // GNU ground truth (`string-match`):
+    //   (string-match "\\b" "")     => 0     (string-match "\\B" "")     => nil
+    //   (string-match "\\b" ".")    => 0     (string-match "\\B" ".")    => nil
+    //   (string-match "\\b" "a")    => 0     (string-match "\\B" "a")    => nil
+    //   (string-match "\\B" "ab")   => 1     (string-match "\\B" ".)_aA")=> 1
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+
+    let pos_of = |pat: &str, text: &str| -> Option<usize> {
+        search_pattern(pat, text, 0, false, &syn, 0)
+            .expect("compile")
+            .map(|(pos, _)| pos)
+    };
+
+    // `\b` matches at the leading edge for every string, including empty and
+    // ones whose first char is not a word constituent.
+    assert_eq!(pos_of("\\b", ""), Some(0), "\\b on empty string");
+    assert_eq!(pos_of("\\b", "."), Some(0), "\\b before non-word char");
+    assert_eq!(pos_of("\\b", "a"), Some(0), "\\b before word char");
+
+    // `\B` never matches at an edge.
+    assert_eq!(pos_of("\\B", ""), None, "\\B on empty string");
+    assert_eq!(pos_of("\\B", "."), None, "\\B on single non-word char");
+    assert_eq!(pos_of("\\B", "a"), None, "\\B on single word char");
+
+    // Interior non-boundaries still match `\B` at the right place.
+    assert_eq!(pos_of("\\B", "ab"), Some(1), "\\B between two word chars");
+    assert_eq!(
+        pos_of("\\B", ".)_aA"),
+        Some(1),
+        "\\B between two non-word chars"
+    );
+
+    // `\W\b`: a non-word char followed by the trailing edge (a boundary).
+    assert_eq!(pos_of("\\W\\b", ","), Some(0), "\\W then \\b at EOF edge");
+}
+
+#[test]
+fn test_explicit_group_number_collision_with_open_group() {
+    // Regression: GNU rejects an explicit `\(?N:...\)` whose number collides
+    // with a still-OPEN enclosing group (regex-emacs.c:2250-2259,
+    // group_in_compile_stack) as `invalid-regexp`; neomacs used to accept it.
+    // But *reusing* a number for a sequential/closed group stays legal.  Found
+    // by the differential proptest.
+    crate::test_utils::init_test_tracing();
+
+    // Collision with an enclosing open group -> compile error.
+    assert!(
+        regex_compile("\\(\\(?1:\\)\\)", false, false).is_err(),
+        "explicit group 1 nested inside the auto-numbered group 1 must error"
+    );
+    assert!(
+        regex_compile("\\(\\(\\(?2:\\)\\)\\)", false, false).is_err(),
+        "explicit group 2 nested inside enclosing group 2 must error"
+    );
+
+    // Reusing a number for a closed/sequential group is still accepted.
+    assert!(
+        regex_compile("\\(?1:\\)\\(?1:\\)", false, false).is_ok(),
+        "two sequential explicit group 1s are legal"
+    );
+    assert!(
+        regex_compile("\\(\\)\\(?1:\\)", false, false).is_ok(),
+        "auto group 1 then a sequential explicit group 1 is legal"
+    );
+    assert!(
+        regex_compile("\\(\\(?2:\\)\\)", false, false).is_ok(),
+        "explicit group 2 inside open group 1 (no collision) is legal"
+    );
+}
+
+#[test]
+fn test_auto_group_number_after_explicit_uses_re_nsub() {
+    // Regression: an auto-numbered `\(...\)` following an explicit
+    // `\(?N:...\)` that lowered the running regnum below re_nsub used to reuse
+    // an already-assigned number (`regnum + 1`) instead of GNU's `++re_nsub`.
+    // For `\(?2:\(?1:x\)\)\(y\)` on "xy" GNU numbers the trailing `\(y\)`
+    // as group 3 -> match-data (0 2 0 1 0 1 1 2); neomacs used to mislabel it 2.
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let (pos, regs) = search_pattern("\\(?2:\\(?1:x\\)\\)\\(y\\)", "xy", 0, false, &syn, 0)
+        .expect("compile")
+        .expect("should match");
+    assert_eq!(pos, 0);
+    assert_eq!((regs.start[0], regs.end[0]), (0, 2));
+    assert_eq!((regs.start[1], regs.end[1]), (0, 1), "explicit group 1 = x");
+    assert_eq!((regs.start[2], regs.end[2]), (0, 1), "explicit group 2 = x");
+    assert_eq!(
+        (regs.start[3], regs.end[3]),
+        (1, 2),
+        "auto group must be numbered 3 (= ++re_nsub), not colliding with 2"
+    );
+}
+
+#[test]
+fn test_charset() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let r = search_pattern("[abc]", "xbz", 0, false, &syn, 0);
+    assert!(r.unwrap().is_some());
+    let r = search_pattern("[abc]", "xyz", 0, false, &syn, 0);
+    assert!(r.unwrap().is_none());
+}
+
+#[test]
+fn test_syntax_word() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // \sw matches word characters
+    let r = search_pattern("\\sw+", "hello world", 0, false, &syn, 0);
+    assert!(r.unwrap().is_some());
+}
+
+#[test]
+fn default_syntax_lookup_uses_gnu_standard_classes() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    assert_eq!(
+        syn.char_syntax('a'),
+        neovm_text::emacs_core::syntax::SyntaxClass::Word
+    );
+    assert_eq!(
+        syn.char_syntax('$'),
+        neovm_text::emacs_core::syntax::SyntaxClass::Word
+    );
+    assert_eq!(
+        syn.char_syntax('_'),
+        neovm_text::emacs_core::syntax::SyntaxClass::Symbol
+    );
+    assert_eq!(
+        syn.char_syntax('-'),
+        neovm_text::emacs_core::syntax::SyntaxClass::Symbol
+    );
+    assert_eq!(
+        syn.char_syntax(' '),
+        neovm_text::emacs_core::syntax::SyntaxClass::Whitespace
+    );
+    assert_eq!(
+        syn.char_syntax('\u{4e2d}'),
+        neovm_text::emacs_core::syntax::SyntaxClass::Word
+    );
+}
+
+#[test]
+fn test_backreference() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let r = search_pattern("\\(a\\)\\1", "aa", 0, false, &syn, 0);
+    assert!(r.unwrap().is_some());
+    let r = search_pattern("\\(a\\)\\1", "ab", 0, false, &syn, 0);
+    assert!(r.unwrap().is_none());
+}
+
+#[test]
+fn backreference_to_open_group_is_invalid_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let err = search_pattern("\\([^ \t\n]+ \\1\\)", "hello hello", 0, false, &syn, 0)
+        .expect_err("GNU signals invalid-regexp for a backreference before group end");
+    assert_eq!(err.message, "Invalid back reference");
+}
+
+#[test]
+fn test_alternation() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let r = search_pattern("\\(foo\\|bar\\)", "test bar baz", 0, false, &syn, 0);
+    assert!(r.is_ok(), "compile failed: {:?}", r.err());
+    assert!(r.as_ref().unwrap().is_some(), "match failed");
+    let (pos, regs) = r.unwrap().unwrap();
+    assert_eq!(pos, 5, "match position");
+    assert_eq!(regs.start[0], 5);
+    assert_eq!(regs.end[0], 8);
+}
+
+#[test]
+fn test_char_range() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let r = search_pattern("[0-9]+", "foo 123 bar", 0, false, &syn, 0);
+    assert!(r.is_ok(), "compile failed: {:?}", r.err());
+    assert!(r.as_ref().unwrap().is_some(), "match failed");
+    let (pos, _regs) = r.unwrap().unwrap();
+    assert_eq!(pos, 4, "match position");
+}
+
+#[test]
+fn test_fastmap_skips_positions() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // Pattern starts with 'z' — should skip to position where 'z' appears
+    let r = search_pattern("zing", "aaaaaaaaaazing", 0, false, &syn, 0);
+    assert!(r.unwrap().is_some());
+    let r = search_pattern("zing", "aaaaaaaaaazing", 0, false, &syn, 0);
+    let (pos, _) = r.unwrap().unwrap();
+    assert_eq!(pos, 10);
+}
+
+#[test]
+fn test_fastmap_literal_accurate() {
+    crate::test_utils::init_test_tracing();
+    // Verify fastmap is populated and accurate for a simple literal
+    let compiled = regex_compile("hello", false, false).unwrap();
+    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap[b'h' as usize]);
+    assert!(!compiled.fastmap[b'a' as usize]);
+    assert!(!compiled.fastmap[b'z' as usize]);
+}
+
+#[test]
+fn test_fastmap_charset() {
+    crate::test_utils::init_test_tracing();
+    // Verify fastmap for character class patterns
+    let compiled = regex_compile("[abc]", false, false).unwrap();
+    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap[b'a' as usize]);
+    assert!(compiled.fastmap[b'b' as usize]);
+    assert!(compiled.fastmap[b'c' as usize]);
+    assert!(!compiled.fastmap[b'd' as usize]);
+}
+
+#[test]
+fn test_fastmap_case_fold() {
+    crate::test_utils::init_test_tracing();
+    // Case-folded pattern should match both cases
+    let compiled = regex_compile("Hello", false, true).unwrap();
+    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap[b'h' as usize]);
+    assert!(compiled.fastmap[b'H' as usize]);
+}
+
+#[test]
+fn test_fastmap_alternation() {
+    crate::test_utils::init_test_tracing();
+    // Alternation: both branches should appear in fastmap
+    let compiled = regex_compile("\\(foo\\|bar\\)", false, false).unwrap();
+    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap[b'f' as usize]);
+    assert!(compiled.fastmap[b'b' as usize]);
+    assert!(!compiled.fastmap[b'z' as usize]);
+}
+
+#[test]
+fn test_fastmap_dot() {
+    crate::test_utils::init_test_tracing();
+    // AnyChar: everything except newline
+    let compiled = regex_compile(".", false, false).unwrap();
+    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap[b'a' as usize]);
+    assert!(compiled.fastmap[b'Z' as usize]);
+    assert!(!compiled.fastmap[b'\n' as usize]);
+}
+
+#[test]
+fn test_fastmap_anchor_then_literal() {
+    crate::test_utils::init_test_tracing();
+    // ^hello — anchor is zero-width, fastmap should see 'h'
+    let compiled = regex_compile("^hello", false, false).unwrap();
+    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap[b'h' as usize]);
+    assert!(!compiled.fastmap[b'x' as usize]);
+}
+
+#[test]
+fn test_fastmap_charset_not() {
+    crate::test_utils::init_test_tracing();
+    // [^abc] should allow everything except a, b, c
+    let compiled = regex_compile("[^abc]", false, false).unwrap();
+    assert!(compiled.fastmap_accurate);
+    assert!(!compiled.fastmap[b'a' as usize]);
+    assert!(!compiled.fastmap[b'b' as usize]);
+    assert!(!compiled.fastmap[b'c' as usize]);
+    assert!(compiled.fastmap[b'd' as usize]);
+    assert!(compiled.fastmap[b'z' as usize]);
+}
+
+#[test]
+fn test_unterminated_charset_reports_gnu_ebrack() {
+    crate::test_utils::init_test_tracing();
+    match regex_compile("[invalid", false, false) {
+        Ok(_) => panic!("unterminated charset should fail"),
+        Err(err) => assert_eq!(err.message, "Unmatched [ or [^"),
+    }
+}
+
+#[test]
+fn test_trailing_backslash_reports_gnu_eescape() {
+    crate::test_utils::init_test_tracing();
+    match regex_compile("a\\", false, false) {
+        Ok(_) => panic!("trailing backslash should fail"),
+        Err(err) => assert_eq!(err.message, "Trailing backslash"),
+    }
+}
+
+#[test]
+fn test_unmatched_interval_reports_gnu_ebrace() {
+    crate::test_utils::init_test_tracing();
+    match regex_compile("a\\{2", false, false) {
+        Ok(_) => panic!("unmatched interval should fail"),
+        Err(err) => assert_eq!(err.message, "Unmatched \\{"),
+    }
+}
+
+#[test]
+fn test_multibyte_charset() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let r = search_pattern("[àáâ]", "hello à world", 0, false, &syn, 0);
+    assert!(r.is_ok(), "compile failed: {:?}", r.err());
+    assert!(r.unwrap().is_some(), "should match à in text");
+}
+
+#[test]
+fn test_multibyte_charset_no_match() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let r = search_pattern("[àáâ]", "hello world", 0, false, &syn, 0);
+    assert!(r.is_ok());
+    assert!(
+        r.unwrap().is_none(),
+        "should not match when no accented chars"
+    );
+}
+
+#[test]
+fn test_multibyte_charset_range() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // Range of accented Latin characters: é (U+00E9) through ü (U+00FC)
+    let r = search_pattern("[é-ü]", "hello ö world", 0, false, &syn, 0);
+    assert!(r.is_ok(), "compile failed: {:?}", r.err());
+    assert!(r.unwrap().is_some(), "ö should be in range é-ü");
+}
+
+#[test]
+fn test_multibyte_charset_range_no_match() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // 'a' (U+0061) is outside the range é (U+00E9) through ü (U+00FC)
+    let r = search_pattern("[é-ü]", "hello a world", 0, false, &syn, 0);
+    assert!(r.is_ok());
+    assert!(r.unwrap().is_none(), "ASCII 'a' should not be in range é-ü");
+}
+
+#[test]
+fn test_multibyte_charset_not() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // [^à] should match any character that is not à
+    let r = search_pattern("[^à]", "à", 0, false, &syn, 0);
+    assert!(r.is_ok());
+    assert!(r.unwrap().is_none(), "[^à] should not match 'à'");
+
+    let r = search_pattern("[^à]", "b", 0, false, &syn, 0);
+    assert!(r.is_ok());
+    assert!(r.unwrap().is_some(), "[^à] should match 'b'");
+}
+
+#[test]
+fn test_multibyte_charset_mixed() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // Mix of ASCII and non-ASCII in one charset
+    let r = search_pattern("[aéz]", "hello é world", 0, false, &syn, 0);
+    assert!(r.is_ok());
+    assert!(r.unwrap().is_some(), "should match é");
+
+    let r = search_pattern("[aéz]", "hello z world", 0, false, &syn, 0);
+    assert!(r.is_ok());
+    assert!(r.unwrap().is_some(), "should also match z");
+}
+
+#[test]
+fn test_multibyte_charset_cjk() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // CJK characters
+    let r = search_pattern("[你好世]", "say 好 to the world", 0, false, &syn, 0);
+    assert!(r.is_ok());
+    assert!(r.unwrap().is_some(), "should match 好");
+}
+
+#[test]
+fn test_multibyte_charset_match_position() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    let r = search_pattern("[àáâ]", "hello á world", 0, false, &syn, 0);
+    let (pos, regs) = r.unwrap().unwrap();
+    assert_eq!(pos, 6, "á starts at byte 6");
+    assert_eq!(regs.end[0], 8, "á is 2 bytes in UTF-8, ends at byte 8");
+}
+
+#[test]
+fn test_charset_before_alternation_shift() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // (string-match "[é]\\|x" (string ?é)) => 0 in GNU.
+    // The `\\|x` second alternative splices an OnFailureJump before `[é]`.
+    let r = search_pattern("[é]\\|x", "é", 0, false, &syn, 0);
+    assert!(r.is_ok(), "compile failed: {:?}", r.err());
+    let (pos, _) = r
+        .unwrap()
+        .expect("[é]\\|x should match the lone é, not be orphaned by the splice");
+    assert_eq!(pos, 0);
+}
+
+#[test]
+fn test_charset_range_before_alternation_shift() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // (string-match "[ç-ï]\\|x" (string ?é)) => 0 in GNU (é is in ç..ï).
+    let r = search_pattern("[ç-ï]\\|x", "é", 0, false, &syn, 0);
+    assert!(r.is_ok(), "compile failed: {:?}", r.err());
+    let (pos, _) = r.unwrap().expect("[ç-ï]\\|x should match é (in range ç-ï)");
+    assert_eq!(pos, 0);
+}
+
+#[test]
+fn test_charset_range_before_quantifier_shift() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // (string-match "[ç-ï]*x" (string ?é ?é ?x)) => 0 in GNU.
+    // The `*` splices OnFailureJumpLoop before `[ç-ï]`.
+    let r = search_pattern("[ç-ï]*x", "ééx", 0, false, &syn, 0);
+    assert!(r.is_ok(), "compile failed: {:?}", r.err());
+    let (pos, _) = r
+        .unwrap()
+        .expect("[ç-ï]*x should match \"ééx\" from the start");
+    assert_eq!(pos, 0);
+}
+
+#[test]
+fn test_charset_in_group_before_alternation_shift() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // (string-match "\\([ç-ï]\\)\\|z" (string ?é)) => 0 in GNU.
+    // Group + alternation both splice bytes ahead of `[ç-ï]`.
+    let r = search_pattern("\\([ç-ï]\\)\\|z", "é", 0, false, &syn, 0);
+    assert!(r.is_ok(), "compile failed: {:?}", r.err());
+    let (pos, regs) = r
+        .unwrap()
+        .expect("\\([ç-ï]\\)\\|z should match é and capture it");
+    assert_eq!(pos, 0);
+    assert_eq!(regs.start[1], 0, "group 1 should capture the é");
+    assert_eq!(regs.end[1], 2, "é is 2 bytes in UTF-8");
+}
+
+#[test]
+fn test_charset_optional_before_quantifier_shift() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // Greedy `?` also splices an OnFailureJump before the charset.
+    // (string-match "[ç-ï]?x" (string ?é ?x)) => 0 in GNU.
+    let r = search_pattern("[ç-ï]?x", "éx", 0, false, &syn, 0);
+    assert!(r.is_ok(), "compile failed: {:?}", r.err());
+    let (pos, _) = r.unwrap().expect("[ç-ï]?x should match \"éx\"");
+    assert_eq!(pos, 0);
+
+    // Non-greedy `*?` truncates+re-extends the charset body to a new offset.
+    // (string-match "[ç-ï]*?x" (string ?é ?é ?x)) => 0 in GNU.
+    let r = search_pattern("[ç-ï]*?x", "ééx", 0, false, &syn, 0);
+    assert!(r.is_ok(), "compile failed: {:?}", r.err());
+    let (pos, _) = r.unwrap().expect("[ç-ï]*?x should match \"ééx\"");
+    assert_eq!(pos, 0);
+}
+
+#[test]
+fn test_ascii_class_before_alternation_no_regression() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // ASCII-only classes use the bitmap (no side-map entry), so the splice
+    // never affected them; assert they still behave correctly.
+    let r = search_pattern("[a-c]\\|x", "b", 0, false, &syn, 0);
+    assert!(r.is_ok());
+    assert_eq!(r.unwrap().expect("[a-c]\\|x should match b").0, 0);
+
+    let r = search_pattern("[a-c]\\|x", "x", 0, false, &syn, 0);
+    assert!(r.is_ok());
+    assert_eq!(
+        r.unwrap().expect("[a-c]\\|x should match x via 2nd alt").0,
+        0
+    );
+
+    let r = search_pattern("[a-c]\\|x", "z", 0, false, &syn, 0);
+    assert!(r.is_ok());
+    assert!(r.unwrap().is_none(), "[a-c]\\|x should not match z");
+
+    // Quantifier over an ASCII class (`*`) plus a multibyte class to confirm
+    // the two co-exist after a shift.
+    let r = search_pattern("[a-c]*[ç-ï]", "abcé", 0, false, &syn, 0);
+    assert!(r.is_ok(), "compile failed: {:?}", r.err());
+    assert_eq!(r.unwrap().expect("[a-c]*[ç-ï] should match \"abcé\"").0, 0);
+}
+
+#[test]
+fn test_descending_interval_reports_gnu_badbr() {
+    crate::test_utils::init_test_tracing();
+    // \{2,1\}, \{5,2\}, \{3,0\}: lower > upper must signal "Invalid content of \{\}".
+    for pat in ["a\\{2,1\\}", "a\\{5,2\\}", "a\\{3,0\\}"] {
+        match regex_compile(pat, false, false) {
+            Ok(_) => panic!("descending interval {pat:?} should fail to compile"),
+            Err(err) => assert_eq!(
+                err.message, "Invalid content of \\{\\}",
+                "wrong error for {pat:?}"
+            ),
+        }
+    }
+}
+
+#[test]
+fn test_ascending_and_unbounded_intervals_still_compile() {
+    crate::test_utils::init_test_tracing();
+    // Equal bounds, ascending bounds, and an unbounded upper must remain valid.
+    for pat in ["a\\{2,3\\}", "a\\{2,2\\}", "a\\{2,\\}", "a\\{0,2\\}"] {
+        assert!(
+            regex_compile(pat, false, false).is_ok(),
+            "valid interval {pat:?} should compile"
+        );
+    }
+}
+
+#[test]
+fn test_stacked_quantifiers_fold_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // Each of these must compile and match at position 0 of "aaa",
+    // exactly like GNU's quantifier folding.
+    for pat in ["a**", "a*?*", "a*+", "a++", "a???", "a+*", "a?*", "a?+"] {
+        let r = search_pattern(pat, "aaa", 0, false, &syn, 0);
+        let r = r.unwrap_or_else(|e| panic!("{pat:?} failed to compile: {e:?}"));
+        let (pos, _regs) = r.unwrap_or_else(|| panic!("{pat:?} should match \"aaa\""));
+        assert_eq!(pos, 0, "{pat:?} should match at position 0");
+    }
+}
+
+#[test]
+fn test_stacked_greedy_star_consumes_all() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // `a**` folds to a greedy `a*`, so on "aaa" it consumes all three a's.
+    let (pos, regs) = search_pattern("a**", "aaa", 0, false, &syn, 0)
+        .unwrap()
+        .expect("a** should match \"aaa\"");
+    assert_eq!(pos, 0);
+    assert_eq!(regs.end[0], 3, "greedy a** should consume all three a's");
+}
+
+#[test]
+fn test_stacked_plus_requires_one() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // `a++` folds to a greedy `a+`: must match at least one `a`.
+    let r = search_pattern("a++", "aaa", 0, false, &syn, 0).unwrap();
+    let (pos, regs) = r.expect("a++ should match \"aaa\"");
+    assert_eq!(pos, 0);
+    assert_eq!(regs.end[0], 3);
+    // `a+` (folded from a++) must NOT match a string with no `a`.
+    let r = search_pattern("a++", "bbb", 0, false, &syn, 0).unwrap();
+    assert!(r.is_none(), "a++ must not match a string with no a's");
+}
+
+#[test]
+fn cntrl_class_excludes_del_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    // GNU `ISCNTRL(c)` is `((c) < ' ')` (regex-emacs.c:108), so `[[:cntrl:]]`
+    // matches only 0x00..=0x1F.  In particular it must NOT match DEL (0x7F),
+    // unlike the C-locale `iscntrl`.  This is the primitive behind json.el's
+    // `(rx (in cntrl))`, which controls whether `json-encode-string` escapes a
+    // character: DEL must pass through literally, only chars < 0x20 are escaped.
+
+    // 0x1F (unit separator) is a control char and must match.
+    assert!(
+        search_pattern("[[:cntrl:]]", "\u{1f}", 0, false, &syn, 0)
+            .unwrap()
+            .is_some(),
+        "[[:cntrl:]] must match 0x1F"
+    );
+    // 0x7F (DEL) is NOT a control char for Emacs regexp.
+    assert!(
+        search_pattern("[[:cntrl:]]", "\u{7f}", 0, false, &syn, 0)
+            .unwrap()
+            .is_none(),
+        "[[:cntrl:]] must NOT match DEL (0x7F)"
+    );
+    // The same holds when combined with other class members, mirroring the
+    // exact charset json.el compiles: `(rx (in ?\" ?\\ cntrl))`.
+    assert!(
+        search_pattern("[\"\\\\[:cntrl:]]", "\u{7f}", 0, false, &syn, 0)
+            .unwrap()
+            .is_none(),
+        "[\"\\\\[:cntrl:]] must NOT match DEL (0x7F)"
+    );
+    // A boundary check: 0x20 (space) is not a control char.
+    assert!(
+        search_pattern("[[:cntrl:]]", " ", 0, false, &syn, 0)
+            .unwrap()
+            .is_none(),
+        "[[:cntrl:]] must NOT match space"
+    );
+}
+
+/// GNU `[[:space:]]` is `ISSPACE(c) == (BUFFER_SYNTAX(c) == Swhitespace)`
+/// (regex-emacs.c:151,1618): it consults the ACTIVE syntax table's whitespace
+/// class, NOT a fixed isspace/Unicode-whitespace set.  neomacs previously baked
+/// space/tab/LF/CR/FF into the compile-time bitmap, so `[[:space:]]` matched LF
+/// and CR even when the buffer's syntax table classified them otherwise.
+///
+/// Under a `lisp-interaction-mode`-style table (the default batch buffer) `\n`
+/// is comment-end and `\r` is a symbol, so neither is whitespace and
+/// `[[:space:]]` must NOT match them — matching GNU's
+/// `(string-match "[[:space:]]" "\n")` => nil and `"\r"` => nil.  Space, tab and
+/// formfeed are still whitespace and must match.
+#[test]
+fn posix_space_class_consults_syntax_table_excludes_newline_cr() {
+    crate::test_utils::init_test_tracing();
+    let syn = LispModeSyntaxLookup;
+
+    // GNU: nil for LF and CR under emacs-lisp syntax.
+    assert!(
+        search_pattern("[[:space:]]", "\n", 0, false, &syn, 0)
+            .unwrap()
+            .is_none(),
+        "[[:space:]] must NOT match LF when newline is comment-end (GNU nil)"
+    );
+    assert!(
+        search_pattern("[[:space:]]", "\r", 0, false, &syn, 0)
+            .unwrap()
+            .is_none(),
+        "[[:space:]] must NOT match CR when it is a symbol constituent (GNU nil)"
+    );
+
+    // GNU: 0 for space, tab and formfeed (still whitespace syntax).
+    for (text, label) in [(" ", "space"), ("\t", "tab"), ("\u{0c}", "formfeed")] {
+        assert!(
+            search_pattern("[[:space:]]", text, 0, false, &syn, 0)
+                .unwrap()
+                .is_some(),
+            "[[:space:]] must match {label} (whitespace syntax)"
+        );
+    }
+}
+
+/// Under the GNU *standard* syntax table (`init_syntax_once`, syntax.c:3686-3691,
+/// the table used by `fundamental-mode` / `(standard-syntax-table)`), LF and CR
+/// ARE whitespace, so `[[:space:]]` DOES match them.  This is the other half of
+/// the syntax-table dependency and guards against over-correcting the fix.
+#[test]
+fn posix_space_class_matches_newline_cr_under_standard_syntax() {
+    crate::test_utils::init_test_tracing();
+    let syn = DefaultSyntaxLookup;
+    for (text, label) in [
+        ("\n", "LF"),
+        ("\r", "CR"),
+        (" ", "space"),
+        ("\t", "tab"),
+        ("\u{0c}", "formfeed"),
+    ] {
+        assert!(
+            search_pattern("[[:space:]]", text, 0, false, &syn, 0)
+                .unwrap()
+                .is_some(),
+            "[[:space:]] must match {label} under the standard syntax table"
+        );
+    }
+}
+
+/// `[[:blank:]]` is strictly ASCII space and tab (`ISBLANK`, regex-emacs.c:113):
+/// it is NOT syntax-table-driven and must never match LF or CR regardless of the
+/// syntax table.  Guards against the space fix accidentally touching blank.
+#[test]
+fn posix_blank_class_is_space_tab_only_independent_of_syntax() {
+    crate::test_utils::init_test_tracing();
+    for syn in [
+        &DefaultSyntaxLookup as &dyn SyntaxLookup,
+        &LispModeSyntaxLookup,
+    ] {
+        assert!(
+            search_pattern("[[:blank:]]", " ", 0, false, syn, 0)
+                .unwrap()
+                .is_some(),
+            "[[:blank:]] must match space"
+        );
+        assert!(
+            search_pattern("[[:blank:]]", "\t", 0, false, syn, 0)
+                .unwrap()
+                .is_some(),
+            "[[:blank:]] must match tab"
+        );
+        assert!(
+            search_pattern("[[:blank:]]", "\n", 0, false, syn, 0)
+                .unwrap()
+                .is_none(),
+            "[[:blank:]] must NOT match LF"
+        );
+        assert!(
+            search_pattern("[[:blank:]]", "\r", 0, false, syn, 0)
+                .unwrap()
+                .is_none(),
+            "[[:blank:]] must NOT match CR"
+        );
+    }
+}
+
+/// Fast differential fuzz that runs on every `cargo nextest run` — a few thousand
+/// cases is enough to catch gross divergences quickly.
+#[test]
+fn pike_fuzz_smoke() {
+    crate::test_utils::init_test_tracing();
+    // Short texts keep the forced-backtracker oracle fast (catastrophic
+    // patterns stay bounded), so the smoke run finishes in seconds.
+    run_fuzz(4_000, 0x1234_5678, 16);
+}
+
+#[test]
+fn backward_syntax_assertions_share_gnu_stop_semantics_across_engines() {
+    crate::test_utils::init_test_tracing();
+    let syntax = DefaultSyntaxLookup;
+    let text = b"one two three";
+
+    for engine in [
+        RegexEngineOverride::Backtracker,
+        RegexEngineOverride::PikeVm,
+    ] {
+        for (pattern, expected_start) in [(" \\<", 3), (" \\_<", 3), (" \\b", 7)] {
+            let compiled = regex_compile(pattern, false, false).expect("compile assertion pattern");
+            assert!(
+                compiled.pike_eligible,
+                "{pattern:?} must exercise both engines"
+            );
+            let (start, registers) = with_regex_engine_override(engine, || {
+                re_search(&compiled, text, 8, -8, &syntax, 8).expect("backward match")
+            });
+            assert_eq!(start, expected_start, "{engine:?} {pattern:?}");
+            assert_eq!(registers.start[0], expected_start as i64);
+        }
+    }
+}
+
+#[test]
+fn pike_greedy_and_captures() {
+    // NB: `a??` (non-greedy optional) is intentionally Pike-INELIGIBLE (its
+    // keep-string jump can't be modelled), so it is not asserted here.
+    for p in [
+        "a*",
+        "a+",
+        "a?",
+        "a*?",
+        "a+?",
+        "\\(a*\\)\\(a*\\)",
+        "\\(a\\|ab\\)\\(c\\|bcd\\)",
+        "\\(?:ab\\)+",
+        "a.*b",
+        "a.*?b",
+        "\\(a+\\)+",
+        "\\(.*\\)\\(.*\\)",
+    ] {
+        assert_engines_agree(p, false, b"aaabcaabcd");
+        assert_engines_agree(p, false, b"");
+        assert_engines_agree(p, false, b"abababab");
+    }
+}
+
+#[test]
+fn pike_alternation_priority() {
+    // Leftmost-greedy: left arm wins when both can match.
+    assert_engines_agree("\\(a\\|ab\\)", false, b"ab");
+    assert_engines_agree("\\(ab\\|a\\)", false, b"ab");
+    assert_engines_agree("a\\|ab\\|abc", false, b"abc");
+}
+
+#[test]
+fn pike_anchors_boundaries() {
+    for p in [
+        "^ab",
+        "ab$",
+        "\\<ab\\>",
+        "\\_<a_b\\_>",
+        "\\bword\\b",
+        "\\`start",
+        "end\\'",
+    ] {
+        assert_engines_agree(p, false, b"ab word a_b start end\nab");
+        assert_engines_agree(p, false, b"xx ab\nword\n");
+    }
+}
+
+#[test]
+fn pike_charsets_syntax_multibyte_casefold() {
+    assert_engines_agree("[a-z]+", false, b"Hello World");
+    assert_engines_agree("[^a-z ]+", false, b"Hello World 123");
+    assert_engines_agree("[[:alpha:]]+", false, b"abc123 def");
+    assert_engines_agree("\\w+", false, b"foo_bar baz");
+    assert_engines_agree("\\(?:\\w\\|\\s_\\)+", false, b"a-b_c d");
+    assert_engines_agree("[A-Z]+", true, b"hello WORLD"); // case fold
+    assert_engines_agree(
+        "\u{2018}\\(\\w+\\)\u{2019}",
+        false,
+        "\u{2018}sym\u{2019}".as_bytes(),
+    );
+    assert_engines_agree("é+", false, "café ééé".as_bytes());
+}
+
+/// Nullable NON-capturing loops (empty-matchable body, no capture in the
+/// cycle) stay Pike-eligible — the `seen`-set handles termination and there
+/// are no captures to lose.  These are excluded from the fuzzer (the
+/// backtracker oracle is catastrophically slow on them) so pin them here on
+/// short input where the backtracker stays fast.  Any capture INSIDE the
+/// loop makes the pattern ineligible (see `has_capturing_epsilon_cycle`).
+#[test]
+fn pike_nullable_noncapturing_loops() {
+    for p in [
+        "\\(?:a\\|\\)*b",
+        "\\(?:\\<\\)*a",
+        "\\(?:x*\\)*y", // inner star, outer star, shy — nullable, no capture
+        "\\(?:\\b\\)*.",
+        "\\(?:a\\|b\\|\\)+c",
+    ] {
+        let cp = regex_compile(p, false, false).expect("compile");
+        // These are eligible ONLY because the epsilon cycle carries no
+        // capture group; assert that so the test documents the boundary.
+        assert!(
+            cp.pike_eligible,
+            "{p:?} should be pike-eligible (no capture in cycle)"
+        );
+        // Keep texts SHORT (<=3 chars): these nullable-loop patterns blow up
+        // exponentially in the forced-backtracker oracle on longer input.
+        for text in [&b""[..], b"a", b"b", b"ab", b"ba", b"xy", b"c", b"axy"] {
+            let case = RegexCase::new(p, text, false, 0, 0);
+            let check = check_regex_differential(case, RegexDifferential::PikeVm).unwrap_or_else(
+                |divergence| {
+                    panic!("{divergence} for {p:?} on {text:?}");
+                },
+            );
+            assert_eq!(check, RegexCheck::Equivalent { comparisons: 3 });
+        }
+    }
+}
+
+/// The production routing is backtracker-by-default with a Pike fallback that
+/// triggers ONLY on catastrophic backtracking: a well-behaved pattern must
+/// never fall back (so it keeps the backtracker's speed), while `a*a*b` on a
+/// long non-matching run must fall back to the linear Pike VM.
+#[test]
+fn pike_fallback_only_on_catastrophe() {
+    let syn = DefaultSyntaxLookup;
+
+    // Well-behaved patterns over ordinary text: no fallback.
+    for (pat, text) in [
+        ("\\(foo\\|bar\\)+baz", &b"foobarbaz foo bar"[..]),
+        ("[a-z]+\\_>", b"hello world twelve"),
+        ("a.*b", b"axxxxxxxxxxb and more"),
+    ] {
+        let cp = regex_compile(pat, false, false).unwrap();
+        let before = pike_fallback_count();
+        let _ = re_search(&cp, text, 0, text.len() as isize, &syn, 0);
+        assert_eq!(
+            pike_fallback_count(),
+            before,
+            "{pat:?} should not trip the catastrophe fallback"
+        );
+    }
+
+    // `a*a*b` over a long non-matching run: MUST fall back to Pike.
+    let cp = regex_compile("a*a*b", false, false).unwrap();
+    let mut text = vec![b'a'; 4000];
+    text.push(b'!');
+    let before = pike_fallback_count();
+    assert!(re_match(&cp, &text, 0, text.len(), &syn, 0).is_none());
+    assert!(
+        pike_fallback_count() > before,
+        "a*a*b over a long run should trip the catastrophe fallback"
+    );
+}
+
+/// Fast smoke run on every `cargo nextest run`.
+#[test]
+fn prefilter_fuzz_smoke() {
+    crate::test_utils::init_test_tracing();
+    // Mix in general patterns (1-in-3) for breadth on the cheap smoke path.
+    let c = run_prefilter_fuzz(4_000, 0x5EED_1234, 24, 3, false, SearchTarget::Multibyte);
+    eprintln!(
+        "prefilter smoke: compiled={} with_prefilter={} pf_forward_cmp={}",
+        c.compiled, c.with_prefilter, c.pf_forward_cmp
+    );
+    // The generator must actually exercise the prefilter on a real fraction.
+    assert!(
+        c.with_prefilter > c.compiled / 20,
+        "prefilter fuzz should build a prefilter on many cases \
+         (with_prefilter={} compiled={})",
+        c.with_prefilter,
+        c.compiled
+    );
+}
+
+/// The same stream over the other search shapes: case-folded searches in
+/// multibyte and unibyte text, and exact searches in unibyte text.
+#[test]
+fn search_optimization_fuzz_smoke_across_folding_and_targets() {
+    crate::test_utils::init_test_tracing();
+    for (case_fold, target, seed) in [
+        (true, SearchTarget::Multibyte, 0xF01D_0001),
+        (true, SearchTarget::Unibyte, 0xF01D_0002),
+        (false, SearchTarget::Unibyte, 0xF01D_0003),
+    ] {
+        let c = run_prefilter_fuzz(1_500, seed, 24, 3, case_fold, target);
+        tracing::info!(
+            case_fold,
+            %target,
+            compiled = c.compiled,
+            with_prefilter = c.with_prefilter,
+            checks = c.pf_forward_cmp,
+            "search optimization fuzz smoke"
+        );
+        assert!(c.compiled > 1_000, "the generator must compile most cases");
+        if case_fold {
+            assert!(
+                c.pf_forward_cmp >= 6 * c.compiled,
+                "every case-folded case is compared exhaustively"
+            );
+        }
+        // Case-folded patterns get the folded literal prefilter too.
+        assert!(
+            c.with_prefilter > c.compiled / 20,
+            "the stream should build a prefilter on many cases \
+             (with_prefilter={} compiled={})",
+            c.with_prefilter,
+            c.compiled
+        );
+    }
+}
+
+#[test]
+fn prefilter_built_for_leading_literal() {
+    // A plain multi-byte literal → a single-needle prefilter (memmem).
+    let cp = regex_compile("unread-command-events", false, false).expect("compile");
+    assert!(
+        cp.literal_prefilter().is_some(),
+        "leading literal should get a prefilter"
+    );
+    assert_prefilter_equiv(
+        "unread-command-events",
+        false,
+        b"xx unread-command-events yy unread-command-events",
+    );
+}
+
+#[test]
+fn prefilter_built_for_keyword_alternation() {
+    // The real font-lock shapes with literal keyword alternations.
+    for pat in [
+        "(\\(catch\\|throw\\|featurep\\|provide\\|require\\)\\_>",
+        "(\\(cl-\\(?:assert\\|check-type\\)\\|error\\|signal\\|user-error\\|warn\\)\\_>",
+    ] {
+        let cp = regex_compile(pat, false, false).expect("compile");
+        assert!(
+            cp.literal_prefilter().is_some(),
+            "keyword alternation should get a prefilter: {pat:?}"
+        );
+    }
+    assert_prefilter_equiv(
+        "(\\(catch\\|throw\\|require\\)\\_>",
+        false,
+        b"(throw x) (require 'foo) (catch 'tag) (provide 'bar) (defun f ())",
+    );
+}
+
+#[test]
+fn prefilter_none_for_custom_case_table() {
+    crate::test_utils::init_test_tracing();
+    // A case-canon char-table that folds a non-ASCII character into a needle
+    // byte gets no prefilter; the standard translation does.
+    let table = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
+    neovm_text::emacs_core::chartable::ct_set_single(&table, 0x212A, Value::fixnum('d' as i64));
+    let cp = regex_compile_lisp_with_translation(
+        &neovm_value::heap_types::LispString::from_utf8("defun"),
+        false,
+        Some(CaseTranslation::from_char_table(table)),
+    )
+    .expect("compile");
+    assert!(
+        cp.literal_prefilter().is_none(),
+        "a custom case table must not get a prefilter"
+    );
+    let cp = regex_compile("defun", false, true).expect("compile");
+    assert!(
+        cp.literal_prefilter().is_some(),
+        "the standard translation gets the folded prefilter"
+    );
+}
+
+#[test]
+fn prefilter_none_for_alternation_with_nonliteral_arm() {
+    // One arm has no literal head → the whole pattern has a match with no
+    // offset-0 literal → no prefilter (soundness bail).
+    for pat in [
+        "(\\(catch\\|\\w+\\)",     // second arm `\w+` — non-literal head
+        "(\\(catch\\|\\|throw\\)", // empty middle arm — nullable path
+    ] {
+        let cp = regex_compile(pat, false, false).expect("compile");
+        assert!(
+            cp.literal_prefilter().is_none(),
+            "alternation with a non-literal/empty arm must bail: {pat:?}"
+        );
+    }
+    // But the equivalent all-literal alternation still works and is correct.
+    assert_prefilter_equiv(
+        "(\\(catch\\|throw\\)",
+        false,
+        b"(catch (throw x)) \\w+ throw",
+    );
+}
+
+#[test]
+fn prefilter_multibyte_needles_char_boundary() {
+    // Multibyte literal keywords; candidate positions inside a multibyte char
+    // must be rejected (char-boundary skip), and matches stay byte-exact.
+    assert_prefilter_equiv("\\(中文\\|éxx\\)", false, "a中文b éxx 中éxx中文".as_bytes());
+}
+
+#[test]
+fn test_pattern_max_match_chars() {
+    crate::test_utils::init_test_tracing();
+    let max = |pat: &str| pattern_max_match_chars(&regex_compile(pat, false, false).unwrap());
+    // Loop-free patterns get a finite conservative bound at least as
+    // large as any real match.
+    assert_eq!(max("hello"), Some(5));
+    assert_eq!(max("\\_<byte-compile\\_>"), Some(12));
+    assert_eq!(max("^foo$"), Some(3));
+    assert!(max("a\\|bb").unwrap() >= 2);
+    assert!(max("\\(ab\\)c").unwrap() >= 3);
+    assert!(max("[abc]x").unwrap() >= 2);
+    assert!(max("\\sw\\s-").unwrap() >= 2);
+    // Unbounded or counter-driven repetition, and backreferences,
+    // report no finite bound.
+    assert_eq!(max("a*"), None);
+    assert_eq!(max("a+b"), None);
+    assert_eq!(max("a\\{2,5\\}"), None);
+    assert_eq!(max("\\(x\\)\\1"), None);
+    assert_eq!(max(".*foo"), None);
+}
+
+/// The literal prefilter is built by the first forward search long enough to
+/// use it, not at compile time: most patterns only ever match short strings.
+/// A short search leaves it unbuilt and still finds the match.
+#[test]
+fn prefilter_is_built_by_the_first_long_forward_search() {
+    let cp = regex_compile("unread-command-events", false, false).expect("compile");
+    assert!(
+        cp.prefilter.get().is_none(),
+        "compiling builds no prefilter"
+    );
+    let short = b"xx unread-command-events";
+    let found = re_search(&cp, short, 0, short.len() as isize, &DefaultSyntaxLookup, 0);
+    assert_eq!(found.map(|(pos, _)| pos), Some(3));
+    assert!(
+        cp.prefilter.get().is_none(),
+        "a short search builds no prefilter"
+    );
+    let mut long = vec![b'x'; 1000];
+    long.extend_from_slice(b"unread-command-events");
+    let found = re_search(&cp, &long, 0, long.len() as isize, &DefaultSyntaxLookup, 0);
+    assert_eq!(found.map(|(pos, _)| pos), Some(1000));
+    assert!(
+        cp.prefilter.get().is_some_and(Option::is_some),
+        "a long search builds and uses the prefilter"
+    );
+}
+
+/// A BOUNDED search must not scan past its bound, and must still find a match
+/// that ends exactly at it.
+///
+/// GNU's fastmap skip loop is bounded by the remaining RANGE
+/// (`while (range > lim && !fastmap[*d]) { d++; range--; }`,
+/// src/regex-emacs.c `re_search_2`), so a bounded search costs the bound, not
+/// the buffer.  Our literal prefilter ran its SIMD scan to `text_len` and only
+/// then rejected the candidate for being past `end`, which made every bounded
+/// FAILING search cost the whole buffer: 34.6ms over 800KB against GNU's flat
+/// 0.7ms.  Font-lock issues exactly this shape (a bounded search to LIMIT that
+/// usually fails) on every fontified chunk.
+///
+/// The boundary rows are the ones that matter: the new scan bound is
+/// `end + offset + longest-needle`, and if that arithmetic is wrong by even
+/// one byte the match ending exactly at the bound disappears.  Pinned to GNU
+/// Emacs 31.1.
+#[test]
+fn a_bounded_search_finds_a_match_ending_exactly_at_the_bound() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(with-temp-buffer
+             ;; Span well past PREFILTER_MIN_BUILD_SPAN so the prefilter is live.
+             (insert (make-string 4000 ?a))
+             (goto-char 2001) (delete-char 4) (insert "XYZZ")
+             (list
+              (progn (goto-char (point-min)) (re-search-forward "XYZZ" 2004 t))
+              (progn (goto-char (point-min)) (re-search-forward "XYZZ" 2005 t))
+              (progn (goto-char (point-min)) (re-search-forward "XYZZ" 2006 t))
+              (progn (goto-char (point-min)) (re-search-forward "XYZZ" nil t))
+              (progn (goto-char (point-min)) (re-search-forward "XYZZ" 300 t))
+              (progn (goto-char (point-min)) (re-search-forward "QQQQ\\|XYZZ" 2005 t))
+              (progn (goto-char 2100) (re-search-forward "XYZZ" nil t))))"#,
+    );
+    assert_eq!(observed, "OK (nil 2005 2005 2005 nil 2005 nil)");
+}
+
+/// Sweep the BOUND across every offset around a match, for several needle
+/// lengths and alternation shapes, and pin the whole answer set to GNU.
+///
+/// This is the assertion the single-boundary test above could not make. The
+/// prefilter's scan span now stops just past the search bound, and an error of
+/// one byte there hides a match at exactly one offset, for exactly one needle
+/// length -- which a hand-picked case will miss. Sweeping d from -6 to +40
+/// over needles of length 2..9, in three alternation shapes, covers the ways
+/// that arithmetic can be wrong.
+///
+/// The 240 rows below were verified identical to GNU Emacs 31.1 row by row
+/// (not by hash -- `sxhash` is not comparable across implementations).
+#[test]
+fn bounded_searches_answer_like_gnu_across_a_bound_sweep() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((out '()))
+             (dolist (needle '("XY" "XYZ" "XYZZ" "XYZZY" "XYZZYQWER"))
+               (dolist (pat (list needle
+                                  (concat "QQQQQQ\\|" needle)
+                                  (concat needle "\\|ZZZZZZ")))
+                 (with-temp-buffer
+                   (insert (make-string 3000 ?a))
+                   (let ((at 1500))
+                     (goto-char at) (delete-char (length needle)) (insert needle)
+                     (dolist (d '(-6 -3 -1 0 1 2 3 6 40))
+                       (let ((bound (+ at (length needle) d)))
+                         (when (and (> bound 1) (<= bound (point-max)))
+                           (goto-char (point-min))
+                           (push (re-search-forward pat bound t) out))))
+                     (dolist (s '(1 1400 1499 1500 1501 1505 2000))
+                       (goto-char s)
+                       (push (re-search-forward pat nil t) out))))))
+             (list (length out)
+                   (length (delq nil (copy-sequence out)))
+                   (apply #'+ (delq nil (copy-sequence out)))))"#,
+    );
+    // Taken from GNU Emacs 31.1, not hand-derived: 240 probes, 150 of which
+    // find a match, the found positions summing to 225,690.  Any offset that
+    // stopped matching moves the second and third numbers.
+    assert_eq!(observed, "OK (240 150 225690)");
+}
+
+#[test]
+fn bounded_bol_search_agrees_with_exhaustive_candidates() {
+    crate::test_utils::init_test_tracing();
+    let syntax = DefaultSyntaxLookup;
+    for text in ["", "aa\nz", "a\n\nz\n", "é中\n日\nz\nZ"] {
+        let positions: Vec<_> = text
+            .char_indices()
+            .map(|(pos, _)| pos)
+            .chain(std::iter::once(text.len()))
+            .collect();
+        for pattern in ["^", "^z", "^\\(\\)", "^\\(z\\)", "^z?", "^$", "^日"] {
+            for case_fold in [false, true] {
+                let compiled = regex_compile(pattern, false, case_fold).expect("compile");
+                for &start in &positions {
+                    for &end in positions.iter().filter(|&&end| end >= start) {
+                        // Use the matcher directly so the oracle does not share
+                        // the searcher's BOL candidate skipping or scan bounds.
+                        let expected = positions
+                            .iter()
+                            .copied()
+                            .filter(|&pos| pos >= start && pos <= end)
+                            .find_map(|pos| {
+                                re_match(&compiled, text.as_bytes(), pos, end, &syntax, start)
+                                    .map(|(_, regs)| (pos, regs.start, regs.end))
+                            });
+                        let actual = re_search(
+                            &compiled,
+                            text.as_bytes(),
+                            start,
+                            (end - start) as isize,
+                            &syntax,
+                            start,
+                        )
+                        .map(|(pos, regs)| (pos, regs.start, regs.end));
+                        assert_eq!(
+                            actual, expected,
+                            "{pattern:?} in {text:?}, {start}..={end}, fold={case_fold}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_bol_search_preserves_gnu_point_and_match_data() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let (out)
+             ;; TEXT PATTERN START BOUND NOERROR BACKWARD CASE-FOLD
+             (dolist (case '(("aa\nz" "^" 2 3 t nil nil)
+                             ("aa\nz" "^" 2 4 t nil nil)
+                             ("aa\nz" "^\\(\\)" 2 4 t nil nil)
+                             ("aa\nz" "^\\(z\\)" 2 4 t nil nil)
+                             ("aa\nz" "^\\(z\\)" 2 5 t nil nil)
+                             ("aa\nz" "^z" 2 3 move nil nil)
+                             ("aa\nz" "^z" 2 3 nil nil nil)
+                             ("aa\nz" "^" 4 4 t nil nil)
+                             ("aa\nz" "^z" 4 4 t nil nil)
+                             ("aa\n" "^" 2 4 t nil nil)
+                             ("" "^" 1 1 t nil nil)
+                             ("z" "^" 1 1 t nil nil)
+                             ("z" "^z" 1 1 t nil nil)
+                             ("é中\nz" "^\\(\\)" 2 4 t nil nil)
+                             ("é中\n日" "^\\(日\\)" 2 5 t nil nil)
+                             ("é中\n日" "^日" 2 4 t nil nil)
+                             ("aa\nZ" "^\\(z\\)" 2 5 t nil t)
+                             ("aa\nZ" "^z" 2 5 t nil nil)
+                             ("aa\nz" "^\\(z\\)" 5 2 t t nil)
+                             ("aa\nz" "^" 5 4 t t nil)
+                             ("aa\nz" "^z" 4 2 t t nil)))
+               (with-temp-buffer
+                 (insert (nth 0 case))
+                 (goto-char (nth 2 case))
+                 (set-match-data '(7 9))
+                 (let* ((case-fold-search (nth 6 case))
+                        (answer (condition-case err
+                                    (funcall (if (nth 5 case)
+                                                 #'re-search-backward
+                                               #'re-search-forward)
+                                             (nth 1 case) (nth 3 case) (nth 4 case))
+                                  (search-failed (car err)))))
+                   (push (list answer (point)
+                               (mapcar (lambda (value)
+                                         (if (bufferp value)
+                                             (eq value (current-buffer)) value))
+                                       (match-data t))) out))))
+             (nreverse out))"#,
+    );
+    // Checked row by row against GNU Emacs 31.1. A trailing t in match data
+    // asserts that the match belongs to the searched buffer.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((nil 2 (7 9)) (4 4 (4 4 t)) (4 4 (4 4 4 4 t)) ",
+            "(nil 2 (7 9)) (5 5 (4 5 4 5 t)) (nil 3 (7 9)) ",
+            "(search-failed 2 (7 9)) (4 4 (4 4 t)) (nil 4 (7 9)) ",
+            "(4 4 (4 4 t)) (1 1 (1 1 t)) (1 1 (1 1 t)) (nil 1 (7 9)) ",
+            "(4 4 (4 4 4 4 t)) (5 5 (4 5 4 5 t)) (nil 2 (7 9)) ",
+            "(5 5 (4 5 4 5 t)) (nil 2 (7 9)) (4 4 (4 5 4 5 t)) ",
+            "(4 4 (4 4 t)) (nil 4 (7 9)))"
+        )
+    );
+}
+
+#[test]
+fn search_entries_preserve_fresh_arguments_across_callback_gc() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
+    let warm = eval.eval_str(
+        r#"(progn
+  (require 'syntax)
+  (require 'bytecomp)
+  (dolist (name '(re-search-forward re-search-backward
+                 posix-search-forward posix-search-backward))
+    (let* ((alias (intern (concat "fixed-search-gc-alias-" (symbol-name name))))
+           (wrapper (intern (concat "fixed-search-gc-call-" (symbol-name name))))
+           (lexical-binding t))
+      (fset alias (symbol-function name))
+      (fset wrapper (byte-compile
+                    `(lambda (pattern bound noerror count)
+                       (,alias pattern bound noerror count))))))
+  (defun fixed-search-scoped-gc ()
+    (let (out)
+      (dolist (name '(re-search-forward re-search-backward
+                     posix-search-forward posix-search-backward))
+        (with-temp-buffer
+          (insert "ab cd")
+          (let* ((backward (string-match-p "backward" (symbol-name name)))
+                 (wrapper (intern (concat "fixed-search-gc-call-" (symbol-name name))))
+                 (parse-sexp-lookup-properties t)
+                 (case-fold-search nil)
+                 (calls 0))
+            (setq-local syntax-propertize-function
+                        (lambda (_start _end)
+                          (setq calls (1+ calls))
+                          (put-text-property 1 3 'syntax-table (string-to-syntax "."))
+                          (garbage-collect)))
+            (setq-local syntax-propertize--done 1)
+            (goto-char (if backward 6 1))
+            (let ((answer (funcall wrapper (concat "\\" "w")
+                                   (copy-marker (if backward 1 6)) t 1)))
+              (push (list answer (point) (> calls 0)
+                          (mapcar (lambda (v) (if (bufferp v) 'buffer v))
+                                  (match-data t))) out)))))
+      (nreverse out)))
+  (fixed-search-scoped-gc))"#,
+    );
+    // GNU Emacs 31.1: all four regex entries retain fresh pattern/marker arguments.
+    let expected = concat!(
+        "OK ((5 5 t (4 5 buffer)) (5 5 t (5 6 buffer)) ",
+        "(5 5 t (4 5 buffer)) (5 5 t (5 6 buffer)))",
+    );
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&warm),
+        expected
+    );
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
+    let before = eval.gc_count_for_test();
+    let result = eval.eval_str("(fixed-search-scoped-gc)");
+    let collections = eval.gc_count_for_test() - before;
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&result),
+        expected
+    );
+    assert!(
+        collections > 4,
+        "expected automatic collections beyond four callbacks"
+    );
+    eprintln!("fixed search scoped stress collections: {collections}");
+}
+
+#[test]
+fn prepared_regexp_zero_count_skips_compilation_after_argument_validation() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(progn
+(require 'syntax)
+(let (out)
+  (dolist (fn '(re-search-forward re-search-backward posix-search-forward posix-search-backward))
+    (dolist (inhibit '(nil t))
+      (with-temp-buffer
+        (insert "éabc")
+        (narrow-to-region 2 5)
+        (let ((inhibit-changing-match-data inhibit)
+              (parse-sexp-lookup-properties t)
+              (calls 0))
+          (setq-local syntax-propertize-function
+                      (lambda (_start _end) (setq calls (1+ calls))))
+          (setq-local syntax-propertize--done 1)
+          (dolist (args (list (list "[" 2 t 0)
+                              (list "[" (copy-marker 2) t 0)
+                              (list 7 2 t 0)
+                              (list "[" 2 t 'bad)
+                              (list "[" 'bad t 0)
+                              (list "[" 3 t 0)))
+            (goto-char 2)
+            (set-match-data '(17 19))
+            (push (list (condition-case err (apply fn args)
+                          (error (car err)))
+                        (point) calls
+                        (mapcar (lambda (v) (if (bufferp v) 'buffer v)) (match-data t))) out))))))
+  (nreverse out))
+
+)"#,
+    );
+    // GNU Emacs 31.1: all four regexp searches agree, with and without
+    // match-data inhibition. Zero count skips invalid-regexp and callbacks,
+    // but preserves STRING, COUNT and BOUND validation and marker coercion.
+    let per_builtin = concat!(
+        "(2 2 0 (2 2 buffer)) (2 2 0 (2 2 buffer)) (wrong-type-argument 2 0 (17 19)) (wrong-type-ar",
+        "gument 2 0 (17 19)) (wrong-type-argument 2 0 (17 19)) (error 2 0 (17 19)) (2 2 0 (17 19)) ",
+        "(2 2 0 (17 19)) (wrong-type-argument 2 0 (17 19)) (wrong-type-argument 2 0 (17 19)) (wrong",
+        "-type-argument 2 0 (17 19)) (error 2 0 (17 19))",
+    );
+    assert_eq!(observed, format!("OK ({0} {0} {0} {0})", per_builtin));
+}
+
+#[test]
+fn prepared_regexp_reuse_preserves_reverse_counts_posix_and_captures() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(progn
+(defun prepared-regexp-direction-captures ()
+  (let (out)
+    (dolist (fn '(re-search-forward re-search-backward posix-search-forward posix-search-backward))
+      (dolist (count '(-2 -1 1 2))
+        (dolist (case '(("b" nil) ("B" t) ("\\(a\\|ab\\)" nil) ("\\(a\\)\\(b\\)?" nil)))
+          (with-temp-buffer
+            (insert "xαab ab中bz")
+            (narrow-to-region 2 10)
+            (let* ((backward (string-match-p "backward" (symbol-name fn)))
+                   (reverse (if (< count 0) (not backward) backward))
+                   (start (if reverse (point-max) (point-min)))
+                   (bound (copy-marker (if reverse (point-min) (point-max))))
+                   (case-fold-search (nth 1 case))
+                   (parse-sexp-lookup-properties nil))
+              (goto-char start)
+              (set-match-data '(17 19))
+              (push (list (funcall fn (car case) bound t count) (point)
+                          (mapcar (lambda (v) (if (bufferp v) 'buffer v)) (match-data t))) out))))))
+    (nreverse out)))
+(prepared-regexp-direction-captures)
+)"#,
+    );
+    // GNU 31.1: four entry points, both directions and repeated matches,
+    // marker bounds in a narrowed multibyte buffer, translated literals,
+    // POSIX longest-match alternatives and captured optional groups.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((7 7 (7 8 buffer)) (7 7 (7 8 buffer)) (3 3 (3 4 3 4 buffer)) (3 3 (3 5 3 4 4 5 buffer)",
+            ") (9 9 (9 10 buffer)) (9 9 (9 10 buffer)) (6 6 (6 7 6 7 buffer)) (6 6 (6 8 6 7 7 8 buffer)",
+            ") (5 5 (4 5 buffer)) (5 5 (4 5 buffer)) (4 4 (3 4 3 4 buffer)) (5 5 (3 5 3 4 4 5 buffer)) ",
+            "(8 8 (7 8 buffer)) (8 8 (7 8 buffer)) (7 7 (6 7 6 7 buffer)) (8 8 (6 8 6 7 7 8 buffer)) (8",
+            " 8 (7 8 buffer)) (8 8 (7 8 buffer)) (7 7 (6 7 6 7 buffer)) (8 8 (6 8 6 7 7 8 buffer)) (5 5",
+            " (4 5 buffer)) (5 5 (4 5 buffer)) (4 4 (3 4 3 4 buffer)) (5 5 (3 5 3 4 4 5 buffer)) (9 9 (",
+            "9 10 buffer)) (9 9 (9 10 buffer)) (6 6 (6 7 6 7 buffer)) (6 6 (6 8 6 7 7 8 buffer)) (7 7 (",
+            "7 8 buffer)) (7 7 (7 8 buffer)) (3 3 (3 4 3 4 buffer)) (3 3 (3 5 3 4 4 5 buffer)) (7 7 (7 ",
+            "8 buffer)) (7 7 (7 8 buffer)) (3 3 (3 5 3 5 buffer)) (3 3 (3 5 3 4 4 5 buffer)) (9 9 (9 10",
+            " buffer)) (9 9 (9 10 buffer)) (6 6 (6 8 6 8 buffer)) (6 6 (6 8 6 7 7 8 buffer)) (5 5 (4 5 ",
+            "buffer)) (5 5 (4 5 buffer)) (5 5 (3 5 3 5 buffer)) (5 5 (3 5 3 4 4 5 buffer)) (8 8 (7 8 bu",
+            "ffer)) (8 8 (7 8 buffer)) (8 8 (6 8 6 8 buffer)) (8 8 (6 8 6 7 7 8 buffer)) (8 8 (7 8 buff",
+            "er)) (8 8 (7 8 buffer)) (8 8 (6 8 6 8 buffer)) (8 8 (6 8 6 7 7 8 buffer)) (5 5 (4 5 buffer",
+            ")) (5 5 (4 5 buffer)) (5 5 (3 5 3 5 buffer)) (5 5 (3 5 3 4 4 5 buffer)) (9 9 (9 10 buffer)",
+            ") (9 9 (9 10 buffer)) (6 6 (6 8 6 8 buffer)) (6 6 (6 8 6 7 7 8 buffer)) (7 7 (7 8 buffer))",
+            " (7 7 (7 8 buffer)) (3 3 (3 5 3 5 buffer)) (3 3 (3 5 3 4 4 5 buffer)))",
+        )
+    );
+}
+
+/// Regex fuzz artifact `crash-bfc34a9633d9bd0a2879e0552f0871a9eccf47d1`.
+///
+/// A five-byte tail whose payload is not a valid 5-byte character decoded
+/// above `MAX_CHAR`, and the syntax-spec opcode asserted when it wrapped that
+/// code in an `EmacsChar`.  Both engines must decode it as one raw byte.
+#[test]
+fn out_of_range_five_byte_text_decodes_as_a_raw_byte_in_both_engines() {
+    let text = [0xF8, 0xB8, 0x96, 0xB8, 0x96];
+    let case = RegexCase::new("\\s-", &text, false, 0, 0);
+    match check_regex_differential(case, RegexDifferential::PikeVm) {
+        Ok(RegexCheck::Equivalent { .. }) => {}
+        other => panic!("five-byte tail must decode as a raw byte: {other:?}"),
+    }
+}
+
+/// A `SyntaxLookup` mirroring the buffer-local syntax table used by the default
+/// `*scratch*`/batch buffer (`lisp-interaction-mode` / `emacs-lisp-mode`): the
+/// newline is comment-end (`Sendcomment`, syntax `>`) and the carriage return
+/// is a symbol constituent (`Ssymbol`, syntax `_`) — neither is whitespace.
+/// Space, tab and formfeed remain whitespace.  Everything else falls back to
+/// the GNU standard-table classification.
+struct LispModeSyntaxLookup;
+
+impl SyntaxLookup for LispModeSyntaxLookup {
+    fn char_syntax(&self, c: char) -> SyntaxClass {
+        match c {
+            '\n' => SyntaxClass::EndComment,
+            '\r' => SyntaxClass::Symbol,
+            _ => neovm_text::emacs_core::syntax::standard_syntax_class_for_char(c),
+        }
+    }
+
+    fn char_has_category(&self, c: char, cat: u8) -> bool {
+        DefaultSyntaxLookup.char_has_category(c, cat)
+    }
+
+    fn cache_key(&self) -> super::SyntaxCacheKey {
+        // Test-only lookup, never routed through the pattern caches;
+        // use a sentinel identity distinct from `Standard` so a cache
+        // ever probed with it cannot hit standard-baked entries.
+        super::SyntaxCacheKey::External {
+            id: usize::MAX,
+            epoch: 0,
+        }
+    }
+}
+
+impl FuzzRng {
+    fn new(seed: u64) -> Self {
+        FuzzRng(seed ^ 0x9E3779B97F4A7C15)
+    }
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+    fn below(&mut self, n: usize) -> usize {
+        if n == 0 {
+            0
+        } else {
+            (self.next_u64() % n as u64) as usize
+        }
+    }
+    /// True with probability `num/den`.
+    fn chance(&mut self, num: u64, den: u64) -> bool {
+        self.next_u64() % den < num
+    }
+    fn pick_char(&mut self, xs: &[char]) -> char {
+        xs[self.below(xs.len())]
+    }
+    fn pick_str<'a>(&mut self, xs: &[&'a str]) -> &'a str {
+        xs[self.below(xs.len())]
+    }
+}
+
+fn run_fuzz(cases: usize, base_seed: u64, text_max: usize) {
+    let mut eligible = 0usize;
+    let mut compiled = 0usize;
+    for i in 0..cases {
+        let seed = base_seed.wrapping_add(i as u64);
+        let mut rng = FuzzRng::new(seed);
+        let case_fold = rng.chance(1, 3);
+        let mut pat = String::new();
+        let depth = 2 + rng.below(2) as u32;
+        gen_regex(&mut rng, &mut pat, depth, true, false);
+
+        let cp = match regex_compile(&pat, false, case_fold) {
+            Ok(cp) => cp,
+            Err(_) => continue, // invalid random pattern; skip
+        };
+        compiled += 1;
+        if !cp.pike_eligible {
+            continue;
+        }
+        eligible += 1;
+
+        let text = gen_text(&mut rng, text_max);
+        let start = rng.below(text.len() + 1);
+        let point = rng.below(text.len() + 1);
+
+        let case = RegexCase::new(&pat, &text, case_fold, start, point);
+        if let Err(divergence) = check_regex_differential(case, RegexDifferential::PikeVm) {
+            // Print the RAW case first so it survives even if shrinking is slow.
+            eprintln!(
+                "PIKE/BACKTRACKER DIVERGENCE at seed {seed}: {divergence}; pattern={pat:?} \
+                 case_fold={case_fold} text={text:?} start={start} point={point}"
+            );
+            let (spat, stext, sstart, spoint) = shrink(&pat, case_fold, &text, start, point);
+            panic!(
+                "PIKE/BACKTRACKER DIVERGENCE at seed {seed}: {divergence}\n\
+                 pattern   = {pat:?}  (case_fold={case_fold})\n\
+                 text      = {text:?}\n\
+                 start={start} point={point}\n\
+                 --- shrunk ---\n\
+                 pattern   = {spat:?}\n\
+                 text      = {stext:?}\n\
+                 start={sstart} point={spoint}"
+            );
+        }
+    }
+    // Sanity: the generator should still exercise the Pike path on a large
+    // fraction of cases (many random patterns are legitimately ineligible —
+    // `??`, `\{n,m\}`, nullable non-greedy loops, capture-in-nullable-loop).
+    assert!(
+        eligible * 4 > compiled,
+        "fuzzer should exercise the Pike path on many cases (eligible={eligible} compiled={compiled})"
+    );
+    assert!(
+        eligible > cases / 8,
+        "too few eligible cases: {eligible}/{cases}"
+    );
+}
+
+/// Assert both engines agree on a concrete (pattern, text) case.
+fn assert_engines_agree(pat: &str, case_fold: bool, text: &[u8]) {
+    let cp = regex_compile(pat, false, case_fold).expect("compile");
+    assert!(cp.pike_eligible, "pattern {pat:?} should be pike-eligible");
+    for start in 0..=text.len() {
+        let case = RegexCase::new(pat, text, case_fold, start, start);
+        let check = check_regex_differential(case, RegexDifferential::PikeVm).unwrap_or_else(
+            |divergence| {
+                panic!("{divergence} for {pat:?} @ start={start}");
+            },
+        );
+        assert_eq!(check, RegexCheck::Equivalent { comparisons: 3 });
+    }
+}
+
+/// Result counters from one fuzz stream.
+#[derive(Default, Clone, Copy)]
+struct PfFuzzCounts {
+    compiled: usize,
+    with_prefilter: usize,
+    /// Differential checks (a forward and a backward search each) on the
+    /// exhaustively compared cases: those with `prefilter.is_some()`, and every
+    /// case-folded case.  This is the number that matters for the soundness
+    /// gate — every one asserts optimized scan == skip-off.
+    pf_forward_cmp: usize,
+}
+
+/// Run one prefilter fuzz stream.  Only cases that actually BUILD a prefilter
+/// exercise the feature, so they get the exhaustive comparison (2 buffers × 3
+/// starts × forward+backward); the backtracker verifies every candidate, so a
+/// divergence there = an unsound literal skip.  A case-folded search always
+/// runs a folded candidate scan, so every case-folded case gets it too.  Other
+/// cases with NO prefilter can't diverge on the prefilter path, so they are
+/// only lightly sampled (a cheap comparison that also keeps the fastmap path
+/// honest) — this keeps the run fast enough to fit the test timeout while
+/// still driving ≥320k prefilter comparisons.  `general_1_in` (0 = never)
+/// mixes in arbitrary `gen_regex` patterns for breadth.
+fn run_prefilter_fuzz(
+    cases: usize,
+    base_seed: u64,
+    text_max: usize,
+    general_1_in: u32,
+    case_fold: bool,
+    target: SearchTarget,
+) -> PfFuzzCounts {
+    let mut c = PfFuzzCounts::default();
+    for i in 0..cases {
+        let seed = base_seed.wrapping_add(i as u64);
+        let mut rng = FuzzRng::new(seed);
+
+        let (mut pat, keywords) = if general_1_in > 0 && rng.chance(1, general_1_in as u64) {
+            let mut p = String::new();
+            let depth = 2 + rng.below(2) as u32;
+            gen_regex(&mut rng, &mut p, depth, true, false);
+            (p, Vec::new())
+        } else {
+            pf_gen_pattern(&mut rng)
+        };
+        if case_fold && rng.chance(1, 3) {
+            // An upper-case literal is stored folded; a flipped escape letter
+            // (`\w` -> `\W`) is still a valid pattern.
+            pat = pat.to_ascii_uppercase();
+        }
+
+        let cp = match regex_compile(&pat, false, case_fold) {
+            Ok(cp) => cp,
+            Err(_) => continue,
+        };
+        c.compiled += 1;
+        let has_pf = cp.literal_prefilter().is_some();
+        if has_pf {
+            c.with_prefilter += 1;
+        }
+
+        let check_case = |text: &[u8], start: usize| {
+            let case = RegexCase::new(&pat, text, case_fold, start, start).with_target(target);
+            let check = check_regex_differential(case, RegexDifferential::SearchOptimizations)
+                .unwrap_or_else(|divergence| {
+                    panic!(
+                        "{divergence} at seed {seed}: pattern={pat:?} fold={case_fold} \
+                         target={target} has_prefilter={has_pf} text={text:?} start={start}"
+                    );
+                });
+            assert_eq!(check, RegexCheck::Equivalent { comparisons: 2 });
+        };
+
+        if has_pf || case_fold {
+            // The gate: exercise the prefilter over planted-keyword + noise
+            // buffers at head/middle/tail starts.
+            let mut texts = [
+                pf_gen_text(&mut rng, &keywords, text_max),
+                gen_text(&mut rng, text_max),
+            ];
+            if case_fold {
+                for text in &mut texts {
+                    *text = scramble_case(&mut rng, text);
+                }
+            }
+            for text in &texts {
+                for &start in &[0usize, text.len() / 2, text.len()] {
+                    let start = start.min(text.len());
+                    check_case(text, start);
+                    c.pf_forward_cmp += 1;
+                }
+            }
+        } else if rng.chance(1, 6) {
+            // No prefilter → can't diverge on the prefilter path; a light
+            // sampled forward comparison still guards the fastmap path cheaply.
+            let text = gen_text(&mut rng, text_max);
+            check_case(&text, 0);
+        }
+    }
+    c
+}
+
+/// Search with the prefilter enabled must equal search with it disabled, for a
+/// concrete (pattern, text) pair, at every start position.
+fn assert_prefilter_equiv(pat: &str, case_fold: bool, text: &[u8]) {
+    regex_compile(pat, false, case_fold).expect("compile");
+    for start in 0..=text.len() {
+        let case = RegexCase::new(pat, text, case_fold, start, start);
+        let check = check_regex_differential(case, RegexDifferential::SearchOptimizations)
+            .unwrap_or_else(|divergence| {
+                panic!("{divergence} for {pat:?} @ start={start}");
+            });
+        assert_eq!(
+            check,
+            RegexCheck::Equivalent { comparisons: 2 },
+            "prefilter diverged for {pat:?} @ start={start}"
+        );
+    }
+}
+
+/// Tiny deterministic xorshift RNG so fuzz failures reproduce from a seed.
+struct FuzzRng(u64);
+
+fn gen_regex(
+    rng: &mut FuzzRng,
+    out: &mut String,
+    depth: u32,
+    allow_quant: bool,
+    must_consume: bool,
+) {
+    let arms = 1 + rng.below(3);
+    for i in 0..arms {
+        if i > 0 {
+            out.push_str("\\|");
+        }
+        gen_concat(rng, out, depth, allow_quant, must_consume);
+    }
+}
+
+fn gen_text(rng: &mut FuzzRng, max_len: usize) -> Vec<u8> {
+    let len = rng.below(max_len);
+    let mut v = Vec::with_capacity(len);
+    for _ in 0..len {
+        match rng.below(10) {
+            0 => v.push(b'\n'),
+            1 => v.push(b' '),
+            2 => v.push(b'_'),
+            3 => v.push(b'-'),
+            4 => v.push(b"abcABZ019:!"[rng.below(11)]),
+            5 => v.extend_from_slice("é".as_bytes()),
+            6 => v.extend_from_slice("中".as_bytes()),
+            7 => v.extend_from_slice("\u{2018}".as_bytes()),
+            8 => v.push(0x80 + rng.below(0x80) as u8), // raw high byte
+            _ => v.push(b'a' + rng.below(26) as u8),
+        }
+    }
+    v
+}
+
+/// Greedily shrink a failing case for a readable report.
+fn shrink(
+    pat: &str,
+    case_fold: bool,
+    text: &[u8],
+    start: usize,
+    point: usize,
+) -> (String, Vec<u8>, usize, usize) {
+    let mut pat = pat.to_string();
+    let mut text = text.to_vec();
+    let mut start = start.min(text.len());
+    let mut point = point.min(text.len());
+
+    // Bound the total number of `fuzz_diverges` probes (each recompiles the
+    // pattern) so a large case can't make shrinking run for minutes.
+    let mut budget: u32 = 3000;
+    macro_rules! probe {
+        ($pat:expr, $text:expr, $s:expr, $p:expr) => {{
+            if budget == 0 {
+                false
+            } else {
+                budget -= 1;
+                fuzz_diverges($pat, case_fold, $text, $s, $p)
+            }
+        }};
+    }
+
+    // Shrink text (drop bytes while still diverging, keeping valid indices).
+    let mut changed = true;
+    while changed && budget > 0 {
+        changed = false;
+        let mut i = 0;
+        while i < text.len() {
+            let mut cand = text.clone();
+            cand.remove(i);
+            let s = start.min(cand.len());
+            let p = point.min(cand.len());
+            if probe!(&pat, &cand, s, p) {
+                text = cand;
+                start = s;
+                point = p;
+                changed = true;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    // Shrink start / point toward 0.
+    while start > 0 && probe!(&pat, &text, start - 1, point) {
+        start -= 1;
+    }
+    while point > 0 && probe!(&pat, &text, start, point - 1) {
+        point -= 1;
+    }
+    // Shrink pattern by trying to drop single chars (best-effort; may break
+    // group balance, in which case the divergence check fails and we skip).
+    changed = true;
+    while changed && budget > 0 {
+        changed = false;
+        let chars: Vec<char> = pat.chars().collect();
+        for i in 0..chars.len() {
+            let cand: String = chars
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, c)| *c)
+                .collect();
+            if probe!(&cand, &text, start, point) {
+                pat = cand;
+                changed = true;
+                break;
+            }
+        }
+    }
+    (pat, text, start, point)
+}
+
+/// Generate a pattern that stresses the prefilter's literal extraction:
+/// a literal prefix, optionally a `\(alt\|...\)` whose arms are mostly literal
+/// (some deliberately non-literal / empty to exercise the soundness bail),
+/// optional quantifiers, and an optional non-literal suffix.  Returns the
+/// pattern and the literal keywords used (for planting real matches).
+fn pf_gen_pattern(rng: &mut FuzzRng) -> (String, Vec<String>) {
+    let mut out = String::new();
+    let mut keywords: Vec<String> = Vec::new();
+
+    // Leading literal prefix (sometimes empty to force alternation-first).
+    let mut prefix_kw = String::new();
+    if rng.chance(4, 5) {
+        pf_emit_literal(rng, &mut out, &mut prefix_kw);
+        // Optional quantifier on the last prefix char (tests optional/loop
+        // branch handling): rewrite as `pre(?:lastchar)?`-ish by appending.
+        if rng.chance(1, 4) {
+            out.push_str(rng.pick_str(&["?", "*", "+"]));
+        }
+    }
+
+    // Alternation.
+    if prefix_kw.is_empty() || rng.chance(3, 4) {
+        out.push_str("\\(");
+        let arms = 2 + rng.below(4);
+        for i in 0..arms {
+            if i > 0 {
+                out.push_str("\\|");
+            }
+            match rng.below(10) {
+                0 => { /* empty arm — nullable, must make the prefilter bail */ }
+                1 => out.push_str("\\w+"), // non-literal head — must bail
+                2 => {
+                    out.push('.'); // AnyChar head — must bail
+                    let mut kw = String::new();
+                    pf_emit_literal(rng, &mut out, &mut kw);
+                }
+                3 => {
+                    out.push_str("[a-c]"); // charset head — must bail
+                    let mut kw = String::new();
+                    pf_emit_literal(rng, &mut out, &mut kw);
+                }
+                _ => {
+                    let mut kw = String::new();
+                    pf_emit_literal(rng, &mut out, &mut kw);
+                    keywords.push(format!("{prefix_kw}{kw}"));
+                }
+            }
+        }
+        out.push_str("\\)");
+    } else if !prefix_kw.is_empty() {
+        keywords.push(prefix_kw.clone());
+    }
+
+    // Optional suffix.
+    if rng.chance(1, 2) {
+        out.push_str(rng.pick_str(&["", "\\_>", "\\w*", "[ \t]*", "\\(?:\\w\\|\\s_\\)+", ":"]));
+    }
+
+    (out, keywords)
+}
+
+/// Build a buffer that mixes random noise (from the literal alphabet, so
+/// partial matches occur often) with whole planted keywords (so full matches —
+/// the prefilter's positive/verify path — are exercised, not just misses).
+fn pf_gen_text(rng: &mut FuzzRng, keywords: &[String], max_len: usize) -> Vec<u8> {
+    let mut v: Vec<u8> = Vec::with_capacity(max_len);
+    while v.len() < max_len {
+        match rng.below(12) {
+            0 if !keywords.is_empty() => {
+                let kw = &keywords[rng.below(keywords.len())];
+                v.extend_from_slice(kw.as_bytes());
+            }
+            1 => v.push(b' '),
+            2 => v.push(b'\n'),
+            3 => v.extend_from_slice("é".as_bytes()),
+            4 => v.extend_from_slice("中".as_bytes()),
+            5 => v.push(0x80 + rng.below(0x80) as u8), // raw high byte
+            _ => {
+                let c = PF_LIT_CHARS[rng.below(PF_LIT_CHARS.len())];
+                let mut buf = [0u8; 4];
+                v.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            }
+        }
+    }
+    v
+}
+
+/// Randomly flip the case of ASCII letters and splice in fold traps, so a
+/// case-folded search meets every spelling of its keywords.
+fn scramble_case(rng: &mut FuzzRng, text: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len() + 8);
+    for &b in text {
+        if b.is_ascii_alphabetic() && rng.chance(1, 2) {
+            out.push(b ^ 0x20);
+        } else {
+            out.push(b);
+        }
+        if rng.chance(1, 16) {
+            let c = rng.pick_char(FOLD_TRAP_CHARS);
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+    out
+}
+
+/// True if this (pattern, case_fold, text, start, point) diverges — used by
+/// the shrinker.
+fn fuzz_diverges(pat: &str, case_fold: bool, text: &[u8], start: usize, point: usize) -> bool {
+    let case = RegexCase::new(pat, text, case_fold, start, point);
+    check_regex_differential(case, RegexDifferential::PikeVm).is_err()
+}
+
+fn gen_concat(
+    rng: &mut FuzzRng,
+    out: &mut String,
+    depth: u32,
+    allow_quant: bool,
+    must_consume: bool,
+) {
+    let terms = 1 + rng.below(4);
+    for _ in 0..terms {
+        gen_term(rng, out, depth, allow_quant, must_consume);
+    }
+}
+
+/// Literal alphabet for prefilter patterns: ASCII letters + Emacs-literal
+/// punctuation (`(` `)` `_` `-` `:` `!` are non-special) + multibyte, to stress
+/// byte-exact needle handling and multibyte char-boundary skipping.
+const PF_LIT_CHARS: &[char] = &[
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', '(', ')', '_', '-', ':', '!', 'é', '中',
+];
+
+/// Emit a literal run into `out`, escaping regex metacharacters, and record the
+/// raw (unescaped) bytes as a keyword so the buffer generator can plant hits.
+fn pf_emit_literal(rng: &mut FuzzRng, out: &mut String, kw: &mut String) {
+    let n = 1 + rng.below(6);
+    for _ in 0..n {
+        let c = rng.pick_char(PF_LIT_CHARS);
+        if ".*+?[]^$\\".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+        kw.push(c);
+    }
+}
+
+/// Characters whose case folding is a trap for an ASCII candidate scan: each
+/// has an ASCII case partner in Unicode (K/k, ſ/s, İ/i, ı/I) that Emacs's
+/// standard case table deliberately leaves out (characters.el:803-812), plus
+/// ordinary non-ASCII case pairs.
+const FOLD_TRAP_CHARS: &[char] = &[
+    '\u{212A}', 'ſ', 'İ', 'ı', 'É', 'é', 'ẞ', 'ß', 'Σ', 'ς', 'Ａ',
+];
+
+fn gen_term(
+    rng: &mut FuzzRng,
+    out: &mut String,
+    depth: u32,
+    allow_quant: bool,
+    must_consume: bool,
+) {
+    let will_quant = allow_quant && rng.chance(1, 2);
+    // A quantified atom's body must not quantify (no nesting) and must
+    // consume (no nullable loop body).
+    let quantifiable = gen_atom(
+        rng,
+        out,
+        depth,
+        allow_quant && !will_quant,
+        must_consume || will_quant,
+    );
+    if will_quant && quantifiable {
+        out.push_str(rng.pick_str(FUZZ_QUANTIFIERS));
+    }
+}
+
+const FUZZ_QUANTIFIERS: &[&str] = &["*", "+", "?", "*?", "+?", "??"];
+
+/// Generate a quantifiable atom.  Returns true if the atom may take a
+/// postfix quantifier.
+///
+/// Two flags keep the forced-backtracker ORACLE tractable (the Pike VM is
+/// linear regardless; the constraint is only about the oracle used to check
+/// it), by never generating a quantifier over a body that can iterate with
+/// zero progress — the sole source of *exponential* backtracking:
+///   * `allow_quant` — FALSE inside a quantified atom, so quantifiers never
+///     nest (`\(a*\)*`).
+///   * `must_consume` — TRUE inside a quantified atom, so its body cannot be
+///     nullable: zero-width atoms (anchors / boundaries) are excluded, so
+///     every arm consumes ≥1 char (`\(?:A[中]\|\<\)*` is never generated).
+///
+/// Everything else is still covered: single quantifiers, non-nullable
+/// `\(?:\w\|\s_\)+`, the O(n^2) `a*a*b`, alternation, captures, anchors and
+/// boundaries at non-quantified positions, case-fold and multibyte.
+/// (Nullable non-capturing loops are covered separately by targeted unit
+/// tests on short input where the backtracker stays fast.)
+fn gen_atom(
+    rng: &mut FuzzRng,
+    out: &mut String,
+    depth: u32,
+    allow_quant: bool,
+    must_consume: bool,
+) -> bool {
+    let choices = if depth == 0 { 5 } else { 8 };
+    // When the atom must consume, remap the two zero-width choices (4, 5)
+    // onto consuming atoms.
+    let pick = match rng.below(choices) {
+        4 | 5 if must_consume => rng.below(4),
+        n => n,
+    };
+    match pick {
+        0 => {
+            gen_literal(rng, out);
+            true
+        }
+        1 => {
+            out.push('.');
+            true
+        }
+        2 => {
+            gen_charclass(rng, out);
+            true
+        }
+        3 => {
+            out.push_str(rng.pick_str(FUZZ_SYNTAX));
+            true
+        }
+        4 => {
+            out.push_str(rng.pick_str(FUZZ_BOUNDARIES));
+            false
+        }
+        5 => {
+            out.push_str(rng.pick_str(FUZZ_ANCHORS));
+            false
+        }
+        6 => {
+            // shy group
+            out.push_str("\\(?:");
+            gen_regex(rng, out, depth - 1, allow_quant, must_consume);
+            out.push_str("\\)");
+            true
+        }
+        _ => {
+            // capturing group
+            out.push_str("\\(");
+            gen_regex(rng, out, depth - 1, allow_quant, must_consume);
+            out.push_str("\\)");
+            true
+        }
+    }
+}
+
+const FUZZ_SYNTAX: &[&str] = &["\\w", "\\W", "\\sw", "\\s_", "\\s-", "\\s.", "\\Sw", "\\S_"];
+
+const FUZZ_ANCHORS: &[&str] = &["^", "$", "\\`", "\\'"];
+
+const FUZZ_BOUNDARIES: &[&str] = &["\\b", "\\B", "\\<", "\\>", "\\_<", "\\_>"];
+
+fn gen_literal(rng: &mut FuzzRng, out: &mut String) {
+    let c = rng.pick_char(FUZZ_LITERALS);
+    // Escape regex metacharacters so they stay literal.
+    if "\\.*+?[]^$".contains(c) {
+        out.push('\\');
+    }
+    out.push(c);
+}
+
+fn gen_charclass(rng: &mut FuzzRng, out: &mut String) {
+    out.push('[');
+    if rng.chance(1, 3) {
+        out.push('^');
+    }
+    let items = 1 + rng.below(3);
+    for _ in 0..items {
+        match rng.below(4) {
+            0 => {
+                // range x-y (keep ordered, ASCII letters/digits)
+                let bases = [('a', 'z'), ('A', 'Z'), ('0', '9')];
+                let (lo, hi) = bases[rng.below(bases.len())];
+                let a = (lo as u8) + rng.below((hi as u8 - lo as u8) as usize + 1) as u8;
+                let b = a + rng.below((hi as u8 - a) as usize + 1) as u8;
+                out.push(a as char);
+                out.push('-');
+                out.push(b as char);
+            }
+            1 => out.push_str(rng.pick_str(FUZZ_POSIX)),
+            _ => {
+                // plain class char (avoid ] \ [ - ^ to keep the class valid)
+                let safe = ['a', 'q', 'Z', '3', '_', '中', 'é'];
+                out.push(rng.pick_char(&safe));
+            }
+        }
+    }
+    out.push(']');
+}
+
+const FUZZ_LITERALS: &[char] = &[
+    'a', 'b', 'c', 'A', 'Z', '0', '1', ' ', '_', '-', '!', ':', '\n', 'é', '中', '\u{2018}',
+    '\u{2019}',
+];
+
+const FUZZ_POSIX: &[&str] = &[
+    "[:alpha:]",
+    "[:digit:]",
+    "[:alnum:]",
+    "[:space:]",
+    "[:upper:]",
+    "[:punct:]",
+    "[:word:]",
+];

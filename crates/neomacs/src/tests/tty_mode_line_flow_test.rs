@@ -1,4 +1,5 @@
 //! A child mode-line throw preserves the TTY tree's active presentations.
+use neovm_core::window::{DisplayFrameExt, DisplayFrameManagerExt};
 
 use super::*;
 use neovm_core::emacs_core::Value;
@@ -9,7 +10,7 @@ fn tty_child_mode_line_throw_discards_staged_presentations_before_activation() {
     // before any formatter reads it.
     unsafe { std::env::set_var("NEOVM_MODE_LINE_FLOW", "1") };
     neovm_core::logging::init_for_tests();
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str(
         "(setq noninteractive nil inhibit-redisplay nil \
                mode-line-format nil header-line-format nil tab-line-format nil)",

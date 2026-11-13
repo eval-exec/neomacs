@@ -2,9 +2,10 @@ use crate::common;
 
 use common::run_oracle_eval;
 use neovm_core::emacs_core::{Context, format_eval_result};
+use neovm_core::window::DisplayFrameManagerExt;
 
 fn run_neovm_eval_minimal_with_frame(form: &str) -> Result<String, String> {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf = eval.buffer_manager_mut().create_buffer("*scratch*");
     eval.buffer_manager_mut().set_current(buf);
     eval.frame_manager_mut().create_frame("F1", 800, 600, buf);

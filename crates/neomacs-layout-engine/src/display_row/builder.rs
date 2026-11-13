@@ -1352,6 +1352,7 @@ pub(crate) struct DisplayRowGlyphSlot {
     // Primitive boundary relative to the start of this text append. Source
     // characters and stored glyphs differ for padding and composition.
     text_glyph_offset: Option<usize>,
+    selected_primitive_dimensions: Option<neovm_core::window::LogicalCursorDimensions>,
 }
 
 /// Source positions and paint primitives are not one-to-one. Composition
@@ -1376,6 +1377,8 @@ impl DisplayRowGlyphSlot {
         Self::with_pointer_appearance(source, x_px, col, width_px, width_cols, None)
     }
 
+    /// Record a source slot's advance and pointer appearance. A vertical
+    /// measurement is attached separately only when a primitive was emitted.
     pub(crate) fn with_pointer_appearance(
         source: DisplaySourcePosition,
         x_px: f32,
@@ -1395,6 +1398,7 @@ impl DisplayRowGlyphSlot {
             },
             default_cell_height: false,
             text_glyph_offset: None,
+            selected_primitive_dimensions: None,
         }
     }
 
@@ -1416,6 +1420,24 @@ impl DisplayRowGlyphSlot {
     pub(crate) fn with_text_glyph_offset(mut self, offset: usize) -> Self {
         self.text_glyph_offset = Some(offset);
         self
+    }
+
+    /// Preserve both dimensions from one emitted primitive, not the aggregate
+    /// advance of a source character that may expand into several glyphs.
+    fn with_selected_primitive(mut self, glyph: Option<&Glyph>) -> Self {
+        self.selected_primitive_dimensions = glyph.and_then(|glyph| {
+            crate::display_cursor::measured_logical_cursor_dimensions(
+                glyph.pixel_width,
+                glyph.pixel_height,
+            )
+        });
+        self
+    }
+
+    pub(crate) fn selected_primitive_dimensions(
+        &self,
+    ) -> Option<neovm_core::window::LogicalCursorDimensions> {
+        self.selected_primitive_dimensions
     }
 
     pub(crate) fn text_glyph_offset(&self) -> Option<usize> {
@@ -2143,6 +2165,18 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
             item.box_vertical_edges,
             true,
         );
+        // Retained layout can still mutate space extents. Read the paired
+        // measurement only after all item layout has been applied.
+        for (slot, glyph) in slots
+            .iter_mut()
+            .zip(&self.writer.row.glyphs[GlyphArea::Text.index()][glyph_start..])
+        {
+            slot.selected_primitive_dimensions =
+                crate::display_cursor::measured_logical_cursor_dimensions(
+                    glyph.pixel_width,
+                    glyph.pixel_height,
+                );
+        }
         Some(DisplayRowAppendProgress::new(
             start_position,
             self.position,
@@ -2152,6 +2186,8 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         ))
     }
 
+    /// Append one canonical item and report its addressable source slots with
+    /// the metrics of the actual emitted primitives, including clipped output.
     pub(crate) fn push_item(&mut self, item: DisplayItem) -> DisplayRowAppendProgress {
         let start = self.position;
         let mut metrics = DisplayRowWriteMetrics::default();
@@ -2400,14 +2436,19 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                     }
                 }
                 if !written.is_empty() {
-                    slots.push(DisplayRowGlyphSlot::with_pointer_appearance(
-                        slot_source,
-                        slot_start.x_px(),
-                        slot_start.col(),
-                        written.width_px(),
-                        written.width_cols(),
-                        pointer_appearance.clone(),
-                    ));
+                    slots.push(
+                        DisplayRowGlyphSlot::with_pointer_appearance(
+                            slot_source,
+                            slot_start.x_px(),
+                            slot_start.col(),
+                            written.width_px(),
+                            written.width_cols(),
+                            pointer_appearance.clone(),
+                        )
+                        .with_selected_primitive(
+                            self.writer.row.glyphs[self.writer.area_index()].get(before_len),
+                        ),
+                    );
                 }
                 self.advance(written);
                 metrics.add(written);
@@ -2477,6 +2518,8 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         apply_box_run_topology_to_glyphs(glyphs, membership, source_edges, source_item_complete);
     }
 
+    /// Keep each character's source slot paired with its emitted primitive
+    /// after measurement and clipping, rather than using the row's defaults.
     #[allow(clippy::too_many_arguments)]
     fn push_text_item(
         &mut self,
@@ -2491,6 +2534,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         slots: &mut Vec<DisplayRowGlyphSlot>,
     ) -> DisplayRowAppendStatus {
         let glyph_start = self.area_len();
+        let slot_start = slots.len();
         let face_id = self.writer.face_id(face);
         let measurement = self.text_run_measurement(text, face_id);
         // An explicit or supplied measured plan remains authoritative. Query
@@ -2594,7 +2638,8 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 .with_default_cell_height(
                     ch == '\t' && matches!(source_mapping, DisplayTextSourceMapping::NaturalText),
                 )
-                .with_text_glyph_offset(before_len - glyph_start),
+                .with_text_glyph_offset(before_len - glyph_start)
+                .with_selected_primitive(self.writer.row.glyphs[area_index].get(before_len)),
             );
             self.advance(written);
             metrics.add(written);
@@ -2603,9 +2648,29 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 break;
             }
         }
+        // Later contextual members can grow the head selected by an earlier
+        // slot. Refresh that same primitive only after this append is complete.
+        // A continuation that emitted nothing must stay unselected even if its
+        // boundary offset is now occupied by a later character's glyph.
+        let glyphs = &self.writer.row.glyphs[self.writer.area_index()];
+        for slot in &mut slots[slot_start..] {
+            if slot.selected_primitive_dimensions.is_some()
+                && let Some(offset) = slot.text_glyph_offset
+            {
+                slot.selected_primitive_dimensions =
+                    glyphs.get(glyph_start + offset).and_then(|glyph| {
+                        crate::display_cursor::measured_logical_cursor_dimensions(
+                            glyph.pixel_width,
+                            glyph.pixel_height,
+                        )
+                    });
+            }
+        }
         status
     }
 
+    /// Emit a composition once while retaining all source positions. Only its
+    /// head owns primitive metrics; members must not invent measured extents.
     #[allow(clippy::too_many_arguments)]
     fn push_automatic_text_item(
         &mut self,
@@ -2671,6 +2736,10 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 },
                 pointer_appearance.cloned(),
             );
+            if char_offset == 0 {
+                slot = slot
+                    .with_selected_primitive(self.writer.row.glyphs[area_index].get(before_len));
+            }
             slot.coverage = if char_offset == 0 {
                 DisplayRowGlyphCoverage::Primitive { source_chars }
             } else {

@@ -561,10 +561,18 @@ def _finish(result: ScanResult, stream: io.BytesIO) -> ScanResult:
 
 
 def scan_c_directory(src: Path) -> ScanResult:
-    """`scan_file` over every `*.c` in SRC, in the order GNU's shell glob gives."""
+    """`scan_file` over SRC's C and Objective-C sources.
+
+    GNU's DOC is built by running make-docfile over the objects a build
+    compiles, and the NS backend's DEFVAR/DEFUN docstrings live in `*.m`
+    (nsterm.m/nsfns.m/nsmenu.m/nsselect.m/nsfont.m).  Scan those after the
+    `*.c` files: the first declaration of a shared name keeps the C site the
+    tables were generated with, and the NS-only names are appended rather
+    than interleaved by filename.
+    """
     merged = ScanResult()
     chunks = []
-    for c_file in sorted(src.glob("*.c")):
+    for c_file in [*sorted(src.glob("*.c")), *sorted(src.glob("*.m"))]:
         one = scan_c_file(c_file)
         merged.records.extend(one.records)
         merged.heads_without_doc.extend(one.heads_without_doc)
@@ -590,7 +598,10 @@ def verify_against_make_docfile(src: Path, doc_stream: bytes) -> str | None:
     binary = find_make_docfile(src)
     if binary is None:
         return None
-    names = sorted(p.name for p in src.glob("*.c"))
+    names = [
+        *sorted(p.name for p in src.glob("*.c")),
+        *sorted(p.name for p in src.glob("*.m")),
+    ]
     proc = subprocess.run(
         [str(binary), *names],
         cwd=str(src),

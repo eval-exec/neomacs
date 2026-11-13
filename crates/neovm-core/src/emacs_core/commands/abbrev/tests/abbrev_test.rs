@@ -1,4 +1,8 @@
 use super::*;
+use crate::emacs_core::eval::data::abbrev::{
+    Abbrev, AbbrevManager, AbbrevTable, abbrev_string_to_runtime, abbrev_table_sym, apply_case,
+    runtime_string_to_abbrev_string,
+};
 use crate::heap_types::LispString;
 
 // -----------------------------------------------------------------------
@@ -6,7 +10,7 @@ use crate::heap_types::LispString;
 // -----------------------------------------------------------------------
 
 fn abbrev_runtime(text: &LispString) -> String {
-    super::abbrev_string_to_runtime(text)
+    abbrev_string_to_runtime(text)
 }
 
 #[test]
@@ -27,10 +31,11 @@ fn abbrev_copied_properties_have_only_manager_roots() {
     }
 
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    eval.gc_stress = false;
+    let mut eval = crate::test_utils::new_context();
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     eval.gc_collect_exact();
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { eval.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     let property = Value::symbol("abbrev-owner-only");
     let table_sym = abbrev_table_sym("owned-abbrev-root-table");
     let probes = eval.with_gc_inhibited(|eval| {
@@ -65,29 +70,32 @@ fn abbrev_copied_properties_have_only_manager_roots() {
         };
         // The pdump compatibility manager remains a real World owner even
         // though live Lisp abbrev builtins now use obarray-backed tables.
-        *eval.abbrevs =
-            AbbrevManager::from_dump(HashMap::from([(table_sym, table)]), table_sym, false);
+        neovm_eval::test_support::authority::set_abbrevs_manager_for_test(
+            eval,
+            AbbrevManager::from_dump(HashMap::from([(table_sym, table)]), table_sym, false),
+        );
         assert_eq!(probes.len(), 5);
         probes
     });
     let check_live = |eval: &Context| {
         for Probe(bits) in &probes {
             assert!(
-                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                eval.tagged_heap()
+                    .retains_veclike(unsafe { Value::from_bits(*bits) }),
                 "abbrev-only property vector was reclaimed"
             );
         }
         for (index, Probe(bits)) in probes.iter().enumerate() {
             assert_eq!(
-                Value::from_bits(*bits)
+                unsafe { Value::from_bits(*bits) }
                     .as_vector_data()
                     .expect("live abbrev property vector")
                     .as_slice(),
                 &[Value::fixnum(index as i64)]
             );
         }
-        let table = eval
-            .abbrevs
+        let table: &AbbrevTable = eval
+            .abbrevs_for_test()
             .get_table("owned-abbrev-root-table")
             .expect("retained abbrev table");
         let entry = table
@@ -104,36 +112,41 @@ fn abbrev_copied_properties_have_only_manager_roots() {
             probes[3].0
         );
     };
-    let completed = eval.gc_count;
-    if eval.tagged_heap.generational_enabled() {
-        assert!(eval.tagged_heap.should_run_minor(false, false));
-        eval.gc_pending = true;
+    let completed = eval.gc_count_for_test();
+    if eval.tagged_heap().tagged_heap_generational_enabled() {
+        assert!(eval.tagged_heap().should_run_minor(false, false));
+        neovm_eval::test_support::authority::set_gc_pending_for_test(&mut eval, true);
         eval.gc_safe_point_exact();
-        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
-        assert!(!eval.tagged_heap.concurrent_mark_running());
+        assert!(
+            eval.tagged_heap().sweep_in_progress(),
+            "expected minor sweep"
+        );
+        assert!(!eval.tagged_heap().concurrent_mark_running());
         for _ in 0..10_000 {
-            if !eval.tagged_heap.sweep_in_progress() {
+            if !eval.tagged_heap().sweep_in_progress() {
                 break;
             }
             eval.gc_safe_point_exact();
         }
-        assert!(!eval.tagged_heap.sweep_in_progress());
-        assert!(!eval.tagged_heap.mark_in_progress());
+        assert!(!eval.tagged_heap().sweep_in_progress());
+        assert!(!eval.tagged_heap().mark_in_progress());
     } else {
         eval.gc_collect_exact();
     }
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_live(&eval);
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     eval.gc_collect_exact();
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_live(&eval);
 
-    *eval.abbrevs = AbbrevManager::new();
+    neovm_eval::test_support::authority::reset_abbrevs_for_test(&mut eval);
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
-            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            !eval
+                .tagged_heap()
+                .retains_veclike(unsafe { Value::from_bits(bits) }),
             "retired abbrev graph remained permanently rooted"
         );
     }
@@ -149,15 +162,15 @@ fn define_and_expand() {
     assert_eq!(result, Some("by the way".to_string()));
 
     // Check count incremented
-    let tbl = mgr.get_table("global-abbrev-table").unwrap();
-    let key_btw = super::runtime_string_to_abbrev_string("btw");
+    let tbl: &AbbrevTable = mgr.get_table("global-abbrev-table").unwrap();
+    let key_btw = runtime_string_to_abbrev_string("btw");
     assert_eq!(tbl.abbrevs.get(&key_btw).unwrap().count, 1);
 
     // Expand again
     let result = mgr.expand_abbrev("global-abbrev-table", "btw");
     assert_eq!(result, Some("by the way".to_string()));
 
-    let tbl = mgr.get_table("global-abbrev-table").unwrap();
+    let tbl: &AbbrevTable = mgr.get_table("global-abbrev-table").unwrap();
     assert_eq!(tbl.abbrevs.get(&key_btw).unwrap().count, 2);
 }
 
@@ -200,10 +213,12 @@ fn case_fixed() {
     crate::test_utils::init_test_tracing();
     let mut mgr = AbbrevManager::new();
     mgr.define_abbrev("global-abbrev-table", "btw", "by the way");
-    mgr.tables
-        .get_mut(&abbrev_table_sym("global-abbrev-table"))
-        .unwrap()
-        .case_fixed = true;
+    neovm_eval::test_support::authority::with_abbrev_tables_mut_for_test(&mut mgr, |tables| {
+        tables
+            .get_mut(&abbrev_table_sym("global-abbrev-table"))
+            .unwrap()
+            .case_fixed = true;
+    });
 
     // With case_fixed, expansion is returned verbatim regardless of input case
     let result = mgr.expand_abbrev("global-abbrev-table", "BTW");
@@ -306,8 +321,8 @@ fn define_abbrev_full_with_hook_and_system() {
         true,
     );
 
-    let tbl = mgr.get_table("global-abbrev-table").unwrap();
-    let key_hw = super::runtime_string_to_abbrev_string("hw");
+    let tbl: &AbbrevTable = mgr.get_table("global-abbrev-table").unwrap();
+    let key_hw = runtime_string_to_abbrev_string("hw");
     let ab = tbl.abbrevs.get(&key_hw).unwrap();
     assert_eq!(abbrev_runtime(&ab.expansion), "hello world");
     assert_eq!(
@@ -369,7 +384,7 @@ fn test_make_abbrev_table_and_predicate() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // make-abbrev-table creates an abbrev table
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
@@ -397,7 +412,7 @@ fn test_define_abbrev_and_lookup() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
 
@@ -463,7 +478,7 @@ fn define_abbrev_system_force_matches_gnu_overwrite_and_storage() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
 
     builtin_define_abbrev(
@@ -532,7 +547,7 @@ fn test_clear_abbrev_table() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
 
@@ -569,7 +584,7 @@ fn test_abbrev_get_put() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
 
@@ -587,7 +602,7 @@ fn test_define_abbrev_table_and_lookup() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // define-abbrev-table creates a named table
     builtin_define_abbrev_table(&mut eval, vec![Value::symbol("test-table"), Value::NIL]).unwrap();
@@ -603,7 +618,7 @@ fn test_insert_abbrev_table_description_writes_buffer_text() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_define_abbrev_table(&mut eval, vec![Value::symbol("test-table"), Value::NIL]).unwrap();
 
     let table = eval
@@ -625,6 +640,7 @@ fn test_insert_abbrev_table_description_writes_buffer_text() {
     builtin_insert_abbrev_table_description(&mut eval, vec![Value::symbol("test-table")]).unwrap();
 
     let rendered = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -640,7 +656,7 @@ fn test_abbrev_tables_do_not_share_symbol_cells() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table_a = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
     let table_b = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
 
@@ -666,7 +682,7 @@ fn test_define_abbrev_preserves_raw_unibyte_expansion() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
     let raw = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
 
@@ -683,7 +699,7 @@ fn test_abbrev_table_properties_are_table_local() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table_a = builtin_make_abbrev_table(
         &mut eval,
         vec![Value::list(vec![Value::keyword(":case-fixed"), Value::T])],
@@ -704,7 +720,7 @@ fn test_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // expand-abbrev needs exactly 0 args
     let result = builtin_expand_abbrev(&mut eval, vec![Value::string("t")]);

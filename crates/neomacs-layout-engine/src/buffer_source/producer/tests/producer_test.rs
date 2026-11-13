@@ -9,7 +9,7 @@ use neovm_core::emacs_core::Context;
 type ConsumedStep = (BufferSourceConsumedItem, DisplaySourceTextPosition);
 
 fn buffer_snapshot(text: &str) -> (BufferId, LayoutBufferSnapshot) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -104,7 +104,7 @@ fn assert_snapshot_restore_matches_rewind(text: &str, candidate: DisplaySourceTe
     // The seating saved at the wrap candidate, before the overflow attempt.
     let saved = {
         let mut seated = producer(buffer_id, &snapshot);
-        seated.rewind_word_wrap_to(candidate);
+        seated.rewind_word_wrap_to(DisplaySourceResumeCursor::AfterOverlayStrings(candidate));
         seated.snapshot()
     };
 

@@ -8,4 +8,5 @@ publish = false
 
 [dependencies]
 libc.workspace = true
+sha2.workspace = true
 tempfile.workspace = true

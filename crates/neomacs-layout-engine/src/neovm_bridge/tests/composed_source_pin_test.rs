@@ -10,7 +10,7 @@ fn pin_table_with_named_face() -> FaceTable {
 
 #[test]
 fn composed_pin_adopts_the_cache_across_a_definitions_refresh() {
-    let _context = neovm_core::emacs_core::Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = pin_table_with_named_face();
 
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);

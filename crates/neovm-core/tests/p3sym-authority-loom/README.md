@@ -212,7 +212,7 @@ export CARGO_TARGET_DIR=/home/exec/nvme-rust-target/v10x-peer-p3sym/loom
 taskset -c 0-3,14-31 nix develop -c bash -c '
   unset RUST_LOG
   export RUST_BACKTRACE=0 P3SYM_PREEMPTIONS=2
-  cargo test --locked --manifest-path crates/neovm-core/tests/p3sym-authority-loom/Cargo.toml --tests -- --test-threads=1 --nocapture
+  cargo nextest run --locked --manifest-path crates/neovm-core/tests/p3sym-authority-loom/Cargo.toml --tests --no-capture
 ' > tmp/peer-p3sym/c1/loom-bound2.log 2>&1
 ```
 

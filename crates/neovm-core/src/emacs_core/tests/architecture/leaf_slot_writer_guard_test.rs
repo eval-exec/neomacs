@@ -11,9 +11,11 @@
 //! (and from its own definition, which contains no call). Test-only items are
 //! skipped (tests arm synthetic leaves and ids).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use syn::visit::{self, Visit};
+
+use super::architecture_production_source_roots::production_source_files;
 
 struct Writer {
     name: &'static str,
@@ -198,21 +200,6 @@ fn writer_calls(path: &Path) -> Vec<CallSite> {
     scan.hits
 }
 
-/// Every production `*.rs` under `src/`, excluding `tests/` directories.
-fn sources(root: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(root).expect("read source directory") {
-        let path = entry.expect("source entry").path();
-        if path.is_dir() {
-            if path.file_name().and_then(|name| name.to_str()) == Some("tests") {
-                continue;
-            }
-            sources(&path, out);
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
-            out.push(path);
-        }
-    }
-}
-
 fn allowed_call(writer: &Writer, relative: &str, enclosing: Option<&str>) -> bool {
     writer
         .callers
@@ -223,20 +210,17 @@ fn allowed_call(writer: &Writer, relative: &str, enclosing: Option<&str>) -> boo
 
 #[test]
 fn each_mint_writer_has_one_production_call_site() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = Vec::new();
-    sources(&root, &mut files);
     let mut offenders = Vec::new();
-    for path in files {
-        let hits = writer_calls(&path);
+    for file in production_source_files() {
+        // The pre-split walk skipped `tests/` directories (not `test_*` files).
+        if file.relative.split('/').any(|part| part == "tests") {
+            continue;
+        }
+        let hits = writer_calls(&file.path);
         if hits.is_empty() {
             continue;
         }
-        let relative = path
-            .strip_prefix(&root)
-            .expect("source lives under src")
-            .to_string_lossy()
-            .replace('\\', "/");
+        let relative = file.relative;
         for hit in hits {
             let writer = WRITERS
                 .iter()

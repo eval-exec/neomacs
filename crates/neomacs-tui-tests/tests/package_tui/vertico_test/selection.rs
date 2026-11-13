@@ -56,6 +56,10 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
             "the fixture's three candidates",
             |grid| candidate_rows(grid, PREFIX).len() == 3,
         );
+        // The three rows and the first-candidate highlight are painted by
+        // separate redisplay passes; wait for the candidate window to show
+        // one selection state before asserting on it.
+        wait_for_drawn_selection(session, PREFIX, Duration::from_secs(8));
     })?;
 
     // Sorted by the package's default sort function, and the first candidate is
@@ -109,6 +113,9 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
             "the inserted candidate",
             |grid| count_indicator_in(grid, PROMPT) == "1/1",
         );
+        // The shrunk candidate window repaints the same way as a selection
+        // move; assert only on a settled selection state.
+        wait_for_drawn_selection(session, PREFIX, Duration::from_secs(8));
     })?;
     assert_eq!(
         minibuffer_input(&pair.neo, PROMPT),

@@ -2,6 +2,9 @@
 //! History alone grants no authority: source identity and captured Lisp reads
 //! must still match. Partial, ambiguous or unsupported coverage falls back.
 use super::*;
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::{
     buffer::LispCharPos1,
     window::{
@@ -28,22 +31,24 @@ impl PreparedViewports {
                 return None;
             }
         };
-        if !scroll_coverage::inactive_overlay_arrows(evaluator) {
-            tracing::trace!(target: "neomacs_layout_engine::motion_geometry",
-                "prepared rows declined: active overlay arrows");
-            return None;
-        }
         let buffer_id = evaluator
             .frame_manager()
             .get(frame)?
             .find_window(window)?
             .buffer_id()?;
+        if !scroll_coverage::inactive_overlay_arrows(evaluator, Some(buffer_id)) {
+            tracing::trace!(target: "neomacs_layout_engine::motion_geometry",
+                "prepared rows declined: active overlay arrows");
+            return None;
+        }
         let buffer = evaluator.buffer_manager().get(buffer_id)?;
         // A synchronous query must still run unfontified-source Lisp. Worker
         // paint alone does not certify that those callbacks have happened.
-        let fontification = buffer
-            .buffer_local_value("fontification-functions")
-            .or_else(|| evaluator.variable_value_by_name("fontification-functions"));
+        let fontification = crate::neovm_bridge::visible_display_value(
+            evaluator,
+            buffer_id,
+            crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id(),
+        );
         if fontification.is_some_and(|value| !value.is_nil()) {
             tracing::trace!(target: "neomacs_layout_engine::motion_geometry",
                 "prepared rows declined: fontification callbacks");
@@ -53,7 +58,8 @@ impl PreparedViewports {
         self.entries.iter().rev().find_map(|entry| {
             tracing::trace!(target: "neomacs_layout_engine::motion_geometry", ?scope,
                 computed = entry.computed,
-                collections_match = entry.reads.as_ref().is_none_or(|reads| reads.unchanged()),
+                collections_match = entry.cursor_sources.as_ref()
+                    .is_some_and(|sources| sources.can_replay() && sources.unchanged()),
                 fontset_matches = entry.retained.key.fontset_generation
                     == neovm_core::emacs_core::fontset::fontset_generation(),
                 start_present = entry.retained.display_snapshot.rows.iter()
@@ -170,6 +176,7 @@ impl PreparedViewports {
                 })
                 .collect();
             snapshot.logical_cursor = None;
+            snapshot.logical_cursor_dimensions = None;
             snapshot.phys_cursor = None;
             snapshot.chrome_strings = Default::default();
             snapshot.regions_materialized = true;

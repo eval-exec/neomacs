@@ -125,7 +125,7 @@ fn empty_overlay_cross_buffer_form_parses_in_neovm() {
     // which requires a TaggedHeap to be active on the current thread.
     // The simplest way to install one for an integration test is to
     // construct an empty Context.
-    let eval = neovm_core::emacs_core::eval::Context::new();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let forms = value_reader::read_all(
         EMPTY_OVERLAY_QUERIES_AND_CROSS_BUFFER_MOVE_FORM,
         eval.variables(),

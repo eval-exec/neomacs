@@ -1,0 +1,44 @@
+[package]
+name = "neovm-edit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Editor and buffer storage extracted from neovm-core"
+
+[features]
+# neovm-value/sqlite is a forward, not a default: value's old default
+# features supplied it to this crate's default graph, and the sibling
+# edges now disable defaults.
+default = ["jit", "neovm-value/sqlite"]
+test-support = ["neovm-value/test-support", "dep:visibility"]
+display-stop-validate = []
+jit = ["neovm-value/jit"]
+# Numeric redisplay policy injection for dependent fixtures (stage-4 W5/E13:
+# the evaluator re-exports the guard, so the feature must reach this crate).
+redisplay-test-policy = []
+
+[dependencies]
+neovm-value = { path = "../neovm-value", default-features = false }
+libc.workspace = true
+malachite.workspace = true
+memchr.workspace = true
+num_enum.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+smallvec.workspace = true
+static_assertions.workspace = true
+strum.workspace = true
+sysinfo.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+visibility = { version = "0.1.1", optional = true }
+
+[dev-dependencies]
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support", "test-thread-fallback-heap"] }
+proptest.workspace = true
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

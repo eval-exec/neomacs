@@ -31,6 +31,9 @@ mod coding_save;
 #[path = "colrv1_emoji.rs"]
 mod colrv1_emoji;
 
+#[path = "commit_editing.rs"]
+mod commit_editing;
+
 #[path = "compact_frame_geometry.rs"]
 mod compact_frame_geometry;
 
@@ -75,6 +78,9 @@ mod fill_column_stipple;
 
 #[path = "font_coverage.rs"]
 mod font_coverage;
+
+#[path = "font_name_pattern_resize.rs"]
+mod font_name_pattern_resize;
 
 #[path = "fontset_han_repertory.rs"]
 mod fontset_han_repertory;
@@ -136,11 +142,17 @@ mod mouse_position_in_root_frame_gui_oracle;
 #[path = "native_frame_focus.rs"]
 mod native_frame_focus;
 
+#[path = "word_wrap_cursor.rs"]
+mod word_wrap_cursor;
+
 #[path = "native_menus.rs"]
 mod native_menus;
 
 #[path = "native_scrolling.rs"]
 mod native_scrolling;
+
+#[path = "neomacsclient_frames.rs"]
+mod neomacsclient_frames;
 
 #[path = "org_line_spacing.rs"]
 mod org_line_spacing;

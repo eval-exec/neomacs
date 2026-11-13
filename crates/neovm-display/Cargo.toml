@@ -1,0 +1,76 @@
+[package]
+name = "neovm-display"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Display, window, face and image layer extracted from neovm-core"
+
+[features]
+# neovm-value/sqlite is a forward, not a default: value's old default
+# features supplied it to this crate's default graph, and the sibling
+# edges now disable defaults.
+default = ["jit", "neovm-value/sqlite"]
+jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit", "neovm-eval/jit"]
+sound = ["dep:rodio"]
+redisplay-test-policy = ["neovm-eval/redisplay-test-policy"]
+display-stop-validate = ["neovm-edit/display-stop-validate"]
+gc-memory-telemetry = []
+# Test-only support surface: enabled only by a dev-dependency of a crate ABOVE
+# neovm-display, never by a product profile.
+test-support = ["neovm-value/test-support", "neovm-text/test-support", "dep:visibility"]
+# The cfg(test) unit runtime include!s eval's H3 upper snapshot, whose rows
+# carry `#[cfg(feature = "sqlite")]`; the attribute is evaluated in THIS
+# crate, so display must declare the feature and forward it to eval so the
+# compiled table and host_cfg::HostCfgClass agree in one build view.
+sqlite = ["neovm-eval/sqlite"]
+
+[build-dependencies]
+# Host-cfg probe shared by core/system/value/eval/display (build_support/host_cfg.rs).
+pkg-config.workspace = true
+
+[dependencies]
+rodio = { version = "0.20", optional = true }
+neovm-value = { path = "../neovm-value", default-features = false }
+neovm-edit = { path = "../neovm-edit", default-features = false }
+neovm-text = { path = "../neovm-text", default-features = false }
+neovm-eval = { path = "../neovm-eval", default-features = false }
+enum-map.workspace = true
+libc.workspace = true
+neomacs-display-protocol.workspace = true
+neomacs-video-model.workspace = true
+num_enum.workspace = true
+regex.workspace = true
+rustc-hash.workspace = true
+smallvec.workspace = true
+static_assertions.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# B3 TEST-SUPPORT-VIS: pub only in the test-support build; product visibility
+# is unchanged (the re-export stays pub(crate) in ordinary builds).
+visibility = { version = "0.1.1", optional = true }
+
+[dev-dependencies]
+# The A' gate on fence-routed items is cfg(any(test, feature = "test-support"))
+# to match the fence module's cfg; the optional `visibility` dependency is
+# tied to the test-support feature, so this dev-dependency makes the
+# attribute macro resolvable in this crate's own cfg(test) build too.
+visibility = "0.1.1"
+# Downward-only: shared value test helpers for this crate's own unit tests
+# (dependency crates never have cfg(test), so the provider feature is enabled
+# only by this dev edge, exactly like neovm-eval).
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support", "test-thread-fallback-heap"] }
+# Downward eval test-support edge: the re-homed display oracles reach the
+# signed eval A-prime fixtures (pdump converters, point-row modes, font
+# fixtures) through lower-crate rows.
+neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support", "redisplay-test-policy"] }
+# Display unit tests use GNU oracle and tempfile fixtures directly.
+tempfile.workspace = true
+libc.workspace = true
+malachite.workspace = true
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

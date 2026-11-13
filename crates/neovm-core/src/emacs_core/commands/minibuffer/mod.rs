@@ -9,15 +9,18 @@
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::VariableView;
-use crate::gc_trace::GcTrace;
-use std::collections::HashMap;
-use std::num::NonZeroUsize;
+use crate::emacs_core::keyboard::CommandLoopHost;
 use strum::IntoStaticStr;
 
-use crate::buffer::{
-    BufferId, BufferManager, CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange, LispCharPos1,
-};
+use crate::buffer::{BufferId, BufferManager, EmacsBytePos, EmacsByteRange, LispCharPos1};
 use crate::heap_types::LispString;
+
+pub(crate) mod read_entries;
+mod redisplay;
+mod window_state;
+
+pub(crate) use read_entries::*;
+pub(crate) use window_state::*;
 
 use super::error::{EvalResult, Flow, signal};
 use super::intern::{NIL_SYM_ID, SymId, T_SYM_ID, resolve_sym};
@@ -25,6 +28,7 @@ use super::reader::KeyboardInputRuntime;
 use super::symbol::Obarray;
 use super::textprop::StickinessProperty;
 use super::value::{Value, ValueKind, VecLikeType};
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 /// GNU completion state held in predeclared C variables/symbols rather than
 /// rediscovered by name at every completion operation.
@@ -187,205 +191,31 @@ fn read_buffer_prompt(vars: VariableView<'_>, raw_prompt: Value, default: Value)
 // CompletionTable
 // ---------------------------------------------------------------------------
 
-/// What can be completed against.
-pub enum CompletionTable {
-    /// Fixed list of completion candidates.
-    List(Vec<LispString>),
-    /// Dynamic completion function: given the current input, returns matching candidates.
-    #[allow(clippy::type_complexity)]
-    // callable is the public dynamic-completion representation
-    Function(Box<dyn Fn(&LispString) -> Vec<LispString>>),
-    /// File name completion rooted at a directory.
-    FileNames { directory: CompletionDirectory },
-    /// Buffer name completion (candidates supplied externally).
-    BufferNames,
-    /// Symbol name completion (candidates supplied externally).
-    SymbolNames,
-    /// Association list: each entry is (key, value).
-    Alist(Vec<(LispString, Value)>),
-}
+pub use crate::emacs_core::eval::data::minibuffer::{
+    CompletionDirectory, CompletionStyle, CompletionTable, MinibufferHistory, MinibufferManager,
+    MinibufferState,
+};
 
-/// Native directory spelling: filesystem lookup cannot retain text properties.
-/// The private payload and shared-only view preserve this constructor invariant.
-#[derive(Clone, Debug)]
-#[repr(transparent)]
-pub struct CompletionDirectory(LispString);
-
-impl From<&LispString> for CompletionDirectory {
-    fn from(directory: &LispString) -> Self {
-        Self(directory.without_properties())
-    }
-}
-
-impl AsRef<LispString> for CompletionDirectory {
-    fn as_ref(&self) -> &LispString {
-        &self.0
-    }
-}
+pub use crate::emacs_core::eval::data::minibuffer_entry::{
+    CompletionResult, CompletionTableExt, MinibufferManagerExt, MinibufferStateExt,
+};
+pub(crate) use crate::emacs_core::eval::data::minibuffer_entry::{
+    MinibufferEntryRejection, MinibufferInitialContents, RecursiveMinibufferPolicy,
+};
+pub(crate) use crate::emacs_core::eval::data::minibuffer_entry::{
+    completion_char_codes, completion_fold_char, lisp_string_chars,
+};
 
 static_assertions::assert_eq_size!(CompletionDirectory, LispString);
 static_assertions::assert_not_impl_any!(CompletionDirectory: Send, Sync);
-
-impl CompletionTable {
-    /// Extract the raw string candidates from the table.
-    ///
-    /// For `Function` tables the `input` is passed through; for static tables it
-    /// is ignored (filtering happens later in the matching functions).
-    fn candidates(&self, input: &LispString) -> Vec<LispString> {
-        match self {
-            CompletionTable::List(v) => v.clone(),
-            CompletionTable::Function(f) => f(input),
-            CompletionTable::FileNames { directory } => list_files_in_dir(directory.as_ref()),
-            CompletionTable::BufferNames => Vec::new(),
-            CompletionTable::SymbolNames => Vec::new(),
-            CompletionTable::Alist(pairs) => pairs.iter().map(|(k, _)| k.clone()).collect(),
-        }
-    }
-}
-
-/// Best-effort listing of file names in `dir`.  Returns an empty vec on I/O error.
-fn list_files_in_dir(dir: &LispString) -> Vec<LispString> {
-    let Some(dir) = dir.as_utf8_str() else {
-        return Vec::new();
-    };
-    match std::fs::read_dir(dir) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok())
-            .map(|e| LispString::from_utf8(&e.file_name().to_string_lossy()))
-            .collect(),
-        Err(_) => Vec::new(),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // CompletionStyle
 // ---------------------------------------------------------------------------
 
-/// Matching strategy for completions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CompletionStyle {
-    /// Standard prefix matching (case-insensitive).
-    Prefix,
-    /// Match anywhere in the candidate string.
-    Substring,
-    /// Fuzzy / flex matching: input characters must appear in order.
-    Flex,
-    /// Exact prefix (case-sensitive).
-    Basic,
-}
-
 // ---------------------------------------------------------------------------
 // CompletionResult
 // ---------------------------------------------------------------------------
-
-/// Result of a completion attempt.
-pub struct CompletionResult {
-    /// The candidates that matched.
-    pub matches: Vec<LispString>,
-    /// Longest common prefix of all matches (if any).
-    pub common_prefix: Option<LispString>,
-    /// Whether the match list is exhaustive (i.e. we know there are no more).
-    pub exhaustive: bool,
-}
-
-// ---------------------------------------------------------------------------
-// MinibufferState
-// ---------------------------------------------------------------------------
-
-/// Tracks one active minibuffer interaction (possibly recursive).
-pub struct MinibufferState {
-    pub buffer_id: BufferId,
-    pub prompt: LispString,
-    pub prompt_end: usize,
-    pub initial_input: LispString,
-    pub history: Vec<LispString>,
-    pub history_position: Option<usize>,
-    pub content: LispString,
-    pub cursor_pos: usize,
-    pub completion_table: Option<CompletionTable>,
-    /// The `require-match` argument from `completing-read`.
-    ///
-    /// Possible semantic values:
-    /// - `nil` — no restriction, any input accepted
-    /// - `t` (or any non-nil, non-`confirm`, non-`confirm-after-completion`)
-    ///   — must match exactly
-    /// - symbol `confirm` — may exit with non-match after a second RET
-    /// - symbol `confirm-after-completion` — like `confirm` but only after
-    ///   the user has triggered a completion at least once
-    pub require_match: Value,
-    pub default_value: Option<LispString>,
-    pub active: bool,
-    /// Recursive minibuffer depth at which this state was entered.
-    pub depth: usize,
-    /// Command-loop depth active when this minibuffer was entered.
-    pub command_loop_depth: usize,
-}
-
-/// Initial minibuffer text paired with a valid character cursor.
-///
-/// GNU's public reader APIs express this cursor with subtly different Lisp
-/// coordinate conventions.  Those conventions are normalized at the reader
-/// boundary; the minibuffer core only accepts this checked, zero-based
-/// character coordinate, so it cannot confuse it with a byte offset or lose
-/// it while passing the text through setup.
-#[derive(Clone, Debug)]
-pub(crate) struct MinibufferInitialContents {
-    text: LispString,
-    cursor: CharPos0,
-}
-
-impl MinibufferInitialContents {
-    pub(crate) fn at_end(text: LispString) -> Self {
-        let cursor = CharPos0::new(text.schars());
-        Self { text, cursor }
-    }
-
-    pub(crate) fn at_character_offset(text: LispString, cursor: CharPos0) -> Option<Self> {
-        (cursor.get() <= text.schars()).then_some(Self { text, cursor })
-    }
-
-    pub(crate) fn text(&self) -> &LispString {
-        &self.text
-    }
-
-    fn cursor_byte_offset(&self) -> EmacsByteLen {
-        EmacsByteLen::new(self.text.char_to_byte_pos(self.cursor.get()))
-    }
-}
-
-impl MinibufferState {
-    fn new(
-        buffer_id: BufferId,
-        prompt: LispString,
-        initial: Option<&MinibufferInitialContents>,
-        depth: usize,
-    ) -> Self {
-        let initial_text = initial
-            .map(|contents| contents.text.clone())
-            .unwrap_or_else(|| LispString::from_utf8(""));
-        let cursor_pos = initial
-            .map(MinibufferInitialContents::cursor_byte_offset)
-            .unwrap_or(EmacsByteLen::ZERO)
-            .get();
-        let prompt_end = prompt.sbytes();
-        Self {
-            buffer_id,
-            prompt,
-            prompt_end,
-            initial_input: initial_text.clone(),
-            history: Vec::new(),
-            history_position: None,
-            content: initial_text,
-            cursor_pos,
-            completion_table: None,
-            require_match: Value::NIL,
-            default_value: None,
-            active: true,
-            depth,
-            command_loop_depth: 0,
-        }
-    }
-}
 
 pub(crate) fn install_minibuffer_buffer_contents(
     buffers: &mut BufferManager,
@@ -515,611 +345,9 @@ fn apply_minibuffer_prompt_properties(
 // MinibufferHistory
 // ---------------------------------------------------------------------------
 
-/// Named history lists (e.g. "minibuffer-history", "file-name-history", ...).
-pub struct MinibufferHistory {
-    histories: HashMap<SymId, Vec<LispString>>,
-}
-
-impl MinibufferHistory {
-    pub fn new() -> Self {
-        Self {
-            histories: HashMap::new(),
-        }
-    }
-
-    pub fn get(&self, name: SymId) -> &[LispString] {
-        match self.histories.get(&name) {
-            Some(v) => v.as_slice(),
-            None => &[],
-        }
-    }
-
-    /// Add a value to a named history list.
-    ///
-    /// `max_length` controls how many entries to keep.  Callers that have
-    /// access to the obarray should read the `history-length` symbol and
-    /// pass it here; the default in GNU Emacs is 100.
-    pub fn add(&mut self, name: SymId, value: LispString, max_length: usize) {
-        let list = self.histories.entry(name).or_default();
-        // Avoid consecutive duplicates at the front.
-        if list.first() != Some(&value) {
-            list.insert(0, value);
-        }
-        if list.len() > max_length {
-            list.truncate(max_length);
-        }
-    }
-}
-
-impl Default for MinibufferHistory {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // MinibufferManager
 // ---------------------------------------------------------------------------
-
-/// Whether a new minibuffer may be entered while another one is active.
-///
-/// Keeping the Lisp option out of `MinibufferManager` makes admission an
-/// explicit operation for each read instead of mutable ambient state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RecursiveMinibufferPolicy {
-    Allow,
-    Reject,
-}
-
-/// The exhaustive reasons a minibuffer entry can be rejected before it has
-/// changed any buffer, window, or command-loop state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MinibufferEntryRejection {
-    RecursiveDisabled,
-    #[cfg(test)]
-    TestDepthLimit,
-}
-
-/// Whether an admitted read enters the first minibuffer or recurses from one.
-///
-/// GNU uses `minibuf_level == 1` when deciding whether to replace
-/// `minibuf_selected_window`.  Keeping that distinction typed prevents callers
-/// from reconstructing the lifecycle rule from an unvalidated integer depth.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MinibufferEntryLevel {
-    Outermost,
-    Recursive,
-}
-
-impl MinibufferEntryLevel {
-    pub(crate) fn from_depth(depth: NonZeroUsize) -> Self {
-        if depth.get() == 1 {
-            Self::Outermost
-        } else {
-            Self::Recursive
-        }
-    }
-}
-
-impl MinibufferEntryRejection {
-    pub(crate) fn into_flow(self) -> Flow {
-        let message = match self {
-            Self::RecursiveDisabled => "Command attempted to use minibuffer while in minibuffer",
-            #[cfg(test)]
-            Self::TestDepthLimit => "Command attempted to use minibuffer while in minibuffer",
-        };
-        signal(LispCondition::UserError, vec![Value::string(message)])
-    }
-}
-
-/// Single-use proof that entering the next minibuffer level is allowed.
-///
-/// The private fields prevent callers from manufacturing a permit. Consuming
-/// it at entry and checking its parent depth keep admission and stack mutation
-/// paired even as the setup path evolves.
-#[must_use = "minibuffer admission must be consumed by enter_with_permit"]
-#[derive(Debug)]
-pub(crate) struct MinibufferEntryPermit {
-    parent_depth: usize,
-    depth: NonZeroUsize,
-}
-
-impl MinibufferEntryPermit {
-    pub(crate) fn depth(&self) -> usize {
-        self.depth.get()
-    }
-
-    pub(crate) fn level(&self) -> MinibufferEntryLevel {
-        MinibufferEntryLevel::from_depth(self.depth)
-    }
-}
-
-/// Owns all minibuffer state, including the recursive-edit stack.
-pub struct MinibufferManager {
-    state_stack: Vec<MinibufferState>,
-    history: MinibufferHistory,
-    completion_style: CompletionStyle,
-    #[cfg(test)]
-    max_depth: usize,
-}
-
-impl GcTrace for MinibufferManager {
-    fn trace_roots(&self, roots: &mut Vec<Value>) {
-        self.trace_roots_with(&mut |value| roots.push(value));
-    }
-
-    fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
-        let Self {
-            state_stack,
-            history,
-            completion_style: _,
-            #[cfg(test)]
-                max_depth: _,
-        } = self;
-        for state in state_stack {
-            // No rest pattern: a newly retained field needs a tracing decision.
-            let MinibufferState {
-                buffer_id: _,
-                prompt,
-                prompt_end: _,
-                initial_input,
-                history,
-                history_position: _,
-                content,
-                cursor_pos: _,
-                completion_table,
-                require_match,
-                default_value,
-                active: _,
-                depth: _,
-                command_loop_depth: _,
-            } = state;
-            for text in [prompt, initial_input, content]
-                .into_iter()
-                .chain(history)
-                .chain(default_value)
-            {
-                text.trace_roots_with(visit);
-            }
-            visit(*require_match);
-            if let Some(table) = completion_table {
-                match table {
-                    CompletionTable::List(candidates) => {
-                        for candidate in candidates {
-                            candidate.trace_roots_with(visit);
-                        }
-                    }
-                    CompletionTable::Alist(entries) => {
-                        for (key, value) in entries {
-                            key.trace_roots_with(visit);
-                            visit(*value);
-                        }
-                    }
-                    // The native directory type cannot carry interval edges.
-                    CompletionTable::FileNames { directory: _ }
-                    | CompletionTable::BufferNames
-                    | CompletionTable::SymbolNames => {}
-                    // An opaque native callback has no enumerable capture
-                    // record; this walk covers the manager's declared fields.
-                    CompletionTable::Function(_) => {}
-                }
-            }
-        }
-        let MinibufferHistory { histories } = history;
-        for entries in histories.values() {
-            for text in entries {
-                text.trace_roots_with(visit);
-            }
-        }
-    }
-}
-
-impl MinibufferManager {
-    pub fn new() -> Self {
-        Self {
-            state_stack: Vec::new(),
-            history: MinibufferHistory::new(),
-            completion_style: CompletionStyle::Prefix,
-            #[cfg(test)]
-            max_depth: 10,
-        }
-    }
-
-    /// Decide whether the next minibuffer level may be entered.
-    ///
-    /// This is deliberately side-effect free. GNU `read_minibuf` rejects a
-    /// prohibited recursive read before selecting or clearing a minibuffer
-    /// window; callers must obtain this permit before doing either.
-    pub(crate) fn prepare_entry(
-        &self,
-        policy: RecursiveMinibufferPolicy,
-    ) -> Result<MinibufferEntryPermit, MinibufferEntryRejection> {
-        let parent_depth = self.state_stack.len();
-        let depth = NonZeroUsize::new(
-            parent_depth
-                .checked_add(1)
-                .expect("minibuffer depth overflow"),
-        )
-        .expect("next minibuffer depth is nonzero");
-        #[cfg(test)]
-        if depth.get() > self.max_depth {
-            return Err(MinibufferEntryRejection::TestDepthLimit);
-        }
-        if policy == RecursiveMinibufferPolicy::Reject && parent_depth != 0 {
-            return Err(MinibufferEntryRejection::RecursiveDisabled);
-        }
-        Ok(MinibufferEntryPermit {
-            parent_depth,
-            depth,
-        })
-    }
-
-    pub(crate) fn enter_with_permit(
-        &mut self,
-        permit: MinibufferEntryPermit,
-        buffer_id: BufferId,
-        prompt: &LispString,
-        initial: Option<&MinibufferInitialContents>,
-        history_name: Option<SymId>,
-    ) -> &mut MinibufferState {
-        assert_eq!(
-            self.state_stack.len(),
-            permit.parent_depth,
-            "minibuffer stack changed after entry was admitted"
-        );
-        let mut state =
-            MinibufferState::new(buffer_id, prompt.clone(), initial, permit.depth.get());
-
-        if let Some(name) = history_name {
-            state.history = self.history.get(name).to_vec();
-        }
-
-        self.state_stack.push(state);
-        self.state_stack
-            .last_mut()
-            .expect("admitted minibuffer state was just pushed")
-    }
-
-    /// Enter the minibuffer with the given prompt and optional initial input / history name.
-    ///
-    /// Returns a fresh `MinibufferState` that has been pushed onto the stack.
-    /// The caller can further configure it (completion table, require-match, default).
-    pub(crate) fn read_from_minibuffer_lisp(
-        &mut self,
-        buffer_id: BufferId,
-        prompt: &LispString,
-        initial: Option<&LispString>,
-        history_name: Option<SymId>,
-    ) -> Result<&mut MinibufferState, Flow> {
-        let permit = self
-            .prepare_entry(RecursiveMinibufferPolicy::Allow)
-            .map_err(MinibufferEntryRejection::into_flow)?;
-        let initial = initial.cloned().map(MinibufferInitialContents::at_end);
-        Ok(self.enter_with_permit(permit, buffer_id, prompt, initial.as_ref(), history_name))
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) fn read_from_minibuffer(
-        &mut self,
-        buffer_id: BufferId,
-        prompt: &str,
-        initial: Option<&str>,
-        history_name: Option<SymId>,
-    ) -> Result<&mut MinibufferState, Flow> {
-        let prompt = LispString::from_utf8(prompt);
-        let initial = initial.map(LispString::from_utf8);
-        self.read_from_minibuffer_lisp(buffer_id, &prompt, initial.as_ref(), history_name)
-    }
-
-    /// Attempt to complete the current minibuffer content.
-    pub fn try_complete(&self, state: &MinibufferState) -> CompletionResult {
-        match &state.completion_table {
-            Some(table) => {
-                let matches = self.all_completions(&state.content, table);
-                let common = compute_common_prefix(&matches);
-                let exhaustive = !matches!(table, CompletionTable::Function(_));
-                CompletionResult {
-                    matches,
-                    common_prefix: common,
-                    exhaustive,
-                }
-            }
-            None => CompletionResult {
-                matches: Vec::new(),
-                common_prefix: None,
-                exhaustive: true,
-            },
-        }
-    }
-
-    /// Return all completions of `prefix` against `table`.
-    pub fn all_completions(&self, prefix: &LispString, table: &CompletionTable) -> Vec<LispString> {
-        let candidates = table.candidates(prefix);
-        match self.completion_style {
-            CompletionStyle::Prefix => prefix_match(prefix, &candidates),
-            CompletionStyle::Substring => substring_match(prefix, &candidates),
-            CompletionStyle::Flex => flex_match(prefix, &candidates),
-            CompletionStyle::Basic => basic_match(prefix, &candidates),
-        }
-    }
-
-    /// Try to complete `prefix` to the longest common prefix of all matches.
-    /// Returns `None` if there are no matches.
-    pub fn try_completion_string(
-        &self,
-        prefix: &LispString,
-        table: &CompletionTable,
-    ) -> Option<LispString> {
-        let matches = self.all_completions(prefix, table);
-        compute_common_prefix(&matches)
-    }
-
-    /// Test whether `string` is an exact match in `table`.
-    pub fn test_completion(&self, string: &LispString, table: &CompletionTable) -> bool {
-        let candidates = table.candidates(string);
-        candidates.iter().any(|candidate| candidate == string)
-    }
-
-    /// Exit the current minibuffer, returning its content (or the default if empty).
-    pub fn exit_minibuffer(&mut self) -> Option<LispString> {
-        if let Some(mut state) = self.state_stack.pop() {
-            state.active = false;
-            let result = if state.content.is_empty() {
-                state
-                    .default_value
-                    .clone()
-                    .unwrap_or_else(|| LispString::from_utf8(""))
-            } else {
-                state.content.clone()
-            };
-            Some(result)
-        } else {
-            None
-        }
-    }
-
-    /// Abort the current minibuffer (like C-g).
-    pub fn abort_minibuffer(&mut self) {
-        if let Some(mut state) = self.state_stack.pop() {
-            state.active = false;
-        }
-    }
-
-    /// Navigate to the previous (older) history entry.
-    pub fn history_previous(&mut self) -> Option<LispString> {
-        let state = self.state_stack.last_mut()?;
-        let history = &state.history;
-        if history.is_empty() {
-            return None;
-        }
-        let new_pos = match state.history_position {
-            None => 0,
-            Some(p) => {
-                if p + 1 < history.len() {
-                    p + 1
-                } else {
-                    return None; // already at oldest
-                }
-            }
-        };
-        state.history_position = Some(new_pos);
-        let entry = history[new_pos].clone();
-        state.content = entry.clone();
-        state.cursor_pos = state.content.byte_len();
-        Some(entry)
-    }
-
-    /// Navigate to the next (newer) history entry.
-    pub fn history_next(&mut self) -> Option<LispString> {
-        let state = self.state_stack.last_mut()?;
-        match state.history_position {
-            None => None,
-            Some(0) => {
-                // Back to the original input.
-                state.history_position = None;
-                state.content = state.initial_input.clone();
-                state.cursor_pos = state.content.byte_len();
-                Some(state.content.clone())
-            }
-            Some(p) => {
-                let new_pos = p - 1;
-                state.history_position = Some(new_pos);
-                state.content = state.history[new_pos].clone();
-                state.cursor_pos = state.content.byte_len();
-                Some(state.content.clone())
-            }
-        }
-    }
-
-    /// Add a value to a named history list.
-    ///
-    /// `max_length` controls how many entries to keep.  Callers should read
-    /// the `history-length` symbol from the obarray (default 100).
-    pub fn add_to_history(&mut self, name: SymId, value: &str, max_length: usize) {
-        self.add_to_history_lisp(name, LispString::from_utf8(value), max_length);
-    }
-
-    pub fn add_to_history_lisp(&mut self, name: SymId, value: LispString, max_length: usize) {
-        self.history.add(name, value, max_length);
-    }
-
-    /// Read the effective `history-length` from the obarray, defaulting to 100.
-    pub fn history_length_from_obarray(vars: VariableView<'_>) -> usize {
-        match vars.value_by_name("history-length") {
-            Some(v) if v.is_fixnum() && v.xfixnum() > 0 => v.xfixnum() as usize,
-            _ => 100,
-        }
-    }
-
-    /// Reference to the current (innermost) minibuffer state, if any.
-    pub fn current(&self) -> Option<&MinibufferState> {
-        self.state_stack.last()
-    }
-
-    /// Mutable reference to the current (innermost) minibuffer state.
-    pub fn current_mut(&mut self) -> Option<&mut MinibufferState> {
-        self.state_stack.last_mut()
-    }
-
-    /// Current recursive minibuffer depth (0 = not in minibuffer).
-    pub fn depth(&self) -> usize {
-        self.state_stack.len()
-    }
-
-    /// Whether any minibuffer is currently active.
-    pub fn is_active(&self) -> bool {
-        self.state_stack.last().is_some_and(|s| s.active)
-    }
-
-    pub fn has_buffer(&self, buffer_id: BufferId) -> bool {
-        self.state_stack
-            .iter()
-            .any(|state| state.buffer_id == buffer_id)
-    }
-
-    /// Set the completion style.
-    pub fn set_completion_style(&mut self, style: CompletionStyle) {
-        self.completion_style = style;
-    }
-}
-
-impl Default for MinibufferManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Completion matching functions
-// ---------------------------------------------------------------------------
-
-/// Case-insensitive prefix matching.
-fn prefix_match(input: &LispString, candidates: &[LispString]) -> Vec<LispString> {
-    candidates
-        .iter()
-        .filter(|candidate| lisp_string_matches_prefix(input, candidate, true))
-        .cloned()
-        .collect()
-}
-
-/// Substring matching (case-insensitive).
-fn substring_match(input: &LispString, candidates: &[LispString]) -> Vec<LispString> {
-    candidates
-        .iter()
-        .filter(|candidate| lisp_string_matches_substring(input, candidate, true))
-        .cloned()
-        .collect()
-}
-
-/// Flex (fuzzy) matching: the input characters must appear in order within the candidate.
-fn flex_match(input: &LispString, candidates: &[LispString]) -> Vec<LispString> {
-    candidates
-        .iter()
-        .filter(|candidate| is_flex_match(input, candidate))
-        .cloned()
-        .collect()
-}
-
-/// Check if all characters in `input` appear in order in `candidate` (case-insensitive).
-fn is_flex_match(input: &LispString, candidate: &LispString) -> bool {
-    let input_codes = completion_char_codes(input);
-    let candidate_codes = completion_char_codes(candidate);
-    let mut cursor = 0usize;
-    for code in input_codes {
-        let folded = completion_fold_char(code, true);
-        while cursor < candidate_codes.len()
-            && completion_fold_char(candidate_codes[cursor], true) != folded
-        {
-            cursor += 1;
-        }
-        if cursor == candidate_codes.len() {
-            return false;
-        }
-        cursor += 1;
-    }
-    true
-}
-
-/// Exact (case-sensitive) prefix matching.
-fn basic_match(input: &LispString, candidates: &[LispString]) -> Vec<LispString> {
-    candidates
-        .iter()
-        .filter(|candidate| lisp_string_matches_prefix(input, candidate, false))
-        .cloned()
-        .collect()
-}
-
-fn lisp_string_prefix_chars(string: &LispString, chars: usize) -> LispString {
-    let end_byte = if string.is_multibyte() {
-        crate::emacs_core::emacs_char::char_to_byte_pos(string.as_bytes(), chars)
-    } else {
-        chars.min(string.byte_len())
-    };
-    string
-        .slice(0, end_byte)
-        .unwrap_or_else(|| LispString::from_utf8(""))
-}
-
-fn lisp_string_matches_prefix(
-    input: &LispString,
-    candidate: &LispString,
-    ignore_case: bool,
-) -> bool {
-    let input_codes = completion_char_codes(input);
-    let candidate_codes = completion_char_codes(candidate);
-    if input_codes.len() > candidate_codes.len() {
-        return false;
-    }
-    input_codes
-        .iter()
-        .zip(candidate_codes.iter())
-        .all(|(left, right)| {
-            completion_fold_char(*left, ignore_case) == completion_fold_char(*right, ignore_case)
-        })
-}
-
-fn lisp_string_matches_substring(
-    input: &LispString,
-    candidate: &LispString,
-    ignore_case: bool,
-) -> bool {
-    let needle = completion_char_codes(input);
-    let haystack = completion_char_codes(candidate);
-    if needle.is_empty() {
-        return true;
-    }
-    if needle.len() > haystack.len() {
-        return false;
-    }
-    haystack.windows(needle.len()).any(|window| {
-        window.iter().zip(needle.iter()).all(|(left, right)| {
-            completion_fold_char(*left, ignore_case) == completion_fold_char(*right, ignore_case)
-        })
-    })
-}
-
-/// Compute the longest common prefix of a set of strings.
-/// Returns `None` if the set is empty.
-fn compute_common_prefix(strings: &[LispString]) -> Option<LispString> {
-    if strings.is_empty() {
-        return None;
-    }
-    let first = &strings[0];
-    let mut prefix = completion_char_codes(first);
-    for string in &strings[1..] {
-        let other = completion_char_codes(string);
-        let max = prefix.len().min(other.len());
-        let mut common = 0;
-        while common < max && prefix[common] == other[common] {
-            common += 1;
-        }
-        prefix.truncate(common);
-        if prefix.is_empty() {
-            return Some(LispString::from_utf8(""));
-        }
-    }
-    Some(lisp_string_prefix_chars(first, prefix.len()))
-}
 
 // ---------------------------------------------------------------------------
 // Builtin functions for Elisp
@@ -1131,7 +359,7 @@ fn compute_common_prefix(strings: &[LispString]) -> Option<LispString> {
 /// In interactive mode, delegates to completing-read with buffer name candidates.
 pub(crate) fn builtin_read_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     execute_read_buffer_plan(eval, &args, |eval, completing_args| {
-        super::reader::builtin_completing_read(eval, completing_args.to_vec())
+        builtin_completing_read(eval, completing_args.to_vec())
     })
 }
 
@@ -1185,7 +413,7 @@ fn execute_read_buffer_plan(
     builtin_read_buffer_in_runtime(eval, args)?;
 
     // GNU binds this around both the override and completion paths.
-    let specpdl_count = eval.specpdl.len();
+    let specpdl_count = eval.specpdl().len();
     let ignore_case = eval.visible_variable_value_or_nil("read-buffer-completion-ignore-case");
     eval.try_specbind_or_unwind_to(
         specpdl_count,
@@ -1208,7 +436,7 @@ pub(crate) fn finish_read_buffer_in_vm_runtime(
     args: &[Value],
 ) -> EvalResult {
     execute_read_buffer_plan(eval, args, |eval, completing_args| {
-        super::reader::finish_completing_read_in_vm_runtime(eval, completing_args)
+        finish_completing_read_in_vm_runtime(eval, completing_args)
     })
 }
 
@@ -1272,7 +500,7 @@ pub(crate) fn finish_read_command_in_eval(
     args: &[Value],
 ) -> EvalResult {
     finish_read_command_with_minibuffer(args, |minibuffer_args| {
-        super::reader::builtin_read_from_minibuffer(eval, minibuffer_args.to_vec())
+        builtin_read_from_minibuffer(eval, minibuffer_args.to_vec())
     })
 }
 
@@ -1349,7 +577,7 @@ pub(crate) fn finish_read_variable_in_eval(
     args: &[Value],
 ) -> EvalResult {
     finish_read_variable_with_minibuffer(args, |minibuffer_args| {
-        super::reader::builtin_read_from_minibuffer(eval, minibuffer_args.to_vec())
+        builtin_read_from_minibuffer(eval, minibuffer_args.to_vec())
     })
 }
 
@@ -1382,7 +610,7 @@ pub(crate) fn builtin_minibuffer_prompt_ctx(
 ) -> EvalResult {
     expect_args("minibuffer-prompt", &args, 0)?;
     Ok(eval
-        .minibuffers
+        .minibuffers()
         .current()
         .map(|state| Value::heap_string(state.prompt.clone()))
         .unwrap_or(Value::NIL))
@@ -1395,7 +623,7 @@ pub(crate) fn builtin_minibuffer_prompt_end_ctx(
     expect_args("minibuffer-prompt-end", &args, 0)?;
 
     Ok(Value::fixnum(
-        minibuffer_prompt_end_in_state(eval.variables(), &eval.buffers, &eval.minibuffers)?
+        minibuffer_prompt_end_in_state(eval.variables(), &eval.edit.buffers, &eval.minibuffers())?
             .as_i64(),
     ))
 }
@@ -1407,7 +635,7 @@ fn minibuffer_prompt_end_in_state(
 ) -> Result<LispCharPos1, Flow> {
     let Some((current_id, point_min, point_max)) = buffers.current_buffer().map(|buffer| {
         (
-            buffer.id,
+            buffer.id(),
             buffer.point_min_lisp_char_pos().as_i64(),
             buffer.point_max_lisp_char_pos().as_i64(),
         )
@@ -1490,7 +718,7 @@ pub(crate) fn builtin_minibuffer_depth_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("minibuffer-depth", &args, 0)?;
-    Ok(Value::fixnum(eval.minibuffers.depth() as i64))
+    Ok(Value::fixnum(eval.minibuffers().depth() as i64))
 }
 
 /// `(minibufferp &optional BUFFER)` — returns t if BUFFER is a minibuffer.
@@ -1509,15 +737,15 @@ pub(crate) fn builtin_minibufferp_ctx(
 ) -> EvalResult {
     validate_minibufferp_args(&args)?;
     let live_only = args.get(1).is_some_and(|v| v.is_truthy());
-    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.buffers, args.first())? else {
+    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.edit.buffers, args.first())? else {
         return Ok(Value::NIL);
     };
-    let is_live = eval.minibuffers.has_buffer(buffer_id);
-    let is_minibuffer = is_live
-        || eval
-            .buffers
-            .get(buffer_id)
-            .is_some_and(|buffer| is_minibuffer_buffer_name(&buffer.name_runtime_string_owned()));
+    let is_live = eval.minibuffers().has_buffer(buffer_id);
+    let is_minibuffer =
+        is_live
+            || eval.edit.buffers.get(buffer_id).is_some_and(|buffer| {
+                is_minibuffer_buffer_name(&buffer.name_runtime_string_owned())
+            });
     Ok(Value::bool_val(if live_only {
         is_live
     } else {
@@ -1530,12 +758,12 @@ pub(crate) fn builtin_minibuffer_innermost_command_loop_p_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("minibuffer-innermost-command-loop-p", &args, 0, 1)?;
-    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.buffers, args.first())? else {
+    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.edit.buffers, args.first())? else {
         return Ok(Value::NIL);
     };
     let recursive_depth = eval.recursive_command_loop_depth();
     let command_loop_depth = eval
-        .minibuffers
+        .minibuffers()
         .state_stack
         .iter()
         .find(|state| state.buffer_id == buffer_id)
@@ -1550,11 +778,11 @@ pub(crate) fn builtin_innermost_minibuffer_p_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("innermost-minibuffer-p", &args, 0, 1)?;
-    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.buffers, args.first())? else {
+    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.edit.buffers, args.first())? else {
         return Ok(Value::NIL);
     };
     Ok(Value::bool_val(
-        eval.minibuffers
+        eval.minibuffers()
             .current()
             .is_some_and(|state| state.buffer_id == buffer_id),
     ))
@@ -1618,7 +846,7 @@ enum RecursiveEditBuffer {
 
 impl RecursiveEditBuffer {
     fn record(eval: &mut super::eval::Context) -> Self {
-        let Some(current) = eval.buffers.current_buffer_id() else {
+        let Some(current) = eval.edit.buffers.current_buffer_id() else {
             return Self::SelectedWindows;
         };
         let window_buffer = super::window_cmds::builtin_window_buffer(eval, &[])
@@ -1633,9 +861,9 @@ impl RecursiveEditBuffer {
 
     fn unwind(self, eval: &mut super::eval::Context) {
         if let Self::Restore(buffer_id) = self
-            && eval.buffers.get(buffer_id).is_some()
+            && eval.edit.buffers.get(buffer_id).is_some()
         {
-            let _ = eval.buffers.switch_current(buffer_id);
+            let _ = eval.edit.buffers.switch_current(buffer_id);
         }
     }
 }
@@ -1663,7 +891,7 @@ pub(crate) fn builtin_exit_recursive_edit(
 ) -> EvalResult {
     expect_args("exit-recursive-edit", &args, 0)?;
     // GNU Emacs checks: command_loop_level > 0 || minibuf_level > 0
-    if eval.recursive_command_loop_depth() == 0 && eval.minibuffers.depth() == 0 {
+    if eval.recursive_command_loop_depth() == 0 && eval.minibuffers().depth() == 0 {
         return Err(signal(
             LispCondition::UserError,
             vec![Value::string("No recursive edit is in progress")],
@@ -1706,10 +934,10 @@ pub(crate) fn builtin_abort_minibuffers(args: Vec<Value>) -> EvalResult {
 /// GNU minibuf.c `this_minibuffer_depth`: the 1-based minibuffer level of the
 /// current buffer, or 0 when it is not one of the active minibuffers.
 fn this_minibuffer_depth(eval: &super::eval::Context) -> usize {
-    let Some(buffer_id) = eval.buffers.current_buffer_id() else {
+    let Some(buffer_id) = eval.edit.buffers.current_buffer_id() else {
         return 0;
     };
-    eval.minibuffers
+    eval.minibuffers()
         .state_stack
         .iter()
         .position(|state| state.buffer_id == buffer_id)
@@ -1738,7 +966,7 @@ pub(crate) fn builtin_abort_minibuffers_ctx(
         ));
     }
 
-    let minibuf_level = eval.minibuffers.depth();
+    let minibuf_level = eval.minibuffers().depth();
     let quit_recursive_edit = Value::symbol("minibuffer-quit-recursive-edit");
     if minibuf_depth < minibuf_level {
         // Aborting this minibuffer also aborts every one nested inside it, so
@@ -1765,7 +993,7 @@ pub(crate) fn minibuffer_contents_lisp_string_in_state(
 ) -> Result<LispString, Flow> {
     let Some((point_max, current_id)) = buffers
         .current_buffer()
-        .map(|buffer| (buffer.accessible_emacs_byte_region().end(), buffer.id))
+        .map(|buffer| (buffer.accessible_emacs_byte_region().end(), buffer.id()))
     else {
         return Ok(LispString::from_utf8(""));
     };
@@ -1788,8 +1016,8 @@ fn minibuffer_contents_lisp_string(
 ) -> Result<LispString, Flow> {
     minibuffer_contents_lisp_string_in_state(
         eval.variables(),
-        &eval.buffers,
-        &eval.minibuffers,
+        &eval.edit.buffers,
+        &eval.minibuffers(),
         preserve_properties,
     )
 }
@@ -1828,7 +1056,7 @@ pub(crate) fn builtin_abort_recursive_edit(
 ) -> EvalResult {
     expect_args("abort-recursive-edit", &args, 0)?;
     // GNU Emacs checks: command_loop_level > 0 || minibuf_level > 0
-    if eval.recursive_command_loop_depth() == 0 && eval.minibuffers.depth() == 0 {
+    if eval.recursive_command_loop_depth() == 0 && eval.minibuffers().depth() == 0 {
         return Err(signal(
             LispCondition::UserError,
             vec![Value::string("No recursive edit is in progress")],
@@ -2021,10 +1249,6 @@ fn completion_candidates_from_list_value(collection: &Value) -> Vec<CompletionCa
         .collect()
 }
 
-fn completion_char_codes(string: &crate::heap_types::LispString) -> Vec<u32> {
-    super::builtins::lisp_string_char_codes(string)
-}
-
 /// The prefix state shared by GNU's three scanning completion primitives.
 ///
 /// Empty input is not merely a zero-length character buffer: for prefix
@@ -2069,31 +1293,6 @@ impl CompletionPrefix {
 /// lisp_string_char_codes but without materializing a Vec. Prefix matching
 /// over large candidate sets (a whole obarray) usually rejects on the first
 /// character; allocating the full decode per candidate dominated bootstrap.
-fn lisp_string_chars(
-    string: &crate::heap_types::LispString,
-) -> impl Iterator<Item = u32> + use<'_> {
-    let bytes = string.as_bytes();
-    let multibyte = string.is_multibyte();
-    let mut pos = 0usize;
-    // GNU minibuf.c:1719-1723 compares a declared character prefix. A
-    // shorthand name can have SCHARS independent of payload decoding.
-    (0..string.schars()).map(move |index| {
-        if !multibyte {
-            return u32::from(bytes[index]);
-        }
-        let tail = bytes.get(pos..).unwrap_or_default();
-        let (code, width) = crate::heap_types::decode_declared_multibyte_char(tail);
-        pos += width;
-        code.code()
-    })
-}
-
-fn completion_fold_char(code: u32, ignore_case: bool) -> u32 {
-    if !ignore_case {
-        return code;
-    }
-    crate::emacs_core::builtins::downcase_char_code_emacs_compat(code as i64) as u32
-}
 
 fn completion_text_matches_nonempty_prefix(
     prefix_codes: &[u32],
@@ -2278,7 +1477,7 @@ pub(crate) fn completion_candidates_from_collection_in_state(
     ctx: &crate::emacs_core::eval::Context,
     collection: &Value,
 ) -> Result<Option<Vec<CompletionCandidate>>, Flow> {
-    let obarray = &ctx.obarray;
+    let obarray = &ctx.obarray();
     let vars = ctx.variables();
     Ok(match collection.kind() {
         ValueKind::Nil | ValueKind::Cons => Some(completion_candidates_from_list_value(collection)),
@@ -2422,7 +1621,7 @@ pub(crate) fn builtin_try_completion_with_candidates(
             && !matches_completion_regexps(
                 syntax,
                 eval.variables(),
-                &eval.buffers,
+                &eval.edit.buffers,
                 &candidate.completion,
                 regexps,
                 ignore_case,
@@ -2576,7 +1775,7 @@ pub(crate) fn builtin_all_completions_with_candidates(
             && !matches_completion_regexps(
                 syntax,
                 eval.variables(),
-                &eval.buffers,
+                &eval.edit.buffers,
                 &candidate.completion,
                 regexps,
                 ignore_case,
@@ -2634,7 +1833,7 @@ pub(crate) fn builtin_test_completion_with_candidates(
             && !matches_completion_regexps(
                 syntax,
                 eval.variables(),
-                &eval.buffers,
+                &eval.edit.buffers,
                 &candidate.completion,
                 regexps,
                 ignore_case,
@@ -2958,8 +2157,8 @@ pub(crate) fn builtin_try_completion(
     args: Vec<Value>,
 ) -> EvalResult {
     let candidates = completion_candidates_from_collection(eval, &args[1])?;
-    let ignore_case = completion_ignore_case(eval.variables(), &eval.buffers);
-    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.buffers);
+    let ignore_case = completion_ignore_case(eval.variables(), &eval.edit.buffers);
+    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers);
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     // Root the candidate set across the predicate calls (see the holder doc).
     let root_scope = eval.save_specpdl_roots();
@@ -2983,8 +2182,8 @@ pub(crate) fn builtin_all_completions(
     args: Vec<Value>,
 ) -> EvalResult {
     let candidates = completion_candidates_from_collection(eval, &args[1])?;
-    let ignore_case = completion_ignore_case(eval.variables(), &eval.buffers);
-    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.buffers);
+    let ignore_case = completion_ignore_case(eval.variables(), &eval.edit.buffers);
+    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers);
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     // Root the candidate set across the predicate calls (see the holder doc).
     let root_scope = eval.save_specpdl_roots();
@@ -3017,7 +2216,7 @@ pub(crate) fn builtin_test_completion(
     if args.len() >= 2
         && let Ok(string) = expect_lisp_string(&args[0])
     {
-        let ignore_case = completion_ignore_case(eval.variables(), &eval.buffers);
+        let ignore_case = completion_ignore_case(eval.variables(), &eval.edit.buffers);
         let probe =
             match direct_hash_completion_candidate(args[1], &string, eval.symbols_with_pos_enabled)
             {
@@ -3026,7 +2225,7 @@ pub(crate) fn builtin_test_completion(
             };
         match probe {
             ObarrayProbe::Found(candidate) => {
-                let regexps = completion_regexp_lisp_list(eval.variables(), &eval.buffers);
+                let regexps = completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers);
                 let syntax =
                     super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
                 return builtin_test_completion_with_candidates(
@@ -3045,8 +2244,8 @@ pub(crate) fn builtin_test_completion(
         }
     }
     let candidates = completion_candidates_from_collection(eval, &args[1])?;
-    let ignore_case = completion_ignore_case(eval.variables(), &eval.buffers);
-    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.buffers);
+    let ignore_case = completion_ignore_case(eval.variables(), &eval.edit.buffers);
+    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers);
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     // Root the candidate set across the predicate calls (see the holder doc).
     let root_scope = eval.save_specpdl_roots();
@@ -3117,7 +2316,7 @@ pub(crate) fn builtin_flex_cost_gotoh(
         return Ok(Value::NIL);
     }
 
-    let ignore_case = completion_ignore_case(eval.variables(), &eval.buffers);
+    let ignore_case = completion_ignore_case(eval.variables(), &eval.edit.buffers);
 
     // Cheap subsequence pre-filter for the common case-sensitive case: if PAT
     // is not a subsequence of STR there can be no match, so bail before the

@@ -62,6 +62,20 @@ named after the platform and number they came from: `mac-36`, `win-93`,
 `Key::Unidentified(NativeKey::Xkb(keysym))`, and that keysym is already the
 identity this port uses.
 
+Windows needs the same correction at the toolkit boundary. Ctrl+Alt is AltGr
+only when `w32-recognize-altgr` is non-nil and left Ctrl plus right Alt select
+the layout's AltGr level (`src/w32fns.c:4876-4883`); every other Ctrl/Alt
+chord is two command modifiers, and `ToUnicode` returns no character for such
+a chord. The winit fork's `patch` branch builds the logical key from the
+layout's value with only Shift and CapsLock applied, which is what GNU's w32
+backend uses for a non-letter chord (`src/w32fns.c:4900-4915`); a composition
+the layout does have still wins when the chord really is AltGr.
+`Ctrl+Alt+n` therefore reaches Emacs as `C-M-n`, and `Ctrl+Alt+Shift+3` as
+`#`, which cooks to GNU's `C-M-#`. GNU's letter path deliberately uses the
+ASCII virtual key (`:4889-4898`), so a layout that maps a letter key to a
+non-ASCII character still differs there. The reserved band remains the last
+resort for a key the layout cannot name. See issue #756.
+
 ## Spelling: GNU's tables first, then the toolkit, verbatim
 
 The names are the ones GNU configs already write, and they come from the same

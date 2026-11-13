@@ -7,6 +7,7 @@ is only needed for development or unsupported platforms.
 ## Prerequisites
 
 - **Rust** (stable, pinned via `rust-toolchain.toml` — rustup installs it automatically)
+- **Texinfo** (`makeinfo` and `install-info`, needed to build the shipped manuals)
 - **GStreamer** (optional, for video playback)
 - **WPE WebKit** (optional, for the inline browser on Linux)
 - **WebKit.framework** (macOS: the inline browser uses the system
@@ -34,6 +35,18 @@ cargo xtask fresh-build --release --low-memory
 # Run
 ./target/release/neomacs
 ```
+
+The fresh build also generates all 66 Info manuals and their directory index
+under `info/`, using the built Neomacs to export the Org manuals. To regenerate
+just the manuals with an existing binary, run:
+
+```bash
+cargo xtask build-info --binary target/release/neomacs
+```
+
+Release packaging requires the complete generated manual set, including when
+using `--skip-build`. `MAKEINFO` and `INSTALL_INFO` can select alternate host
+tool paths.
 
 ## Testing
 
@@ -128,7 +141,7 @@ package manager.
 ```bash
 # Install dependencies
 sudo dnf install -y \
-  gcc gcc-c++ make binutils pkgconf-pkg-config gawk \
+  gcc gcc-c++ make binutils pkgconf-pkg-config gawk texinfo info \
   ncurses-devel fontconfig-devel freetype-devel glib2-devel \
   gstreamer1-devel gstreamer1-plugins-base-devel libdrm-devel \
   zlib-devel lcms2-devel
@@ -229,11 +242,14 @@ uploading a locally assembled app bundle.
 
 ```bash
 # Install dependencies (Homebrew)
-brew install pkgconf \
+brew install pkgconf texinfo \
   glib cairo \
   gstreamer gst-plugins-base gst-plugins-good \
   jpeg-turbo libtiff giflib libpng librsvg webp \
   gnutls libxml2 jansson tree-sitter gmp
+
+# Texinfo is keg-only; use its makeinfo and install-info.
+export PATH="$(brew --prefix texinfo)/bin:$PATH"
 
 # gmp-mpfr-sys is built with system GMP support. Its build script probes
 # GMP with the C compiler directly, so Homebrew's keg must be visible to
@@ -279,6 +295,26 @@ extra-trusted-public-keys = nix-wpe-webkit.cachix.org-1:ItCjHkz1Y5QcwqI9cTGNWHzc
 ```
 
 ### Build with Nix
+
+The [main-cache workflow](../.github/workflows/cachix-main.yml) is scheduled to
+start daily at 04:41 UTC and publishes the full `neomacs` runtime package to
+`eval-exec.cachix.org` after successful builds. Maintainers can also run it
+manually on `main`. It builds one fixed commit on
+`x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`. Each successful native
+publish job records its commit and store path in the run summary.
+
+For a prebuilt snapshot, use the full commit from a successful publish job for
+your platform:
+
+```bash
+nix profile install --accept-flake-config \
+  'github:eval-exec/neomacs/<published-commit>#neomacs'
+```
+
+The latest `main` commit may be newer than the daily build, and unpinned cache
+entries can expire. Nix builds from source when a required path is unavailable.
+Release-tag publication remains separate. This publisher uploads runtime
+closures, not development shells, checks, or every intermediate build path.
 
 **Option 1** — Trust the `nixConfig` in `flake.nix` (simplest):
 

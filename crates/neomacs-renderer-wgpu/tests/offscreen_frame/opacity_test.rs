@@ -4,6 +4,7 @@
 fn pane_previous_patches_interpolate_complete_colored_pictures() {
     use neomacs_renderer_wgpu::{PaneBlit, PaneSource};
     let mut h = try_harness().expect("GPU required for pane opacity regression");
+    probe_adapter_conversion(&mut h);
     let mut old_frame = picture();
     old_frame.background = Color::GREEN;
     let mut new_frame = old_frame.clone();
@@ -29,11 +30,35 @@ fn pane_previous_patches_interpolate_complete_colored_pictures() {
         );
         let pixels = read_back(&h);
         let bg = px(&pixels, 70, 45);
-        eprintln!("pane Previous {weight}: {bg:?}");
-        assert!((127..=129).contains(&bg[3]), "pane weight {weight}: {bg:?}");
-        let color = Color::new(0.0, 0.5 * weight, 0.5 * (1.0 - weight), 0.5).linear_to_srgb();
-        assert!(bg[1].abs_diff((color.g * 255.0).round() as u8) <= 2);
-        assert!(bg[2].abs_diff((color.b * 255.0).round() as u8) <= 2);
+        // Expected final linear background at this weight: the two
+        // 0.5-alpha pictures (GREEN and BLUE) mixed by the Previous weight.
+        // Render that independently computed linear colour through the SAME
+        // pane call on reference snapshots; the reference and the actual
+        // pixel both pass through the adapter's permitted sRGB conversion
+        // rounding, so the comparison is byte-exact without a tolerance.
+        let expected = Color::new(0.0, weight, 1.0 - weight, 1.0);
+        let reference =
+            reference_effect_pixels(&mut h, expected, 0.5, |renderer, old_ref, new_ref, view| {
+                renderer.render_pane_layout(
+                    new_ref,
+                    Some(old_ref),
+                    view,
+                    (W as f32, H as f32),
+                    &[PaneBlit {
+                        bounds: neomacs_display_protocol::types::Rect::new(8.0, 8.0, 80.0, 48.0),
+                        content_origin: (8.0, 8.0),
+                        source: PaneSource::Previous,
+                        opacity: weight,
+                    }],
+                );
+            });
+        let reference_bg = px(&reference, 70, 45);
+        eprintln!("pane Previous {weight}: actual {bg:?} reference {reference_bg:?}");
+        assert_eq!(
+            bg, reference_bg,
+            "pane background must equal the expected linear colour through the \
+             same pane pipeline at weight {weight}"
+        );
         assert!(
             opaque_text(&pixels) > 0,
             "pane foreground remains opaque at {weight}"
@@ -53,6 +78,7 @@ fn dispatched_scale_zoom_preserves_overlap_opacity_and_outside_pixels() {
         DirectionlessTransitionEffect, ResolvedTransitionEffect, TransitionEasing,
     };
     let mut h = try_harness().expect("GPU required for ScaleZoom regression");
+    probe_adapter_conversion(&mut h);
     let size = SnapshotSize::new(W, H).unwrap();
     let old = h.renderer.acquire_snapshot(size).unwrap();
     let new = h.renderer.acquire_snapshot(size).unwrap();
@@ -93,21 +119,76 @@ fn dispatched_scale_zoom_preserves_overlap_opacity_and_outside_pixels() {
             );
             let pixels = read_back(&h);
             let bg = px(&pixels, 70, 45);
-            eprintln!("ScaleZoom {alpha}/{progress}: {bg:?}");
-            assert!(
-                bg[3].abs_diff((255.0_f32 * alpha).round() as u8) <= 1,
-                "ScaleZoom overlap background {alpha}/{progress}: {bg:?}"
+            // The expected linear colour is the frame background at its
+            // recorded alpha.  Render it through the SAME ScaleZoom call on
+            // reference snapshots; both sides then share the adapter's
+            // permitted sRGB conversion rounding.
+            let reference = reference_effect_pixels(
+                &mut h,
+                frame.background,
+                frame.background_alpha,
+                |renderer, old_ref, new_ref, view| {
+                    renderer.render_transition_effect(
+                        view,
+                        old_ref,
+                        new_ref,
+                        progress,
+                        0.0,
+                        &bounds,
+                        ResolvedTransitionEffect::Directionless(
+                            DirectionlessTransitionEffect::ScaleZoom,
+                        ),
+                        TransitionEasing::Linear,
+                        W,
+                        H,
+                        frame.background,
+                        frame.background_alpha,
+                    );
+                },
+            );
+            let reference_bg = px(&reference, 70, 45);
+            eprintln!("ScaleZoom {alpha}/{progress}: actual {bg:?} reference {reference_bg:?}");
+            assert_eq!(
+                bg, reference_bg,
+                "ScaleZoom overlap background {alpha}/{progress} must equal the \
+                 expected linear colour through the same effect pipeline"
             );
             for x in [8, 9] {
-                assert!(
-                    px(&pixels, x, 32)[3].abs_diff((255.0_f32 * alpha).round() as u8) <= 1,
-                    "ScaleZoom geometric complement {alpha}/{progress}: {:?}",
-                    px(&pixels, x, 32)
+                let actual = px(&pixels, x, 32);
+                let expected = px(&reference, x, 32);
+                assert_eq!(
+                    actual, expected,
+                    "ScaleZoom geometric complement {alpha}/{progress} at x={x} \
+                     must equal the expected linear colour through the same \
+                     effect pipeline"
                 );
             }
-            assert!(
-                opaque_text(&pixels) > 0,
-                "ScaleZoom opaque foreground {alpha}/{progress}"
+            let text_reference = reference_effect_pixels_with_frame(
+                &mut h,
+                &text_reference_frame(&frame),
+                |renderer, old_ref, new_ref, view| {
+                    renderer.render_transition_effect(
+                        view,
+                        old_ref,
+                        new_ref,
+                        progress,
+                        0.0,
+                        &bounds,
+                        ResolvedTransitionEffect::Directionless(
+                            DirectionlessTransitionEffect::ScaleZoom,
+                        ),
+                        TransitionEasing::Linear,
+                        W,
+                        H,
+                        frame.background,
+                        frame.background_alpha,
+                    );
+                },
+            );
+            assert_opaque_text_matches_reference(
+                &pixels,
+                &text_reference,
+                &format!("ScaleZoom {alpha}/{progress}"),
             );
             assert_eq!(px(&pixels, 2, 2), px(&before, 2, 2));
             assert_eq!(px(&pixels, 94, 62), px(&before, 94, 62));
@@ -124,6 +205,7 @@ fn dispatched_parallax_adds_overlapping_faded_pictures() {
         TransitionEasing,
     };
     let mut h = try_harness().expect("GPU required for shared weighted transition regression");
+    probe_adapter_conversion(&mut h);
     let size = SnapshotSize::new(W, H).unwrap();
     let old = h.renderer.acquire_snapshot(size).unwrap();
     let new = h.renderer.acquire_snapshot(size).unwrap();
@@ -155,9 +237,38 @@ fn dispatched_parallax_adds_overlapping_faded_pictures() {
             frame.background_alpha,
         );
         let bg = px(&read_back(&h), 48, 48);
-        assert!(
-            bg[3].abs_diff((255.0_f32 * alpha).round() as u8) <= 1,
-            "parallax overlap {alpha}: {bg:?}"
+        let reference = reference_effect_pixels(
+            &mut h,
+            frame.background,
+            frame.background_alpha,
+            |renderer, old_ref, new_ref, view| {
+                renderer.render_transition_effect(
+                    view,
+                    old_ref,
+                    new_ref,
+                    0.5,
+                    0.0,
+                    &neomacs_display_protocol::types::Rect::new(8.0, 8.0, 80.0, 48.0),
+                    ResolvedTransitionEffect::AxisMotion {
+                        effect: AxisMotionTransitionEffect::Parallax,
+                        axis: TransitionAxis::Horizontal,
+                        direction: TransitionDirection::Forward,
+                        distance: 32.0,
+                    },
+                    TransitionEasing::Linear,
+                    W,
+                    H,
+                    frame.background,
+                    frame.background_alpha,
+                );
+            },
+        );
+        let reference_bg = px(&reference, 48, 48);
+        eprintln!("parallax {alpha}: actual {bg:?} reference {reference_bg:?}");
+        assert_eq!(
+            bg, reference_bg,
+            "parallax overlap {alpha} must equal the expected linear colour \
+             through the same effect pipeline"
         );
     }
 }
@@ -317,12 +428,106 @@ fn opaque_text(buf: &[u8]) -> usize {
         .count()
 }
 
+/// A reference frame with `frame`'s background and a fully opaque white
+/// region over the glyph area.  The foreground-opacity checks render this
+/// through the same effect as the real picture, so the adapter's permitted
+/// rounding of the blended white is shared by both sides instead of being
+/// frozen as a literal 255.
+fn text_reference_frame(frame: &FrameGlyphBuffer) -> FrameGlyphBuffer {
+    let mut reference = FrameGlyphBuffer::with_size(W as f32, H as f32);
+    reference.background = frame.background;
+    reference.background_alpha = frame.background_alpha;
+    reference.set_face(
+        FaceId::new(99),
+        Color::WHITE,
+        Some(Color::BLACK),
+        400,
+        false,
+        0,
+        None,
+        0,
+        None,
+        0,
+        None,
+    );
+    reference.faces.get_mut(&FaceId::new(99)).unwrap().stipple = Some(std::sync::Arc::new(
+        neomacs_display_protocol::StipplePattern {
+            width: 1,
+            height: 1,
+            bits: vec![1],
+        },
+    ));
+    reference.set_draw_context(DisplayWindowId::new(1), GlyphRowRole::Text, None);
+    // A stippled stretch paints the face foreground (white) over the whole
+    // box; the stretch colour is only the background beneath it.  This is
+    // the same opaque-white primitive the ScaleZoom test uses for its broad
+    // foreground interior.
+    reference.add_stretch(20.0, 16.0, 16.0, 24.0, Color::BLACK, FaceId::new(99), false);
+    reference
+}
+
+/// The brightest alpha in the glyph area.
+fn max_text_alpha(buf: &[u8]) -> u8 {
+    (16..40)
+        .flat_map(|y| (20..36).map(move |x| (x, y)))
+        .map(|(x, y)| px(buf, x, y)[3])
+        .max()
+        .unwrap_or(0)
+}
+
+/// Assert the frame's brightest pixel is as opaque as the same effect applied
+/// to an opaque white reference, and that it is still white.  Slides move the
+/// picture, so the reference's white block and the real glyph can both leave
+/// the glyph box; the whole frame is the region that still contains them.
+fn assert_opaque_white_matches_reference_anywhere(pixels: &[u8], reference: &[u8], label: &str) {
+    let actual = pixels.chunks_exact(4).map(|p| p[3]).max().unwrap_or(0);
+    let expected = reference.chunks_exact(4).map(|p| p[3]).max().unwrap_or(0);
+    assert!(
+        actual > 0 && actual == expected,
+        "{label}: the frame's brightest alpha must equal the opaque white \
+         reference through the same effect (actual {actual}, reference {expected})"
+    );
+    let brightest = pixels
+        .chunks_exact(4)
+        .max_by_key(|p| (p[3], p[..3].iter().map(|c| *c as u32).sum::<u32>()))
+        .unwrap();
+    assert!(
+        brightest[..3].iter().all(|c| *c > 245),
+        "{label}: the brightest frame pixel must stay white: {brightest:?}"
+    );
+}
+
+/// Assert the text area's brightest pixel is as opaque as the same effect
+/// applied to an opaque white reference, and that it is still white.
+fn assert_opaque_text_matches_reference(pixels: &[u8], reference: &[u8], label: &str) {
+    let actual = max_text_alpha(pixels);
+    let expected = max_text_alpha(reference);
+    assert!(
+        actual > 0 && actual == expected,
+        "{label}: the text area's brightest alpha must equal the opaque white \
+         reference through the same effect (actual {actual}, reference {expected})"
+    );
+    // Several pixels can share the maximum alpha (the interior and its
+    // antialiased edge); choose the whitest of them, not whichever happens
+    // to come last in scan order.
+    let brightest = (16..40)
+        .flat_map(|y| (20..36).map(move |x| (x, y)))
+        .map(|(x, y)| px(pixels, x, y))
+        .max_by_key(|p| (p[3], p[..3].iter().map(|c| *c as u32).sum::<u32>()))
+        .unwrap();
+    assert!(
+        brightest[..3].iter().all(|c| *c > 245),
+        "{label}: the brightest text pixel must stay white: {brightest:?}"
+    );
+}
+
 #[test]
 fn background_alpha_keeps_text_opaque_through_crossfade() {
     let Some(mut h) = try_harness() else {
         eprintln!("SKIP: no GPU adapter");
         return;
     };
+    probe_adapter_conversion(&mut h);
     let frame = picture();
     let size = SnapshotSize::new(W, H).unwrap();
     let old = h.renderer.acquire_snapshot(size).unwrap();
@@ -340,13 +545,49 @@ fn background_alpha_keeps_text_opaque_through_crossfade() {
             H,
         );
         let pixels = read_back(&h);
-        assert!(
-            (127..=129).contains(&px(&pixels, 80, 50)[3]),
-            "background opacity must not compound at mix {mix}"
+        let reference = reference_effect_pixels(
+            &mut h,
+            frame.background,
+            frame.background_alpha,
+            |renderer, old_ref, new_ref, view| {
+                renderer.render_crossfade(
+                    view,
+                    old_ref,
+                    new_ref,
+                    mix,
+                    &neomacs_display_protocol::types::Rect::new(0.0, 0.0, W as f32, H as f32),
+                    W,
+                    H,
+                );
+            },
         );
-        assert!(
-            opaque_text(&pixels) > 0,
-            "same foreground stays opaque at mix {mix}"
+        let actual = px(&pixels, 80, 50);
+        let expected = px(&reference, 80, 50);
+        eprintln!("crossfade mix {mix}: actual {actual:?} reference {expected:?}");
+        assert_eq!(
+            actual, expected,
+            "background opacity must not compound at mix {mix}: the pixel must \
+             equal the expected linear colour through the same crossfade"
+        );
+        let text_reference = reference_effect_pixels_with_frame(
+            &mut h,
+            &text_reference_frame(&frame),
+            |renderer, old_ref, new_ref, view| {
+                renderer.render_crossfade(
+                    view,
+                    old_ref,
+                    new_ref,
+                    mix,
+                    &neomacs_display_protocol::types::Rect::new(0.0, 0.0, W as f32, H as f32),
+                    W,
+                    H,
+                );
+            },
+        );
+        assert_opaque_text_matches_reference(
+            &pixels,
+            &text_reference,
+            &format!("crossfade mix {mix}"),
         );
     }
 }
@@ -449,6 +690,7 @@ fn dispatched_crossfade_and_slide_replace_the_previous_picture() {
         eprintln!("SKIP: no GPU adapter");
         return;
     };
+    probe_adapter_conversion(&mut h);
     let frame = picture();
     let size = SnapshotSize::new(W, H).unwrap();
     let old = h.renderer.acquire_snapshot(size).unwrap();
@@ -474,8 +716,64 @@ fn dispatched_crossfade_and_slide_replace_the_previous_picture() {
             frame.background_alpha,
         );
         let pixels = read_back(&h);
-        assert!((127..=129).contains(&px(&pixels, 80, 50)[3]));
-        assert!(opaque_text(&pixels) > 0, "dispatched crossfade at {mix}");
+        let reference = reference_effect_pixels(
+            &mut h,
+            frame.background,
+            frame.background_alpha,
+            |renderer, old_ref, new_ref, view| {
+                renderer.render_transition_effect(
+                    view,
+                    old_ref,
+                    new_ref,
+                    mix,
+                    0.0,
+                    &bounds,
+                    ResolvedTransitionEffect::Directionless(
+                        DirectionlessTransitionEffect::Crossfade,
+                    ),
+                    TransitionEasing::Linear,
+                    W,
+                    H,
+                    frame.background,
+                    frame.background_alpha,
+                );
+            },
+        );
+        let actual = px(&pixels, 80, 50);
+        let expected = px(&reference, 80, 50);
+        eprintln!("dispatched crossfade mix {mix}: actual {actual:?} reference {expected:?}");
+        assert_eq!(
+            actual, expected,
+            "dispatched crossfade at {mix} must equal the expected linear \
+             colour through the same effect pipeline"
+        );
+        let text_reference = reference_effect_pixels_with_frame(
+            &mut h,
+            &text_reference_frame(&frame),
+            |renderer, old_ref, new_ref, view| {
+                renderer.render_transition_effect(
+                    view,
+                    old_ref,
+                    new_ref,
+                    mix,
+                    0.0,
+                    &bounds,
+                    ResolvedTransitionEffect::Directionless(
+                        DirectionlessTransitionEffect::Crossfade,
+                    ),
+                    TransitionEasing::Linear,
+                    W,
+                    H,
+                    frame.background,
+                    frame.background_alpha,
+                );
+            },
+        );
+        assert_opaque_text_matches_reference(
+            &pixels,
+            &text_reference,
+            &format!("dispatched crossfade mix {mix}"),
+        );
     }
     for axis in [TransitionAxis::Horizontal, TransitionAxis::Vertical] {
         for direction in [TransitionDirection::Forward, TransitionDirection::Backward] {
@@ -500,14 +798,40 @@ fn dispatched_crossfade_and_slide_replace_the_previous_picture() {
                     H,
                 );
                 let pixels = read_back(&h);
-                assert!(
-                    (127..=129).contains(&px(&pixels, 80, 50)[3]),
-                    "slide {axis:?} {direction:?} {mix}"
+                let reference = reference_effect_pixels(
+                    &mut h,
+                    frame.background,
+                    frame.background_alpha,
+                    |renderer, old_ref, new_ref, view| {
+                        renderer.render_transition_slide(
+                            view, old_ref, new_ref, mix, axis, direction, &bounds, distance, W, H,
+                        );
+                    },
                 );
-                assert!(
-                    pixels
-                        .chunks_exact(4)
-                        .any(|p| p[0] > 245 && p[1] > 245 && p[2] > 245 && p[3] == 255)
+                let actual = px(&pixels, 80, 50);
+                let expected = px(&reference, 80, 50);
+                eprintln!(
+                    "slide {axis:?} {direction:?} {mix}: actual {actual:?} \
+                     reference {expected:?}"
+                );
+                assert_eq!(
+                    actual, expected,
+                    "slide {axis:?} {direction:?} {mix} must equal the expected \
+                     linear colour through the same effect pipeline"
+                );
+                let text_reference = reference_effect_pixels_with_frame(
+                    &mut h,
+                    &text_reference_frame(&frame),
+                    |renderer, old_ref, new_ref, view| {
+                        renderer.render_transition_slide(
+                            view, old_ref, new_ref, mix, axis, direction, &bounds, distance, W, H,
+                        );
+                    },
+                );
+                assert_opaque_white_matches_reference_anywhere(
+                    &pixels,
+                    &text_reference,
+                    &format!("slide {axis:?} {direction:?} {mix}"),
                 );
             }
         }
@@ -633,6 +957,7 @@ fn colored_uncovered_child_fill_matches_square_and_rounded() {
 fn child_char_and_stretch_stipple_is_foreground_at_zero_background() {
     use neomacs_display_protocol::StipplePattern;
     let mut h = try_harness().expect("GPU adapter required for stipple regression");
+    probe_adapter_conversion(&mut h);
     let mut parent = FrameGlyphBuffer::with_size(W as f32, H as f32);
     parent.background_alpha = 0.0;
     for stretch in [false, true] {
@@ -678,9 +1003,43 @@ fn child_char_and_stretch_stipple_is_foreground_at_zero_background() {
                         "{stretch}/{background_alpha}/{radius}/{alpha}: {p:?}"
                     );
                     assert!(p[3].abs_diff((255.0_f32 * alpha).round() as u8) <= 1);
+                    // The child background must apply its alpha and the
+                    // popup opacity exactly once.  The expected product is
+                    // computed here; render it through the SAME child-frame
+                    // call as a fully opaque child background with the
+                    // product as the popup opacity, so the adapter's
+                    // permitted sRGB conversion rounding is shared by the
+                    // actual and the reference.
+                    // The child background must apply its alpha and the
+                    // popup opacity exactly once.  Read the child frame's
+                    // stored background alpha on this adapter, multiply it by
+                    // the popup opacity in the test, and render that linear
+                    // alpha through the same frame pipeline.  The actual
+                    // popup pixel and the expected flat pixel then share the
+                    // adapter's permitted conversion rounding, including its
+                    // choice at a .5 tie.
+                    render(&mut h, &parent, &view);
+                    render(&mut h, &child, &view);
+                    let child_alpha = px(&read_back(&h), 10, 10)[3];
+                    let expected_alpha = (child_alpha as f32 / 255.0) * alpha;
+                    let mut expected_frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+                    expected_frame.background = Color::BLACK;
+                    expected_frame.background_alpha = expected_alpha;
+                    render(&mut h, &parent, &view);
+                    render(&mut h, &expected_frame, &view);
+                    let expected_pixels = read_back(&h);
+                    let actual_bg = px(&pixels, 10, 10);
+                    let expected_bg = px(&expected_pixels, 10, 10);
+                    eprintln!(
+                        "stipple bg {stretch}/{background_alpha}/{radius}/{alpha}: \
+                         child-alpha {child_alpha}, actual {actual_bg:?} \
+                         expected {expected_bg:?}"
+                    );
                     assert_eq!(
-                        px(&pixels, 10, 10)[3],
-                        (255.0 * background_alpha * alpha).round() as u8
+                        actual_bg, expected_bg,
+                        "{stretch}/{background_alpha}/{radius}/{alpha}: the \
+                         child background must equal the expected linear alpha \
+                         through the same frame pipeline"
                     );
                 }
             }

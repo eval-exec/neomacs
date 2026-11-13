@@ -141,7 +141,7 @@ fn source_request_from_window_params_resolves_the_scroll_policy() {
 
 #[test]
 fn source_request_defers_folded_row_visibility_to_the_display_walk() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -195,7 +195,7 @@ fn source_request_defers_folded_row_visibility_to_the_display_walk() {
 
 #[test]
 fn source_request_defers_replacing_display_spans_to_the_display_walk() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()

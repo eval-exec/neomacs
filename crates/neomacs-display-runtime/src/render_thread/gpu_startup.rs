@@ -1,6 +1,7 @@
 //! Driver discovery and device acquisition without worker-owned native surfaces.
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
+use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use std::{collections::VecDeque, sync::Arc};
 use winit::{
     event::WindowEvent,
@@ -213,20 +214,11 @@ impl PendingGpu {
                 let Self::Adapters { window, .. } = self else {
                     unreachable!()
                 };
-                let (instance, mut adapters) = result;
-                // The pinned desktop HALs do not use enumeration's surface
-                // hint. Preserve wgpu-core's stable preference ranking, then
-                // apply its same surface-capability filter on the main thread.
-                let preference = crate::gpu_power_preference();
-                adapters.sort_by_key(|adapter| {
-                    adapter_rank(adapter.get_info().device_type, preference)
-                });
+                let (instance, adapters) = result;
                 let surface = instance
                     .create_surface(window.clone())
                     .map_err(|error| error.to_string())?;
-                let adapter = adapters
-                    .into_iter()
-                    .find(|adapter| adapter.is_surface_supported(&surface))
+                let adapter = select_adapter(adapters, &surface, window.as_ref())
                     .ok_or_else(|| "no GPU adapter supports the native surface".to_owned())?;
                 let worker_adapter = adapter.clone();
                 let reply = spawn("gpu-device", proxy.clone(), move || {
@@ -282,6 +274,78 @@ impl PendingGpu {
             GpuPoll::Ready(prepared)
         }
     }
+}
+
+/// The adapter `request_adapter` would pick for `surface`, except that an
+/// adapter known to present nothing to this window gives way to the next one.
+/// The pinned desktop HALs do not use enumeration's surface hint, so this
+/// preserves wgpu-core's stable preference ranking, then applies its same
+/// surface-capability filter.
+pub(super) fn select_adapter(
+    mut adapters: Vec<wgpu::Adapter>,
+    surface: &wgpu::Surface<'_>,
+    window: &dyn Window,
+) -> Option<wgpu::Adapter> {
+    let preference = crate::gpu_power_preference();
+    adapters.sort_by_key(|adapter| adapter_rank(adapter.get_info().device_type, preference));
+    let mut supported = adapters
+        .into_iter()
+        .filter(|adapter| adapter.is_surface_supported(surface));
+    let first = supported.next()?;
+    let info = first.get_info();
+    if !is_x11(window) || !lavapipe_drops_x11_frames(&info) {
+        return Some(first);
+    }
+    let Some(other) = supported.find(|adapter| !lavapipe_drops_x11_frames(&adapter.get_info()))
+    else {
+        // An explicit WGPU_BACKEND=vulkan leaves nothing else to choose.
+        tracing::warn!(
+            "{} ({}) presents nothing to X11 windows before Mesa 24.0.2, and no other adapter supports the window",
+            info.name,
+            info.driver_info
+        );
+        return Some(first);
+    };
+    let other_info = other.get_info();
+    tracing::warn!(
+        "skipping {} ({}): it presents nothing to X11 windows before Mesa 24.0.2; using {} ({:?})",
+        info.name,
+        info.driver_info,
+        other_info.name,
+        other_info.backend
+    );
+    Some(other)
+}
+
+fn is_x11(window: &dyn Window) -> bool {
+    window.display_handle().is_ok_and(|handle| {
+        matches!(
+            handle.as_raw(),
+            RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_)
+        )
+    })
+}
+
+/// Mesa's lavapipe before 24.0.2 sends frames to an X11 server without DRI3
+/// through a core `PutImage` hardcoded to depth 24 (`x11_present_to_x11_sw` in
+/// `src/vulkan/wsi/wsi_common_x11.c`). Neomacs windows use a depth-32 visual
+/// with alpha, as GNU's `select_visual` picks, so the server rejects every
+/// frame with `BadMatch` and the window shows nothing.
+// ponytail: also skips lavapipe on X servers with DRI3, where Mesa's MIT-SHM
+// path works; query the DRI3 extension if software Vulkan there matters.
+fn lavapipe_drops_x11_frames(info: &wgpu::AdapterInfo) -> bool {
+    info.backend == wgpu::Backend::Vulkan
+        && info.driver == "llvmpipe"
+        && mesa_version(&info.driver_info).is_some_and(|version| version < (24, 0, 2))
+}
+
+/// `"Mesa 23.2.1-1ubuntu3.1~22.04.4 (LLVM 15.0.7)"` is `(23, 2, 1)`.
+fn mesa_version(driver_info: &str) -> Option<(u32, u32, u32)> {
+    let mut numbers = driver_info
+        .strip_prefix("Mesa ")?
+        .split(|c: char| !c.is_ascii_digit());
+    let mut next = || numbers.next()?.parse().ok();
+    Some((next()?, next()?, next()?))
 }
 
 fn adapter_rank(kind: wgpu::DeviceType, preference: wgpu::PowerPreference) -> u8 {

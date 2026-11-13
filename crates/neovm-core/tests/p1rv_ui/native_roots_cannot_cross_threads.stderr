@@ -4,7 +4,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 8 |     ThreadTransfer::<NativeRoots<'static>>::transfer(roots);
   |                                             ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<NativeRoots<'static>>` due to unsatisfied trait bounds
   |
- ::: src/tagged/gc/mutator_registration/native_extent.rs
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/native_extent.rs
   |
   | pub struct NativeRoots<'extent> {
   | ------------------------------- doesn't satisfy `NativeRoots<'static>: Send`

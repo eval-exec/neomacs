@@ -1,0 +1,36 @@
+warning: unexpected `cfg` condition value: `test-support`
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/../../world/sole_owner.rs
+  |
+  | #[cfg(not(any(test, feature = "test-support")))]
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `contract-fixtures`, `dbus-vendored`, `default`, `desktop-font-settings`, `display-stop-validate`, `fuzzing`, `gc-memory-telemetry`, `jit`, `perf-probes`, `redisplay-test-policy`, `sound`, `sqlite`, `vm-profile`, and `webview`
+  = help: consider adding `test-support` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition value: `test-support`
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/../../world/sole_owner.rs
+  |
+  | #[cfg(any(test, feature = "test-support"))]
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `contract-fixtures`, `dbus-vendored`, `default`, `desktop-font-settings`, `display-stop-validate`, `fuzzing`, `gc-memory-telemetry`, `jit`, `perf-probes`, `redisplay-test-policy`, `sound`, `sqlite`, `vm-profile`, and `webview`
+  = help: consider adding `test-support` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+error[E0382]: use of moved value: `registration`
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/reuse_consumed_registration.rs
+  |
+  |     let registration = construction.registration();
+  |         ------------ move occurs because `registration` has type `SoleOwnerRegistration`, which does not implement the `Copy` trait
+  |     let _vm = registration.into_vm();
+  |                            --------- `registration` moved due to this method call
+  |     let _duplicate = registration.into_vm();
+  |                      ^^^^^^^^^^^^ value used here after move
+  |
+note: `SoleOwnerRegistration::into_vm` takes ownership of the receiver `self`, which moves `registration`
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/../../world/sole_owner.rs
+  |
+  |     pub(crate) fn into_vm(self) -> SoleOwnerVm {
+  |                           ^^^^

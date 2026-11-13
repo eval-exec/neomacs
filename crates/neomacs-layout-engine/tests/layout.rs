@@ -7,6 +7,9 @@
 #[path = "child_frame_border.rs"]
 mod child_frame_border;
 
+#[path = "fallback_heap_scope.rs"]
+mod fallback_heap_scope;
+
 #[path = "direct_write.rs"]
 mod direct_write;
 

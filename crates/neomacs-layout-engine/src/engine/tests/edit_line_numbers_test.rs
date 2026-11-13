@@ -63,7 +63,7 @@ fn materialized_gutter(
 
 #[test]
 fn display_string_newlines_keep_buffer_numbers_and_current_line_face() {
-    let mut ctx = Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = ctx.buffer_manager().current_buffer().unwrap().id();
     let frame = ctx
         .frame_manager_mut()
@@ -116,7 +116,7 @@ fn display_string_newlines_keep_buffer_numbers_and_current_line_face() {
 #[test]
 fn display_replacements_count_hidden_buffer_lines_for_every_replacement_kind() {
     for replacement in [r#""[hidden] ""#, "'(space :width 2)", r#""""#] {
-        let mut ctx = Context::new();
+        let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buffer = ctx.buffer_manager().current_buffer().unwrap().id();
         let frame = ctx
             .frame_manager_mut()
@@ -147,7 +147,7 @@ fn display_replacements_count_hidden_buffer_lines_for_every_replacement_kind() {
 
 #[test]
 fn display_table_newline_glyphs_still_advance_buffer_line_numbers() {
-    let mut ctx = Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = ctx.buffer_manager().current_buffer().unwrap().id();
     let frame = ctx
         .frame_manager_mut()
@@ -169,14 +169,14 @@ fn display_table_newline_glyphs_still_advance_buffer_line_numbers() {
 }
 
 fn newline_edits(mode: &str, count: usize) {
-    let mut ctx = Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     ctx.eval_str("(neomacs-set-buffer-text-backend 'gap-buffer)")
         .unwrap();
     let buffer = ctx.buffer_manager().current_buffer().unwrap().id();
     let frame = ctx
         .frame_manager_mut()
         .create_frame("gutter-cpu", 1024, 768, buffer);
-    let mini = ctx.buffers.create_buffer(" *Minibuf-0*");
+    let mini = ctx.buffer_manager_mut().create_buffer(" *Minibuf-0*");
     ctx.frame_manager_mut()
         .get_mut(frame)
         .unwrap()

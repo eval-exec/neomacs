@@ -1,0 +1,1094 @@
+//! GC pacing and safe points: when the evaluator collects, how it seeds roots, and the concurrent-mark handshakes it drives (GNU `maybe_gc` / `garbage_collect` shape).
+//!
+//! Moved out of `eval/mod.rs` unchanged; a child module of `eval` so it keeps
+//! the same view of `Context` and the parent's private items (`use super::*`).
+
+use super::*;
+use neovm_value::tagged::gc::MarkPhase;
+
+impl Context {
+    /// Enumerate every live `Value` reference in the evaluator and all
+    /// sub-managers without materializing a single temporary root vector.
+    /// Enumerate every evaluator/context root into `visit`, announcing each
+    /// root GROUP boundary via `group(name)` immediately before that group's
+    /// values are visited. The group seam is diagnostics-only: the GC
+    /// handshake instrumentation brackets per-group timings around the
+    /// boundaries; enumeration order and content are unchanged.
+    /// The functions a redefinition took out of a function cell while a
+    /// compiled activation called through that symbol may still run them
+    /// (`jit::cache::pin_redefined_function`): rooted while a backtrace frame
+    /// -- this thread's or a suspended one's -- records the symbol.
+    #[cfg(feature = "jit")]
+    #[doc(hidden)]
+    pub fn trace_jit_redefined_functions(
+        &self,
+        heap_id: usize,
+        visit: &mut dyn FnMut(Value),
+        called: &mut Vec<SymId>,
+    ) {
+        let symbol_mode = self.symbol_mode();
+        use crate::emacs_core::jit::cache;
+        called.clear();
+        if !cache::has_redefined_pins() {
+            return;
+        }
+        called.extend(
+            self.specpdl
+                .iter()
+                .chain(
+                    self.suspended_thread_bindings
+                        .iter()
+                        .flat_map(|state| state.specpdl.iter()),
+                )
+                .filter_map(|entry| match entry {
+                    SpecBinding::Backtrace { function, .. }
+                    | SpecBinding::Backtrace1 { function, .. }
+                    | SpecBinding::Backtrace2 { function, .. }
+                    | SpecBinding::BacktraceNative { function, .. } => {
+                        function.as_symbol_id(symbol_mode)
+                    }
+                    _ => None,
+                }),
+        );
+        called.sort_unstable_by_key(|sym| sym.to_raw());
+        called.dedup();
+        cache::trace_redefined_pins(
+            heap_id,
+            &|sym| {
+                called
+                    .binary_search_by_key(&sym.to_raw(), |s| s.to_raw())
+                    .is_ok()
+            },
+            visit,
+        );
+        called.clear();
+    }
+
+    /// Every root this Context holds, in named groups. Identity and shared-root
+    /// access come from the caller's current heap loan. The shared-root reader
+    /// runs to completion before visiting its values: holding `&TaggedHeap`
+    /// across `visit` would prohibit the visitor's writes to the gray queue.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn trace_roots(
+        &self,
+        heap_id: usize,
+        collect_shared_roots: impl FnOnce(&mut Vec<Value>),
+        group: &mut dyn FnMut(&'static str),
+        visit: &mut dyn FnMut(Value),
+    ) {
+        self.trace_roots_reusing(heap_id, collect_shared_roots, group, visit, &mut Vec::new());
+    }
+
+    /// Collector seeding retains this empty scratch's high-water capacity.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn trace_roots_reusing(
+        &self,
+        heap_id: usize,
+        collect_shared_roots: impl FnOnce(&mut Vec<Value>),
+        group: &mut dyn FnMut(&'static str),
+        visit: &mut dyn FnMut(Value),
+        scratch: &mut Vec<Value>,
+    ) {
+        debug_assert!(scratch.is_empty());
+        self.trace_root_groups::<true>(heap_id, collect_shared_roots, group, visit, scratch);
+        debug_assert!(scratch.is_empty());
+    }
+
+    /// Only this owner's execution roots. World cells are traced by the
+    /// collecting owner; parking must not walk them merely to discard them.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn trace_private_roots(&self, roots: &mut Vec<Value>) {
+        self.trace_private_roots_reusing(roots, &mut Vec::new());
+    }
+
+    /// Green's private census reuses the called-symbol buffer after JIT source
+    /// capture has cleared it. Both paths use the same pin and Flow collectors.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn trace_private_roots_reusing(&self, roots: &mut Vec<Value>, called: &mut Vec<SymId>) {
+        let heap_id = self.tagged_heap.tagged_heap_identity();
+        self.trace_root_groups::<false>(
+            heap_id,
+            |_| {},
+            &mut |_| {},
+            &mut |value| roots.push(value),
+            &mut Vec::new(),
+        );
+        #[cfg(feature = "jit")]
+        self.trace_jit_redefined_functions(heap_id, &mut |value| roots.push(value), called);
+        #[cfg(not(feature = "jit"))]
+        let _ = called;
+        self.collect_in_flight_roots(heap_id, roots);
+    }
+
+    /// Flow payloads belong to the owner. The full walk supplies its registry
+    /// scratch, while parking appends directly to its reusable census buffer.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn collect_in_flight_roots(&self, heap_id: usize, roots: &mut Vec<Value>) {
+        neovm_value::error::collect_in_flight_registry_gc_roots(
+            roots,
+            &self.in_flight_registry,
+            heap_id,
+        );
+    }
+
+    /// Derive private group membership from the same const-generic guards
+    /// that select the actual park walk, without maintaining another list.
+    #[cfg(test)]
+    #[doc(hidden)]
+    pub fn private_root_group_names(&self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        self.trace_root_groups::<false>(
+            self.tagged_heap.identity(),
+            |_| {},
+            &mut |name| names.push(name),
+            &mut |_| {},
+            &mut Vec::new(),
+        );
+        names
+    }
+
+    /// Compile separate walks: the collection walk has no runtime mode
+    /// test, and the parking walk never enters a World root group.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn trace_root_groups<const WORLD: bool>(
+        &self,
+        heap_id: usize,
+        collect_shared_roots: impl FnOnce(&mut Vec<Value>),
+        group: &mut dyn FnMut(&'static str),
+        visit: &mut dyn FnMut(Value),
+        scratch: &mut Vec<Value>,
+    ) {
+        group("vm_frames");
+        for frame in &self.vm_root_frames {
+            for root in frame.roots.iter().copied() {
+                visit(root);
+            }
+        }
+        if WORLD {
+            group("owned_native");
+            self.owned_roots.trace_roots(visit);
+            group("owner_bindings");
+            self.trace_owner_slabs(heap_id, visit);
+        }
+        group("eval_temp");
+        for root in self.eval_temp_roots.iter().copied() {
+            visit(root);
+        }
+        // GNU's `eval_sub` argument arrays, one live run per sequence frame
+        // (see `Context::eval_call_roots`): the same logical root set of
+        // transient evaluator C-stack slots, so the same group.
+        for root in self.eval_call_roots.iter().copied() {
+            visit(root);
+        }
+        if WORLD {
+            group("treesit");
+            for root in self.treesit.roots() {
+                visit(root);
+            }
+        }
+        group("bc");
+        for root in self.bc_buf.iter().copied() {
+            visit(root);
+        }
+        group("jit_window");
+        for root in self.jit_root_stack[..self.jit_root_stack_top]
+            .iter()
+            .copied()
+        {
+            // A JIT unboxed float's tag word (TAG_FLOAT, null pointer) is
+            // never a Value; compiled code must box before publishing.
+            debug_assert_ne!(
+                root.bits(),
+                neovm_value::tagged::value::TAG_FLOAT,
+                "an unboxed-float tag word reached the JIT root window"
+            );
+            visit(root);
+        }
+        for frame in &self.bc_frames {
+            if frame.fun.is_heap_object() {
+                visit(frame.fun);
+            }
+        }
+        group("handlers");
+        for frame in self.condition_stack.iter().chain(
+            self.suspended_thread_bindings
+                .iter()
+                .flat_map(|state| state.condition_stack.iter()),
+        ) {
+            match frame {
+                ConditionFrame::Catch { tag, .. } => visit(*tag),
+                ConditionFrame::ConditionCase { conditions, .. } => visit(*conditions),
+                ConditionFrame::HandlerBind {
+                    conditions,
+                    handler,
+                    ..
+                } => {
+                    visit(*conditions);
+                    visit(*handler);
+                }
+                ConditionFrame::SkipConditions { .. } => {}
+            }
+        }
+        group("specpdl");
+        for state in &self.suspended_thread_bindings {
+            visit(state.lexenv);
+        }
+        for entry in self.specpdl.iter().chain(
+            self.suspended_thread_bindings
+                .iter()
+                .flat_map(|state| state.specpdl.iter()),
+        ) {
+            match entry {
+                SpecBinding::Let { old_value, .. } => {
+                    if let Some(value) = old_value.get() {
+                        visit(value);
+                    }
+                }
+                SpecBinding::LetLocal { old_value, .. } => visit(*old_value),
+                SpecBinding::LetDefault { old_value, .. } => {
+                    if let Some(value) = old_value.get() {
+                        visit(value);
+                    }
+                }
+                SpecBinding::LexicalEnv { old_lexenv } => visit(*old_lexenv),
+                SpecBinding::GcRoot { value } => visit(*value),
+                SpecBinding::Backtrace { function, args, .. } => {
+                    visit(*function);
+                    self.trace_backtrace_args(args, visit);
+                }
+                SpecBinding::Backtrace1 { function, arg, .. } => {
+                    visit(*function);
+                    visit(*arg);
+                }
+                SpecBinding::Backtrace2 {
+                    function,
+                    arg0,
+                    arg1,
+                } => {
+                    visit(*function);
+                    visit(*arg0);
+                    visit(*arg1);
+                }
+                SpecBinding::BacktraceNative {
+                    function,
+                    args_ptr,
+                    nargs,
+                } => {
+                    visit(*function);
+                    // SAFETY: the variant's contract — `args_ptr` names
+                    // the call-args slot of a live JIT frame (unmutated
+                    // while this entry exists): a pusher pops its entry
+                    // before that frame resumes, or detaches it on a
+                    // contained-panic path while the slot is still live
+                    // (`detach_native_frames_into`) -- and root seeding
+                    // runs with the mutator stopped.
+                    for i in 0..*nargs as usize {
+                        visit(unsafe {
+                            /* SAFETY: real Value word */
+                            Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+                        });
+                    }
+                }
+                SpecBinding::UnwindProtect { forms, lexenv } => {
+                    visit(*forms);
+                    visit(*lexenv);
+                }
+                SpecBinding::SaveRestriction { state } => {
+                    let mut roots = Vec::new();
+                    state.state().trace_roots(&mut roots);
+                    // The saved bounds live as marker ids only; root the
+                    // marker objects so restore still finds them (see
+                    // SavedRestrictionState::trace_marker_roots).
+                    state
+                        .state()
+                        .trace_marker_roots(&self.edit.buffers, &mut roots);
+                    for root in roots {
+                        visit(root);
+                    }
+                }
+                SpecBinding::SaveExcursion { marker, .. } => visit(*marker),
+                SpecBinding::NativeUnwind { action } => action.trace_roots(visit),
+                // EXHAUSTIVE ON PURPOSE — no catch-all arm. These four carry
+                // no Lisp value (a buffer id, two lengths, nothing), and a new
+                // `SpecBinding` variant must state which group it belongs to
+                // instead of being absorbed by a `_ => {}`. A root walk is the
+                // one match where "the compiler did not complain" and "the
+                // value is marked" must be the same sentence
+                // (DIVERGENCES.md 161's residual, closed by 162).
+                SpecBinding::SaveCurrentBuffer { .. }
+                | SpecBinding::LoadsInProgress { .. }
+                | SpecBinding::RequireStack { .. }
+                | SpecBinding::Nop => {}
+            }
+        }
+        #[cfg(feature = "jit")]
+        {
+            group("jit_redefined");
+            if WORLD {
+                self.trace_jit_redefined_functions(heap_id, visit, &mut Vec::new());
+            }
+        }
+        group("profiler");
+        self.trace_profiler_roots(visit);
+        // These Rust-owned payloads clone interval tables but share their Lisp
+        // plists. The echo buffer's copied plists do not retain the message's
+        // own copies. GNU roots echo buffers and Vloads_in_progress instead.
+        group("string_payloads");
+        for text in self
+            .current_message
+            .iter()
+            .chain(self.loads_in_progress.iter())
+            .chain(
+                self.last_redisplay_signature
+                    .iter()
+                    .flat_map(|signature| signature.current_message.iter()),
+            )
+        {
+            text.trace_roots_with(visit);
+        }
+        group("misc");
+        if WORLD {
+            super::font_shape::trace_gstring_shape_cache(&self.gstring_shape_cache, visit);
+        }
+        visit(self.lexenv);
+        visit(self.quit_flag);
+        visit(self.inhibit_quit);
+        visit(self.throw_on_input);
+        if self.cached_system_name.is_heap_object() {
+            visit(*self.cached_system_name);
+        }
+        if let Some(filter_fn) = self.interpreted_closure_filter_fn {
+            visit(filter_fn);
+        }
+        self.cconv_memo.trace_roots(visit);
+        self.tier_i.trace_roots(visit);
+        for entry in self.named_call_cache.values() {
+            if let NamedCallTarget::Obarray(val) = &entry.target {
+                visit(*val);
+            }
+        }
+        for funcall in &self.pending_safe_funcalls {
+            visit(funcall.function);
+            for arg in funcall.args.iter().copied() {
+                visit(arg);
+            }
+        }
+        for hook in self.edit.last_overlay_modification_hooks() {
+            visit(hook.hook_list());
+            visit(hook.overlay());
+        }
+        if !self.edit.interval_insert_behind_hooks().is_nil() {
+            visit(self.edit.interval_insert_behind_hooks());
+        }
+        if !self.edit.interval_insert_in_front_hooks().is_nil() {
+            visit(self.edit.interval_insert_in_front_hooks());
+        }
+        if !self.current_local_map.is_nil() {
+            visit(self.current_local_map);
+        }
+        let selected_global_map = self.selected_global_map.value();
+        if !selected_global_map.is_nil() {
+            visit(selected_global_map);
+        }
+        if self.standard_syntax_table.is_heap_object() {
+            visit(self.standard_syntax_table);
+        }
+        if self.syntax_code_objects.is_heap_object() {
+            visit(self.syntax_code_objects);
+        }
+        if self.standard_category_table.is_heap_object() {
+            visit(self.standard_category_table);
+        }
+        if let Some(table) = self.cached_standard_case_table {
+            visit(table);
+        }
+        // GNU dispnew.c's frame_and_buffer_state lives for the whole session,
+        // so the internal state vector must survive every collection even
+        // while no Lisp variable refers to it.
+        if let Some(state) = self.frame_and_buffer_state {
+            visit(state);
+        }
+        // The Flow registry is private even though the full walk uses the
+        // same temporary buffer for it and the following World registries.
+        group("in_flight_registry");
+        if WORLD {
+            let mut registry_roots = &mut *scratch;
+            // Rust-held signals, throws and yields stay rooted when this Context moves.
+            self.collect_in_flight_roots(heap_id, &mut registry_roots);
+            for root in registry_roots.drain(..) {
+                visit(root);
+            }
+            // Values that any thread holds through this heap's `SharedRoot`s.
+            group("shared_roots");
+            collect_shared_roots(&mut registry_roots);
+            for root in registry_roots.drain(..) {
+                visit(root);
+            }
+            group("ccl_registry");
+            neovm_text::emacs_core::ccl::collect_ccl_registry_gc_roots(
+                &self.ccl_registry,
+                &mut registry_roots,
+            );
+            for root in registry_roots.drain(..) {
+                visit(root);
+            }
+            group("charset_registry");
+            neovm_text::emacs_core::charset::collect_charset_registry_gc_roots(
+                &self.charset_registry,
+                &mut registry_roots,
+            );
+            for root in registry_roots.drain(..) {
+                visit(root);
+            }
+            group("terminal_registry");
+            crate::emacs_core::eval::data::terminal_state::collect_terminal_registry_gc_roots(
+                &self.terminal_registry,
+                &mut registry_roots,
+            );
+            for root in registry_roots.drain(..) {
+                visit(root);
+            }
+            group("font_registry");
+            crate::emacs_core::eval::data::face_registry::collect_font_registry_gc_roots(
+                &self.font_registry,
+                &mut registry_roots,
+            );
+            for root in registry_roots.drain(..) {
+                visit(root);
+            }
+            group("hash_table_test_registry");
+            super::super::builtins::collect_hash_table_test_registry_gc_roots(
+                &self.hash_table_test_registry,
+                &mut registry_roots,
+            );
+            for root in registry_roots.drain(..) {
+                visit(root);
+            }
+            group("file_notify_registry");
+            super::super::builtins::collect_file_notify_registry_gc_roots(
+                &self.file_notify_registry,
+                &mut registry_roots,
+            );
+            for root in registry_roots.drain(..) {
+                visit(root);
+            }
+            group("dynamic_module_registry");
+            super::data::dynamic_module_registry::collect_dynamic_module_registry_gc_roots(
+                &self.dynamic_module_registry,
+                &mut registry_roots,
+            );
+            for root in registry_roots.drain(..) {
+                visit(root);
+            }
+            // Every registry has been drained; its capacity is available to
+            // the larger owner walk below without retaining any Values.
+        }
+        if WORLD {
+            // Full ~all-interned-symbols walk on STW collections; only the
+            // BLV-pool residual under `ObarraySymbolCellSkipGuard` (both
+            // concurrent handshakes).
+            group("obarray");
+            // Use the canonical owner enumerator directly: the trait's default
+            // visitor would allocate a fresh vector for this large owner.
+            self.obarray.trace_roots(scratch);
+            for root in scratch.drain(..) {
+                visit(root);
+            }
+            group("proc_timer");
+            self.processes.trace_roots_with(visit);
+            self.watchers.trace_roots_with(visit);
+            group("registers");
+            self.registers.trace_roots_with(visit);
+            group("bookmarks");
+            self.bookmarks.trace_roots_with(visit);
+            group("minibuffers");
+            self.minibuffers.trace_roots_with(visit);
+        }
+        group("custom");
+        self.custom.trace_roots_with(visit);
+        if WORLD {
+            group("autoloads");
+            self.autoloads.trace_roots_with(visit);
+            group("abbrevs");
+            self.abbrevs.trace_roots_with(visit);
+            group("interactive");
+            self.interactive.trace_roots_with(visit);
+            group("buffers");
+            self.edit.buffers.trace_roots_with(visit);
+            group("xwidgets");
+            self.xwidgets.trace_roots_with(visit);
+            group("face_table");
+            self.face_table.trace_roots_with(visit);
+            group("threads");
+            self.threads.trace_roots_with(visit);
+            group("kmacro");
+            self.kmacro.trace_roots_with(visit);
+            group("rectangle");
+            self.rectangle.trace_roots_with(visit);
+            group("command_loop");
+            neovm_value::gc_trace::GcTrace::trace_roots_with(&*self.command_loop, visit);
+            group("modes");
+            self.modes.trace_roots_with(visit);
+            group("frames");
+            self.frames.trace_roots_with(visit);
+            group("coding_systems");
+            self.coding_systems.trace_roots_with(visit);
+        }
+        group("match_data");
+        if let Some(ref md) = self.match_data
+            && let Some(neovm_text::emacs_core::regex::SearchedString::Heap(val)) =
+                md.searched_string()
+        {
+            visit(*val);
+        }
+    }
+
+    /// Share `value` with other threads, rooted in this evaluator's heap until
+    /// the last clone of the returned root drops.
+    ///
+    /// # Safety
+    /// `value` must be live and belong to this evaluator's heap. The caller
+    /// must satisfy [`SharedRoot::new`]'s admission and lifetime requirements;
+    /// a raw `Value` carries no heap brand, so this evaluator cannot prove its
+    /// origin merely by accepting it as an argument.
+    ///
+    /// [`SharedRoot::new`]: neovm_value::tagged::transport::SharedRoot::new
+    pub unsafe fn share_value(&self, value: Value) -> neovm_value::tagged::transport::SharedRoot {
+        // SAFETY: the caller supplies the live same-heap value and lifetime
+        // proof required by this method; this Context supplies its heap.
+        unsafe { neovm_value::tagged::transport::SharedRoot::new(&self.tagged_heap, value) }
+    }
+
+    /// Share several live values through one private vector lease.
+    ///
+    /// # Safety
+    /// Every value must satisfy [`Self::share_value`]'s admission and lifetime
+    /// requirements. This evaluator must be the installed active mutator;
+    /// raw values stay reachable until the batch has been admitted.
+    ///
+    /// # Errors
+    /// A missing installed heap or an installed heap from another evaluator.
+    pub unsafe fn share_values(
+        &self,
+        values: &[Value],
+    ) -> Result<
+        Vec<neovm_value::tagged::transport::SharedRoot>,
+        neovm_value::tagged::transport::SharedRootError,
+    > {
+        use neovm_value::tagged::gc::{HeapIdentity, current_tagged_heap_identity};
+        use neovm_value::tagged::transport::SharedRootError;
+        let installed = current_tagged_heap_identity()
+            .and_then(HeapIdentity::from_legacy_word)
+            .ok_or(SharedRootError::NoInstalledHeap)?;
+        let owner = self.tagged_heap.heap_identity();
+        if installed != owner {
+            return Err(SharedRootError::ForeignHeap {
+                owner,
+                mutator: installed,
+            });
+        }
+        // SAFETY: this method's caller establishes live same-evaluator input
+        // provenance, and the identity check establishes its installed heap.
+        unsafe { neovm_value::tagged::transport::SharedRoot::batch_from_current_heap(values) }
+    }
+
+    /// Share exactly `N` live values through one private vector lease,
+    /// returning one root per input in order.
+    ///
+    /// [`Self::share_values`] with a fixed-size result: the caller gets a
+    /// `[SharedRoot; N]` by construction, so no later length check can fail.
+    ///
+    /// # Safety
+    /// Every value must satisfy [`Self::share_value`]'s admission and lifetime
+    /// requirements. This evaluator must be the installed active mutator;
+    /// raw values stay reachable until the batch has been admitted.
+    ///
+    /// # Errors
+    /// A missing installed heap or an installed heap from another evaluator.
+    pub unsafe fn share_values_array<const N: usize>(
+        &self,
+        values: [Value; N],
+    ) -> Result<
+        [neovm_value::tagged::transport::SharedRoot; N],
+        neovm_value::tagged::transport::SharedRootError,
+    > {
+        use neovm_value::tagged::gc::{HeapIdentity, current_tagged_heap_identity};
+        use neovm_value::tagged::transport::SharedRootError;
+        let installed = current_tagged_heap_identity()
+            .and_then(HeapIdentity::from_legacy_word)
+            .ok_or(SharedRootError::NoInstalledHeap)?;
+        let owner = self.tagged_heap.heap_identity();
+        if installed != owner {
+            return Err(SharedRootError::ForeignHeap {
+                owner,
+                mutator: installed,
+            });
+        }
+        // SAFETY: this method's caller establishes live same-evaluator input
+        // provenance, and the identity check establishes its installed heap.
+        unsafe { neovm_value::tagged::transport::SharedRoot::batch_from_current_heap_array(values) }
+    }
+
+    /// The local value of `root` on this evaluator's thread.
+    ///
+    /// # Errors
+    /// [`SharedRootError::ForeignHeap`] when `root` was shared from another
+    /// evaluator's heap.
+    ///
+    /// [`SharedRootError::ForeignHeap`]: neovm_value::tagged::transport::SharedRootError::ForeignHeap
+    pub fn materialize<'r>(
+        &'r self,
+        root: &'r neovm_value::tagged::transport::SharedRoot,
+    ) -> Result<
+        neovm_value::tagged::transport::LocalRoot<'r>,
+        neovm_value::tagged::transport::SharedRootError,
+    > {
+        root.materialize(&self.tagged_heap)
+    }
+
+    pub fn gc_threshold(&self) -> usize {
+        self.tagged_heap.gc_threshold()
+    }
+
+    /// Whether `sym_id` is one of the GC-setting variables (compared against
+    /// the live-resolved ids; `false` until the first settings refresh has
+    /// resolved them — the GC-end/decision-point refresh covers that window).
+    #[doc(hidden)]
+    pub fn is_gc_runtime_setting_symbol(&self, sym_id: SymId) -> bool {
+        self.gc_runtime_settings_cache
+            .syms
+            .is_some_and(|syms| syms.contains(sym_id))
+    }
+
+    #[doc(hidden)]
+    pub fn refresh_gc_runtime_settings_after_change_by_id(&mut self, sym_id: SymId) {
+        if self.is_gc_runtime_setting_symbol(sym_id) {
+            self.refresh_gc_runtime_settings_cache();
+            self.sync_gc_threshold_from_runtime_settings();
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn refresh_gc_runtime_settings_cache(&mut self) {
+        // Re-resolve the variable names against the LIVE interner every time
+        // (four hash lookups on a rare path): see `GcRuntimeSettingsCache::syms`.
+        let syms = GcSettingSyms::resolve();
+        self.gc_runtime_settings_cache.syms = Some(syms);
+        // Cached binding/unbinding tiers already refuse this flag. Only the
+        // parity lane needs GC settings to be authoritative between refreshes;
+        // marking the four canonical cells on this rare path keeps their
+        // dynamic bindings on the publishing path without another check in
+        // ordinary cached bindings. Redirect changes preserve this flag.
+        if neovm_value::hashtab::hash_test_parity_enabled() {
+            for id in syms.all() {
+                if !self
+                    .obarray
+                    .get_by_id(id)
+                    .is_some_and(|symbol| symbol.flags().runtime_projected())
+                {
+                    self.obarray.mark_runtime_projected_id(id);
+                }
+            }
+        }
+        // Buffer switches and writes through an alias target can bypass the
+        // normal GC-setting publisher. Once a setting leaves global storage,
+        // user-test guards keep refreshing its live projection on their cold
+        // path. The owning Context's flag is sticky, so restoring a binding
+        // or changing buffers cannot make a stale projection authoritative.
+        use neovm_value::symbol::SymbolRedirect;
+        if syms.all().into_iter().any(|id| {
+            self.obarray.get_by_id(id).is_some_and(|symbol| {
+                matches!(
+                    symbol.redirect(),
+                    SymbolRedirect::Localized | SymbolRedirect::Varalias
+                )
+            })
+        }) {
+            self.mark_user_test_gc_settings_volatile();
+        }
+        self.gc_runtime_settings_cache.gc_cons_threshold_bytes = self
+            .builtin_var_value(syms.threshold())
+            .and_then(|value| {
+                value.as_fixnum().or_else(|| {
+                    // GNU's gc-cons-threshold watcher accepts integers fitting
+                    // intmax_t, including bignums. User-test GC-maybe needs the
+                    // resulting HI_THRESHOLD countdown for its inhibited return.
+                    neovm_value::hashtab::gc_threshold_integer_fallback(value)
+                })
+            })
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(GC_DEFAULT_THRESHOLD_BYTES);
+        self.gc_runtime_settings_cache.gc_cons_percentage_scaled = self
+            .variable_value_or_nil(syms.percentage)
+            .as_number_f64()
+            .filter(|float| float.is_finite() && *float > 0.0)
+            .and_then(|float| {
+                std::num::NonZeroU64::new(
+                    ((float * GC_PERCENT_SCALE as f64).ceil() as u64).clamp(1, u64::MAX),
+                )
+            });
+        self.gc_runtime_settings_cache.memory_full =
+            GcMemoryPressure::from_full(!self.variable_value_or_nil(syms.memory_full).is_nil());
+    }
+
+    #[doc(hidden)]
+    pub fn effective_gc_threshold_bytes(&mut self) -> usize {
+        if self.gc_runtime_settings_cache.memory_full.is_full() {
+            return self.tagged_heap.gc_threshold();
+        }
+
+        let mut threshold = self
+            .gc_runtime_settings_cache
+            .gc_cons_threshold_bytes
+            .max(GC_THRESHOLD_FLOOR_BYTES);
+        if let Some(percentage_scaled) = self.gc_runtime_settings_cache.gc_cons_percentage_scaled {
+            let live_estimate = self
+                .tagged_heap
+                .live_bytes()
+                .saturating_add(self.tagged_heap.bytes_since_gc() / 2);
+            let pct_threshold = ((live_estimate as u128)
+                .saturating_mul(percentage_scaled.get() as u128)
+                .saturating_add((GC_PERCENT_SCALE - 1) as u128)
+                / GC_PERCENT_SCALE as u128)
+                .min(GC_HI_THRESHOLD_BYTES as u128) as usize;
+            threshold = threshold.max(pct_threshold);
+        }
+        // Internal live-proportional growth term: trigger only once at least
+        // GC_LIVE_GROWTH_NUM/GC_LIVE_GROWTH_DEN of the live heap has been
+        // allocated since the last cycle, so the full-mark cost (O(live))
+        // amortizes as the heap grows. Invariants: strict max — the
+        // elisp-derived value above stays a floor this term never lowers (user
+        // settings and the defaults keep their meaning as minimum budgets);
+        // overridden thresholds (`set_gc_threshold`) are unaffected because
+        // this value only flows through `set_gc_threshold_from_runtime`; the
+        // GC_HI clamp below still bounds the result. `live_bytes` is what the
+        // last sweep counted and does not move between sweeps, so this term
+        // is stable across a burst of allocation rather than growing with it.
+        let live_growth = ((self.tagged_heap.live_bytes() as u128)
+            .saturating_mul(super::gc_live_growth_percent())
+            / 100)
+            .min(GC_HI_THRESHOLD_BYTES as u128) as usize;
+        threshold = threshold.max(live_growth);
+        let mut threshold = threshold.clamp(1, GC_HI_THRESHOLD_BYTES);
+        if self
+            .gc_runtime_settings_cache
+            .syms
+            .is_some_and(|syms| !self.variable_value_or_nil(syms.startup_ceiling).is_nil())
+        {
+            threshold = threshold.min(GC_STARTUP_THRESHOLD_CEILING_BYTES);
+        }
+        gc_threshold_cap_from_env().map_or(threshold, |cap| threshold.min(cap))
+    }
+
+    #[doc(hidden)]
+    pub fn sync_gc_threshold_from_runtime_settings(&mut self) {
+        // Read the Lisp variables LIVE here, like GNU's `garbage_collect` end
+        // (`consing_until_gc = consing_threshold (gc_cons_threshold,
+        // Vgc_cons_percentage, 0)`), instead of trusting a cache that only the
+        // setter paths routed through `refresh_gc_runtime_settings_after_
+        // change_by_id` keep current: any write that bypasses them (a direct
+        // forwarder store, a future setter) is then honored at the next GC,
+        // which is exactly GNU's contract for a changed threshold.
+        self.refresh_gc_runtime_settings_cache();
+        let threshold = self.effective_gc_threshold_bytes();
+        if self.tagged_heap.gc_threshold() != threshold {
+            self.tagged_heap.set_gc_threshold_from_runtime(threshold);
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn update_gc_runtime_stats(&mut self, elapsed: std::time::Duration) {
+        self.store_variable(gcs_done_symbol(), Value::fixnum(self.gc_count as i64));
+
+        let old_elapsed = self
+            .builtin_var_value(gc_elapsed_symbol())
+            .and_then(|value| value.as_number_f64())
+            .unwrap_or(0.0);
+        self.store_variable(
+            gc_elapsed_symbol(),
+            Value::make_float(old_elapsed + elapsed.as_secs_f64()),
+        );
+
+        // Publish a cross-thread snapshot for the diagnostics server. Sampled
+        // here, once per GC cycle, so the diagnostics thread never touches the
+        // heap; values between collections are the last post-sweep reading.
+        let counts = self.tagged_heap.memory_use_counts_snapshot();
+        crate::emacs_core::gc_stats::publish(crate::emacs_core::gc_stats::GcStatsSnapshot {
+            collections: self.gc_count,
+            live_bytes: self.tagged_heap.live_bytes() as u64,
+            total_allocated_bytes: self.tagged_heap.total_allocated_bytes(),
+            cons_cells: counts[0],
+            vector_cells: counts[2],
+            strings: counts[6],
+        });
+    }
+
+    /// Set the GC threshold. Use usize::MAX to effectively disable GC.
+    pub fn set_gc_threshold(&mut self, threshold: usize) {
+        self.tagged_heap.set_gc_threshold(threshold);
+    }
+
+    /// Set the maximum eval recursion depth.
+    pub fn set_max_depth(&mut self, depth: usize) {
+        self.max_depth = depth;
+    }
+
+    /// Set the thread-local heap pointers for the current thread.
+    ///
+    /// Reactivates this thread's Context after another local Context ran.
+    /// Context is thread-confined; worker threads construct their own Context.
+    #[inline(never)]
+    pub fn setup_thread_locals(&mut self) {
+        self.setup_thread_locals_inner::<true>();
+    }
+
+    /// Separate the ordinary activation from admitted-owner activation at
+    /// compile time. The ordinary specialization keeps its terminal snapshot;
+    /// no runtime owner predicate enters its callers.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn setup_thread_locals_inner<const SNAPSHOT_TERMINAL_IDS: bool>(&mut self) {
+        // Root-based install (see `AliasableBox`): the slot must survive
+        // every later `&mut` reborrow this Context takes through its view.
+        self.tagged_heap.install_tagged_heap();
+        neovm_text::emacs_core::ccl::install_ccl_registry_handle(&self.ccl_registry);
+        neovm_text::emacs_core::charset::install_charset_registry_handle(&self.charset_registry);
+        crate::emacs_core::eval::lifecycle::install_font_registry_handle(&self.font_registry);
+        if SNAPSHOT_TERMINAL_IDS {
+            crate::emacs_core::eval::lifecycle::install_terminal_registry_handle(
+                &self.terminal_registry,
+            );
+        } else {
+            crate::emacs_core::eval::lifecycle::install_owner_terminal_registry_handle(
+                &self.terminal_registry,
+            );
+        }
+        super::super::builtins::install_hash_table_test_registry_handle(
+            &self.hash_table_test_registry,
+        );
+        super::super::builtins::install_file_notify_registry_handle(&self.file_notify_registry);
+        super::super::builtins::install_window_configuration_registry_handle(
+            &self.window_configuration_registry,
+        );
+        super::data::dynamic_module_registry::install_dynamic_module_registry_handle(
+            &self.dynamic_module_registry,
+        );
+        neovm_value::error::install_in_flight_registry_handle(&self.in_flight_registry);
+        self.integer_width_context.activate(&self.obarray);
+        neovm_text::emacs_core::casetab::activate_casetab_thread_locals(
+            self.cached_standard_case_table,
+        );
+        let thread = std::thread::current().id();
+        let thread_changed = self.last_activation_thread != Some(thread);
+        self.last_activation_thread = Some(thread);
+        let heap_identity = self.tagged_heap.tagged_heap_identity();
+        let collection_epoch = self.tagged_heap.gc_collections();
+        let collection_in_progress = match self.tagged_heap.mark_phase() {
+            MarkPhase::Idle => false,
+            MarkPhase::ConcurrentRunning
+            | MarkPhase::StoppedMarking
+            | MarkPhase::PublishingSweep
+            | MarkPhase::Sweeping => true,
+        };
+        neovm_value::string_pos_cache::activate_string_pos_cache(
+            heap_identity,
+            collection_epoch,
+            collection_in_progress,
+            thread_changed,
+        );
+        neovm_text::emacs_core::regex::activate_regex_thread_locals(
+            heap_identity,
+            collection_epoch,
+            collection_in_progress,
+        );
+        neovm_text::emacs_core::syntax::restore_standard_syntax_table_object(
+            self.standard_syntax_table,
+        );
+        neovm_text::emacs_core::syntax::restore_syntax_code_objects(self.syntax_code_objects);
+        neovm_text::emacs_core::category::restore_standard_category_table_object(
+            self.standard_category_table,
+        );
+        // Install this Context's quit-request flag so leaf functions
+        // (regex matcher, other long-running scans) can poll it
+        // without `&mut Context` access.
+        neovm_value::quit::install_quit_requested_tls(self.quit_requested.clone());
+        // Compiled leaves guard this thread's stack from now on.
+        self.refresh_jit_stack_limit();
+    }
+
+    #[doc(hidden)]
+    pub fn finish_runtime_activation(&mut self, sync_keyboard: bool) {
+        self.setup_thread_locals();
+        // The call gates read `debug-on-next-call` through a never-null cell
+        // pointer that names an always-armed stand-in until resolved; resolve
+        // it before any Lisp runs so no call takes the reference path for it.
+        self.resolve_debug_on_next_call_cell();
+        self.refresh_gc_runtime_settings_cache();
+        self.sync_gc_threshold_from_runtime_settings();
+        if sync_keyboard {
+            self.sync_keyboard_runtime_from_obarray();
+        }
+        self.sync_thread_runtime_bindings();
+        self.sync_current_thread_buffer_state();
+        // Every name GNU's C declares with `DEFVAR_LISP' or `DEFVAR_KBOARD'
+        // gets GNU's redirect tag here, at the last point before the evaluator
+        // is live: the same boundary GNU's `main' crosses when the last
+        // `syms_of_*'/`init_*' returns, reached from the other side.  GNU
+        // declares first and assigns after; this port assigns from several
+        // hundred scattered sites -- including `runtime_identity::install' and
+        // `sync_thread_runtime_bindings' just above, which is why this cannot
+        // sit with the `register_bootstrap_vars' calls -- and declares once,
+        // here.  Idempotent, so the pdump-restored path (whose image already
+        // carries the descriptors) finds every row settled and the six names
+        // an image cannot carry get theirs.  See `defvar_object' for what the
+        // tag buys and why the store rule -- the thing `DEFVAR_BOOL' and
+        // `DEFVAR_INT' are declared for -- is not it.
+        // SAFETY: DEFVAR adoption is noncalling and uses canonical install/
+        // reattachment hooks; a dumped localized Boolean may retarget the
+        // debugger descriptor. Storage identity and generation are preserved.
+        unsafe {
+            self.obarray
+                .with_legacy_storage_write(super::super::defvar_object::adopt);
+        }
+        self.obarray.refresh_admission();
+    }
+
+    #[doc(hidden)]
+    pub fn sync_current_thread_buffer_state(&mut self) {
+        let current_thread_id = self.threads.current_thread_id();
+        let current_buffer_id = self.edit.buffers.current_buffer_id();
+        self.threads
+            .set_thread_current_buffer(current_thread_id, current_buffer_id);
+    }
+
+    #[doc(hidden)]
+    pub fn sync_current_buffer_runtime_state(&mut self) -> Result<(), Flow> {
+        self.sync_current_thread_buffer_state();
+        crate::emacs_core::eval::case_tables::sync_current_buffer_case_table_state(self)?;
+        neovm_text::emacs_core::syntax::sync_current_buffer_syntax_table_state(self)?;
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn switch_current_buffer(&mut self, id: neovm_edit::buffer::BufferId) -> Result<(), Flow> {
+        if !self.edit.buffers.switch_current(id) {
+            return Err(signal(
+                "error",
+                vec![Value::string("Selecting deleted buffer")],
+            ));
+        }
+        self.sync_current_buffer_runtime_state()
+    }
+
+    #[doc(hidden)]
+    pub fn set_current_buffer_unrecorded(
+        &mut self,
+        id: neovm_edit::buffer::BufferId,
+    ) -> Result<(), Flow> {
+        if !self.edit.buffers.switch_current_unrecorded(id) {
+            return Err(signal(
+                "error",
+                vec![Value::string("Selecting deleted buffer")],
+            ));
+        }
+        self.sync_current_buffer_runtime_state()
+    }
+
+    /// GNU `set_buffer_if_live` for an unwind: re-select `id` unless it was
+    /// killed meanwhile.
+    ///
+    /// Mirrors `set_buffer_internal_1`'s first line, `if (current_buffer ==
+    /// b) return;`: the overwhelmingly common unwind (every
+    /// `save-current-buffer` body that never switched, every
+    /// `put-text-property` on the current buffer) restores the buffer that
+    /// is still current.  Its runtime state was synced when it became
+    /// current, and the sync below is a thread-slot write plus two
+    /// seed-if-nil table reads, so redoing it bought nothing — at ~1,500
+    /// instructions a call it was 7% of a whole-buffer Org fontify (44,265
+    /// restores per five fontifies, all of them same-buffer).
+    pub fn restore_current_buffer_if_live(&mut self, id: neovm_edit::buffer::BufferId) {
+        if self.edit.buffers.current_buffer_id() == Some(id) {
+            return;
+        }
+        if self.edit.buffers.get(id).is_none() {
+            return;
+        }
+        let _ = self.edit.buffers.switch_current_unrecorded(id);
+        let _ = self.sync_current_buffer_runtime_state();
+    }
+
+    /// Restore native buffer ownership while abandoning a Rust panic scope.
+    ///
+    /// GNU's `set_buffer_internal_1` (`buffer.c:2326-2395`) selects existing
+    /// storage; its table initialization belongs to buffer creation. Recovery
+    /// must likewise leave absent or invalid lazy tables untouched. This
+    /// exclusively borrowed Context owns the current mutator's buffer and
+    /// thread slots, so no ambient heap or TLS table cache is consulted.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn restore_current_buffer_storage_if_live(&mut self, id: neovm_edit::buffer::BufferId) {
+        if self.edit.buffers.current_buffer_id() == Some(id) {
+            return;
+        }
+        if self.edit.buffers.switch_current_unrecorded(id) {
+            self.sync_current_thread_buffer_state();
+        }
+    }
+
+    /// Start the command loop after installing a HostInputPublisher.
+    /// Receiver attachment is owned by that publisher's installer, so a caller
+    /// cannot connect an independent raw channel without its wake capability.
+    pub fn init_input_system(&mut self) {
+        self.command_loop.running = true;
+    }
+
+    /// Install the receiver for cross-thread [`EvalThreadTask`]s (e.g. from the
+    /// diagnostics server). The sender side wakes the Lisp thread via
+    /// [`Context::wait_notifier`]; queued tasks run at the next safe point.
+    pub fn init_eval_task_system(&mut self, rx: crossbeam_channel::Receiver<EvalThreadTask>) {
+        self.eval_task_rx = Some(rx);
+    }
+
+    /// Run any queued cross-thread tasks synchronously. Called at a Lisp-safe
+    /// point (the `read_char` loop); a no-op when no channel is installed.
+    #[doc(hidden)]
+    pub fn drain_eval_tasks(&mut self) {
+        // Clone the Receiver handle so we don't borrow `self.eval_task_rx`
+        // across the `&mut self` task call.
+        if let Some(rx) = self.eval_task_rx.clone() {
+            while let Ok(task) = rx.try_recv() {
+                task(self);
+            }
+        }
+    }
+
+    /// Cross-platform handle producers use to wake the wait loop after
+    /// publishing work (see [`WaitNotifier`]). Returns `None` only if the
+    /// platform poller could not be created. Frontend input, diagnostics, and
+    /// asynchronous process work share this mechanism.
+    pub fn wait_notifier(
+        &self,
+    ) -> Option<crate::emacs_core::eval::data::process_state::WaitNotifier> {
+        crate::emacs_core::eval::process_hooks::wait_notifier(self)
+    }
+
+    pub fn set_display_host(&mut self, mut host: Box<dyn DisplayHost>) {
+        let _ = host.set_visual_config(self.visual_config.clone());
+        self.display_host = Some(host);
+    }
+
+    pub fn set_tty_frame_host_factory(&mut self, factory: Box<dyn TtyFrameHostFactory>) {
+        self.tty_frame_host_factory = Some(factory);
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/root_seed_capacity_test.rs"]
+mod root_seed_capacity_tests;

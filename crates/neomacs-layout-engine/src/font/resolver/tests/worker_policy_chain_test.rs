@@ -20,7 +20,7 @@ enum FontsetScenario {
 }
 
 fn installed_fontset(scenario: FontsetScenario) -> neovm_core::emacs_core::Context {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     match scenario {
         FontsetScenario::LongSpecificAndFallback | FontsetScenario::ExplicitStop => {
             eval.eval_str(

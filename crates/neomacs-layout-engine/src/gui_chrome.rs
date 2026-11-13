@@ -3,6 +3,8 @@
 //! Mirrors the existing TTY menu-bar walk, but produces GUI overlay
 //! payloads for the render thread from the active Lisp keymaps.
 
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
@@ -25,6 +27,8 @@ use strum::{EnumString, IntoStaticStr};
 use crate::tty_menu_bar::{
     MenuBarCacheKey, collect_tty_menu_bar_items, collect_tty_menu_bar_items_for_frame,
 };
+use neovm_core::display_evaluation::DisplayEvaluationContextExt;
+use neovm_core::emacs_core::keymap::MenuButtonKindExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
@@ -47,7 +51,9 @@ impl ToolBarIconTheme {
 }
 
 pub fn compact_bar_mode_enabled(eval: &Context) -> bool {
-    eval.variable_value_by_name("compact-bar-mode")
+    // Neo-only option: the visible read still honours a `let` around the
+    // display pass, which a default-only read silently ignores.
+    crate::neovm_bridge::visible_value_by_name(eval, "compact-bar-mode")
         .unwrap_or(Value::NIL)
         .is_truthy()
 }
@@ -656,16 +662,16 @@ fn themed_tool_bar_image_path(eval: &Context, path: &str) -> String {
 }
 
 fn current_tool_bar_icon_theme(eval: &Context) -> ToolBarIconTheme {
-    eval.variable_value_by_name("neomacs-toolbar-icon-theme")
+    crate::neovm_bridge::visible_value_by_name(eval, "neomacs-toolbar-icon-theme")
         .and_then(|value| value.as_bare_symbol_name())
         .and_then(|name| ToolBarIconTheme::from_str(name).ok())
         .unwrap_or(ToolBarIconTheme::VscodeLike)
 }
 
 fn custom_tool_bar_icon_path(eval: &Context, icon_name: &str) -> Option<String> {
-    let directory = eval
-        .variable_value_by_name("neomacs-toolbar-icon-directory")
-        .and_then(|value| value.as_runtime_string_owned())?;
+    let directory =
+        crate::neovm_bridge::visible_value_by_name(eval, "neomacs-toolbar-icon-directory")
+            .and_then(|value| value.as_runtime_string_owned())?;
     let directory = directory.trim();
     if directory.is_empty() {
         return None;
@@ -796,7 +802,7 @@ fn resolve_keymap(eval: &Context, value: &Value) -> Option<Value> {
         return Some(*value);
     }
     if let Some(name) = value.as_symbol_name(eval.symbol_mode())
-        && let Some(symbol_value) = eval.variable_value_by_name(name)
+        && let Some(symbol_value) = crate::neovm_bridge::visible_value_by_name(eval, name)
         && is_keymap(&symbol_value, eval.symbol_mode())
     {
         return Some(symbol_value);

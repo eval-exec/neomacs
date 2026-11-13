@@ -62,6 +62,7 @@ pub(crate) struct BufferSourceOverflowRenderContext {
     row_limit: DisplayRowLimit,
     active_face_metrics: DisplayRowMeasuredFaceMetrics,
     frame_background: Color,
+    point_charpos: i64,
 }
 
 impl BufferSourceOverflowRenderContext {
@@ -81,6 +82,7 @@ impl BufferSourceOverflowRenderContext {
         row_limit: DisplayRowLimit,
         active_face_metrics: DisplayRowMeasuredFaceMetrics,
         frame_background: Color,
+        point_charpos: i64,
     ) -> Self {
         Self {
             ch,
@@ -97,6 +99,7 @@ impl BufferSourceOverflowRenderContext {
             row_limit,
             active_face_metrics,
             frame_background,
+            point_charpos,
         }
     }
 }
@@ -199,6 +202,7 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
             row_source_start,
             face_scan,
             row_y_positions,
+            cursor_info,
             ..
         } = state;
         let mut source_render = source_render;
@@ -288,6 +292,11 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                 // display-point metadata is rewound to the same boundary by
                 // `apply_before_row_transition` below.)
                 source_render.restore_word_wrap_checkpoint(wrap_break);
+                cursor_info.rewind_word_wrap(
+                    row_build.row_geometry.row(),
+                    wrap_break,
+                    context.point_charpos,
+                );
                 word_wrap_action.restore_row_extend(row_build.row_extend, row_build.row_geometry);
                 {
                     let box_vertical_edges = source_render.trailing_box_run_terminal();
@@ -314,12 +323,11 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                 // above, the row's drawn glyphs + display points) back to the word
                 // boundary; reseat the producer at the SAME boundary so the
                 // candidate char is RE-produced on the continuation row. The
-                // producer's position IS its resume state, so this is a plain
-                // reseat — it used to also have to drop a stale queued run
-                // remainder (candidate + 1) that would otherwise replay first and
-                // drop the candidate char from the layout.
+                // checkpoint also retains whether overlay strings at that
+                // boundary were already drawn. Restoring a bare position would
+                // replay those strings while retaining their glyphs.
                 source_walk.rewind_source_consumption(
-                    BufferSourceRewind::WordWrap(source_position),
+                    BufferSourceRewind::WordWrap(wrap_break.source_cursor()),
                     invisible_text_checkpoint,
                 );
                 source_walk

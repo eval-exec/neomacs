@@ -1,0 +1,28 @@
+//! Tagged pointer value system — replaces ObjId-based Value enum.
+//!
+//! Every Lisp value fits in a single `usize` (8 bytes on 64-bit).
+//! The low 3 bits encode the type tag; heap pointers are 8-byte aligned
+//! so those bits are always zero and available for tagging.
+//!
+//! This matches GNU Emacs's `Lisp_Object` design exactly.
+
+#[doc(hidden)]
+pub mod bytecode;
+pub mod collection_reads;
+pub mod gc;
+pub mod header;
+pub mod mutate;
+#[doc(hidden)]
+pub mod pdump_image;
+pub mod symbol_marks;
+pub mod transport;
+pub mod value;
+pub use value::SymbolMode;
+
+#[cfg(test)]
+#[path = "tests/tagged_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "tests/pdump_image_test.rs"]
+mod pdump_image_tests;

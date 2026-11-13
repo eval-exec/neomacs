@@ -9,7 +9,7 @@ error[E0308]: mismatched types
   = note:      expected reference `&AllStopped<'_>`
           found mutable reference `&mut Mutator<'static>`
 note: associated function defined here
- --> src/tagged/gc/mutator_registration/table_authority.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/table_authority.rs
   |
   |     pub fn enter(
   |            ^^^^^

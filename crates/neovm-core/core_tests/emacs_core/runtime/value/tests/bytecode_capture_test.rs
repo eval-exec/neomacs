@@ -1,3 +1,4 @@
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::value::{LambdaParams, Value, bytecode_data_access_count};
 use crate::tagged::collection_reads::capture;

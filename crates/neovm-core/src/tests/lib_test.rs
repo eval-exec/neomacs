@@ -95,7 +95,7 @@ fn facade_reexports_name_the_engine_front_door() {
     crate::test_utils::init_test_tracing();
     // The curated lib.rs facade must keep working: Context, Value,
     // ValueKind, EvalError, Flow at the crate root.
-    let mut ctx: crate::Context = crate::Context::new();
+    let mut ctx: crate::Context = crate::test_utils::new_context();
     let v: crate::Value = ctx
         .eval_str_each("(+ 1 2)")
         .pop()

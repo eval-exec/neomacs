@@ -27,5 +27,5 @@ impl ThreadManager {
     }
 }
 
-#[path = "../../src/emacs_core/runtime/threads/completion.rs"]
+#[path = "../../../neovm-eval/src/emacs_core/runtime/threads/completion.rs"]
 pub(crate) mod completion;

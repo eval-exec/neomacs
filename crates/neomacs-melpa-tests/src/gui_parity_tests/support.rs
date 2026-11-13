@@ -172,6 +172,13 @@ fn run_editor(
     command
         .envs(packages.process_environment())
         .env("RUST_LOG", "off")
+        // GNU Emacs' GTK build emits a dbind/AT-SPI warning on stderr when
+        // the desktop accessibility bus is absent.  The paired outcome
+        // compares both editors' captured stderr, so that host property is
+        // pinned off for BOTH engines here, the same harness-side policy as
+        // `jka-compr-verbose: nil` in the prepared startup: a host without an
+        // accessibility bus must not decide the result.
+        .env("NO_AT_BRIDGE", "1")
         .env("WINIT_UNIX_BACKEND", "x11")
         .args(["--quick", "--geometry", "100x35"]);
     // The display session pins the locale that keeps X11 clients and the

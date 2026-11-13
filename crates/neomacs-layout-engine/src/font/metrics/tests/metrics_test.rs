@@ -200,10 +200,10 @@ fn realized_face_font_selection_uses_effective_family_without_a_fontset_candidat
 
 #[test]
 fn symbol_font_policy_tracks_the_live_char_script_table_and_invalidates_char_caches() {
-    let mut eval = neovm_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(set-char-table-range char-script-table '(#x2000 . #x27ff) 'symbol)")
         .expect("classify the Unicode symbol block");
-    let table = eval.variable_value_by_name("char-script-table");
+    let table = eval.default_value_only_by_name("char-script-table");
 
     let mut svc = make_svc();
     assert!(
@@ -271,10 +271,10 @@ fn covered_char_publishes_the_same_record_as_the_realized_face() {
 
 #[test]
 fn covered_symbol_uses_and_publishes_the_realized_primary_font() {
-    let mut eval = neovm_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(set-char-table-range char-script-table '(#x2000 . #x27ff) 'symbol)")
         .expect("classify the Unicode symbol block");
-    let table = eval.variable_value_by_name("char-script-table");
+    let table = eval.default_value_only_by_name("char-script-table");
 
     let mut svc = make_svc();
     let _ = svc.synchronize_symbol_font_policy(true, table);
@@ -3632,7 +3632,7 @@ fn resolved_font_for_char_preserves_platform_collection_face() {
     );
     // Make the fallback tier explicit rather than relying on the host's CJK
     // preference order. Selection still passes through the real native owner.
-    let mut eval = neovm_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(let ((font-encoding-alist '((\".*\" unicode)))) (set-fontset-font t ?好 '(\"Noto Sans CJK SC\" . \"iso10646-1\")))").expect("explicit pinned CJK fontset tier");
     let mut svc = catalog.metrics_service();
     let resolved = svc

@@ -106,5 +106,5 @@ impl Control {
     }
 }
 
-#[path = "../../src/emacs_core/runtime/eval/green/scheduler/completion_exit.rs"]
+#[path = "../../../neovm-eval/src/emacs_core/runtime/eval/green/scheduler/completion_exit.rs"]
 mod completion_exit;

@@ -8,6 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
+use super::architecture_production_source_roots::production_dir_in;
+
 use syn::visit::{self, Visit};
 
 fn cfg_is_test(meta: &syn::Meta) -> bool {
@@ -159,7 +161,7 @@ fn sources(root: &Path, out: &mut Vec<PathBuf>) {
 
 #[test]
 fn tagged_sources_name_no_compiler_type() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/tagged");
+    let root = production_dir_in("neovm-value", "tagged");
     let mut files = Vec::new();
     sources(&root, &mut files);
     let mut offenders = Vec::new();

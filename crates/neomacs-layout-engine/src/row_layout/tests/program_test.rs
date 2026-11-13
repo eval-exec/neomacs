@@ -241,6 +241,7 @@ fn wrapped_program_supports_tab_after_continuation_and_rejects_cancellation() {
     ));
 }
 
+/// Worker reconstruction must preserve the captured fonts' exact row geometry.
 #[test]
 fn complete_row_program_uses_exact_captured_fonts_on_worker() {
     fn require_send<T: Send + 'static>() {}
@@ -299,7 +300,10 @@ fn complete_row_program_uses_exact_captured_fonts_on_worker() {
         position = progress.end();
         slots.extend(progress.slots().iter().cloned());
         if let Some(newline) = newline {
-            DisplayRowLineEndFinalizer::new(
+            // Supply this independent measurer's primary newline extents,
+            // just as the buffer reader and captured worker do. Without
+            // them, the finalizer keeps seeded rather than actual maxima.
+            let _ = DisplayRowLineEndFinalizer::new(
                 newline,
                 FaceId::new(1),
                 geometry.width - position.x_px(),
@@ -309,6 +313,7 @@ fn complete_row_program_uses_exact_captured_fonts_on_worker() {
                 Default::default(),
                 Default::default(),
             )
+            .with_newline_font_metrics(minimum)
             .finalize(&mut expected, &faces);
         }
     }
@@ -392,7 +397,7 @@ fn incomplete_overbudget_cancelled_and_clipped_rows_are_never_admitted() {
 
 #[test]
 fn named_line_spacing_never_crosses_worker_boundary() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let faces = faces();
     let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
     let mut input = items();
@@ -612,11 +617,11 @@ fn contextual_gui_resume_requires_its_native_font_authority() {
 #[test]
 fn category_word_wrap_worker_uses_frozen_rules_after_lisp_table_changes() {
     use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos};
-    use neovm_core::window::{WordWrapMode, WordWrapPolicy};
-    let mut eval = neovm_core::emacs_core::Context::new();
+    use neovm_core::window::{WordWrapMode, word_wrap_policy_for_buffer};
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(progn (define-category ?| \"line breakable\") (modify-category-entry ?x ?|))")
         .unwrap();
-    let policy = WordWrapPolicy::for_buffer(
+    let policy = word_wrap_policy_for_buffer(
         eval.buffer_manager().current_buffer().unwrap(),
         WordWrapMode::Category,
     );
@@ -667,5 +672,98 @@ fn category_word_wrap_worker_uses_frozen_rules_after_lisp_table_changes() {
     assert_eq!(
         first_row_chars, 5,
         "the worker must fill the row using the captured category rules"
+    );
+}
+
+#[test]
+fn word_wrap_after_string_checkpoint_does_not_restart_inserted_text_on_worker() {
+    use neomacs_display_protocol::glyph_matrix::GlyphType;
+    use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos};
+
+    let face = FaceId::new(1);
+    let faces = vec![DisplayRowFace::from_resolved(
+        face,
+        &ResolvedFace::default(),
+    )];
+    let pos =
+        |n| DisplaySourcePosition::buffer(BufferId(1), CharPos0::new(n), EmacsBytePos::new(n));
+    let text_item = |span, text: &str| {
+        DisplayItem::new(
+            span,
+            RenderFaceRef::FaceId(face),
+            DisplayItemKind::TextRun(DisplayTextRun::independent(text)),
+        )
+    };
+    let tail = "x".repeat(300);
+    let inputs = [
+        text_item(SourceSpan::new(pos(0), pos(3)), "see"),
+        // This insertion has been consumed when the first buffer x records
+        // the word boundary after its trailing space. It must stay on the
+        // preceding row when the long buffer word is rolled back.
+        text_item(
+            SourceSpan::new(
+                DisplaySourcePosition::lisp_string(77, 0, 0),
+                DisplaySourcePosition::lisp_string(77, 6, 6),
+            ),
+            " hint ",
+        ),
+        text_item(SourceSpan::new(pos(3), pos(303)), &tail),
+        DisplayItem::new(
+            SourceSpan::new(pos(303), pos(304)),
+            RenderFaceRef::FaceId(face),
+            DisplayItemKind::RowBreak(DisplayRowBreak {
+                line_height: DisplayLineHeightPolicy::Default,
+                line_spacing: DisplayLineSpacingPolicy::Inherit,
+            }),
+        ),
+    ];
+    let mut geometry = geometry(640.0);
+    geometry.character_wrap = true;
+    geometry.word_wrap = true;
+    let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
+    let program = RowProgram::capture(geometry, inputs, faces.clone(), &mut measurer, limits())
+        .expect("capture bounded after-string program");
+    // The existing program row limit bounds a faulty replay. Running the
+    // owned program on a worker also guards against relying on evaluator TLS.
+    let rows = std::thread::spawn(move || program.compute_visual_rows(16, || false))
+        .join()
+        .expect("worker completed")
+        .expect("the short insertion and 300-character tail fit in sixteen rows");
+    let displayed: String = rows
+        .iter()
+        .flat_map(|row| row.row.glyphs[GlyphArea::Text.index()].iter())
+        .filter(|glyph| !glyph.padding)
+        .filter_map(|glyph| match &glyph.glyph_type {
+            GlyphType::Char { ch } => Some(*ch),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        displayed.matches("hint").count(),
+        1,
+        "the already-consumed insertion is retained once: {displayed:?}"
+    );
+    assert_eq!(
+        displayed.chars().filter(|ch| *ch == 'x').count(),
+        300,
+        "the worker reaches the whole buffer tail: {displayed:?}"
+    );
+    let tail_positions: Vec<_> = rows
+        .iter()
+        .flat_map(|row| row.slots.iter())
+        .filter_map(|slot| match slot.source() {
+            DisplaySourcePosition::Buffer { char_pos, .. }
+                if (3..303).contains(&char_pos.get()) =>
+            {
+                Some(char_pos.get())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tail_positions, (3..303).collect::<Vec<_>>());
+    assert!(
+        rows.iter()
+            .any(|row| row.end_kind == ComputedRowEnd::Newline),
+        "the row limit must not conceal an unfinished repeated insertion"
     );
 }

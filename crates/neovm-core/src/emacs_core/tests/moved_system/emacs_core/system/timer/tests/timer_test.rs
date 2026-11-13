@@ -1,0 +1,439 @@
+use neovm_display::window::DisplayFrameManagerExt;
+use neovm_value::value::Value;
+fn test_ob() -> neovm_value::symbol::Obarray {
+    neovm_value::symbol::Obarray::new()
+}
+use neovm_eval::emacs_core::eval::Context;
+use neovm_system::emacs_core::timer::*;
+use neovm_value::error::{FlowRef, FlowResultExt};
+use std::cell::RefCell;
+use std::fs;
+use std::rc::Rc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(test)]
+#[path = "numeric_boundaries.rs"]
+mod numeric_boundaries;
+
+#[cfg(test)]
+#[path = "timed_waits.rs"]
+mod timed_wait_tests;
+
+fn eval_first_form_after_marker(eval: &mut Context, source: &str, marker: &str) {
+    let start = source
+        .find(marker)
+        .unwrap_or_else(|| panic!("missing GNU subr.el marker: {marker}"));
+    let (form, _) = neovm_eval::emacs_core::value_reader::read_one(
+        &source[start..],
+        0,
+        neovm_eval::emacs_core::eval::VariableView::canonical(
+            neovm_value::symbol::CanonicalAccess::TEST,
+            &test_ob(),
+        ),
+    )
+    .unwrap_or_else(|err| panic!("parse GNU subr.el from {marker} failed: {:?}", err))
+    .unwrap_or_else(|| panic!("no GNU subr.el form found after marker: {marker}"));
+    eval.eval_form(form)
+        .unwrap_or_else(|err| panic!("evaluate GNU subr.el form {marker} failed: {:?}", err));
+}
+
+/// Install minimal `defun`/`defmacro`/`when`/`unless` shims so a bare
+/// evaluator can evaluate forms extracted from GNU `.el` source files.
+fn install_bare_elisp_shims(ev: &mut Context) {
+    let shims = r#"
+(defalias 'defun (cons 'macro #'(lambda (name arglist &rest body)
+  (list 'defalias (list 'quote name) (cons 'function (list (cons 'lambda (cons arglist body))))))))
+(defalias 'defmacro (cons 'macro #'(lambda (name arglist &rest body)
+  (list 'defalias (list 'quote name)
+        (list 'cons ''macro (cons 'function (list (cons 'lambda (cons arglist body)))))))))
+(defalias 'when (cons 'macro #'(lambda (cond &rest body)
+  (list 'if cond (cons 'progn body)))))
+(defalias 'unless (cons 'macro #'(lambda (cond &rest body)
+  (cons 'if (cons cond (cons nil body))))))
+"#;
+    ev.eval_str(shims).expect("install bare elisp shims");
+}
+
+fn gnu_subr_sit_for_eval() -> Context {
+    let project_root = crate::test_utils::workspace_root();
+    let subr_path = project_root.join("lisp/subr.el");
+    let subr_source = fs::read_to_string(&subr_path).expect("read GNU subr.el");
+
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    install_bare_elisp_shims(&mut ev);
+    ev.set_lexical_binding(true);
+    eval_first_form_after_marker(
+        &mut ev,
+        &subr_source,
+        "(defun sit-for (seconds &optional nodisp)",
+    );
+    ev
+}
+
+fn install_minimal_special_event_command_runtime(ev: &mut Context) {
+    ev.eval_str(
+        r#"
+(fset 'command-execute
+      (lambda (cmd &optional _record keys _special)
+        (funcall cmd (aref keys 0))))
+(fset 'handle-delete-frame
+      (lambda (event)
+        (setq neo-last-delete-frame-event event)
+        nil))
+"#,
+    )
+    .expect("install special-event command runtime");
+}
+
+fn gnu_timer_before(delay: Duration, callback: &str) -> Value {
+    let when = SystemTime::now()
+        .checked_sub(delay)
+        .unwrap_or(UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
+        .expect("timer deadline should not precede unix epoch");
+    let secs = when.as_secs() as i64;
+
+    Value::vector(vec![
+        Value::NIL,
+        Value::fixnum(secs >> 16),
+        Value::fixnum(secs & 0xFFFF),
+        Value::fixnum(when.subsec_micros() as i64),
+        Value::NIL,
+        Value::symbol(callback),
+        Value::NIL,
+        Value::NIL,
+        Value::fixnum(0),
+        Value::NIL,
+    ])
+}
+
+#[test]
+fn gnu_sit_for_matches_subr_el() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = gnu_subr_sit_for_eval();
+    let first = ev
+        .eval_str("(let ((noninteractive t)) (sit-for 0.0))")
+        .expect("eval sit-for");
+    assert!(first.is_truthy());
+
+    let second = ev
+        .eval_str("(let ((noninteractive t)) (sit-for 0.01 t))")
+        .expect("eval sit-for nodisp");
+    assert!(second.is_truthy());
+}
+
+#[test]
+fn gnu_sit_for_interactive_timeout_returns_t() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = gnu_subr_sit_for_eval();
+    ev.set_variable("noninteractive", Value::NIL);
+    let tx = crate::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+
+    let start = Instant::now();
+    let result = ev
+        .eval_str("(sit-for 0.01 t)")
+        .expect("eval interactive sit-for");
+    drop(tx);
+
+    assert!(result.is_truthy());
+    assert!(start.elapsed() < Duration::from_millis(250));
+}
+
+#[test]
+fn gnu_sit_for_with_pending_input_does_not_run_timers_first() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = gnu_subr_sit_for_eval();
+    ev.set_variable("noninteractive", Value::NIL);
+    ev.eval_str(
+        r#"(progn
+             (setq sit-for-pending-input-timer-fired nil)
+             (fset 'sit-for-pending-input-timer-callback
+                   (lambda ()
+                     (setq sit-for-pending-input-timer-fired 'done))))"#,
+    )
+    .expect("install sit-for pending-input timer setup");
+    ev.eval_str(
+        r#"(fset 'timer-event-handler
+                 (lambda (timer)
+                   (setq timer-list (delq timer timer-list))
+                   (apply (aref timer 5) (aref timer 6))))"#,
+    )
+    .expect("install timer-event-handler stub");
+    ev.set_variable(
+        "timer-list",
+        Value::list(vec![gnu_timer_before(
+            Duration::from_millis(1),
+            "sit-for-pending-input-timer-callback",
+        )]),
+    );
+
+    let tx = crate::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(
+        neovm_eval::emacs_core::eval::keyboard::InputEvent::key_press(
+            neovm_eval::emacs_core::eval::keyboard::KeyEvent::char('a'),
+        ),
+    )
+    .expect("queue keypress");
+
+    let result = ev
+        .eval_str("(sit-for 0.5 t)")
+        .expect("eval interactive sit-for");
+
+    assert!(result.is_nil());
+    assert!(
+        ev.eval_symbol("sit-for-pending-input-timer-fired")
+            .expect("timer callback flag")
+            .is_nil()
+    );
+    let event = ev.read_char().expect("keypress should remain available");
+    assert_eq!(event, Value::fixnum('a' as i64));
+}
+
+#[test]
+fn gnu_sit_for_pending_input_returns_nil_without_redisplay() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = gnu_subr_sit_for_eval();
+    ev.set_variable("noninteractive", Value::NIL);
+    let redisplays = Rc::new(RefCell::new(0usize));
+    let redisplays_in_cb = Rc::clone(&redisplays);
+    ev.redisplay_fn = Some(Box::new(move |_ev: &mut Context| {
+        *redisplays_in_cb.borrow_mut() += 1;
+    }));
+
+    let tx = crate::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(
+        neovm_eval::emacs_core::eval::keyboard::InputEvent::key_press(
+            neovm_eval::emacs_core::eval::keyboard::KeyEvent::char('a'),
+        ),
+    )
+    .expect("queue keypress");
+
+    let result = ev
+        .eval_str("(sit-for 0.5)")
+        .expect("eval interactive sit-for");
+
+    assert!(result.is_nil());
+    assert_eq!(*redisplays.borrow(), 0);
+    let event = ev.read_char().expect("keypress should remain available");
+    assert_eq!(event, Value::fixnum('a' as i64));
+}
+
+#[test]
+fn gnu_sit_for_zero_without_nodisp_redisplays_once() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = gnu_subr_sit_for_eval();
+    ev.set_variable("noninteractive", Value::NIL);
+    let redisplays = Rc::new(RefCell::new(0usize));
+    let redisplays_in_cb = Rc::clone(&redisplays);
+    ev.redisplay_fn = Some(Box::new(move |_ev: &mut Context| {
+        *redisplays_in_cb.borrow_mut() += 1;
+    }));
+
+    let tx = crate::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+
+    let result = ev
+        .eval_str("(sit-for 0)")
+        .expect("eval zero-second sit-for");
+    drop(tx);
+
+    assert!(result.is_truthy());
+    assert_eq!(*redisplays.borrow(), 1);
+}
+
+#[test]
+fn gnu_sit_for_zero_nodisp_runs_due_gnu_timer_without_redisplay() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = gnu_subr_sit_for_eval();
+    ev.set_variable("noninteractive", Value::NIL);
+    ev.eval_str(
+        r#"(progn
+             (setq sit-for-zero-timer-fired nil)
+             (fset 'sit-for-zero-timer-callback
+                   (lambda ()
+                     (setq sit-for-zero-timer-fired 'done)))
+             (fset 'timer-event-handler
+                   (lambda (timer)
+                     (setq timer-list (delq timer timer-list))
+                     (funcall (aref timer 5)))))"#,
+    )
+    .expect("install zero-second sit-for timer setup");
+    ev.set_variable(
+        "timer-list",
+        Value::list(vec![gnu_timer_before(
+            Duration::from_millis(1),
+            "sit-for-zero-timer-callback",
+        )]),
+    );
+
+    let redisplays = Rc::new(RefCell::new(0usize));
+    let redisplays_in_cb = Rc::clone(&redisplays);
+    ev.redisplay_fn = Some(Box::new(move |_ev: &mut Context| {
+        *redisplays_in_cb.borrow_mut() += 1;
+    }));
+
+    let tx = crate::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+
+    let result = ev
+        .eval_str("(sit-for 0 t)")
+        .expect("eval zero-second sit-for");
+    drop(tx);
+
+    assert!(result.is_truthy());
+    assert_eq!(*redisplays.borrow(), 0);
+    assert_eq!(
+        ev.eval_symbol("sit-for-zero-timer-fired")
+            .expect("zero-second sit-for timer flag"),
+        Value::symbol("done")
+    );
+}
+
+#[test]
+fn test_builtin_sleep_for() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    let result = builtin_sleep_for(&mut eval, vec![Value::fixnum(0)]);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_nil());
+
+    let result = builtin_sleep_for(&mut eval, vec![Value::fixnum(0), Value::fixnum(0)]);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_nil());
+
+    let result = builtin_sleep_for(&mut eval, vec![]);
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
+
+    let result = builtin_sleep_for(
+        &mut eval,
+        vec![Value::fixnum(0), Value::fixnum(0), Value::fixnum(0)],
+    );
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
+
+    let result = builtin_sleep_for(&mut eval, vec![Value::string("1")]);
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
+            if sig.symbol_name() == "wrong-type-argument"
+                && sig.data == vec![Value::symbol("numberp"), Value::string("1")]
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
+
+    let result = builtin_sleep_for(&mut eval, vec![Value::fixnum(0), Value::make_float(0.5)]);
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
+            if sig.symbol_name() == "wrong-type-argument"
+                && sig.data == vec![Value::symbol("fixnump"), Value::make_float(0.5)]
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
+}
+
+#[test]
+fn sleep_for_window_close_uses_special_event_map_handler_when_loaded() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    let scratch = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
+    install_minimal_special_event_command_runtime(&mut ev);
+
+    let tx = crate::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(
+        neovm_eval::emacs_core::eval::keyboard::InputEvent::WindowClose {
+            emacs_frame_id: frame.0,
+        },
+    )
+    .expect("queue window close");
+
+    ev.command_loop_mut().running = true;
+
+    let result = builtin_sleep_for(&mut ev, vec![Value::make_float(0.01)])
+        .expect("sleep-for should consume handled window close");
+    drop(tx);
+
+    assert_eq!(result, Value::NIL);
+    let logged = ev
+        .eval_symbol("neo-last-delete-frame-event")
+        .expect("delete-frame event should be logged");
+    assert_eq!(
+        logged,
+        Value::list(vec![
+            Value::symbol("delete-frame"),
+            Value::list(vec![Value::make_frame(frame.0)]),
+        ]),
+    );
+}
+
+#[test]
+fn sleep_for_window_close_honors_throw_on_input_before_handler() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    let scratch = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
+    install_minimal_special_event_command_runtime(&mut ev);
+
+    let tx = crate::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(
+        neovm_eval::emacs_core::eval::keyboard::InputEvent::WindowClose {
+            emacs_frame_id: frame.0,
+        },
+    )
+    .expect("queue window close");
+
+    ev.command_loop_mut().running = true;
+    ev.obarray_mut()
+        .set_symbol_value("throw-on-input", Value::symbol("tag"));
+
+    let flow = builtin_sleep_for(&mut ev, vec![Value::make_float(0.01)])
+        .expect_err("throw-on-input should interrupt sleep-for");
+    assert!(matches!(
+        flow.kind(),
+        FlowRef::Throw(ref thrown)
+            if thrown.tag == Value::symbol("tag") && thrown.value == Value::T
+    ));
+
+    ev.obarray_mut()
+        .set_symbol_value("throw-on-input", Value::NIL);
+    let result = builtin_sleep_for(&mut ev, vec![Value::make_float(0.01)])
+        .expect("sleep-for should consume handled window close afterwards");
+    drop(tx);
+
+    assert_eq!(result, Value::NIL);
+    let logged = ev
+        .eval_symbol("neo-last-delete-frame-event")
+        .expect("delete-frame event should be logged");
+    assert_eq!(
+        logged,
+        Value::list(vec![
+            Value::symbol("delete-frame"),
+            Value::list(vec![Value::make_frame(frame.0)]),
+        ]),
+    );
+}

@@ -44,6 +44,32 @@ fn draw_root(
         None,
     );
 }
+
+/// Record the active adapter's linear-to-sRGB8 conversion for a known input.
+///
+/// Vulkan permits either neighbour at a .5 tie: AMD RADV rounds the P2
+/// reference to [0, 0, 188, 128], the NVIDIA GTX 1650 truncates to
+/// [0, 0, 187, 127].  The scene's byte-exact expectations below therefore
+/// compare against references rendered through this same frame pipeline
+/// instead of this probe's literal value; this function remains a fail-loud
+/// check that the conversion is deterministic for a given adapter.
+fn probe_adapter_conversion(renderer: &mut WgpuRenderer, render: &mut GuiFrameRenderState) {
+    let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+    frame.background = Color::BLUE;
+    frame.background_alpha = 0.5;
+    let probe_target = target(renderer);
+    let probe_view = probe_target.create_view(&Default::default());
+    draw_root(renderer, render, &probe_view, &frame);
+    let first = px(&pixels(renderer, &probe_target), 80, 60);
+    draw_root(renderer, render, &probe_view, &frame);
+    let second = px(&pixels(renderer, &probe_target), 80, 60);
+    assert_eq!(
+        first, second,
+        "the adapter's linear-to-sRGB8 conversion must be deterministic for \
+         the same input"
+    );
+    eprintln!("display-runtime adapter linear 0.5 blue encodes as {first:?}");
+}
 fn linear_second() -> MotionSpec {
     MotionSpec::Tween(TweenSpec {
         duration: MotionDuration::new(Duration::from_secs(1)).unwrap(),
@@ -627,9 +653,83 @@ fn production_split_delete_placements_keep_background_opacity() {
     use neomacs_renderer_wgpu::PaneSource;
     let mut renderer =
         WgpuRenderer::new(None, W, H).expect("GPU required for runtime pane regression");
+    {
+        let origin = observe_platform_now();
+        let mut probe_render = GuiFrameRenderState::new(42, renderer.device(), 1.0, false, origin);
+        probe_adapter_conversion(&mut renderer, &mut probe_render);
+    }
+    // Expected outside background: the destination picture's background
+    // (BLUE at 0.5 alpha) rendered through the same frame pipeline.  The
+    // actual outside pixel below is the pane layout's base copy of that
+    // picture; the reference makes the check adapter-relative because
+    // Vulkan permits either neighbour at the .5 tie.
+    let reference_outside = {
+        let origin = observe_platform_now();
+        let mut reference_render =
+            GuiFrameRenderState::new(42, renderer.device(), 1.0, false, origin);
+        let mut expected = FrameGlyphBuffer::with_size(W as f32, H as f32);
+        expected.background = Color::BLUE;
+        expected.background_alpha = 0.5;
+        let reference_size = SnapshotSize::new(W, H).unwrap();
+        let reference_snapshot = renderer.acquire_snapshot(reference_size).unwrap();
+        draw_root(
+            &mut renderer,
+            &mut reference_render,
+            reference_snapshot.view(),
+            &expected,
+        );
+        let reference_target = target(&renderer);
+        let reference_view = reference_target.create_view(&Default::default());
+        // The actual outside pixel is the pane layout's base copy of the
+        // destination picture, so the reference must take the same
+        // surface-copy path: draw the expected frame into a snapshot, then
+        // let render_pane_layout copy it (the tiny pane at the origin cannot
+        // reach the sampled pixel).
+        renderer.render_pane_layout(
+            reference_snapshot.bind_group(),
+            None,
+            &reference_view,
+            (W as f32, H as f32),
+            &[neomacs_renderer_wgpu::PaneBlit {
+                bounds: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 1.0, 1.0),
+                content_origin: (0.0, 0.0),
+                source: neomacs_renderer_wgpu::PaneSource::Destination,
+                opacity: 0.0,
+            }],
+        );
+        px(&pixels(&renderer, &reference_target), 80, 60)
+    };
     let size = SnapshotSize::new(W, H).unwrap();
     let old = renderer.acquire_snapshot(size).unwrap();
     let new = renderer.acquire_snapshot(size).unwrap();
+    // Reference pictures for the pane composition: the analytically expected
+    // uniform background (old GREEN, new BLUE, both at the frame's recorded
+    // 0.5 alpha) with no window content.  A pane patch interpolates a source
+    // sample with the destination backdrop; rendering this flat expected
+    // background through the same composition applies the adapter's own
+    // conversion rounding to the expected linear colour, so the actual
+    // background row can be compared byte for byte instead of against the
+    // fixed -- and adapter-dependent -- literal 127.
+    let flat_old = {
+        let origin = observe_platform_now();
+        let mut flat_render = GuiFrameRenderState::new(42, renderer.device(), 1.0, false, origin);
+        let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+        frame.background = Color::GREEN;
+        frame.background_alpha = 0.5;
+        let snapshot = renderer.acquire_snapshot(size).unwrap();
+        draw_root(&mut renderer, &mut flat_render, snapshot.view(), &frame);
+        snapshot
+    };
+    let flat_new = {
+        let origin = observe_platform_now();
+        let mut flat_render = GuiFrameRenderState::new(42, renderer.device(), 1.0, false, origin);
+        let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+        frame.background = Color::BLUE;
+        frame.background_alpha = 0.5;
+        let snapshot = renderer.acquire_snapshot(size).unwrap();
+        draw_root(&mut renderer, &mut flat_render, snapshot.view(), &frame);
+        snapshot
+    };
     for splitting in [true, false] {
         let origin = observe_platform_now();
         let mut render = GuiFrameRenderState::new(42, renderer.device(), 1.0, false, origin);
@@ -660,6 +760,8 @@ fn production_split_delete_placements_keep_background_opacity() {
         draw_root(&mut renderer, &mut render, new.view(), &after);
         install_layout(&mut render, &before, origin);
         install_layout(&mut render, &after, origin);
+        let reference_target = target(&renderer);
+        let reference_view = reference_target.create_view(&Default::default());
         let target = target(&renderer);
         let view = target.create_view(&Default::default());
         for millis in [0, 500, 1000] {
@@ -691,15 +793,40 @@ fn production_split_delete_placements_keep_background_opacity() {
                 &composition.blits,
             );
             let data = pixels(&renderer, &target);
+            renderer.render_pane_layout(
+                flat_new.bind_group(),
+                Some(flat_old.bind_group()),
+                &reference_view,
+                (W as f32, H as f32),
+                &composition.blits,
+            );
+            let reference_data = pixels(&renderer, &reference_target);
+            let reference_alpha_max = (2..W - 2)
+                .map(|x| px(&reference_data, x, 40)[3])
+                .max()
+                .unwrap_or(0);
+            assert!(
+                reference_alpha_max < 160,
+                "runtime pane split={splitting} {millis}: the expected background \
+                 must stay near the 0.5 source opacity rather than compound \
+                 (max alpha {reference_alpha_max})"
+            );
             for x in 2..W - 2 {
-                let bg = px(&data, x, 40);
-                assert!(
-                    (127..=129).contains(&bg[3]),
-                    "runtime pane split={splitting} {millis} x{x}: {bg:?}"
+                let actual_px = px(&data, x, 40);
+                let expected_px = px(&reference_data, x, 40);
+                assert_eq!(
+                    actual_px, expected_px,
+                    "runtime pane split={splitting} {millis} x{x}: the background \
+                     row must equal the expected linear background through the \
+                     same pane composition"
                 );
             }
             let outside = px(&data, 80, 60);
-            assert_eq!(outside, [0, 0, 188, 128], "outside actual pane placements");
+            assert_eq!(
+                outside, reference_outside,
+                "outside actual pane placements must equal the expected \
+                 linear colour through the frame pipeline"
+            );
             assert_eq!(
                 px(&data, 20, 20),
                 [255; 4],

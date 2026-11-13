@@ -116,7 +116,8 @@ fn split_and_probe(
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     eval.set_variable("posn-control-child", Value::make_window(child.0));
     let mut captures = Vec::new();
     for (x, y) in [(0, 0), (1, 0), (3, 0), (0, 2), (1, 2), (3, 2)] {

@@ -256,58 +256,85 @@ fn gnu_oracle_ci_action() -> &'static str {
     ))
 }
 
+/// The configure/build recipe shared by CI and the local NixOS shell
+/// (commit 3a8e3c21ea: one definition, no second copy to drift).
+fn gnu_oracle_build_recipe() -> &'static str {
+    include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/scripts/ci/build-gnu-oracle.sh"
+    ))
+}
+
+/// The configuration attestation shared by CI and the local NixOS shell.
+fn gnu_oracle_check_recipe() -> &'static str {
+    include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/scripts/ci/check-gnu-oracle.sh"
+    ))
+}
+
 #[test]
 fn gnu_oracle_ci_requires_native_dbus() {
-    let action = gnu_oracle_ci_action();
+    // The single-recipe refactor (commit 3a8e3c21ea) moved the configure line
+    // out of the action into scripts/ci/build-gnu-oracle.sh and the feature
+    // attestation into scripts/ci/check-gnu-oracle.sh; assert the same
+    // properties in their one definition.
+    let build = gnu_oracle_build_recipe();
+    let linux = build
+        .split("profile=linux-gtk3")
+        .nth(1)
+        .and_then(|tail| tail.split("esac").next())
+        .expect("linux-gtk3 configure branch");
     assert!(
-        action.split_whitespace().any(|word| word == "--with-dbus"),
+        linux.split_whitespace().any(|word| word == "--with-dbus"),
         "the pinned GNU must require D-Bus at configure time for real notification tests"
     );
-    assert!(!action.contains("--without-dbus"));
-    let smoke = action
-        .split("- name: Put the oracle on PATH and prove it is the pinned build")
+    assert!(!linux.contains("--without-dbus"));
+    let check = gnu_oracle_check_recipe();
+    let linux_features = check
+        .split("linux-gtk3)")
         .nth(1)
-        .expect("oracle smoke step");
-    let required_features = smoke
-        .split("for want in ")
-        .nth(1)
-        .and_then(|tail| tail.split(';').next())
-        .expect("required GNU configuration features");
+        .and_then(|tail| tail.split(";;").next())
+        .expect("linux-gtk3 required features");
     assert!(
-        required_features
-            .split_whitespace()
-            .any(|word| word == "DBUS")
+        linux_features.split_whitespace().any(|word| word == "DBUS"),
+        "the oracle attestation must require the DBUS configuration feature"
     );
-    assert!(smoke.contains("(require 'dbus)"));
+    assert!(check.contains("(require 'dbus)"));
     for primitive in [
         "dbus-call-method",
         "dbus-register-method",
         "dbus-get-unique-name",
     ] {
-        assert!(smoke.contains(primitive), "smoke must verify {primitive}");
+        assert!(check.contains(primitive), "smoke must verify {primitive}");
     }
     assert!(
-        smoke.contains("fboundp"),
+        check.contains("fboundp"),
         "smoke must check native functions exist"
     );
     assert!(
-        smoke.contains("subrp"),
+        check.contains("subrp"),
         "smoke must distinguish the native primitive"
     );
 }
 
 #[test]
 fn gnu_oracle_ci_installs_dbus_dependencies_on_cache_hits() {
+    // The single-recipe refactor split the old unconditional dependency step
+    // into an unconditional RUNTIME step and a cache-miss-only BUILD step
+    // (commit 3a8e3c21ea). The runtime step is the one a cache hit needs, and
+    // it must stay unconditional and keep the D-Bus runtime packages.
     let action = gnu_oracle_ci_action();
     let dependency_step = action
-        .split("- name: Install the oracle's build and runtime dependencies")
+        .split("- name: Install the oracle's runtime dependencies")
         .nth(1)
-        .and_then(|tail| tail.split("- name: Restore the cached oracle build").next())
-        .expect("unconditional dependency step before restoring cache");
+        .and_then(|tail| tail.split("\n    - name:").next())
+        .expect("unconditional runtime dependency step");
     assert!(
         !dependency_step
             .lines()
-            .any(|line| line.trim_start().starts_with("if:"))
+            .any(|line| line.trim_start().starts_with("if:")),
+        "runtime dependencies must install on cache hits too (no if:)"
     );
     for package in ["libdbus-1-dev", "dbus-daemon"] {
         assert!(
@@ -321,12 +348,103 @@ fn gnu_oracle_ci_installs_dbus_dependencies_on_cache_hits() {
 
 #[test]
 fn gnu_oracle_ci_keeps_build_scratch_in_workspace() {
+    // The single-recipe refactor (commit 3a8e3c21ea) moved the checkout
+    // workdir out of the action: CI passes a per-job RUNNER_TEMP scratch
+    // directory, the recipe honors an explicit third argument first, and only
+    // then falls back to EMACS_ORACLE_WORKDIR and TMPDIR. The historical test
+    // name records the original workspace-tmp intent; the assertion pins the
+    // current contract, which still keeps the checkout out of the source tree
+    // and makes the directory selectable.
     let action = gnu_oracle_ci_action();
     assert!(
-        action.contains("mktemp -d \"$GITHUB_WORKSPACE/tmp/gnu-emacs-oracle.XXXXXX\""),
-        "the GNU source checkout must use workspace tmp, including when TMPDIR is unset"
+        action.contains("EMACS_ORACLE_WORKDIR=\"$RUNNER_TEMP\""),
+        "CI must pass a per-job scratch directory to the oracle recipe"
     );
-    assert!(action.contains("mkdir -p \"$GITHUB_WORKSPACE/tmp\""));
+    let build = gnu_oracle_build_recipe();
+    assert!(
+        build.contains("readonly workdir=${3:-${EMACS_ORACLE_WORKDIR:-${TMPDIR:-/tmp}}}"),
+        "the checkout workdir must be selectable (argument, env) with a safe default"
+    );
+    assert!(
+        build.contains("mktemp -d \"$workdir/gnu-emacs-oracle.XXXXXX\""),
+        "the GNU source checkout must use the selected scratch directory"
+    );
+}
+
+/// LEAD 22:3xZ (xtask path tests r2): the D-Bus and attestation properties
+/// are asserted in their single definition (the two scripts, above), but the
+/// action must still WIRE those recipes. The build step invokes
+/// scripts/ci/build-gnu-oracle.sh, the smoke step invokes
+/// scripts/ci/check-gnu-oracle.sh with the build manifest, and the Linux job
+/// sets no EMACS_ORACLE_PROFILE, so the recipe's linux-gtk3 default is
+/// selected. The build writes the `profile=` line that check reads back.
+#[test]
+fn gnu_oracle_ci_action_wires_the_shared_recipes_and_profile() {
+    let action = gnu_oracle_ci_action();
+    let build_recipe = gnu_oracle_build_recipe();
+    let check_recipe = gnu_oracle_check_recipe();
+
+    let build_step = action
+        .split("- name: Build GNU Emacs from the pinned commit")
+        .nth(1)
+        .and_then(|tail| tail.split("\n    - name:").next())
+        .expect("the action has a 'Build GNU Emacs from the pinned commit' step");
+    // (i) The build step invokes the one shared recipe, not a second copy.
+    assert!(
+        build_step.contains("\"$GITHUB_WORKSPACE/scripts/ci/build-gnu-oracle.sh\""),
+        "the build step must invoke scripts/ci/build-gnu-oracle.sh"
+    );
+    assert!(
+        build_step.contains("\"$EMACS_COMMIT\" /opt/gnu-emacs-oracle"),
+        "the build step must pass the pinned commit and the install prefix to the recipe"
+    );
+
+    let smoke_step = action
+        .split("- name: Put the oracle on PATH and prove it is the pinned build")
+        .nth(1)
+        .expect("the action has the oracle smoke/attestation step");
+    // (iii) The smoke step invokes the one attestation recipe with the
+    // manifest the build wrote.
+    assert!(
+        smoke_step.contains("\"$GITHUB_WORKSPACE/scripts/ci/check-gnu-oracle.sh\""),
+        "the smoke step must invoke scripts/ci/check-gnu-oracle.sh"
+    );
+    const MANIFEST: &str = "/opt/gnu-emacs-oracle/share/gnu-emacs-oracle/build-manifest";
+    assert!(
+        smoke_step.contains(MANIFEST),
+        "the smoke step must attest the build manifest"
+    );
+
+    // (iv) The build writes profile=<name> into that manifest and check
+    // selects on the line.
+    assert!(
+        build_recipe.contains("printf 'profile=%s\\n' \"$profile\""),
+        "build-gnu-oracle.sh must write the profile= line into the manifest"
+    );
+    assert!(
+        check_recipe.contains("profile=*) profile=${line#profile=}"),
+        "check-gnu-oracle.sh must select the profile from the manifest"
+    );
+    // The action builds into the prefix whose manifest the smoke step reads.
+    assert!(
+        build_step.contains("/opt/gnu-emacs-oracle"),
+        "the build and the smoke attestation must agree on the install prefix"
+    );
+
+    // (ii) No profile override in the Linux action: the recipe's Linux
+    // default selects linux-gtk3 and rejects any other override.
+    assert!(
+        !action.contains("EMACS_ORACLE_PROFILE"),
+        "the Linux action must not set EMACS_ORACLE_PROFILE; an override would select another profile"
+    );
+    assert!(
+        build_recipe.contains("if [[ -n $profile_override && $profile_override != linux-gtk3 ]]"),
+        "the Linux recipe must reject a non-linux-gtk3 EMACS_ORACLE_PROFILE override"
+    );
+    assert!(
+        build_recipe.contains("profile=linux-gtk3"),
+        "the Linux recipe must select linux-gtk3"
+    );
 }
 
 #[test]
@@ -784,7 +902,15 @@ fn windows_gstreamer_packager_accepts_official_pango_runtime_shape() {
 }
 
 fn parse_options(args: &[&str]) -> FreshBuildOptions {
-    FreshBuildOptions::parse(PathBuf::from("/repo"), args.iter().map(OsString::from)).unwrap()
+    // Hermetic: the parser's environment inputs are injected, so an ambient
+    // CARGO_TARGET_DIR (the P2 baseline's path-test failure) cannot change
+    // the expected `/repo/target/<profile>` result.
+    FreshBuildOptions::parse_with_env(
+        PathBuf::from("/repo"),
+        args.iter().map(OsString::from),
+        ParseEnv::default(),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -1022,6 +1148,28 @@ fn usage_places_preloaded_lisp_compile_before_final_pdump() {
 
     assert!(preloaded < pdump);
     assert!(pdump < compile_main);
+}
+
+/// The peer ruling for the fresh-build stamp: lisp/ldefs-boot.el is the one
+/// tracked file the pipeline regenerates, and fresh-build restores its
+/// pre-build bytes BEFORE stamping the tree.  Pin both directions: a changed
+/// file is rewritten, an identical one is left alone (and reported as not
+/// rewritten, so the pipeline only prints its INFO line when it acted).
+#[test]
+fn tracked_ldefs_boot_restore_rewrites_only_a_changed_file() {
+    let tempdir = tempdir();
+    let path = tempdir.join("ldefs-boot.el");
+    let tracked = b";; tracked bootstrap autoloads\n";
+    fs::write(&path, b";; regenerated from loaddefs.el\n").unwrap();
+    assert!(
+        restore_tracked_ldefs_boot(tracked, &path).unwrap(),
+        "a regenerated file must be restored"
+    );
+    assert_eq!(fs::read(&path).unwrap(), tracked);
+    assert!(
+        !restore_tracked_ldefs_boot(tracked, &path).unwrap(),
+        "an already-tracked file must not be rewritten"
+    );
 }
 
 #[test]

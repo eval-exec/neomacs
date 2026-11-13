@@ -1,9 +1,14 @@
+mod canonical_subr_plan_command;
 mod compile_wave;
 mod dependency_coherence;
 mod gc_stress;
+mod info_manuals;
+mod oracle_preflight_command;
 mod pentry_inventory_command;
 mod pgo;
 mod production_capabilities;
+mod upper_snapshots_command;
+mod upper_subrs_command;
 mod window_icon;
 
 // SINGLE SOURCE OF TRUTH (ledger 206): the recipe for every Lisp file this
@@ -439,12 +444,44 @@ fn try_main() -> Result<()> {
 
 fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut args = args.into_iter().peekable();
+    if matches!(args.peek().and_then(|arg| arg.to_str()), Some("build-info")) {
+        args.next();
+        return info_manuals::run(&repo_root, args);
+    }
     if matches!(
         args.peek().and_then(|arg| arg.to_str()),
         Some("pentry-inventory")
     ) {
         args.next();
         return pentry_inventory_command::run(&repo_root, args);
+    }
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("upper-snapshots")
+    ) {
+        args.next();
+        return upper_snapshots_command::run(&repo_root, args);
+    }
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("upper-subrs")
+    ) {
+        args.next();
+        return upper_subrs_command::run(&repo_root, args);
+    }
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("canonical-subr-plan")
+    ) {
+        args.next();
+        return canonical_subr_plan_command::run(&repo_root, args);
+    }
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("oracle-preflight")
+    ) {
+        args.next();
+        return oracle_preflight_command::run(&repo_root, args);
     }
     if matches!(
         args.peek().and_then(|arg| arg.to_str()),
@@ -510,10 +547,40 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
     run_fresh_build(&options)
 }
 
+/// Environment inputs of [`FreshBuildOptions::parse`].
+///
+/// The parser reads two environment values. Injecting them keeps tests
+/// hermetic: the P2 baseline's `parse_release_uses_release_bin_dir` expected
+/// `/repo/target/release` while an ambient `CARGO_TARGET_DIR` silently won.
+/// Production passes [`ParseEnv::from_process`]; tests pass a clean value.
+#[derive(Clone, Debug, Default)]
+struct ParseEnv {
+    cargo_target_dir: Option<OsString>,
+    native_comp: bool,
+}
+
+impl ParseEnv {
+    fn from_process() -> Self {
+        Self {
+            cargo_target_dir: env::var_os("CARGO_TARGET_DIR"),
+            native_comp: env::var("NEOMACS_NATIVE_COMP")
+                .is_ok_and(|value| value.eq_ignore_ascii_case("yes")),
+        }
+    }
+}
+
 impl FreshBuildOptions {
     fn parse(
         repo_root: PathBuf,
         args: impl IntoIterator<Item = OsString>,
+    ) -> Result<FreshBuildOptions> {
+        Self::parse_with_env(repo_root, args, ParseEnv::from_process())
+    }
+
+    fn parse_with_env(
+        repo_root: PathBuf,
+        args: impl IntoIterator<Item = OsString>,
+        parse_env: ParseEnv,
     ) -> Result<FreshBuildOptions> {
         let mut args = args.into_iter().peekable();
 
@@ -532,8 +599,7 @@ impl FreshBuildOptions {
         let mut profile: Option<BuildProfile> = None;
         let mut cargo_jobs = CargoJobBudget::Inherit;
         let mut dry_run = false;
-        let mut native_comp =
-            env::var("NEOMACS_NATIVE_COMP").is_ok_and(|value| value.eq_ignore_ascii_case("yes"));
+        let mut native_comp = parse_env.native_comp;
         let mut skip_build = false;
         let mut no_byte_compile = false;
         let mut features: Vec<RequestedCargoFeature> = Vec::new();
@@ -635,7 +701,9 @@ impl FreshBuildOptions {
             .into());
         }
 
-        let bin_dir = bin_dir.unwrap_or_else(|| default_bin_dir(&repo_root, &profile));
+        let bin_dir = bin_dir.unwrap_or_else(|| {
+            default_bin_dir_with_target(&repo_root, &profile, parse_env.cargo_target_dir.as_deref())
+        });
 
         Ok(FreshBuildOptions {
             repo_root,
@@ -700,7 +768,19 @@ fn repository_root() -> PathBuf {
 }
 
 fn default_bin_dir(repo_root: &Path, profile: &BuildProfile) -> PathBuf {
-    env::var_os("CARGO_TARGET_DIR")
+    default_bin_dir_with_target(
+        repo_root,
+        profile,
+        env::var_os("CARGO_TARGET_DIR").as_deref(),
+    )
+}
+
+fn default_bin_dir_with_target(
+    repo_root: &Path,
+    profile: &BuildProfile,
+    cargo_target_dir: Option<&OsStr>,
+) -> PathBuf {
+    cargo_target_dir
         .map(PathBuf::from)
         .map(|path| {
             if path.is_absolute() {
@@ -909,6 +989,23 @@ fn run_fresh_build_pipeline(
         None
     } else {
         Some(UnchangedSourceMtimes::capture(&paths.lisp_root)?)
+    };
+
+    // lisp/ldefs-boot.el is the ONE tracked file this pipeline overwrites: it
+    // is the bootstrap fallback `(load "ldefs-boot.el")` used while loaddefs.el
+    // does not exist yet, and GNU's comment in loadup.el keeps the tracked copy
+    // as the repository's bootstrap autoload snapshot
+    // (`admin/update_autogen` refreshes it periodically, not every build).
+    // The final dump runs loadup AFTER loaddefs.el exists, so it loads the
+    // generated loaddefs.el, not this file; restoring the tracked bytes after
+    // the dump cannot change the runtime.  The local build scripts restored
+    // this file with `git checkout --` after fresh-build, which would make the
+    // fresh-build stamp's manifest stale; the restore belongs here, before the
+    // stamp, and needs no `.git` (a remote lane copy has none).
+    let tracked_ldefs_boot = if options.dry_run {
+        None
+    } else {
+        fs::read(&ldefs_boot).ok()
     };
 
     // GNU's bootstrap-clean removes Lisp bytecode before building
@@ -1165,6 +1262,41 @@ fn run_fresh_build_pipeline(
     // loaded into the final pdump before the broad Lisp byte-compile pass.
     if !options.no_byte_compile {
         run_compile_main(options, &paths, &envs)?;
+    }
+
+    info_manuals::build(
+        &options.repo_root,
+        &options.runtime_root,
+        &paths.final_bin,
+        options.dry_run,
+    )?;
+
+    // Put the tracked bootstrap autoloads back BEFORE the stamp hashes the
+    // tree.  The final dump above ran loadup with loaddefs.el present, so it
+    // consumed the generated autoloads; ldefs-boot.el is only the bootstrap
+    // fallback, and the tree the stamp describes must be the checkout's.
+    if let Some(original) = &tracked_ldefs_boot {
+        if restore_tracked_ldefs_boot(original, &ldefs_boot)? {
+            print_synthetic_step("restore the tracked lisp/ldefs-boot.el bytes");
+            println!(
+                "  INFO  the dump loaded the generated loaddefs.el; the tracked bootstrap autoloads are restored before the stamp"
+            );
+        }
+    }
+
+    // The fresh-build stamp attests this binary to the Lisp tree it was built
+    // with.  The oracle harnesses and `scripts/oracle-full-run.sh` refuse to
+    // measure an editor whose tree was synced, stripped or regenerated after
+    // the build; a remote lane lost its .elc files that way and every Lisp
+    // file loaded as source.  Written last, after the final dump and the
+    // compile-main pass, so both the binary and every .elc are final.
+    if !options.dry_run {
+        print_synthetic_step(
+            "write the fresh-build stamp (binary sha256 + generated-Lisp manifest)",
+        );
+        let stamp =
+            neomacs_test_env::fresh_build_stamp::write_stamp(&paths.final_bin, &paths.lisp_root)?;
+        println!("  INFO  stamp {}", stamp.display());
     }
 
     let mode = options.profile.as_name();
@@ -4258,57 +4390,15 @@ fn parse_compile_first_sources(
     ))
 }
 
+/// The loadup preloaded list, from the single implementation shared with the
+/// oracle attestation (`neomacs-test-env`): GNU's own `src/Makefile.in` rule.
 fn parse_preloaded_lisp_sources(loadup: &Path, lisp_root: &Path) -> Result<Vec<PathBuf>> {
-    let contents = fs::read_to_string(loadup)?;
-    Ok(parse_preloaded_lisp_sources_from_str(&contents, lisp_root))
+    Ok(neomacs_test_env::fresh_build_stamp::parse_preloaded_sources(loadup, lisp_root)?)
 }
 
+#[cfg(test)]
 fn parse_preloaded_lisp_sources_from_str(contents: &str, lisp_root: &Path) -> Vec<PathBuf> {
-    let mut targets = BTreeSet::new();
-
-    // GNU src/Makefile.in generates src/lisp.mk with:
-    //   sed -n 's/^[ \t]*(load "\([^"]*\)".*/\1/p' loadup.el |
-    //     sed -e 's/$/.elc \\/' -e 's/\.el\.elc/.el/'
-    for line in contents.lines() {
-        let trimmed = line.trim_start_matches([' ', '\t']);
-        let Some(rest) = trimmed.strip_prefix("(load \"") else {
-            continue;
-        };
-        let Some((library, _)) = rest.split_once('"') else {
-            continue;
-        };
-        let target = if library.ends_with(".el") {
-            library.to_string()
-        } else {
-            format!("{library}.elc")
-        };
-        targets.insert(target);
-    }
-
-    targets.remove("leim/leim-list.el");
-    targets.remove("site-load.elc");
-    targets.remove("site-init.elc");
-    targets.insert("loaddefs.elc".to_string());
-
-    let mut sources = Vec::new();
-    push_preloaded_lisp_source("loaddefs.elc", lisp_root, &mut sources);
-    for target in targets {
-        if target == "loaddefs.elc" {
-            continue;
-        }
-        push_preloaded_lisp_source(&target, lisp_root, &mut sources);
-    }
-    sources
-}
-
-fn push_preloaded_lisp_source(target: &str, lisp_root: &Path, out: &mut Vec<PathBuf>) {
-    let Some(source) = target.strip_suffix(".elc") else {
-        return;
-    };
-    let source = lisp_root.join(format!("{source}.el"));
-    if source.is_file() && !source_has_no_byte_compile_marker(&source).unwrap_or(false) {
-        out.push(source);
-    }
+    neomacs_test_env::fresh_build_stamp::parse_preloaded_sources_from_str(contents, lisp_root)
 }
 
 fn parse_compile_first_sources_from_str(
@@ -4484,6 +4574,21 @@ fn write_ldefs_boot(loaddefs_el: &Path, ldefs_boot: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Restore the tracked `lisp/ldefs-boot.el` bytes captured before the
+/// generators ran.  Returns whether the file had to be rewritten.
+///
+/// The restore is deliberately a saved-bytes write rather than
+/// `git checkout --`: a remote lane copy can be `.git`-less (or carry the
+/// seed's `.git`, whose HEAD is a different tree), and the bytes the build
+/// started from ARE the checkout's tracked bytes in a clean tree.
+fn restore_tracked_ldefs_boot(original: &[u8], path: &Path) -> Result<bool> {
+    if fs::read(path).ok().as_deref() == Some(original) {
+        return Ok(false);
+    }
+    fs::write(path, original)?;
+    Ok(true)
+}
+
 const LOADDEFS_END_BOUNDARY: &str = "\n\x0c\n;;; End of scraped data";
 // GNU Emacs 31.0.90's `loaddefs-generate` prints the autoload docstring on its
 // own line (verified against the system emacs-31.0.90 binary), not the older
@@ -4555,6 +4660,7 @@ fn print_usage() {
 fn usage_text() -> &'static str {
     "\
 Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload|--no-aot-preload]
+       cargo xtask build-info --binary PATH [--runtime-root DIR] [--dry-run]
        cargo xtask check-dependency-coherence
        cargo xtask render-window-icon --out-dir DIR [--source PATH]
        cargo xtask perf list

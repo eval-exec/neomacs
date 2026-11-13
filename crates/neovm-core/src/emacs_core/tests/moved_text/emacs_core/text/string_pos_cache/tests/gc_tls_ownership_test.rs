@@ -1,0 +1,71 @@
+use crate::emacs_core::eval::Context;
+use neovm_value::value::Value;
+
+use neovm_value::string_pos_cache::*;
+
+#[test]
+fn gc_tls_ownership_string_pos_cache_new_heap_reset_drops_old_values() {
+    {
+        let mut first = crate::test_utils::new_context();
+        let value = populate(&mut first);
+        assert!(roots(&first).iter().any(|root| root.bits() == value.bits()));
+    }
+    let mut next = crate::test_utils::new_context();
+    assert!(
+        roots(&next)
+            .iter()
+            .all(|value| !value.is_heap_object()
+                || next.tagged_heap().owns_heap_value_for_test(*value)),
+        "new-heap reset retained a value from the dropped heap"
+    );
+    next.gc_collect_exact();
+}
+
+#[test]
+fn gc_tls_ownership_string_pos_cache_excludes_another_live_heap() {
+    let mut first = crate::test_utils::new_context();
+    let mut second = crate::test_utils::new_context();
+    let value = populate(&mut second);
+    assert!(
+        roots(&second)
+            .iter()
+            .any(|root| root.bits() == value.bits())
+    );
+    assert!(
+        roots(&first)
+            .iter()
+            .all(|value| !value.is_heap_object()
+                || first.tagged_heap().owns_heap_value_for_test(*value)),
+        "GC roots contain a value belonging to another live Context"
+    );
+    first.gc_collect_exact();
+    second.setup_thread_locals();
+    assert!(
+        roots(&second).is_empty(),
+        "activation retained an old cache entry"
+    );
+    second.gc_collect_exact();
+    assert!(
+        !second.tagged_heap().owns_heap_value_for_test(value),
+        "an evicted cache entry kept its otherwise unreachable string alive"
+    );
+}
+
+fn populate(_ctx: &mut Context) -> Value {
+    let string = Value::string("aжb");
+    string_char_to_byte(string, string.as_lisp_string().unwrap(), 2);
+    string
+}
+
+fn roots(ctx: &Context) -> Vec<Value> {
+    let mut roots = Vec::new();
+    collect_string_pos_cache_gc_roots(
+        &mut roots,
+        ctx.tagged_heap().tagged_heap_identity(),
+        ctx.tagged_heap().gc_collections(),
+        neovm_value::tagged::gc::CacheRootScan::snapshot(
+            ctx.tagged_heap().mark_in_progress() || ctx.tagged_heap().sweep_in_progress(),
+        ),
+    );
+    roots
+}

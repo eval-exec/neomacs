@@ -8,17 +8,17 @@ error[E0277]: `Rc<()>` cannot be sent between threads safely
 note: required because it appears within the type `std::marker::PhantomData<Rc<()>>`
  --> $RUST/core/src/marker.rs
 note: required because it appears within the type `OwnerResumePort<RedisplayStep, u64>`
- --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/owner_step.rs
   |
   | pub(crate) struct OwnerResumePort<K: OwnerStepKind, O> {
   |                   ^^^^^^^^^^^^^^^
 note: required because it appears within the type `OwnerStepClaim<'static, RedisplayStep, u64>`
- --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/owner_step.rs
   |
   | pub(crate) struct OwnerStepClaim<'s, K: OwnerStepKind, O> {
   |                   ^^^^^^^^^^^^^^
 note: required because it appears within the type `ClaimedOwnerStep<'static, u64>`
- --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/owner_step.rs
   |
   |           pub(crate) enum ClaimedOwnerStep<'s, O> { $($variant(OwnerStepClaim<'s, $kind, O>),)+ }
   |                           ^^^^^^^^^^^^^^^^

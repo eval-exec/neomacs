@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `install_string_bytes_changed_hook` is unsafe and requires unsafe block
+ --> tests/mint_seal_ui/string_bytes_hook_install_is_not_public.rs:8:13
+  |
+8 |     let _ = neovm_value::heap_types::install_string_bytes_changed_hook(&STAMP);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

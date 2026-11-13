@@ -3,9 +3,9 @@ use neovm_core::emacs_core::{
     format_eval_result,
     load::{
         LoadupDumpInvocation, LoadupDumpMode, LoadupInvocation, RuntimeImageRole,
-        activate_runtime_evaluator, create_bootstrap_evaluator_for_loadup,
+        activate_runtime_evaluator,
     },
-    pdump::load_from_dump,
+    load_boot::{create_bootstrap_evaluator_for_loadup, load_from_dump},
 };
 use std::{fs, path::PathBuf, process::Command};
 use tempfile::tempdir;

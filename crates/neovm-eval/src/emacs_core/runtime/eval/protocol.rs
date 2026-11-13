@@ -1,0 +1,826 @@
+//! Display-host protocol vocabulary owned by the evaluator layer
+//! (stage-4 W2 E5, S1 state-down).
+//!
+//! These are validated boundary values and the one cold display-host trait
+//! that cross the evaluator/display-host seam. They name only value/edit
+//! vocabulary, display-protocol vocabulary (an allowed leaf), the evaluator's
+//! own face data and evaluator types, so the evaluator can hold and return
+//! them without naming a display-crate type.
+
+use std::fmt::{Display, Formatter};
+use std::num::{NonZeroU16, NonZeroU32};
+
+use neovm_edit::buffer::BufferId;
+
+use super::data::face::{Face, FaceHeight};
+use super::{
+    FontEntityMetricsRequest, FontListError, FontListFilter, FontOtfCapability, FontPxProbeResult,
+    FontSpecListQuery, FontSpecResolveRequest, GuiFrameHostRequest, GuiFrameHostSize,
+    ListedFontEntity, PopupMenuRequest, ResolvedFontEntityMetrics, ResolvedFontMatch,
+    ResolvedFontSpecMatch, ResolvedFrameFont, ResolvedSurface, ResolvedVideo, ResolvedWebKit,
+    ShaderSurfaceCreateRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
+    SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
+};
+use neomacs_display_protocol::font::ResolvedFontIdentity;
+use neomacs_display_protocol::{
+    GraphicalDisplayIdentity, GraphicalFaceAttribute, ImageSizeLimit, ImageStateEvent,
+    SelectionOwner,
+};
+use neomacs_display_protocol::{VideoId, WebViewId};
+use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
+use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
+use neovm_value::display_vocab::{
+    FontEntityHandle, FrameFullscreen, FrameId, FrameVisibility, XwidgetScriptRequestId,
+};
+use neovm_value::emacs_char::EmacsChar;
+use neovm_value::heap_types::LispString;
+
+mod system_fonts;
+pub use system_fonts::{SystemFontName, SystemFontRole, SystemFonts};
+
+pub mod image_catalog;
+
+mod rows_authority;
+pub use rows_authority::InertRowsHostAuthority;
+pub(crate) use rows_authority::actual_rows_host_type;
+pub mod tty_host;
+
+/// The display object that owns a neo-term instance.
+///
+/// Window terminals carry their buffer identity in the variant itself, so a
+/// detached frame-wide `Window` state cannot be constructed accidentally.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalDisplayTarget {
+    Window { buffer: BufferId },
+    Inline,
+    Floating,
+}
+
+/// A live terminal identifier. Zero is reserved as the Lisp failure sentinel,
+/// so it cannot cross the typed display-host boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TerminalId(NonZeroU32);
+
+impl TerminalId {
+    pub fn new(id: u32) -> Option<Self> {
+        NonZeroU32::new(id).map(Self)
+    }
+
+    pub fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl Display for TerminalId {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// Non-empty terminal grid dimensions validated at the Lisp boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminalGridSize {
+    pub cols: NonZeroU16,
+    pub rows: NonZeroU16,
+}
+
+impl TerminalGridSize {
+    pub fn new(cols: u16, rows: u16) -> Option<Self> {
+        Some(Self {
+            cols: NonZeroU16::new(cols)?,
+            rows: NonZeroU16::new(rows)?,
+        })
+    }
+}
+
+/// Validated terminal creation request owned by the evaluator/display-host
+/// boundary. Renderer-specific command enums stay outside `neovm-core`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalCreateRequest {
+    pub size: TerminalGridSize,
+    pub target: TerminalDisplayTarget,
+    pub shell: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerminalFloatPlacement {
+    x: f32,
+    y: f32,
+    opacity: f32,
+}
+
+impl TerminalFloatPlacement {
+    pub fn new(x: f32, y: f32, opacity: f32) -> Option<Self> {
+        (x.is_finite() && y.is_finite() && opacity.is_finite() && (0.0..=1.0).contains(&opacity))
+            .then_some(Self { x, y, opacity })
+    }
+
+    pub fn x(self) -> f32 {
+        self.x
+    }
+
+    pub fn y(self) -> f32 {
+        self.y
+    }
+
+    pub fn opacity(self) -> f32 {
+        self.opacity
+    }
+}
+
+/// A finite, positive scalar used by point-size and relative-size requests.
+///
+/// Lisp numbers are validated once when they cross the display-host seam, so
+/// native font adapters never need to recover from NaN, infinity, zero, or a
+/// negative size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PositiveFontScalar(f64);
+
+impl PositiveFontScalar {
+    pub fn new(value: f64) -> Option<Self> {
+        (value.is_finite() && value > 0.0).then_some(Self(value))
+    }
+
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+/// The semantic size attached to a frame-font request.
+///
+/// GNU keeps integer font-spec sizes in pixels until font realization, while
+/// floating sizes are points. Keeping those units in the type prevents a
+/// frame-independent conversion from silently assuming one platform DPI.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FrameFontSize {
+    Default,
+    Pixels(NonZeroU32),
+    Points(PositiveFontScalar),
+    Relative(PositiveFontScalar),
+}
+
+impl FrameFontSize {
+    pub fn pixels(value: i64) -> Option<Self> {
+        u32::try_from(value)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .map(Self::Pixels)
+    }
+
+    pub fn points(value: f64) -> Option<Self> {
+        let value = PositiveFontScalar::new(value)?;
+        ((1.0..=f64::from(i32::MAX)).contains(&(value.get() * 10.0))).then_some(Self::Points(value))
+    }
+
+    pub fn relative(value: f64) -> Option<Self> {
+        PositiveFontScalar::new(value).map(Self::Relative)
+    }
+
+    pub fn from_face_height(height: FaceHeight) -> Option<Self> {
+        match height {
+            FaceHeight::Absolute(tenths) => Self::points(f64::from(tenths) / 10.0),
+            FaceHeight::Relative(scale) => Self::relative(scale),
+        }
+    }
+}
+
+/// Size used to open a font for a Lisp query, not to resize a frame.
+///
+/// GNU opens an unsized scalable entity at the smallest usable size, whereas
+/// a named font can request pixels or points. Point conversion belongs to the
+/// display host; neither the selected frame's font nor backing scale supplies
+/// substitute metrics. An explicit font-spec DPI overrides the display DPI.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FontOpeningSize {
+    SmallestUsable,
+    Pixels(NonZeroU32),
+    /// An unsized name uses GNU's moderate default, except on Cocoa where
+    /// the native frame's `fontsize` parameter supplies the default points.
+    NamedDefault {
+        frame_fontsize: Option<PositiveFontScalar>,
+    },
+    Points {
+        size: PositiveFontScalar,
+        dpi: Option<NonZeroU32>,
+    },
+}
+
+/// Display and exact opened-font facts for the first graphical frame.
+///
+/// A terminal frame may be selected while early init runs. Its identity and
+/// one-cell metrics cannot supply defaults for the later graphical creation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InitialGuiFrameDefaults {
+    pub display: GraphicalDisplayIdentity,
+    pub font: ResolvedFrameFont,
+    pub size: GuiFrameHostSize,
+}
+
+/// A non-empty font-family name crossing from the platform display host into
+/// the evaluator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AvailableFontFamilyName(LispString);
+
+impl AvailableFontFamilyName {
+    pub fn new(name: LispString) -> Option<Self> {
+        name.as_utf8_str()
+            .is_some_and(|name| !name.trim().is_empty())
+            .then_some(Self(name))
+    }
+
+    pub fn from_utf8(name: &str) -> Option<Self> {
+        Self::new(LispString::from_utf8(name))
+    }
+
+    pub fn into_lisp_string(self) -> LispString {
+        self.0
+    }
+}
+
+/// Coverage queries inspect one font, never a fontset or fallback chain.
+#[derive(Clone, Debug)]
+pub enum FontCoverageTarget {
+    Entity(FontEntityHandle),
+    Opened(ResolvedFontIdentity),
+}
+
+/// GNU font drivers can defer entity coverage until opening the font.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontCoverage {
+    Present,
+    Absent,
+    NeedsOpening,
+}
+
+#[derive(Clone, Debug)]
+pub struct FontCoverageRequest {
+    pub frame_id: FrameId,
+    pub target: FontCoverageTarget,
+    pub character: EmacsChar,
+}
+
+/// Fully qualified GNU resource keys. Native backends own their database
+/// precedence, including whether explicit resources bypass inhibition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuiResourceQuery {
+    pub name: String,
+    pub class: String,
+    pub inhibit_native: bool,
+}
+
+impl GuiResourceQuery {
+    pub fn normalize_instance_name(name: &str) -> String {
+        let valid = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_';
+        if name.bytes().all(valid) {
+            return name.into();
+        }
+        if name.bytes().filter(|byte| valid(*byte)).count() < 2 {
+            return "emacs".into();
+        }
+        name.bytes()
+            .map(|byte| if valid(byte) { char::from(byte) } else { '_' })
+            .collect()
+    }
+}
+
+/// Typed request crossing from GNU-compatible face realization into the
+/// platform font host. Keeping it here makes the host boundary—not the Lisp
+/// evaluator—the owner of native font selection.
+#[derive(Clone, Debug)]
+pub struct FontResolveRequest {
+    pub frame_id: FrameId,
+    /// Full GNU Emacs character domain, including raw-byte and non-Unicode
+    /// codes. Backends explicitly decide which subset they can encode.
+    pub character: EmacsChar,
+    /// Fully merged face attributes; family-less fontset rules inherit this family.
+    pub face: Face,
+}
+
+pub trait DisplayHost {
+    /// Concrete host identity for the closed numeric Rows authority check.
+    ///
+    /// The return type is public only to make this provided method a valid
+    /// public interface. Its module is private and it is not re-exported, so
+    /// external host implementations cannot name the return type to override
+    /// this method or forward another host's identity. They inherit this
+    /// default, whose `Self` is their actual concrete implementor even when
+    /// called through a stored `dyn DisplayHost`.
+    ///
+    /// Keep the return type and its constructor sealed. Implementations in
+    /// this trusted module subtree must preserve the same concrete-`Self`
+    /// identity invariant. This identity grants no geometry, lifetime or
+    /// cache authority by itself; Rows still requires the audited host-type
+    /// contract and every producer, owner and freshness check.
+    #[doc(hidden)]
+    fn __rows_host_identity(&self) -> rows_authority::ActualHostType
+    where
+        Self: 'static,
+    {
+        rows_authority::ActualHostType::of::<Self>()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn ns_resource(&self, _name: &str) -> Option<String> {
+        None
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_ns_resource(&mut self, _name: &str, _value: Option<&str>) {}
+
+    fn set_gui_resource_database(&mut self, _resources: &str) {}
+
+    /// Return the identity of the graphical connection hosted by this process.
+    /// `Ok(None)` means no graphical connection is hosted, so a daemon refuses
+    /// graphical frame requests. An error rejects an unsupported display name.
+    /// An explicit display must name that connection; None selects the host default.
+    fn graphical_connection_identity(
+        &self,
+        _display: Option<&str>,
+    ) -> Result<Option<neomacs_display_protocol::GraphicalDisplayIdentity>, String> {
+        Ok(None)
+    }
+
+    fn gui_resource(&self, _query: &GuiResourceQuery) -> Option<String> {
+        None
+    }
+
+    /// Refresh native preferences independently of Lisp's font adoption policy.
+    fn update_system_fonts(&mut self, _fonts: SystemFonts) {}
+
+    fn system_font(&self, _role: SystemFontRole) -> Option<&SystemFontName> {
+        None
+    }
+
+    fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String>;
+    fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String>;
+    /// Whether this concrete graphical backend can represent ATTRIBUTE.
+    ///
+    /// The conservative default keeps test/dummy hosts from accidentally
+    /// claiming rendering support.  Real graphical hosts must opt in.
+    fn supports_graphical_face_attribute(&self, _attribute: GraphicalFaceAttribute) -> bool {
+        false
+    }
+    fn set_clipboard_text(&mut self, _text: Option<&str>) -> Result<(), String> {
+        Err("clipboard is unsupported by this display host".to_owned())
+    }
+    fn clipboard_text(&mut self) -> Result<Option<String>, String> {
+        Err("clipboard is unsupported by this display host".to_owned())
+    }
+    fn set_primary_selection_text(&mut self, _text: Option<&str>) -> Result<(), String> {
+        Err("PRIMARY selection is unsupported by this display host".to_owned())
+    }
+    fn primary_selection_text(&mut self) -> Result<Option<String>, String> {
+        Err("PRIMARY selection is unsupported by this display host".to_owned())
+    }
+    fn primary_selection_owner(&mut self) -> Result<SelectionOwner, String> {
+        Err("PRIMARY selection ownership is unsupported by this display host".to_owned())
+    }
+    fn set_gui_frame_geometry_hints(
+        &mut self,
+        _frame_id: FrameId,
+        _geometry_hints: GuiFrameGeometryHints,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_gui_frame_fullscreen(
+        &mut self,
+        _frame_id: FrameId,
+        _fullscreen: FrameFullscreen,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_gui_frame_visibility(
+        &mut self,
+        _frame_id: FrameId,
+        _visibility: FrameVisibility,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_gui_frame_title(
+        &mut self,
+        _frame_id: FrameId,
+        _title: LispString,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    /// Move a top-level GUI frame's outer window to absolute display
+    /// coordinates, in the same pixel units as the frame's size.
+    fn set_gui_frame_position(
+        &mut self,
+        _frame_id: FrameId,
+        _x: i32,
+        _y: i32,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    /// Apply the `undecorated` frame parameter to the platform window.
+    ///
+    /// GNU dispatches each frame parameter to a backend setter through
+    /// `frame_parms[]` (src/frame.c); a parameter the backend cannot honour is
+    /// still STORED, so `frame-parameter` reads back what Lisp set. Keep that
+    /// split: the caller records the value regardless of what this returns.
+    fn set_gui_frame_undecorated(
+        &mut self,
+        _frame_id: FrameId,
+        _undecorated: bool,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    /// Apply each accepted legacy alpha operation synchronously, independently
+    /// of replaceable scene transport. Negative components mean retain.
+    fn set_gui_frame_alpha(
+        &mut self,
+        _frame: FrameId,
+        _alpha: [f32; 2],
+        _limit: f32,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_gui_frame_focus_redirects(
+        &mut self,
+        _redirects: Vec<(FrameId, Option<FrameId>)>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn retire_gui_frame_alpha(&mut self, _frame: FrameId) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_gui_frame_alpha_lower_limit(&mut self, _limit: f32) {}
+
+    /// Resolve graphical defaults only when Lisp requests its opening frame.
+    fn prepare_initial_gui_frame(&mut self) -> Result<Option<InitialGuiFrameDefaults>, String> {
+        Ok(None)
+    }
+
+    /// Complete creation after GNU Lisp has applied faces and delayed font
+    /// parameters, before user `after-make-frame-functions` run.
+    fn finish_gui_frame_creation(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Retire a display-free GUI startup after an uncaught top-level error.
+    /// Recoverable errors inside Lisp must leave the pending startup intact.
+    fn fail_pending_gui_startup(&mut self, _error: String) -> bool {
+        false
+    }
+
+    fn opening_gui_frame_pending(&self) -> bool {
+        false
+    }
+    fn destroy_gui_frame(&mut self, _frame_id: FrameId) -> Result<(), String> {
+        Ok(())
+    }
+    fn show_gui_child_frame(&mut self, _frame_id: FrameId) -> Result<(), String> {
+        Ok(())
+    }
+    fn remove_gui_child_frame(&mut self, _frame_id: FrameId) -> Result<(), String> {
+        Ok(())
+    }
+    fn show_popup_menu(&mut self, _menu: PopupMenuRequest) -> Result<(), String> {
+        Ok(())
+    }
+    fn owns_native_menu_tooltips(&self) -> bool {
+        false
+    }
+    fn show_tooltip(
+        &mut self,
+        _frame: FrameId,
+        _request: neomacs_display_protocol::tooltip::TooltipRequest,
+    ) -> Result<(), String> {
+        Err("native tooltips are not supported by this display host".into())
+    }
+    fn hide_tooltip(&mut self) -> Result<bool, String> {
+        Ok(false)
+    }
+    fn tooltip_generation(&self) -> Option<neomacs_display_protocol::tooltip::TooltipGeneration> {
+        None
+    }
+    fn popup_menu_visible_rows(&self, _x: f32, _y: f32, _entry_count: usize) -> Option<usize> {
+        None
+    }
+    fn hide_popup_menu(
+        &mut self,
+        _token: neomacs_display_protocol::menu::MenuToken,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn current_primary_window_size(&self) -> Option<GuiFrameHostSize> {
+        None
+    }
+    fn list_font_families(
+        &mut self,
+        _frame_id: FrameId,
+    ) -> Result<Vec<AvailableFontFamilyName>, String> {
+        Ok(Vec::new())
+    }
+    fn resolve_font_for_char(
+        &mut self,
+        _request: FontResolveRequest,
+    ) -> Result<Option<ResolvedFontMatch>, String> {
+        Ok(None)
+    }
+    fn resolve_frame_font(
+        &mut self,
+        _frame_id: FrameId,
+        _request: FrameFontRequest,
+    ) -> Result<Option<ResolvedFrameFont>, String> {
+        Ok(None)
+    }
+    fn resolve_font_for_spec(
+        &mut self,
+        _request: FontSpecResolveRequest,
+    ) -> Result<Option<ResolvedFontSpecMatch>, String> {
+        Ok(None)
+    }
+    fn list_fonts_for_spec(
+        &mut self,
+        _query: FontSpecListQuery,
+        _prefer: Option<FontSpecListQuery>,
+        _maximum: Option<usize>,
+        _filter: Option<&mut FontListFilter<'_>>,
+    ) -> Result<Vec<ListedFontEntity>, FontListError> {
+        Ok(Vec::new())
+    }
+    fn font_character_coverage(
+        &mut self,
+        _request: FontCoverageRequest,
+    ) -> Result<FontCoverage, String> {
+        Ok(FontCoverage::NeedsOpening)
+    }
+    fn probe_font_px_metrics(
+        &mut self,
+        _file: &str,
+        _face_index: u32,
+        _pixel_size: u32,
+        _wght: Option<f32>,
+    ) -> Result<Option<FontPxProbeResult>, String> {
+        Ok(None)
+    }
+    fn probe_font_entity_metrics(
+        &mut self,
+        request: FontEntityMetricsRequest,
+    ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
+        let Some(file) = request.file.as_ref().and_then(LispString::as_utf8_str) else {
+            return Ok(None);
+        };
+        let weight = request.weight.map(|weight| f32::from(weight.css_weight()));
+        let pixel_size = match request.size {
+            FontOpeningSize::SmallestUsable => 0,
+            FontOpeningSize::Pixels(size) => size.get(),
+            // A file-only adapter has no display resolution. Native hosts
+            // must resolve point requests using their own font-sizing policy.
+            FontOpeningSize::Points { .. } | FontOpeningSize::NamedDefault { .. } => {
+                return Ok(None);
+            }
+        };
+        let metrics = self.probe_font_px_metrics(file, 0, pixel_size, weight)?;
+        Ok(metrics.map(|metrics| ResolvedFontEntityMetrics {
+            metrics,
+            file: request.file,
+            capability: None,
+        }))
+    }
+    fn font_otf_capability(
+        &mut self,
+        _file: &str,
+        _face_index: u32,
+    ) -> Result<Option<FontOtfCapability>, String> {
+        Ok(None)
+    }
+    /// GNU-compatible synchronous image query used by explicit Lisp
+    /// primitives such as `image-size`. This may wait for metadata and must
+    /// never be called from redisplay.
+    ///
+    /// `limit` is the querying frame's resolved `max-image-size`, for the same
+    /// reason [`image_catalog::ImageCatalog::lookup`] takes it: GNU
+    /// checks the bound in the loader, so a synchronous query must refuse the
+    /// same images redisplay refuses.
+    fn resolve_image_sync(
+        &self,
+        _request: image_catalog::ImageResolveRequest,
+        _limit: ImageSizeLimit,
+    ) -> Result<Option<image_catalog::ReadyImage>, String> {
+        Ok(None)
+    }
+    /// Nonblocking image catalog used by redisplay. Synchronous Lisp image
+    /// queries use `resolve_image_sync`; redisplay must use this catalog instead.
+    fn image_catalog(&self) -> Option<&dyn image_catalog::ImageCatalog> {
+        None
+    }
+    /// The same catalog as [`Self::image_catalog`], as a shared handle.
+    ///
+    /// Layout needs to resolve `(image …)` operands inside `(space :align-to …)`
+    /// expressions (GNU does this inline with `lookup_image`), but the layout
+    /// engine's pixel arithmetic must not hold a borrow of the host. Hosts with
+    /// a catalog should return it here as well.
+    fn image_catalog_shared(&self) -> Option<std::rc::Rc<dyn image_catalog::ImageCatalog>> {
+        None
+    }
+    /// Called when renderer image-cache state changes, before retained layout
+    /// matrices are invalidated. Hosts reconcile decode completion and lost
+    /// residency so the rebuild observes one authoritative catalog state.
+    fn reconcile_image_catalog_for_media_rebuild(&self, _event: ImageStateEvent) {}
+    fn request_video(
+        &self,
+        _request: VideoResolveRequest,
+    ) -> Result<Option<ResolvedVideo>, String> {
+        Ok(None)
+    }
+    /// Create a Lisp-managed video session and return its stable protocol id.
+    fn create_video(&self, _request: VideoOpenRequest) -> Result<VideoId, String> {
+        Err("video sessions are unsupported by this display host".to_owned())
+    }
+    /// Apply one typed playback action to a Lisp-managed video session.
+    fn control_video(&self, _id: VideoId, _action: PlaybackAction) -> Result<(), String> {
+        Err("video sessions are unsupported by this display host".to_owned())
+    }
+    /// Close a Lisp-managed video session and release its renderer resources.
+    fn destroy_video(&self, _id: VideoId) -> Result<(), String> {
+        Ok(())
+    }
+    /// Return one coherent renderer-owned native-video snapshot.
+    fn video_diagnostics(&self) -> Result<VideoDiagnostics, String> {
+        Err("video diagnostics are unsupported by this display host".to_owned())
+    }
+    /// Begin a coherent video diagnostics epoch and return only after the
+    /// render thread has reset every participating counter. Return the
+    /// zero-point snapshot captured by that same render-thread command.
+    fn begin_video_measurement_epoch(&self) -> Result<VideoDiagnostics, String> {
+        Err("video diagnostics are unsupported by this display host".to_owned())
+    }
+    fn request_webkit(
+        &self,
+        _request: WebKitResolveRequest,
+    ) -> Result<Option<ResolvedWebKit>, String> {
+        Ok(None)
+    }
+    /// Nonblocking declarative shader-surface resolution used by redisplay
+    /// for `(surface :shader …)` display specs. Memoized by request content;
+    /// a WGSL validation failure logs and returns `Ok(None)` (redisplay can
+    /// not signal), unlike `create_shader_surface` which reports errors to
+    /// Lisp synchronously.
+    fn request_surface(
+        &self,
+        _request: SurfaceResolveRequest,
+    ) -> Result<Option<ResolvedSurface>, String> {
+        Ok(None)
+    }
+    fn create_webkit_xwidget(
+        &self,
+        _id: WebViewId,
+        _width: u32,
+        _height: u32,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn load_webkit_xwidget_uri(&self, _id: WebViewId, _uri: LispString) -> Result<(), String> {
+        Ok(())
+    }
+    fn execute_webkit_xwidget_script(
+        &self,
+        _id: WebViewId,
+        _request: XwidgetScriptRequestId,
+        _script: LispString,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn resize_webkit_xwidget(
+        &self,
+        _id: WebViewId,
+        _width: u32,
+        _height: u32,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn destroy_webkit_xwidget(&self, _id: WebViewId) -> Result<(), String> {
+        Ok(())
+    }
+    /// Validate and create a shader surface, returning its host-allocated id.
+    /// WGSL validation happens synchronously so `neomacs-surface-create` can
+    /// signal compile errors as Lisp errors.
+    fn create_shader_surface(&self, _request: ShaderSurfaceCreateRequest) -> Result<u32, String> {
+        Err("shader surfaces are unsupported by this display host".to_owned())
+    }
+    fn set_shader_surface_uniform(
+        &self,
+        _id: u32,
+        _name: &str,
+        _value: [f32; 4],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    /// Install (Some source with its user uniforms in slot order, validated
+    /// synchronously) or remove (None) the full-frame post shader.
+    fn set_frame_shader(
+        &self,
+        _source: Option<(String, ShaderSurfaceLanguage, Vec<ShaderSurfaceUniformInit>)>,
+    ) -> Result<(), String> {
+        Err("frame shaders are unsupported by this display host".to_owned())
+    }
+    /// Update one named uniform on the installed full-frame post shader
+    /// (cheap; no recompile). Errors when no frame shader is installed.
+    fn set_frame_shader_uniform(&self, _name: &str, _value: [f32; 4]) -> Result<(), String> {
+        Err("frame shaders are unsupported by this display host".to_owned())
+    }
+    fn destroy_shader_surface(&self, _id: u32) -> Result<(), String> {
+        Ok(())
+    }
+    fn create_terminal(&self, _request: TerminalCreateRequest) -> Result<TerminalId, String> {
+        Err("neo-term is unsupported by this display host".to_owned())
+    }
+    fn write_terminal(&self, _id: TerminalId, _data: Vec<u8>) -> Result<(), String> {
+        Err("neo-term is unsupported by this display host".to_owned())
+    }
+    fn resize_terminal(&self, _id: TerminalId, _size: TerminalGridSize) -> Result<(), String> {
+        Err("neo-term is unsupported by this display host".to_owned())
+    }
+    fn destroy_terminal(&self, _id: TerminalId) -> Result<(), String> {
+        Err("neo-term is unsupported by this display host".to_owned())
+    }
+    fn set_floating_terminal(
+        &self,
+        _id: TerminalId,
+        _placement: TerminalFloatPlacement,
+    ) -> Result<(), String> {
+        Err("neo-term is unsupported by this display host".to_owned())
+    }
+    fn terminal_text(&self, _id: TerminalId) -> Result<Option<String>, String> {
+        Err("neo-term is unsupported by this display host".to_owned())
+    }
+    fn set_visual_config(
+        &mut self,
+        _config: neomacs_display_protocol::VisualConfig,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    /// Toggle the render thread's scroll-position indicators and
+    /// active-window focus ring.
+    fn set_scroll_indicators(&mut self, _enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
+    /// Set the renderer's extra line and letter spacing in logical pixels.
+    fn set_extra_spacing(
+        &mut self,
+        _line_spacing: f32,
+        _letter_spacing: f32,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    /// Publish the compiled NS modifier policy to the display backend.
+    ///
+    /// GNU's `nsterm.m` reads `ns-command-modifier' and friends at every
+    /// `keyDown:'; a winit backend cannot read Lisp per event, so Lisp
+    /// compiles the policy once per change (`add-variable-watcher' in
+    /// `lisp/term/neo-win.el') and ships it here.  The conservative default
+    /// keeps test and TTY hosts honest: they carry no modifier policy, and
+    /// the render thread keeps cooking with GNU's compiled-in defaults.
+    fn set_modifier_policy(
+        &mut self,
+        _policy: neomacs_display_protocol::modifier_policy::ModifierPolicy,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    /// The display rebuilt its GPU state after a device loss
+    /// (`keyboard::InputEvent::DisplayReset`). Hosts drop every memo of
+    /// renderer-resident media (so redisplay re-creates it), re-upload
+    /// images, and re-send the frame shader. The caller then forces a full
+    /// redisplay.
+    fn display_reset(&self) {}
+    /// Debug-only hook behind the hidden `neomacs--debug-lose-device`
+    /// builtin: ask the display to simulate a GPU device loss so the whole
+    /// recovery path can be exercised against a healthy device.
+    fn debug_lose_device(&self) {}
+}
+
+/// Typed request crossing from frame-local face state into native font
+/// selection. The embedded face carries style; `size` is its sole sizing
+/// authority and therefore cannot disagree with `Face::height`.
+#[derive(Clone, Debug)]
+pub struct FrameFontRequest {
+    face: Face,
+    size: FrameFontSize,
+}
+
+impl FrameFontRequest {
+    pub fn from_face(mut face: Face) -> Self {
+        let size = face
+            .height
+            .take()
+            .and_then(FrameFontSize::from_face_height)
+            .unwrap_or(FrameFontSize::Default);
+        Self { face, size }
+    }
+
+    pub fn with_size(mut face: Face, size: FrameFontSize) -> Self {
+        face.height = None;
+        Self { face, size }
+    }
+
+    pub const fn face(&self) -> &Face {
+        &self.face
+    }
+
+    pub const fn size(&self) -> FrameFontSize {
+        self.size
+    }
+}

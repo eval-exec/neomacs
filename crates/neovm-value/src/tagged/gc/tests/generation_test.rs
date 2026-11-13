@@ -1,0 +1,212 @@
+//! The header's generation byte and THE generation predicate (P3.1 C2.1),
+//! and the byte map every later header commit builds on (P3.0 §3.1).
+
+use super::*;
+use crate::tagged::header::ImageResident;
+
+fn header_of(value: TaggedValue) -> *mut GcHeader {
+    TaggedHeap::value_heap_addr(value).expect("a heap object") as *mut GcHeader
+}
+
+/// A new header is all zero outside `kind`: the reserved bytes, the
+/// generation byte and `remembered` (the pdump image writes the same).
+#[test]
+fn a_new_header_zeroes_every_byte_but_kind() {
+    let header = GcHeader::new(HeapObjectKind::VecLike);
+    // SAFETY: the header is 16 plain bytes (a pointer and eight bytes).
+    let bytes: [u8; 16] = unsafe { std::mem::transmute(header) };
+    assert_eq!(bytes[1], u8::from(HeapObjectKind::VecLike));
+    for (i, byte) in bytes.iter().enumerate() {
+        if i != 1 {
+            assert_eq!(*byte, 0, "byte {i}");
+        }
+    }
+    let header = GcHeader::new(HeapObjectKind::Float);
+    assert_eq!(header.generation, GenBits::NONE);
+    assert!(!header.generation.permanent());
+}
+
+/// The predicate: a young object is black in no scope; an old object only
+/// in a young collection; a permanent in every scope. Permanent implies
+/// tenured, so a young-scope answer is exactly the `tenured` byte.
+#[test]
+fn black_by_generation_per_scope() {
+    let mut young = GcHeader::new(HeapObjectKind::VecLike);
+    assert!(!young.black_by_generation(CollectionScope::Young));
+    assert!(!young.black_by_generation(CollectionScope::Full));
+
+    // An old (promoted, not permanent) object: only P3.1's minors make one.
+    young.tenured = true;
+    let old = young;
+    assert!(old.black_by_generation(CollectionScope::Young));
+    assert!(!old.black_by_generation(CollectionScope::Full));
+
+    let mut permanent = GcHeader::new(HeapObjectKind::String);
+    permanent.make_permanent(&ImageResident::for_test());
+    assert!(permanent.tenured);
+    assert!(permanent.generation.permanent());
+    assert!(permanent.black_by_generation(CollectionScope::Young));
+    assert!(permanent.black_by_generation(CollectionScope::Full));
+
+    let heap = TaggedHeap::new();
+    assert_eq!(heap.collection_scope(), CollectionScope::Young);
+}
+
+/// The first partition cycle classifies survivors: loader-stamped image
+/// residents become permanent; every runtime survivor is ordinary old (GEN1)
+/// or stays young (GEN0). Nothing else becomes permanent, and the runtime
+/// class is reclaimed by a later full collection once unrooted.
+#[test]
+fn the_first_partition_cycle_reserves_permanence_for_image_residents() {
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let generational = heap.tagged_heap_generational_enabled();
+    heap.extend_dump_span(4096, 16);
+    let table = heap.alloc_hash_table(crate::value::LispHashTable::new(
+        crate::value::HashTableTest::Eq,
+    ));
+    let vector = heap.alloc_vector(vec![TaggedValue::NIL; 2]);
+    let string = heap.alloc_string(crate::heap_types::LispString::from_utf8("perm"));
+    let float = heap.alloc_float(1.5);
+    let record = heap.alloc_record(vec![TaggedValue::T]);
+    let lambda = heap.alloc_lambda(vec![TaggedValue::NIL]);
+    // Two survivors stand in for loader-reconstructed dump-image rows; the
+    // rest are runtime allocations.
+    assert_eq!(heap.note_image_object(vector), ImageStamp::Stamped);
+    assert_eq!(heap.note_image_object(lambda), ImageStamp::Stamped);
+    let residents = [vector, lambda];
+    let runtime = [table, string, float, record];
+    let mut root = TaggedValue::NIL;
+    for &value in residents.iter().chain(runtime.iter()) {
+        root = heap.alloc_cons(value, root);
+    }
+    heap.collect_exact(std::iter::once(root));
+    for &value in &residents {
+        let header = unsafe { &*header_of(value) };
+        assert!(header.tenured, "{value:?}");
+        assert!(header.generation.permanent(), "{value:?}");
+        assert!(header.black_by_generation(CollectionScope::Full));
+    }
+    for &value in &runtime {
+        let header = unsafe { &*header_of(value) };
+        assert_eq!(header.tenured, generational, "{value:?}");
+        assert!(!header.generation.permanent(), "{value:?}");
+        assert!(!header.black_by_generation(CollectionScope::Full));
+    }
+    // A young object allocated after the promotion is neither.
+    let young = heap.alloc_vector(vec![TaggedValue::NIL]);
+    let young_header = unsafe { &*header_of(young) };
+    assert!(!young_header.tenured);
+    assert_eq!(young_header.generation, GenBits::NONE);
+    // With the graph rooted, later cycles keep both classes alive: the
+    // runtime class is traced by every full collection, not skipped.
+    let root2 = heap.alloc_cons(young, root);
+    for _ in 0..3 {
+        heap.collect_exact(std::iter::once(root2));
+        for &value in residents.iter().chain(runtime.iter()).chain([&young]) {
+            assert!(heap.is_value_marked(value), "{value:?}");
+        }
+        for &value in &residents {
+            assert!(unsafe { &*header_of(value) }.generation.permanent());
+        }
+    }
+    // Drop every root: the next full collection reclaims the runtime
+    // survivors and the young vector; image residents stay forever.
+    drop(root2);
+    heap.collect_exact(std::iter::empty());
+    for &value in &residents {
+        assert!(heap.owns_heap_value_for_test(value), "{value:?}");
+        assert!(unsafe { &*header_of(value) }.generation.permanent());
+    }
+    for &value in runtime.iter().chain([&young]) {
+        assert!(
+            !heap.owns_heap_value_for_test(value),
+            "{value:?} must be reclaimed"
+        );
+    }
+    // The reclaimed weak table left the always-swept registry: cycling the
+    // weak sweep again must not inspect its freed memory.
+    heap.collect_exact(std::iter::empty());
+}
+
+/// The tri-state mark byte (P3.1 C2.2): 0 is unmarked at rest under both
+/// parities; a parity value is marked only at that parity; a claim moves
+/// the byte to the claiming parity from rest or from the other parity, once.
+#[test]
+fn the_mark_byte_is_tri_state() {
+    let header = GcHeader::new(HeapObjectKind::VecLike);
+    assert_eq!(header.raw_mark(), UNMARKED_AT_REST);
+    assert!(!header.is_marked());
+    for parity in [MarkParity::One, MarkParity::Two] {
+        assert!(
+            !header.is_marked_at(parity),
+            "at rest is white at {parity:?}"
+        );
+    }
+    assert!(header.mark_claim_at(MarkParity::One), "claim from rest");
+    assert!(
+        !header.mark_claim_at(MarkParity::One),
+        "a second claim loses"
+    );
+    assert!(header.is_marked_at(MarkParity::One));
+    assert!(!header.is_marked_at(MarkParity::Two));
+    assert!(
+        header.mark_claim_at(MarkParity::Two),
+        "claim from the other parity"
+    );
+    assert_eq!(header.raw_mark(), MarkParity::Two.byte());
+    let born = GcHeader::new_marked(HeapObjectKind::Float, MarkParity::One);
+    assert!(born.is_marked_at(MarkParity::One));
+    assert!(!born.is_marked_at(MarkParity::Two));
+    assert_eq!(MarkParity::One.flip(), MarkParity::Two);
+    assert_eq!(MarkParity::Two.flip(), MarkParity::One);
+}
+
+/// The heap's parity starts at `Two` so the bootstrap cycle runs at `One`
+/// and alternates every collection. Tracing sets the cycle parity; the
+/// generational sweep resets ordinary old survivors to rest (GEN-3), while
+/// the legacy sweep leaves their cycle marks. Rest is white at both parities.
+#[test]
+fn parity_alternates_and_rest_is_white_under_both() {
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    assert_eq!(heap.mark_parity, MarkParity::Two);
+    let v = heap.alloc_vector(vec![TaggedValue::NIL]);
+    let header = header_of(v);
+    assert_eq!(
+        unsafe { (*header).raw_mark() },
+        MarkParity::Two.byte(),
+        "born at parity"
+    );
+    for parity in [MarkParity::One, MarkParity::Two] {
+        heap.begin_stw_collection();
+        heap.seed_root(v);
+        heap.mark_all();
+        assert_eq!(heap.mark_parity, parity);
+        assert!(heap.owns_heap_value_for_test(v));
+        assert!(
+            unsafe { (*header).is_marked_at(parity) },
+            "traced at the new parity before sweep",
+        );
+        heap.complete_collection();
+        assert!(heap.owns_heap_value_for_test(v));
+        if heap.tagged_heap_generational_enabled() {
+            assert!(heap.value_is_old_for_test(v));
+            assert_eq!(
+                unsafe { (*header).raw_mark() },
+                UNMARKED_AT_REST,
+                "ordinary old survivor rests only after sweep",
+            );
+        } else {
+            assert!(unsafe { (*header).is_marked_at(parity) });
+        }
+    }
+    // Fresh raw-pointer accesses only: no header borrow spans collection.
+    unsafe { (*header).marked.store(UNMARKED_AT_REST, Ordering::Relaxed) };
+    for parity in [heap.mark_parity.flip(), heap.mark_parity] {
+        assert!(!unsafe { (*header).is_marked_at(parity) });
+    }
+    heap.collect_exact(std::iter::once(v));
+    assert!(heap.owns_heap_value_for_test(v), "traced again from rest");
+    assert!(heap.is_value_marked(v));
+}

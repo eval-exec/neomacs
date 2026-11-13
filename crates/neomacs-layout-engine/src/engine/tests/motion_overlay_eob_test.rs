@@ -17,7 +17,7 @@ fn overlay_eob_fixture(
     restriction: Option<(i64, i64)>,
     width: u32,
 ) -> (Context, FrameId, WindowId) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -88,7 +88,8 @@ fn install_motion_query(eval: &mut Context) -> Arc<AtomicUsize> {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     calls
 }
 

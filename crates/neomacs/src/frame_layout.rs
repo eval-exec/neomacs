@@ -19,12 +19,14 @@ use neomacs_display_runtime::tty_input::{
     TerminalCellSize, TerminalColumns, TerminalRows, TerminalSizeQuery,
 };
 use neovm_core::emacs_core::eval::Context;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::window::{FrameId, RenderFrameScope, RenderFrameVisibility};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::StartupOptions;
 use super::tty_init;
+use neovm_core::window::display::WindowDisplayContextExt;
 
 thread_local! {
     /// Start without font metrics to avoid the ~500ms cosmic-text font
@@ -266,11 +268,13 @@ fn install_window_layout_query_with_policy(
     }));
     // The immutable native policy lives in this existing heap allocation.
     // Context, LayoutEngine and the runtime's TLS representation do not grow.
-    evaluator.install_window_layout_query(move |eval, frame_id, window_id, scope| {
-        REDISPLAY_RUNTIME.with(|runtime| {
-            runtime.query_window_with_policy(eval, frame_id, window_id, scope, &policy)
+    evaluator
+        .install_window_layout_query(move |eval, frame_id, window_id, scope| {
+            REDISPLAY_RUNTIME.with(|runtime| {
+                runtime.query_window_with_policy(eval, frame_id, window_id, scope, &policy)
+            })
         })
-    });
+        .expect("install the layout-query handler");
 }
 
 pub(crate) fn tty_rows_host_authority()
@@ -389,8 +393,10 @@ fn prepare_tty_tree_before_activation(
 /// (src/term.c:362-372); its default is 1, so an unbound variable reads
 /// as non-nil here too.  One variable read per redisplay.
 pub(crate) fn very_visible_cursor(evaluator: &Context) -> bool {
+    // term.c:5246 DEFVAR_BOOL, read from the C global in tty_show_cursor
+    // (term.c:362-372); a live `let` is visible there.
     evaluator
-        .variable_value(neovm_core::emacs_core::intern::WellKnown::VisibleCursor.id())
+        .builtin_var_value(neovm_core::emacs_core::intern::WellKnown::VisibleCursor.id())
         .is_none_or(|value| value.is_truthy())
 }
 

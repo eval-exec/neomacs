@@ -2,6 +2,7 @@
 //! scalar materializer; unset or `bulk` copies validated ordinary UTF-8 runs.
 //! The selector is native immutable process configuration, read once.
 
+use crate::cursor_source_dependencies::string_properties as get_string_text_properties_table_for_value;
 use crate::display_item::{
     BufferDisplayReplacementSource, DisplayGlyphless, DisplayItem, DisplayItemKind,
     DisplayItemLayout, DisplayLength, DisplayLineHeightPolicy, DisplayLineSpacingPolicy,
@@ -38,7 +39,7 @@ use neovm_core::emacs_core::composite::composition_display_text_for_property;
 use neovm_core::emacs_core::composite::{AutomaticCompositionRules, AutomaticCompositionSpan};
 use neovm_core::emacs_core::emacs_char::EmacsChar;
 use neovm_core::emacs_core::intern::WellKnown;
-use neovm_core::emacs_core::value::{get_string_text_properties_table_for_value, list_to_vec};
+use neovm_core::emacs_core::value::list_to_vec;
 use neovm_core::face::LispFaceId;
 
 // Each key is a fixed DEFSYM id resolved at its original query boundary. Cells
@@ -124,10 +125,15 @@ impl<'a> DisplaySourceContext<'a> {
         base: RenderFaceRef,
         face_value: Value,
     ) -> RenderFaceRef {
-        self.face_resolver
-            .as_mut()
-            .map(|resolver| resolver.resolve_face_ref(base, face_value))
-            .unwrap_or(base)
+        // Interpret the original payload under observation, not just the
+        // string's cloned interval table. Native face decoding is callback-free;
+        // observed ancestor edges protect the rooted original plist graph.
+        crate::cursor_source_dependencies::observe_projection(face_value, || {
+            self.face_resolver
+                .as_mut()
+                .map(|resolver| resolver.resolve_face_ref(base, face_value))
+                .unwrap_or(base)
+        })
     }
 
     pub(crate) fn resolve_face_sources(
@@ -561,6 +567,30 @@ impl DisplaySourceTextOrigin {
 pub(crate) struct DisplaySourceTextPosition {
     byte_idx: usize,
     charpos: i64,
+}
+
+/// A buffer seating and whether its overlay-string insertion was consumed.
+///
+/// The same buffer position can describe either side of an insertion. Word-wrap
+/// checkpoints must preserve that distinction together with their glyph state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DisplaySourceResumeCursor {
+    BeforeOverlayStrings(DisplaySourceTextPosition),
+    AfterOverlayStrings(DisplaySourceTextPosition),
+}
+
+impl Default for DisplaySourceResumeCursor {
+    fn default() -> Self {
+        Self::AfterOverlayStrings(DisplaySourceTextPosition::default())
+    }
+}
+
+impl DisplaySourceResumeCursor {
+    pub(crate) const fn position(self) -> DisplaySourceTextPosition {
+        match self {
+            Self::BeforeOverlayStrings(position) | Self::AfterOverlayStrings(position) => position,
+        }
+    }
 }
 
 impl DisplaySourceTextPosition {
@@ -2439,7 +2469,9 @@ impl DisplayReplacementStringSourceItem {
         source_id: u64,
         cursor_slot_width_px: f32,
     ) -> Option<Self> {
-        let replacement = value.as_utf8_str()?;
+        // GNU display strings can contain raw bytes in either string storage
+        // form. The source cursor decodes Emacs characters, not just UTF-8.
+        let replacement = value.as_lisp_string()?;
         Some(Self {
             value,
             origin: DisplayOrigin::DisplayPropertyString {

@@ -394,6 +394,7 @@ impl ApplicationHandler for Smoke {
                         position: winit::dpi::PhysicalPosition::new(10.0, 10.0),
                         primary: true,
                         source: winit::event::PointerSource::Mouse,
+                        timestamp: None,
                     },
                     &gpu.device,
                     &gpu.queue,

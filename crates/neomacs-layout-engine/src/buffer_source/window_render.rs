@@ -541,6 +541,27 @@ where
         // re-walks at the full-window bottom). The source reads from
         // `walk_start` so its text slice + byte indices align with the
         // walk, while the published positions later use the real window_start.
+        if scroll.is_none()
+            && params.window_system
+            && !params.is_minibuffer()
+            && params.measurement_rows.is_none()
+            && params.measurement_pixels.is_none()
+            && params.source_extent == crate::types::WindowSourceExtent::Viewport
+        {
+            let face_line = state.with_face_services(|_resolver, font_metrics| {
+                let metrics = font_metrics.as_mut()?;
+                shorter_face_line_at_window_start(
+                    buffer,
+                    resolved_window_start,
+                    default_resolved,
+                    metrics,
+                )
+            });
+            if let Some(face_line) = face_line {
+                geometry.widen_body_for_shorter_face(face_line);
+            }
+        }
+
         let source_request = if let Some(scroll) = &scroll {
             geometry.text_y = params.bounds.y + scroll.exposed_text_y;
             geometry.display_text_row_base = scroll.exposed_row_base;
@@ -572,6 +593,7 @@ where
             }
         } else {
             BufferWindowSourceRequest::from_window_params(params, geometry.max_rows)
+                .with_body_read_rows(geometry.matrix_body_rows)
         };
 
         let source_request = match window_text_budget {
@@ -633,13 +655,23 @@ where
         )
         .into_setup();
         let text_append_surface = walk_setup.text_append_surface.clone();
+        // `display_text_rows` is 1 for a growing AccessibleEnd grid while
+        // `max_rows` stays the real walk budget. Use the widened slot count
+        // only after a shorter face actually grew it.
+        let walk_rows = if scroll.as_ref().is_some_and(|replay| replay.bound_walk)
+            || geometry.matrix_body_rows <= geometry.display_text_rows
+        {
+            geometry.max_rows
+        } else {
+            geometry.matrix_body_rows
+        };
         let output_setup = BufferSourceOutputSetup::from_window_geometry(
             frame_id,
             window_id,
             params,
             &geometry,
             layout_box,
-            geometry.max_rows,
+            walk_rows,
             &walk_setup,
         )
         .with_position_publication(position_publication)
@@ -651,7 +683,7 @@ where
                 chrome_plan.render_request(
                     params,
                     *layout_box,
-                    geometry.mode_line_display_row,
+                    geometry.allocated_mode_line_row(),
                     reserve_right_border_col,
                     window_metrics,
                     buffer_name,
@@ -666,7 +698,7 @@ where
             chrome_plan.render_request(
                 params,
                 *layout_box,
-                geometry.mode_line_display_row,
+                geometry.allocated_mode_line_row(),
                 reserve_right_border_col,
                 window_metrics,
                 buffer_name,
@@ -692,5 +724,146 @@ where
             cursor_only,
             scroll,
         )
+    }
+}
+
+/// Line box of a `face` text property at the window start, when that spec
+/// names a height. Named faces and specs without `:height` stay `None`, so
+/// the frame-font row count is unchanged.
+fn shorter_face_line_at_window_start<B: crate::neovm_bridge::LayoutBufferView>(
+    buffer: &B,
+    window_start: ResolvedWindowStart,
+    default_face: &crate::neovm_bridge::ResolvedFace,
+    metrics: &mut crate::font::metrics::FontMetricsService,
+) -> Option<f32> {
+    use neovm_core::emacs_core::Value;
+
+    let spec = crate::neovm_bridge::LayoutCharPropertyLookup::new(
+        buffer,
+        Value::symbol(&crate::fixed_symbols::FACE),
+    )
+    .text_value_at(
+        buffer,
+        buffer.layout_char_pos_to_emacs_byte_pos(neovm_core::buffer::CharPos0::new(
+            window_start.get().max(0) as usize,
+        )),
+    )?;
+    let font_size = face_spec_font_size(&spec, default_face.font_size)?;
+    metrics
+        .vertical_metrics_for_face_probe(
+            'X',
+            crate::font::metrics::RealizedFaceFontSelection::new(
+                default_face.font_family.as_ref(),
+                default_face.font_weight,
+                default_face.italic,
+                font_size,
+            ),
+        )
+        .map(|measured| measured.line_height)
+}
+
+fn face_spec_font_size(spec: &neovm_core::emacs_core::Value, inherited_px: f32) -> Option<f32> {
+    if let Some(size) = height_in_face_plist(spec, inherited_px) {
+        return Some(size);
+    }
+    if spec.is_cons() && !is_face_keyword(spec.cons_car()) {
+        let mut cursor = *spec;
+        while cursor.is_cons() {
+            if let Some(size) = face_spec_font_size(&cursor.cons_car(), inherited_px) {
+                return Some(size);
+            }
+            cursor = cursor.cons_cdr();
+        }
+    }
+    None
+}
+
+fn height_in_face_plist(spec: &neovm_core::emacs_core::Value, inherited_px: f32) -> Option<f32> {
+    if !spec.is_cons() || !is_face_keyword(spec.cons_car()) {
+        return None;
+    }
+    let mut cursor = *spec;
+    while cursor.is_cons() {
+        let key = cursor.cons_car();
+        let rest = cursor.cons_cdr();
+        if !rest.is_cons() {
+            return None;
+        }
+        if is_height_keyword(key) {
+            let value = rest.cons_car();
+            if let Some(tenths) = value.as_fixnum() {
+                let tenths = i32::try_from(tenths).ok()?;
+                return Some(crate::font::sizing::face_height_to_gnu_x11_fallback_pixels(
+                    tenths,
+                ));
+            }
+            if let Some(factor) = value.as_float() {
+                return Some(inherited_px * factor as f32);
+            }
+            return None;
+        }
+        cursor = rest.cons_cdr();
+    }
+    None
+}
+
+/// Probe-only keyword test. Out of line, and it does not call
+/// `is_bare_keyword`, `is_keyword_id`, or `intern`. A second caller of
+/// `is_keyword_id` outlines that body out of `face_spec_is_plist`, and
+/// interning from redisplay would make `intern-soft` observe a new symbol.
+/// Identity is an already-interned keyword id via `lookup_interned`.
+#[cold]
+#[inline(never)]
+fn is_face_keyword(value: neovm_core::emacs_core::Value) -> bool {
+    let Some(id) = value.as_bare_symbol_id() else {
+        return false;
+    };
+    let Some(name) = value.as_bare_symbol_name() else {
+        return false;
+    };
+    if !name.starts_with(':') {
+        return false;
+    }
+    neovm_core::emacs_core::intern::lookup_interned(name) == Some(id)
+}
+
+/// Probe-only `:height` test. Symbol id equality with the interned keyword,
+/// not a name compare, and out of line for the same reason as
+/// [`is_face_keyword`].
+#[cold]
+#[inline(never)]
+fn is_height_keyword(value: neovm_core::emacs_core::Value) -> bool {
+    let Some(id) = value.as_bare_symbol_id() else {
+        return false;
+    };
+    neovm_core::emacs_core::intern::lookup_interned(":height") == Some(id)
+}
+
+#[cfg(test)]
+mod face_keyword_identity_tests {
+    use super::{is_face_keyword, is_height_keyword};
+    use neovm_core::emacs_core::Value;
+    use neovm_core::emacs_core::intern::intern_uninterned;
+
+    /// An uninterned symbol named `:height` does not take the short-face path.
+    /// The probe only grows the body-matrix slot count; face realization
+    /// already matches keywords by id, so the drawn row is unchanged and a
+    /// GNU redisplay pair would not observe this gate.
+    #[test]
+    fn uninterned_colon_height_does_not_open_the_short_face_path() {
+        let uninterned = Value::from_sym_id(intern_uninterned(":height"));
+        assert!(!uninterned.is_bare_keyword());
+        assert!(!is_face_keyword(uninterned));
+        assert!(!is_height_keyword(uninterned));
+
+        let height = Value::keyword(":height");
+        assert!(is_face_keyword(height));
+        assert!(is_height_keyword(height));
+        assert!(is_face_keyword(Value::keyword(":weight")));
+        assert!(!is_height_keyword(Value::keyword(":weight")));
+
+        let unique = Value::from_sym_id(intern_uninterned(":foo-probe-unique"));
+        assert!(!is_face_keyword(unique));
+        assert!(neovm_core::emacs_core::intern::lookup_interned(":foo-probe-unique").is_none());
     }
 }

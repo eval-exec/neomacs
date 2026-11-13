@@ -1095,18 +1095,28 @@ fn listed_font_from_raw_pattern(pattern: *mut fontconfig_sys::FcPattern) -> Opti
 
 #[cfg(unix)]
 fn map_fontconfig_weight_raw(weight: i32) -> u16 {
-    match weight {
-        i32::MIN..=20 => 100,
-        21..=45 => 200,
-        46..=62 => 300,
-        63..=89 => 400,
-        90..=139 => 500,
-        140..=189 => 600,
-        190..=204 => 700,
-        205..=209 => 800,
-        210..=212 => 900,
-        _ => 900,
+    // FONT_SET_STYLE in ftfont_pattern_entity uses font_style_to_value's
+    // nearest GNU weight-table category, with equal distances rounded down.
+    let mut closest = FontWeight::Thin;
+    for candidate in [
+        FontWeight::ExtraLight,
+        FontWeight::Light,
+        FontWeight::SemiLight,
+        FontWeight::Normal,
+        FontWeight::Medium,
+        FontWeight::SemiBold,
+        FontWeight::Bold,
+        FontWeight::ExtraBold,
+        FontWeight::Black,
+        FontWeight::UltraHeavy,
+    ] {
+        if i64::from(weight).abs_diff(i64::from(candidate.gnu_numeric()))
+            < i64::from(weight).abs_diff(i64::from(closest.gnu_numeric()))
+        {
+            closest = candidate;
+        }
     }
+    closest.css_weight()
 }
 
 #[cfg(unix)]

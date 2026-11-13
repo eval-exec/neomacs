@@ -7,8 +7,12 @@ fn word_rewind_rechecks_invisibility_but_character_retry_retains_the_stop() {
     // chooses an earlier word boundary. Replaying that span must hide it again.
     checkpoint.record_next_visible(46);
     assert!(!checkpoint.should_check(40));
-    BufferSourceRewind::WordWrap(DisplaySourceTextPosition::new(30, 30))
-        .restore_invisible_checkpoint(&mut checkpoint);
+    BufferSourceRewind::WordWrap(
+        crate::display_source::DisplaySourceResumeCursor::BeforeOverlayStrings(
+            DisplaySourceTextPosition::new(30, 30),
+        ),
+    )
+    .restore_invisible_checkpoint(&mut checkpoint);
     assert!(checkpoint.should_check(30));
     assert!(checkpoint.should_check(40));
     checkpoint.record_next_visible(46);

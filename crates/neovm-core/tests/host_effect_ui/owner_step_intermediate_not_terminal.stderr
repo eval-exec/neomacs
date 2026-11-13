@@ -16,7 +16,7 @@ help: the type constructed contains `PendingOwnerStep<'s, u64>` due to the type 
    |                                                |
    |                                                this argument influences the type of `Returned`
 note: tuple variant defined here
-  --> tests/host_effect_ui/support/../../../src/host_effect/contracts.rs
+  --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/contracts.rs
    |
    |     Returned(R),
    |     ^^^^^^^^

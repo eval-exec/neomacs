@@ -1,4 +1,4 @@
-use neovm_core::heap_types::OverlayData;
+use neovm_value::heap_types::OverlayData;
 
 fn main() {}
 

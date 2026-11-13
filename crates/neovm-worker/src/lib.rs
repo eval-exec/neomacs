@@ -1,7 +1,5 @@
 use neovm_core::emacs_core::intern::resolve_sym;
-use neovm_core::emacs_core::load::{
-    apply_runtime_startup_state, create_bootstrap_evaluator_cached,
-};
+use neovm_core::emacs_core::load::apply_runtime_startup_state;
 use neovm_core::emacs_core::{self, Context, EvalError};
 use neovm_core::{TaskHandle, TaskScheduler, TaskStatus};
 use neovm_host_abi::{
@@ -1173,9 +1171,11 @@ impl WorkerRuntime {
 }
 
 fn create_elisp_context() -> Result<Box<Context>, WorkerStartError> {
-    let mut evaluator = Box::new(create_bootstrap_evaluator_cached().map_err(|err| {
-        WorkerStartError::Initialization(format!("bootstrap evaluator: {err:?}"))
-    })?);
+    let mut evaluator = Box::new(
+        neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached().map_err(|err| {
+            WorkerStartError::Initialization(format!("bootstrap evaluator: {err:?}"))
+        })?,
+    );
     evaluator.setup_thread_locals();
     if let Err(err) = apply_runtime_startup_state(&mut evaluator) {
         // Render while this owner-local evaluator and its error roots are live.

@@ -43,8 +43,19 @@ impl StringRoots<'_> {
 pub(crate) mod emacs_core {
     pub mod value {
         pub mod buffer_vocab {
+            #[allow(unused_imports)]
             pub use neovm_core::emacs_core::value::buffer_vocab::BufferId;
         }
+    }
+}
+
+// Mirror the post-split root `value` vocabulary path that the production
+// `heap_types/threading.rs` now imports (`crate::value::buffer_vocab`); before
+// the split the source reached the same item through `emacs_core::value`.
+pub(crate) mod value {
+    pub mod buffer_vocab {
+        #[allow(unused_imports)]
+        pub use neovm_core::emacs_core::value::buffer_vocab::BufferId;
     }
 }
 
@@ -66,5 +77,5 @@ pub(crate) mod tagged {
     }
 }
 
-#[path = "../../src/heap_types/threading.rs"]
+#[path = "../../../neovm-value/src/heap_types/threading.rs"]
 pub(crate) mod threading;

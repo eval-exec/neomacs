@@ -18,6 +18,16 @@ use neomacs_display_protocol::types::FaceId;
 const TEXT_FACE: FaceId = FaceId::new(1);
 const TWS_FACE: FaceId = FaceId::new(42);
 
+// These mutation-only cases supply an already-verified source predicate.
+// End-to-end tests exercise the actual buffer/point classification.
+fn highlight(row: &mut GlyphRow) {
+    HighlightTrailingWhitespaceMutation {
+        face_id: TWS_FACE,
+        source_is_trailing: &|_| true,
+    }
+    .apply(row);
+}
+
 fn push_char(row: &mut GlyphRow, ch: char, charpos: usize) {
     row.glyphs[GlyphArea::Text.index()].push(Glyph::char(ch, TEXT_FACE, charpos));
 }
@@ -51,7 +61,7 @@ fn trailing_spaces_are_refaced_leading_text_kept() {
         push_char(&mut row, ch, i);
     }
 
-    HighlightTrailingWhitespaceMutation { face_id: TWS_FACE }.apply(&mut row);
+    highlight(&mut row);
 
     assert_eq!(
         face_ids(&row),
@@ -66,7 +76,7 @@ fn trailing_tab_stretch_is_refaced() {
     push_char(&mut row, 'x', 0);
     push_tab(&mut row);
 
-    HighlightTrailingWhitespaceMutation { face_id: TWS_FACE }.apply(&mut row);
+    highlight(&mut row);
 
     assert_eq!(
         face_ids(&row),
@@ -83,7 +93,7 @@ fn interior_whitespace_is_not_refaced() {
         push_char(&mut row, ch, i);
     }
 
-    HighlightTrailingWhitespaceMutation { face_id: TWS_FACE }.apply(&mut row);
+    highlight(&mut row);
 
     assert_eq!(
         face_ids(&row),
@@ -104,7 +114,7 @@ fn line_with_no_trailing_whitespace_is_unchanged() {
         push_char(&mut row, ch, i);
     }
 
-    HighlightTrailingWhitespaceMutation { face_id: TWS_FACE }.apply(&mut row);
+    highlight(&mut row);
 
     assert_eq!(
         face_ids(&row),
@@ -124,7 +134,7 @@ fn appended_positionless_newline_space_is_skipped_but_buffer_run_refaced() {
     }
     push_positionless_space(&mut row);
 
-    HighlightTrailingWhitespaceMutation { face_id: TWS_FACE }.apply(&mut row);
+    highlight(&mut row);
 
     assert_eq!(
         face_ids(&row),
@@ -140,7 +150,7 @@ fn positionless_extend_stretch_at_row_end_is_skipped() {
     push_char(&mut row, ' ', 1);
     push_positionless_stretch(&mut row);
 
-    HighlightTrailingWhitespaceMutation { face_id: TWS_FACE }.apply(&mut row);
+    highlight(&mut row);
 
     assert_eq!(
         face_ids(&row),
@@ -159,7 +169,7 @@ fn refacing_stops_at_glyph_without_buffer_position() {
     push_positionless_space(&mut row);
     push_char(&mut row, ' ', 2);
 
-    HighlightTrailingWhitespaceMutation { face_id: TWS_FACE }.apply(&mut row);
+    highlight(&mut row);
 
     assert_eq!(
         face_ids(&row),
@@ -174,7 +184,7 @@ fn row_of_only_positionless_glyphs_is_unchanged() {
     push_positionless_space(&mut row);
     push_positionless_stretch(&mut row);
 
-    HighlightTrailingWhitespaceMutation { face_id: TWS_FACE }.apply(&mut row);
+    highlight(&mut row);
 
     assert_eq!(
         face_ids(&row),
@@ -190,7 +200,7 @@ fn all_whitespace_row_is_fully_refaced() {
     push_tab(&mut row);
     push_char(&mut row, ' ', 1);
 
-    HighlightTrailingWhitespaceMutation { face_id: TWS_FACE }.apply(&mut row);
+    highlight(&mut row);
 
     assert_eq!(
         face_ids(&row),

@@ -1,26 +1,39 @@
+warning: unexpected `cfg` condition value: `test-support`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  |     #[cfg(any(test, feature = "test-support"))]
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `contract-fixtures`, `dbus-vendored`, `default`, `desktop-font-settings`, `display-stop-validate`, `fuzzing`, `gc-memory-telemetry`, `jit`, `perf-probes`, `redisplay-test-policy`, `sound`, `sqlite`, `vm-profile`, and `webview`
+  = help: consider adding `test-support` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `#[warn(unexpected_cfgs)]` on by default
+
 error[E0599]: no associated function or constant named `new` found for struct `RealWaitPermit` in the current scope
  --> tests/host_effect_ui/real_wait_permit_no_constructor.rs:7:35
   |
 7 |     let _forged = RealWaitPermit::new();
   |                                   ^^^ associated function or constant not found in `RealWaitPermit`
   |
- ::: tests/host_effect_ui/support/../../../src/host_effect/wake/native_wait.rs
+ ::: tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake/native_wait.rs
   |
-  | pub(crate) struct RealWaitPermit {
-  | -------------------------------- associated function or constant `new` not found for this struct
+  | pub struct RealWaitPermit {
+  | ------------------------- associated function or constant `new` not found for this struct
   |
   = help: items from traits can only be used if the trait is implemented and in scope
   = note: the following traits define an item `new`, perhaps you need to implement one of them:
-          candidate #1: `cranelift_assembler_x64::api::AsReg`
-          candidate #2: `cranelift_codegen::machinst::MachInstEmitState`
-          candidate #3: `cranelift_entity::EntityRef`
-          candidate #4: `crypto_common::KeyInit`
-          candidate #5: `crypto_common::KeyIvInit`
-          candidate #6: `crypto_common::TryKeyInit`
-          candidate #7: `digest::block_api::VariableOutputCore`
-          candidate #8: `digest::digest::Digest`
-          candidate #9: `gimli::read::lookup::PubStuffEntry`
-          candidate #10: `itertools::adaptors::coalesce::CountItem`
-          candidate #11: `parking_lot_core::thread_parker::ThreadParkerT`
-          candidate #12: `ring::aead::BoundKey`
-          candidate #13: `typenum::marker_traits::Bit`
+          candidate #1: `MinibufferManagerExt`
+          candidate #2: `MinibufferStateExt`
+          candidate #3: `cranelift_assembler_x64::api::AsReg`
+          candidate #4: `cranelift_codegen::machinst::MachInstEmitState`
+          candidate #5: `cranelift_entity::EntityRef`
+          candidate #6: `crypto_common::KeyInit`
+          candidate #7: `crypto_common::KeyIvInit`
+          candidate #8: `crypto_common::TryKeyInit`
+          candidate #9: `digest::block_api::VariableOutputCore`
+          candidate #10: `digest::digest::Digest`
+          candidate #11: `gimli::read::lookup::PubStuffEntry`
+          candidate #12: `itertools::adaptors::coalesce::CountItem`
+          candidate #13: `parking_lot_core::thread_parker::ThreadParkerT`
+          candidate #14: `ring::aead::BoundKey`
+          candidate #15: `typenum::marker_traits::Bit`

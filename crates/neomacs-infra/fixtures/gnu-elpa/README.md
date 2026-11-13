@@ -9,7 +9,7 @@ the installer (and the typed `GnuElpaPackage` pins) live in
 `crates/neomacs-infra/src/packages/elpa_archive.rs`.  Every lock row must have
 a tarball here whose sha256 matches the row, and every tarball must contain a
 top-level `<name>-<version>/<name>-pkg.el` whose `define-package` name and
-version match the pin; `cargo test -p neomacs-infra` enforces both.
+version match the pin; `cargo nextest run -p neomacs-infra` enforces both.
 
 ## Adding or updating a pin
 
@@ -27,7 +27,7 @@ version match the pin; `cargo test -p neomacs-infra` enforces both.
    `package-install-file` resolves no dependencies, so the installer
    materializes both from fixtures.
 
-4. Run `cargo test -p neomacs-infra`.
+4. Run `cargo nextest run -p neomacs-infra`.
 
 These tarballs are third-party GNU ELPA releases; each carries its own
 license and copyright headers.

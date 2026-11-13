@@ -8,8 +8,14 @@
 mod export;
 mod measurement;
 
+#[cfg(test)]
+#[path = "prepared_viewports/tests/certificate_test.rs"]
+mod certificate_tests;
+
 use super::*;
+use crate::cursor_source_dependencies::CursorSourceDependencies;
 use crate::frame_face_arena::PreparedFaceSnapshot;
+use crate::frame_visual_history::FrameVisualHistory;
 use crate::incremental_layout::WindowDelta;
 use neomacs_display_protocol::GlyphRowRole;
 use neovm_core::buffer::CharPos0;
@@ -30,9 +36,9 @@ struct PreparedViewport {
     computed: bool,
     // Partial worker pages may extend coverage, but cannot replace a viewport.
     complete_viewport: bool,
-    reads: Option<CollectionReads>,
+    // The authority belongs to these original rows, not the latest viewport.
+    cursor_sources: Option<CursorSourceDependencies>,
     query_freshness: Option<neovm_core::window::WindowDisplaySnapshotFreshness>,
-    _source_roots: Vec<neovm_core::emacs_core::owned_roots::OwnedRoots>,
 }
 
 impl PreparedViewport {
@@ -40,9 +46,9 @@ impl PreparedViewport {
         self.retained.key.fontset_generation
             == neovm_core::emacs_core::fontset::fontset_generation()
             && self
-                .reads
+                .cursor_sources
                 .as_ref()
-                .is_none_or(CollectionReads::unchanged_and_observe)
+                .is_some_and(|sources| sources.can_replay() && sources.unchanged())
     }
 }
 
@@ -67,6 +73,15 @@ pub(super) struct PreparedViewports {
 }
 
 impl PreparedViewports {
+    pub(super) fn retain_live_frames(
+        &mut self,
+        live: impl Fn(neovm_core::window::FrameId) -> bool,
+    ) {
+        self.entries.retain(|entry| live(entry.frame));
+        self.exports.retain(|export| live(export.frame));
+        self.invalidated.retain(|(frame, _)| live(*frame));
+    }
+
     pub(super) fn retire_invalid_dependencies(&mut self) {
         self.entries.retain(|entry| {
             if entry.dependencies_valid() {
@@ -124,6 +139,10 @@ impl PreparedViewports {
         complete_viewport: bool,
         query_freshness: Option<neovm_core::window::WindowDisplaySnapshotFreshness>,
     ) -> bool {
+        let cursor_sources = CursorSourceDependencies::from_prepared_rows(reads, source_roots);
+        if !cursor_sources.can_replay() || !cursor_sources.unchanged() {
+            return false;
+        }
         // Retargeting can revisit a page that is already prepared. A preview
         // must never shorten its still-valid coverage while the rest is being
         // captured again. Freshness and geometry must match before retaining
@@ -188,9 +207,8 @@ impl PreparedViewports {
             glyphs,
             computed: true,
             complete_viewport,
-            reads: Some(reads),
+            cursor_sources: Some(cursor_sources),
             query_freshness,
-            _source_roots: source_roots,
         });
         self.trim();
         // Removing only the newly appended entry leaves both payloads and
@@ -293,7 +311,11 @@ impl PreparedViewports {
         window: DisplayWindowId,
         key: &RetainedWindowKey,
         force_start: bool,
-    ) -> Option<(CursorOnlyReplay, PreparedFaceSnapshot)> {
+    ) -> Option<(
+        CursorOnlyReplay,
+        PreparedFaceSnapshot,
+        Option<CursorSourceDependencies>,
+    )> {
         self.entries.iter().rev().find_map(|entry| {
             if !entry.complete_viewport
                 || !entry.dependencies_valid()
@@ -309,7 +331,7 @@ impl PreparedViewports {
                 .ok()?;
             // The cursor builder deliberately leaves chrome empty. Even when
             // revisiting a page, mode-line Lisp must run against today's state.
-            Some((replay, entry.faces.clone()))
+            Some((replay, entry.faces.clone(), entry.cursor_sources.clone()))
         })
     }
 
@@ -325,7 +347,12 @@ impl PreparedViewports {
         geometry: crate::buffer_source::window_geometry::BufferWindowGeometry,
         arena: &FrameFaceArena,
         force_start: bool,
-    ) -> Option<(CursorOnlyReplay, PreparedFaceSnapshot)> {
+        prefix_sources: CursorSourceDependencies,
+    ) -> Option<(
+        CursorOnlyReplay,
+        PreparedFaceSnapshot,
+        Option<CursorSourceDependencies>,
+    )> {
         if prefix.sync.is_some() || prefix.edit || prefix.face_generation != arena.generation() {
             return None;
         }
@@ -359,6 +386,7 @@ impl PreparedViewports {
             candidate.presented_cursor = None;
             let snapshot = std::sync::Arc::make_mut(&mut candidate.display_snapshot);
             snapshot.logical_cursor = None;
+            snapshot.logical_cursor_dimensions = None;
             snapshot.phys_cursor = None;
             snapshot.layout_freshness = None;
             snapshot.window_end_record = None;
@@ -482,10 +510,18 @@ impl PreparedViewports {
                             Some(point)
                         }),
                 );
+            let sources = CursorSourceDependencies::combine_originals([
+                prefix_sources.clone(),
+                entry.cursor_sources.clone()?,
+            ])?;
             let replay = candidate
                 .cursor_only_replay_with_forced_start(key, force_start)
                 .ok()?;
-            Some((replay, arena.prepared_with_retained(&entry.faces).ok()?))
+            Some((
+                replay,
+                arena.prepared_with_retained(&entry.faces).ok()?,
+                Some(sources),
+            ))
         })
     }
 
@@ -498,7 +534,11 @@ impl PreparedViewports {
         window: DisplayWindowId,
         key: &RetainedWindowKey,
         minimum_reused: usize,
-    ) -> Option<(ScrollReplay, PreparedFaceSnapshot)> {
+    ) -> Option<(
+        ScrollReplay,
+        PreparedFaceSnapshot,
+        Option<CursorSourceDependencies>,
+    )> {
         self.entries.iter().rev().find_map(|entry| {
             if !entry.dependencies_valid()
                 || entry.frame != frame
@@ -535,7 +575,8 @@ impl PreparedViewports {
                     .len()
                     .checked_sub(replay.exposed_row_base)?;
             }
-            (replay.reused_rows.len() > minimum_reused).then(|| (replay, entry.faces.clone()))
+            (replay.reused_rows.len() > minimum_reused)
+                .then(|| (replay, entry.faces.clone(), entry.cursor_sources.clone()))
         })
     }
 
@@ -545,6 +586,7 @@ impl PreparedViewports {
         previous: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix>,
         next: &rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix>,
         faces: Option<&FrameFaceArena>,
+        previous_sources: Option<&FrameVisualHistory>,
     ) {
         self.retire_invalid_dependencies();
         self.entries.retain(|entry| {
@@ -568,6 +610,14 @@ impl PreparedViewports {
             return;
         };
         for (window, retained) in previous {
+            let cursor_sources =
+                previous_sources.and_then(|history| history.cursor_sources_for(window));
+            if !cursor_sources
+                .as_ref()
+                .is_some_and(|sources| sources.can_replay() && sources.unchanged())
+            {
+                continue;
+            }
             let Some(current) = next.get(&window) else {
                 continue;
             };
@@ -617,9 +667,8 @@ impl PreparedViewports {
                 glyphs,
                 computed: false,
                 complete_viewport: true,
-                reads: None,
+                cursor_sources,
                 query_freshness: None,
-                _source_roots: Vec::new(),
             });
         }
         self.trim();

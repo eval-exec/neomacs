@@ -9,7 +9,7 @@ error[E0382]: use of moved value: `port`
    |                       ^^^^ value used here after move
    |
 note: `ReplyPort::<'session, R>::complete` takes ownership of the receiver `self`, which moves `port`
-  --> src/host_effect/contracts.rs
+  --> $WORKSPACE/crates/neovm-eval/src/host_effect/contracts.rs
    |
    |         self,
    |         ^^^^

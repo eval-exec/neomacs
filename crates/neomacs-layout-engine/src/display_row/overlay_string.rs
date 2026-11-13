@@ -5,6 +5,7 @@
 use crate::buffer_source::loop_state::BufferSourceRowCarryoverState;
 use crate::buffer_source::row_prelude::BufferSourceRowPreludeRequestContext;
 use crate::coords::layout_char_pos_from_i64;
+use crate::cursor_source_dependencies::string_properties as get_string_text_properties_table_for_value;
 use crate::display_cursor::{
     CapturedCursorInfo, CapturedCursorPlacement, CapturedCursorSlotWidth,
     CapturedCursorVisualState, CursorCaptureState, DisplayStringCursorContext,
@@ -44,7 +45,6 @@ use crate::types::{LayoutCharPos0, WindowParams};
 use neomacs_display_protocol::types::Px;
 use neovm_core::buffer::{CharPos0, DisplayColumn};
 use neovm_core::emacs_core::Value;
-use neovm_core::emacs_core::value::get_string_text_properties_table_for_value;
 
 #[derive(Clone, Copy)]
 pub(crate) struct OverlayStringRenderSource {
@@ -980,6 +980,8 @@ fn root_lisp_position_char(source: &crate::display_item::DisplaySourcePosition) 
     }
 }
 
+/// Resolve cursor-property eligibility at the string's source slot and attach
+/// its measured extent before later bidi reordering changes visual placement.
 fn capture_overlay_string_cursor_at_slot(
     text_props: Option<&neovm_core::buffer::text_props::TextPropertyTable>,
     slot: &DisplayRowGlyphSlot,
@@ -992,7 +994,7 @@ fn capture_overlay_string_cursor_at_slot(
     let Some(char_idx) = root_lisp_position_char(&slot.source()) else {
         return;
     };
-    capture_overlay_string_cursor(
+    capture_overlay_string_cursor_with_dimensions(
         text_props,
         char_idx,
         cursor_info,
@@ -1003,11 +1005,14 @@ fn capture_overlay_string_cursor_at_slot(
         visual_state,
         CapturedCursorSlotWidth::Explicit(slot.width_px()),
         cursor_context,
+        slot.selected_primitive_dimensions(),
     );
 }
 
+/// Keep explicit string-cursor identity and measured extent together; window
+/// row defaults are not evidence of the selected slot's glyph height.
 #[allow(clippy::too_many_arguments)]
-fn capture_overlay_string_cursor(
+fn capture_overlay_string_cursor_with_dimensions(
     text_props: Option<&neovm_core::buffer::text_props::TextPropertyTable>,
     char_idx: usize,
     cursor_info: &mut CursorCaptureState,
@@ -1018,6 +1023,7 @@ fn capture_overlay_string_cursor(
     visual_state: CapturedCursorVisualState,
     slot_width: CapturedCursorSlotWidth,
     cursor_context: DisplayStringCursorContext,
+    logical_dimensions: Option<neovm_core::window::LogicalCursorDimensions>,
 ) {
     let Some(props) = text_props else {
         return;
@@ -1028,7 +1034,7 @@ fn capture_overlay_string_cursor(
     ) else {
         return;
     };
-    let info = CapturedCursorInfo::from_visual_state(
+    let mut info = CapturedCursorInfo::from_visual_state(
         visual_state,
         CapturedCursorPlacement {
             x,
@@ -1040,6 +1046,7 @@ fn capture_overlay_string_cursor(
             stretch_like: false,
         },
     );
+    info.logical_dimensions = logical_dimensions;
     if let Some(candidate) = cursor_context.resolve(cursor_prop, info) {
         cursor_info.capture_display_string_cursor(candidate);
     }

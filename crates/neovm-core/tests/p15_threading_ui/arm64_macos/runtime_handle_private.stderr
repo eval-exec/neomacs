@@ -5,7 +5,7 @@ error[E0603]: struct `CondVarHandle` is private
   |                                       ^^^^^^^^^^^^^ private struct
   |
 note: the struct `CondVarHandle` is defined here
- --> src/emacs_core/runtime/threads/mod.rs
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs
   |
   | pub(crate) struct CondVarHandle {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -17,7 +17,7 @@ error[E0603]: struct `MutexHandle` is private
   |                                                      ^^^^^^^^^^^ private struct
   |
 note: the struct `MutexHandle` is defined here
- --> src/emacs_core/runtime/threads/mod.rs
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs
   |
   | pub(crate) struct MutexHandle {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

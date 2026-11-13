@@ -1,0 +1,733 @@
+//! Customization and buffer-local variable system.
+//!
+//! GNU Lisp owns `defcustom`, `defgroup`, `setq-default`, and `custom-*`.
+//! The live Rust-side responsibility here is the buffer-local/default-value
+//! machinery that the evaluator still needs directly.
+
+use neovm_edit::buffer::BufferId;
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
+use neovm_value::gc_trace::GcTrace;
+use neovm_value::intern::{SymId, intern, resolve_sym};
+use neovm_value::value::*;
+
+/// Rust-side registry for customization state.
+///
+/// The `auto_buffer_local` `HashSet<SymId>` that used to live here
+/// was a pure mirror of the LOCALIZED redirect + BLV `local_if_set`
+/// flag. It was removed in Phase D of the symbol-redirect refactor.
+/// Readers now consult `Obarray::blv(id).local_if_set` directly.
+#[derive(Clone, Debug, Default)]
+pub struct CustomManager {}
+
+impl CustomManager {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl GcTrace for CustomManager {
+    fn trace_roots(&self, _roots: &mut Vec<Value>) {}
+}
+
+// ---------------------------------------------------------------------------
+// Pure builtins (no evaluator needed)
+// ---------------------------------------------------------------------------
+
+/// GNU's `KBOARD_OBJFWDP` guard, shared by `Fmake_variable_buffer_local`
+/// (`src/data.c:2220-2223`) and `Fmake_local_variable` (`src/data.c:2286-2288`).
+///
+/// A `DEFVAR_KBOARD` variable's storage is a slot in `struct KBOARD`, which is
+/// per-terminal, not per-buffer; there is nowhere for a buffer-local binding
+/// of one to live, so both entry points refuse it by name rather than
+/// producing a binding that could not be read back.  This is the only
+/// Lisp-visible behaviour that separates `Lisp_Fwd_Kboard_Obj` from
+/// `Lisp_Fwd_Obj`, which is why the two are separate variants here.
+fn keyboard_variable_may_not_be_buffer_local(
+    obarray: &neovm_value::symbol::Obarray,
+    resolved: neovm_value::intern::SymId,
+    reported: Value,
+) -> Result<(), Flow> {
+    use neovm_value::forward::LispFwdType;
+    if obarray.forward_type(resolved) != Some(LispFwdType::KboardObj) {
+        return Ok(());
+    }
+    let name = neovm_value::intern::resolve_sym(reported.as_bare_symbol_id().unwrap_or(resolved));
+    Err(signal(
+        "error",
+        vec![Value::string(format!(
+            "Symbol {name} may not be buffer-local"
+        ))],
+    ))
+}
+
+/// `(make-variable-buffer-local VARIABLE)` -- mark variable as automatically buffer-local.
+#[doc(hidden)]
+pub fn builtin_make_variable_buffer_local(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let custom = &mut eval.custom;
+    // SAFETY: alias/constant validation and localization preserve the existing
+    // forwarder descriptor. This helper does not call Lisp, publish dispatch
+    // metadata, replace storage or return a mutable manager/BLV reference.
+    let (result, resolved) = unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            builtin_make_variable_buffer_local_with_state(obarray, custom, args)
+        })
+    }?;
+    eval.mark_user_test_gc_settings_volatile_if_gc_symbol(resolved);
+    Ok(result)
+}
+
+// Inlined into `builtin_make_variable_buffer_local`, as it was before the
+// cold projection handler below became a second caller.
+#[inline(always)]
+pub(crate) fn builtin_make_variable_buffer_local_with_state(
+    obarray: &mut neovm_value::symbol::Obarray,
+    _custom: &mut CustomManager,
+    args: Vec<Value>,
+) -> Result<(Value, SymId), Flow> {
+    expect_args("make-variable-buffer-local", &args, 1)?;
+    let symbol = match args[0].kind() {
+        ValueKind::Symbol(id) => id,
+        ValueKind::Nil => intern("nil"),
+        ValueKind::T => intern("t"),
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("symbolp"), args[0]],
+            ));
+        }
+    };
+    let resolved_id = super::builtins::resolve_variable_alias_id_in_obarray(obarray, symbol)?;
+    // GNU signals from inside the redirect switch, BEFORE the constant check
+    // below (`src/data.c:2220-2223` then `:2230-2231`).
+    keyboard_variable_may_not_be_buffer_local(obarray, resolved_id, args[0])?;
+    if obarray.forward_type(resolved_id) == Some(neovm_value::forward::LispFwdType::BufferObj) {
+        if obarray.thread_projection_of(resolved_id).is_some() {
+            return make_projected_variable_buffer_local(obarray, _custom, args, resolved_id);
+        }
+        // A per-buffer variable already is one: GNU returns it unchanged,
+        // before the constant check (`src/data.c:2225-2226`).
+        return Ok((args[0], resolved_id));
+    }
+    if obarray.is_constant_id(resolved_id) {
+        return Err(signal(LispCondition::SettingConstant, vec![args[0]]));
+    }
+
+    // Flip the symbol's redirect tag to LOCALIZED and mark it as
+    // auto-buffer-local at first set. Mirrors GNU
+    // `Fmake_variable_buffer_local` (`data.c:2142-2207`).
+    // GNU operates on the exact symbol object after following aliases;
+    // it does not intern by name.  This matters for `(make-symbol ...)`
+    // variables, whose value cells and BLVs are independent from any
+    // interned symbol with the same print name.
+    let default_value = obarray
+        .canonical_find_value(neovm_value::symbol::CanonicalAccess::STORAGE, resolved_id)
+        .unwrap_or(Value::NIL);
+    obarray.make_symbol_localized(resolved_id, default_value);
+    obarray.set_blv_local_if_set(resolved_id, true);
+    Ok((args[0], resolved_id))
+}
+
+/// `make-variable-buffer-local` of a thread-projected variable, on the
+/// variable it projects.
+#[cold]
+#[inline(never)]
+fn make_projected_variable_buffer_local(
+    obarray: &mut neovm_value::symbol::Obarray,
+    custom: &mut CustomManager,
+    args: Vec<Value>,
+    resolved: SymId,
+) -> Result<(Value, SymId), Flow> {
+    obarray.with_revealed_projection(resolved, |obarray| {
+        builtin_make_variable_buffer_local_with_state(obarray, custom, args)
+    })
+}
+
+/// `(make-local-variable VARIABLE)` -- make variable local in current buffer.
+///
+/// Mirrors GNU `Fmake_local_variable` (`data.c:2209-2312`). Differs
+/// from `make-variable-buffer-local` in that it creates a per-buffer
+/// binding *only* in the current buffer, without setting
+/// `local_if_set` (which would auto-create on every subsequent
+/// `setq` in any buffer).
+#[doc(hidden)]
+pub fn builtin_make_local_variable(ctx: &mut super::eval::Context, args: &[Value]) -> EvalResult {
+    expect_args("make-local-variable", &args, 1)?;
+    let symbol = match args[0].kind() {
+        ValueKind::Symbol(id) => id,
+        ValueKind::Nil => intern("nil"),
+        ValueKind::T => intern("t"),
+        _other => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("symbolp"), args[0]],
+            ));
+        }
+    };
+    let resolved = super::builtins::resolve_variable_alias_id_in_obarray(&ctx.obarray, symbol)?;
+    // Same refusal, same place in the order (`src/data.c:2286-2288` then
+    // `:2293-2294`).
+    keyboard_variable_may_not_be_buffer_local(&ctx.obarray, resolved, args[0])?;
+    if ctx.obarray.is_constant_id(resolved) {
+        return Err(signal(LispCondition::SettingConstant, vec![args[0]]));
+    }
+
+    {
+        static BUFFER_UNDO_LIST: std::sync::OnceLock<neovm_value::intern::SymId> =
+            std::sync::OnceLock::new();
+        if resolved == *BUFFER_UNDO_LIST.get_or_init(|| intern("buffer-undo-list")) {
+            return Ok(args[0]);
+        }
+    }
+
+    // Already Localized with a binding in this buffer: nothing left to do
+    // (GNU Fmake_local_variable finds the existing `local_var_alist` entry
+    // via Fassq and skips the cons; every step below is idempotent state
+    // this buffer already has). `setq-local` on flush paths calls this per
+    // keystroke — the full re-localization walk was 7.6K Ir per call.
+    if ctx.obarray.is_localized(resolved)
+        && let Some(buf_id) = ctx.edit.buffers.current_buffer_id()
+        && let Some(buf) = ctx.edit.buffers.get(buf_id)
+        && buf.has_buffer_local_by_sym_id(resolved)
+    {
+        return Ok(args[0]);
+    }
+
+    // Phase 10E: for FORWARDED BUFFER_OBJFWD symbols, just flip the
+    // per-buffer local-flags bit on the current buffer. Mirrors GNU
+    // `Fmake_local_variable` SYMBOL_FORWARDED arm at data.c:2263-2272:
+    //
+    //     if (forwarded && BUFFER_OBJFWDP (valcontents.fwd)) {
+    //       int idx = PER_BUFFER_IDX (offset);
+    //       eassert (idx);
+    //       if (idx > 0)
+    //         SET_PER_BUFFER_VALUE_P (current_buffer, idx, true);
+    //       return variable;
+    //     }
+    //
+    // The slot remains the source of truth — DO NOT replace it with
+    // a fresh BLV via make_symbol_localized.
+    {
+        let buf_objfwd = ctx
+            .obarray
+            .get_by_id(resolved)
+            .and_then(|s| s.forwarded_descriptor())
+            .and_then(|fwd| fwd.as_buffer_obj_fwd())
+            .map(|buf_fwd| buf_fwd.buffer_slot());
+        if let Some(slot) = buf_objfwd {
+            let Some(slot) = slot else {
+                // Only a thread projection's header has no slot: localize
+                // the variable it projects.
+                return make_projected_variable_local(ctx, resolved, args);
+            };
+            if let Some(buf_id) = ctx.edit.buffers.current_buffer_id()
+                && let Some(buf) = ctx.edit.buffers.get_mut(buf_id)
+            {
+                buf.set_slot_local_flag(slot, true);
+            }
+            return Ok(args[0]);
+        }
+    }
+
+    // Phase 6 of the symbol-redirect refactor: flip the symbol to
+    // LOCALIZED (preserving its current value as the default) and
+    // seed the current buffer's local_var_alist with `(sym . default)`
+    // if it doesn't already have an entry. This is the new GNU-shape
+    // path.
+    //
+    // For a void symbol, seed the alist with `Qunbound` as the cdr —
+    // mirrors GNU `Fmake_local_variable` which does `Fcons (variable,
+    // XCDR (blv->defcell))` at `data.c:2289`, and `blv->defcell` is
+    // `(variable . Qunbound)` when the symbol has no value.
+    let default_value = ctx
+        .obarray
+        .canonical_find_value(neovm_value::symbol::CanonicalAccess::STORAGE, resolved)
+        .unwrap_or(Value::UNBOUND);
+    ctx.obarray.make_symbol_localized(resolved, default_value);
+    ctx.mark_user_test_gc_settings_volatile_if_gc_symbol(resolved);
+    if let Some(current_id) = ctx.edit.buffers.current_buffer_id() {
+        let current_buf = Value::make_buffer(current_id);
+        // GNU `Fmake_local_variable` calls `swap_in_global_binding`
+        // before consing the new `(sym . val)` alist entry when the
+        // BLV cache is currently loaded for this buffer. The closed operation
+        // cannot expose or retarget the BLV's forwarded debugger descriptor.
+        ctx.obarray
+            .reset_blv_cache_for_buffer(resolved, current_buf);
+        if let Some(buf) = ctx.edit.buffers.get_mut(current_id) {
+            // Only seed when no entry exists yet (idempotent — calling
+            // make-local-variable twice doesn't double-prepend).
+            if !buf.has_buffer_local_by_sym_id(resolved) {
+                buf.set_buffer_local_by_sym_id(resolved, default_value);
+            }
+        }
+    }
+    Ok(args[0])
+}
+
+/// `make-local-variable` of a thread-projected variable: the same operation
+/// on the variable it projects, whose new arm the projection then records;
+/// a new local starts at the default this owner sees.
+#[cold]
+#[inline(never)]
+fn make_projected_variable_local(
+    ctx: &mut super::eval::Context,
+    resolved: SymId,
+    args: &[Value],
+) -> EvalResult {
+    let had_local = ctx.projected_local_in_current_buffer(resolved);
+    let result =
+        ctx.with_revealed_projection(resolved, |ctx| builtin_make_local_variable(ctx, args))?;
+    if !had_local {
+        ctx.owner_local_made(resolved);
+    }
+    Ok(result)
+}
+
+/// `(local-variable-p VARIABLE &optional BUFFER)` -- test if variable is local.
+#[doc(hidden)]
+pub fn builtin_local_variable_p(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("local-variable-p", &args, 1)?;
+    expect_max_args("local-variable-p", &args, 2)?;
+    let sym_id = match args[0].kind() {
+        ValueKind::Symbol(id) => id,
+        ValueKind::Nil => intern("nil"),
+        ValueKind::T => intern("t"),
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("symbolp"), args[0]],
+            ));
+        }
+    };
+    let resolved_id = super::builtins::resolve_variable_alias_id_in_obarray(&ctx.obarray, sym_id)?;
+    let buf = if args.len() > 1 {
+        match args[1].kind() {
+            ValueKind::Nil => ctx.edit.buffers.current_buffer(),
+            ValueKind::Veclike(VecLikeType::Buffer) => {
+                ctx.edit.buffers.get(args[1].as_buffer_id().unwrap())
+            }
+            _other => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("bufferp"), args[1]],
+                ));
+            }
+        }
+    } else {
+        ctx.edit.buffers.current_buffer()
+    };
+
+    let Some(b) = buf else {
+        return Ok(Value::NIL);
+    };
+
+    // Phase 10E: route LOCALIZED checks through the BLV machinery.
+    // Mirrors GNU `Flocal_variable_p` SYMBOL_LOCALIZED arm at
+    // `data.c:2399-2412`: walk the buffer's local_var_alist (or
+    // trust the BLV cache if `where == buf`).
+    use neovm_value::symbol::SymbolRedirect;
+    if let Some(sym_slot) = ctx.obarray.get_by_id(resolved_id)
+        && sym_slot.redirect() == SymbolRedirect::Localized
+    {
+        return Ok(Value::bool_val(b.has_buffer_local_by_sym_id(resolved_id)));
+    }
+
+    Ok(Value::bool_val(b.has_buffer_local_by_sym_id(resolved_id)))
+}
+
+/// `(buffer-local-variables &optional BUFFER)` -- list all local variables.
+///
+/// Mirrors GNU `Fbuffer_local_variables` (`buffer.c:1453-1520`), which
+/// walks `BVAR(buf, local_var_alist)` and `FOR_EACH_PER_BUFFER_OBJECT_AT`
+/// and prepends each entry with `Fcons`. The net effect is:
+///
+///   result = [alist walked forward, prepended]
+///            ++ [slots walked forward, prepended]
+///
+/// which reverses within-group iteration order. Entries whose alist cdr
+/// is `Qunbound` are emitted as the bare symbol (no cons) — that's
+/// what `(memq SYMBOL (buffer-local-variables))` keys off of.
+#[doc(hidden)]
+pub fn builtin_buffer_local_variables(
+    ctx: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("buffer-local-variables", &args, 1)?;
+
+    let id = match args.first() {
+        None => ctx
+            .edit
+            .buffers
+            .current_buffer()
+            .map(|b| b.id())
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
+        Some(v) if v.is_nil() => ctx
+            .edit
+            .buffers
+            .current_buffer()
+            .map(|b| b.id())
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
+        Some(v) if v.is_buffer() => v.as_buffer_id().unwrap(),
+        Some(other) => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("bufferp"), *other],
+            ));
+        }
+    };
+
+    // GNU's `Fbuffer_local_variables` decodes through `decode_buffer`
+    // (`src/buffer.h`), which does `CHECK_BUFFER` and nothing else -- nothing
+    // in that path rejects a KILLED buffer, and `Fkill_buffer` has already run
+    // `reset_buffer_local_variables (b, 1)` before `bset_name (b, Qnil)`.  So
+    // a killed buffer reports its built-in per-buffer slots at their defaults,
+    // an alist measurably EQUAL (keys and values) to a freshly created
+    // buffer's -- GNU 31.0.50, `emacs -Q --batch`, 19 entries either way.
+    //
+    // neomacs drops the buffer on kill, so there is no struct left to read
+    // those defaults off.  Build them from a default buffer rather than
+    // restating the slot list here: one code path produces the live answer and
+    // the dead one, so the two cannot drift.
+    //
+    // Returning nil would be the wrong repair.  GNU's answer is a non-empty
+    // alist; nil would convert a loud divergence into a quiet one.
+    let killed_buffer_defaults;
+    let buf = match ctx.edit.buffers.get(id) {
+        Some(buf) => buf,
+        None => {
+            // The name is not part of the answer -- `buffer-local-variables`
+            // reports slots, and none of GNU's 19 entries is name-derived --
+            // and GNU's killed buffer carries `name` nil regardless; the
+            // constructor requires a string, so the empty one stands in for a
+            // field this value is never read for.
+            killed_buffer_defaults =
+                neovm_edit::buffer::Buffer::new_standalone(id, Value::string(""));
+            &killed_buffer_defaults
+        }
+    };
+
+    // Build in GNU prepend order: start with slots (forward iter,
+    // appended to a Vec, later reversed), then alist (same pattern).
+    // The final entries list ends up as [alist-reversed, slots-reversed]
+    // which matches GNU's prepend-based construction.
+    let ordered = buf.ordered_buffer_local_bindings();
+    let entries: Vec<Value> = ordered
+        .into_iter()
+        .rev()
+        .map(|(sym_id, value)| match value.as_value() {
+            Some(value) => Value::cons(Value::from_sym_id(sym_id), value),
+            None => Value::from_sym_id(sym_id),
+        })
+        .collect();
+    Ok(Value::list(entries))
+}
+
+fn buffer_arg_or_current(
+    ctx: &mut super::eval::Context,
+    _fn_name: &str,
+    arg: Option<Value>,
+) -> Result<BufferId, Flow> {
+    match arg {
+        None => ctx
+            .edit
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")])),
+        Some(value) => match value.kind() {
+            ValueKind::Nil => ctx
+                .edit
+                .buffers
+                .current_buffer_id()
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")])),
+            ValueKind::Veclike(VecLikeType::Buffer) => {
+                let id = value.as_buffer_id().expect("buffer value has id");
+                if ctx.edit.buffers.get(id).is_some() {
+                    Ok(id)
+                } else {
+                    Err(signal(
+                        "error",
+                        vec![Value::string("Selecting deleted buffer")],
+                    ))
+                }
+            }
+            _ => Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("bufferp"), value],
+            )),
+        },
+    }
+}
+
+fn local_toplevel_binding_value(
+    specpdl: &[super::eval::SpecBinding],
+    sym_id: SymId,
+    buffer_id: BufferId,
+) -> Option<Value> {
+    specpdl.iter().find_map(|binding| match binding {
+        super::eval::SpecBinding::LetLocal {
+            sym_id: binding_sym,
+            old_value,
+            buffer_id: binding_buffer,
+        } if *binding_sym == sym_id && *binding_buffer == buffer_id => Some(*old_value),
+        _ => None,
+    })
+}
+
+fn set_local_toplevel_binding_value(
+    specpdl: &mut [super::eval::SpecBinding],
+    sym_id: SymId,
+    buffer_id: BufferId,
+    value: Value,
+) -> bool {
+    for binding in specpdl.iter_mut() {
+        if let super::eval::SpecBinding::LetLocal {
+            sym_id: binding_sym,
+            old_value,
+            buffer_id: binding_buffer,
+        } = binding
+            && *binding_sym == sym_id
+            && *binding_buffer == buffer_id
+        {
+            *old_value = value;
+            return true;
+        }
+    }
+    false
+}
+
+/// `(buffer-local-toplevel-value SYMBOL &optional BUFFER)`.
+///
+/// Mirrors GNU `Fbuffer_local_toplevel_value` (`eval.c`): first require an
+/// actual buffer-local binding in the target buffer, then return the saved
+/// `SPECPDL_LET_LOCAL` old value if an active `let` is shadowing it.
+#[doc(hidden)]
+pub fn builtin_buffer_local_toplevel_value(
+    ctx: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("buffer-local-toplevel-value", &args, 1)?;
+    expect_max_args("buffer-local-toplevel-value", &args, 2)?;
+
+    let symbol = super::builtins::symbols::expect_symbol_id(&args[0], ctx.symbol_mode())?;
+    let resolved = super::builtins::resolve_variable_alias_id_in_obarray(&ctx.obarray, symbol)?;
+    let buffer_id =
+        buffer_arg_or_current(ctx, "buffer-local-toplevel-value", args.get(1).copied())?;
+    let buffer_value = Value::make_buffer(buffer_id);
+
+    let is_local = builtin_local_variable_p(ctx, vec![args[0], buffer_value])?;
+    if is_local.is_nil() {
+        return Err(signal(LispCondition::VoidVariable, vec![args[0]]));
+    }
+
+    if let Some(value) = local_toplevel_binding_value(ctx.specpdl.as_slice(), resolved, buffer_id) {
+        return Ok(value);
+    }
+    if let Some(value) = ctx.owner_local_toplevel_value(resolved, buffer_id) {
+        return Ok(value);
+    }
+
+    crate::emacs_core::eval::builtin_buffer_local_value(ctx, vec![args[0], buffer_value])
+}
+
+/// `(set-buffer-local-toplevel-value SYMBOL VALUE &optional BUFFER)`.
+///
+/// Mirrors GNU `Fset_buffer_local_toplevel_value`: update the saved
+/// `SPECPDL_LET_LOCAL` old value when one is active; otherwise temporarily
+/// select the target buffer, make the variable local, and set it there.
+#[doc(hidden)]
+pub fn builtin_set_buffer_local_toplevel_value(
+    ctx: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("set-buffer-local-toplevel-value", &args, 2)?;
+    expect_max_args("set-buffer-local-toplevel-value", &args, 3)?;
+
+    let symbol = super::builtins::symbols::expect_symbol_id(&args[0], ctx.symbol_mode())?;
+    let resolved = super::builtins::resolve_variable_alias_id_in_obarray(&ctx.obarray, symbol)?;
+    let buffer_id =
+        buffer_arg_or_current(ctx, "set-buffer-local-toplevel-value", args.get(2).copied())?;
+    if set_local_toplevel_binding_value(ctx.specpdl.as_mut_slice(), resolved, buffer_id, args[1])
+        || ctx.set_owner_local_toplevel_value(resolved, buffer_id, args[1])
+    {
+        return Ok(Value::NIL);
+    }
+
+    let saved_current = ctx.edit.buffers.current_buffer_id();
+    let switched = saved_current != Some(buffer_id);
+    if switched {
+        ctx.set_current_buffer_unrecorded(buffer_id)?;
+    }
+
+    let result = (|| {
+        builtin_make_local_variable(ctx, &[args[0]])?;
+        super::eval::set_runtime_binding_in_state(ctx, resolved, args[1])?;
+        Ok(Value::NIL)
+    })();
+
+    if switched && let Some(saved) = saved_current {
+        ctx.restore_current_buffer_if_live(saved);
+    }
+
+    result
+}
+
+/// `(kill-local-variable VARIABLE)` -- remove local binding in current buffer.
+#[doc(hidden)]
+pub fn builtin_kill_local_variable(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let outcome = builtin_kill_local_variable_impl(ctx, &args)?;
+    Ok(outcome.result)
+}
+
+pub(crate) struct KillLocalVariableOutcome {
+    pub result: Value,
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    pub removed: bool,
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    pub resolved_id: SymId,
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    pub buffer_id: Option<neovm_edit::buffer::BufferId>,
+}
+
+/// `kill-local-variable` of a thread-projected variable, on the variable it
+/// projects; a binding of this owner that hid the local hides nothing now.
+#[cold]
+#[inline(never)]
+fn kill_projected_local_variable(
+    ctx: &mut crate::emacs_core::eval::Context,
+    resolved: SymId,
+    args: &[Value],
+) -> Result<KillLocalVariableOutcome, Flow> {
+    ctx.owner_local_killed(resolved);
+    ctx.with_revealed_projection(resolved, |ctx| builtin_kill_local_variable_impl(ctx, args))
+}
+
+// Inlined into `builtin_kill_local_variable`, its one ordinary caller, as it
+// was before the cold projection handler above became a second caller.
+#[inline(always)]
+pub(crate) fn builtin_kill_local_variable_impl(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: &[Value],
+) -> Result<KillLocalVariableOutcome, Flow> {
+    expect_args("kill-local-variable", args, 1)?;
+    let symbol = match args[0].kind() {
+        ValueKind::Symbol(id) => id,
+        ValueKind::Nil => intern("nil"),
+        ValueKind::T => intern("t"),
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("symbolp"), args[0]],
+            ));
+        }
+    };
+
+    let resolved = super::builtins::resolve_variable_alias_id_in_obarray(&ctx.obarray, symbol)?;
+    let resolved_name = resolve_sym(resolved);
+    let mut removed = false;
+    let buffer_id = ctx.edit.buffers.current_buffer_id();
+
+    // GNU `Fkill_local_variable` handles SYMBOL_FORWARDED BUFFER_OBJFWD
+    // variables before watcher notification (`data.c:2328-2345`):
+    // conditional per-buffer slots clear their local flag and reload the
+    // current default value; always-local slots are left alone.
+    {
+        let forwarded_slot = ctx
+            .obarray
+            .get_by_id(resolved)
+            .and_then(|s| s.forwarded_descriptor())
+            .and_then(|fwd| fwd.as_buffer_obj_fwd())
+            .map(|buf_fwd| buf_fwd.buffer_slot());
+        let forwarded_slot = match forwarded_slot {
+            // Only a thread projection's header has no slot: kill the
+            // binding of the variable it projects.
+            Some(None) => return kill_projected_local_variable(ctx, resolved, args),
+            Some(Some(slot)) => neovm_edit::buffer::buffer::lookup_buffer_slot(resolved_name)
+                .map(|info| (info, slot)),
+            None => None,
+        };
+        if let Some((info, slot)) = forwarded_slot {
+            let offset = slot.index();
+            let default_value = ctx.edit.buffers.buffer_defaults.get(offset).copied();
+            if info.local_flags_idx >= 0
+                && let Some(buffer_id) = buffer_id
+                && let Some(buf) = ctx.edit.buffers.get_mut(buffer_id)
+            {
+                buf.set_slot_local_flag(slot, false);
+                if let Some(default_value) = default_value {
+                    buf.slots_mut()[offset] = default_value;
+                }
+            }
+            return Ok(KillLocalVariableOutcome {
+                result: args[0],
+                removed: false,
+                resolved_id: resolved,
+                buffer_id,
+            });
+        }
+    }
+
+    // Phase 10E: for LOCALIZED symbols, remove the entry from
+    // `Buffer::local_var_alist` and reset the BLV cache. Mirrors
+    // GNU `Fkill_local_variable` SYMBOL_LOCALIZED arm at
+    // `data.c:2349-2378` which does:
+    //
+    //     swap_in_global_binding (sym);
+    //     XSETSYMBOL (variable, sym);
+    //     bset_local_var_alist (current_buffer,
+    //                           Fdelq (Fassq (variable,
+    //                                         BVAR (current_buffer, local_var_alist)),
+    //                                  BVAR (current_buffer, local_var_alist)));
+    use neovm_value::symbol::SymbolRedirect;
+    if let Some(buffer_id) = buffer_id {
+        let is_localized = ctx
+            .obarray
+            .get_by_id(resolved)
+            .map(|s| s.redirect() == SymbolRedirect::Localized)
+            .unwrap_or(false);
+        if is_localized {
+            ctx.mark_user_test_gc_settings_volatile_if_gc_symbol(resolved);
+            // GNU `Fkill_local_variable` notifies watchers before removing the
+            // buffer's local alist entry or swapping the BLV back to the
+            // global binding, so the callback still observes the local value.
+            ctx.run_variable_watchers_by_id_with_where(
+                resolved,
+                &Value::NIL,
+                &Value::NIL,
+                "makunbound",
+                &Value::make_buffer(buffer_id),
+            )?;
+
+            // Reset the BLV cache so subsequent reads re-swap to
+            // the global default. Equivalent to GNU's
+            // `swap_in_global_binding`.
+            ctx.obarray.reset_blv_cache_to_default(resolved);
+            // Walk the buffer's alist and remove any (sym . val)
+            // pair. Returns whether anything was removed.
+            if let Some(buf) = ctx.edit.buffers.get_mut(buffer_id) {
+                removed = buf.kill_buffer_local_by_sym_id(resolved).is_some();
+            }
+        } else {
+            removed = ctx
+                .edit
+                .buffers
+                .remove_buffer_local_property(buffer_id, resolved_name)
+                .flatten()
+                .is_some();
+        }
+    }
+
+    Ok(KillLocalVariableOutcome {
+        result: args[0],
+        removed,
+        resolved_id: resolved,
+        buffer_id,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------

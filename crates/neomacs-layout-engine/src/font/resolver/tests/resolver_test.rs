@@ -282,6 +282,70 @@ fn candidate(family: &str, weight: u16, slant: FontSlant, spacing: i32) -> FontC
 }
 
 #[test]
+fn entity_listing_filters_before_limiting_and_preserves_plural_results() {
+    let mut regular = candidate("Fixture Sans", 400, FontSlant::Normal, 100);
+    regular.matched.metadata.foundry = Some("SRC".to_owned());
+    let mut bold = candidate("Fixture Sans", 700, FontSlant::Normal, 100);
+    bold.matched.metadata.foundry = Some("SRC".to_owned());
+    let resolver = FontResolver::new(Box::new(ScopedListingBackend {
+        candidates: vec![
+            candidate("Other Family", 400, FontSlant::Normal, 100),
+            regular,
+            bold,
+        ],
+    }));
+    let query = FontEntityQuery::new(FontFamilyName::new("fixture sans"));
+    let constraints = FontEntityListConstraints {
+        foundry: Some("src".to_owned()),
+        pixel_size: Some(13),
+        average_width: Some(0),
+        ..Default::default()
+    };
+    let listed = resolver.list_entities(&query, &constraints, None, None);
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].matched.weight(), Some(400));
+    assert_eq!(listed[1].matched.weight(), Some(700));
+    let prefer = query.clone().with_weight(700);
+    let preferred =
+        resolver.list_entities(&query, &constraints, Some((&prefer, &constraints)), Some(1));
+    assert_eq!(preferred.len(), 1);
+    assert_eq!(preferred[0].matched.weight(), Some(700));
+    assert!(
+        resolver
+            .list_entities(&query, &constraints, None, Some(0))
+            .is_empty()
+    );
+    for family in ["Missing Family", "Fixture S*", "Fixture S?ns"] {
+        assert!(
+            resolver
+                .list_entities(
+                    &FontEntityQuery::new(FontFamilyName::new(family)),
+                    &constraints,
+                    None,
+                    None
+                )
+                .is_empty()
+        );
+    }
+    let missing_foundry = FontEntityListConstraints {
+        foundry: Some("missing".to_owned()),
+        ..constraints.clone()
+    };
+    assert!(
+        resolver
+            .list_entities(&query, &missing_foundry, None, None)
+            .is_empty()
+    );
+    let all = resolver.list_entities(
+        &FontEntityQuery::default(),
+        &FontEntityListConstraints::default(),
+        None,
+        None,
+    );
+    assert_eq!(all.len(), 3);
+}
+
+#[test]
 fn primary_weight_selection_uses_gnu_distance_before_discovery_order() {
     // GNU font.c:font_score compares weight-table values, not CSS weights.
     // semi-light=55 is nearer light=50 than regular=80. The CSS distances
@@ -610,7 +674,7 @@ fn explicit_fontset_width_beats_the_face_width_on_live_and_frozen_paths() {
         collection_face(0, FontWidth::Normal),
         collection_face(3, FontWidth::Expanded),
     ];
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str(
         "(let ((font-encoding-alist '((\".*\" unicode)))) \
            (set-fontset-font t ?α (font-spec :family \"Fixture Mono\" :width 'expanded \
@@ -1008,7 +1072,7 @@ fn captured_family_policy_keeps_alias_order_and_fallback_boundary() {
 
 #[test]
 fn frozen_character_requests_survive_live_policy_mutation_and_reject_unknown_queries() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(let ((font-encoding-alist '((\".*\" unicode)))) (set-fontset-font t #x3042 '(\"Fixture Sans\" . \"iso10646-1\")))").unwrap();
     let policies = FrozenCharacterPolicies::capture(
         &[("Base Mono", 'あ', 400, false, selection_size())],
@@ -1066,7 +1130,7 @@ fn frozen_character_requests_survive_live_policy_mutation_and_reject_unknown_que
 
 #[test]
 fn frozen_explicit_none_does_not_enable_native_fallback() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(set-fontset-font t #x3042 nil)").unwrap();
     let policies = FrozenCharacterPolicies::capture(
         &[("Base Mono", 'あ', 400, false, selection_size())],
@@ -1209,3 +1273,134 @@ fn opening_by_spec_driver_fallback_replaces_unavailable_explicit_style_with_norm
 
 #[path = "worker_family_laziness_test.rs"]
 mod worker_family_laziness_test;
+
+// Native catalogs select families and their secondary aliases before shared
+// style filtering. The primary display family need not equal the query.
+struct ScopedListingBackend {
+    candidates: Vec<FontCandidate>,
+}
+impl FontBackend for ScopedListingBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+    fn list_families(&self) -> Vec<FontFamilyName> {
+        Vec::new()
+    }
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+    fn family_prefers_monospace(&self, _: &str) -> bool {
+        false
+    }
+    fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
+        self.candidates
+            .iter()
+            .filter(|candidate| {
+                query.scope.queried_family().is_none_or(|family| {
+                    candidate.matched.family().eq_ignore_ascii_case(family)
+                        || (family == "Fixture Alias"
+                            && candidate.matched.family() == "Fixture Sans")
+                })
+            })
+            .cloned()
+            .collect()
+    }
+    fn advance_catalog_generation(&mut self) {}
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+#[test]
+fn entity_listing_accepts_native_family_alias_membership() {
+    let resolver = FontResolver::new(Box::new(ScopedListingBackend {
+        candidates: vec![candidate("Fixture Sans", 400, FontSlant::Normal, 100)],
+    }));
+    let listed = resolver.list_entities(
+        &FontEntityQuery::new(FontFamilyName::new("Fixture Alias")),
+        &FontEntityListConstraints::default(),
+        None,
+        None,
+    );
+    assert_eq!(
+        listed.len(),
+        1,
+        "native family aliases retain their catalog match"
+    );
+    assert_eq!(listed[0].matched.family(), "Fixture Sans");
+}
+
+#[test]
+fn entity_listing_restricts_the_driver_before_enumeration() {
+    let resolver = FontResolver::new(Box::new(ScopedListingBackend {
+        candidates: vec![candidate("Fixture Sans", 400, FontSlant::Normal, 100)],
+    }));
+    let query = FontEntityQuery::new(FontFamilyName::new("Fixture Sans"));
+    let actual = FontEntityListConstraints {
+        driver: Some(intern("ftcrhb")),
+        ..Default::default()
+    };
+    assert_eq!(resolver.list_entities(&query, &actual, None, None).len(), 1);
+    for driver in [
+        intern("neomacs-missing-driver"),
+        intern("ns"),
+        neovm_core::emacs_core::intern::intern_uninterned("ftcrhb"),
+    ] {
+        let foreign = FontEntityListConstraints {
+            driver: Some(driver),
+            ..Default::default()
+        };
+        assert!(
+            resolver
+                .list_entities(&query, &foreign, None, None)
+                .is_empty()
+        );
+    }
+    let listed = resolver.list_entities(&query, &actual, None, None);
+    assert_eq!(listed[0].driver, Some(intern("ftcrhb")));
+    let ignored_preference = FontEntityListConstraints {
+        driver: Some(intern("ns")),
+        ..Default::default()
+    };
+    assert_eq!(
+        resolver
+            .list_entities(
+                &query,
+                &FontEntityListConstraints::default(),
+                Some((&query, &ignored_preference)),
+                None
+            )
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn entity_listing_spacing_constraint_accepts_absent_catalog_spacing() {
+    let mut proportional = candidate("Fixture Sans", 400, FontSlant::Normal, 0);
+    proportional.matched.metadata.spacing = None;
+    let resolver = FontResolver::new(Box::new(ScopedListingBackend {
+        candidates: vec![proportional],
+    }));
+    let query = FontEntityQuery::new(FontFamilyName::new("Fixture Sans"));
+    for spacing in [0, 100] {
+        let constraints = FontEntityListConstraints {
+            spacing: Some(spacing),
+            ..Default::default()
+        };
+        let listed = resolver.list_entities(&query, &constraints, None, None);
+        assert_eq!(
+            listed.len(),
+            1,
+            "an absent catalog property does not reject the font"
+        );
+        assert_eq!(listed[0].matched.metadata.spacing, None);
+    }
+}
+
+#[path = "accepted_listing_review_test.rs"]
+mod accepted_listing_review_test;
+
+#[cfg(target_os = "linux")]
+#[path = "named_listing_weight_review_test.rs"]
+mod named_listing_weight_review_test;

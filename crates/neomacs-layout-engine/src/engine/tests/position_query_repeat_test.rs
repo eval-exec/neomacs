@@ -76,7 +76,8 @@ fn repeated_posn_at_point_uses_the_real_adapter_with_stable_output() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
 
     // Keep an owned String across later callbacks, never an unrooted Lisp
     // position list. Every property/field of subsequent results is compared.

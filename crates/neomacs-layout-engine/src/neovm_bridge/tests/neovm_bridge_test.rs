@@ -29,7 +29,7 @@ fn set_buffer_text(buf: &mut Buffer, text: &str) {
 
 #[test]
 fn window_named_face_inheritance_observes_default_face_remapping() {
-    let _runtime = neovm_core::emacs_core::Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = neovm_core::face::FaceTable::new();
     table
         .get("line-number")
@@ -84,7 +84,7 @@ impl BufferTextPropertyTestExt for Buffer {
 /// and verify `collect_layout_params` produces correct output.
 #[test]
 fn test_collect_layout_params_basic() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     // Create a buffer.
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*test*");
@@ -131,7 +131,7 @@ fn test_collect_layout_params_basic() {
 
 #[test]
 fn collect_layout_params_suppresses_line_numbers_for_minibuffer_windows() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*line-number-window-kind*");
@@ -170,7 +170,7 @@ fn collect_layout_params_suppresses_line_numbers_for_minibuffer_windows() {
 
 #[test]
 fn collect_layout_params_forwards_window_vscroll() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*vscroll*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -196,7 +196,7 @@ fn collect_layout_params_forwards_window_vscroll() {
 
 #[test]
 fn collect_layout_params_reads_nobreak_char_display_global() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*nobreak*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -231,9 +231,124 @@ fn collect_layout_params_reads_nobreak_char_display_global() {
     );
 }
 
+/// LD-1 pin (i): the helper's buffer-local arm.  GNU reads
+/// Vnobreak_char_display from the C global with the buffer current
+/// (xdisp.c:8522), so a buffer-local binding decides even when the default is
+/// t.
+#[test]
+fn collect_layout_params_reads_the_buffers_local_nobreak_char_display() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("*nobreak-local*");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    let frame_id =
+        evaluator
+            .frame_manager_mut()
+            .create_frame("nobreak-local-frame", 800, 600, buf_id);
+    evaluator.store_variable_by_name("nobreak-char-display", Value::T);
+    evaluator
+        .eval_str("(set (make-local-variable 'nobreak-char-display) nil)")
+        .expect("buffer-local nobreak-char-display");
+    let (_, wps) = collect_layout_params(&evaluator, frame_id, None).expect("layout params");
+    assert_eq!(
+        wps[0].nobreak_char_display,
+        crate::types::NobreakDisplayMode::Literal,
+        "the buffer-local nil must win over the global t"
+    );
+}
+
+/// LD-1 pin (ii): the helper's live dynamic-let arm.  The variable is made
+/// buffer-local first, then a `let`-style dynamic binding is installed; a
+/// default-only read answers the default `t` and renders HighlightOriginal,
+/// while GNU's visible read answers the bound nil and renders Literal.
+#[test]
+fn collect_layout_params_honours_a_live_let_on_nobreak_char_display() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("*nobreak-let*");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    let frame_id =
+        evaluator
+            .frame_manager_mut()
+            .create_frame("nobreak-let-frame", 800, 600, buf_id);
+    evaluator.store_variable_by_name("nobreak-char-display", Value::T);
+    evaluator
+        .eval_str("(make-local-variable 'nobreak-char-display)")
+        .expect("make-local nobreak-char-display");
+    let scope = evaluator.specpdl().len();
+    evaluator
+        .specbind_uncached(
+            neovm_core::emacs_core::intern::intern("nobreak-char-display"),
+            Value::NIL,
+        )
+        .expect("dynamic nobreak-char-display binding");
+    let (_, wps) = collect_layout_params(&evaluator, frame_id, None).expect("layout params");
+    evaluator.unbind_to(scope);
+    assert_eq!(
+        wps[0].nobreak_char_display,
+        crate::types::NobreakDisplayMode::Literal,
+        "the live let must reach the display read"
+    );
+}
+
+/// LD-1 capture pin (i): the layout-variable capture reads this buffer's
+/// local `char-property-alias-alist` (textprop.c:2403 DEFVAR_LISP, made local
+/// by font-core.el; read with the window's buffer current).
+#[test]
+fn layout_var_capture_reads_the_buffers_local_alias_alist() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("*alias-local*");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    let expected = evaluator
+        .eval_str(
+            "(set (make-local-variable 'char-property-alias-alist) \
+                  '((face . font-lock-face)))",
+        )
+        .expect("buffer-local alias alist");
+    let buffer = evaluator.buffer_manager().get(buf_id).expect("buffer");
+    let snapshot = LayoutBufferSnapshot::from_buffer_with_obarray(buffer, evaluator.variables());
+    assert_eq!(
+        snapshot.layout_buffer_local_value(LayoutVar::CharPropertyAliasAlist),
+        Some(expected)
+    );
+}
+
+/// LD-1 capture pin (ii): a live dynamic binding of the same variable reaches
+/// the capture through the visible fallback rather than the default-only cell.
+#[test]
+fn layout_var_capture_honours_a_live_let_on_the_alias_alist() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator.buffer_manager_mut().create_buffer("*alias-let*");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    let bound = evaluator
+        .eval_str("'((face . font-lock-face))")
+        .expect("bound value");
+    let scope = evaluator.specpdl().len();
+    evaluator
+        .specbind_uncached(
+            neovm_core::emacs_core::intern::intern("char-property-alias-alist"),
+            bound,
+        )
+        .expect("dynamic alias-alist binding");
+    let snapshot = {
+        let buffer = evaluator.buffer_manager().get(buf_id).expect("buffer");
+        LayoutBufferSnapshot::from_buffer_with_obarray(buffer, evaluator.variables())
+    };
+    evaluator.unbind_to(scope);
+    assert_eq!(
+        snapshot.layout_buffer_local_value(LayoutVar::CharPropertyAliasAlist),
+        Some(bound),
+        "the live let must reach the captured layout variable"
+    );
+}
+
 #[test]
 fn test_frame_params_from_neovm() {
-    let runtime = neovm_core::emacs_core::Context::new();
+    let runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     let mut buf_mgr = BufferManager::new();
     let buf_id = buf_mgr.create_buffer("*scratch*");
@@ -262,7 +377,7 @@ fn window_params_resolve_special_display_face_colors() {
         (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
     }
 
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*special*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -314,6 +429,7 @@ fn window_params_resolve_special_display_face_colors() {
         false,
         Value::T,
         Value::NIL,
+        None,
     )
     .expect("leaf window params");
 
@@ -348,7 +464,7 @@ fn window_params_resolve_special_display_face_colors() {
 
 #[test]
 fn frame_params_from_neovm_uses_effective_gui_divider_widths() {
-    let runtime = neovm_core::emacs_core::Context::new();
+    let runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     let mut buf_mgr = BufferManager::new();
     let buf_id = buf_mgr.create_buffer("*scratch*");
@@ -370,7 +486,7 @@ fn frame_params_from_neovm_uses_effective_gui_divider_widths() {
 
 #[test]
 fn frame_params_from_neovm_ignores_stored_tty_divider_parameters() {
-    let runtime = neovm_core::emacs_core::Context::new();
+    let runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     let mut buf_mgr = BufferManager::new();
     let buf_id = buf_mgr.create_buffer("*scratch*");
@@ -434,7 +550,7 @@ fn chrome_face_pixel_height_uses_smaller_realized_face_like_gnu() {
 
 #[test]
 fn window_params_default_colors_follow_buffer_default_face_remap() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*default-remap*");
@@ -483,6 +599,7 @@ fn window_params_default_colors_follow_buffer_default_face_remap() {
         false,
         Value::T,
         Value::NIL,
+        None,
     )
     .expect("leaf window params");
 
@@ -494,7 +611,7 @@ fn window_params_default_colors_follow_buffer_default_face_remap() {
 fn test_window_params_from_neovm_internal_returns_none() {
     use neovm_core::window::{SplitDirection, WindowCellDimensions};
 
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*test*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -531,6 +648,7 @@ fn test_window_params_from_neovm_internal_returns_none() {
         false,
         Value::T,
         Value::NIL,
+        None,
     );
     assert!(result.is_none(), "Internal windows should return None");
 }
@@ -539,7 +657,7 @@ fn test_window_params_from_neovm_internal_returns_none() {
 fn window_params_from_neovm_uses_default_header_line_and_tab_line_values() {
     use neovm_core::buffer::buffer::lookup_buffer_slot;
 
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*test*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -577,6 +695,7 @@ fn window_params_from_neovm_uses_default_header_line_and_tab_line_values() {
         false,
         Value::T,
         Value::NIL,
+        None,
     )
     .expect("leaf window params");
 
@@ -591,7 +710,7 @@ fn display_line_numbers_any_non_nil_value_is_absolute_like_gnu() {
     // `'absolute` a user init sets, anything else truthy -- is ABSOLUTE line
     // numbers. Treating unknown symbols as Off switched the whole gutter off
     // for `(setq display-line-numbers-type 'absolute)` (issue #441).
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*line-numbers*");
@@ -627,7 +746,7 @@ fn display_line_numbers_any_non_nil_value_is_absolute_like_gnu() {
 
 #[test]
 fn layout_snapshot_buffer_local_value_falls_back_to_default_values() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*line-numbers*");
@@ -654,7 +773,7 @@ fn layout_snapshot_buffer_local_value_falls_back_to_default_values() {
 
 #[test]
 fn layout_snapshot_compiles_live_lisp_automatic_composition_spans() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval_lisp(
         &mut evaluator,
         r##"(progn
@@ -704,7 +823,7 @@ fn display_line_numbers_symbol_domain_matches_gnu() {
 
 #[test]
 fn layout_snapshot_buffer_local_value_prefers_local_binding() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*line-numbers*");
@@ -732,7 +851,7 @@ fn layout_snapshot_buffer_local_value_prefers_local_binding() {
 
 #[test]
 fn layout_snapshot_sees_display_line_numbers_set_through_lisp() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     evaluator
         .eval_str("(setq display-line-numbers t)")
         .expect("enable display-line-numbers through Lisp");
@@ -773,7 +892,7 @@ fn test_window_params_nonselected_reads_window_point() {
     // test specifically verifies the non-selected branch so a
     // future refactor of `window_params_from_neovm` can't
     // silently collapse both branches to read from the buffer.
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*test*");
     {
         let buf = evaluator.buffer_manager_mut().get_mut(buf_id).unwrap();
@@ -819,6 +938,7 @@ fn test_window_params_nonselected_reads_window_point() {
         false,
         Value::T,
         Value::NIL,
+        None,
     )
     .expect("window params");
 
@@ -831,7 +951,7 @@ fn test_window_params_nonselected_reads_window_point() {
 
 #[test]
 fn test_effective_cursor_spec_prefers_window_cursor_type() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*cursor*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -854,7 +974,7 @@ fn test_effective_cursor_spec_prefers_window_cursor_type() {
 
 #[test]
 fn cursor_effect_profile_accepts_known_effect() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let profile = Value::list(vec![
         Value::symbol("cursor-glow"),
         Value::keyword(":enabled"),
@@ -868,7 +988,7 @@ fn cursor_effect_profile_accepts_known_effect() {
 
 #[test]
 fn cursor_effect_profile_rejects_unknown_effect() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let profile = Value::list(vec![
         Value::symbol("cursor-glwo"),
         Value::keyword(":enabled"),
@@ -880,7 +1000,7 @@ fn cursor_effect_profile_rejects_unknown_effect() {
 
 #[test]
 fn cursor_effect_profile_rejects_mixed_profile_with_unknown_effect() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let profile = Value::list(vec![
         Value::list(vec![
             Value::symbol("cursor-glow"),
@@ -907,7 +1027,7 @@ fn test_parse_cursor_spec_nil_is_no_cursor_like_gnu() {
 
 #[test]
 fn test_parse_cursor_spec_accepts_zero_width_cons_like_gnu() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let spec = parse_cursor_spec(&Value::cons(Value::symbol("bar"), Value::fixnum(0))).unwrap();
 
     assert_eq!(spec.cursor_kind, CursorKind::Bar);
@@ -916,7 +1036,7 @@ fn test_parse_cursor_spec_accepts_zero_width_cons_like_gnu() {
 
 #[test]
 fn test_parse_cursor_spec_invalid_cons_falls_back_hollow_like_gnu() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let spec = parse_cursor_spec(&Value::cons(Value::symbol("bar"), Value::fixnum(-1))).unwrap();
 
     assert_eq!(spec.cursor_kind, CursorKind::HollowBox);
@@ -925,7 +1045,7 @@ fn test_parse_cursor_spec_invalid_cons_falls_back_hollow_like_gnu() {
 
 #[test]
 fn test_effective_cursor_spec_nonselected_box_becomes_hollow() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*cursor*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -941,7 +1061,7 @@ fn test_effective_cursor_spec_nonselected_box_becomes_hollow() {
 
 #[test]
 fn test_effective_cursor_spec_nonselected_bar_narrows_under_t() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*cursor*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -966,7 +1086,7 @@ fn test_effective_cursor_spec_nonselected_bar_narrows_under_t() {
 
 #[test]
 fn test_effective_cursor_spec_nonselected_explicit_bar_is_preserved() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*cursor*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -990,7 +1110,7 @@ fn test_effective_cursor_spec_nonselected_explicit_bar_is_preserved() {
 
 #[test]
 fn test_effective_cursor_spec_nonselected_nil_disables_cursor() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*cursor*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -1010,7 +1130,7 @@ fn test_effective_cursor_spec_nonselected_nil_disables_cursor() {
 
 #[test]
 fn test_effective_cursor_spec_nonselected_minibuffer_hides_cursor() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*cursor*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -1025,7 +1145,7 @@ fn test_effective_cursor_spec_nonselected_minibuffer_hides_cursor() {
 
 #[test]
 fn collect_layout_params_dims_windows_on_nonselected_frame() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let first_buf = evaluator.buffer_manager_mut().create_buffer("*first*");
     let second_buf = evaluator.buffer_manager_mut().create_buffer("*second*");
 
@@ -1057,7 +1177,7 @@ fn collect_layout_params_dims_windows_on_nonselected_frame() {
 
 #[test]
 fn test_frame_cursor_color_uses_cursor_face_background() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*cursor-color*");
@@ -1085,7 +1205,7 @@ fn test_frame_cursor_color_uses_cursor_face_background() {
 
 #[test]
 fn test_frame_cursor_color_prefers_frame_parameter_like_gnu() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*cursor-color*");
@@ -1101,7 +1221,7 @@ fn test_frame_cursor_color_prefers_frame_parameter_like_gnu() {
 
 #[test]
 fn test_gui_frame_cursor_color_falls_back_when_matching_background_like_gnu() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*cursor-color*");
@@ -1124,7 +1244,7 @@ fn test_gui_frame_cursor_color_falls_back_when_matching_background_like_gnu() {
 
 #[test]
 fn test_gui_frame_cursor_color_falls_back_to_foreground_when_mouse_also_matches_background() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*cursor-color*");
@@ -1151,7 +1271,7 @@ fn test_gui_frame_cursor_color_falls_back_to_foreground_when_mouse_also_matches_
 
 #[test]
 fn test_gui_frame_cursor_color_keeps_contrasting_parameter_like_gnu() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*cursor-color*");
@@ -1174,7 +1294,7 @@ fn test_gui_frame_cursor_color_keeps_contrasting_parameter_like_gnu() {
 
 #[test]
 fn test_frame_cursor_foreground_defaults_to_frame_background_like_gnu() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*cursor-foreground*");
@@ -1189,14 +1309,18 @@ fn test_frame_cursor_foreground_defaults_to_frame_background_like_gnu() {
     let frame = evaluator.frame_manager().get(frame_id).unwrap();
 
     assert_eq!(
-        frame_cursor_foreground_pixel(frame, evaluator.face_table(), evaluator.variables()),
+        frame_cursor_foreground_pixel(
+            frame,
+            evaluator.face_table(),
+            visible_value(&evaluator, X_CURSOR_FORE_PIXEL.id()),
+        ),
         0x123456
     );
 }
 
 #[test]
 fn test_frame_cursor_foreground_honors_x_cursor_fore_pixel_like_gnu() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*cursor-foreground*");
@@ -1209,14 +1333,253 @@ fn test_frame_cursor_foreground_honors_x_cursor_fore_pixel_like_gnu() {
     let frame = evaluator.frame_manager().get(frame_id).unwrap();
 
     assert_eq!(
-        frame_cursor_foreground_pixel(frame, evaluator.face_table(), evaluator.variables()),
+        frame_cursor_foreground_pixel(
+            frame,
+            evaluator.face_table(),
+            visible_value(&evaluator, X_CURSOR_FORE_PIXEL.id()),
+        ),
         0xabcdef
+    );
+}
+
+/// V-CUR: GNU reads Vx_cursor_fore_pixel in x_set_cursor_color
+/// (xfns.c:1482-1490), a command-context C-global read; a live `let` must be
+/// visible to it.  The default-only read this branch replaced missed it.
+#[test]
+fn test_frame_cursor_foreground_honours_a_live_let() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("*cursor-foreground-let*");
+    let frame_id = evaluator
+        .frame_manager_mut()
+        .create_frame("test", 800, 600, buf_id);
+    let scope = evaluator.specpdl().len();
+    evaluator
+        .specbind_uncached(X_CURSOR_FORE_PIXEL.id(), Value::string("#abcdef"))
+        .expect("dynamic x-cursor-fore-pixel binding");
+    let resolved = visible_value(&evaluator, X_CURSOR_FORE_PIXEL.id());
+    evaluator.unbind_to(scope);
+    let frame = evaluator.frame_manager().get(frame_id).unwrap();
+    assert_eq!(
+        frame_cursor_foreground_pixel(frame, evaluator.face_table(), resolved),
+        0xabcdef,
+        "a live let on x-cursor-fore-pixel must be visible to the cursor read"
+    );
+}
+
+/// V-BUF: nobreak-char-ascii-display is a DEFVAR_BOOL read at
+/// xdisp.c:8604/8618 while producing glyphs for the displayed buffer, so its
+/// buffer-local binding must win over the global.  The default-only read this
+/// branch replaced always answered the global.
+#[test]
+fn buffer_local_nobreak_char_ascii_display_wins_over_the_global() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("nb-ascii-local");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (setq nobreak-char-display t)
+               (setq nobreak-char-ascii-display nil)
+               (make-local-variable 'nobreak-char-ascii-display)
+               (set 'nobreak-char-ascii-display t)
+               nil)",
+        )
+        .expect("buffer-local nobreak-char-ascii-display");
+    let local_wins = {
+        let buffer = evaluator.buffer_manager().get(buf_id).expect("buffer");
+        super::effective_nobreak_char_display(buffer, evaluator.variables())
+    };
+    assert_eq!(
+        local_wins,
+        NobreakDisplayMode::HighlightAscii,
+        "the buffer-local t must win over the global nil"
+    );
+    // Flip both: the buffer-local nil still wins over the global t.  The
+    // symbol is localized now, so the global needs set-default.
+    evaluator
+        .eval_str(
+            "(progn
+               (set-default 'nobreak-char-ascii-display t)
+               (set 'nobreak-char-ascii-display nil)
+               nil)",
+        )
+        .expect("flipped nobreak-char-ascii-display");
+    let global_loses = {
+        let buffer = evaluator.buffer_manager().get(buf_id).expect("buffer");
+        super::effective_nobreak_char_display(buffer, evaluator.variables())
+    };
+    assert_eq!(
+        global_loses,
+        NobreakDisplayMode::HighlightOriginal,
+        "the buffer-local nil must win over the global t"
+    );
+}
+
+/// V-BUF: x-stretch-cursor is read while drawing the cursor from the window's
+/// buffer (xdisp.c:2727, xterm.c:10645, under xdisp.c:20555), so a buffer-local
+/// binding must win over the global.
+#[test]
+fn buffer_local_x_stretch_cursor_wins_over_the_global() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("stretch-cursor-local");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (setq x-stretch-cursor nil)
+               (make-local-variable 'x-stretch-cursor)
+               (set 'x-stretch-cursor t)
+               nil)",
+        )
+        .expect("buffer-local x-stretch-cursor");
+    let buffer = evaluator.buffer_manager().get(buf_id).expect("buffer");
+    assert!(
+        super::effective_buffer_bool_id(buffer, evaluator.variables(), &X_STRETCH_CURSOR),
+        "the buffer-local t must win over the global nil"
+    );
+}
+
+/// V-BUF: mode-line-in-non-selected-windows is read by dispextern.h's display
+/// macros (1542/1583/1618) with the window's buffer current; a buffer-local
+/// nil must show the mode line even when the global is t.
+#[test]
+fn buffer_local_mode_line_in_non_selected_windows_wins_over_the_global() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let local_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("mode-line-local");
+    let global_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("mode-line-global");
+    evaluator.buffer_manager_mut().set_current(local_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (setq mode-line-in-non-selected-windows t)
+               (make-local-variable 'mode-line-in-non-selected-windows)
+               (set 'mode-line-in-non-selected-windows nil)
+               nil)",
+        )
+        .expect("buffer-local mode-line-in-non-selected-windows");
+    let local_off = {
+        let buffer = evaluator.buffer_manager().get(local_id).expect("buffer");
+        super::display_mode_line_in_non_selected_windows(buffer, evaluator.variables())
+    };
+    let global_on = {
+        let buffer = evaluator.buffer_manager().get(global_id).expect("buffer");
+        super::display_mode_line_in_non_selected_windows(buffer, evaluator.variables())
+    };
+    assert!(local_off, "the buffer-local nil must win over the global t");
+    assert!(
+        !global_on,
+        "a buffer without its own binding must read the global t"
+    );
+}
+
+/// V-BUF: scroll-minibuffer-conservatively is read in redisplay_window
+/// (xdisp.c:21092/21103) with the window's buffer current; a buffer-local t
+/// must win over a nil global.
+#[test]
+fn buffer_local_scroll_minibuffer_conservatively_wins_over_the_global() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let local_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("scroll-mini-local");
+    let global_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("scroll-mini-global");
+    evaluator.buffer_manager_mut().set_current(local_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (setq scroll-minibuffer-conservatively nil)
+               (make-local-variable 'scroll-minibuffer-conservatively)
+               (set 'scroll-minibuffer-conservatively t)
+               nil)",
+        )
+        .expect("buffer-local scroll-minibuffer-conservatively");
+    let local_on = {
+        let buffer = evaluator.buffer_manager().get(local_id).expect("buffer");
+        super::effective_scroll_minibuffer_conservatively(buffer, evaluator.variables())
+    };
+    let global_off = {
+        let buffer = evaluator.buffer_manager().get(global_id).expect("buffer");
+        super::effective_scroll_minibuffer_conservatively(buffer, evaluator.variables())
+    };
+    assert!(local_on, "the buffer-local t must win over the global nil");
+    assert!(
+        !global_off,
+        "a buffer without its own binding must read the global nil"
+    );
+}
+
+/// V-BUF: composition-function-table is read by composite.c:1105-1189 for the
+/// buffer being examined, so each buffer resolves its own binding; the
+/// default-only read this branch replaced answered one table for every buffer.
+#[test]
+fn buffer_local_composition_function_table_applies_only_in_its_buffer() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let a_id = evaluator.buffer_manager_mut().create_buffer("comp-local-a");
+    let b_id = evaluator.buffer_manager_mut().create_buffer("comp-local-b");
+    // The global table has a rule at ?x; each local buffer installs its own
+    // table (a distinct char-table object) with a different rule.
+    evaluator.buffer_manager_mut().set_current(a_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (setq composition-function-table (make-char-table nil))
+               (aset composition-function-table ?x (list (vector \"xy\" 0 'font-shape-gstring)))
+               (make-local-variable 'composition-function-table)
+               (set 'composition-function-table (make-char-table nil))
+               (aset composition-function-table ?y (list (vector \"yz\" 0 'font-shape-gstring)))
+               nil)",
+        )
+        .expect("composition tables for A");
+    evaluator.buffer_manager_mut().set_current(b_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (make-local-variable 'composition-function-table)
+               (set 'composition-function-table (make-char-table nil))
+               (aset composition-function-table ?z (list (vector \"zw\" 0 'font-shape-gstring)))
+               nil)",
+        )
+        .expect("composition tables for B");
+    let function = evaluator
+        .eval_str("'auto-compose-chars")
+        .expect("auto-compose-chars symbol");
+    let global_id = evaluator.buffer_manager_mut().create_buffer("comp-global");
+    let table_for = |buffer_id| {
+        let buffer = evaluator.buffer_manager().get(buffer_id).expect("buffer");
+        super::buffer_snapshot::active_composition_table(
+            Some(Value::T),
+            Some(function),
+            buffer,
+            evaluator.variables(),
+            neovm_core::tagged::SymbolMode::Positioned,
+        )
+    };
+    let local_a = table_for(a_id);
+    let local_b = table_for(b_id);
+    let global = table_for(global_id);
+    assert!(local_a.is_some() && local_b.is_some() && global.is_some());
+    assert_ne!(local_a, global, "buffer A must not read the global table");
+    assert_ne!(local_b, global, "buffer B must not read the global table");
+    assert_ne!(
+        local_a, local_b,
+        "each buffer's own local table must be the one it reads"
     );
 }
 
 #[test]
 fn test_window_params_buffer_locals() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*locals*");
 
     // Set buffer-local variables.
@@ -1241,7 +1604,7 @@ fn test_window_params_buffer_locals() {
 
 #[test]
 fn window_params_fill_column_indicator_follows_gnu_conditions() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*fci*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -1280,7 +1643,7 @@ fn window_params_fill_column_indicator_follows_gnu_conditions() {
 fn test_window_params_partial_width_windows_force_truncation_like_gnu() {
     use neovm_core::window::{SplitDirection, SplitPlacement};
 
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let left_buf = evaluator.buffer_manager_mut().create_buffer("*left*");
     let right_buf = evaluator.buffer_manager_mut().create_buffer("*right*");
     let frame_id = evaluator
@@ -1320,7 +1683,7 @@ fn test_window_params_partial_width_windows_force_truncation_like_gnu() {
 
 #[test]
 fn active_minibuffer_keeps_its_callers_mode_line_active() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let root_buffer = evaluator.buffer_manager_mut().create_buffer("*caller*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -1356,7 +1719,7 @@ fn active_minibuffer_keeps_its_callers_mode_line_active() {
 fn test_window_params_partial_width_windows_respect_disabled_truncate_partial_width_windows() {
     use neovm_core::window::{SplitDirection, SplitPlacement};
 
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let left_buf = evaluator.buffer_manager_mut().create_buffer("*left*");
     let right_buf = evaluator.buffer_manager_mut().create_buffer("*right*");
     let frame_id = evaluator
@@ -1397,7 +1760,7 @@ fn test_window_params_partial_width_windows_respect_disabled_truncate_partial_wi
 
 #[test]
 fn test_window_params_hscroll_forces_truncation_like_gnu() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*hscroll*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -1430,7 +1793,7 @@ fn test_window_params_hscroll_forces_truncation_like_gnu() {
 
 #[test]
 fn test_window_params_fringes_and_margins() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*fringe*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -1466,7 +1829,7 @@ fn test_window_params_fringes_and_margins() {
 
 #[test]
 fn test_window_params_tty_ignores_fringes_keeps_margins() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*tty-fringe*");
     let frame_id = evaluator
         .frame_manager_mut()
@@ -1501,7 +1864,7 @@ fn test_window_params_tty_ignores_fringes_keeps_margins() {
 
 #[test]
 fn test_collect_nonexistent_frame() {
-    let evaluator = neovm_core::emacs_core::Context::new();
+    let evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let result = collect_layout_params(&evaluator, FrameId(999999), None);
     assert!(result.is_none());
 }
@@ -1512,7 +1875,7 @@ fn test_collect_nonexistent_frame() {
 
 #[test]
 fn test_rust_buffer_access_copy_text() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*test-copy*");
     // Insert some text
     if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {
@@ -1533,7 +1896,7 @@ fn test_rust_buffer_access_copy_text() {
 
 #[test]
 fn test_rust_buffer_access_charpos_to_bytepos() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*test-pos*");
     if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {
         set_buffer_text(buf, "abc");
@@ -1552,7 +1915,7 @@ fn test_rust_buffer_access_charpos_to_bytepos() {
 
 #[test]
 fn test_layout_buffer_snapshot_preserves_byte_bounds_for_multibyte_text() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*test-multibyte-pos*");
@@ -1579,7 +1942,7 @@ fn test_layout_buffer_snapshot_preserves_byte_bounds_for_multibyte_text() {
 
 #[test]
 fn test_rust_buffer_access_lisp_charpos_to_bytepos() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*test-lisp-pos*");
@@ -1600,7 +1963,7 @@ fn test_rust_buffer_access_lisp_charpos_to_bytepos() {
 
 #[test]
 fn test_rust_buffer_access_count_lines() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*test-lines*");
     if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {
         set_buffer_text(buf, "line1\nline2\nline3");
@@ -1617,7 +1980,7 @@ fn test_rust_buffer_access_count_lines() {
 
 #[test]
 fn rust_buffer_access_count_lines_is_text_backend_neutral() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text: String = (0..2500)
         .map(|idx| if idx % 37 == 0 { '\n' } else { 'x' })
         .collect();
@@ -1652,7 +2015,7 @@ struct LayoutSnapshotBackendTrace {
 }
 
 fn fragmented_snapshot_backend_trace(kind: BufferTextBackendKind) -> LayoutSnapshotBackendTrace {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abé\n日本\tΩ\n";
     let mut buf = test_buffer_with_backend(200 + u64::from(u8::from(kind)), "*snapshot*", kind);
     set_buffer_text(&mut buf, text);
@@ -1764,13 +2127,36 @@ fn layout_buffer_snapshot_is_text_backend_neutral_for_positions_bytes_and_proper
     }
 }
 
+/// Absence is about all properties, including unrecognized aliases/categories,
+/// and remains tied to the immutable source rather than later buffer mutation.
+#[test]
+fn layout_property_absence_proof_is_complete_and_snapshot_stable() {
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    for kind in BufferTextBackendKind::implemented_variants() {
+        let mut buffer =
+            test_buffer_with_backend(300 + u64::from(u8::from(kind)), "*property-proof*", kind);
+        set_buffer_text(&mut buffer, "abc");
+        let empty = LayoutBufferSnapshot::from_buffer(&buffer);
+        assert!(buffer.layout_text_props_is_empty());
+        assert!(empty.layout_text_props_is_empty());
+        buffer.put_text_property(0, 1, Value::symbol("unrecognized-display-alias"), Value::T);
+        let occupied = LayoutBufferSnapshot::from_buffer(&buffer);
+        assert!(!buffer.layout_text_props_is_empty());
+        assert!(!occupied.layout_text_props_is_empty());
+        assert!(
+            empty.layout_text_props_is_empty(),
+            "{kind:?}: frozen proof changed"
+        );
+    }
+}
+
 // -----------------------------------------------------------------------
 // RustTextPropAccess tests
 // -----------------------------------------------------------------------
 
 #[test]
 fn test_text_prop_check_invisible() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*invis*");
     if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {
         set_buffer_text(buf, "visible hidden visible");
@@ -1798,7 +2184,7 @@ fn test_text_prop_check_invisible() {
 
 #[test]
 fn text_prop_invisible_respects_buffer_invisibility_spec() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*dired-invis*");
@@ -1839,7 +2225,7 @@ fn text_prop_invisible_respects_buffer_invisibility_spec() {
 
 #[test]
 fn text_prop_invisible_matches_members_of_property_list() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*invis-list*");
     if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {
         set_buffer_text(buf, "folded");
@@ -1871,7 +2257,7 @@ fn text_prop_invisible_matches_members_of_property_list() {
 
 #[test]
 fn overlay_invisible_respects_buffer_invisibility_spec() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     {
         let buf = evaluator
             .buffer_manager_mut()
@@ -1922,7 +2308,7 @@ fn buffer_invisible_ellipsis_text_reads_display_table_slot() {
     // holds the org/GNU ` [...] ` glyphs (a mix of bare-fixnum glyph codes and
     // a `(char . face-id)` cons, both produced by `make-glyph-code`) and assert
     // the helper decodes the characters.
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*disp-table*");
 
     // A display table is a char-table with 6 extra slots; slot 4 holds the
@@ -1960,7 +2346,7 @@ fn buffer_invisible_ellipsis_text_reads_display_table_slot() {
 fn buffer_invisible_ellipsis_text_absent_when_no_display_table() {
     // With no buffer/standard display table the helper returns None so callers
     // fall back to GNU's default three-dot ellipsis.
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*no-disp-table*");
@@ -1977,7 +2363,7 @@ fn buffer_display_table_glyphs_decodes_per_char_vector() {
     // glyph codes for `ch` decodes to the glyph characters.  Covers both the
     // bare-fixnum and `(char . face-id)` cons glyph-code forms, plus a `?\t`
     // glyph that must be returned literally so the renderer re-expands it.
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*disp-char*");
 
     let table = Value::make_char_table(Value::symbol("display-table"), Value::NIL, 6);
@@ -2036,7 +2422,7 @@ fn glyphless_char_display_uses_the_tty_branch_as_a_typed_acronym() {
     // GNU `lookup_glyphless_char_display` selects the cdr of a
     // (GRAPHICAL . TEXT) entry on a terminal frame.  tabulated-list.el uses
     // this exact shape to display its GUI triangles as ASCII `v` / `^`.
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*glyphless-tty*");
@@ -2062,7 +2448,7 @@ fn glyphless_char_display_uses_the_tty_branch_as_a_typed_acronym() {
 
 #[test]
 fn buffer_display_table_glyphs_preserves_typed_face_runs() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*disp-char-face*");
@@ -2165,7 +2551,7 @@ fn buffer_display_table_glyphs_preserves_typed_face_runs() {
 
 #[test]
 fn glyph_code_face_encoding_accepts_positive_and_rejects_nonpositive_ids() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let positive = ('A' as i64) | (7i64 << 22);
     assert_eq!(
         glyph_code_parts(Value::fixnum(positive)),
@@ -2197,7 +2583,7 @@ fn glyph_code_face_encoding_accepts_positive_and_rejects_nonpositive_ids() {
 fn buffer_display_table_glyphs_absent_when_no_display_table() {
     // Hot path: with no buffer/standard display table the helper returns None so
     // every char renders literally (a single cheap check, untouched).
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*no-disp-char*");
@@ -2217,7 +2603,7 @@ fn buffer_display_table_glyphs_absent_when_no_display_table() {
 
 #[test]
 fn text_prop_access_returns_raw_line_spacing_property() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*spacing*");
     if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {
         set_buffer_text(buf, "line1\nline2");
@@ -2236,7 +2622,7 @@ fn text_prop_access_returns_raw_line_spacing_property() {
 
 #[test]
 fn overlay_strings_at_collects_zero_length_boundary_strings_like_gnu() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*overlay-strings*");
@@ -2316,7 +2702,7 @@ fn overlay_strings_at_collects_zero_length_boundary_strings_like_gnu() {
 
 #[test]
 fn overlay_strings_at_filters_window_specific_overlays_like_gnu() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*overlay-window-filter*");
@@ -2387,7 +2773,7 @@ fn overlay_strings_at_orders_like_gnu_compare_overlay_entries() {
     // overlays come in front of before-strings; within after-strings priority
     // descends; within before-strings priority ascends. Each overlay carries a
     // single string here so the order is a deterministic, cycle-free total order.
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*overlay-order*");
@@ -2450,7 +2836,7 @@ fn overlay_strings_at_orders_like_gnu_compare_overlay_entries() {
 
 #[test]
 fn test_text_prop_next_change() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*next*");
     if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {
         set_buffer_text(buf, "aabbcc");
@@ -2472,7 +2858,7 @@ fn test_text_prop_next_change() {
 
 #[test]
 fn test_text_prop_get_property() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*prop*");
     if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {
         set_buffer_text(buf, "test");
@@ -2492,7 +2878,7 @@ fn test_text_prop_get_property() {
 
 #[test]
 fn test_text_prop_access_multibyte_positions_use_byte_offsets() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*utf8-prop*");
     if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {
         set_buffer_text(buf, "a好b");
@@ -2528,7 +2914,7 @@ fn test_color_to_pixel() {
 
 #[test]
 fn test_face_resolver_default() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
 
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
@@ -2552,7 +2938,7 @@ fn test_face_resolver_default() {
 
 #[test]
 fn test_face_resolver_with_text_property() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
 
@@ -2583,7 +2969,7 @@ fn face_resolver_window_filter_matches_window_parameter() {
     // `evaluate_face_filter`): applies the wrapped spec only when the current
     // window has window-parameter PARAMETER `eq` VALUE. This is how indent-bars
     // applies its per-window stipple-rotation remap keyed on `indent-bars-whr`.
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, Some("x".to_string()));
     let base = resolver.default_face().clone();
@@ -2617,7 +3003,7 @@ fn face_resolver_window_filter_matches_window_parameter() {
 
 #[test]
 fn face_resolver_underline_styles_use_gnu_codes() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
     let styles: [(&str, NeoUnderlineStyle, u8); 5] = [
         ("line-face", NeoUnderlineStyle::Line, 1),
@@ -2653,7 +3039,7 @@ fn face_resolver_underline_styles_use_gnu_codes() {
 
 #[test]
 fn flat_button_box_uses_background_without_changing_simple_box_foreground() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00112233, 0x00445566, 14.0, None);
 
@@ -2685,7 +3071,7 @@ fn flat_button_box_uses_background_without_changing_simple_box_foreground() {
 
 #[test]
 fn lisp_named_flat_button_style_survives_nil_plist_entries() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval_lisp(
         &mut evaluator,
         r##"(progn
@@ -2713,7 +3099,7 @@ fn lisp_named_flat_button_style_survives_nil_plist_entries() {
 
 #[test]
 fn flat_button_box_realizes_named_and_default_face_backgrounds() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
     for name in ["default", "flat-button"] {
         let specification = eval_lisp(
@@ -2739,7 +3125,7 @@ fn flat_button_box_realizes_named_and_default_face_backgrounds() {
 
 #[test]
 fn face_resolver_box_styles_use_gnu_codes() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
     let styles: [(&str, NeoBoxStyle, u8); 4] = [
         ("simple-box-face", NeoBoxStyle::Simple, 1),
@@ -2774,7 +3160,7 @@ fn face_resolver_box_styles_use_gnu_codes() {
 
 #[test]
 fn test_face_resolver_with_font_lock_face() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
 
@@ -2809,7 +3195,7 @@ fn test_face_resolver_with_font_lock_face() {
 
 #[test]
 fn test_face_resolver_face_property_precedes_font_lock_face() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
 
@@ -2833,7 +3219,7 @@ fn test_face_resolver_face_property_precedes_font_lock_face() {
 
 #[test]
 fn test_face_resolver_next_check() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
 
@@ -2863,7 +3249,7 @@ fn test_face_resolver_next_check() {
 
 #[test]
 fn test_face_resolver_overlay_face() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
 
@@ -2893,7 +3279,7 @@ fn test_face_resolver_overlay_face() {
 
 #[test]
 fn face_for_overlay_string_uses_text_property_but_ignores_overlay_face() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let buf_id = evaluator
@@ -2946,7 +3332,7 @@ fn face_policy_resolves_display_origin_base_faces() {
     use crate::display_origin::{DisplayOrigin, DisplayPropertySource, OverlayStringKind};
     use neomacs_display_protocol::face::BasicFaceId;
 
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let buf_id = evaluator
@@ -3036,7 +3422,7 @@ fn face_policy_resolves_display_origin_base_faces() {
 
 #[test]
 fn test_face_resolver_overlay_priority() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
 
     // Define two custom faces with different foreground colors.
@@ -3081,7 +3467,7 @@ fn test_face_resolver_overlay_priority() {
 
 #[test]
 fn test_face_resolver_face_ref_list_respects_gnu_precedence() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
 
     let mut face_a = NeoFace::new("face-a");
@@ -3111,7 +3497,7 @@ fn test_face_resolver_face_ref_list_respects_gnu_precedence() {
 
 #[test]
 fn test_face_resolver_buffer_local_default_remap_applies_to_plain_text() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
 
@@ -3138,7 +3524,7 @@ fn prefix_base_faces_use_buffer_local_default_remap() {
     use crate::display_origin::DisplayOrigin;
     use neomacs_display_protocol::face::BasicFaceId;
 
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
 
@@ -3176,7 +3562,7 @@ fn prefix_base_faces_use_buffer_local_default_remap() {
 
 #[test]
 fn test_face_resolver_buffer_local_named_face_remap_applies_to_face_prop() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
 
@@ -3204,7 +3590,7 @@ fn test_face_resolver_buffer_local_named_face_remap_applies_to_face_prop() {
 /// `header-line` to `magit-header-line` buffer-locally.
 #[test]
 fn header_line_base_face_uses_buffer_local_named_face_remap() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
 
     let mut header_line = NeoFace::new("header-line");
@@ -3244,7 +3630,7 @@ fn header_line_base_face_uses_buffer_local_named_face_remap() {
 /// entry.
 #[test]
 fn header_line_base_face_uses_buffer_remap_of_inherited_mode_line() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
 
     let mut package_mode_line = NeoFace::new("package-mode-line");
@@ -3280,7 +3666,7 @@ fn header_line_base_face_uses_buffer_remap_of_inherited_mode_line() {
 
 #[test]
 fn test_face_resolver_inverse_video() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
 
     let mut inv_face = NeoFace::new("inverse-test");
@@ -3305,7 +3691,7 @@ fn test_face_resolver_inverse_video() {
 
 #[test]
 fn face_resolver_applies_inverse_video_after_text_and_overlay_faces_are_merged() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
 
     let mut branch_local = NeoFace::new("branch-local");
@@ -3372,7 +3758,7 @@ fn face_resolver_applies_inverse_video_after_text_and_overlay_faces_are_merged()
 /// merged on top renders as a *background* pill.
 #[test]
 fn face_resolver_realizes_base_face_inverse_video_after_merging_text_property_face() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
 
     let mut default = NeoFace::new("default");
@@ -3408,7 +3794,7 @@ fn face_resolver_realizes_base_face_inverse_video_after_merging_text_property_fa
 /// when the face is `:inverse-video` (`load_face_colors`, src/xfaces.c:1417-1425).
 #[test]
 fn face_resolver_applies_distant_foreground_to_the_inverse_video_slot() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
 
     let mut plain = NeoFace::new("plain-distant");
@@ -3461,7 +3847,7 @@ fn test_face_resolver_can_ignore_inverse_video_for_gui_menu_bar() {
 
 #[test]
 fn test_face_resolver_multibyte_text_property_uses_byte_offsets() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
@@ -3480,7 +3866,7 @@ fn test_face_resolver_multibyte_text_property_uses_byte_offsets() {
 
 #[test]
 fn test_face_resolver_multibyte_overlay_uses_byte_offsets() {
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
@@ -3510,21 +3896,21 @@ fn test_face_resolver_multibyte_overlay_uses_byte_offsets() {
 
 #[test]
 fn test_resolve_face_value_symbol() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let names = FaceResolver::resolve_face_value(&Value::symbol("bold"));
     assert_eq!(names, vec!["bold"]);
 }
 
 #[test]
 fn test_resolve_face_value_nil() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let names = FaceResolver::resolve_face_value(&Value::NIL);
     assert!(names.is_empty());
 }
 
 #[test]
 fn test_resolve_face_value_list() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let list = Value::list(vec![Value::symbol("bold"), Value::symbol("italic")]);
     let names = FaceResolver::resolve_face_value(&list);
     assert_eq!(names, vec!["bold", "italic"]);
@@ -3532,7 +3918,7 @@ fn test_resolve_face_value_list() {
 
 #[test]
 fn test_realize_face_height_absolute() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
 
@@ -3545,7 +3931,7 @@ fn test_realize_face_height_absolute() {
 
 #[test]
 fn face_resolver_absolute_height_uses_configured_font_sizing() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new_with_font_sizing(
         &table,
@@ -3608,7 +3994,7 @@ fn graphic_named_face_retains_valid_frame_size_while_height_is_unrealized() {
 
 #[test]
 fn test_realize_face_height_relative() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
 
@@ -3622,7 +4008,7 @@ fn test_realize_face_height_relative() {
 
 #[test]
 fn test_face_from_plist_realizes_relative_height_family_and_weight() {
-    let _evaluator = neovm_core::emacs_core::Context::new();
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 26.666666, None);
 
@@ -3669,7 +4055,7 @@ fn intern_value(name: &str) -> Value {
 #[test]
 fn resolve_fringe_indicator_bare_symbol_used_for_all_cases() {
     // `(empty-line . right-arrow)` — a bare symbol cdr is used for every case.
-    let mut ctx = neovm_core::emacs_core::Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let alist = eval_lisp(&mut ctx, "'((empty-line . right-arrow))");
     let mut buf = test_buffer(1, "*fringe*");
     buf.set_buffer_local("fringe-indicator-alist", alist);
@@ -3692,7 +4078,7 @@ fn resolve_fringe_indicator_bare_symbol_used_for_all_cases() {
 fn resolve_fringe_indicator_list_selects_left_or_right() {
     // `(truncation left-arrow right-arrow)` — 2-element cdr list. Left for
     // right_p=false (ix1=0), right for right_p=true (ix1=1).
-    let mut ctx = neovm_core::emacs_core::Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let alist = eval_lisp(&mut ctx, "'((truncation left-arrow right-arrow))");
     let mut buf = test_buffer(2, "*fringe*");
     buf.set_buffer_local("fringe-indicator-alist", alist);
@@ -3727,7 +4113,7 @@ fn resolve_fringe_indicator_list_selects_left_or_right() {
 #[test]
 fn resolve_fringe_indicator_partial_elements_selected() {
     // `(L R PL PR)` — partial_p picks ix2 (= ix1 + 2).
-    let mut ctx = neovm_core::emacs_core::Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let alist = eval_lisp(
         &mut ctx,
         "'((truncation left-arrow right-arrow left-curly-arrow right-curly-arrow))",
@@ -3765,7 +4151,7 @@ fn resolve_fringe_indicator_partial_elements_selected() {
 fn resolve_fringe_indicator_t_element_is_no_bitmap() {
     // A `t` element means "no bitmap here". With only a `t` left element and no
     // global fallback, the result is `None`.
-    let mut ctx = neovm_core::emacs_core::Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let alist = eval_lisp(&mut ctx, "'((truncation t right-arrow))");
     let mut buf = test_buffer(4, "*fringe*");
     buf.set_buffer_local("fringe-indicator-alist", alist);
@@ -3796,7 +4182,7 @@ fn resolve_fringe_indicator_t_element_is_no_bitmap() {
 fn resolve_fringe_indicator_t_element_with_custom_indicator_yields_none() {
     // A custom indicator absent from the global default: a `t` element really
     // yields `None` (no global fallback can rescue it).
-    let mut ctx = neovm_core::emacs_core::Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let alist = eval_lisp(&mut ctx, "'((test-custom-xxx t right-arrow))");
     let mut buf = test_buffer(5, "*fringe*");
     buf.set_buffer_local("fringe-indicator-alist", alist);
@@ -3817,7 +4203,7 @@ fn resolve_fringe_indicator_t_element_with_custom_indicator_yields_none() {
 #[test]
 fn resolve_fringe_indicator_unregistered_symbol_is_none() {
     // A bitmap symbol that isn't registered resolves to `None`.
-    let mut ctx = neovm_core::emacs_core::Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let alist = eval_lisp(&mut ctx, "'((empty-line . no-such-bitmap-zzz))");
     let mut buf = test_buffer(6, "*fringe*");
     buf.set_buffer_local("fringe-indicator-alist", alist);
@@ -3832,7 +4218,7 @@ fn resolve_fringe_indicator_unregistered_symbol_is_none() {
 #[test]
 fn resolve_fringe_indicator_missing_entry_is_none() {
     // No matching entry and no global default => None.
-    let mut ctx = neovm_core::emacs_core::Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let alist = eval_lisp(&mut ctx, "'((continuation . right-curly-arrow))");
     let mut buf = test_buffer(7, "*fringe*");
     buf.set_buffer_local("fringe-indicator-alist", alist);
@@ -3846,11 +4232,11 @@ fn resolve_fringe_indicator_missing_entry_is_none() {
 
 #[test]
 fn default_fringe_indicator_alist_seeded_resolves_standard_indicators() {
-    // A bare `Context::new()` (no lisp/fringe.el load) still has the GNU default
+    // A bare `neovm_core::emacs_core::eval_hook_installers::new_context()` (no lisp/fringe.el load) still has the GNU default
     // `fringe-indicator-alist` seeded in Rust, so the resolver yields the
     // standard truncation / continuation / empty-line bitmaps via the
     // buffer-default fallback (no buffer-local override on a fresh scratch buf).
-    let mut ctx = neovm_core::emacs_core::Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let dv = ctx
         .eval_str("(default-value 'fringe-indicator-alist)")
         .expect("default-value");
@@ -3904,7 +4290,7 @@ fn face_resolver_honors_overlay_window_property() {
     // the same buffer in two windows highlights only the selected one. The
     // overlay-face path must skip a windowed overlay whose window isn't the one
     // being resolved, matching the overlay-string path.
-    let _ctx = neovm_core::emacs_core::Context::new();
+    let _ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
     let mut hl = NeoFace::new("hl-line-test");
     hl.background = Some(neovm_core::face::Color::rgb(0xff, 0xff, 0x00));
@@ -3962,7 +4348,7 @@ fn face_resolver_honors_overlay_window_property() {
 
 #[test]
 fn inverse_merge_preserves_original_color_before_distant_substitution() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
     let mut base = NeoFace::new("inverse-base");
     base.foreground = Some(NeoColor::rgb(0x33, 0x33, 0x33));
@@ -3991,7 +4377,7 @@ fn inverse_merge_preserves_original_color_before_distant_substitution() {
 
 #[test]
 fn inverse_merge_restores_terminal_default_channel_when_disabled() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
     let mut base = NeoFace::new("mixed-default-inverse");
     base.foreground = Some(NeoColor::rgb(0xFF, 0, 0));
@@ -4017,7 +4403,7 @@ fn inverse_merge_restores_terminal_default_channel_when_disabled() {
 
 #[test]
 fn distant_foreground_is_reconsidered_after_every_merge() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
     let mut base = NeoFace::new("distant-base");
     base.foreground = Some(NeoColor::rgb(0x33, 0x33, 0x33));
@@ -4050,7 +4436,7 @@ fn distant_foreground_is_reconsidered_after_every_merge() {
 
 #[test]
 fn composed_face_sources_are_interned_by_content() {
-    let _runtime = neovm_core::emacs_core::Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0xFFFFFF, 0, 14.0, None);
 
@@ -4083,7 +4469,7 @@ fn composed_face_sources_are_interned_by_content() {
 
 #[test]
 fn repeated_face_compositions_reuse_their_merged_source() {
-    let _runtime = neovm_core::emacs_core::Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0xFFFFFF, 0, 14.0, None);
 
@@ -4118,7 +4504,7 @@ fn repeated_face_compositions_reuse_their_merged_source() {
 
 #[test]
 fn named_overlay_specs_are_shared_by_identity() {
-    let _runtime = neovm_core::emacs_core::Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
     let mut face = NeoFace::new("identity-named-face");
     face.foreground = Some(NeoColor::rgb(12, 34, 56));
@@ -4171,7 +4557,7 @@ fn named_overlay_specs_are_shared_by_identity() {
 
 #[test]
 fn unmatched_remapping_still_shares_named_specs() {
-    let _runtime = neovm_core::emacs_core::Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
     let mut face = NeoFace::new("unmatched-remap-face");
     face.foreground = Some(NeoColor::rgb(10, 20, 30));
@@ -4239,4 +4625,46 @@ fn unmatched_remapping_still_shares_named_specs() {
             .is_none_or(|identity| !std::sync::Arc::ptr_eq(identity, &first_id)),
         "a remapped fold never serves the unmatched memo entry"
     );
+}
+
+#[test]
+fn frame_params_capture_owned_minibuffer_sibling_without_height_heuristics() {
+    let runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut buffers = BufferManager::new();
+    let buffer = buffers.create_buffer("*divider-topology*");
+    let mut frames = FrameManager::new();
+    let host = frames.create_frame("minibuffer-host", 800, 600, buffer);
+    let target = frames.create_frame("divider-target", 800, 600, buffer);
+    let borrowed = frames.get(host).unwrap().minibuffer_window.unwrap();
+    let faces = FaceTable::new();
+
+    let captured =
+        frame_params_from_neovm(frames.get(target).unwrap(), &faces, runtime.variables());
+    assert!(captured.has_minibuffer_sibling);
+
+    frames
+        .get_mut(target)
+        .unwrap()
+        .minibuffer_leaf
+        .as_mut()
+        .unwrap()
+        .bounds_mut()
+        .height = 0.0;
+    let captured =
+        frame_params_from_neovm(frames.get(target).unwrap(), &faces, runtime.variables());
+    assert!(
+        captured.has_minibuffer_sibling,
+        "zero height does not remove ownership"
+    );
+
+    // Borrowing an actual minibuffer ID does not make it a root sibling here.
+    let frame = frames.get_mut(target).unwrap();
+    frame.minibuffer_leaf = None;
+    frame.minibuffer_window = Some(borrowed);
+    let captured = frame_params_from_neovm(frame, &faces, runtime.variables());
+    assert!(!captured.has_minibuffer_sibling);
+
+    frame.minibuffer_window = None;
+    let captured = frame_params_from_neovm(frame, &faces, runtime.variables());
+    assert!(!captured.has_minibuffer_sibling);
 }

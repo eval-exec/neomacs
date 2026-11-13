@@ -4,7 +4,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 8 |     ThreadTransfer::<RootBatchReader<'static>>::transfer(reader);
   |                                                 ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<RootBatchReader<'static>>` due to unsatisfied trait bounds
   |
- ::: src/tagged/transport/root_batch.rs
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/transport/root_batch.rs
   |
   | pub struct RootBatchReader<'r> {
   | ------------------------------ doesn't satisfy `RootBatchReader<'static>: Send`
@@ -17,83 +17,83 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
   = note: the following trait bounds were not satisfied:
           `Rc<()>: Send`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut GcHeader: Sync`
+          `*mut GcHeader: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Cell<u8>: Sync`
+          `Cell<u8>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: Sync`
+          `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Cell<usize>: Sync`
+          `Cell<usize>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut HashTableObj: Sync`
+          `*mut HashTableObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut FinalizerObj: Sync`
+          `*mut FinalizerObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut *mut MarkerObj: Sync`
+          `*mut *mut MarkerObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Cell<()>: Sync`
+          `Cell<()>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*const (): Sync`
+          `*const (): std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut u8: Sync`
+          `*mut u8: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut ConsCell: Sync`
+          `*mut ConsCell: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut FloatObj: Sync`
+          `*mut FloatObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut VecLikeHeader: Sync`
+          `*mut VecLikeHeader: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut StringObj: Sync`
+          `*mut StringObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `OnceCell<collection_reads::store_state::ObservationWorld>: Sync`
+          `OnceCell<collection_reads::store_state::ObservationWorld>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Cell<*mut TaggedHeap>: Sync`
+          `Cell<*mut TaggedHeap>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Rc<Cell<Vec<TaggedValue>>>: Sync`
+          `Rc<Cell<Vec<TaggedValue>>>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Rc<Cell<*const ()>>: Sync`
+          `Rc<Cell<*const ()>>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Cell<u64>: Sync`
+          `Cell<u64>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Cell<NonNull<[Cell<usize>; 8192]>>: Sync`
+          `Cell<NonNull<[Cell<usize>; 8192]>>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Cell<collection_reads::JournalPolicy>: Sync`
+          `Cell<collection_reads::JournalPolicy>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Cell<bool>: Sync`
+          `Cell<bool>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Cell<gc::barrier_window::BarrierWindow>: Sync`
+          `Cell<neovm_core::tagged::gc::BarrierWindow>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut VectorObj: Sync`
+          `*mut VectorObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut ByteCodeObj: Sync`
+          `*mut ByteCodeObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut LambdaObj: Sync`
+          `*mut LambdaObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut MacroObj: Sync`
+          `*mut MacroObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut RecordObj: Sync`
+          `*mut RecordObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut SymbolWithPosObj: Sync`
+          `*mut SymbolWithPosObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut MarkerObj: Sync`
+          `*mut MarkerObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*mut BignumObj: Sync`
+          `*mut BignumObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*const LispSymbol: Sync`
+          `*const LispSymbol: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*const Atomic<u32>: Sync`
+          `*const Atomic<u32>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `NonNull<TaggedHeap>: Sync`
+          `NonNull<TaggedHeap>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `Rc<()>: Sync`
+          `Rc<()>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `UnsafeCell<TaggedValue>: Sync`
+          `UnsafeCell<TaggedValue>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*const AtomicTaggedValue: Sync`
+          `*const AtomicTaggedValue: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*const TaggedValue: Sync`
+          `*const TaggedValue: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `*const CharTableObj: Sync`
+          `*const CharTableObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
           `*const (): Send`
           which is required by `RootBatchReader<'static>: Send`

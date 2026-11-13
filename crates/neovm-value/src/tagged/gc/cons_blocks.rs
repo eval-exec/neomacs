@@ -1,0 +1,398 @@
+//! The cons block allocator: 64 KB-aligned blocks of ConsCell with packed mark bits, GNU alloc.c's cons_block shape.
+//!
+//! Moved out of `gc.rs` unchanged; a child module so it keeps the
+//! parent's view of its private items (`use super::*`).
+
+use super::*;
+
+/// GNU Emacs keeps conses in fixed-size aligned blocks and derives the owning
+/// block/index directly from the cons pointer. Keep the same shape here so
+/// mark/ownership checks stay O(1) instead of linearly scanning `cons_blocks`.
+pub(super) const CONS_BLOCK_ALIGN: usize = CONS_BLOCK_BYTES;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ConsBlockCacheEntry {
+    pub(super) block_base: usize,
+    pub(super) block_index: usize,
+}
+
+impl ConsBlockCacheEntry {
+    pub(super) fn new(block_base: usize, block_index: usize) -> Self {
+        Self {
+            block_base,
+            block_index,
+        }
+    }
+}
+
+/// A GNU-shaped cons block with cells at the front of a fixed-size aligned
+/// storage area, followed by the mark bitmap and the cells' age bytes.
+pub(super) struct ConsBlock {
+    /// Aligned raw storage for cons cells plus `ConsBlockTrailer`.
+    pub(super) storage: *mut u8,
+    /// Index of the first never-allocated cell in this block.
+    pub(super) next_index: u16,
+}
+
+impl ConsBlock {
+    pub(super) fn layout() -> Layout {
+        Layout::from_size_align(CONS_BLOCK_BYTES, CONS_BLOCK_ALIGN).expect("cons block layout")
+    }
+
+    pub(super) fn new() -> Self {
+        let layout = Self::layout();
+        let storage = unsafe { alloc::alloc_zeroed(layout) };
+        if storage.is_null() {
+            alloc::handle_alloc_error(layout);
+        }
+        // A fresh owned allocation may reuse an address once occupied by a
+        // foreign cons; its object lifetime starts with no observation.
+        clear_cons_observed_block(storage as usize);
+        Self {
+            storage,
+            next_index: 0,
+        }
+    }
+
+    #[inline]
+    pub(super) fn base_addr(&self) -> usize {
+        self.storage as usize
+    }
+
+    #[inline]
+    pub(super) fn cells_ptr(&self) -> *mut ConsCell {
+        self.storage.cast()
+    }
+
+    #[inline]
+    pub(super) fn trailer(&self) -> &ConsBlockTrailer {
+        // SAFETY: the block owns this storage for the duration of the borrow.
+        unsafe { ConsBlockTrailer::from_block_base(self.base_addr()) }
+    }
+
+    #[inline]
+    pub(super) fn block_base_for_ptr(ptr: *const ConsCell) -> usize {
+        (ptr as usize) & !(CONS_BLOCK_ALIGN - 1)
+    }
+
+    #[inline]
+    pub(super) fn ptr_offset(ptr: *const ConsCell) -> usize {
+        (ptr as usize).saturating_sub(Self::block_base_for_ptr(ptr))
+    }
+
+    #[inline]
+    pub(super) fn ptr_is_cell_aligned(ptr: *const ConsCell) -> bool {
+        let offset = Self::ptr_offset(ptr);
+        offset < CONS_CELLS_BYTES && offset.is_multiple_of(size_of::<ConsCell>())
+    }
+
+    #[inline]
+    pub(super) fn index_of_ptr(ptr: *const ConsCell) -> usize {
+        Self::ptr_offset(ptr) / size_of::<ConsCell>()
+    }
+
+    /// The cell at `index` of the block whose storage begins at `base`.
+    ///
+    /// # Safety
+    /// `base` is a live registered block base of this heap era and `index`
+    /// is within `[0, CONS_BLOCK_SIZE)`; the caller owns the returned cell
+    /// range exclusively.
+    #[inline]
+    pub(super) unsafe fn cell_ptr_at(base: usize, index: usize) -> *mut ConsCell {
+        debug_assert!(index < CONS_BLOCK_SIZE);
+        debug_assert!(Self::ptr_is_cell_aligned(
+            (base + index * size_of::<ConsCell>()) as *const ConsCell
+        ));
+        (base + index * size_of::<ConsCell>()) as *mut ConsCell
+    }
+
+    #[inline]
+    pub(super) fn mark_bit(index: usize) -> ConsMarkBit {
+        ConsBlockTrailer::mark_bit(index)
+    }
+
+    /// View a mark-bitmap word as an atomic. The cons mark bits are accessed
+    /// atomically (relaxed) so a future concurrent GC thread can set them while
+    /// the mutator allocate-blacks / reads them without a data race; on x86 a
+    /// relaxed atomic load/store is a plain mov, so this is free single-threaded.
+    #[inline]
+    pub(super) fn mark_word(&self, word_index: usize) -> &AtomicUsize {
+        self.trailer().mark_word(word_index)
+    }
+
+    #[inline]
+    pub(super) fn is_marked_ptr(&self, ptr: *const ConsCell) -> bool {
+        self.trailer().is_marked(Self::index_of_ptr(ptr))
+    }
+
+    /// Mark the cell at `offset` bytes into this block's cells, reporting
+    /// whether the bit was newly set.
+    ///
+    /// The caller has already decomposed the address, and the test and the set
+    /// share one index and one mark word. Going through `is_marked_ptr` and
+    /// then `mark_ptr` recomputed the block base, the offset, the cell index
+    /// and the bit mask a second time -- on 26.4M marked conses per
+    /// rust-lsp-typing capture.
+    #[inline]
+    /// VIS row: copied age-byte read for the re-homed cons minor-sweep oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn is_old_for_test(&self, index: usize) -> bool {
+        self.trailer().is_old(index)
+    }
+
+    /// VIS row: age-byte promotion for the re-homed cons minor-sweep oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_old_for_test(&self, index: usize) {
+        self.trailer().set_old(index)
+    }
+
+    pub(super) fn mark_cell_offset(&mut self, offset: usize) -> bool {
+        self.trailer().mark_cell(offset / size_of::<ConsCell>())
+    }
+
+    /// Reserve up to `want` never-used cells from this block's bump cursor
+    /// as one run (an allocation region): answers `(first cell index,
+    /// count)`, `count == 0` when the block is full. The cursor only: the
+    /// allocator writes car and cdr at hand-out, for cells from every source
+    /// (GNU's `cons_block_index` bump is likewise just the cursor).
+    #[inline]
+    pub(super) fn reserve_tail(&mut self, want: usize) -> (usize, usize) {
+        let first = self.next_index as usize;
+        let n = want.min(CONS_BLOCK_SIZE - first);
+        self.next_index = (first + n) as u16;
+        (first, n)
+    }
+
+    /// Give the tail `[index, next_index)` back to the bump cursor (an
+    /// allocation region's unused tail). Its mark bits must already be
+    /// clear: bits at or above `next_index` are never set.
+    pub(super) fn rewind_tail(&mut self, index: usize) {
+        debug_assert!(index <= self.next_index as usize);
+        self.next_index = index as u16;
+    }
+
+    /// Set (`set == true`) or clear the mark bits of cells
+    /// `[start, start + n)` of the block whose storage begins at `base`,
+    /// a word at a time with the same relaxed atomics the marker uses
+    /// (`mark_cell_offset`): an allocation region pre-marked black at grant,
+    /// or its unused tail unmarked at close. Needs no `&mut` block, so a
+    /// region names its block by address alone.
+    pub(super) fn mark_run_at(base: usize, start: usize, n: usize, set: bool) {
+        // SAFETY: the allocation region names an owned block held live for
+        // the duration of its extent. Its tail ranges stay inside the cells.
+        unsafe { ConsBlockTrailer::from_block_base(base) }.mark_run(start, n, set);
+    }
+
+    /// Clear all mark bits used by this block. Runs stop-the-world (at
+    /// `begin_collection`), but stores atomically so the representation stays
+    /// consistent with the concurrent reads/writes elsewhere.
+    pub(super) fn clear_marks(&mut self) {
+        self.trailer()
+            .clear_marks_world_stopped(self.next_index as usize);
+    }
+
+    /// Count currently-marked (live) cells via mark-bitmap popcount. Bits at or
+    /// above `next_index` are never set, so popcounting the used words is exact.
+    /// Cheap O(cells/64); used to recompute the live count after an incremental
+    /// sweep without a second cell walk.
+    pub(super) fn count_marked(&self) -> usize {
+        self.trailer().count_marked(self.next_index as usize)
+    }
+
+    /// The minor live count includes untraced old cells as well as marked
+    /// young cells. Use this for recounts and empty-block decisions.
+    pub(super) fn count_live_generational(&self) -> usize {
+        self.trailer()
+            .count_live_generational(self.next_index as usize)
+    }
+
+    /// Promote marked survivors with every mutator stopped, allocation
+    /// regions closed and the concurrent marker's exit handshake complete.
+    /// The result is the number of cells entering the old generation.
+    /// Promotion ORs marks into the old bitmap without clearing mark words.
+    /// A block leaving the young set therefore retains marks on now-old cells:
+    /// minors ignore those old cells, and majors clear every block's marks.
+    /// GEN1 verification checks marked => old in every non-young block.
+    pub(super) fn promote_marked_world_stopped(&self) -> usize {
+        self.trailer()
+            .promote_marked_world_stopped(self.next_index as usize)
+    }
+
+    /// A minor may reclaim only an unmarked young cell. Runs on the mutator
+    /// with allocation regions closed and no concurrent marker; old cells
+    /// stay intact in a minor; major promotion first replaces old with mark.
+    pub(super) fn sweep_generational(&mut self, free_list: &mut *mut ConsCell) -> usize {
+        clear_cons_observed_dead(
+            self.base_addr(),
+            self.trailer(),
+            self.next_index as usize,
+            true,
+        );
+        let mut live = 0usize;
+        for i in (0..self.next_index as usize).rev() {
+            let cell = unsafe { self.cells_ptr().add(i) };
+            if self.trailer().is_live_generational(i) {
+                live += 1;
+            } else {
+                unsafe { (*cell).set_free_next(*free_list) };
+                *free_list = cell;
+            }
+        }
+        live
+    }
+
+    /// Replace old age with current major liveness at the stop-all boundary.
+    #[inline]
+    pub(super) fn promote_major_world_stopped(&self) -> usize {
+        self.trailer().promote_major_world_stopped()
+    }
+
+    #[inline]
+    pub(super) fn count_old(&self) -> usize {
+        self.trailer().count_old(self.next_index as usize)
+    }
+
+    /// Card-mark S2: the old cells that start in the card at byte OFFSET
+    /// from the block base, as the index of the card's first cell and a mask
+    /// of up to 32 cells from it. Cells are 16 bytes from the block base, so
+    /// a 512-byte card is half of one old-bitmap word.
+    #[inline]
+    pub(super) fn old_cells_in_card(&self, offset: usize) -> (usize, u64) {
+        use super::card_table::CARD_BYTES;
+        const CELLS_PER_CARD: usize = CARD_BYTES / size_of::<ConsCell>();
+        const BITS_PER_WORD: usize = u64::BITS as usize;
+        const _: () = assert!(BITS_PER_WORD % CELLS_PER_CARD == 0);
+        let first = offset / size_of::<ConsCell>();
+        let used = self.next_index as usize;
+        if first >= used {
+            return (first, 0);
+        }
+        let cells = (used - first).min(CELLS_PER_CARD);
+        let old = (self.trailer().old_word(first / BITS_PER_WORD) >> (first % BITS_PER_WORD))
+            & (u64::MAX >> (BITS_PER_WORD - cells));
+        (first, old)
+    }
+
+    /// Whether VALUE is an old cell of this block. A dirty card's cells are
+    /// mostly list spines whose cdr is the next old cell of the same block,
+    /// which a minor would only push and pop again to skip.
+    #[inline]
+    pub(super) fn holds_old_cell(&self, value: TaggedValue) -> bool {
+        if !value.is_cons() {
+            return false;
+        }
+        let ptr = value.gc_cons_ptr();
+        Self::block_base_for_ptr(ptr) == self.base_addr()
+            && Self::ptr_is_cell_aligned(ptr)
+            && self.trailer().is_old(Self::index_of_ptr(ptr))
+    }
+
+    /// Sweep: thread reclaimed cells into this block's intrusive free list and
+    /// return the number of live cells in this block.
+    pub(super) fn sweep(&mut self, free_list: &mut *mut ConsCell) -> usize {
+        clear_cons_observed_dead(
+            self.base_addr(),
+            self.trailer(),
+            self.next_index as usize,
+            false,
+        );
+        let mut live = 0;
+
+        // Match GNU alloc.c: reclaimed conses are linked through the dead
+        // cells themselves instead of rebuilding an external index vector.
+        for i in (0..self.next_index as usize).rev() {
+            let cell = unsafe { self.cells_ptr().add(i) };
+            if self.trailer().is_marked(i) {
+                live += 1;
+            } else {
+                unsafe {
+                    (*cell).set_free_next(*free_list);
+                }
+                *free_list = cell;
+            }
+        }
+
+        live
+    }
+}
+
+impl Drop for ConsBlock {
+    fn drop(&mut self) {
+        clear_cons_observed_block(self.base_addr());
+        unsafe { alloc::dealloc(self.storage, Self::layout()) };
+    }
+}
+
+/// Opaque test-support wrapper for the relocated cons minor-sweep oracle.
+///
+/// V1 (thread-safety UI fixture) owns the textual name `ConsBlock`, so the
+/// real block type cannot be A-prime widened. The wrapper keeps the block
+/// crate-private and exposes the copied reads and fixture drivers the moved
+/// oracle needs; every method is a one-line delegate.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+mod test_support {
+    use super::*;
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) struct SweepBlockHarness(ConsBlock);
+
+    impl SweepBlockHarness {
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn new() -> Self {
+            Self(ConsBlock::new())
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn base_addr(&self) -> usize {
+            self.0.base_addr()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn cells_ptr(&self) -> *mut ConsCell {
+            self.0.cells_ptr()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn block_base_for_ptr(ptr: *const ConsCell) -> usize {
+            ConsBlock::block_base_for_ptr(ptr)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn index_of_ptr(ptr: *const ConsCell) -> usize {
+            ConsBlock::index_of_ptr(ptr)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn mark_cell_offset(&mut self, offset: usize) -> bool {
+            self.0.mark_cell_offset(offset)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn reserve_tail(&mut self, want: usize) -> (usize, usize) {
+            self.0.reserve_tail(want)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn clear_marks(&mut self) {
+            self.0.clear_marks()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn count_marked(&self) -> usize {
+            self.0.count_marked()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn count_live_generational(&self) -> usize {
+            self.0.count_live_generational()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn promote_marked_world_stopped(&self) -> usize {
+            self.0.promote_marked_world_stopped()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn sweep_generational(&mut self, free_list: &mut *mut ConsCell) -> usize {
+            self.0.sweep_generational(free_list)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn is_old_for_test(&self, index: usize) -> bool {
+            self.0.is_old_for_test(index)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn set_old_for_test(&self, index: usize) {
+            self.0.set_old_for_test(index)
+        }
+    }
+}

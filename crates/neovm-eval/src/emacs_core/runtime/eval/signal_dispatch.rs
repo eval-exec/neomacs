@@ -1,0 +1,668 @@
+//! Signal dispatch: the condition-handler stack, catch and handler lookup, signal delivery, backtrace rendering, and debugger entry (GNU eval.c signal_or_quit / find_handler_clause).
+//!
+//! Moved out of `eval/mod.rs` unchanged; a child module of `eval` so it keeps
+//! the same view of `Context` and the parent's private items (`use super::*`).
+
+use super::*;
+
+impl Context {
+    #[doc(hidden)]
+    pub fn push_condition_frame(&mut self, frame: ConditionFrame) {
+        self.condition_stack.push(frame);
+    }
+
+    #[doc(hidden)]
+    pub fn pop_condition_frame(&mut self) -> Option<ConditionFrame> {
+        self.condition_stack.pop()
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn truncate_condition_stack(&mut self, len: usize) {
+        self.condition_stack.truncate(len);
+    }
+
+    /// Rebase the `stack_len` of the topmost `count` bytecode catch/condition-case
+    /// handlers from FRAME-RELATIVE to ABSOLUTE `bc_buf` positions by adding
+    /// `frame_base`.
+    ///
+    /// The JIT `push-catch`/`push-condition-case` shims record `stack_len` as the
+    /// native model operand-stack DEPTH (frame-relative — a native frame keeps no
+    /// operands on `bc_buf`), whereas the interpreter records the ABSOLUTE
+    /// `bc_buf.len()`. When a native frame deopts and resumes via
+    /// [`Vm::run_resumed_frame`], its operands are seeded at `bc_buf[frame_base..]`,
+    /// so its transferred handlers must be rebased to absolute — otherwise a later
+    /// throw/signal caught by such a handler would `bc_buf.truncate(relative_len)`
+    /// and collapse the caller's live operand stack (the native frame's handlers
+    /// are exactly the topmost `count` Vm catch/condition-case frames).
+    #[doc(hidden)]
+    pub fn rebase_resumed_vm_handler_stack_lens(&mut self, count: usize, frame_base: usize) {
+        if count == 0 || frame_base == 0 {
+            return;
+        }
+        let mut remaining = count;
+        for frame in self.condition_stack.iter_mut().rev() {
+            if remaining == 0 {
+                break;
+            }
+            let resume = match frame {
+                ConditionFrame::Catch { resume, .. }
+                | ConditionFrame::ConditionCase { resume, .. } => resume,
+                _ => continue,
+            };
+            match resume {
+                ResumeTarget::VmCatch { stack_len, .. }
+                | ResumeTarget::VmConditionCase { stack_len, .. } => {
+                    *stack_len += frame_base;
+                    remaining -= 1;
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    /// [`Self::rebase_resumed_vm_handler_stack_lens`] for one frame of a
+    /// resumed chain (`Vm::run_resumed_chain`): the frame's `count` handlers
+    /// are the first `count` Vm catch/condition-case frames at or above
+    /// `condition_stack[start]`, below the handlers of the frames it called.
+    /// Returns the index just past the last one, where the next frame's
+    /// handlers begin.
+    #[cfg_attr(not(test), allow(dead_code))] // until the JIT reads deopt chains back
+    #[doc(hidden)]
+    pub fn rebase_resumed_vm_handler_range(
+        &mut self,
+        start: usize,
+        count: usize,
+        frame_base: usize,
+    ) -> usize {
+        let mut remaining = count;
+        let mut index = start;
+        while remaining > 0 && index < self.condition_stack.len() {
+            let resume = match &mut self.condition_stack[index] {
+                ConditionFrame::Catch { resume, .. }
+                | ConditionFrame::ConditionCase { resume, .. } => Some(resume),
+                _ => None,
+            };
+            if let Some(
+                ResumeTarget::VmCatch { stack_len, .. }
+                | ResumeTarget::VmConditionCase { stack_len, .. },
+            ) = resume
+            {
+                *stack_len += frame_base;
+                remaining -= 1;
+            }
+            index += 1;
+        }
+        debug_assert_eq!(remaining, 0, "a resumed frame's handlers are registered");
+        index
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn condition_stack_len(&self) -> usize {
+        self.condition_stack.len()
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn allocate_resume_id(&mut self) -> u64 {
+        let resume_id = self.next_resume_id;
+        self.next_resume_id += 1;
+        resume_id
+    }
+
+    #[doc(hidden)]
+    pub fn matching_catch_resume(&self, tag: &Value) -> Option<ResumeTarget> {
+        self.matching_catch_resume_with_symbols(tag, self.symbol_mode())
+    }
+
+    #[doc(hidden)]
+    pub fn matching_catch_resume_with_symbols(
+        &self,
+        tag: &Value,
+        mode: neovm_value::tagged::SymbolMode,
+    ) -> Option<ResumeTarget> {
+        if tag.is_nil() {
+            return None;
+        }
+
+        self.condition_stack
+            .iter()
+            .rev()
+            .find_map(|frame| match frame {
+                ConditionFrame::Catch {
+                    tag: catch_tag,
+                    resume,
+                } if eq_value_swp(
+                    catch_tag,
+                    tag,
+                    mode == neovm_value::tagged::SymbolMode::Positioned,
+                ) =>
+                {
+                    Some(resume.clone())
+                }
+                _ => None,
+            })
+    }
+
+    #[doc(hidden)]
+    pub fn has_active_catch(&self, tag: &Value) -> bool {
+        self.matching_catch_resume(tag).is_some()
+    }
+
+    #[doc(hidden)]
+    pub fn has_active_condition_handler_for_signal(&self, sig: &SignalData) -> bool {
+        self.condition_stack.iter().rev().any(|frame| match frame {
+            ConditionFrame::ConditionCase { conditions, .. }
+            | ConditionFrame::HandlerBind { conditions, .. } => {
+                neovm_value::errors::signal_matches_condition_value_sym(
+                    &self.obarray,
+                    sig.symbol,
+                    conditions,
+                    self.symbol_mode(),
+                )
+            }
+            _ => false,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn dispatch_signal_if_needed(
+        &mut self,
+        sig: Box<SignalData>,
+    ) -> Result<Box<SignalData>, Flow> {
+        if sig.search_complete() {
+            return Ok(sig);
+        }
+        self.dispatch_signal(*sig).map(Box::new)
+    }
+
+    /// Every call return passes here.  The answer for anything but a signal
+    /// -- a value, a throw, a thread block -- is decided inline by one tag
+    /// test; the dispatch itself stays out of line.  Marked `#[inline]` alone,
+    /// the whole match stayed out of line at the interpreter's cons-form site:
+    /// a 16-byte `EvalResult` round trip per form.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn dispatch_signal_result_if_needed(&mut self, result: EvalResult) -> EvalResult {
+        if !neovm_value::error::is_signal_result!(result) {
+            return result;
+        }
+        self.dispatch_signal_result_cold(result)
+    }
+
+    /// [`Self::dispatch_signal_result_if_needed`] for a caller that already
+    /// took the `Err` apart: its success path rebuilds `Ok(value)` from the
+    /// value alone, and only a failure comes here.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn dispatch_signal_flow_cold(&mut self, flow: Flow) -> EvalResult {
+        self.dispatch_signal_result_if_needed(Err(flow))
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn dispatch_signal_result_cold(&mut self, result: EvalResult) -> EvalResult {
+        neovm_value::error::with_signal_result!(result, sig => {
+            match self.dispatch_signal_if_needed(sig) {
+                Ok(dispatched) => Err(Flow::signal_boxed(dispatched)),
+                Err(flow) => Err(flow),
+            }
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn dispatch_signal(&mut self, mut sig: SignalData) -> Result<SignalData, Flow> {
+        // GNU bytecode.c records inline primitive error frames before signalling.
+        // Native leaves defer this specpdl mutation until their witness is gone.
+        // The selected handler/function unwinder owns the frame from here on.
+        if let Some(frame) = sig.bytecode_error_backtrace_mut().take() {
+            frame.record(&mut |function: Value, args: &[Value]| {
+                self.push_backtrace_frame(function, args)
+            });
+        }
+        self.run_signal_hook(&sig)?;
+        let original_delivery = sig.delivery();
+        sig = self.canonicalize_signal_symbol(sig);
+        if matches!(
+            original_delivery,
+            neovm_value::error::SignalDelivery::MemoryExhausted(_)
+        ) && matches!(sig.delivery(), neovm_value::error::SignalDelivery::Ordinary)
+        {
+            // GNU eval.c:1978-1980 signals a fresh ordinary error when an
+            // OOM descriptor names an undefined condition. Its hook runs.
+            self.run_signal_hook(&sig)?;
+        }
+
+        let mut idx = self.condition_stack.len();
+        let mut seen_condition_entries = 0usize;
+
+        while let Some(next_idx) = idx.checked_sub(1) {
+            idx = next_idx;
+            match self.condition_stack[idx].clone() {
+                ConditionFrame::Catch { .. } => {}
+                ConditionFrame::SkipConditions { remaining } => {
+                    let mut to_skip = remaining;
+                    while idx > 0 && to_skip > 0 {
+                        idx -= 1;
+                        if matches!(
+                            self.condition_stack[idx],
+                            ConditionFrame::ConditionCase { .. }
+                                | ConditionFrame::HandlerBind { .. }
+                        ) {
+                            to_skip -= 1;
+                        }
+                    }
+                }
+                ConditionFrame::ConditionCase { conditions, resume } => {
+                    seen_condition_entries += 1;
+                    if neovm_value::errors::signal_matches_condition_value_sym(
+                        &self.obarray,
+                        sig.symbol,
+                        &conditions,
+                        self.symbol_mode(),
+                    ) {
+                        self.maybe_call_debugger_for_signal(&sig, Some(&conditions))?;
+                        *sig.selected_resume_mut() = Some(resume);
+                        *sig.search_complete_mut() = true;
+                        return Ok(sig);
+                    }
+                }
+                ConditionFrame::HandlerBind {
+                    conditions,
+                    handler,
+                    mute_span,
+                } => {
+                    seen_condition_entries += 1;
+                    if !neovm_value::errors::signal_matches_condition_value_sym(
+                        &self.obarray,
+                        sig.symbol,
+                        &conditions,
+                        self.symbol_mode(),
+                    ) {
+                        continue;
+                    }
+
+                    let specpdl_root_scope = self.save_specpdl_roots();
+                    for value in &sig.data {
+                        self.push_specpdl_root(*value);
+                    }
+                    if let Some(raw) = &sig.raw_data {
+                        self.push_specpdl_root(*raw);
+                    }
+
+                    // GNU eval.c:2016-2030 borrows room while this handler
+                    // runs, and restores it before popping SKIP_CONDITIONS.
+                    let count = self.specpdl.len();
+                    self.ensure_lisp_eval_depth_room(200);
+                    self.push_condition_frame(ConditionFrame::SkipConditions {
+                        remaining: seen_condition_entries + mute_span,
+                    });
+
+                    let handler_result = self.apply(handler, vec![make_signal_binding_value(&sig)]);
+                    let handler_result = self.dispatch_signal_result_if_needed(handler_result);
+                    let handler_result = self.unbind_to_with_result(count, handler_result);
+
+                    match handler_result.kinded() {
+                        Ok(_) => {
+                            self.pop_condition_frame();
+                            self.restore_specpdl_roots(specpdl_root_scope);
+                            continue;
+                        }
+                        Err(FlowKind::Signal(next_sig)) => {
+                            let dispatched =
+                                self.dispatch_signal_if_needed(next_sig).map(|sig| *sig);
+                            self.pop_condition_frame();
+                            self.restore_specpdl_roots(specpdl_root_scope);
+                            return dispatched;
+                        }
+                        Err(flow @ FlowKind::Throw(_)) => {
+                            self.pop_condition_frame();
+                            self.restore_specpdl_roots(specpdl_root_scope);
+                            return Err(Flow::from_kind(flow));
+                        }
+                        Err(flow @ (FlowKind::ThreadBlocked(_) | FlowKind::Shutdown(_))) => {
+                            self.pop_condition_frame();
+                            self.restore_specpdl_roots(specpdl_root_scope);
+                            return Err(Flow::from_kind(flow));
+                        }
+                    }
+                }
+            }
+        }
+
+        self.maybe_call_debugger_for_signal(&sig, None)?;
+        // No handler matched: this signal will propagate to the command loop.
+        // Capture the live Lisp backtrace NOW, while the specpdl is still intact
+        // (unwinding happens as `Ok(sig)` propagates up), so the command loop's
+        // error log can show WHERE it was signaled without the reporter needing
+        // `debug-on-error`. Gated on debug-level tracing — the default filter is
+        // `warn`, so production only pays a cheap `enabled!` check, and only
+        // truly-uncaught signals are ever rendered.
+        let captured_backtrace = if tracing::enabled!(tracing::Level::DEBUG) {
+            Some(self.render_uncaught_signal_backtrace(64))
+        } else {
+            None
+        };
+        self.last_uncaught_signal_backtrace = captured_backtrace;
+        *sig.search_complete_mut() = true;
+        *sig.selected_resume_mut() = None;
+        Ok(sig)
+    }
+
+    /// Render a compact snapshot of the live Lisp backtrace (innermost frame
+    /// first), like GNU `backtrace`, for the command-loop error log. Bounded to
+    /// `max_frames`. Only invoked under a debug-tracing gate — it prints every
+    /// live frame's function and arguments.
+    /// Render the current Lisp backtrace for diagnostics (public alias of the
+    /// uncaught-signal renderer, used by env-gated observability hooks).
+    #[doc(hidden)]
+    pub fn render_lisp_backtrace(&self, max_frames: usize) -> String {
+        self.render_uncaught_signal_backtrace(max_frames)
+    }
+
+    #[doc(hidden)]
+    pub fn render_uncaught_signal_backtrace(&self, max_frames: usize) -> String {
+        let mut lines: Vec<String> = Vec::new();
+        for entry in self.specpdl.iter().rev() {
+            let Some((function, args, _, _)) = self.backtrace_entry_values(entry) else {
+                continue;
+            };
+            if lines.len() >= max_frames {
+                lines.push("    ...".to_string());
+                break;
+            }
+            let fn_str = crate::emacs_core::print_value_with_eval(self, &function);
+            let arg_strs: Vec<String> = args
+                .iter()
+                .map(|v| crate::emacs_core::print_value_with_eval(self, v))
+                .collect();
+            lines.push(if arg_strs.is_empty() {
+                format!("    ({fn_str})")
+            } else {
+                format!("    ({fn_str} {})", arg_strs.join(" "))
+            });
+        }
+        lines.join("\n")
+    }
+
+    #[doc(hidden)]
+    pub fn run_signal_hook(&mut self, sig: &SignalData) -> Result<(), Flow> {
+        match sig.delivery() {
+            neovm_value::error::SignalDelivery::Ordinary => {}
+            neovm_value::error::SignalDelivery::HookSuppressed
+            | neovm_value::error::SignalDelivery::MemoryExhausted(_) => return Ok(()),
+        }
+
+        let hook = self
+            .builtin_var_value_by_name("signal-hook-function")
+            .unwrap_or(Value::NIL);
+        if hook.is_nil() {
+            return Ok(());
+        }
+
+        // GNU eval.c:1966-1976 reserves twenty evaluator frames for the hook.
+        let count = self.specpdl.len();
+        self.ensure_lisp_eval_depth_room(20);
+        let result = self.apply(
+            hook,
+            vec![
+                Value::from_sym_id(sig.symbol),
+                signal_hook_payload_value(sig),
+            ],
+        );
+        self.unbind_to_with_result(count, result).map(|_| ())
+    }
+
+    #[doc(hidden)]
+    pub fn canonicalize_signal_symbol(&self, sig: SignalData) -> SignalData {
+        if sig.symbol == error_symbol() || sig.symbol == quit_symbol() {
+            return sig;
+        }
+        // GNU `signal_or_quit` reads `error-conditions` directly from the
+        // signalled symbol object (`Fget (real_error_symbol, Qerror_conditions)`,
+        // src/eval.c:1959), so an *uninterned* error symbol created via
+        // `make-symbol` and given conditions by `define-error` is honoured.
+        // Looking the property up by name (which interns) would resolve to a
+        // *different*, interned symbol with no conditions and spuriously
+        // canonicalize to "Invalid error symbol".  Use identity instead.
+        if self
+            .obarray
+            .get_property_id(sig.symbol, error_conditions_symbol())
+            .is_some()
+        {
+            return sig;
+        }
+
+        let delivery = match sig.delivery() {
+            neovm_value::error::SignalDelivery::MemoryExhausted(_)
+            | neovm_value::error::SignalDelivery::Ordinary => {
+                neovm_value::error::SignalDelivery::Ordinary
+            }
+            neovm_value::error::SignalDelivery::HookSuppressed => {
+                neovm_value::error::SignalDelivery::HookSuppressed
+            }
+        };
+        SignalData::new_with_delivery(
+            error_symbol(),
+            vec![
+                Value::string("Invalid error symbol"),
+                Value::from_sym_id(sig.symbol),
+            ],
+            None,
+            delivery,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn maybe_call_debugger_for_signal(
+        &mut self,
+        sig: &SignalData,
+        matched_clause: Option<&Value>,
+    ) -> Result<(), Flow> {
+        // GNU eval.c:2041-2044 never enters the debugger for an OOM error,
+        // even when debug-on-signal and a matched debug clause request it.
+        match sig.delivery() {
+            neovm_value::error::SignalDelivery::MemoryExhausted(_) => return Ok(()),
+            neovm_value::error::SignalDelivery::Ordinary
+            | neovm_value::error::SignalDelivery::HookSuppressed => {}
+        }
+        if self
+            .builtin_var_value_by_name("inhibit-debugger")
+            .is_some_and(|value| !value.is_nil())
+        {
+            return Ok(());
+        }
+
+        let debug_on_signal = self
+            .builtin_var_value_by_name("debug-on-signal")
+            .is_some_and(|value| !value.is_nil());
+        let should_consider_debugger = debug_on_signal
+            || matched_clause.is_none()
+            || matched_clause.is_some_and(condition_value_contains_debug);
+        if !should_consider_debugger {
+            return Ok(());
+        }
+
+        let conditions = self.signal_conditions_value(sig);
+        let debug_setting = if neovm_value::errors::signal_matches_condition_value_sym(
+            &self.obarray,
+            sig.symbol,
+            &Value::from_sym_id(quit_symbol()),
+            self.symbol_mode(),
+        ) {
+            self.builtin_var_value_by_name("debug-on-quit")
+                .unwrap_or(Value::NIL)
+        } else {
+            self.builtin_var_value_by_name("debug-on-error")
+                .unwrap_or(Value::NIL)
+        };
+        if !wants_debugger(&debug_setting, &conditions, self.symbol_mode()) {
+            return Ok(());
+        }
+        if self.skip_debugger(sig, &conditions)? {
+            return Ok(());
+        }
+        // GNU's last conjunct, and it is last there too: "See commentary on
+        // definition of `internal-when-entered-debugger'" (`src/eval.c:2210-2212`).
+        // A debugger that signals must not re-enter itself, so one entry per
+        // non-macro input event is the budget -- which in batch, where no such
+        // event ever arrives, is one entry per session.
+        if !self.debugger_reentry_is_permitted() {
+            return Ok(());
+        }
+
+        self.call_debugger_for_signal(sig)
+    }
+
+    #[doc(hidden)]
+    pub fn signal_conditions_value(&self, sig: &SignalData) -> Value {
+        // Read `error-conditions' by identity so an uninterned error symbol
+        // (created via `make-symbol' + `define-error') yields its real
+        // condition list for `condition-case' clause matching, instead of the
+        // empty/`(SYMBOL)' fallback a name-based lookup of a different interned
+        // symbol would give.
+        self.obarray
+            .get_property_id(sig.symbol, error_conditions_symbol())
+            .unwrap_or_else(|| Value::list(vec![Value::from_sym_id(sig.symbol)]))
+    }
+
+    #[doc(hidden)]
+    pub fn skip_debugger(&mut self, sig: &SignalData, conditions: &Value) -> Result<bool, Flow> {
+        let ignored = self
+            .builtin_var_value_by_name("debug-ignored-errors")
+            .unwrap_or(Value::NIL);
+        let Some(entries) = list_to_vec(&ignored) else {
+            return Ok(false);
+        };
+        if entries.is_empty() {
+            return Ok(false);
+        }
+
+        let mut error_message = None;
+        let error_data = make_signal_binding_value(sig);
+        let signal_conditions = list_to_vec(conditions).unwrap_or_else(|| vec![*conditions]);
+
+        for entry in entries {
+            if entry.is_string() {
+                let message = if let Some(message) = error_message {
+                    message
+                } else {
+                    let rendered = crate::emacs_core::print::builtin_error_message_string(
+                        self,
+                        vec![error_data],
+                    )?;
+                    error_message = Some(rendered);
+                    rendered
+                };
+
+                let current_buffer = self.edit.buffers.current_buffer();
+                let syntax_table =
+                    current_buffer.map(neovm_text::emacs_core::syntax::SyntaxTable::for_buffer);
+                let category_table = Some(
+                    neovm_text::emacs_core::category::active_category_table_for_buffer(
+                        current_buffer,
+                    )?,
+                );
+                let word_boundary = builtins::search::current_word_boundary_lookup(self);
+                let syntax_properties = builtins::search::current_string_match_syntax_properties(
+                    self,
+                    self.variables(),
+                    &self.edit.buffers,
+                    Some(&message),
+                );
+                if builtins::search::builtin_string_match_p_with_case_fold(
+                    false,
+                    None,
+                    syntax_table.as_ref(),
+                    category_table,
+                    word_boundary,
+                    syntax_properties,
+                    &[entry, message],
+                )?
+                .as_fixnum()
+                .is_some()
+                {
+                    return Ok(true);
+                }
+                continue;
+            }
+
+            if signal_conditions.contains(&entry) {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Whether an uncaught command signal is something GNU would show the
+    /// user and forget, or something worth a diagnostic.
+    ///
+    /// GNU's command loop does not distinguish: `cmd_error_internal'
+    /// (src/keyboard.c:1030-1047, emacs-31.0.90) hands every signal to
+    /// `command-error-function' and never logs.  The one place GNU does rank
+    /// signals is the debugger gate, `skip_debugger' (src/eval.c:2146-2180):
+    /// a condition or message matched by `debug-ignored-errors' -- by default
+    /// `beginning-of-line', `end-of-line', `end-of-buffer', `buffer-read-only',
+    /// `user-error', ... (lisp/bindings.el:1038-1046), and whatever packages
+    /// push there, such as evil's `end-of-line' -- is routine and must not
+    /// interrupt the user.  A quit is routine by construction
+    /// (`signal_quit_p', src/eval.c:2181-2190).  This port's command-loop
+    /// log follows the same ranking, so `C-g` and "End of line" are not
+    /// errors in the log while a void function still is.
+    ///
+    /// Two departures from GNU, both deliberate.  GNU consults
+    /// `skip_debugger' only when the debugger is otherwise wanted
+    /// (`maybe_call_debugger', src/eval.c:2206-2213); the log has no such
+    /// gate, so the ignore list is evaluated on every uncaught command
+    /// signal.  And this runs inside `command_loop_2', GNU's sole recovery
+    /// owner (`internal_condition_case (command_loop_1, ..., cmd_error)'),
+    /// where nothing may signal: a string entry in `debug-ignored-errors'
+    /// that is not a valid regexp makes the matcher signal `invalid-regexp',
+    /// and that must classify the original error, not unwind the command
+    /// loop.  So this is infallible: a matcher failure is a `Diagnostic'.
+    #[doc(hidden)]
+    pub fn command_error_severity(&mut self, sig: &SignalData) -> CommandErrorSeverity {
+        if neovm_value::errors::signal_matches_condition_value_sym(
+            &self.obarray,
+            sig.symbol,
+            &Value::from_sym_id(quit_symbol()),
+            self.symbol_mode(),
+        ) {
+            return CommandErrorSeverity::Routine;
+        }
+        let conditions = self.signal_conditions_value(sig);
+        match self.skip_debugger(sig, &conditions) {
+            Ok(true) => CommandErrorSeverity::Routine,
+            Ok(false) => CommandErrorSeverity::Diagnostic,
+            Err(flow) => {
+                tracing::debug!(
+                    "`debug-ignored-errors' could not be matched while ranking a command \
+                     loop signal; treating it as a diagnostic: {flow:?}"
+                );
+                CommandErrorSeverity::Diagnostic
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn call_debugger_for_signal(&mut self, sig: &SignalData) -> Result<(), Flow> {
+        // Render only when this diagnostic is enabled. GNU's debugger entry
+        // does not print the signal before invoking the callback (eval.c:2229).
+        tracing::error!(
+            "entering Lisp debugger for signal: symbol={} data={}",
+            format_symbol_name_for_diagnostic(sig.symbol),
+            crate::emacs_core::print::format_signal_data_with_eval(self, sig)
+        );
+        // GNU `call_debugger (list2 (Qdebug, ...))` from `maybe_call_debugger`:
+        // one shared entry point with the `debug-on-next-call` and
+        // `debug-on-exit` sites, so the bindings it installs -- and the
+        // `debug_on_next_call = 0` at `src/eval.c:298` -- cannot be one thing
+        // for a signal and another thing for a call.
+        self.call_debugger(vec![Value::symbol("error"), make_signal_binding_value(sig)])
+            .map(|_| ())
+    }
+}

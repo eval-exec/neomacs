@@ -1,20 +1,22 @@
 //! File completion compares decoded characters through the buffer case table.
 
 use super::super::*;
-use crate::emacs_core::{casetab, chartable};
+use crate::emacs_core::casetab_entries;
+use crate::emacs_core::chartable;
 
 fn context_with_mapping(mapped: u32, multibyte: bool) -> Context {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
-    let standard = casetab::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
+    let mut ctx = crate::test_utils::new_context();
+    let standard = casetab_entries::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
     let table = chartable::copy_char_table(standard).unwrap();
     let up = chartable::copy_char_table(table.as_char_table_obj().unwrap().extras.as_slice()[0])
         .unwrap();
     chartable::ct_set_single(&up, b'a' as i64, Value::fixnum(mapped as i64));
     table.with_char_table_mut(|obj| obj.set_extra(0, up));
-    casetab::builtin_set_case_table(&mut ctx, vec![table]).unwrap();
-    let id = ctx.buffers.current_buffer_id().unwrap();
-    ctx.buffers
+    casetab_entries::builtin_set_case_table(&mut ctx, vec![table]).unwrap();
+    let id = ctx.edit.buffers.current_buffer_id().unwrap();
+    ctx.edit
+        .buffers
         .set_buffer_multibyte_flag(id, multibyte)
         .unwrap();
     ctx

@@ -34,7 +34,10 @@ fn pgo_roundtrip_runtime_emit_next_session_serves_fast_from_call_1() {
         std::env::set_var("NEOVM_AOT", "force");
         std::env::set_var("NEOVM_AOT_DIR", dir.path());
     }
-    let r = neovm_core::emacs_core::jit::aot::testkit_pgo_roundtrip_selftest(dir.path());
+    let r = neovm_core::emacs_core::jit::aot::testkit_pgo_roundtrip_selftest(
+        dir.path(),
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+    );
     unsafe {
         std::env::remove_var("NEOVM_AOT");
         std::env::remove_var("NEOVM_AOT_DIR");
@@ -62,7 +65,10 @@ fn pgo_drain_persists_hot_leaf_and_next_session_serves_fast_from_call_1() {
         // arith (whose fixnum guard would deopt under the NEOVM_JIT_FORCE_DEOPT gate).
         std::env::set_var("NEOVM_JIT_PROFIT", "off");
     }
-    let r = neovm_core::emacs_core::jit::aot::testkit_pgo_drain_selftest(dir.path());
+    let r = neovm_core::emacs_core::jit::aot::testkit_pgo_drain_selftest(
+        dir.path(),
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+    );
     unsafe {
         std::env::remove_var("NEOVM_AOT");
         std::env::remove_var("NEOVM_AOT_PGO");
@@ -85,7 +91,10 @@ fn pgo_drain_default_off_writes_nothing() {
         std::env::set_var("NEOVM_AOT_DIR", dir.path());
         std::env::set_var("NEOVM_JIT_PROFIT", "off"); // stage the bare-call hot leaf
     }
-    let r = neovm_core::emacs_core::jit::aot::testkit_pgo_default_off_selftest(dir.path());
+    let r = neovm_core::emacs_core::jit::aot::testkit_pgo_default_off_selftest(
+        dir.path(),
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+    );
     unsafe {
         std::env::remove_var("NEOVM_AOT_DIR");
         std::env::remove_var("NEOVM_JIT_PROFIT");

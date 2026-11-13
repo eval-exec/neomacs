@@ -995,7 +995,7 @@ fn display_row_append_cursor_uses_glyph_measurer() {
 
 #[test]
 fn display_row_append_cursor_appends_explicit_source_item() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let row_layout = layout();
     let mut matrix = DisplayOutputBuilder::new();
     matrix.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
@@ -1027,7 +1027,7 @@ fn display_row_append_cursor_appends_explicit_source_item() {
 
 #[test]
 fn display_row_append_cursor_appends_explicit_source_item_with_glyph_measurer() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let row_layout = layout();
     let mut matrix = DisplayOutputBuilder::new();
     let mut measurer = FixedGlyphAdvances::new();
@@ -1289,7 +1289,7 @@ fn graphical_relative_stretch_measures_the_covered_character() {
 
 #[test]
 fn display_row_builder_consumes_display_item_source() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut source = LispStringSourceCursor::new(
         1,
         Value::string("abc"),
@@ -1508,7 +1508,7 @@ fn display_row_writer_can_append_items_to_left_margin_area() {
 
 #[test]
 fn display_row_writer_consumes_display_item_source() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut row = neomacs_display_protocol::glyph_matrix::GlyphRow::new(GlyphRowRole::Text);
     row.enabled = true;
     crate::glyph_row_writer::push_char_to_row(&mut row, 'x', FaceId::new(2), 0, 8.0);
@@ -2095,6 +2095,111 @@ fn display_row_builder_groups_arabic_complex_run() {
     assert!(glyphs.iter().filter(|glyph| glyph.padding).count() >= 3);
 }
 
+struct SelectedPrimitiveMeasurer;
+
+impl DisplayGlyphMeasurer for SelectedPrimitiveMeasurer {
+    fn glyph_advance_px(
+        &mut self,
+        _ch: char,
+        _face_id: FaceId,
+        _columns: u8,
+        _fallback_advance_px: f32,
+    ) -> Option<f32> {
+        None
+    }
+
+    fn glyph_vertical_metrics_px(
+        &mut self,
+        _ch: char,
+        _face_id: FaceId,
+    ) -> Option<DisplayRowVerticalMetrics> {
+        Some(DisplayRowVerticalMetrics::new(16.0, 12.0))
+    }
+}
+
+fn assert_contextual_selected_primitive_dimensions(item: DisplayItem) {
+    let row_layout = layout();
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    let progress = {
+        let mut measurer = SelectedPrimitiveMeasurer;
+        let mut writer = DisplayRowProgressWriter::with_glyph_measurer(
+            &row_layout,
+            &mut row,
+            &mut measurer,
+            DisplayRowPosition::new(0.0, 0),
+            240.0,
+        );
+        // A separate append with a different face and padding makes the
+        // composition's append-local glyph offsets differ from row indices.
+        let mut prefix = text_item("中");
+        prefix.face = RenderFaceRef::FaceId(FaceId::new(3));
+        writer.push_item(prefix);
+        writer.push_item(item)
+    };
+    let head = row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .find(|glyph| {
+            !glyph.padding
+                && matches!(&glyph.glyph_type, GlyphType::Composite { text } if text.as_ref() == "سلام")
+        })
+        .expect("finalized Arabic composition");
+    assert_eq!(head.pixel_width, 32.0);
+    assert_eq!(
+        progress.slots()[0].selected_primitive_dimensions(),
+        Some(neovm_core::window::LogicalCursorDimensions {
+            width: head.pixel_width.round() as u32,
+            height: head.pixel_height.round() as u32,
+        }),
+    );
+}
+
+#[test]
+fn contextual_text_selected_primitive_dimensions_are_finalized() {
+    assert_contextual_selected_primitive_dimensions(text_item("سلام"));
+}
+
+#[test]
+fn contextual_source_mapped_selected_primitive_dimensions_are_finalized() {
+    assert_contextual_selected_primitive_dimensions(mapped_text_item("سلام"));
+}
+
+#[test]
+fn text_selected_primitive_dimensions_preserve_unpainted_and_control_slots() {
+    let row_layout = layout();
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    let (progress, control_progress) = {
+        let mut measurer = SelectedPrimitiveMeasurer;
+        let mut writer = DisplayRowProgressWriter::with_glyph_measurer(
+            &row_layout,
+            &mut row,
+            &mut measurer,
+            DisplayRowPosition::new(0.0, 0),
+            240.0,
+        );
+        (
+            writer.push_item(text_item("e\u{301}X")),
+            writer.push_item(control_item('\u{1}')),
+        )
+    };
+    let slots = progress.slots();
+    assert_eq!(slots[1].selected_primitive_dimensions(), None);
+    let control = row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .find(|glyph| matches!(glyph.glyph_type, GlyphType::Char { ch: '^' }))
+        .expect("first control-character primitive");
+    assert_eq!(
+        control_progress.slots()[0].selected_primitive_dimensions(),
+        Some(neovm_core::window::LogicalCursorDimensions {
+            width: control.pixel_width.round() as u32,
+            height: control.pixel_height.round() as u32,
+        }),
+    );
+    assert_eq!(
+        control_progress.slots()[0].width_px(),
+        2.0 * control.pixel_width
+    );
+}
+
 #[test]
 fn display_row_builder_produces_logical_order_rows() {
     // Slice 5: DisplayRowBuilder::finish normalizes displays_text but no longer
@@ -2178,7 +2283,7 @@ fn display_row_vertical_metrics_include_in_row_only_grows_extents() {
 /// already passed `false` — the two paths had drifted.
 #[test]
 fn display_row_builder_scales_height_expressions_by_line_height() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // `(+ 1 1)` is an arithmetic form, so it reaches the evaluator rather than
     // the plain-number `Em` arm.
     let expr = eval
@@ -2381,7 +2486,7 @@ fn replacement_string_session_stamps_gnu_string_indices() {
     // wrapped in the covered rewrite): for string "STR" covering buffer
     // [2, 4), GNU stamps glyphs with indices in the STRING, not with the
     // covered buffer start.  Buffer coverage remains on the row/item track.
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let covered = crate::display_item::BufferDisplayReplacementSource::spanning(
         neovm_core::buffer::BufferId(1),
         neovm_core::buffer::CharPos0::new(2),
@@ -2543,7 +2648,7 @@ fn owned_mapped_text_preserves_string_coordinates_and_clipping_on_a_worker() {
     use crate::row_layout::ResolvedMappedTextInput;
     fn require_send_sync<T: Send + Sync + 'static>() {}
     require_send_sync::<ResolvedMappedTextInput>();
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let covered = crate::display_item::BufferDisplayReplacementSource::spanning(
         neovm_core::buffer::BufferId(1),
         neovm_core::buffer::CharPos0::new(2),

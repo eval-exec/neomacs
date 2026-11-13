@@ -166,7 +166,7 @@ write_installation_methods() {
   </thead>
   <tbody>
     <tr>
-      <td rowspan="11"><img src="https://cdn.jsdelivr.net/gh/devicons/devicon@v2.17.0/icons/linux/linux-original.svg" width="36" height="36" alt="Linux logo"><br><strong>Linux</strong></td>
+      <td rowspan="12"><img src="https://cdn.jsdelivr.net/gh/devicons/devicon@v2.17.0/icons/linux/linux-original.svg" width="36" height="36" alt="Linux logo"><br><strong>Linux</strong></td>
       <td rowspan="2"><img src="https://cdn.jsdelivr.net/gh/vscode-icons/vscode-icons@v12.19.0/icons/file_type_zip.svg" width="28" height="28" alt="Archive file icon"> <strong>Portable archive</strong></td>
       <td><code>x86_64</code></td>
       <td><a href="$release_base/$linux_x86_tarball"><code>$linux_x86_tarball</code></a></td>
@@ -198,6 +198,11 @@ write_installation_methods() {
       <td><img src="https://cdn.jsdelivr.net/gh/devicons/devicon@v2.17.0/icons/archlinux/archlinux-original.svg" width="28" height="28" alt="Arch Linux logo"> <strong>ArchLinux</strong></td>
       <td><code>x86_64</code></td>
       <td><a href="https://aur.archlinux.org/packages/neomacs-bin"><code>neomacs-bin</code></a></td>
+    </tr>
+    <tr>
+      <td><img src="https://cdn.simpleicons.org/gentoo" width="28" height="28" alt="Gentoo logo"> <strong>Gentoo</strong></td>
+      <td><code>x86_64</code> / <code>amd64</code></td>
+      <td><a href="https://github.com/xz-dev/neomacs-gentoo">Community overlay</a><br><code>emerge app-editors/emacs:31-neomacs</code></td>
     </tr>
     <tr>
       <td rowspan="2"><img src="https://cdn.jsdelivr.net/gh/devicons/devicon@v2.17.0/icons/debian/debian-original.svg" width="24" height="24" alt="Debian logo"> <strong>Debian</strong><br><img src="https://cdn.jsdelivr.net/gh/devicons/devicon@v2.17.0/icons/ubuntu/ubuntu-original.svg" width="24" height="24" alt="Ubuntu logo"> <strong>Ubuntu</strong></td>

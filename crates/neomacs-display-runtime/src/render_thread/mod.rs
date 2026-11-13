@@ -20,6 +20,8 @@ pub(crate) mod frame_windows;
 mod gpu_startup;
 mod input;
 mod lifecycle;
+#[cfg(target_os = "macos")]
+mod macos_quit_redirect;
 mod media;
 #[cfg(test)]
 #[path = "tests/modifier_policy_cooking_test.rs"]
@@ -110,6 +112,53 @@ impl RenderEventLoop {
     pub fn display_observation(&self) -> neomacs_display_protocol::DisplayObservation {
         crate::display_scale::observe_event_loop_display(&self.0)
     }
+}
+
+/// Opaque native host for a display-connected startup.
+///
+/// `main` asks the render thread to open this. The event loop stays inside
+/// the owner until `take_gui_event_loop`, which is the same capability as
+/// `build_render_event_loop`.
+pub struct NativeGuiHost {
+    event_loop: RenderEventLoop,
+    observation: neomacs_display_protocol::DisplayObservation,
+    identity: neomacs_display_protocol::GraphicalDisplayIdentity,
+}
+
+impl NativeGuiHost {
+    #[must_use]
+    pub fn observation(&self) -> neomacs_display_protocol::DisplayObservation {
+        self.observation
+    }
+
+    #[must_use]
+    pub fn identity(&self) -> &neomacs_display_protocol::GraphicalDisplayIdentity {
+        &self.identity
+    }
+}
+
+/// Open the native connection and resolve its identity. `system_name` is the
+/// caller's hostname; font scale and bootstrap config stay with the caller.
+pub fn open_gui_connection_host(system_name: &str) -> Result<NativeGuiHost, String> {
+    // Wayland can consume WAYLAND_SOCKET while opening the connection.
+    let resolver = crate::display_identity::DisplayIdentityResolver::capture_environment();
+    let event_loop = build_render_event_loop()
+        .map_err(|error| format!("failed to build GUI event loop: {error}"))?;
+    let observation = event_loop.display_observation();
+    let identity = event_loop
+        .display_identity(resolver, system_name)
+        .map_err(|error| format!("failed to resolve graphical display identity: {error:?}"))?;
+    Ok(NativeGuiHost {
+        event_loop,
+        observation,
+        identity,
+    })
+}
+
+/// Hand the opened loop to an anchor that already owns GUI startup.
+#[must_use]
+pub fn take_gui_event_loop(host: NativeGuiHost) -> RenderEventLoop {
+    host.event_loop
 }
 
 /// Owned native-loop wake capability, without access to the native proxy.

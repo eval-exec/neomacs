@@ -1,0 +1,1002 @@
+//! Heap writes and allocation inline in JIT code (levers P0.7 and P0.8):
+//! the stores `setcar`, `setcdr` and `aset` (of a plain vector or record)
+//! make, done in place instead of in `neovm_jit_setcar`/`_setcdr`/`_aset`;
+//! and conses and float boxes bumped out of the heap's open allocation
+//! regions instead of `neovm_jit_cons`/`neovm_jit_make_float`.
+//!
+//! The write barrier starts with one owner-address window
+//! (`tagged::gc::BarrierWindow`), which the heap publishes into its
+//! `JitHeapState` at every change of collector state. Compiled code reads it
+//! through `vmctx -> Context.tagged_heap -> jit` and stores inline only when
+//! the owner lies outside it and its remaining gate accepts the store.
+//! Concurrent marking or owner tracking makes the window ALL; a dump
+//! partition uses the image span. Non-conses test their logged header.
+//! An old generational cons additionally marks its card, with no slow
+//! path. A refusal takes the unchanged shim, which signals, records and
+//! stores.
+//!
+//! Why a plain store is sound outside the window: the window is ALL for the
+//! whole life of a concurrent mark (`launch_concurrent_mark` publishes it
+//! before the GC thread can read anything and `join_concurrent_mark` only
+//! clears it after the thread has exited), so an inline store never races a
+//! collector read; the next mark's start handshake (a channel send) orders
+//! it before any. With generations enabled, an old owned cons outside the
+//! window additionally dirties its card, which the next minor scans.
+//!
+//! Allocation: `JitHeapState` also holds each class's region cursor and
+//! limit (`tagged::gc::alloc_region`), which the Rust allocator bumps too.
+//! A site loads both, bumps the cursor when the region has room and writes
+//! the new object's fields; an exhausted (or closed: both 0) region takes
+//! the unchanged shim, which refills through the Rust allocator. The region
+//! was charged to the consing counters and, for conses allocated while the
+//! heap allocates black, pre-marked when it was granted, so the site
+//! neither counts nor marks. The cursor is reloaded at every site, never
+//! cached across a call: a shim or safe point in between may have closed
+//! the region. No site reaches a safe point (the shim contract).
+//!
+//! A body containing an inline site dereferences its vmctx: see
+//! [`inline_heap_sites`] and `CompiledLeaf::needs_vmctx`.
+
+use super::jit_layout::CONTEXT_TAGGED_HEAP_OFFSET;
+use super::jit_layout::heap::{
+    FLOAT_SLOT_BYTES, HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, HEAP_JIT_CONS_CUR,
+    HEAP_JIT_CONS_LIM, HEAP_JIT_EXCLUSION_LEN, HEAP_JIT_EXCLUSION_LO, HEAP_JIT_FLOAT_CUR,
+    HEAP_JIT_FLOAT_LIM, HEAP_JIT_SINGLE_CONS, HEAP_JIT_SLOT_BARRIER_LEN, HEAP_JIT_SLOT_BARRIER_LO,
+};
+use super::*;
+
+/// Branch preference owned by one compilation. It counts decoded explicit
+/// Cons store sites, never observes Lisp state, and adds no runtime metadata.
+/// A single site favours its range proof; multiple sites favour the retained
+/// exact old-cell proof before admitting their independent fresh-cell range.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ConsStoreProbeOrder {
+    #[default]
+    RangeFirst,
+    ExactFirst,
+}
+
+impl ConsStoreProbeOrder {
+    #[doc(hidden)]
+    pub fn for_ops(ops: &[Op]) -> Self {
+        if ops
+            .iter()
+            .filter(|op| matches!(op, Op::Setcar | Op::Setcdr))
+            .take(2)
+            .count()
+            > 1
+        {
+            Self::ExactFirst
+        } else {
+            Self::RangeFirst
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn probes(self) -> [ConsStoreProbe; 2] {
+        match self {
+            Self::RangeFirst => [ConsStoreProbe::Range, ConsStoreProbe::Exact],
+            Self::ExactFirst => [ConsStoreProbe::Exact, ConsStoreProbe::Range],
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ConsStoreProbe {
+    Exact,
+    Range,
+}
+
+/// Compiler-owned store domain. Cons exemptions never admit vector/record
+/// slots, whose native gate uses its own observation hull. No runtime state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeStoreOwner {
+    Cons,
+    Slots,
+}
+
+thread_local! {
+    /// Inline heap sites emitted in the function being lowered.
+    static INLINE_HEAP_SITES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Start the inline-heap-site count for a new function.
+pub(crate) fn inline_heap_sites_reset() {
+    INLINE_HEAP_SITES.with(|c| c.set(0));
+}
+
+/// Inline heap sites emitted since the last [`inline_heap_sites_reset`]: a
+/// function with any reads the heap through its vmctx, so it must never be
+/// entered with a null one.
+pub(crate) fn inline_heap_sites() -> u32 {
+    INLINE_HEAP_SITES.with(|c| c.get())
+}
+
+/// Inline stores emitted, process-wide, so a test can tell "the inline path
+/// answered" from "the emitter declined and the shim answered".
+#[cfg(debug_assertions)]
+pub(crate) static INLINE_HEAP_STORES_EMITTED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// GEN1 card marks emitted by cons stores. Compile-time instrumentation
+/// only: no mutator data or runtime cache.
+#[cfg(debug_assertions)]
+pub(crate) static GENERATIONAL_CARD_MARKS_EMITTED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+fn note_inline_site() {
+    INLINE_HEAP_SITES.with(|c| c.set(c.get() + 1));
+}
+
+/// Load the `*const TaggedHeap` off a `*mut Context`. The box is assigned
+/// only by the context's constructors, so the pointer never changes.
+pub(crate) fn load_heap_ptr(fb: &mut FunctionBuilder, vmctx: ClifValue) -> ClifValue {
+    fb.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        vmctx,
+        CONTEXT_TAGGED_HEAP_OFFSET as i32,
+    )
+}
+
+/// The running context's heap: the entry block's hoisted load when the body
+/// has one, else a load at the site.
+pub(crate) fn heap_ptr(fb: &mut FunctionBuilder, rt: &RtCtx) -> ClifValue {
+    if let Some(heap) = rt.heap {
+        return heap;
+    }
+    let vmctx = fb.use_var(rt.vmctx_var);
+    load_heap_ptr(fb, vmctx)
+}
+
+/// Branch to `slow` when the owner at untagged address `owner` lies in the
+/// published barrier window; leaves the builder in a fresh sealed block on
+/// the outside-the-window path. The window is reloaded at every site: a
+/// shim or safe point between two sites may have changed it.
+fn emit_barrier_window_check(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    heap: ClifValue,
+    owner: ClifValue,
+    slow: Block,
+    owner_kind: NativeStoreOwner,
+) {
+    let observed = rt
+        .refs
+        .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
+        && !rt.generational_enabled();
+    let outside = fb.create_block();
+    let first_probe = observed
+        && owner_kind == NativeStoreOwner::Cons
+        && rt.refs.observation_exclusions_enabled();
+    if first_probe {
+        emit_cons_observation_exemptions(fb, heap, owner, outside);
+    }
+    let (lo_offset, len_offset, flags) = match owner_kind {
+        NativeStoreOwner::Slots if observed => (
+            HEAP_JIT_SLOT_BARRIER_LO,
+            HEAP_JIT_SLOT_BARRIER_LEN,
+            MemFlagsData::new().with_notrap(),
+        ),
+        NativeStoreOwner::Cons | NativeStoreOwner::Slots => (
+            HEAP_JIT_BARRIER_LO,
+            HEAP_JIT_BARRIER_LEN,
+            MemFlagsData::trusted(),
+        ),
+    };
+    let lo = fb.ins().load(types::I64, flags, heap, lo_offset as i32);
+    let len = fb.ins().load(types::I64, flags, heap, len_offset as i32);
+    let offset = fb.ins().isub(owner, lo);
+    let inside = fb.ins().icmp(IntCC::UnsignedLessThan, offset, len);
+    // A pre-capture leaf keeps main's hull rejection byte-for-byte: interior
+    // probes there perturbed its hot loop's register allocation, while the
+    // collection shim already completes any store a later capture exempts.
+    fb.ins().brif(inside, slow, &[], outside, &[]);
+    fb.switch_to_block(outside);
+    fb.seal_block(outside);
+}
+
+/// Negative proofs are current heap protocol, not hoisted owner facts. A
+/// first real read clears them before its certificate snapshots a revision;
+/// ordinary ALL and GEN1 publish zero. No callback or safepoint occurs here.
+/// The exact old-cell admission avoids repeating the hull test, while the
+/// separate empty range admits fresh cells without evicting that old cell.
+fn emit_cons_observation_exemptions(
+    fb: &mut FunctionBuilder,
+    heap: ClifValue,
+    owner: ClifValue,
+    outside: Block,
+) {
+    let flags = MemFlagsData::new().with_notrap();
+    let single = fb
+        .ins()
+        .load(types::I64, flags, heap, HEAP_JIT_SINGLE_CONS as i32);
+    let same = fb.ins().icmp(IntCC::Equal, owner, single);
+    let range = fb.create_block();
+    fb.ins().brif(same, outside, &[], range, &[]);
+    fb.switch_to_block(range);
+    fb.seal_block(range);
+    let lo = fb
+        .ins()
+        .load(types::I64, flags, heap, HEAP_JIT_EXCLUSION_LO as i32);
+    let len = fb
+        .ins()
+        .load(types::I64, flags, heap, HEAP_JIT_EXCLUSION_LEN as i32);
+    let offset = fb.ins().isub(owner, lo);
+    let exempt = fb.ins().icmp(IntCC::UnsignedLessThan, offset, len);
+    let hull = fb.create_block();
+    fb.ins().brif(exempt, outside, &[], hull, &[]);
+    fb.switch_to_block(hull);
+    fb.seal_block(hull);
+}
+
+/// Whether GEN1 native stores record collection history for every owner.
+/// Off and Eager keep that original GEN1 journal. Observed mode instead uses
+/// the GEN0 observed-owner gate: the published barrier window covers every
+/// observed owner, whose refusal reaches the shim that journals it, so an
+/// accepted inline store needs no history. The remembered-set barrier below
+/// is separate and unchanged; history never discharges a GC obligation.
+fn gen1_journals_every_store() -> bool {
+    !jit_gen0_collection_journal_on() || jit_gen0_collection_journal_eager()
+}
+
+/// Record an accepted Cons or VecLike store through the shared store helper.
+/// It loads TAGGED_HEAP once and journals in that heap's inline World protocol;
+/// no observation-TLS journal or independent generated revision is maintained.
+/// This has no Lisp allocation, callback or safe point; it runs the same
+/// projected recorder as the interpreter's setter before the actual store.
+/// GEN0 calls it only under the collection-journal knob. Knob-off GEN1
+/// retains its original tag restoration, indirect call and generated CLIF.
+pub(crate) fn emit_collection_write(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    owner: ClifValue,
+    tag: usize,
+) {
+    let tagged = if jit_gen0_collection_journal_on() {
+        // Owners are aligned and already untagged. Addition restores the
+        // tag and lets Cranelift cancel the cons site's earlier subtraction.
+        iadd_imm_p(fb, owner, tag as i64)
+    } else {
+        bor_imm_p(fb, owner, tag as i64)
+    };
+    let mut signature = Signature::new(rt.refs.call_conv);
+    signature.params.push(AbiParam::new(rt.ptr_ty));
+    let signature = fb.import_signature(signature);
+    let record = fb.ins().iconst(
+        rt.ptr_ty,
+        neovm_value::tagged::gc::TaggedHeap::record_compiled_collection_write as *const () as usize
+            as i64,
+    );
+    fb.ins().call_indirect(signature, record, &[tagged]);
+}
+
+/// The single cons-store gate, shared by setcar/setcdr, HOF stores and BLVs.
+/// OWNER is an untagged, shape-guarded live cons. Window refusal comes first:
+/// mapped cells stay on the shim's persistent mapped set, and marks/tracking
+/// need the shim even when VALUE is a fixnum. Only a proven fixnum skips the
+/// GEN1 card mark: a symbol's liveness is tracked in a side table, so a
+/// symbol store must dirty the card the minor traces it through.
+pub(crate) fn emit_cons_store_barrier(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    owner: ClifValue,
+    value: ClifValue,
+    value_proof: StoredValueProof,
+    slow: Block,
+) {
+    // BLV stores also dereference vmctx here; give them the same heap-identity
+    // entry check as ordinary inline cons stores. This is compiler metadata.
+    note_inline_site();
+    let heap = heap_ptr(fb, rt);
+    emit_barrier_window_check(fb, rt, heap, owner, slow, NativeStoreOwner::Cons);
+    if !rt.generational_enabled() {
+        if jit_gen0_collection_journal_eager() {
+            emit_collection_write(fb, rt, owner, TAG_CONS);
+        }
+        return;
+    }
+    let journal = gen1_journals_every_store();
+    let class = value_proof.class_of(fb, value);
+    if class == Some(StoredValueClass::Fixnum) {
+        if journal {
+            emit_collection_write(fb, rt, owner, TAG_CONS);
+        }
+        return;
+    }
+    // Card-mark Stage A S3: an OLD owner marks its card. Young and old
+    // cells share blocks (sticky marks, no copying), so a young owner's
+    // mark would make the minor trace every old cell of that card; the
+    // owner's old bit keeps the dirty cards to the S1 owner set. A fixnum
+    // tag filter in front only skips false-dirty cards; it stays behind
+    // its knob.
+    let store = fb.create_block();
+    if class.is_none() && neovm_value::tagged::gc::card_tag_filter_on() {
+        let age = fb.create_block();
+        let immediate = super::lowering::fixnum_tag_test(fb, value);
+        fb.ins().brif(immediate, store, &[], age, &[]);
+        fb.switch_to_block(age);
+        fb.seal_block(age);
+    }
+    let mark = fb.create_block();
+    let old = emit_cons_old_bit(fb, owner);
+    fb.ins().brif(old, mark, &[], store, &[]);
+    fb.switch_to_block(mark);
+    fb.seal_block(mark);
+    emit_card_mark(fb, heap, owner);
+    fb.ins().jump(store, &[]);
+    fb.switch_to_block(store);
+    fb.seal_block(store);
+    if journal {
+        emit_collection_write(fb, rt, owner, TAG_CONS);
+    }
+    #[cfg(debug_assertions)]
+    GENERATIONAL_CARD_MARKS_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The age byte of the untagged, owned OWNER cell in its block trailer
+/// (nonzero when old): one byte load at the cell's index past the age
+/// offset. Ages change only at a stop-all promotion, which a safe point
+/// inside this leaf may run, so the byte is reloaded at every store. Mapped
+/// cells never get here: the window refused them.
+fn emit_cons_old_bit(fb: &mut FunctionBuilder, owner: ClifValue) -> ClifValue {
+    use super::jit_layout::heap::{CONS_AGE_OFFSET, CONS_BLOCK_BYTES, ConsAge};
+    // A block is 64 KiB, so the cell's block offset is the owner's low half
+    // word: one zero-extending move instead of a copy and a mask.
+    const _: () = assert!(CONS_BLOCK_BYTES == 1 << u16::BITS);
+    let base = band_imm_p(fb, owner, !((CONS_BLOCK_BYTES - 1) as i64));
+    let low = fb.ins().ireduce(types::I16, owner);
+    let offset = fb.ins().uextend(types::I64, low);
+    let index = ushr_imm_p(
+        fb,
+        offset,
+        std::mem::size_of::<ConsCell>().trailing_zeros() as i64,
+    );
+    let address = fb.ins().iadd(base, index);
+    let age = fb.ins().load(
+        types::I8,
+        MemFlagsData::trusted(),
+        address,
+        CONS_AGE_OFFSET as i32,
+    );
+    // A compare against the young age lets the load fold into it.
+    fb.ins()
+        .icmp_imm_u(IntCC::NotEqual, age, i64::from(ConsAge::Young as u8))
+}
+
+/// Mark the GEN1 card of the untagged OWNER in HEAP's card table,
+/// `card[(owner >> CARD_SHIFT) & CARD_INDEX_MASK] = CARD_DIRTY`, and its
+/// chunk's summary byte, with no slow path. The table address is loaded from the heap, not
+/// baked, so AOT and preloaded code stay valid; it is fixed for the heap's
+/// life, which `install_card_table` publishes before any GEN1 leaf runs.
+/// The mark precedes the store and no safe point separates them, so a
+/// stop-all card clear can never fall between the two.
+fn emit_card_mark(fb: &mut FunctionBuilder, heap: ClifValue, owner: ClifValue) {
+    use super::jit_layout::heap::{
+        CARD_CHUNK_SHIFT, CARD_DIRTY, CARD_INDEX_MASK, CARD_SHIFT, CHUNK_SUMMARY_OFFSET,
+        HEAP_JIT_CARD_TABLE,
+    };
+    let table = fb.ins().load(
+        types::I64,
+        MemFlagsData::new().with_notrap().with_readonly(),
+        heap,
+        HEAP_JIT_CARD_TABLE as i32,
+    );
+    let card = ushr_imm_p(fb, owner, CARD_SHIFT as i64);
+    let card = band_imm_p(fb, card, CARD_INDEX_MASK as i64);
+    let address = fb.ins().iadd(table, card);
+    let dirty = fb.ins().iconst(types::I8, CARD_DIRTY as i64);
+    fb.ins().store(MemFlagsData::trusted(), dirty, address, 0);
+    // The chunk summary byte, so the minor reads cards of dirty chunks only.
+    let chunk = ushr_imm_p(fb, card, CARD_CHUNK_SHIFT as i64);
+    let summary = fb.ins().iadd(table, chunk);
+    fb.ins().store(
+        MemFlagsData::trusted(),
+        dirty,
+        summary,
+        CHUNK_SUMMARY_OFFSET as i32,
+    );
+}
+
+/// The non-cons half of the same store sequence. The OFF arm emits the
+/// original window and adjacent tenured/remembered-byte test verbatim.
+fn emit_slot_store_barrier(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    heap: ClifValue,
+    owner: ClifValue,
+    value: ClifValue,
+    value_proof: StoredValueProof,
+    slow: Block,
+) {
+    use super::jit_layout::heap::GC_HEADER_TENURED_OFFSET;
+    use neovm_value::tagged::header::GcHeader;
+    emit_barrier_window_check(fb, rt, heap, owner, slow, NativeStoreOwner::Slots);
+    let journal = if rt.generational_enabled() {
+        gen1_journals_every_store()
+    } else {
+        jit_gen0_collection_journal_eager()
+    };
+    let class = rt
+        .generational_enabled()
+        .then(|| value_proof.class_of(fb, value))
+        .flatten();
+    if class == Some(StoredValueClass::Fixnum) {
+        if journal {
+            emit_collection_write(fb, rt, owner, neovm_value::tagged::value::TAG_VECLIKE);
+        }
+        return;
+    }
+    let immediate_store = if rt.generational_enabled() && class.is_none() {
+        let store = fb.create_block();
+        let check = fb.create_block();
+        let immediate = super::lowering::fixnum_tag_test(fb, value);
+        fb.ins().brif(immediate, store, &[], check, &[]);
+        fb.switch_to_block(check);
+        fb.seal_block(check);
+        Some(store)
+    } else {
+        None
+    };
+    let pair = fb.ins().uload16(
+        types::I64,
+        MemFlagsData::trusted(),
+        owner,
+        GC_HEADER_TENURED_OFFSET as i32,
+    );
+    let needs_remembering = icmp_imm_p(
+        fb,
+        IntCC::Equal,
+        pair,
+        GcHeader::NEEDS_REMEMBERING_U16 as i64,
+    );
+    let store = immediate_store.unwrap_or_else(|| fb.create_block());
+    fb.ins().brif(needs_remembering, slow, &[], store, &[]);
+    fb.switch_to_block(store);
+    fb.seal_block(store);
+    if journal {
+        emit_collection_write(fb, rt, owner, neovm_value::tagged::value::TAG_VECLIKE);
+    }
+}
+
+/// Compile-owned proof that the immediately preceding explicit cons guard
+/// checked this exact tagged CLIF operand with the store's deopt frame. The
+/// guard, including forced deopt, remains the Opt caller's responsibility.
+/// Threading: one compilation owns this value; it contains no runtime state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ConsStoreProof {
+    #[default]
+    Dynamic,
+    GuardedCons(ClifValue),
+}
+
+/// Whether a stored word can be a fixnum, the one immediate the GEN1
+/// remembered-set barrier filters dynamically. Symbols are not filtered: an
+/// uninterned symbol's liveness is tracked in a side table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StoredValueClass {
+    /// Always a fixnum: the store creates no old-to-young edge.
+    Fixnum,
+    /// Never a fixnum: the dynamic fixnum-tag test could never skip.
+    NonFixnum,
+}
+
+/// Compile-owned optimizer fact about the exact tagged CLIF word a store
+/// writes. A fact bound to another word (an operand rewritten after the
+/// analysis) is ignored. Threading: compiler-owned, with no runtime state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum StoredValueProof {
+    #[default]
+    Dynamic,
+    Proven(ClifValue, StoredValueClass),
+}
+
+impl StoredValueProof {
+    /// The class of VALUE from this proof or from VALUE's own CLIF shape.
+    #[doc(hidden)]
+    pub fn class_of(self, fb: &FunctionBuilder, value: ClifValue) -> Option<StoredValueClass> {
+        if super::lowering::is_known_fixnum(fb, value) {
+            return Some(StoredValueClass::Fixnum);
+        }
+        if super::lowering::iconst_bits(fb, value).is_some() {
+            return Some(StoredValueClass::NonFixnum);
+        }
+        match self {
+            Self::Proven(word, class) if word == value => Some(class),
+            Self::Proven(..) | Self::Dynamic => None,
+        }
+    }
+}
+
+/// Every compile-owned fact about one explicit store's operands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StoreProof {
+    pub(crate) owner: ConsStoreProof,
+    pub(crate) value: StoredValueProof,
+}
+
+/// `setcar` (`is_cdr == false`) or `setcdr` of `cell` to `value`, inline —
+/// GNU `Bsetcar`/`Bsetcdr`'s `XSETCAR`/`XSETCDR`: a cons outside the barrier
+/// window is stored in place, `res` is defined as `value` and control jumps
+/// to `merge`; anything else branches to `slow`, where the caller emits the
+/// unchanged shim call (the non-cons signal included). Neither op consults
+/// the function cell, in GNU or here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_inline_cons_store(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    cell: ClifValue,
+    value: ClifValue,
+    value_proof: StoredValueProof,
+    is_cdr: bool,
+    slow: Block,
+    res: Variable,
+    merge: Block,
+) {
+    let tag = band_imm_p(fb, cell, TAG_MASK as i64);
+    let is_cons = icmp_imm_p(fb, IntCC::Equal, tag, TAG_CONS as i64);
+    let typed = fb.create_block();
+    fb.ins().brif(is_cons, typed, &[], slow, &[]);
+    fb.switch_to_block(typed);
+    fb.seal_block(typed);
+    emit_inline_cons_store_known_cons(fb, rt, cell, value, value_proof, is_cdr, slow, res, merge);
+}
+
+/// Store through an SSA value whose cons identity was already guarded.
+/// The caller must keep that identity rooted and immutable until this site;
+/// the mutable write-barrier window is still reloaded here. This introduces
+/// no runtime state or cross-mutator cache, and shares the ordinary store's
+/// barrier, effect, output and instrumentation exactly.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_inline_cons_store_known_cons(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    cell: ClifValue,
+    value: ClifValue,
+    value_proof: StoredValueProof,
+    is_cdr: bool,
+    slow: Block,
+    res: Variable,
+    merge: Block,
+) {
+    // The tag is known, so untagging is a subtract (folds into the store's
+    // addressing).
+    let ptr = iadd_imm_p(fb, cell, -(TAG_CONS as i64));
+    emit_cons_store_barrier(fb, rt, ptr, value, value_proof, slow);
+    let field = if is_cdr {
+        core::mem::offset_of!(ConsCell, cdr_or_next)
+    } else {
+        core::mem::offset_of!(ConsCell, car)
+    };
+    fb.ins()
+        .store(MemFlagsData::trusted(), value, ptr, field as i32);
+    fb.def_var(res, value);
+    fb.ins().jump(merge, &[]);
+    #[cfg(debug_assertions)]
+    INLINE_HEAP_STORES_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Opt-only proof seam. Dynamic or mismatched proofs emit the original main
+/// helper; an exact guarded cons emits main's existing known-cons helper.
+/// Both routes preserve its window reload, collection revision mutation,
+/// output, slow shim and instrumentation unchanged. The value proof reaches
+/// only the GEN1 remembered-set filter; GEN0 never reads it.
+/// Threading: the proof is compiler-owned, with no shared mutator state.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_inline_cons_store_with_proof(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    cell: ClifValue,
+    value: ClifValue,
+    is_cdr: bool,
+    slow: Block,
+    res: Variable,
+    merge: Block,
+    proof: StoreProof,
+) {
+    if matches!(proof.owner, ConsStoreProof::GuardedCons(checked) if checked == cell) {
+        emit_inline_cons_store_known_cons(
+            fb,
+            rt,
+            cell,
+            value,
+            proof.value,
+            is_cdr,
+            slow,
+            res,
+            merge,
+        );
+    } else {
+        emit_inline_cons_store(fb, rt, cell, value, proof.value, is_cdr, slow, res, merge);
+    }
+}
+
+/// Explicit setcar/setcdr only: keep negative-proof admissions separate from
+/// the general barrier's shared outside block. BLV/HOF callers retain their
+/// existing helper. This uses the heap's published observation protocol.
+/// Off, Eager and GEN1 delegate before making new blocks, and so does a leaf
+/// compiled before any collection observation: its stores keep main's hull
+/// gate and refuse to the collection shim, which completes any later
+/// observation-dependent store. Cold proof blocks there would only perturb
+/// the hot loop's register allocation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_explicit_cons_store_with_proof(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    cell: ClifValue,
+    value: ClifValue,
+    is_cdr: bool,
+    slow: Block,
+    res: Variable,
+    merge: Block,
+    proof: StoreProof,
+) {
+    let observed = rt
+        .refs
+        .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
+        && !rt.generational_enabled();
+    if !observed || !rt.refs.observation_exclusions_enabled() {
+        emit_inline_cons_store_with_proof(fb, rt, cell, value, is_cdr, slow, res, merge, proof);
+        return;
+    }
+    if !matches!(proof.owner, ConsStoreProof::GuardedCons(checked) if checked == cell) {
+        let tag = band_imm_p(fb, cell, TAG_MASK as i64);
+        let is_cons = icmp_imm_p(fb, IntCC::Equal, tag, TAG_CONS as i64);
+        let typed = fb.create_block();
+        fb.ins().brif(is_cons, typed, &[], slow, &[]);
+        fb.switch_to_block(typed);
+        fb.seal_block(typed);
+    }
+    note_inline_site();
+    // The extra interactive refusal paths must not retain the entry's heap
+    // SSA across the loop. This Context owns the stable box and no callback
+    // or safepoint intervenes in this store site.
+    let vmctx = fb.use_var(rt.vmctx_var);
+    let heap = load_heap_ptr(fb, vmctx);
+    for (probe_index, probe) in rt.cons_store_probe_order.probes().into_iter().enumerate() {
+        let flags = MemFlagsData::new().with_notrap();
+        let admitted = match probe {
+            ConsStoreProbe::Exact => {
+                let single = fb
+                    .ins()
+                    .load(types::I64, flags, heap, HEAP_JIT_SINGLE_CONS as i32);
+                let owner = if probe_index == 0 {
+                    iadd_imm_p(fb, cell, -(TAG_CONS as i64))
+                } else {
+                    // Keep refusal-path addresses separate from the hot
+                    // owner's destructive subtraction.
+                    band_imm_p(fb, cell, !(TAG_MASK as i64))
+                };
+                fb.ins().icmp(IntCC::Equal, owner, single)
+            }
+            ConsStoreProbe::Range => {
+                let owner = if probe_index == 0 {
+                    iadd_imm_p(fb, cell, -(TAG_CONS as i64))
+                } else {
+                    // This owner has passed the tag guard. Masking is
+                    // equivalent, but keeps refusal-path owner SSA separate.
+                    band_imm_p(fb, cell, !(TAG_MASK as i64))
+                };
+                let len = fb
+                    .ins()
+                    .load(types::I64, flags, heap, HEAP_JIT_EXCLUSION_LEN as i32);
+                // Keep LO adjacent to SUB so x86 lowering can fold its load.
+                let lo = fb
+                    .ins()
+                    .load(types::I64, flags, heap, HEAP_JIT_EXCLUSION_LO as i32);
+                let offset = fb.ins().isub(owner, lo);
+                fb.ins().icmp(IntCC::UnsignedLessThan, offset, len)
+            }
+        };
+        let store = fb.create_block();
+        let next_probe = fb.create_block();
+        fb.ins().brif(admitted, store, &[], next_probe, &[]);
+        fb.switch_to_block(store);
+        fb.seal_block(store);
+        emit_direct_admitted_cons_store(fb, cell, value, is_cdr, res, merge);
+        fb.switch_to_block(next_probe);
+        fb.seal_block(next_probe);
+    }
+    let owner = band_imm_p(fb, cell, !(TAG_MASK as i64));
+    emit_explicit_cons_hull_admission(fb, heap, owner, cell, value, is_cdr, res, merge, slow);
+    #[cfg(debug_assertions)]
+    INLINE_HEAP_STORES_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Keep each hull-outside admission adjacent to its store too. The rejected
+/// edge is the caller's existing collection shim.
+#[allow(clippy::too_many_arguments)]
+fn emit_explicit_cons_hull_admission(
+    fb: &mut FunctionBuilder,
+    heap: ClifValue,
+    owner: ClifValue,
+    cell: ClifValue,
+    value: ClifValue,
+    is_cdr: bool,
+    res: Variable,
+    merge: Block,
+    rejected: Block,
+) {
+    let lo = fb.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        heap,
+        HEAP_JIT_BARRIER_LO as i32,
+    );
+    let len = fb.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        heap,
+        HEAP_JIT_BARRIER_LEN as i32,
+    );
+    let offset = fb.ins().isub(owner, lo);
+    let inside = fb.ins().icmp(IntCC::UnsignedLessThan, offset, len);
+    let hull_store = fb.create_block();
+    fb.ins().brif(inside, rejected, &[], hull_store, &[]);
+    fb.switch_to_block(hull_store);
+    fb.seal_block(hull_store);
+    emit_direct_admitted_cons_store(fb, cell, value, is_cdr, res, merge);
+}
+
+/// Address through the tagged SSA cell so each admitted edge can fold the
+/// constant untagging into its store, without an owner merge/register copy.
+fn emit_direct_admitted_cons_store(
+    fb: &mut FunctionBuilder,
+    cell: ClifValue,
+    value: ClifValue,
+    is_cdr: bool,
+    res: Variable,
+    merge: Block,
+) {
+    let field = if is_cdr {
+        core::mem::offset_of!(ConsCell, cdr_or_next)
+    } else {
+        core::mem::offset_of!(ConsCell, car)
+    };
+    fb.ins().store(
+        MemFlagsData::trusted(),
+        value,
+        cell,
+        field as i32 - TAG_CONS as i32,
+    );
+    fb.def_var(res, value);
+    fb.ins().jump(merge, &[]);
+}
+
+/// `aset` of a plain vector or record, inline — GNU `Baset`'s in-bytecode
+/// `ASET`: owned storage, an in-range fixnum index, an owner outside the
+/// barrier window that is not a tenured owner the remembered set still
+/// lacks. On success stores `value`,
+/// defines `res` as it and jumps to `cont`; anything else branches to
+/// `slow`, where the caller emits the unchanged shim call (strings, signals,
+/// mapped storage, the barrier's slow path).
+///
+/// Like GNU `Baset`, this opcode never consults `aset`'s function cell.
+///
+/// Returns `false`, emitting nothing, when a layout probe fails
+/// (`LispValueVec::jit_slice_offsets` / `jit_owned_probe`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_inline_aset(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    array: ClifValue,
+    index: ClifValue,
+    value: ClifValue,
+    value_proof: StoredValueProof,
+    slow: Block,
+    res: Variable,
+    cont: Block,
+) -> bool {
+    use super::jit_layout::heap::{value_vec_owned_probe, value_vec_slice_offsets};
+    if value_vec_slice_offsets().is_none() {
+        return false;
+    }
+    let Some(owned_probe) = value_vec_owned_probe() else {
+        return false;
+    };
+    let Some(super::lowering::PlainSlot { object, slot }) =
+        emit_plain_slot_address(fb, array, index, slow, Some(owned_probe))
+    else {
+        unreachable!("the slice offsets were probed above");
+    };
+    let heap = heap_ptr(fb, rt);
+    emit_slot_store_barrier(fb, rt, heap, object, value, value_proof, slow);
+    fb.ins().store(MemFlagsData::trusted(), value, slot, 0);
+    fb.def_var(res, value);
+    fb.ins().jump(cont, &[]);
+    note_inline_site();
+    #[cfg(debug_assertions)]
+    INLINE_HEAP_STORES_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    true
+}
+
+/// Inline allocations emitted, process-wide (see
+/// [`INLINE_HEAP_STORES_EMITTED`]).
+#[cfg(debug_assertions)]
+pub(crate) static INLINE_ALLOCS_EMITTED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Bump one object of `stride` bytes out of the region whose cursor and
+/// limit sit at heap offsets `cur_off`/`lim_off`: on room, advances the
+/// cursor and leaves the builder in the fast block, returning the object's
+/// address; otherwise branches to `slow`.
+fn emit_region_bump(
+    fb: &mut FunctionBuilder,
+    heap: ClifValue,
+    cur_off: usize,
+    lim_off: usize,
+    stride: usize,
+    slow: Block,
+) -> ClifValue {
+    let cur = fb
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), heap, cur_off as i32);
+    let lim = fb
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), heap, lim_off as i32);
+    // Regions are whole objects, so `cur < lim` iff one is left; a closed
+    // region is (0, 0).
+    let room = fb.ins().icmp(IntCC::UnsignedLessThan, cur, lim);
+    let fast = fb.create_block();
+    fb.ins().brif(room, fast, &[], slow, &[]);
+    fb.switch_to_block(fast);
+    fb.seal_block(fast);
+    let next = iadd_imm_p(fb, cur, stride as i64);
+    fb.ins()
+        .store(MemFlagsData::trusted(), next, heap, cur_off as i32);
+    cur
+}
+
+/// `(cons car cdr)` inline — GNU `Fcons`: bump a cell out of the open cons
+/// region and write car and cdr; an exhausted region calls
+/// `neovm_jit_cons` (cold), which refills. Returns the tagged cons. Like
+/// the shim, nothing here reaches a safe point, so the operands and the
+/// residual stack need no roots.
+pub(crate) fn emit_inline_cons(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    car: ClifValue,
+    cdr: ClifValue,
+) -> ClifValue {
+    let res = fb.declare_var(types::I64);
+    let slow = fb.create_block();
+    let merge = fb.create_block();
+    let heap = heap_ptr(fb, rt);
+    let cell = emit_region_bump(
+        fb,
+        heap,
+        HEAP_JIT_CONS_CUR,
+        HEAP_JIT_CONS_LIM,
+        core::mem::size_of::<ConsCell>(),
+        slow,
+    );
+    fb.ins().store(
+        MemFlagsData::trusted(),
+        car,
+        cell,
+        core::mem::offset_of!(ConsCell, car) as i32,
+    );
+    fb.ins().store(
+        MemFlagsData::trusted(),
+        cdr,
+        cell,
+        core::mem::offset_of!(ConsCell, cdr_or_next) as i32,
+    );
+    let tagged = bor_imm_p(fb, cell, TAG_CONS as i64);
+    fb.def_var(res, tagged);
+    fb.ins().jump(merge, &[]);
+    fb.switch_to_block(slow);
+    fb.seal_block(slow);
+    fb.set_cold_block(slow);
+    let cons = rt.refs.get(fb.func, Shim::Cons);
+    let call = fb.ins().call(cons, &[car, cdr]);
+    let boxed = fb.inst_results(call)[0];
+    fb.def_var(res, boxed);
+    fb.ins().jump(merge, &[]);
+    fb.switch_to_block(merge);
+    fb.seal_block(merge);
+    note_inline_site();
+    #[cfg(debug_assertions)]
+    INLINE_ALLOCS_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    fb.use_var(res)
+}
+
+/// Box the `f64` `value` inline — GNU `make_float`: bump a slot out of the
+/// open float region (its header was written at the region's grant, born
+/// at the current parity) and store the value; an exhausted region calls
+/// `neovm_jit_make_float` (cold). Returns the tagged float.
+pub(crate) fn emit_inline_box_float(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    value: ClifValue,
+) -> ClifValue {
+    use super::jit_layout::heap::FLOAT_VALUE_OFFSET;
+    let res = fb.declare_var(types::I64);
+    let slow = fb.create_block();
+    let merge = fb.create_block();
+    let heap = heap_ptr(fb, rt);
+    let slot = emit_region_bump(
+        fb,
+        heap,
+        HEAP_JIT_FLOAT_CUR,
+        HEAP_JIT_FLOAT_LIM,
+        FLOAT_SLOT_BYTES,
+        slow,
+    );
+    fb.ins()
+        .store(MemFlagsData::trusted(), value, slot, FLOAT_VALUE_OFFSET);
+    let tagged = bor_imm_p(fb, slot, neovm_value::tagged::value::TAG_FLOAT as i64);
+    fb.def_var(res, tagged);
+    fb.ins().jump(merge, &[]);
+    fb.switch_to_block(slow);
+    fb.seal_block(slow);
+    fb.set_cold_block(slow);
+    let make_float = rt.refs.get(fb.func, Shim::MakeFloat);
+    let call = fb.ins().call(make_float, &[value]);
+    let boxed = fb.inst_results(call)[0];
+    fb.def_var(res, boxed);
+    fb.ins().jump(merge, &[]);
+    fb.switch_to_block(merge);
+    fb.seal_block(merge);
+    note_inline_site();
+    #[cfg(debug_assertions)]
+    INLINE_ALLOCS_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    fb.use_var(res)
+}
+
+/// Box `value` at a hot site: inline when the function allows it
+/// (`RtCtx::inline_alloc`), else the `neovm_jit_make_float` call.
+pub(crate) fn box_f64(fb: &mut FunctionBuilder, rt: &RtCtx, value: ClifValue) -> ClifValue {
+    if rt.inline_alloc {
+        emit_inline_box_float(fb, rt, value)
+    } else {
+        let make_float = rt.refs.get(fb.func, Shim::MakeFloat);
+        let call = fb.ins().call(make_float, &[value]);
+        fb.inst_results(call)[0]
+    }
+}
+
+/// Whether a baseline body's inline heap sites justify loading the heap
+/// pointer once at entry: two sites, or one inside a loop (the root-window
+/// hoisting rule). `float_site` says whether the op at a pc is a
+/// `Float`-feedback arithmetic site (which boxes its result).
+pub(crate) fn hoist_heap_ptr(
+    ops: &[Op],
+    has_back_edge: bool,
+    inline_alloc: bool,
+    float_site: impl Fn(usize) -> bool,
+) -> bool {
+    let sites = ops
+        .iter()
+        .enumerate()
+        .filter(|&(pc, op)| op_is_inline_heap_site(op, inline_alloc, &float_site, pc))
+        .count();
+    sites >= 2 || (sites == 1 && has_back_edge)
+}
+
+/// Whether the baseline lowers the `op` at `pc` with an inline heap site
+/// (JIT only).
+fn op_is_inline_heap_site(
+    op: &Op,
+    inline_alloc: bool,
+    float_site: &impl Fn(usize) -> bool,
+    pc: usize,
+) -> bool {
+    match op {
+        Op::Setcar | Op::Setcdr | Op::Aset => jit_inline_heap_write_on(),
+        Op::Cons => inline_alloc,
+        Op::Add | Op::Sub | Op::Mul | Op::Div => inline_alloc && float_site(pc),
+        _ => super::inline_vars::op_reads_heap_window(op),
+    }
+}
+
+/// Carrier park: clear the inline-heap-site count.
+pub(crate) fn reset_carrier_tls() {
+    INLINE_HEAP_SITES.with(|slot| slot.set(0));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    neovm_value::tls_fingerprint::mix(h, INLINE_HEAP_SITES.with(|slot| slot.get() as u64));
+}

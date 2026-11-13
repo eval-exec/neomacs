@@ -1,4 +1,4 @@
-use neovm_core::tagged::gc::SymbolHandle;
+use neovm_value::tagged::gc::SymbolHandle;
 fn forge(key: &mut SymbolHandle) {
     key.world = 7;
 }

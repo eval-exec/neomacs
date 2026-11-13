@@ -1,0 +1,10 @@
+error[E0624]: associated function `new` is private
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/private_driver_constructor.rs
+  |
+  |     let _forged = SoleOwnerDriver::new();
+  |                                    ^^^ private associated function
+  |
+ ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/world/sole_owner.rs
+  |
+  |     pub(crate) fn new() -> Self {
+  |     --------------------------- private associated function defined here

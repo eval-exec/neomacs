@@ -1,4 +1,4 @@
-error[E0616]: field `position_handle` of struct `neovm_core::heap_types::OverlayData` is private
+error[E0616]: field `position_handle` of struct `neovm_value::heap_types::OverlayData` is private
  --> tests/thread_safety_ui/overlay_position_handle_private.rs:6:10
   |
 6 |     data.position_handle = None;

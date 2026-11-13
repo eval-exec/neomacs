@@ -4,12 +4,21 @@ use crate::emacs_core::intern::{intern, resolve_sym};
 #[test]
 fn displayed_string_keymap_precedes_buffer_position_maps() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
-    let frame_id = eval
-        .frames
-        .create_frame("displayed-string-keymap", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let mut eval = crate::test_utils::new_context();
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("displayed-string-keymap", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
 
     let displayed = Value::string(" tab-one  tab-two ");
     let string_keymap = make_sparse_list_keymap();
@@ -64,16 +73,26 @@ fn displayed_string_keymap_precedes_buffer_position_maps() {
 #[test]
 fn chrome_string_without_maps_preserves_tab_line_but_clears_mode_line_maps() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let mut eval = crate::test_utils::new_context();
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
     let buffer_local_map = make_sparse_list_keymap();
-    eval.buffers
+    eval.edit
+        .buffers
         .set_current_local_map(buffer_local_map)
         .expect("set buffer local map");
-    let frame_id = eval
-        .frames
-        .create_frame("chrome-string-map-fallback", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("chrome-string-map-fallback", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let displayed = Value::string("caption");
 
     let position_for = |area: &str| {
@@ -1507,9 +1526,15 @@ fn composed_keymap_nil_member_does_not_shadow_later_member() {
 #[test]
 fn event_position_past_point_max_falls_back_to_the_buffer_local_map() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let mut eval = crate::test_utils::new_context();
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
     let point_max = eval
+        .edit
         .buffers
         .get(buffer_id)
         .expect("current buffer")
@@ -1520,13 +1545,18 @@ fn event_position_past_point_max_falls_back_to_the_buffer_local_map() {
         "the posn below must name a position past point-max, got point-max {point_max}"
     );
     let buffer_local_map = make_sparse_list_keymap();
-    eval.buffers
+    eval.edit
+        .buffers
         .set_current_local_map(buffer_local_map)
         .expect("set buffer local map");
-    let frame_id = eval
-        .frames
-        .create_frame("event-position-past-point-max", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("event-position-past-point-max", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
 
     // The posn an echo-area message produces: text position 121 at column 120.
     let position = Value::list(vec![
@@ -1558,10 +1588,15 @@ fn event_position_past_point_max_falls_back_to_the_buffer_local_map() {
 #[test]
 fn event_position_outside_narrowing_clips_before_full_buffer_property_lookup() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(r#"(insert "abcdef")"#)
         .expect("seed current buffer");
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
     let property_map = make_sparse_list_keymap();
     crate::emacs_core::textprop::builtin_put_text_property(
         &mut eval,
@@ -1576,10 +1611,17 @@ fn event_position_outside_narrowing_clips_before_full_buffer_property_lookup() {
     eval.eval_str("(narrow-to-region 1 3)")
         .expect("narrow before the event position");
 
-    let frame_id =
-        eval.frames
-            .create_frame("event-position-outside-narrowing", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval.frame_manager_mut().create_frame(
+        "event-position-outside-narrowing",
+        800,
+        600,
+        buffer_id,
+    );
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let position = Value::list(vec![
         Value::make_window(window_id.0),
         Value::fixnum(5),
@@ -1605,10 +1647,15 @@ fn event_position_outside_narrowing_clips_before_full_buffer_property_lookup() {
 #[test]
 fn event_position_before_narrowing_inherits_map_from_preceding_full_buffer_char() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(r#"(insert "abcdef")"#)
         .expect("seed current buffer");
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
     let property_map = make_sparse_list_keymap();
     crate::emacs_core::textprop::builtin_put_text_property(
         &mut eval,
@@ -1623,10 +1670,17 @@ fn event_position_before_narrowing_inherits_map_from_preceding_full_buffer_char(
     eval.eval_str("(narrow-to-region 3 5)")
         .expect("narrow after the property-bearing character");
 
-    let frame_id = eval
-        .frames
-        .create_frame("event-position-before-narrowing", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval.frame_manager_mut().create_frame(
+        "event-position-before-narrowing",
+        800,
+        600,
+        buffer_id,
+    );
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let position = Value::list(vec![
         Value::make_window(window_id.0),
         Value::fixnum(1),
@@ -1719,7 +1773,7 @@ fn composed_keymap_member_searches_its_parent_chain_from_the_root() {
 #[test]
 fn filter_resolved_prefix_binding_merges_with_parent_keymap() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(

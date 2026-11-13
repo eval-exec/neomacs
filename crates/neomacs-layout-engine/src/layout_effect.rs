@@ -8,6 +8,7 @@ use neovm_core::buffer::BufferId;
 use neovm_core::window::WindowId;
 
 use crate::buffer_source::window_source::ResolvedWindowStart;
+use neovm_core::emacs_core::xdisp::XdispContextExt;
 
 /// Exact GNU callback site acknowledged by one logical redisplay.
 ///

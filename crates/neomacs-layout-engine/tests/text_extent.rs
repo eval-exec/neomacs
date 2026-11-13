@@ -1,5 +1,6 @@
 //! Offscreen source projection through the public row-query API.
 use neomacs_layout_engine::WindowLayoutQueryEngine;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::{
     buffer::LispCharPos1,
     emacs_core::{Context, Value},
@@ -8,7 +9,7 @@ use neovm_core::{
 
 #[test]
 fn text_extent_end_and_geometry_belong_to_projected_source() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let live = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(live)

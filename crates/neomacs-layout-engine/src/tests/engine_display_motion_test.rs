@@ -12,7 +12,7 @@ fn position_query_fixture(
     neovm_core::window::FrameId,
     neovm_core::window::WindowId,
 ) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -808,7 +808,7 @@ fn position_query_cache_observes_newly_enabled_existing_fontification_hooks() {
 #[test]
 fn redisplay_keeps_a_fully_visible_cursor_row_when_its_source_line_continues() {
     use neovm_core::window::WindowLayoutQueryScope;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -865,7 +865,7 @@ fn redisplay_keeps_a_fully_visible_cursor_row_when_its_source_line_continues() {
 fn small_vertical_motion_measures_only_the_needed_rows() {
     use neovm_core::window::WindowLayoutQueryScope;
     use std::{cell::RefCell, rc::Rc};
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -889,7 +889,8 @@ fn small_vertical_motion_measures_only_the_needed_rows() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval.eval_str("(progn (goto-char 2001) (let ((noninteractive nil)) (list (vertical-motion 1) (point) (vertical-motion -1) (point))))").unwrap();
     assert_eq!(
         neovm_core::emacs_core::print::print_value(&result),
@@ -910,7 +911,7 @@ fn small_vertical_motion_measures_only_the_needed_rows() {
 fn small_backward_pixel_measurement_starts_with_bounded_rows() {
     use neovm_core::window::WindowLayoutQueryScope;
     use std::{cell::RefCell, rc::Rc};
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -934,7 +935,8 @@ fn small_backward_pixel_measurement_starts_with_bounded_rows() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval.eval_str("(progn (goto-char 2001) (cdr (window-text-pixel-size nil '(2001 . -1) 2001 nil nil nil t)))").unwrap();
     assert_eq!(
         neovm_core::emacs_core::print::print_value(&result),
@@ -950,7 +952,7 @@ fn small_backward_pixel_measurement_starts_with_bounded_rows() {
 
 #[test]
 fn backward_pixel_measurement_uses_the_offscreen_rows_actual_height() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -970,7 +972,8 @@ fn backward_pixel_measurement_uses_the_offscreen_rows_actual_height() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval.eval_str("(list (mapcar (lambda (offset) (cdr (window-text-pixel-size nil (cons 5 offset) 5 nil nil nil t))) '(-1 -63 -64 -65)) (window-start) (point))").unwrap();
     assert_eq!(
         neovm_core::emacs_core::print::print_value(&result),
@@ -987,7 +990,7 @@ fn backward_pixel_measurement_uses_the_offscreen_rows_actual_height() {
 fn backward_pixel_measurement_expands_past_wrapped_source_lines() {
     use neovm_core::window::WindowLayoutQueryScope;
     use std::num::NonZeroUsize;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1039,7 +1042,8 @@ fn backward_pixel_measurement_expands_past_wrapped_source_lines() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str("(cdr (window-text-pixel-size nil '(2002 . -1) 2002 nil nil nil t))")
         .unwrap();
@@ -1068,7 +1072,7 @@ fn backward_pixel_measurement_expands_past_wrapped_source_lines() {
 
 #[test]
 fn consecutive_scroll_commands_preserve_the_original_goal_past_short_rows() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1087,7 +1091,8 @@ fn consecutive_scroll_commands_preserve_the_original_goal_past_short_rows() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil)
@@ -1112,7 +1117,7 @@ fn consecutive_scroll_commands_preserve_the_original_goal_past_short_rows() {
 
 #[test]
 fn graphical_scrolling_honors_screen_position_and_scroll_margin() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1131,7 +1136,8 @@ fn graphical_scrolling_honors_screen_position_and_scroll_margin() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1151,7 +1157,7 @@ fn graphical_scrolling_honors_screen_position_and_scroll_margin() {
 
 #[test]
 fn motion_backtracking_does_not_reseat_inside_a_multiline_replacement() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1167,7 +1173,8 @@ fn motion_backtracking_does_not_reseat_inside_a_multiline_replacement() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(progn (goto-char 8)
@@ -1181,7 +1188,7 @@ fn motion_backtracking_does_not_reseat_inside_a_multiline_replacement() {
 fn offscreen_row_queries_preserve_automatic_composition_metrics() {
     use neovm_core::window::{DisplayPointRole, WindowLayoutQueryScope};
     use std::num::NonZeroUsize;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     crate::test_composition::install_rules(&mut eval);
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     let text = format!("{}👩‍💻Z\n", format!("{}\n", "a".repeat(40)).repeat(240));
@@ -1234,7 +1241,7 @@ fn offscreen_row_queries_preserve_automatic_composition_metrics() {
 #[test]
 fn scrolling_restarts_after_fontification_moves_source_positions() {
     for window_system in [None, Some(Value::symbol("neomacs"))] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
         eval.buffer_manager_mut()
             .get_mut(buffer)
@@ -1270,7 +1277,8 @@ fn scrolling_restarts_after_fontification_moves_source_positions() {
                 Ok(query) => WindowLayoutQueryOutcome::Ready(query),
                 Err(error) => WindowLayoutQueryOutcome::Failed(error),
             }
-        });
+        })
+        .expect("install the layout-query handler");
         let result = eval
             .eval_str(
                 r#"(let ((noninteractive nil))
@@ -1286,7 +1294,7 @@ fn scrolling_restarts_after_fontification_moves_source_positions() {
 
 #[test]
 fn measured_motion_distinguishes_overlay_insertions_from_replacements() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1300,7 +1308,8 @@ fn measured_motion_distinguishes_overlay_insertions_from_replacements() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval.eval_str(r#"(let ((noninteractive nil))
         (mapcar (lambda (property)
           (let ((overlay (make-overlay 1 2)))
@@ -1318,7 +1327,7 @@ fn measured_motion_distinguishes_overlay_insertions_from_replacements() {
 
 #[test]
 fn measured_motion_reaches_an_invisible_accessible_beginning() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1337,7 +1346,8 @@ fn measured_motion_reaches_an_invisible_accessible_beginning() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1352,7 +1362,7 @@ fn measured_motion_reaches_an_invisible_accessible_beginning() {
 
 #[test]
 fn page_scrolling_back_to_a_tall_row_keeps_point_in_the_new_viewport() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1381,7 +1391,8 @@ fn page_scrolling_back_to_a_tall_row_keeps_point_in_the_new_viewport() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1410,7 +1421,7 @@ fn page_scrolling_back_to_a_tall_row_keeps_point_in_the_new_viewport() {
 
 #[test]
 fn scrolling_promotes_a_bottom_clipped_point_row_before_pixel_scrolling() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1436,7 +1447,8 @@ fn scrolling_promotes_a_bottom_clipped_point_row_before_pixel_scrolling() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1456,7 +1468,7 @@ fn scrolling_promotes_a_bottom_clipped_point_row_before_pixel_scrolling() {
 
 #[test]
 fn page_scrolling_a_tall_first_row_uses_pixels_and_returns_to_the_same_viewport() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1485,7 +1497,8 @@ fn page_scrolling_a_tall_first_row_uses_pixels_and_returns_to_the_same_viewport(
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1510,7 +1523,7 @@ fn page_scrolling_a_tall_first_row_uses_pixels_and_returns_to_the_same_viewport(
 /// `mwheel-scroll' loops on `(scroll-up)' until it gets that signal.
 #[test]
 fn page_scroll_reaching_zv_without_final_newline_signals_end_of_buffer() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     let frame = eval
         .frame_manager_mut()
@@ -1525,7 +1538,8 @@ fn page_scroll_reaching_zv_without_final_newline_signals_end_of_buffer() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil)
@@ -1588,7 +1602,8 @@ fn page_scroll_reaching_a_partially_visible_final_row_keeps_gnu_vscroll() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil)
@@ -1625,7 +1640,8 @@ fn page_scroll_final_row_accounts_for_an_existing_pixel_offset() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil)
@@ -1654,7 +1670,7 @@ fn page_scroll_final_row_accounts_for_an_existing_pixel_offset() {
 
 #[test]
 fn vertical_motion_measures_replacements_outside_the_presented_viewport() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1678,7 +1694,8 @@ fn vertical_motion_measures_replacements_outside_the_presented_viewport() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     // GNU -nw in a real PTY: the first step leaves both replacement rows;
     // the second reaches source line 43, with three physical rows crossed.
     let result = eval
@@ -1710,7 +1727,7 @@ fn vertical_motion_measures_replacements_outside_the_presented_viewport() {
 
 #[test]
 fn vertical_motion_leaves_a_wrapped_replacement_before_taking_another_step() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1728,7 +1745,8 @@ fn vertical_motion_leaves_a_wrapped_replacement_before_taking_another_step() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1746,7 +1764,7 @@ fn vertical_motion_leaves_a_wrapped_replacement_before_taking_another_step() {
 
 #[test]
 fn vertical_motion_remeasures_display_rows_after_a_display_property_change() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1769,7 +1787,8 @@ fn vertical_motion_remeasures_display_rows_after_a_display_property_change() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(progn
@@ -1868,7 +1887,7 @@ fn vertical_motion_remeasures_display_rows_after_a_display_property_change() {
 
 #[test]
 fn vertical_motion_counts_measured_rows_at_accessible_boundaries() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1884,7 +1903,8 @@ fn vertical_motion_counts_measured_rows_at_accessible_boundaries() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1916,7 +1936,7 @@ fn vertical_motion_counts_measured_rows_at_accessible_boundaries() {
 
 #[test]
 fn vertical_motion_does_not_treat_measured_viewport_edges_as_buffer_boundaries() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1948,7 +1968,7 @@ fn vertical_motion_does_not_treat_measured_viewport_edges_as_buffer_boundaries()
 
 #[test]
 fn vertical_motion_preserves_a_labeled_accessible_region_during_measurement() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1962,7 +1982,8 @@ fn vertical_motion_preserves_a_labeled_accessible_region_during_measurement() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(progn
@@ -1991,7 +2012,7 @@ fn vertical_motion_preserves_a_labeled_accessible_region_during_measurement() {
 /// which puts such a point on the truncated row.
 #[test]
 fn scrolling_places_a_point_past_the_right_margin_on_the_truncated_row() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     // A long truncated line early, and enough lines after it that the window can
     // start well below point: the buffer's own end is then inside the rows the
@@ -2018,7 +2039,8 @@ fn scrolling_places_a_point_past_the_right_margin_on_the_truncated_row() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil) (truncate-lines t))
@@ -2049,7 +2071,7 @@ fn scrolling_places_a_point_past_the_right_margin_on_the_truncated_row() {
 /// source coverage" instead of reaching the end of its line.
 #[test]
 fn vertical_motion_reaches_the_end_of_a_truncated_line() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -2065,7 +2087,8 @@ fn vertical_motion_reaches_the_end_of_a_truncated_line() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil) (truncate-lines t))
@@ -2092,7 +2115,7 @@ fn vertical_motion_reaches_the_end_of_a_truncated_line() {
 
 #[test]
 fn graphical_posn_queries_follow_live_scroll_before_presentation() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     let text: String = (0..400)
         .map(|i| format!("Line {i:03} -- native scrolling diagnostic\n"))
@@ -2121,7 +2144,8 @@ fn graphical_posn_queries_follow_live_scroll_before_presentation() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let observe = |eval: &mut Context| {
         let value = eval.eval_str(
             "(let ((noninteractive nil)) (list (nth 1 (posn-at-x-y 0 100 (selected-window))) (nth 2 (posn-at-point 881))))",
@@ -2169,7 +2193,7 @@ fn identical_geometry_queries_reuse_rows_and_mutations_force_a_new_walk() {
             count: NonZeroUsize::new(8).unwrap(),
         },
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buffer = eval.buffer_manager().current_buffer().unwrap().id();
         eval.buffer_manager_mut()
             .get_mut(buffer)
@@ -2252,7 +2276,7 @@ fn identical_geometry_queries_reuse_rows_and_mutations_force_a_new_walk() {
 #[test]
 fn geometry_queries_reevaluate_conditional_display_without_source_edits() {
     use neovm_core::window::WindowLayoutQueryScope;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -2300,7 +2324,7 @@ fn geometry_queries_reevaluate_conditional_display_without_source_edits() {
 fn pixel_only_queries_reuse_complete_row_geometry() {
     use crate::engine::viewport_retry_depth_probe as probe;
     use neovm_core::window::WindowLayoutQueryScope;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -2348,7 +2372,7 @@ fn pixel_query_placement_matches_fresh_wrapped_and_decorated_rows() {
               (overlay-put o 'after-string "suffix")
               (overlay-put o 'face '(:height 1.2))))"#,
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buffer = eval.buffer_manager().current_buffer().unwrap().id();
         eval.buffer_manager_mut()
             .get_mut(buffer)
@@ -2396,7 +2420,7 @@ fn pixel_query_placement_matches_fresh_wrapped_and_decorated_rows() {
 fn ordinary_query_reuse_ignores_unread_lisp_collection_writes() {
     use crate::engine::viewport_retry_depth_probe as probe;
     use neovm_core::window::WindowLayoutQueryScope;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -2439,7 +2463,7 @@ fn ordinary_query_reuse_ignores_local_writes_after_hook_cache_invalidation() {
 fn query_reuse_after_unrelated_local_write(invalidate_hook_cache: bool) {
     use crate::engine::viewport_retry_depth_probe as probe;
     use neovm_core::window::WindowLayoutQueryScope;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let buf = eval.buffer_manager_mut().get_mut(buffer).unwrap();
     buf.insert(&"row\n".repeat(100));
@@ -2498,7 +2522,7 @@ fn repeated_query_points_keep_bounded_independent_observations() {
               (overlay-put o 'after-string "suffix")
               (overlay-put o 'face '(:height 1.2))))"#,
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buffer = eval.buffer_manager().current_buffer().unwrap().id();
         eval.buffer_manager_mut()
             .get_mut(buffer)
@@ -2543,7 +2567,7 @@ fn repeated_query_points_keep_bounded_independent_observations() {
 
 #[test]
 fn backward_page_does_not_treat_bounded_wrapped_rows_as_covering_the_origin() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -2571,7 +2595,8 @@ fn backward_page_does_not_treat_bounded_wrapped_rows_as_covering_the_origin() {
             }
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let actual = eval
         .eval_str("(let ((noninteractive nil)) (scroll-down) (window-start))")
         .unwrap()
@@ -2592,7 +2617,7 @@ fn backward_page_does_not_treat_bounded_wrapped_rows_as_covering_the_origin() {
 fn bounded_truncated_rows_publish_only_their_consumed_line_tail() {
     use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
     for newline in [false, true] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buffer = eval.buffer_manager().current_buffer().unwrap().id();
         let text = format!(
             "{}{}",
@@ -2640,7 +2665,7 @@ fn bounded_truncated_rows_publish_only_their_consumed_line_tail() {
 fn absolute_row_queries_survive_viewport_placement_but_not_source_changes() {
     use crate::engine::viewport_retry_depth_probe as probe;
     use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -2688,7 +2713,7 @@ fn absolute_row_queries_survive_viewport_placement_but_not_source_changes() {
 #[test]
 fn page_viewports_measure_their_pixel_extent_in_one_walk() {
     use std::{cell::Cell, rc::Rc};
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -2711,7 +2736,8 @@ fn page_viewports_measure_their_pixel_extent_in_one_walk() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     eval.eval_str("(let ((noninteractive nil)) (scroll-up))")
         .unwrap();
     assert!(
@@ -2729,10 +2755,61 @@ fn page_viewports_measure_their_pixel_extent_in_one_walk() {
 }
 
 #[test]
+fn raw_byte_display_replacement_covers_its_cookie_and_finishes_paging() {
+    use neovm_core::window::WindowLayoutQueryScope;
+    let (mut eval, frame, window) = position_query_fixture("", 400, 400);
+    // Like Info's broken-image fallback: both the hidden cookie and its
+    // display string contain raw bytes, so displaying the cookie as ordinary
+    // UTF-8 cannot conceal a failure to accept the replacement.
+    eval.eval_str(
+        r#"(insert "before\n")
+           (let ((start (point)))
+             (insert (string 0) (unibyte-string 255) "cookie")
+             (put-text-property
+              start (point) 'display
+              (propertize (concat "[broken image:" (unibyte-string 255) "]")
+                          'fontified nil)))
+           (insert "\nafter\n")
+           (goto-char 1) (set-window-start nil 1 t)"#,
+    )
+    .unwrap();
+    let end = LispCharPos1::new(eval.eval_str("(point-max)").unwrap().as_fixnum().unwrap());
+    let mut query = crate::font::metrics::test_catalog::query_engine();
+    let viewport = query
+        .query_window_layout(&mut eval, frame, window, WindowLayoutQueryScope::Viewport)
+        .unwrap();
+    assert_eq!(viewport.end(), end, "replacement stopped source coverage");
+    eval.install_window_layout_query(move |eval, frame, window, scope| {
+        // A regression must fail before the paging measurer can allocate
+        // geometrically larger glyph matrices for this three-row buffer.
+        if let WindowLayoutQueryScope::Pixels { height, .. } = scope {
+            assert!(height.get() <= 800, "paging did not reach the source end");
+        }
+        match query.query_window_layout(eval, frame, window, scope) {
+            Ok(query) => WindowLayoutQueryOutcome::Ready(query),
+            Err(error) => WindowLayoutQueryOutcome::Failed(error),
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        eval.eval_str(
+            "(condition-case nil (let ((noninteractive nil)) (scroll-up)) (end-of-buffer 'at-end))"
+        )
+        .unwrap(),
+        Value::symbol("at-end"),
+    );
+    assert_eq!(
+        eval.eval_str("(list (window-start) (point) (window-vscroll nil t))")
+            .unwrap(),
+        Value::list(vec![Value::fixnum(1), Value::fixnum(1), Value::fixnum(0)])
+    );
+}
+
+#[test]
 fn pixel_extent_queries_match_complete_rows_with_mixed_heights_and_overlays() {
     use neovm_core::window::WindowLayoutQueryScope;
     use std::num::NonZeroUsize;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -2805,7 +2882,7 @@ fn forward_page_uses_the_visible_wrap_context_with_tabs_and_overlays() {
     use neovm_core::window::WindowLayoutQueryScope;
     use std::num::NonZeroUsize;
     for start in [17, 33, 74] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buffer = eval.buffer_manager().current_buffer().unwrap().id();
         eval.buffer_manager_mut().get_mut(buffer).unwrap().insert(
             &"words\twith tabs and wrapping words repeated many times within a single physical line\n".repeat(100));
@@ -2854,7 +2931,8 @@ fn forward_page_uses_the_visible_wrap_context_with_tabs_and_overlays() {
                 Ok(query) => WindowLayoutQueryOutcome::Ready(query),
                 Err(error) => WindowLayoutQueryOutcome::Failed(error),
             }
-        });
+        })
+        .expect("install the layout-query handler");
         eval.eval_str("(let ((noninteractive nil)) (scroll-up))")
             .unwrap();
         assert_eq!(
@@ -2868,7 +2946,7 @@ fn forward_page_uses_the_visible_wrap_context_with_tabs_and_overlays() {
 #[test]
 fn backward_page_grows_pixel_coverage_without_guessing_row_counts() {
     use std::{cell::Cell, rc::Rc};
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -2891,7 +2969,8 @@ fn backward_page_grows_pixel_coverage_without_guessing_row_counts() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     eval.eval_str("(let ((noninteractive nil)) (scroll-down))")
         .unwrap();
     let actual = eval
@@ -2915,7 +2994,7 @@ fn pixel_coverage_reuses_a_larger_certified_observation() {
     use crate::engine::viewport_retry_depth_probe as probe;
     use neovm_core::window::WindowLayoutQueryScope;
     use std::num::NonZeroUsize;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -3514,7 +3593,7 @@ fn cross_start_pixels_match_canonical_context_sensitive_rows() {
 #[test]
 fn backward_page_growth_handles_different_physical_line_lengths() {
     use std::{cell::Cell, rc::Rc};
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -3542,7 +3621,8 @@ fn backward_page_growth_handles_different_physical_line_lengths() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     eval.eval_str("(let ((noninteractive nil)) (scroll-down))")
         .unwrap();
     let actual = eval
@@ -3575,7 +3655,7 @@ fn pixel_only_queries_reuse_rows_when_point_is_outside_the_viewport() {
               (overlay-put o 'after-string "suffix")
               (overlay-put o 'face '(:height 1.2))))"#,
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buffer = eval.buffer_manager().current_buffer().unwrap().id();
         eval.buffer_manager_mut()
             .get_mut(buffer)
@@ -3670,7 +3750,7 @@ fn pixel_only_queries_reuse_rows_when_point_is_outside_the_viewport() {
 /// `maximum-scroll-margin` is set explicitly so the test pins GNU's cap
 /// (`window_scroll_margin`, src/window.c:6207) rather than the default.
 fn centered_cursor_samples(maximum_scroll_margin: f64) -> Vec<(i64, i64)> {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
     eval.buffer_manager_mut()

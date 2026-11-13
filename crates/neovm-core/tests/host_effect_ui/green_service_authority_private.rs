@@ -1,9 +1,9 @@
 //! Green is private: external callers cannot name any owner/service authority.
 //! This checks the aggregate privacy barrier, not each inner field in isolation.
-use neovm_core::emacs_core::eval::green::host_service::{
+use neovm_eval::emacs_core::eval::green::host_service::{
     OwnerAcknowledged, RealWaitPermit, RestoredHostOwner,
 };
-use neovm_core::emacs_core::eval::green::scheduler::ReservedServiceSlice;
+use neovm_eval::emacs_core::eval::green::scheduler::ReservedServiceSlice;
 
 fn main() {
     let _: Option<ReservedServiceSlice> = None;

@@ -214,6 +214,7 @@ fn native_chrome_moves_webviews_and_invalidates_the_scene_cache() {
             last_ime_cursor_area: None,
             chrome: Default::default(),
             geometry_hints: None,
+            pending_position: None,
         },
         render,
     };

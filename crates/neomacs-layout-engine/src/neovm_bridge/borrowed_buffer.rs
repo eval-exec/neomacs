@@ -192,6 +192,10 @@ impl LayoutBufferView for BorrowedLayoutBuffer<'_> {
             .previous_syntax_prop_state_run_start_at_char_pos(pos)
     }
 
+    fn layout_text_props_is_empty(&self) -> bool {
+        self.buffer.text_props_is_empty()
+    }
+
     fn layout_overlays(&self) -> &OverlayList {
         self.buffer.overlays()
     }

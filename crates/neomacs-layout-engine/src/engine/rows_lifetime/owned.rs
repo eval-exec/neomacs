@@ -1,6 +1,9 @@
 //! Private owned original Rows captures. No public geometry proof or lease API.
 //! Construction belongs only to the actual Terminal producer completion.
 use super::saved_window_point;
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::{
     buffer::{BufferId, BufferSourceAuthority, LispCharPos1},
     emacs_core::{Context, eval::RowsObservationEpoch},

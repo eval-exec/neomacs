@@ -1,3 +1,14 @@
+warning: unexpected `cfg` condition value: `test-support`
+ --> tests/thread_safety_ui/support/../../../../neovm-value/src/tagged/gc/scan_contract.rs
+  |
+  | #[cfg_attr(feature = "test-support", visibility::make(pub))]
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `contract-fixtures`, `dbus-vendored`, `default`, `desktop-font-settings`, `display-stop-validate`, `fuzzing`, `gc-memory-telemetry`, `jit`, `perf-probes`, `redisplay-test-policy`, `sound`, `sqlite`, `vm-profile`, and `webview`
+  = help: consider adding `test-support` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `#[warn(unexpected_cfgs)]` on by default
+
 error[E0308]: mismatched types
  --> tests/thread_safety_ui/single_mutator_shared_owner.rs:7:72
   |
@@ -9,7 +20,7 @@ error[E0308]: mismatched types
   = note: expected mutable reference `&mut TaggedHeap`
                      found reference `&TaggedHeap`
 note: associated function defined here
- --> tests/thread_safety_ui/support/../../../src/tagged/gc/scan_contract.rs
+ --> tests/thread_safety_ui/support/../../../../neovm-value/src/tagged/gc/scan_contract.rs
   |
-  |     pub(crate) unsafe fn from_heap(heap: &'h mut TaggedHeap) -> Self {
-  |                          ^^^^^^^^^ ------------------------
+  |     pub unsafe fn from_heap(heap: &'h mut TaggedHeap) -> Self {
+  |                   ^^^^^^^^^ ------------------------

@@ -208,8 +208,21 @@ impl PreparedPackageSet {
             // "Recursive load".  This require loads through the default
             // suffixes -- `jka-compr.elc` when installed -- and is a no-op in a
             // build tree.
+            //
+            // The narrowed suffix list then forces that compressed install to
+            // decompress every editor library it loads, and jka-compr's verbose
+            // messages ("uncompressing rfc6068.el.gz...done") paint the echo
+            // area / minibuffer while a package initializes -- the P2
+            // helm-gitignore TUI capture saw exactly that text spliced into
+            // Helm's "pattern:" line.  It is install-only noise, not package or
+            // editor behavior: GNU itself binds `jka-compr-verbose' to nil
+            // while loading compressed Info files (lisp/info.el:582), and
+            // every message site is guarded by it (lisp/jka-compr.el:408,
+            // :511; the option is defined in lisp/jka-cmpr-hook.el:42).
+            // Silence it for the source-parity policy on both engines.
             LoadSuffixes::Source => (
-                "(require 'jka-compr)\n                   ",
+                "(require 'jka-compr)\n                   \
+                 (setq jka-compr-verbose nil)\n                   ",
                 "\n                         load-suffixes '(\".el\")",
             ),
             LoadSuffixes::EmacsDefault => ("", ""),

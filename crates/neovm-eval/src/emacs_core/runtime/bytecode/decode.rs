@@ -1,0 +1,1312 @@
+//! GNU Emacs bytecode decoder.
+//!
+//! Translates GNU Emacs `.elc` bytecodes into NeoVM's `Op` instruction set.
+//! GNU bytecodes are documented in `lisp/emacs-lisp/bytecomp.el` (lines 749-937).
+//!
+//! The decoder performs two passes:
+//! 1. Decode all instructions sequentially, building a byte-offset → instruction-index map.
+//! 2. Patch all jump targets from absolute byte offsets to instruction indices.
+
+// FxHashMap, not std's SipHash map: `offset_map`/`byte_targets` are built on
+// EVERY bytecode decode (small-int keys), and SipHash dominated decode_pass1
+// on decode-heavy phases (byte-compile: ~30M Ir of map inserts per bench).
+use rustc_hash::FxHashMap as HashMap;
+use std::fmt;
+
+use super::chunk::GnuByteOffsetMapEntry;
+use super::opcode::Op;
+use neovm_value::intern::intern;
+pub(crate) use neovm_value::tagged::bytecode::decode_data::StackProof;
+use neovm_value::value::{Value, ValueKind};
+
+/// Errors that can occur during GNU bytecode decoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodeError {
+    /// Unknown or unimplemented opcode byte.
+    UnknownOpcode(u8, usize),
+    /// Premature end of bytecode stream while reading operand.
+    UnexpectedEnd(usize),
+    /// Jump target byte offset not found in the offset map.
+    InvalidJumpTarget {
+        target_byte_offset: usize,
+        source_byte_offset: usize,
+    },
+    /// Obsolete opcode that should not appear in modern .elc files.
+    ObsoleteOpcode(u8, usize),
+}
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DecodeError::UnknownOpcode(byte, off) => {
+                write!(
+                    f,
+                    "unknown GNU opcode 0x{:02X} at byte offset {}",
+                    byte, off
+                )
+            }
+            DecodeError::UnexpectedEnd(off) => {
+                write!(f, "unexpected end of bytecode at offset {}", off)
+            }
+            DecodeError::InvalidJumpTarget {
+                target_byte_offset,
+                source_byte_offset,
+            } => {
+                write!(
+                    f,
+                    "jump target byte offset {} not found (from instruction at byte {})",
+                    target_byte_offset, source_byte_offset
+                )
+            }
+            DecodeError::ObsoleteOpcode(byte, off) => {
+                write!(
+                    f,
+                    "obsolete GNU opcode 0x{:02X} at byte offset {}",
+                    byte, off
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
+/// Convert a GNU bytecode string value to raw bytes.
+///
+/// GNU bytecode strings are unibyte — each char maps to one byte (0–255).
+/// After NeoVM's parser processes octal escapes, each char in the Rust string
+/// can be directly cast to `u8`.
+pub fn string_value_to_bytes(s: &str) -> Vec<u8> {
+    s.chars().map(|c| c as u8).collect()
+}
+
+/// Decode GNU Emacs bytecodes into NeoVM `Op` instructions.
+///
+/// `bytecodes` is the raw byte stream from a GNU bytecode string.
+/// `constants` is mutably borrowed because some opcodes (buffer ops)
+/// may inject new symbol entries into the constant pool.
+///
+/// Returns the decoded instruction sequence with jump targets resolved
+/// to instruction indices.
+pub fn decode_gnu_bytecode(
+    bytecodes: &[u8],
+    constants: &mut Vec<Value>,
+) -> Result<Vec<Op>, DecodeError> {
+    let (ops, _) = decode_gnu_bytecode_with_offset_map(bytecodes, constants)?;
+    Ok(ops)
+}
+
+/// Decode GNU Emacs bytecodes and retain the original byte-offset map.
+///
+/// GNU `.elc` switch tables store target byte offsets inside hash-table
+/// constants. NeoVM executes decoded bytecode by instruction index, so
+/// GNU-decoded functions must preserve the original byte-offset ->
+/// instruction-index map for runtime translation of `Bswitch`.
+pub fn decode_gnu_bytecode_with_offset_map(
+    bytecodes: &[u8],
+    constants: &mut Vec<Value>,
+) -> Result<(Vec<Op>, Vec<GnuByteOffsetMapEntry>), DecodeError> {
+    let (raw_ops, offset_map, jump_patches) = decode_pass1(bytecodes, constants)?;
+    let ops = seal_ops(
+        patch_jumps(raw_ops, &offset_map, &jump_patches, bytecodes.len())?,
+        constants.len(),
+    );
+    let entries = offset_map_entries(ops_have_switch(&ops), offset_map);
+    Ok((ops, entries))
+}
+
+/// Decode against an already-published, immutable constant pool.
+///
+/// The deferred-decode path cannot lend its Lisp constants mutably merely to
+/// decode IR; the decoder is known not to extend the pool (asserted below),
+/// so the published pool length is enough to seal `Constant` indices.
+pub fn decode_gnu_bytecode_for_published_pool(
+    bytecodes: &[u8],
+    published_constants_len: usize,
+) -> Result<(Vec<Op>, Vec<GnuByteOffsetMapEntry>), DecodeError> {
+    let mut scratch_constants = Vec::new();
+    let (raw_ops, offset_map, jump_patches) = decode_pass1(bytecodes, &mut scratch_constants)?;
+    debug_assert!(
+        scratch_constants.is_empty(),
+        "deferred decode must not extend a published constant pool"
+    );
+    let ops = seal_ops(
+        patch_jumps(raw_ops, &offset_map, &jump_patches, bytecodes.len())?,
+        published_constants_len,
+    );
+    let entries = offset_map_entries(ops_have_switch(&ops), offset_map);
+    Ok((ops, entries))
+}
+
+fn ops_have_switch(ops: &[Op]) -> bool {
+    ops.iter().any(|op| matches!(op, Op::Switch))
+}
+
+fn offset_map_entries(have_switch: bool, offset_map: InstrStarts) -> Vec<GnuByteOffsetMapEntry> {
+    if !have_switch {
+        return Vec::new();
+    }
+    // Already in byte order: the table is indexed by byte offset.
+    offset_map
+        .entries()
+        .map(|(byte_offset, instruction_index)| {
+            GnuByteOffsetMapEntry::new(byte_offset, instruction_index)
+        })
+        .collect()
+}
+
+/// Why an [`Op::Switch`] has no static target set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwitchTargetError {
+    /// The instruction before the switch is not the `Constant` that pushes
+    /// the jump table (the byte compiler always emits that pair).
+    NoConstantTable,
+    /// The constant is not a hash table, or its pool index is out of range.
+    NotHashTable,
+    /// A table value that is not a fixnum byte offset / instruction index.
+    NonFixnumTarget,
+    /// A value that is negative, past the end of the stream, or (GNU code)
+    /// not an instruction start in the byte-offset map.
+    TargetOutOfRange,
+}
+
+/// Resolve the static target set of the [`Op::Switch`] at `i`: the byte
+/// compiler always pushes the jump table as a constant immediately before the
+/// switch, so `ops[i-1]` must be that `Constant`, the constant a hash table,
+/// and every table value a fixnum address resolving (through the GNU
+/// byte-offset map when present, which only holds instruction starts) to an
+/// in-range instruction index. Returns deduplicated `(raw address, instruction
+/// index)` pairs in table order.
+///
+/// A weak table is accepted: the collector only removes its entries, and a
+/// removed entry is a miss, i.e. the switch's fall-through edge.
+///
+/// One resolver for the two consumers that need the set before the code
+/// runs: the stack verifier below (which proves the depth at every target)
+/// and the JIT's CFG analysis (`jit::compile::switch_static_targets`), so
+/// what they admit cannot drift apart.
+pub(crate) fn switch_static_targets(
+    ops: &[Op],
+    constants: &[Value],
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
+    i: usize,
+) -> Result<Vec<(i64, usize)>, SwitchTargetError> {
+    let table = match i.checked_sub(1).map(|p| &ops[p]) {
+        Some(Op::Constant(idx)) => constants
+            .get(*idx as usize)
+            .ok_or(SwitchTargetError::NotHashTable)?,
+        _ => return Err(SwitchTargetError::NoConstantTable),
+    };
+    let Some(ht) = table.as_hash_table() else {
+        return Err(SwitchTargetError::NotHashTable);
+    };
+    let mut out: Vec<(i64, usize)> = Vec::with_capacity(ht.data.len());
+    for v in ht.data.values() {
+        let ValueKind::Fixnum(raw) = v.kind() else {
+            return Err(SwitchTargetError::NonFixnumTarget);
+        };
+        let raw_addr = usize::try_from(raw).map_err(|_| SwitchTargetError::TargetOutOfRange)?;
+        let target = match offset_map {
+            Some(map) => map
+                .binary_search_by_key(&raw_addr, |e| e.byte_offset)
+                .map(|k| map[k].instruction_index)
+                .map_err(|_| SwitchTargetError::TargetOutOfRange)?,
+            None => raw_addr,
+        };
+        if target >= ops.len() {
+            return Err(SwitchTargetError::TargetOutOfRange);
+        }
+        if !out.iter().any(|&(r, _)| r == raw) {
+            out.push((raw, target));
+        }
+    }
+    Ok(out)
+}
+
+/// What the verifier needs to admit [`Op::Switch`]: the function's constant
+/// pool (the jump tables live there) and, for GNU-decoded code, its byte-offset
+/// map (natively indexed chunks pass `None` and their table values are
+/// instruction indices).
+#[derive(Clone, Copy)]
+pub(crate) struct SwitchTables<'a> {
+    pub(crate) constants: &'a [Value],
+    pub(crate) offset_map: Option<&'a [GnuByteOffsetMapEntry]>,
+}
+
+/// Statically prove a sealed instruction stream's operand-stack behavior.
+///
+/// GNU trusts the compiler's declared `max_stack` blindly (`PUSH` is an
+/// unchecked store); the memory-safe equivalent is this one-time forward
+/// dataflow over the decoded instructions. It succeeds iff, starting from
+/// `entry_depth`, every reachable instruction has a single consistent stack
+/// depth (the byte compiler's output is depth-deterministic), no depth exceeds
+/// `max_stack`, and every instruction's minimum operand requirement is met.
+/// `Vm::run_loop`'s verified instantiation relies on this proof to drop its
+/// per-push capacity guard. The wrapper form [`verify_stack_effects`] answers
+/// a plain bool and refuses every `Switch`; the `_with_tables` form, given
+/// the function's jump tables, admits them and returns the [`StackProof`].
+///
+/// `Switch` requirements (any failure refuses the whole function, which then
+/// runs in the checked driver with today's exact behavior):
+/// - the table is the `Constant` pushed by the instruction just before the
+///   switch, is a hash table, and every one of its values is a fixnum
+///   resolving to an instruction START inside the stream
+///   ([`switch_static_targets`]);
+/// - the switch has two operands (table, dispatch value) and every target,
+///   like the fall-through (no match), is entered at `depth - 2`;
+/// - all reachable switches share one post-pop depth, so target validation
+///   needs no live stack depth from the dispatch arm;
+/// - the per-instruction depths are recorded ([`StackProof`]), so a table
+///   mutated after sealing cannot steer the unchecked driver to an
+///   instruction at an unproven depth.
+///
+/// Other deliberately conservative refusals: a depth inconsistency at a join,
+/// or an effect the table below cannot bound.
+///
+/// Per-edge effects that differ from the fall-through are handled explicitly:
+/// the `*ElsePop` gotos keep TOS on the taken edge and pop on fall-through,
+/// and the three handler-pushing ops flow their recorded resume depth (the
+/// depth at push, after any operand pops, plus one for the delivered value)
+/// into the handler target.
+pub(crate) fn verify_stack_effects(ops: &[Op], entry_depth: usize, max_stack: usize) -> bool {
+    verify_stack_effects_with_tables(ops, entry_depth, max_stack, None).is_some()
+}
+
+/// [`verify_stack_effects`] with the jump tables needed to admit `Switch`;
+/// see there for the proof and the `Switch` requirements.
+pub(crate) fn verify_stack_effects_with_tables(
+    ops: &[Op],
+    entry_depth: usize,
+    max_stack: usize,
+    tables: Option<SwitchTables<'_>>,
+) -> Option<StackProof> {
+    if entry_depth > max_stack || ops.is_empty() {
+        return None;
+    }
+    let mut switch_depth = None;
+    let mut switch_targets: Vec<(i64, u32)> = Vec::new();
+    let mut depths: Vec<Option<usize>> = vec![None; ops.len()];
+    depths[0] = Some(entry_depth);
+    let mut worklist: Vec<(usize, usize)> = vec![(0, entry_depth)];
+
+    // Merge `depth` into pc's state; false = inconsistent or out of bounds.
+    fn flow(
+        depths: &mut [Option<usize>],
+        worklist: &mut Vec<(usize, usize)>,
+        pc: usize,
+        depth: usize,
+        max_stack: usize,
+    ) -> bool {
+        if pc >= depths.len() || depth > max_stack {
+            return false;
+        }
+        match depths[pc] {
+            Some(existing) => existing == depth,
+            None => {
+                depths[pc] = Some(depth);
+                worklist.push((pc, depth));
+                true
+            }
+        }
+    }
+
+    while let Some((pc, depth)) = worklist.pop() {
+        // (min required depth, net delta) for the fall-through edge; branch
+        // and handler edges are pushed onto the worklist explicitly.
+        let (min, net): (usize, isize) = match &ops[pc] {
+            Op::Constant(_) | Op::Nil | Op::True | Op::VarRef(_) | Op::MakeClosure(_) => (0, 1),
+            Op::Dup => (1, 1),
+            Op::StackRef(n) => (*n as usize + 1, 1),
+            Op::Pop | Op::VarSet(_) | Op::VarBind(_) | Op::UnwindProtectPop => (1, -1),
+            Op::StackSet(n) => (*n as usize + 1, -1),
+            Op::DiscardN(raw) => {
+                let n = (*raw & 0x7F) as usize;
+                if n == 0 {
+                    (0, 0)
+                } else if *raw & 0x80 != 0 {
+                    (n + 1, -(n as isize))
+                } else {
+                    (n, -(n as isize))
+                }
+            }
+            Op::Unbind(_) | Op::PopHandler => (0, 0),
+            Op::Call(n) => (*n as usize + 1, -(*n as isize)),
+            Op::Apply(n) => {
+                let n = *n as usize;
+                if n == 0 {
+                    (1, 0)
+                } else {
+                    (n + 1, -(n as isize))
+                }
+            }
+            Op::CallBuiltin(_, n) | Op::CallBuiltinSym(_, n) => (*n as usize, 1 - (*n as isize)),
+            Op::Goto(target) => {
+                if !flow(
+                    &mut depths,
+                    &mut worklist,
+                    *target as usize,
+                    depth,
+                    max_stack,
+                ) {
+                    return None;
+                }
+                continue;
+            }
+            Op::GotoIfNil(target) | Op::GotoIfNotNil(target) => {
+                if depth < 1 {
+                    return None;
+                }
+                if !flow(
+                    &mut depths,
+                    &mut worklist,
+                    *target as usize,
+                    depth - 1,
+                    max_stack,
+                ) {
+                    return None;
+                }
+                (1, -1)
+            }
+            Op::GotoIfNilElsePop(target) | Op::GotoIfNotNilElsePop(target) => {
+                if depth < 1 {
+                    return None;
+                }
+                // Taken edge keeps TOS; fall-through pops it.
+                if !flow(
+                    &mut depths,
+                    &mut worklist,
+                    *target as usize,
+                    depth,
+                    max_stack,
+                ) {
+                    return None;
+                }
+                (1, -1)
+            }
+            Op::Switch => {
+                let Some(tables) = tables else {
+                    return None;
+                };
+                if depth < 2 {
+                    return None;
+                }
+                let targets =
+                    switch_static_targets(ops, tables.constants, tables.offset_map, pc).ok()?;
+                for &(raw, target) in &targets {
+                    if !flow(&mut depths, &mut worklist, target, depth - 2, max_stack) {
+                        return None;
+                    }
+                    switch_targets.push((raw, target as u32));
+                }
+                if switch_depth.is_some_and(|proven| proven != depth - 2) {
+                    return None;
+                }
+                switch_depth = Some(depth - 2);
+                (2, -2)
+            }
+            Op::Return | Op::Throw | Op::TrapOutOfRangeConstant(_) => continue,
+            // In-place unary rewrites.
+            Op::Add1
+            | Op::Sub1
+            | Op::Negate
+            | Op::Car
+            | Op::Cdr
+            | Op::CarSafe
+            | Op::CdrSafe
+            | Op::Length
+            | Op::Symbolp
+            | Op::Consp
+            | Op::Stringp
+            | Op::Listp
+            | Op::Integerp
+            | Op::Numberp
+            | Op::Null
+            | Op::Not
+            | Op::Nreverse
+            | Op::SymbolValue
+            | Op::SymbolFunction
+            | Op::SaveWindowExcursion => (1, 0),
+            // Binary: consume two, produce one.
+            Op::Add
+            | Op::Sub
+            | Op::Mul
+            | Op::Div
+            | Op::Rem
+            | Op::Eqlsign
+            | Op::Gtr
+            | Op::Lss
+            | Op::Leq
+            | Op::Geq
+            | Op::Max
+            | Op::Min
+            | Op::Cons
+            | Op::Nth
+            | Op::Nthcdr
+            | Op::Setcar
+            | Op::Setcdr
+            | Op::Elt
+            | Op::Nconc
+            | Op::Member
+            | Op::Memq
+            | Op::Assq
+            | Op::Eq
+            | Op::Equal
+            | Op::StringEqual
+            | Op::StringLessp
+            | Op::Aref
+            | Op::Set
+            | Op::Fset
+            | Op::Get => (2, -1),
+            // Ternary: consume three, produce one.
+            Op::Aset | Op::Put | Op::Substring => (3, -2),
+            Op::List(n) | Op::Concat(n) => (*n as usize, 1 - (*n as isize)),
+            Op::SaveCurrentBuffer | Op::SaveExcursion | Op::SaveRestriction => (0, 0),
+            Op::PushCatch(target) | Op::PushConditionCaseRaw(target) => {
+                if depth < 1 {
+                    return None;
+                }
+                // The recorded resume depth is the post-pop depth; delivery
+                // pushes the thrown/signaled value on top of it.
+                if !flow(
+                    &mut depths,
+                    &mut worklist,
+                    *target as usize,
+                    depth,
+                    max_stack,
+                ) {
+                    return None;
+                }
+                (1, -1)
+            }
+            Op::PushConditionCase(target) => {
+                // Records the current depth with no operand pop; the handler
+                // receives it plus the delivered value.
+                if depth + 1 > max_stack
+                    || !flow(
+                        &mut depths,
+                        &mut worklist,
+                        *target as usize,
+                        depth + 1,
+                        max_stack,
+                    )
+                {
+                    return None;
+                }
+                (0, 0)
+            }
+        };
+        if depth < min {
+            return None;
+        }
+        let next_depth = depth as isize + net;
+        if next_depth < 0 {
+            return None;
+        }
+        if !flow(
+            &mut depths,
+            &mut worklist,
+            pc + 1,
+            next_depth as usize,
+            max_stack,
+        ) {
+            return None;
+        }
+    }
+    let depths = if switch_depth.is_some() {
+        depths
+            .iter()
+            .map(|depth| depth.map_or(StackProof::UNREACHABLE, |depth| depth as u32))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    switch_targets.sort_unstable();
+    switch_targets.dedup_by_key(|entry| entry.0);
+    Some(unsafe {
+        /* SAFETY: the proof must be the verifier's result for exactly these ops */
+        StackProof::from_parts(switch_depth, switch_targets.into_boxed_slice(), depths)
+    })
+}
+
+/// Seal decoded instructions so the dispatch loop needs no per-fetch bound
+/// check (GNU's `FETCH` is `*pc++` with no check).
+///
+/// GNU's byte compiler always ends a function with `Breturn`, so well-formed
+/// bytecode passes through unchanged.  Two malformed shapes are normalized to
+/// exactly today's fall-off semantics instead of an unbounded pc: a body whose
+/// last instruction can fall through gains an explicit trailing [`Op::Return`]
+/// (falling off the end already behaved as an implicit return of TOS-or-nil),
+/// and a `patch_jumps`-validated jump to exactly the end of the stream is
+/// redirected onto that trailing return (jumping past the end also behaved as
+/// an implicit return).  Afterward `pc` provably never leaves `0..ops.len()`:
+/// every dispatch advances `pc` by one, the final instruction is a `Return`
+/// that never falls through, and every branch target is `< ops.len()`
+/// (runtime `Switch` targets come from the byte-offset map, which only holds
+/// instruction starts).  `Vm::run_loop` relies on this invariant for its
+/// unchecked instruction fetch.
+///
+/// The same pass proves every `Constant` pool index in range so the hot
+/// dispatch arm can read the pool unchecked (GNU's `Bconstant` is an
+/// unchecked vector read); an out-of-range index — impossible in compiler
+/// output — is rewritten to [`Op::TrapOutOfRangeConstant`], which raises
+/// exactly the runtime error the checked arm used to raise.
+pub(crate) fn seal_ops(mut ops: Vec<Op>, constants_len: usize) -> Vec<Op> {
+    if !matches!(ops.last(), Some(Op::Return)) {
+        ops.push(Op::Return);
+    }
+    let last = (ops.len() - 1) as u32;
+    for op in &mut ops {
+        match op {
+            Op::Goto(target)
+            | Op::GotoIfNil(target)
+            | Op::GotoIfNotNil(target)
+            | Op::GotoIfNilElsePop(target)
+            | Op::GotoIfNotNilElsePop(target)
+            | Op::PushConditionCase(target)
+            | Op::PushConditionCaseRaw(target)
+            | Op::PushCatch(target) => {
+                if *target > last {
+                    *target = last;
+                }
+            }
+            Op::Constant(idx) if *idx as usize >= constants_len => {
+                *op = Op::TrapOutOfRangeConstant(*idx);
+            }
+            _ => {}
+        }
+    }
+    ops
+}
+
+/// Intermediate instruction that may contain raw byte-offset jump targets.
+#[derive(Clone, Debug)]
+enum RawOp {
+    /// A fully resolved Op (no jump target to patch).
+    Resolved(Op),
+    /// An Op with a jump target that needs patching from byte offset to instruction index.
+    Jump(JumpKind, usize),
+}
+
+#[derive(Clone, Debug)]
+enum JumpKind {
+    Goto,
+    GotoIfNil,
+    GotoIfNotNil,
+    GotoIfNilElsePop,
+    GotoIfNotNilElsePop,
+    PushConditionCaseRaw,
+    PushCatch,
+}
+
+/// Jump patch entry: instruction index and source byte offset (for error messages).
+struct JumpPatch {
+    instr_idx: usize,
+    source_byte: usize,
+}
+
+/// Which byte offsets start an instruction, and the instruction index each
+/// one has.
+///
+/// A dense side table rather than a hash map: GNU's decoder walks the byte
+/// string once and every entry is keyed by a byte offset below its length, so
+/// the map was paying a hash and a probe per instruction (762K inserts and
+/// their rehashes per org load) for what an index answers.
+struct InstrStarts(Vec<u32>);
+
+impl InstrStarts {
+    #[doc(hidden)]
+    pub const NOT_A_START: u32 = u32::MAX;
+
+    #[doc(hidden)]
+    pub fn new(bytecode_len: usize) -> Self {
+        Self(vec![Self::NOT_A_START; bytecode_len + 1])
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn record(&mut self, byte_offset: usize, instr_idx: usize) {
+        self.0[byte_offset] = instr_idx as u32;
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn instruction_at(&self, byte_offset: usize) -> Option<usize> {
+        match self.0.get(byte_offset).copied() {
+            Some(idx) if idx != Self::NOT_A_START => Some(idx as usize),
+            _ => None,
+        }
+    }
+
+    /// Byte offset and instruction index of every instruction start, in byte
+    /// order.
+    #[doc(hidden)]
+    pub fn entries(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.0.iter().enumerate().filter_map(|(byte_offset, &idx)| {
+            (idx != Self::NOT_A_START).then_some((byte_offset, idx as usize))
+        })
+    }
+}
+
+/// Receiver of one pass over a GNU bytecode string ([`walk_gnu_bytecode`]).
+///
+/// The decoder ([`RawOpSink`]) materializes the instructions; the validator
+/// ([`ValidateSink`]) keeps only what the jump-target check needs. Both run the ONE walker
+/// below, so there is one opcode table and what they accept cannot drift
+/// apart.
+trait DecodeSink {
+    /// Instruction number `instr_idx` starts at `byte_offset`.
+    fn start(&mut self, byte_offset: usize, instr_idx: usize);
+    /// A complete instruction.
+    fn op(&mut self, op: Op);
+    /// A call of the builtin `name` with `arg_count` arguments that the
+    /// opcode names itself (GNU's inline dispatch of the buffer ops).
+    fn builtin(&mut self, name: &'static str, arg_count: u8);
+    /// A jump of `kind` to byte offset `target`, from the instruction at
+    /// `source_byte`.
+    fn jump(&mut self, kind: JumpKind, target: usize, source_byte: usize);
+}
+
+/// Walk `bytecodes` once, instruction by instruction, reporting each to
+/// `sink`. Fails on the first undecodable instruction: an unknown or
+/// obsolete opcode, or an operand past the end.
+#[inline]
+fn walk_gnu_bytecode<S: DecodeSink>(bytecodes: &[u8], sink: &mut S) -> Result<(), DecodeError> {
+    let mut pos: usize = 0;
+    let mut instr_idx: usize = 0;
+    let len = bytecodes.len();
+
+    while pos < len {
+        let byte_offset = pos;
+        sink.start(byte_offset, instr_idx);
+        // Every arm below reports exactly one instruction or fails.
+        instr_idx += 1;
+
+        let byte = bytecodes[pos];
+        pos += 1;
+
+        match byte {
+            // -- Immediate-arg groups (8 bytes each) --
+
+            // 0-7: stack-ref
+            0..=5 => sink.op(Op::StackRef(byte as u16)),
+            6 => {
+                let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::StackRef(arg as u16));
+            }
+            7 => {
+                let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::StackRef(arg));
+            }
+
+            // 8-15: varref
+            8..=13 => sink.op(Op::VarRef((byte - 8) as u16)),
+            14 => {
+                let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::VarRef(arg as u16));
+            }
+            15 => {
+                let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::VarRef(arg));
+            }
+
+            // 16-23: varset
+            16..=21 => sink.op(Op::VarSet((byte - 16) as u16)),
+            22 => {
+                let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::VarSet(arg as u16));
+            }
+            23 => {
+                let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::VarSet(arg));
+            }
+
+            // 24-31: varbind
+            24..=29 => sink.op(Op::VarBind((byte - 24) as u16)),
+            30 => {
+                let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::VarBind(arg as u16));
+            }
+            31 => {
+                let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::VarBind(arg));
+            }
+
+            // 32-39: call
+            32..=37 => sink.op(Op::Call((byte - 32) as u16)),
+            38 => {
+                let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::Call(arg as u16));
+            }
+            39 => {
+                let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::Call(arg));
+            }
+
+            // 40-47: unbind
+            40..=45 => sink.op(Op::Unbind((byte - 40) as u16)),
+            46 => {
+                let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::Unbind(arg as u16));
+            }
+            47 => {
+                let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::Unbind(arg));
+            }
+
+            // -- Fixed opcodes --
+            48 => sink.op(Op::PopHandler),
+            49 => {
+                // pushconditioncase: FETCH2 jump target
+                let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
+                sink.jump(JumpKind::PushConditionCaseRaw, target, byte_offset);
+            }
+            50 => {
+                // pushcatch: FETCH2 jump target
+                let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
+                sink.jump(JumpKind::PushCatch, target, byte_offset);
+            }
+
+            // 51-55: reserved/unused
+            51..=55 => {
+                // Treat as unknown but skip gracefully
+                return Err(DecodeError::UnknownOpcode(byte, byte_offset));
+            }
+
+            56 => sink.op(Op::Nth),
+            57 => sink.op(Op::Symbolp),
+            58 => sink.op(Op::Consp),
+            59 => sink.op(Op::Stringp),
+            60 => sink.op(Op::Listp),
+            61 => sink.op(Op::Eq),
+            62 => sink.op(Op::Memq),
+            63 => sink.op(Op::Not),
+            64 => sink.op(Op::Car),
+            65 => sink.op(Op::Cdr),
+            66 => sink.op(Op::Cons),
+            67 => sink.op(Op::List(1)),
+            68 => sink.op(Op::List(2)),
+            69 => sink.op(Op::List(3)),
+            70 => sink.op(Op::List(4)),
+            71 => sink.op(Op::Length),
+            72 => sink.op(Op::Aref),
+            73 => sink.op(Op::Aset),
+            74 => sink.op(Op::SymbolValue),
+            75 => sink.op(Op::SymbolFunction),
+            76 => sink.op(Op::Set),
+            77 => sink.op(Op::Fset),
+            78 => sink.op(Op::Get),
+            79 => sink.op(Op::Substring),
+            80 => sink.op(Op::Concat(2)),
+            81 => sink.op(Op::Concat(3)),
+            82 => sink.op(Op::Concat(4)),
+            83 => sink.op(Op::Sub1),
+            84 => sink.op(Op::Add1),
+            85 => sink.op(Op::Eqlsign),
+            86 => sink.op(Op::Gtr),
+            87 => sink.op(Op::Lss),
+            88 => sink.op(Op::Leq),
+            89 => sink.op(Op::Geq),
+            90 => sink.op(Op::Sub),
+            91 => sink.op(Op::Negate),
+            92 => sink.op(Op::Add),
+            93 => sink.op(Op::Max),
+            94 => sink.op(Op::Min),
+            95 => sink.op(Op::Mul),
+
+            // 96-127: buffer/point ops
+            //
+            // Mirrors GNU bytecode.c's inline CASE dispatch of opcodes
+            // 0140-0177. Each byte maps to a Lisp function name;
+            // emit Op::CallBuiltinSym with the interned SymId so the
+            // VM dispatches by name without touching the constants
+            // pool. The previous design (add_or_find_symbol +
+            // Op::CallBuiltin) mutated the constants vector, which
+            // silently corrupted any Op::Constant(N) references past
+            // the original pool end when the caller supplied a
+            // truncated pool (observed with cl-generic dispatch
+            // lambdas sharing a bytecode template).
+            96..=127 => {
+                if byte == 114 {
+                    sink.op(Op::SaveCurrentBuffer);
+                } else {
+                    let (name, arg_count) = buffer_op_info(byte);
+                    sink.builtin(name, arg_count);
+                }
+            }
+
+            // 128: unused in GNU Emacs. `byte-constant2` starts at 129 and
+            // single-byte constants are encoded as 192..=255.
+            128 => return Err(DecodeError::UnknownOpcode(byte, byte_offset)),
+
+            // 129: constant2 with 2-byte index
+            129 => {
+                let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::Constant(arg));
+            }
+
+            // 130: goto
+            130 => {
+                let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
+                sink.jump(JumpKind::Goto, target, byte_offset);
+            }
+            // 131: goto-if-nil
+            131 => {
+                let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
+                sink.jump(JumpKind::GotoIfNil, target, byte_offset);
+            }
+            // 132: goto-if-not-nil
+            132 => {
+                let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
+                sink.jump(JumpKind::GotoIfNotNil, target, byte_offset);
+            }
+            // 133: goto-if-nil-else-pop
+            133 => {
+                let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
+                sink.jump(JumpKind::GotoIfNilElsePop, target, byte_offset);
+            }
+            // 134: goto-if-not-nil-else-pop
+            134 => {
+                let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
+                sink.jump(JumpKind::GotoIfNotNilElsePop, target, byte_offset);
+            }
+
+            135 => sink.op(Op::Return),
+            136 => sink.op(Op::Pop),
+            137 => sink.op(Op::Dup),
+
+            138 => {
+                sink.op(Op::SaveExcursion);
+            }
+
+            // 139: Bsave_window_excursion — GNU marks it obsolete since 24.1
+            // but still supports it in bytecode.c. Some .elc files from
+            // GNU Emacs 31 contain it. Pops TOP, evaluates it with Fprogn
+            // inside a save-window-excursion context.
+            139 => {
+                sink.op(Op::SaveWindowExcursion);
+            }
+
+            140 => {
+                sink.op(Op::SaveRestriction);
+            }
+
+            // 141: obsolete (was catch before Emacs 25)
+            141 => return Err(DecodeError::ObsoleteOpcode(byte, byte_offset)),
+
+            142 => {
+                // unwind-protect: GNU pops cleanup fn from TOS (no operand)
+                sink.op(Op::UnwindProtectPop);
+            }
+
+            // 143, 144, 145: obsolete
+            143..=145 => return Err(DecodeError::ObsoleteOpcode(byte, byte_offset)),
+
+            // 146: unused
+            146 => return Err(DecodeError::UnknownOpcode(byte, byte_offset)),
+
+            147 => {
+                // set-marker (GNU bytecode.c Bset_marker, inline dispatch)
+                sink.builtin("set-marker", 3);
+            }
+            148 => {
+                // match-beginning
+                sink.builtin("match-beginning", 1);
+            }
+            149 => {
+                // match-end
+                sink.builtin("match-end", 1);
+            }
+            150 => {
+                // upcase
+                sink.builtin("upcase", 1);
+            }
+            151 => {
+                // downcase
+                sink.builtin("downcase", 1);
+            }
+
+            152 => sink.op(Op::StringEqual),
+            153 => sink.op(Op::StringLessp),
+            154 => sink.op(Op::Equal),
+            155 => sink.op(Op::Nthcdr),
+            156 => sink.op(Op::Elt),
+            157 => sink.op(Op::Member),
+            158 => sink.op(Op::Assq),
+            159 => sink.op(Op::Nreverse),
+            160 => sink.op(Op::Setcar),
+            161 => sink.op(Op::Setcdr),
+            162 => sink.op(Op::CarSafe),
+            163 => sink.op(Op::CdrSafe),
+            164 => sink.op(Op::Nconc),
+            165 => sink.op(Op::Div),
+            166 => sink.op(Op::Rem),
+            167 => sink.op(Op::Numberp),
+            168 => sink.op(Op::Integerp),
+
+            // 169-174: unused/reserved in modern Emacs
+            169..=174 => return Err(DecodeError::UnknownOpcode(byte, byte_offset)),
+
+            175 => {
+                // listN: 1-byte count
+                let count = fetch1(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::List(count as u16));
+            }
+            176 => {
+                // concatN: 1-byte count
+                let count = fetch1(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::Concat(count as u16));
+            }
+            177 => {
+                // insertN: 1-byte count (GNU Binsert_n, inline dispatch)
+                let count = fetch1(bytecodes, &mut pos, byte_offset)?;
+                sink.builtin("insert", count);
+            }
+            178 => {
+                // stack-set: 1-byte
+                let n = fetch1(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::StackSet(n as u16));
+            }
+            179 => {
+                // stack-set2: 2-byte
+                let n = fetch2(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::StackSet(n));
+            }
+
+            // 180-181: unused/reserved
+            180..=181 => return Err(DecodeError::UnknownOpcode(byte, byte_offset)),
+
+            182 => {
+                // discardN: 1-byte (high bit = preserve TOS)
+                let n = fetch1(bytecodes, &mut pos, byte_offset)?;
+                sink.op(Op::DiscardN(n));
+            }
+
+            183 => sink.op(Op::Switch),
+
+            // 184-191: unused/reserved
+            184..=191 => return Err(DecodeError::UnknownOpcode(byte, byte_offset)),
+
+            // 192-255: constant with 6-bit immediate
+            192..=255 => {
+                let idx = (byte - 192) as u16;
+                sink.op(Op::Constant(idx));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// [`DecodeSink`] of the decoder: the instructions (jumps still at byte
+/// offsets), the instruction-start table, and the jumps to patch.
+struct RawOpSink {
+    ops: Vec<RawOp>,
+    offset_map: InstrStarts,
+    jump_patches: Vec<JumpPatch>,
+}
+
+impl DecodeSink for RawOpSink {
+    #[inline]
+    fn start(&mut self, byte_offset: usize, instr_idx: usize) {
+        debug_assert_eq!(instr_idx, self.ops.len());
+        self.offset_map.record(byte_offset, instr_idx);
+    }
+
+    #[inline]
+    fn op(&mut self, op: Op) {
+        self.ops.push(RawOp::Resolved(op));
+    }
+
+    #[inline]
+    fn builtin(&mut self, name: &'static str, arg_count: u8) {
+        self.ops
+            .push(RawOp::Resolved(Op::CallBuiltinSym(intern(name), arg_count)));
+    }
+
+    #[inline]
+    fn jump(&mut self, kind: JumpKind, target: usize, source_byte: usize) {
+        self.jump_patches.push(JumpPatch {
+            instr_idx: self.ops.len(),
+            source_byte,
+        });
+        self.ops.push(RawOp::Jump(kind, target));
+    }
+}
+
+/// A jump the validator saw: its byte-offset target and the byte offset of
+/// the jumping instruction (for the error).
+struct ValidatedJump {
+    target: usize,
+    source_byte: usize,
+}
+
+/// [`DecodeSink`] of the validator: one bit per byte offset that starts an
+/// instruction, and every jump in instruction order — exactly what the
+/// decoder's jump patching checks, and nothing it would build.
+struct ValidateSink {
+    starts: Vec<u64>,
+    jumps: Vec<ValidatedJump>,
+}
+
+impl ValidateSink {
+    #[doc(hidden)]
+    pub fn new(bytecode_len: usize) -> Self {
+        Self {
+            // Offsets 0..=len: a jump may target the end of the stream.
+            starts: vec![0; bytecode_len / 64 + 1],
+            jumps: Vec::new(),
+        }
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn is_start(&self, byte_offset: usize) -> bool {
+        self.starts
+            .get(byte_offset / 64)
+            .is_some_and(|word| (word >> (byte_offset % 64)) & 1 != 0)
+    }
+}
+
+impl DecodeSink for ValidateSink {
+    #[inline]
+    fn start(&mut self, byte_offset: usize, _instr_idx: usize) {
+        self.starts[byte_offset / 64] |= 1 << (byte_offset % 64);
+    }
+
+    #[inline]
+    fn op(&mut self, _op: Op) {}
+
+    #[inline]
+    fn builtin(&mut self, _name: &'static str, _arg_count: u8) {}
+
+    #[inline]
+    fn jump(&mut self, _kind: JumpKind, target: usize, source_byte: usize) {
+        self.jumps.push(ValidatedJump {
+            target,
+            source_byte,
+        });
+    }
+}
+
+/// Accept or reject `bytecodes` exactly as
+/// [`decode_gnu_bytecode_with_offset_map`] does — the same walk, then the
+/// same jump-target check in the same order, so the same first
+/// [`DecodeError`] — without building a single instruction.
+///
+/// `make-byte-code` needs only the verdict: under the lazy policy the
+/// instructions are decoded at first execution, and most compiled
+/// functions a load constructs never run.
+pub(crate) fn validate_gnu_bytecode(bytecodes: &[u8]) -> Result<(), DecodeError> {
+    let mut sink = ValidateSink::new(bytecodes.len());
+    walk_gnu_bytecode(bytecodes, &mut sink)?;
+    for jump in &sink.jumps {
+        // `patch_jumps`: a target must start an instruction, or be the end
+        // of the stream (a fall-through past the last instruction).
+        if !sink.is_start(jump.target) && jump.target != bytecodes.len() {
+            return Err(DecodeError::InvalidJumpTarget {
+                target_byte_offset: jump.target,
+                source_byte_offset: jump.source_byte,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+static FULL_DECODE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Test-only: how many instruction-building decodes (eager or deferred) ran
+/// on any thread so far.
+#[cfg(test)]
+pub(crate) fn full_decode_count_for_test() -> usize {
+    FULL_DECODE_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+// Pass one intentionally returns its three coupled decode artifacts together.
+#[allow(clippy::type_complexity)]
+fn decode_pass1(
+    bytecodes: &[u8],
+    _constants: &mut Vec<Value>,
+) -> Result<(Vec<RawOp>, InstrStarts, Vec<JumpPatch>), DecodeError> {
+    #[cfg(test)]
+    FULL_DECODE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut sink = RawOpSink {
+        // Every instruction is at least one byte, so this is an upper bound.
+        ops: Vec::with_capacity(bytecodes.len()),
+        offset_map: InstrStarts::new(bytecodes.len()),
+        jump_patches: Vec::new(),
+    };
+    walk_gnu_bytecode(bytecodes, &mut sink)?;
+    Ok((sink.ops, sink.offset_map, sink.jump_patches))
+}
+
+fn patch_jumps(
+    raw_ops: Vec<RawOp>,
+    offset_map: &InstrStarts,
+    jump_patches: &[JumpPatch],
+    bytecode_len: usize,
+) -> Result<Vec<Op>, DecodeError> {
+    // Build the ops vector, extracting byte targets for jump instructions.
+    let mut ops: Vec<Op> = Vec::with_capacity(raw_ops.len());
+    let mut byte_targets: HashMap<usize, usize> = HashMap::default();
+
+    for (i, raw) in raw_ops.into_iter().enumerate() {
+        match raw {
+            RawOp::Resolved(op) => ops.push(op),
+            RawOp::Jump(kind, byte_target) => {
+                byte_targets.insert(i, byte_target);
+                ops.push(match kind {
+                    JumpKind::Goto => Op::Goto(0),
+                    JumpKind::GotoIfNil => Op::GotoIfNil(0),
+                    JumpKind::GotoIfNotNil => Op::GotoIfNotNil(0),
+                    JumpKind::GotoIfNilElsePop => Op::GotoIfNilElsePop(0),
+                    JumpKind::GotoIfNotNilElsePop => Op::GotoIfNotNilElsePop(0),
+                    JumpKind::PushConditionCaseRaw => Op::PushConditionCaseRaw(0),
+                    JumpKind::PushCatch => Op::PushCatch(0),
+                });
+            }
+        }
+    }
+
+    // Patch jump targets from byte offsets to instruction indices.
+    for patch in jump_patches {
+        let byte_target = byte_targets[&patch.instr_idx];
+        // If byte_target equals the end of the bytecode stream, it points past
+        // the last instruction (used for fall-through after the function body).
+        let instr_target = if let Some(idx) = offset_map.instruction_at(byte_target) {
+            idx
+        } else {
+            if byte_target == bytecode_len {
+                ops.len()
+            } else {
+                return Err(DecodeError::InvalidJumpTarget {
+                    target_byte_offset: byte_target,
+                    source_byte_offset: patch.source_byte,
+                });
+            }
+        };
+
+        let target = instr_target as u32;
+        match &mut ops[patch.instr_idx] {
+            Op::Goto(addr)
+            | Op::GotoIfNil(addr)
+            | Op::GotoIfNotNil(addr)
+            | Op::GotoIfNilElsePop(addr)
+            | Op::GotoIfNotNilElsePop(addr)
+            | Op::PushConditionCaseRaw(addr)
+            | Op::PushCatch(addr) => {
+                *addr = target;
+            }
+            _ => unreachable!("jump patch on non-jump instruction"),
+        }
+    }
+
+    Ok(ops)
+}
+
+// --- Helper functions ---
+
+/// Fetch a 1-byte operand.
+fn fetch1(bytecodes: &[u8], pos: &mut usize, byte_offset: usize) -> Result<u8, DecodeError> {
+    if *pos >= bytecodes.len() {
+        return Err(DecodeError::UnexpectedEnd(byte_offset));
+    }
+    let val = bytecodes[*pos];
+    *pos += 1;
+    Ok(val)
+}
+
+/// Fetch a 2-byte (little-endian) operand.
+fn fetch2(bytecodes: &[u8], pos: &mut usize, byte_offset: usize) -> Result<u16, DecodeError> {
+    if *pos + 1 >= bytecodes.len() {
+        return Err(DecodeError::UnexpectedEnd(byte_offset));
+    }
+    let lo = bytecodes[*pos] as u16;
+    let hi = bytecodes[*pos + 1] as u16;
+    *pos += 2;
+    Ok(lo | (hi << 8))
+}
+
+/// Add a symbol to the constants vector if not already present, return its index.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn add_or_find_symbol(constants: &mut Vec<Value>, name: &str) -> u16 {
+    let sym = Value::symbol(name);
+    for (i, c) in constants.iter().enumerate() {
+        if let (Some(a), Some(b)) = (c.as_bare_symbol_id(), sym.as_bare_symbol_id())
+            && a == b
+        {
+            return i as u16;
+        }
+    }
+    let idx = constants.len() as u16;
+    constants.push(sym);
+    idx
+}
+
+/// Map buffer/point opcode byte (96-127) to (builtin name, arg count).
+fn buffer_op_info(byte: u8) -> (&'static str, u8) {
+    match byte {
+        96 => ("point", 0),
+        97 => ("%%obsolete-mark", 0), // obsolete
+        98 => ("goto-char", 1),
+        99 => ("insert", 1),
+        100 => ("point-max", 0),
+        101 => ("point-min", 0),
+        102 => ("char-after", 1),
+        103 => ("following-char", 0),
+        104 => ("preceding-char", 0),
+        105 => ("current-column", 0),
+        106 => ("indent-to", 1),
+        107 => ("%%obsolete-scan-buffer", 0), // obsolete
+        108 => ("eolp", 0),
+        109 => ("eobp", 0),
+        110 => ("bolp", 0),
+        111 => ("bobp", 0),
+        112 => ("current-buffer", 0),
+        113 => ("set-buffer", 1),
+        114 => unreachable!("byte 114 handled as SaveCurrentBuffer"),
+        115 => ("%%obsolete-interactive-p", 0), // obsolete
+        116 => ("%%obsolete-forward-char", 0),  // obsolete
+        117 => ("forward-char", 1),
+        118 => ("forward-word", 1),
+        119 => ("skip-chars-forward", 2),
+        120 => ("skip-chars-backward", 2),
+        121 => ("forward-line", 1),
+        122 => ("char-syntax", 1),
+        123 => ("buffer-substring", 2),
+        124 => ("delete-region", 2),
+        125 => ("narrow-to-region", 2),
+        126 => ("widen", 0),
+        127 => ("end-of-line", 1),
+        _ => unreachable!("buffer_op_info called with byte outside 96-127"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Arglist descriptor parsing (Phase 2)
+// ---------------------------------------------------------------------------
+
+/// Preserve GNU's full signed integer descriptor without allocating names.
+/// Mandatory is bits0..6, rest is bit7, and nonrest is the full signed value
+/// shifted right by8. Host-sized stack shape is checked only when needed.
+pub fn parse_arglist_descriptor(descriptor: i64) -> super::FunctionParams {
+    super::FunctionParams::Stack(descriptor.into())
+}
+
+/// Validate the outer slot domain. GNU defers cons contents to invocation.
+pub fn parse_arglist_value(
+    arglist: &Value,
+) -> Result<super::FunctionParams, super::BytecodeSlotError> {
+    super::FunctionParams::try_from(*arglist)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+#[path = "tests/decode_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "tests/verify_switch_test.rs"]
+mod verify_switch_tests;

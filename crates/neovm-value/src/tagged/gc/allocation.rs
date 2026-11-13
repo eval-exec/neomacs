@@ -1,0 +1,1174 @@
+//! Allocation: every `alloc_*` entry point of the GC-managed heap (conses, strings, floats, vectors, char-tables, hash tables, obarrays, lambdas, macros, records).
+//!
+//! Moved out of `gc.rs` unchanged; a child module so it keeps the
+//! parent's view of its private items (`use super::*`).
+
+use super::*;
+
+impl TaggedHeap {
+    /// Allocate a cons cell. Returns a tagged Value.
+    ///
+    /// GNU `Fcons` (`src/alloc.c:2599`): take a cell, store car and cdr.
+    /// The cell comes from the open allocation region (`alloc_region.rs`),
+    /// which was charged to the consing counters and, when the heap
+    /// allocates black, pre-marked when it was granted — so there is
+    /// nothing per cons to count or mark. Like `Fcons`, this MUST NOT
+    /// collect or run Lisp: the list builders below and the JIT shims
+    /// (`neovm_jit_cons`, `neovm_jit_list`) hold an unrooted accumulator
+    /// across it, exactly as GNU's C locals do.
+    #[inline(always)]
+    pub fn alloc_cons(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
+        let cell = self.take_cons_cell();
+        // SAFETY: `cell` is a live, cell-aligned slot of a block this heap
+        // owns, reserved for this allocation by the open region.
+        unsafe {
+            (*cell).set_car(car);
+            (*cell).set_cdr(cdr);
+            TaggedValue::from_cons_ptr(cell)
+        }
+    }
+
+    /// Whether a new object must be born marked: a cons born while a block
+    /// is unswept must survive that block's reclaim, and one born during a
+    /// concurrent mark must survive this cycle's sweep (the GC thread won't
+    /// reach it, and a black owner may point at it before the next root
+    /// snapshot). A property of the allocation region, decided at its grant.
+    #[inline(always)]
+    pub(super) fn allocates_black(&self) -> bool {
+        self.sweep_in_progress || self.concurrent_mark_running
+    }
+
+    /// GNU `Flist` (`src/alloc.c:2699`): `val = Qnil; while (nargs > 0) val =
+    /// Fcons (args[--nargs], val);`.
+    ///
+    /// The accumulator crosses only `take_cons_cell`, which cannot collect or
+    /// run Lisp, so it needs no root — GNU's `Flist` roots nothing either.
+    /// VALUES stay the caller's responsibility (they are its operand-stack
+    /// span, its subr arguments, or its own locals), exactly as for
+    /// `alloc_cons`'s `car`.
+    #[inline]
+    pub fn list_from_slice(&mut self, values: &[TaggedValue]) -> TaggedValue {
+        let mut acc = TaggedValue::NIL;
+        for &value in values.iter().rev() {
+            let cell = self.take_cons_cell();
+            // SAFETY: as in `alloc_cons`: an owned cell the region reserved,
+            // fully initialized before it is published.
+            unsafe {
+                (*cell).set_car(value);
+                (*cell).set_cdr(acc);
+                acc = TaggedValue::from_cons_ptr(cell);
+            }
+        }
+        acc
+    }
+
+    /// Allocate a string object from the STRING ARENA PAGES.
+    ///
+    /// Every slot allocation/reuse performs a FULL-header `ptr::write` of the
+    /// whole 56-byte `StringObj` — a fresh `GcHeader` (kind=String,
+    /// tenured=false, next=null) plus the moved-in `LispString`, whose
+    /// `intervals` `AtomicPtr` word overwrites any STALE interval pointer
+    /// left by the slot's previous occupant BEFORE the value is published
+    /// (for a fresh `LispString` that word is null; a leaked stale non-null
+    /// word would be taken for a live table by the GC thread's null-check
+    /// and dereferenced by `mark_value`'s interval trace — a UAF). Writing
+    /// the atomic word non-atomically inside `ptr::write` is sound: the slot
+    /// is unreachable by any other thread until the tagged value escapes.
+    /// Then the same unconditional born-at-parity store `link_object`
+    /// applies.
+    ///
+    /// Page strings are OWNED via the page-span oracle: they NEVER touch
+    /// `all_objects`, `non_cons_object_addrs`, or `link_object` — the
+    /// intrusive lists sweep with `free_gc_object`/`Box::from_raw`, which
+    /// would corrupt the heap on a page pointer. The page sweep is the only
+    /// string reclaimer (it `drop_in_place`s dead slots, freeing the byte
+    /// storage and interval table the string owns).
+    pub fn alloc_string(&mut self, s: crate::heap_types::LispString) -> TaggedValue {
+        let empty_kind = (s.sbytes() == 0).then(|| s.storage_kind());
+        if let Some(value) = empty_kind.and_then(|kind| self.canonical_empty_strings.get(kind)) {
+            return value;
+        }
+
+        self.add_memory_use_count(MemoryUseCountSlot::Strings, 1);
+        self.add_memory_use_count(MemoryUseCountSlot::StringChars, s.sbytes() as u64);
+        let ptr = self.string_arena.alloc_slot();
+        unsafe {
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            std::ptr::write(
+                ptr,
+                StringObj {
+                    header: GcHeader::new(HeapObjectKind::String),
+                    data: s,
+                },
+            );
+            // BORN-AT-PARITY, unconditionally — the link seam's store (see
+            // `link_object`): allocate-black during a mark/sweep, pre-armed
+            // white for the next `begin_collection` flip otherwise.
+            (*ptr).header.set_marked(self.mark_parity);
+        }
+        self.note_black_born(ptr.cast());
+        #[cfg(any(test, feature = "test-support"))]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(unsafe { Self::string_object_bytes(&*ptr) });
+        let value = unsafe { TaggedValue::from_string_ptr(ptr) };
+        if let Some(kind) = empty_kind {
+            self.canonical_empty_strings.install_owned(kind, value)
+        } else {
+            value
+        }
+    }
+
+    /// Allocate a float object from the FLOAT ARENA PAGES.
+    ///
+    /// The slot comes from the open float allocation region
+    /// (`alloc_region.rs`), whose slots were reserved (alloc bits set),
+    /// charged to the consing counters and FULL-HEADER-WRITTEN when the
+    /// region was granted — a fresh `GcHeader` (kind=Float, tenured=false,
+    /// remembered=false, next=null) born at the heap's current mark parity,
+    /// exactly the header a float used to get at hand-out. A reused slot's
+    /// stale bytes never leak into the new object: a stale mark bit is a
+    /// same-cycle-reuse UAF, a stale kind a type-confused free, a stale
+    /// tenured flag a leak plus child-UAF (never traced, never swept). The
+    /// region closes before every parity flip, so the parity it wrote is
+    /// the current one. Only the value is written here.
+    ///
+    /// Page floats are OWNED via the page-span oracle (stage-3 fold-in: they
+    /// no longer touch `non_cons_object_addrs` — `mark_value`'s
+    /// owned-vs-mapped routing and `is_heap_young` answer through
+    /// `float_arena.owns`) and are NOT `link_object`ed — the intrusive lists
+    /// sweep with `free_gc_object`/`Box::from_raw`, which would corrupt the
+    /// heap on a page pointer. The page sweep is the only float reclaimer.
+    pub fn alloc_float(&mut self, value: f64) -> TaggedValue {
+        self.alloc_float_inline(value)
+    }
+
+    /// [`Self::alloc_float`] inlined into its caller: for the JIT's float
+    /// boxing shim, which makes nearly every float a float loop allocates.
+    /// Other callers keep the call, so the VM's arithmetic arms stay small.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn alloc_float_inline(&mut self, value: f64) -> TaggedValue {
+        let ptr = self.take_float_slot();
+        // SAFETY: a reserved slot of an owned float page whose header the
+        // region wrote; only the value is left.
+        unsafe { std::ptr::addr_of_mut!((*ptr).value).write(value) };
+        #[cfg(any(test, feature = "test-support"))]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe { TaggedValue::from_float_ptr(ptr) }
+    }
+
+    /// Allocate a vector from the VECTOR ARENA PAGES.
+    ///
+    /// This is the single `VecLikeType::Vector` allocation chokepoint (every
+    /// other veclike stays a `Box` through `link_veclike`). One FULL-header
+    /// `ptr::write` of the whole 48-byte `VectorObj` (fresh `VecLikeHeader`
+    /// plus the `LispValueVec` built from `items` — a reused slot's stale
+    /// bytes never leak), then the unconditional born-at-parity store.
+    ///
+    /// INCREMENTAL VECTOR REGISTRY (Fix A) at the page chokepoint: page
+    /// vectors never pass `link_veclike`, so the registry insert lives HERE
+    /// and the matching remove lives in the page sweep's free hook
+    /// (`sweep_arena_pages_ranges`) — the Tier-B vecsnap keeps enumerating
+    /// every live vector. Page vectors never touch `all_objects` /
+    /// `non_cons_object_addrs`; the page sweep is their only reclaimer (its
+    /// `drop_in_place` frees the element `Vec` the vector owns).
+    pub fn alloc_vector(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
+        self.add_memory_use_count(MemoryUseCountSlot::VectorCells, items.len() as u64);
+        let ptr = self.vector_arena.alloc_slot();
+        unsafe {
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            std::ptr::write(
+                ptr,
+                VectorObj {
+                    header: VecLikeHeader::new(VecLikeType::Vector),
+                    data: items.into(),
+                },
+            );
+            // BORN-AT-PARITY, unconditionally — the link seam's store (see
+            // `link_veclike`).
+            (*ptr).header.gc.set_marked(self.mark_parity);
+        }
+        let registered = self.vector_object_addrs.insert(ptr as usize);
+        debug_assert!(
+            registered,
+            "page vector allocated twice (bitmap/registry out of sync)"
+        );
+        self.note_black_born(ptr.cast());
+        #[cfg(any(test, feature = "test-support"))]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(
+            size_of::<VectorObj>()
+                .saturating_add(Self::lisp_value_vec_storage_bytes(unsafe { &(*ptr).data })),
+        );
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a GNU-shaped char-table.
+    pub fn alloc_char_table(
+        &mut self,
+        purpose: TaggedValue,
+        init: TaggedValue,
+        n_extras: usize,
+    ) -> TaggedValue {
+        self.alloc_char_table_with_extras(purpose, init, vec![init; n_extras])
+    }
+
+    /// Use already-reserved extra slots from the validated Lisp boundary.
+    pub(crate) fn alloc_char_table_with_extras(
+        &mut self,
+        purpose: TaggedValue,
+        init: TaggedValue,
+        extras: Vec<TaggedValue>,
+    ) -> TaggedValue {
+        let n_extras = extras.len();
+        let contents = [init; CHAR_TABLE_TOP_SLOTS].map(AtomicTaggedValue::new);
+        self.add_memory_use_count(
+            MemoryUseCountSlot::VectorCells,
+            (4 + CHAR_TABLE_TOP_SLOTS + n_extras) as u64,
+        );
+        let obj = Box::new(CharTableObj {
+            header: VecLikeHeader::new(VecLikeType::CharTable),
+            defalt: init.into(),
+            parent: TaggedValue::NIL.into(),
+            purpose: purpose.into(),
+            ascii: init.into(),
+            contents,
+            extras: extras.into(),
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(unsafe {
+            size_of::<CharTableObj>()
+                .saturating_add(Self::lisp_value_vec_storage_bytes(&(*ptr).extras))
+        });
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a GNU-shaped sub-char-table.
+    pub fn alloc_sub_char_table(
+        &mut self,
+        depth: i32,
+        min_char: i32,
+        contents: Vec<TaggedValue>,
+    ) -> TaggedValue {
+        self.add_memory_use_count(MemoryUseCountSlot::VectorCells, contents.len() as u64);
+        let obj = Box::new(SubCharTableObj {
+            header: VecLikeHeader::new(VecLikeType::SubCharTable),
+            depth,
+            min_char,
+            contents: contents.into(),
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(unsafe {
+            size_of::<SubCharTableObj>()
+                .saturating_add(Self::lisp_value_vec_storage_bytes(&(*ptr).contents))
+        });
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a hash table.
+    pub fn alloc_hash_table(&mut self, table: crate::value::LispHashTable) -> TaggedValue {
+        self.add_memory_use_count(MemoryUseCountSlot::VectorCells, 1);
+        let obj = Box::new(HashTableObj {
+            header: VecLikeHeader::new(VecLikeType::HashTable),
+            table,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(unsafe { Self::hash_table_object_bytes(&*ptr) });
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a GNU-shaped obarray object.
+    pub fn alloc_obarray(&mut self, buckets: Vec<TaggedValue>) -> TaggedValue {
+        self.add_memory_use_count(MemoryUseCountSlot::VectorCells, buckets.len() as u64);
+        let obj = Box::new(ObarrayObj {
+            header: VecLikeHeader::new(VecLikeType::Obarray),
+            buckets: buckets.into(),
+            count: 0,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(unsafe { Self::obarray_object_bytes(&*ptr) });
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a lambda.
+    /// Allocate a lambda (interpreted closure) as a Value vector.
+    /// Matches GNU Emacs's PVEC_CLOSURE: all slots are GC-traced Values.
+    ///
+    /// Allocated from the LAMBDA ARENA PAGES (task 03/3b): one FULL-header
+    /// `ptr::write` of the whole `LambdaObj` (a reused slot's stale bytes
+    /// never leak — a stale kind would type-confuse the Drop of garbage
+    /// `Vec`/`OnceLock` pointers), then the unconditional born-at-parity
+    /// store. Page lambdas are OWNED via the page-span oracle
+    /// (`lambda_arena.owns`, routed by `owns_veclike_object`): they NEVER
+    /// touch `all_objects` / `non_cons_object_addrs` / `link_veclike` — the
+    /// intrusive lists sweep with `free_gc_object`/`Box::from_raw`, which
+    /// would corrupt the heap on a page pointer. The page sweep is the only
+    /// lambda reclaimer (its `drop_in_place` frees the closure slot `Vec` +
+    /// the cached `LambdaParams`). MARKING IS UNCHANGED — the GC thread still
+    /// defers every lambda to the STW termination drain (concurrent claiming
+    /// is a future task); `mark_value`'s owned veclike arm traces it as before.
+    pub fn alloc_lambda(&mut self, slots: Vec<TaggedValue>) -> TaggedValue {
+        let ptr = self.lambda_arena.alloc_slot();
+        unsafe {
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            std::ptr::write(
+                ptr,
+                LambdaObj {
+                    header: VecLikeHeader::new(VecLikeType::Lambda),
+                    data: slots.into(),
+                    parsed_params: std::sync::OnceLock::new(),
+                },
+            );
+            // BORN-AT-PARITY, unconditionally — the link seam's store.
+            (*ptr).header.gc.set_marked(self.mark_parity);
+        }
+        self.note_black_born(ptr.cast());
+        #[cfg(any(test, feature = "test-support"))]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(unsafe { Self::lambda_object_bytes(&*ptr) });
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a lambda from a LambdaData (bridge for migration).
+    /// Converts LambdaData fields to the Value vector layout.
+    pub fn alloc_lambda_from_data(&mut self, data: crate::value::LambdaData) -> TaggedValue {
+        let slots = data.to_closure_slots();
+        self.alloc_lambda(slots)
+    }
+
+    /// Allocate a macro as a Value vector, from the MACRO ARENA PAGES (task
+    /// 03/3b — same discipline as `alloc_lambda`, own arena at the shared
+    /// 128B stride; `drop_in_place` frees the slot `Vec` + cached params).
+    pub fn alloc_macro(&mut self, slots: Vec<TaggedValue>) -> TaggedValue {
+        let ptr = self.macro_arena.alloc_slot();
+        unsafe {
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            std::ptr::write(
+                ptr,
+                MacroObj {
+                    header: VecLikeHeader::new(VecLikeType::Macro),
+                    data: slots.into(),
+                    parsed_params: std::sync::OnceLock::new(),
+                },
+            );
+            // BORN-AT-PARITY, unconditionally.
+            (*ptr).header.gc.set_marked(self.mark_parity);
+        }
+        self.note_black_born(ptr.cast());
+        #[cfg(any(test, feature = "test-support"))]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(unsafe { Self::macro_object_bytes(&*ptr) });
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a macro from a LambdaData (bridge for migration).
+    pub fn alloc_macro_from_data(&mut self, data: crate::value::LambdaData) -> TaggedValue {
+        let slots = data.to_closure_slots();
+        self.alloc_macro(slots)
+    }
+
+    /// Allocate a buffer reference.
+    pub fn alloc_buffer(&mut self, id: crate::value::buffer_vocab::BufferId) -> TaggedValue {
+        let obj = Box::new(BufferObj {
+            header: VecLikeHeader::new(VecLikeType::Buffer),
+            id,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<BufferObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a window reference.
+    pub fn alloc_window(&mut self, id: u64) -> TaggedValue {
+        let obj = Box::new(WindowObj {
+            header: VecLikeHeader::new(VecLikeType::Window),
+            id,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<WindowObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a frame reference.
+    pub fn alloc_frame(&mut self, id: u64) -> TaggedValue {
+        let obj = Box::new(FrameObj {
+            header: VecLikeHeader::new(VecLikeType::Frame),
+            id,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<FrameObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a timer reference.
+    pub fn alloc_timer(&mut self, id: u64) -> TaggedValue {
+        let obj = Box::new(TimerObj {
+            header: VecLikeHeader::new(VecLikeType::Timer),
+            id,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<TimerObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a process reference.
+    pub fn alloc_process(&mut self, id: crate::heap_types::ProcessId) -> TaggedValue {
+        let obj = Box::new(ProcessObj {
+            header: VecLikeHeader::new(VecLikeType::Process),
+            id,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<ProcessObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a display terminal object.
+    pub fn alloc_terminal(&mut self, id: u64) -> TaggedValue {
+        let obj = Box::new(TerminalObj {
+            header: VecLikeHeader::new(VecLikeType::Terminal),
+            id,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<TerminalObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate an xwidget model object.
+    #[allow(clippy::too_many_arguments)]
+    pub fn alloc_xwidget(
+        &mut self,
+        type_: TaggedValue,
+        title: TaggedValue,
+        buffer: TaggedValue,
+        width: i32,
+        height: i32,
+        xwidget_id: u32,
+        webview_id: neovm_display_identity::WebViewId,
+    ) -> TaggedValue {
+        let obj = Box::new(XwidgetObj {
+            header: VecLikeHeader::new(VecLikeType::Xwidget),
+            plist: TaggedValue::NIL,
+            type_,
+            buffer,
+            title,
+            script_callbacks: TaggedValue::NIL,
+            height,
+            width,
+            xwidget_id,
+            webview_id,
+            kill_without_query: false,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<XwidgetObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a packed bool-vector of `nbits` bits from `words` (exactly
+    /// `⌈nbits/64⌉` of them; bits past `nbits` are cleared). A residual
+    /// `Box` veclike with no Lisp children.
+    ///
+    /// `memory-use-counts` vector-cells grows by `1 + ⌈nbits/64⌉`, as GNU's
+    /// `make_clear_bool_vector` counts it (the `size` word plus the data
+    /// words; the header is not a cell).
+    pub fn alloc_bool_vector(&mut self, nbits: usize, words: Vec<u64>) -> TaggedValue {
+        let nwords = words.len();
+        self.add_memory_use_count(MemoryUseCountSlot::VectorCells, 1 + nwords as u64);
+        let obj = Box::new(BoolVectorObj::new(nbits, words));
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<BoolVectorObj>() + nwords * size_of::<u64>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a GC-managed shader-surface handle.
+    ///
+    /// Deliberately NOT registry-rooted (contrast `alloc_finalizer` /
+    /// xwidgets' `internal_xwidget_list`): the handle dies when Lisp drops
+    /// it, and `free_gc_object` then queues `surface_id` on
+    /// `pending_surface_destroys` for the evaluator's post-collection drain.
+    pub fn alloc_surface_handle(&mut self, surface_id: u32) -> TaggedValue {
+        let obj = Box::new(SurfaceObj {
+            header: VecLikeHeader::new(VecLikeType::SurfaceHandle),
+            surface_id,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<SurfaceObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Move a fully initialized thread payload onto the existing Thread tag.
+    /// Allocation cannot collect; the caller roots the returned identity before
+    /// its next safe point. Linking publishes the complete child schema.
+    #[doc(hidden)]
+    pub fn alloc_thread(
+        &mut self,
+        payload: crate::heap_types::threading::ThreadPayload,
+    ) -> TaggedValue {
+        let object = Box::new(ThreadObj::new(payload));
+        let bytes = object.owned_bytes();
+        let ptr = Box::into_raw(object);
+        self.link_veclike(ptr.cast());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(bytes);
+        // SAFETY: the linked, fully initialized ThreadObj owns this header.
+        unsafe { TaggedValue::from_veclike_ptr(ptr.cast()) }
+    }
+
+    /// Allocate a mutex with its owned state and name storage charged together.
+    #[doc(hidden)]
+    pub fn alloc_mutex(
+        &mut self,
+        payload: crate::heap_types::threading::MutexPayload,
+    ) -> TaggedValue {
+        let object = Box::new(MutexObj::new(payload));
+        let bytes = object.owned_bytes();
+        let ptr = Box::into_raw(object);
+        self.link_veclike(ptr.cast());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(bytes);
+        // SAFETY: the linked, fully initialized MutexObj owns this header.
+        unsafe { TaggedValue::from_veclike_ptr(ptr.cast()) }
+    }
+
+    /// Allocate a condition variable, including its strong mutex child.
+    #[doc(hidden)]
+    pub fn alloc_condvar(
+        &mut self,
+        payload: crate::heap_types::threading::CondVarPayload,
+    ) -> TaggedValue {
+        let object = Box::new(CondVarObj::new(payload));
+        let bytes = object.owned_bytes();
+        let ptr = Box::into_raw(object);
+        self.link_veclike(ptr.cast());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(bytes);
+        // SAFETY: the linked, fully initialized CondVarObj owns this header.
+        unsafe { TaggedValue::from_veclike_ptr(ptr.cast()) }
+    }
+
+    /// Allocate a GC-managed video-session handle.
+    pub fn alloc_video_handle(&mut self, video_id: neovm_display_identity::VideoId) -> TaggedValue {
+        let obj = Box::new(VideoObj {
+            header: VecLikeHeader::new(VecLikeType::VideoHandle),
+            video_id,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<VideoObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Take the surface ids of handles the sweep reclaimed since the last
+    /// drain. The evaluator's cycle-completed block queues a best-effort
+    /// `DisplayHost::destroy_shader_surface` for each.
+    pub fn take_pending_surface_destroys(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.pending_surface_destroys)
+    }
+
+    /// Take video ids whose last Lisp handle was reclaimed by the sweep.
+    pub fn take_pending_video_destroys(&mut self) -> Vec<neovm_display_identity::VideoId> {
+        std::mem::take(&mut self.pending_video_destroys)
+    }
+
+    /// Allocate an xwidget view object.
+    pub fn alloc_xwidget_view(&mut self, model: TaggedValue, window: TaggedValue) -> TaggedValue {
+        let obj = Box::new(XwidgetViewObj {
+            header: VecLikeHeader::new(VecLikeType::XwidgetView),
+            model,
+            window,
+            x: 0,
+            y: 0,
+            clip_right: 0,
+            clip_bottom: 0,
+            clip_top: 0,
+            clip_left: 0,
+            redisplayed: false,
+            hidden: false,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<XwidgetViewObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a bytecode function from the BYTECODE ARENA PAGES.
+    ///
+    /// This is the single `VecLikeType::ByteCode` allocation chokepoint —
+    /// every producer (`Value::make_bytecode`, the pdump restore placeholder
+    /// at `DumpHeapObject::ByteCode`) funnels here. One FULL-header
+    /// `ptr::write` of the whole `ByteCodeObj` (fresh `VecLikeHeader` plus
+    /// the moved-in `ByteCodeFunction` — a reused slot's stale bytes never
+    /// leak: a stale kind is a type-confused Drop of garbage `Vec` pointers),
+    /// then the unconditional born-at-parity store (the `link_veclike` seam's
+    /// store).
+    ///
+    /// Page bytecode is OWNED via the page-span oracle
+    /// (`bytecode_arena.owns`, routed by `owns_veclike_object`): it NEVER
+    /// touches `all_objects` / `non_cons_object_addrs` / `link_veclike` — the
+    /// intrusive lists sweep with `free_gc_object`/`Box::from_raw`, which
+    /// would corrupt the heap on a page pointer. The page sweep is the only
+    /// bytecode reclaimer (its `drop_in_place` frees the ops/constants
+    /// vectors, params, GNU byte maps, and docstring the function owns).
+    ///
+    /// MARKING (task 01 bytecode arm): the GC thread CLAIMS page bytecode
+    /// discovered during a concurrent mark (page-base snapshot hit +
+    /// `mark_claim_at`) and gray-pushes its children right there — sound
+    /// because published bytecode is immutable (compile-time enforced; see
+    /// the claim arm in `concurrent_try_mark_owned`). Snapshot misses
+    /// (mid-cycle pages, mapped/dump residue) still defer to the STW
+    /// termination drain, where `mark_value`'s owned veclike arm traces
+    /// them exactly as before.
+    #[inline(never)]
+    pub fn alloc_bytecode(
+        &mut self,
+        data: crate::tagged::bytecode::chunk::ByteCodeFunction,
+    ) -> TaggedValue {
+        let ptr = self.bytecode_arena.alloc_slot();
+        unsafe {
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            std::ptr::write(
+                ptr,
+                ByteCodeObj {
+                    header: VecLikeHeader::new(VecLikeType::ByteCode),
+                    data,
+                    slot_objects: ByteCodeSlotObjects::EMPTY,
+                },
+            );
+            // BORN-AT-PARITY, unconditionally — the link seam's store (see
+            // `link_veclike`).
+            (*ptr).header.gc.set_marked(self.mark_parity);
+        }
+        self.note_black_born(ptr.cast());
+        #[cfg(any(test, feature = "test-support"))]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(unsafe { Self::bytecode_object_bytes(&*ptr) });
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a `make-closure` instance of `proto` whose constant pool is
+    /// `constants` and whose GNU code-string object (`aref` slot 1) is
+    /// `code`, the prototype's, as GNU's instance copies the prototype's
+    /// slot: every other field is `proto`'s (the `Clone` shares its
+    /// bytes, decode cell and tiering state), written STRAIGHT INTO the arena
+    /// slot field by field. `alloc_bytecode` of a clone moved the whole
+    /// ~336-byte function through several stack temporaries on the way into
+    /// the slot (wide copies whose loads hit the narrow stores that had just
+    /// built them); here no temporary of the whole function exists.
+    ///
+    /// Same chokepoint contract as [`Self::alloc_bytecode`]: a FULL header
+    /// write before anything else, every data field written (the destructure
+    /// below is exhaustive, so a new `ByteCodeFunction` field fails to
+    /// compile here until it is copied), then the born-at-parity store — all
+    /// before the value exists, so no barrier is needed and the concurrent
+    /// claim arm, which reads only pre-cycle objects, never sees the slot
+    /// half-written. Same accounting.
+    #[inline(never)]
+    pub fn alloc_bytecode_instance(
+        &mut self,
+        proto: &crate::tagged::bytecode::chunk::ByteCodeFunction,
+        constants: LispValueVec,
+        code: TaggedValue,
+    ) -> TaggedValue {
+        debug_assert!(
+            !proto.is_pdump_stub(),
+            "instantiating an unmaterialized pdump stub"
+        );
+        #[cfg(any(test, feature = "test-support"))]
+        crate::tagged::bytecode::chunk::note_bytecode_function_clone_for_test();
+        let crate::tagged::bytecode::chunk::ByteCodeFunction {
+            source_id,
+            ops,
+            ops_sealed,
+            stack_verified,
+            constants: _,
+            max_stack,
+            params,
+            arglist,
+            lexical,
+            env,
+            gnu_byte_offset_map,
+            gnu_bytecode_bytes,
+            docstring,
+            doc_form,
+            interactive,
+            closure_slot_count,
+            extra_slots,
+            #[cfg(feature = "jit")]
+            runtime,
+            lazy_gnu_code,
+        } = proto;
+        // Every clone BEFORE the slot is claimed: `alloc_slot` marks it
+        // allocated, and the sweep would drop whatever a panic left there.
+        let ops = ops.clone();
+        let params = params.clone();
+        let gnu_byte_offset_map = gnu_byte_offset_map.clone();
+        let gnu_bytecode_bytes = gnu_bytecode_bytes.clone();
+        let docstring = docstring.clone();
+        let extra_slots = extra_slots.clone();
+        #[cfg(feature = "jit")]
+        let runtime = runtime.clone();
+        let lazy_gnu_code = lazy_gnu_code.clone();
+
+        let ptr = self.bytecode_arena.alloc_slot();
+        // SAFETY: `ptr` is a claimed, correctly aligned slot of this heap's
+        // bytecode arena. Every field is written exactly once through a raw
+        // field pointer (never through a reference to the uninitialized
+        // slot), header first, and nothing reads the slot before the value
+        // is returned.
+        unsafe {
+            use std::ptr::addr_of_mut;
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            addr_of_mut!((*ptr).header).write(VecLikeHeader::new(VecLikeType::ByteCode));
+            let data = addr_of_mut!((*ptr).data);
+            addr_of_mut!((*data).source_id).write(*source_id);
+            addr_of_mut!((*data).ops).write(ops);
+            addr_of_mut!((*data).ops_sealed).write(*ops_sealed);
+            addr_of_mut!((*data).stack_verified).write(*stack_verified);
+            addr_of_mut!((*data).constants).write(constants);
+            addr_of_mut!((*data).max_stack).write(*max_stack);
+            addr_of_mut!((*data).params).write(params);
+            addr_of_mut!((*data).arglist).write(*arglist);
+            addr_of_mut!((*data).lexical).write(*lexical);
+            addr_of_mut!((*data).env).write(*env);
+            addr_of_mut!((*data).gnu_byte_offset_map).write(gnu_byte_offset_map);
+            addr_of_mut!((*data).gnu_bytecode_bytes).write(gnu_bytecode_bytes);
+            addr_of_mut!((*data).docstring).write(docstring);
+            addr_of_mut!((*data).doc_form).write(*doc_form);
+            addr_of_mut!((*data).interactive).write(*interactive);
+            addr_of_mut!((*data).closure_slot_count).write(*closure_slot_count);
+            addr_of_mut!((*data).extra_slots).write(extra_slots);
+            #[cfg(feature = "jit")]
+            addr_of_mut!((*data).runtime).write(runtime);
+            addr_of_mut!((*data).lazy_gnu_code).write(lazy_gnu_code);
+            // Pre-publish, like every field above: `code` is reachable from
+            // the prototype, so no barrier is owed.
+            addr_of_mut!((*ptr).slot_objects).write(ByteCodeSlotObjects::with_code(code));
+            // BORN-AT-PARITY, unconditionally — the link seam's store (see
+            // `link_veclike`).
+            (*ptr).header.gc.set_marked(self.mark_parity);
+        }
+        self.note_black_born(ptr.cast());
+        #[cfg(any(test, feature = "test-support"))]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(unsafe { Self::bytecode_object_bytes(&*ptr) });
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a record.
+    ///
+    /// Allocated from the RECORD ARENA PAGES (task 03/3b): the single
+    /// `RecordObj` allocation chokepoint alongside `alloc_window_configuration`
+    /// (same Rust type, distinct tag — both funnel to `record_arena`). One
+    /// FULL-header `ptr::write` (a stale kind would type-confuse the Drop of
+    /// the garbage slot `Vec`), unconditional born-at-parity store; NO
+    /// intrusive-list / addr-set entry (owned via the page-span oracle,
+    /// routed by `owns_veclike_object`). The page sweep's `drop_in_place`
+    /// frees the record's slot `Vec`. Marking is unchanged (deferred).
+    pub fn alloc_record(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
+        self.add_memory_use_count(MemoryUseCountSlot::VectorCells, items.len() as u64);
+        self.alloc_record_like(VecLikeType::Record, items)
+    }
+
+    /// Allocate a native opened-font pseudovector (`PVEC_FONT`).  Fonts retain
+    /// typed metrics and an exact backend identity, so they are residual
+    /// boxed objects rather than pretending to be record slots.
+    pub fn alloc_font(&mut self, data: FontObjectData) -> TaggedValue {
+        self.add_memory_use_count(MemoryUseCountSlot::VectorCells, data.fields.len() as u64);
+        let obj = Box::new(FontObj {
+            header: VecLikeHeader::new(VecLikeType::Font),
+            data,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(unsafe { Self::font_object_bytes(&*ptr) });
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a window configuration. Structurally a record (`{header, data}`)
+    /// but tagged `WindowConfiguration` so it is a distinct pseudovector type.
+    /// Shares the record arena (same `RecordObj`).
+    pub fn alloc_window_configuration(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
+        self.add_memory_use_count(MemoryUseCountSlot::VectorCells, items.len() as u64);
+        self.alloc_record_like(VecLikeType::WindowConfiguration, items)
+    }
+
+    /// Shared `RecordObj` page allocator for the `Record` and
+    /// `WindowConfiguration` tags. `add_memory_use_count` is the caller's job
+    /// (both currently count `VectorCells`).
+    pub(super) fn alloc_record_like(
+        &mut self,
+        tag: VecLikeType,
+        items: Vec<TaggedValue>,
+    ) -> TaggedValue {
+        debug_assert!(matches!(
+            tag,
+            VecLikeType::Record | VecLikeType::WindowConfiguration
+        ));
+        let ptr = self.record_arena.alloc_slot();
+        unsafe {
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            std::ptr::write(
+                ptr,
+                RecordObj {
+                    header: VecLikeHeader::new(tag),
+                    data: items.into(),
+                },
+            );
+            // BORN-AT-PARITY, unconditionally.
+            (*ptr).header.gc.set_marked(self.mark_parity);
+        }
+        self.note_black_born(ptr.cast());
+        #[cfg(any(test, feature = "test-support"))]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(unsafe { Self::record_object_bytes(&*ptr) });
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate an overlay, resolving its precedence identity before the
+    /// object is linked or published.
+    pub fn alloc_overlay(&mut self, init: crate::heap_types::OverlayDataInit) -> TaggedValue {
+        use crate::heap_types::OverlaySerialSource;
+        // GNU `compare_overlays`' final branch is address order, which GNU
+        // documents as arbitrary. Neomacs makes it deterministic creation
+        // order: a fresh Lisp object mints the World's next serial, while an
+        // observer copy or image load keeps the identity it carries.
+        let serial = match init.serial {
+            OverlaySerialSource::Mint => self.overlay_serial.mint(),
+            OverlaySerialSource::Preserved(serial) => serial,
+        };
+        // A resumed image must not hand out a serial at or below one it
+        // already contains; this is the load-side "restore to max+1".
+        self.overlay_serial.observe(serial);
+        let obj = Box::new(OverlayObj {
+            header: VecLikeHeader::new(VecLikeType::Overlay),
+            data: crate::heap_types::OverlayData::from_init(init, serial),
+        });
+        let ptr = Box::into_raw(obj);
+        let value = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<OverlayObj>());
+        value
+    }
+
+    /// Resume the World's overlay counter above `serial` after an image or
+    /// mapped-object load bypassed [`Self::alloc_overlay`]. Never lowers it.
+    #[inline]
+    pub fn observe_overlay_serial(&mut self, serial: crate::heap_types::OverlaySerial) {
+        self.overlay_serial.observe(serial);
+    }
+
+    /// Allocate a marker.
+    pub fn alloc_marker(&mut self, data: crate::heap_types::LispMarker) -> TaggedValue {
+        // Page-only (GNU `marker_block`): a freed slot is reused from the
+        // class free list, so `save-excursion`'s make/free churn cycles
+        // through a few cache-warm slots instead of scattering `Box`es
+        // across the general heap.
+        let ptr = self.marker_arena.alloc_slot();
+        unsafe {
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            std::ptr::write(
+                ptr,
+                MarkerObj {
+                    header: VecLikeHeader::new(VecLikeType::Marker),
+                    data,
+                },
+            );
+            // BORN-AT-PARITY, unconditionally.
+            (*ptr).header.gc.set_marked(self.mark_parity);
+        }
+        self.note_black_born(ptr.cast());
+        #[cfg(any(test, feature = "test-support"))]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<MarkerObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a bignum (arbitrary-precision integer) from the BIGNUM ARENA
+    /// PAGES.
+    ///
+    /// GNU `make_bignum_bits` (`src/bignum.c:94`): a pseudovector slot from
+    /// a vector block, never a malloc of its own; the limbs stay the
+    /// `Integer`'s own vector (GNU: the `mpz_t` limbs GMP mallocs). The caller
+    /// is responsible for the value being outside fixnum range —
+    /// `Value::make_integer` is the canonical fixnum-or-bignum constructor
+    /// that delegates here only when promotion is needed.
+    ///
+    /// Page bignums are OWNED via the page-span oracle (routed by
+    /// `owns_veclike_object`) and are NOT `link_veclike`d: no intrusive-list
+    /// node and no `non_cons_object_addrs` insert, so the sweep neither walks
+    /// a list nor hash-removes per bignum. The page sweep is their only
+    /// reclaimer; `free_gc_object`'s Bignum arm stays the residual-Box seam.
+    pub fn alloc_bignum(&mut self, value: Integer) -> TaggedValue {
+        self.alloc_bignum_inline(value)
+    }
+
+    /// [`Self::alloc_bignum`] inlined into its caller: for the out-of-line
+    /// arithmetic kernels, so the result's fields go from registers straight
+    /// into the slot instead of through a by-value `Integer` copy the kernel's
+    /// narrow stores cannot forward to. Every other caller keeps the call.
+    ///
+    /// One FULL-header `ptr::write` (a reused slot's stale bytes must never
+    /// leak into the new object) with the born-at-parity mark in the same
+    /// store sequence — allocate-black during a mark/sweep, pre-armed white
+    /// for the next `begin_collection` flip otherwise — before the pointer
+    /// escapes (the `alloc_float_inline` pattern).
+    #[inline(always)]
+    pub(crate) fn alloc_bignum_inline(&mut self, value: Integer) -> TaggedValue {
+        let ptr = self.bignum_arena.alloc_slot();
+        unsafe {
+            std::ptr::write(
+                ptr,
+                BignumObj {
+                    header: VecLikeHeader {
+                        gc: GcHeader::new_marked(HeapObjectKind::VecLike, self.mark_parity),
+                        type_tag: VecLikeType::Bignum,
+                    },
+                    value,
+                },
+            );
+        }
+        self.note_black_born(ptr.cast());
+        #[cfg(any(test, feature = "test-support"))]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        // Pacing unchanged: the 56-byte object, as for the boxed bignum. GNU
+        // does not count GMP limb memory toward `consing_until_gc` either.
+        self.note_allocation_bytes(size_of::<BignumObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a symbol-with-pos object from the SYMBOL-WITH-POS ARENA PAGES
+    /// (task 03/3b). `sym` must be a bare symbol, `pos` must be a fixnum.
+    ///
+    /// POD-like: `SymbolWithPosObj` is two `Copy` Values (no payload, no
+    /// Drop), so the class behaves like FloatObj — the sweep/teardown
+    /// `drop_in_place` walk compiles out. Still one FULL-header `ptr::write`
+    /// (the ownership oracle and every header read demand fully-initialized
+    /// slot bytes) + the born-at-parity store; NO intrusive-list / addr-set
+    /// entry (owned via the page-span oracle, routed by owns_veclike_object;
+    /// free_gc_object's SymbolWithPos arm stays the residual-Box seam).
+    pub fn alloc_symbol_with_pos(&mut self, sym: TaggedValue, pos: TaggedValue) -> TaggedValue {
+        let ptr = self.symbol_with_pos_arena.alloc_slot();
+        unsafe {
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            std::ptr::write(
+                ptr,
+                SymbolWithPosObj {
+                    header: VecLikeHeader::new(VecLikeType::SymbolWithPos),
+                    sym,
+                    pos,
+                },
+            );
+            // BORN-AT-PARITY, unconditionally.
+            (*ptr).header.gc.set_marked(self.mark_parity);
+        }
+        self.note_black_born(ptr.cast());
+        #[cfg(any(test, feature = "test-support"))]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<SymbolWithPosObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a finalizer object (GNU `Fmake_finalizer`). Registered in
+    /// `finalizer_registry` so mark termination can detect when the object
+    /// becomes unreachable and queue `function` to run after that cycle.
+    /// GNU accepts any object as the function; callers do not validate it.
+    pub fn alloc_finalizer(&mut self, function: TaggedValue) -> TaggedValue {
+        let obj = Box::new(FinalizerObj {
+            header: VecLikeHeader::new(VecLikeType::Finalizer),
+            function,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.finalizer_registry.push(ptr);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<FinalizerObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate an SQLite database or statement object.
+    pub fn alloc_sqlite(&mut self, is_statement: bool, id: i64) -> TaggedValue {
+        let obj = Box::new(SqliteObj {
+            header: VecLikeHeader::new(VecLikeType::Sqlite),
+            is_statement,
+            id,
+        });
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<SqliteObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a user-pointer object for dynamic module API.
+    pub fn alloc_user_ptr(
+        &mut self,
+        ptr: *mut std::ffi::c_void,
+        finalizer: EmacsFinalizer,
+    ) -> TaggedValue {
+        let obj = Box::new(UserPtrObj {
+            header: VecLikeHeader::new(VecLikeType::UserPtr),
+            ptr,
+            finalizer,
+        });
+        let raw = Box::into_raw(obj);
+        self.link_veclike(raw as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<UserPtrObj>());
+        unsafe { TaggedValue::from_veclike_ptr(raw as *const VecLikeHeader) }
+    }
+
+    /// Allocate a module-function object for dynamic module API.
+    pub fn alloc_module_function(
+        &mut self,
+        min_arity: isize,
+        max_arity: isize,
+        subr: *const std::ffi::c_void,
+        data: *mut std::ffi::c_void,
+        documentation: TaggedValue,
+        interactive_form: TaggedValue,
+    ) -> TaggedValue {
+        let obj = Box::new(ModuleFunctionObj {
+            header: VecLikeHeader::new(VecLikeType::ModuleFunction),
+            min_arity,
+            max_arity,
+            subr,
+            data,
+            finalizer: None,
+            documentation,
+            interactive_form,
+        });
+        let raw = Box::into_raw(obj);
+        self.link_veclike(raw as *mut VecLikeHeader);
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(size_of::<ModuleFunctionObj>());
+        unsafe { TaggedValue::from_veclike_ptr(raw as *const VecLikeHeader) }
+    }
+}
+
+impl TaggedHeap {
+    pub(super) fn veclike_payload_layout(header: *const VecLikeHeader) -> PayloadLayout {
+        unsafe {
+            match (*header).type_tag {
+                VecLikeType::Vector => {
+                    Self::value_vec_payload_layout(&(*(header as *const VectorObj)).data)
+                }
+                VecLikeType::Lambda => {
+                    let object = &*(header as *const LambdaObj);
+                    Self::closure_payload_layout(&object.data, object.parsed_params.get())
+                }
+                VecLikeType::Macro => {
+                    let object = &*(header as *const MacroObj);
+                    Self::closure_payload_layout(&object.data, object.parsed_params.get())
+                }
+                VecLikeType::ByteCode => {
+                    Self::bytecode_payload_layout(&*(header as *const ByteCodeObj))
+                }
+                VecLikeType::Record | VecLikeType::WindowConfiguration => {
+                    Self::value_vec_payload_layout(&(*(header as *const RecordObj)).data)
+                }
+                VecLikeType::Font => {
+                    Self::value_vec_payload_layout(&(*(header as *const FontObj)).data.fields)
+                }
+                VecLikeType::CharTable => {
+                    Self::value_vec_payload_layout(&(*(header as *const CharTableObj)).extras)
+                }
+                VecLikeType::SubCharTable => {
+                    Self::value_vec_payload_layout(&(*(header as *const SubCharTableObj)).contents)
+                }
+                VecLikeType::Obarray => {
+                    Self::value_vec_payload_layout(&(*(header as *const ObarrayObj)).buckets)
+                }
+                VecLikeType::Thread => {
+                    let payload = &(*(header as *const ThreadObj)).payload;
+                    Self::threading_payload_layout(
+                        payload.logical_backing_bytes(),
+                        payload.backing_bytes(),
+                    )
+                }
+                VecLikeType::Mutex => {
+                    let payload = &(*(header as *const MutexObj)).payload;
+                    Self::threading_payload_layout(
+                        payload.logical_backing_bytes(),
+                        payload.backing_bytes(),
+                    )
+                }
+                VecLikeType::CondVar => {
+                    let payload = &(*(header as *const CondVarObj)).payload;
+                    Self::threading_payload_layout(
+                        payload.logical_backing_bytes(),
+                        payload.backing_bytes(),
+                    )
+                }
+                VecLikeType::Bignum
+                | VecLikeType::Marker
+                | VecLikeType::Overlay
+                | VecLikeType::Finalizer
+                | VecLikeType::SymbolWithPos
+                | VecLikeType::UserPtr
+                | VecLikeType::Process
+                | VecLikeType::Frame
+                | VecLikeType::Window
+                | VecLikeType::BoolVector
+                | VecLikeType::Buffer
+                | VecLikeType::HashTable
+                | VecLikeType::Terminal
+                | VecLikeType::Subr
+                | VecLikeType::Xwidget
+                | VecLikeType::XwidgetView
+                | VecLikeType::ModuleFunction
+                | VecLikeType::Sqlite
+                | VecLikeType::Timer
+                | VecLikeType::SurfaceHandle
+                | VecLikeType::VideoHandle => PayloadLayout::default(),
+            }
+        }
+    }
+
+    fn threading_payload_layout(logical_bytes: usize, capacity_bytes: usize) -> PayloadLayout {
+        PayloadLayout {
+            logical_bytes,
+            capacity_bytes,
+            owned: capacity_bytes != 0,
+            mapped: false,
+        }
+    }
+}

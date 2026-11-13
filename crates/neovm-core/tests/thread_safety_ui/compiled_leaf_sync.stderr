@@ -7,10 +7,10 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 11 |     ThreadTransfer::<CompiledLeaf>::transfer();
    |                                     ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<CompiledLeaf>` due to unsatisfied trait bounds
    |
-  ::: src/emacs_core/runtime/jit/compile/leaf.rs
+  ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs
    |
    | pub struct CompiledLeaf {
-   | ----------------------- doesn't satisfy `CompiledLeaf: Sync`
+   | ----------------------- doesn't satisfy `CompiledLeaf: std::marker::Sync`
    |
   ::: $CARGO/cranelift-jit-$VERSION/src/memory/mod.rs
    |
@@ -18,45 +18,45 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
    | --------------------------- doesn't satisfy `_: Sync`
    |
    = note: the following trait bounds were not satisfied:
-           `Cell<bool>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `RefCell<Option<Rc<CompiledLeaf>>>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `*const u8: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `RefCell<HashMap<std::string::String, cranelift_jit::backend::SendWrapper<*const u8>>>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `Cell<i64>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `Cell<u64>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `RefCell<smallvec::SmallVec<[(u64, u32, u64); 4]>>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `RefCell<smallvec::SmallVec<[(u32, u64); 4]>>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `Cell<u32>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `*const TaggedValue: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `*const Cell<i64>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `*const compile::spec_slot::SpecSlot: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `*const u64: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `Cell<jit::tier2::T2State>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `Cell<(u64, u64)>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `RefCell<Option<Arc<RuntimeState>>>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `RefCell<jit::tier2::policy::PolicyState>: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `(dyn cranelift_jit::memory::JITMemoryProvider + Send + 'static): Sync`
-           which is required by `CompiledLeaf: Sync`
-           `*const (): Sync`
-           which is required by `CompiledLeaf: Sync`
-           `*mut u8: Sync`
-           which is required by `CompiledLeaf: Sync`
-           `(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static): Sync`
-           which is required by `CompiledLeaf: Sync`
+           `Cell<bool>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `RefCell<Option<Rc<CompiledLeaf>>>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `*const u8: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `RefCell<HashMap<std::string::String, cranelift_jit::backend::SendWrapper<*const u8>>>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `Cell<i64>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `Cell<u64>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `RefCell<smallvec::SmallVec<[(u64, u32, u64); 4]>>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `RefCell<smallvec::SmallVec<[(u32, u64); 4]>>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `Cell<u32>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `*const TaggedValue: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `*const Cell<i64>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `*const compile::spec_slot::SpecSlot: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `*const u64: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `Cell<jit::tier2::T2State>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `Cell<(u64, u64)>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `RefCell<Option<Arc<RuntimeState>>>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `RefCell<jit::tier2::policy::PolicyState>: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `(dyn cranelift_jit::memory::JITMemoryProvider + Send + 'static): std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `*const (): std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `*mut u8: std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`
+           `(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static): std::marker::Sync`
+           which is required by `CompiledLeaf: std::marker::Sync`

@@ -281,14 +281,15 @@ fn chrome_position_queries_do_not_reenter_chrome_or_signal_layout_busy() {
                 Ok(query) => WindowLayoutQueryOutcome::Ready(query),
                 Err(error) => WindowLayoutQueryOutcome::Failed(error),
             }
-        });
+        })
+        .expect("install the layout-query handler");
         crate::display_status_line::reset_mode_line_eval_count();
         if outer_is_query {
             assert!(!eval.eval_str("(posn-at-point 1)").unwrap().is_nil());
             assert_eq!(crate::display_status_line::header_line_eval_count(), 1);
         } else {
             let format = eval
-                .buffers
+                .buffer_manager_mut()
                 .get(buffer)
                 .expect("buffer")
                 .buffer_local_value("header-line-format")
@@ -310,7 +311,7 @@ fn chrome_position_queries_do_not_reenter_chrome_or_signal_layout_busy() {
         }
         assert_eq!(calls.get(), 1);
         assert_eq!(
-            eval.variable_value_by_name("chrome-query-returned"),
+            eval.default_value_only_by_name("chrome-query-returned"),
             Some(Value::T)
         );
         assert!(!neovm_core::emacs_core::xdisp::mode_line_display_active(
@@ -381,7 +382,8 @@ fn position_query_propagates_deferred_chrome_exit_to_lisp() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
 
     // Warm a reusable body first. The next query must still execute chrome
     // and propagate its throw rather than returning that observation.
@@ -431,7 +433,7 @@ fn position_query_reuses_body_only_after_measuring_the_current_partition() {
     );
     assert_eq!(first, repeated);
     assert_eq!(
-        eval.variable_value_by_name("position-chrome-calls"),
+        eval.default_value_only_by_name("position-chrome-calls"),
         Some(Value::fixnum(2)),
         "GNU pos_visible_p evaluates chrome once on every call, including body hits"
     );
@@ -445,7 +447,7 @@ fn position_query_reuses_body_only_after_measuring_the_current_partition() {
     assert!(taller.header_line_height > first.header_line_height);
     assert!(taller.regions.text_body.height < first.regions.text_body.height);
     assert_eq!(
-        eval.variable_value_by_name("position-chrome-calls"),
+        eval.default_value_only_by_name("position-chrome-calls"),
         Some(Value::fixnum(3)),
         "height convergence must not evaluate chrome twice"
     );
@@ -454,7 +456,7 @@ fn position_query_reuses_body_only_after_measuring_the_current_partition() {
     assert_eq!(probe::max_depth(), 0);
     assert_eq!(taller, repeated_tall);
     assert_eq!(
-        eval.variable_value_by_name("position-chrome-calls"),
+        eval.default_value_only_by_name("position-chrome-calls"),
         Some(Value::fixnum(4))
     );
     // Each partition owns its own bounded entry; returning to an unchanged
@@ -483,7 +485,7 @@ fn position_query_chrome_edits_the_body_before_its_only_walk() {
     let mut engine = LayoutEngine::new_without_font_metrics();
     let observed = query(&mut eval, &mut engine, frame, window, 5);
     assert_eq!(
-        eval.variable_value_by_name("position-edit-calls"),
+        eval.default_value_only_by_name("position-edit-calls"),
         Some(Value::fixnum(1)),
         "GNU measures chrome once, then walks the resulting source"
     );

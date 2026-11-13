@@ -24,6 +24,10 @@ jobs:
       NEOMACS_TUI_RECORD: on
       NEOMACS_TUI_RECORD_DELAY_MS: "0"
       NEOMACS_MELPA_ORACLE_EMACS: /opt/gnu-emacs-oracle/bin/emacs
+      # The release-pdump selection is defined ONCE here and read by both the
+      # verifier and the run step, so the checked selection cannot drift from
+      # the executed one.
+      RELEASE_PDUMP_FILTER: "test(batch_startup) or test(jit_observability) or test(main_stack_overflow)"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -55,10 +59,18 @@ jobs:
       # The release-pdump integration tests spawn target/release/neomacs with
       # the pdump fresh-build just produced; a debug-profile test harness is
       # enough (the feature fails loudly if the release binary is missing).
+      #
+      # The filter is a substring match and every test it targets is behind
+      # cfg(feature = "release-pdump-tests"), so a feature or enumeration
+      # problem can silently shrink the selection. Verify the selection
+      # against the module sources before trusting the run.
+      - name: Verify release-pdump selection
+        run: scripts/ci/verify-release-pdump-selection.sh
+
       - name: Run release-pdump integration tests
         run: >-
           cargo nextest run -p neomacs --features release-pdump-tests
-          -E 'test(batch_startup) or test(jit_observability) or test(main_stack_overflow)'
+          -E "$RELEASE_PDUMP_FILTER"
           --no-fail-fast
 
       - name: Run unit tests for neovm-core
@@ -71,7 +83,7 @@ jobs:
         run: cargo nextest run -p neomacs-tui-tests --release --no-fail-fast
 
       - name: Install Nix for exact MELPA test runtimes
-        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
 
       - name: Restore pinned MELPA source cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

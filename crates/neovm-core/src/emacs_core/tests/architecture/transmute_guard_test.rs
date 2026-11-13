@@ -2,6 +2,7 @@
 //! configuration. Follow module declarations rather than guessing from file
 //! names: a production module named `tests` must still be checked.
 
+use super::architecture_production_source_roots::production_source_roots;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use syn::ext::IdentExt;
@@ -11,7 +12,19 @@ use syn::{Attribute, Expr, Item, ItemMod, Lit, Meta};
 // Base 9bb11e25b0 had 14 production sites. This lane removes six pdump enum
 // conversions and two regex opcode conversions. Lower this ceiling whenever
 // another conversion is removed; never raise it for a new conversion.
-const TRANSMUTE_CEILING: usize = 6;
+//
+// 2026-11-10 peer-signed exception (cired2 fatal P4, pid f70ad89b): 6 -> 7.
+// The one new site is
+// neovm-system/src/emacs_core/system/os_signal/mod.rs
+// `previous_fault_handler`, which reconstitutes the SA_SIGINFO callback from
+// `sigaction.sa_sigaction` (an integer by ABI) so a synchronous SIGSEGV/
+// SIGBUS fault can chain to Rust std's stack-overflow detector before the
+// fatal report. There is no safe route from an integer to a function
+// pointer. The value is only ever read back from a sigaction this process
+// installed, after filtering SIG_DFL/SIG_IGN and requiring SA_SIGINFO. A
+// union spelling of the same conversion was rejected because it hides it
+// from this ratchet.
+const TRANSMUTE_CEILING: usize = 7;
 
 /// Whether a cfg predicate can be true with `test` disabled. Other cfg values
 /// vary across production builds, so both possibilities remain in the scan.
@@ -185,6 +198,41 @@ fn macro_references(mut cursor: syn::buffer::Cursor<'_>, symbol: &str) -> usize 
     count
 }
 
+impl ProductionWalker {
+    /// An alias could hide subsequent conversions from a path-based count.
+    /// Keep unsafe conversions explicit and qualified instead. `public`
+    /// permits a same-name re-export but never a rename.
+    fn check_use_tree(&self, tree: &syn::UseTree, public: bool) {
+        match tree {
+            syn::UseTree::Path(path) => self.check_use_tree(&path.tree, public),
+            syn::UseTree::Name(name) => {
+                if !public {
+                    assert_ne!(
+                        name.ident.unraw(),
+                        self.symbol,
+                        "qualify {} paths",
+                        self.symbol
+                    );
+                }
+            }
+            syn::UseTree::Rename(rename) => {
+                assert_ne!(
+                    rename.ident.unraw(),
+                    self.symbol,
+                    "do not alias {}",
+                    self.symbol
+                );
+            }
+            syn::UseTree::Glob(_) => {}
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.check_use_tree(item, public);
+                }
+            }
+        }
+    }
+}
+
 impl<'ast> Visit<'ast> for ProductionWalker {
     fn visit_item(&mut self, item: &'ast Item) {
         if !test_only(item_attributes(item)) {
@@ -270,28 +318,16 @@ impl<'ast> Visit<'ast> for ProductionWalker {
         self.visit_path(&invocation.path);
     }
 
-    fn visit_use_tree(&mut self, tree: &'ast syn::UseTree) {
-        // An alias could hide subsequent conversions from a path-based count.
-        // Keep unsafe conversions explicit and qualified instead.
-        match tree {
-            syn::UseTree::Name(name) => {
-                assert_ne!(
-                    name.ident.unraw(),
-                    self.symbol,
-                    "qualify {} paths",
-                    self.symbol
-                )
-            }
-            syn::UseTree::Rename(rename) => {
-                assert_ne!(
-                    rename.ident.unraw(),
-                    self.symbol,
-                    "do not alias {}",
-                    self.symbol
-                )
-            }
-            _ => visit::visit_use_tree(self, tree),
-        }
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        // A PUBLIC `use name;` re-export is a facade definition of the
+        // existing public path (AUTHORITY_PATHS names it), not a call-site
+        // import that could hide a conversion: the signed cfg-gated
+        // `pub use gc_thread::set_tagged_heap;` beside the glob in value's
+        // tagged/gc.rs is exactly this shape. Private imports and every alias
+        // stay rejected: an alias could hide a later conversion from the
+        // path-based count.
+        let public = matches!(item.vis, syn::Visibility::Public(_));
+        self.check_use_tree(&item.tree, public);
     }
 }
 
@@ -362,10 +398,44 @@ fn assert_production_ceiling(root: &Path, sites: &BTreeMap<PathBuf, usize>) {
     );
 }
 
+/// Production sites across every extracted source tree, keyed by
+/// workspace-relative path. The pre-split guard walked the single core module
+/// graph; the split moved most of that graph into the lower crates, so the
+/// ceiling covers all of them or it would silently stop counting.
+fn all_production_sites(symbol: &'static str) -> BTreeMap<String, usize> {
+    let mut sites = BTreeMap::new();
+    for root in production_source_roots() {
+        for (path, count) in production_sites_for(&root.src, symbol) {
+            let relative = path
+                .strip_prefix(&root.src)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            *sites
+                .entry(format!("{}/src/{relative}", root.crate_dir))
+                .or_insert(0) += count;
+        }
+    }
+    sites
+}
+
+fn assert_total_ceiling(sites: &BTreeMap<String, usize>) {
+    let count = sites.values().sum::<usize>();
+    let locations = sites
+        .iter()
+        .map(|(path, count)| format!("{path}: {count}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        count <= TRANSMUTE_CEILING,
+        "{count} production transmute sites exceed the ceiling {TRANSMUTE_CEILING}. \
+         Decode enums with TryFromPrimitive or FromRepr; this ceiling may only decrease.\n{locations}"
+    );
+}
+
 #[test]
 fn production_transmute_count_can_only_decrease() {
-    let root = neomacs_infra::crate_root!().join("src");
-    assert_production_ceiling(&root, &production_sites(&root));
+    assert_total_ceiling(&all_production_sites("transmute"));
 }
 
 #[test]
@@ -440,10 +510,54 @@ fn transmute_guard_rejects_aliases_that_hide_conversions() {
     production_sites(directory.path());
 }
 
+/// The public same-name re-export relaxation must not let a RENAME hide the
+/// installer: an aliased public re-export still reddens.
+#[test]
+#[should_panic(expected = "do not alias set_tagged_heap")]
+fn transmute_guard_rejects_a_public_rename_of_the_installer() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    std::fs::write(
+        directory.path().join("lib.rs"),
+        "mod gc_thread { pub fn set_tagged_heap() {} }\n\
+         pub use gc_thread::set_tagged_heap as renamed;\n",
+    )
+    .expect("write source fixture");
+    production_sites_for(directory.path(), "set_tagged_heap");
+}
+
+/// Only a PUBLIC use re-export is the facade shape; a private same-name
+/// import still reddens because it could hide a later conversion.
+#[test]
+#[should_panic(expected = "qualify set_tagged_heap paths")]
+fn transmute_guard_rejects_a_private_same_name_import() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    std::fs::write(
+        directory.path().join("lib.rs"),
+        "mod gc_thread { pub fn set_tagged_heap() {} }\n\
+         use gc_thread::set_tagged_heap;\n",
+    )
+    .expect("write source fixture");
+    production_sites_for(directory.path(), "set_tagged_heap");
+}
+
+/// The accepted shape itself: a public same-name re-export is a facade
+/// definition, not a call-site import.
+#[test]
+fn transmute_guard_accepts_a_public_same_name_reexport() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    std::fs::write(
+        directory.path().join("lib.rs"),
+        "mod gc_thread { pub fn set_tagged_heap() {} }\n\
+         pub use gc_thread::set_tagged_heap;\n",
+    )
+    .expect("write source fixture");
+    let sites = production_sites_for(directory.path(), "set_tagged_heap");
+    assert!(sites.values().all(|count| *count == 0), "{sites:?}");
+}
+
 #[test]
 fn production_heap_installers_use_the_allocation_root() {
-    let root = neomacs_infra::crate_root!().join("src");
-    let sites = production_sites_for(&root, "set_tagged_heap");
+    let sites = all_production_sites("set_tagged_heap");
     assert!(
         sites.is_empty(),
         "production must install TLS from the allocation root: {sites:?}"

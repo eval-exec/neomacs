@@ -9,7 +9,7 @@ use neovm_core::face::{Color as NeoColor, Face as NeoFace, FaceTable};
 mod compiled_collection_mutation;
 
 fn test_buffer_snapshot() -> LayoutBufferSnapshot {
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = context
         .buffer_manager()
         .current_buffer()
@@ -238,7 +238,7 @@ fn source_face_cache_is_keyed_by_base_face_id() {
 
 #[test]
 fn buffer_source_face_resolver_uses_buffer_face_remapping() {
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = context
         .buffer_manager()
         .current_buffer()
@@ -315,7 +315,7 @@ fn buffer_source_face_resolver_uses_buffer_face_remapping() {
 
 #[test]
 fn named_face_background_equal_to_global_default_still_overrides_buffer_default() {
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = context
         .buffer_manager()
         .current_buffer()
@@ -586,7 +586,7 @@ fn source_face_observations_borrow_the_existing_realization() {
 
 #[test]
 fn consecutive_face_lookups_reuse_hashing_and_replay_mutable_dependencies() {
-    let _context = Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     use neovm_core::tagged::collection_reads::capture;
     let table = FaceTable::new();
     let resolver = test_face_resolver(&table);
@@ -623,7 +623,7 @@ fn consecutive_face_lookups_reuse_hashing_and_replay_mutable_dependencies() {
 
 #[test]
 fn consecutive_face_lookup_preserves_structural_equality_and_base_identity() {
-    let _context = Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = test_face_resolver(&table);
     let mut state = DisplaySourceResolveState::default();

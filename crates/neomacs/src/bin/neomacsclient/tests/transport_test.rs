@@ -68,8 +68,8 @@ fn the_server_can_ask_for_a_retry_on_the_terminal() {
 
 fn tty_identity() -> TtyIdentity {
     TtyIdentity {
-        device: "/dev/pts/9".to_string(),
-        terminal_type: "xterm-256color".to_string(),
+        device: OsString::from("/dev/pts/9"),
+        terminal_type: OsString::from("xterm-256color"),
     }
 }
 
@@ -81,9 +81,10 @@ fn a_retry_plan_drops_nowait_and_asks_for_no_window_system() {
     assert!(!attempt.nowait, "GNU clears nowait on the retry");
 
     let plan = build_request(&options, &attempt, Some(":0"), Ok(tty_identity())).unwrap();
-    assert!(plan.request.contains("-tty "), "{}", plan.request);
-    assert!(!plan.request.contains("-nowait"), "{}", plan.request);
-    assert!(!plan.request.contains("-window-system"), "{}", plan.request);
+    let request = String::from_utf8_lossy(&plan.request);
+    assert!(request.contains("-tty "), "{request}");
+    assert!(!request.contains("-nowait"), "{request}");
+    assert!(!request.contains("-window-system"), "{request}");
     assert!(plan.tty.is_some());
 }
 
@@ -94,9 +95,17 @@ fn a_missing_terminal_is_fatal_only_for_a_tty_request() {
     let tty_request = options(&["-t", "FILE"]);
     let attempt = resolve_attempt(&tty_request, false, None);
     assert_eq!(attempt.transport, FrameTransport::Tty);
-    let error = build_request(&tty_request, &attempt, None, Err("no terminal".into()))
-        .expect_err("a tty request without a terminal must fail");
-    assert!(error.contains("no terminal"), "{error}");
+    let error = build_request(
+        &tty_request,
+        &attempt,
+        None,
+        Err(TtyIdentityError::Message("no terminal".to_string())),
+    )
+    .expect_err("a tty request without a terminal must fail");
+    assert!(
+        matches!(&error, ClientError::Message(message) if message.contains("no terminal")),
+        "{error:?}"
+    );
 
     let file_request = options(&["FILE"]);
     let attempt = resolve_attempt(&file_request, true, None);
@@ -104,9 +113,10 @@ fn a_missing_terminal_is_fatal_only_for_a_tty_request() {
         &file_request,
         &attempt,
         Some(":0"),
-        Err("no terminal".into()),
+        Err(TtyIdentityError::Message("no terminal".to_string())),
     )
     .expect("a file request goes without a tty identity");
     assert!(plan.tty.is_none());
-    assert!(!plan.request.contains("-tty "), "{}", plan.request);
+    let request = String::from_utf8_lossy(&plan.request);
+    assert!(!request.contains("-tty "), "{request}");
 }

@@ -21,7 +21,7 @@ fn directory_scans_poll_pending_quit_on_each_entry() {
         Operation::Completion,
         Operation::AllCompletions,
     ] {
-        let mut ctx = Context::new();
+        let mut ctx = crate::test_utils::new_context();
         ctx.quit_requested.request();
         let result = match operation {
             Operation::Names => builtin_directory_files(

@@ -107,6 +107,11 @@ impl RenderApp {
     }
 
     pub(super) fn handle_resumed(&mut self, event_loop: &dyn ActiveEventLoop) {
+        // winit has installed the AppKit application menu by the time
+        // surfaces are requested; route its Quit command through Emacs.
+        #[cfg(target_os = "macos")]
+        super::macos_quit_redirect::install(&self.comms.input_tx);
+
         if !self.lifecycle_flags.resumed_seen {
             tracing::info!(
                 "Render thread resumed: primary_window_exists={} size={}x{} title={:?}",
@@ -260,6 +265,11 @@ impl RenderApp {
     }
 
     pub(super) fn handle_about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        // A Cmd-Q that arrived while the input queue was full is retried here
+        // rather than dropped or blocked on the AppKit main thread.
+        #[cfg(target_os = "macos")]
+        super::macos_quit_redirect::deliver_pending_quit(&self.comms.input_tx);
+
         // One observation for the whole pass. Everything this pass ages,
         // schedules or services is dated to the same instant, so two windows
         // cannot disagree about what time it is and a deadline cannot be
@@ -564,6 +574,14 @@ impl RenderApp {
         }
         if let Some(tooltip_deadline) = self.menus.tooltip_deadline() {
             deadline = Some(deadline.map_or(tooltip_deadline, |d| d.min(tooltip_deadline)));
+        }
+        // A deferred Cmd-Q must not wait for an unrelated event to wake the
+        // loop: keep a bounded retry deadline until the queue has room.
+        #[cfg(target_os = "macos")]
+        if super::macos_quit_redirect::quit_is_pending() {
+            const QUIT_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+            let quit_retry = std::time::Instant::now() + QUIT_RETRY_INTERVAL;
+            deadline = Some(deadline.map_or(quit_retry, |d| d.min(quit_retry)));
         }
         match deadline {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),

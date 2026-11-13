@@ -24,10 +24,10 @@ From the repo root (any cwd works; on this box, inside `nix develop`):
 ```sh
 ./crates/neovm-core/tests/n5-grace-loom/run.sh
 # or directly:
-cargo test --manifest-path crates/neovm-core/tests/n5-grace-loom/Cargo.toml
+cargo nextest run --manifest-path crates/neovm-core/tests/n5-grace-loom/Cargo.toml
 ```
 
-Extra arguments pass through (`run.sh --test ledger`, `run.sh -- --nocapture`
+Extra arguments pass through (`run.sh --test ledger`, `run.sh --no-capture`
 to see the receipts and witness lines).
 
 **Bounds and cost.** Loom preemption bound **2** (`N5_PREEMPTIONS` to

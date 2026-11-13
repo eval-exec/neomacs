@@ -555,6 +555,35 @@ const ROBE_TEST_PRELUDE: &str = r####"
           (funcall callback console process))
       (when process
         (neomacs-robe-test-close-process process))
+      ;; A failing case currently loses the Ruby console transcript and the
+      ;; server access log when the unwind cleanup kills the buffer.  When the
+      ;; caller asks for it, preserve both distinct per case (the batch shares
+      ;; one environment variable, so a single path would keep only the last
+      ;; case) so a failure can be diagnosed from its own real request/response
+      ;; stream.
+      (let* ((base (getenv "NEOMACS_ROBE_TEST_CONSOLE_LOG"))
+             (case-name
+              (and base (file-name-nondirectory (directory-file-name root))))
+             (log (and case-name
+                       (concat (file-name-sans-extension base)
+                               "-" case-name ".log"))))
+        (when (and log (buffer-live-p console))
+          (let ((text
+                 (with-current-buffer console
+                   (buffer-substring-no-properties (point-min) (point-max))))
+                (port
+                 (and (local-variable-p 'robe-port console)
+                      (buffer-local-value 'robe-port console))))
+            (with-temp-file log
+              (insert text)
+              (let ((access
+                     (and (integerp port)
+                          (expand-file-name
+                           (format "robe-access-%s.log" port)
+                           temporary-file-directory))))
+                (when (and access (file-readable-p access))
+                  (insert (format "\n;; robe access log: %s\n" access))
+                  (insert-file-contents access)))))))
       (setq inf-ruby-buffers saved-buffers
             inf-ruby-buffer saved-buffer)
       (when (buffer-live-p console)

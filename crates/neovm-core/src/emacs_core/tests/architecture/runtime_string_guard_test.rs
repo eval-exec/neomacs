@@ -1,6 +1,22 @@
+use super::architecture_production_source_roots::production_file;
+
+/// Read the named `emacs_core` source through the shared production roots.
+/// The paths below are the pre-split ones relative to `src/emacs_core/`; the
+/// owning crate is resolved at run time so moved files stay covered (RULE 19).
+fn read_source(path: &str) -> String {
+    let resolved = if let Some(relative) = path.strip_prefix("../../../neovm-value/src/") {
+        format!("neovm-value/src/{relative}")
+    } else {
+        format!("src/emacs_core/{path}")
+    };
+    let file = production_file(&resolved);
+    std::fs::read_to_string(&file)
+        .unwrap_or_else(|error| panic!("read {}: {error}", file.display()))
+}
+
 macro_rules! source_files {
     ($($path:literal),+ $(,)?) => {
-        [$(($path, include_str!(concat!("../../", $path)))),+]
+        [$(($path, read_source($path))),+]
     };
 }
 
@@ -23,7 +39,7 @@ fn migrated_string_subsystems_do_not_call_generic_runtime_string_adapter_directl
         "editing/dired/mod.rs",
         "display/display/mod.rs",
         "editing/editfns/mod.rs",
-        "runtime/errors/mod.rs",
+        "../../../neovm-value/src/errors/mod.rs",
         "system/fileio/mod.rs",
         "system/filelock/mod.rs",
         "lisp/native/fns/mod.rs",
@@ -33,7 +49,7 @@ fn migrated_string_subsystems_do_not_call_generic_runtime_string_adapter_directl
         "runtime/eval/mod.rs",
         "runtime/eval/tree_walk.rs",
         "commands/interactive/mod.rs",
-        "commands/keyboard/pure.rs",
+        "../../../neovm-value/src/keyboard_pure.rs",
         "commands/kmacro/mod.rs",
         "lisp/load/mod.rs",
         "lisp/lread/mod.rs",
@@ -44,7 +60,7 @@ fn migrated_string_subsystems_do_not_call_generic_runtime_string_adapter_directl
         "system/process/mod.rs",
         "lisp/reader/mod.rs",
         "text/syntax/mod.rs",
-        "text/textprop/mod.rs",
+        "editing/textprop/mod.rs",
         "system/timefns/mod.rs",
         "system/timer/mod.rs",
         "editing/undo/mod.rs",

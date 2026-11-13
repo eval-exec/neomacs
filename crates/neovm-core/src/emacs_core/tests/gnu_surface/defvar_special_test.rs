@@ -29,7 +29,7 @@ fn assert_gnu_special(eval: &mut Context, name: &str, default_pred: &str) {
 
 fn assert_batch(batch: &[(&str, &str)]) {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     for (name, pred) in batch {
         assert_gnu_special(&mut eval, name, pred);
     }
@@ -198,7 +198,7 @@ fn frame_window_terminal_defvars_are_special_with_gnu_defaults() {
 
 #[test]
 fn gnu_31_1_delete_frame_selection_is_a_special_lisp_object() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // GNU 31.1 replaces the old boolean with a forwarded Lisp object.
     // In particular, non-nil values must not be coerced to t.
     let form = r##"
@@ -300,7 +300,7 @@ fn file_coding_charset_defvars_are_special_with_gnu_defaults() {
 #[test]
 fn keyboard_defvar_let_is_visible_to_callees() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
             "(progn

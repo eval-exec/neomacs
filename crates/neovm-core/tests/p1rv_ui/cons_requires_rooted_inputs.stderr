@@ -11,7 +11,7 @@ error[E0308]: arguments to this method are incorrect
   = note: expected reference `&SharedRoot`
              found reference `&TaggedValue`
 note: method defined here
- --> src/tagged/gc/mutator_registration/cons_allocation.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/cons_allocation.rs
   |
   |     pub fn cons(
   |            ^^^^

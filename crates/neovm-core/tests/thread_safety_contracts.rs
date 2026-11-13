@@ -40,6 +40,16 @@ fn thread_safety_compile_contracts() {
     cases.compile_fail(context_cases(target));
 }
 
+// RB-B1: the non-swappable obarray-view capability. Kept in its own runner so
+// a local bless of this one golden cannot rewrite the larger thread-safety
+// family.
+#[test]
+#[cfg(feature = "contract-fixtures")]
+fn obarray_view_swap_compile_contracts() {
+    let cases = trybuild::TestCases::new();
+    cases.compile_fail("tests/thread_safety_ui/obarray_view_cannot_be_swapped.rs");
+}
+
 // The sole-owner eval phase's fixtures sit next to its unit tests, but the
 // runner lives here: trybuild compiles them against the non-test lib, so the
 // contract jobs need no opt-level-2 build of the whole lib unit-test binary.
@@ -47,8 +57,8 @@ fn thread_safety_compile_contracts() {
 #[cfg(feature = "contract-fixtures")]
 fn sole_owner_compile_contracts() {
     let cases = trybuild::TestCases::new();
-    cases.pass("src/emacs_core/runtime/eval/tests/sole_owner_pass/*.rs");
-    cases.compile_fail("src/emacs_core/runtime/eval/tests/sole_owner_ui/*.rs");
+    cases.pass("../neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_pass/*.rs");
+    cases.compile_fail("../neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/*.rs");
 }
 
 // The parallel-Lisp contract runners below lived in the `core` binary, which
@@ -69,15 +79,9 @@ fn nmjit_n1_sketch_compile_contracts() {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/nmjit-type-contracts/Cargo.toml");
     let status = std::process::Command::new(env!("CARGO"))
-        .args(["test", "--locked", "--manifest-path"])
+        .args(["nextest", "run", "--locked", "--manifest-path"])
         .arg(manifest)
-        .args([
-            "--test",
-            "contracts",
-            "--",
-            "--nocapture",
-            "--test-threads=1",
-        ])
+        .args(["--test", "contracts", "--no-capture"])
         .status()
         .expect("launch isolated N1 sketch contracts");
     assert!(

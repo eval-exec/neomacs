@@ -50,7 +50,7 @@ fn enable_flow() {
 }
 
 fn frame_with_format(line: ChromeLine, format: &str) -> (Context, FrameId) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str(
         "(setq noninteractive nil inhibit-redisplay nil \
                mode-line-format nil header-line-format nil tab-line-format nil \

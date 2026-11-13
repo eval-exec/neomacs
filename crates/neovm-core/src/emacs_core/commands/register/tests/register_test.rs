@@ -1,5 +1,6 @@
 use super::*;
 use crate::buffer::{BufferId, LispCharPos1};
+use crate::emacs_core::eval::data::register::RegisterManager;
 use crate::heap_types::LispString;
 
 #[test]
@@ -27,10 +28,11 @@ fn register_copied_properties_have_only_manager_roots() {
     }
 
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    eval.gc_stress = false;
+    let mut eval = crate::test_utils::new_context();
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     eval.gc_collect_exact();
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { eval.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     let key = Value::symbol("register-owned-property");
     let probes = eval.with_gc_inhibited(|eval| {
         let mut probes = Vec::new();
@@ -48,26 +50,27 @@ fn register_copied_properties_have_only_manager_roots() {
             RegisterContent::KbdMacro(vec![payload(&mut probes), payload(&mut probes)]),
         );
         manager.set('n', RegisterContent::Number(42));
-        *eval.registers = manager;
+        *eval.registers_mut() = manager;
         probes
     });
     let check_live = |eval: &Context| {
         for Probe(bits) in &probes {
             assert!(
-                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                eval.tagged_heap()
+                    .retains_veclike(unsafe { Value::from_bits(*bits) }),
                 "register-only property vector was reclaimed"
             );
         }
         for (index, Probe(bits)) in probes.iter().enumerate() {
             assert_eq!(
-                Value::from_bits(*bits)
+                unsafe { Value::from_bits(*bits) }
                     .as_vector_data()
                     .expect("live register property vector")
                     .as_slice(),
                 &[Value::fixnum(index as i64)]
             );
         }
-        let Some(RegisterContent::Text(text)) = eval.registers.get('t') else {
+        let Some(RegisterContent::Text(text)) = eval.registers().get('t') else {
             panic!("retained text register");
         };
         assert_eq!(
@@ -79,36 +82,41 @@ fn register_copied_properties_have_only_manager_roots() {
         );
     };
 
-    let completed = eval.gc_count;
-    if eval.tagged_heap.generational_enabled() {
-        assert!(eval.tagged_heap.should_run_minor(false, false));
-        eval.gc_pending = true;
+    let completed = eval.gc_count_for_test();
+    if eval.tagged_heap().tagged_heap_generational_enabled() {
+        assert!(eval.tagged_heap().should_run_minor(false, false));
+        neovm_eval::test_support::authority::set_gc_pending_for_test(&mut eval, true);
         eval.gc_safe_point_exact();
-        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
-        assert!(!eval.tagged_heap.concurrent_mark_running());
+        assert!(
+            eval.tagged_heap().sweep_in_progress(),
+            "expected minor sweep"
+        );
+        assert!(!eval.tagged_heap().concurrent_mark_running());
         for _ in 0..10_000 {
-            if !eval.tagged_heap.sweep_in_progress() {
+            if !eval.tagged_heap().sweep_in_progress() {
                 break;
             }
             eval.gc_safe_point_exact();
         }
-        assert!(!eval.tagged_heap.sweep_in_progress());
-        assert!(!eval.tagged_heap.mark_in_progress());
+        assert!(!eval.tagged_heap().sweep_in_progress());
+        assert!(!eval.tagged_heap().mark_in_progress());
     } else {
         eval.gc_collect_exact();
     }
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_live(&eval);
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     eval.gc_collect_exact();
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_live(&eval);
 
-    eval.registers.clear_all();
+    eval.registers_mut().clear_all();
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
-            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            !eval
+                .tagged_heap()
+                .retains_veclike(unsafe { Value::from_bits(bits) }),
             "retired register graph remained permanently rooted"
         );
     }
@@ -298,7 +306,7 @@ fn test_builtin_copy_and_insert() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // copy-to-register
     let result = builtin_copy_to_register(
@@ -323,7 +331,7 @@ fn test_builtin_number_and_increment() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // number-to-register
     let result = builtin_number_to_register(&mut eval, vec![Value::fixnum(10), Value::char('n')]);
@@ -349,7 +357,7 @@ fn test_builtin_increment_empty_register() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Incrementing empty register starts from 0
     let result = builtin_increment_register(&mut eval, vec![Value::fixnum(7), Value::char('e')]);
@@ -365,7 +373,7 @@ fn test_builtin_set_and_get_register() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Set string
     let result = builtin_set_register(
@@ -392,7 +400,7 @@ fn test_builtin_view_register() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Empty register
     let result = builtin_view_register(&mut eval, vec![Value::char('v')]);
@@ -401,7 +409,7 @@ fn test_builtin_view_register() {
     assert!(desc.as_utf8_str().unwrap().contains("empty"));
 
     // Text register
-    eval.registers.set(
+    eval.registers_mut().set(
         'v',
         RegisterContent::Text(LispString::from_unibyte(b"some text".to_vec())),
     );
@@ -412,7 +420,7 @@ fn test_builtin_view_register() {
     assert!(desc.as_utf8_str().unwrap().contains("some text"));
 
     // Number register
-    eval.registers.set('v', RegisterContent::Number(99));
+    eval.registers_mut().set('v', RegisterContent::Number(99));
     let result = builtin_view_register(&mut eval, vec![Value::char('v')]);
     assert!(result.is_ok());
     let desc = result.unwrap();
@@ -424,21 +432,29 @@ fn test_builtin_point_to_register_stores_marker() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
-    let current_buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let mut eval = crate::test_utils::new_context();
+    let current_buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
 
     builtin_point_to_register(&mut eval, vec![Value::char('p')]).expect("point-to-register");
 
     let stored = builtin_get_register(&mut eval, vec![Value::char('p')]).expect("get-register");
     assert!(stored.is_marker());
     assert_eq!(
-        crate::emacs_core::marker::builtin_marker_buffer_in_buffers(&eval.buffers, vec![stored],)
+        crate::emacs_core::marker::builtin_marker_buffer_in_buffers(&eval.edit.buffers, &[stored])
             .expect("marker-buffer"),
         Value::make_buffer(current_buffer_id)
     );
     assert_eq!(
-        crate::emacs_core::marker::builtin_marker_position_in_buffers(&eval.buffers, &[stored])
-            .expect("marker-position"),
+        crate::emacs_core::marker::builtin_marker_position_in_buffers(
+            &eval.edit.buffers,
+            &[stored]
+        )
+        .expect("marker-position"),
         Value::fixnum(1)
     );
 }
@@ -448,9 +464,13 @@ fn test_builtin_point_to_register_stores_lisp_char_position() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buffer.insert("\u{20AC}x");
         buffer.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new("\u{20AC}".len()));
         assert_eq!(buffer.point_lisp_char_pos().as_i64(), 2);
@@ -461,8 +481,11 @@ fn test_builtin_point_to_register_stores_lisp_char_position() {
     let stored = builtin_get_register(&mut eval, vec![Value::char('p')]).expect("get-register");
     assert!(stored.is_marker());
     assert_eq!(
-        crate::emacs_core::marker::builtin_marker_position_in_buffers(&eval.buffers, &[stored])
-            .expect("marker-position"),
+        crate::emacs_core::marker::builtin_marker_position_in_buffers(
+            &eval.edit.buffers,
+            &[stored]
+        )
+        .expect("marker-position"),
         Value::fixnum(2)
     );
 }
@@ -472,7 +495,7 @@ fn test_builtin_register_to_string() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Empty register => nil
     let empty = builtin_register_to_string(&mut eval, vec![Value::char('r')]).unwrap();
@@ -489,15 +512,15 @@ fn rectangle_and_file_registers_preserve_raw_unibyte_strings() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
-    eval.registers.set(
+    let mut eval = crate::test_utils::new_context();
+    eval.registers_mut().set(
         'r',
         RegisterContent::Rectangle(vec![
             LispString::from_unibyte(vec![0xFF]),
             LispString::from_unibyte(b"ok".to_vec()),
         ]),
     );
-    eval.registers.set(
+    eval.registers_mut().set(
         'f',
         RegisterContent::File(LispString::from_unibyte(vec![0xFF])),
     );
@@ -523,7 +546,7 @@ fn test_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // copy-to-register needs at least 2 args
     let result = builtin_copy_to_register(&mut eval, vec![Value::char('a')]);
@@ -539,7 +562,7 @@ fn register_text_preserves_raw_unibyte_payload() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let raw = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
 
     builtin_set_register(&mut eval, vec![Value::char('r'), raw]).unwrap();

@@ -7,8 +7,20 @@ license.workspace = true
 repository.workspace = true
 description = "Worker runtime and scheduler scaffolding for NeoVM"
 
+[features]
+# Explicit forwards for what neovm-core's dependency edges used to bring in
+# through their enabled defaults.  Kept as features so --no-default-features
+# stays a real no-jit build.
+default = ["jit", "sqlite"]
+jit = ["neovm-core/jit"]
+sqlite = ["neovm-core/sqlite"]
+
 [dependencies]
 neovm-core.workspace = true
 neovm-host-abi.workspace = true
 static_assertions.workspace = true
 thiserror.workspace = true
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

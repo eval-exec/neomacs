@@ -5,6 +5,37 @@ use super::*;
 use neovm_core::emacs_core::value::Value;
 use std::num::NonZeroUsize;
 
+/// The collector mode is pinned per fixture instead of inherited from the test
+/// runner's environment: the canonical Rows producers require GEN1, and the
+/// GEN0 twin asserts the typed refusal instead.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GcMode {
+    Generational,
+    Legacy,
+}
+
+impl GcMode {
+    fn apply(self, context: &mut Context) {
+        let enabled = self == Self::Generational;
+        // SAFETY: the fixture owns this Context and assembles it serially
+        // before any Layout call; no collector or compiled leaf runs across
+        // the per-heap policy switch.
+        unsafe {
+            neovm_value::test_support::authority::set_generational_enabled_for_test(
+                context.tagged_heap_mut(),
+                enabled,
+            );
+        }
+        assert_eq!(
+            neovm_value::test_support::authority::generational_enabled_for_test(
+                context.tagged_heap()
+            ),
+            enabled,
+            "the Rows fixture must run under its explicitly pinned GC mode",
+        );
+    }
+}
+
 fn rows() -> WindowLayoutQueryScope {
     WindowLayoutQueryScope::Rows {
         start: LispCharPos1::ONE,
@@ -13,7 +44,12 @@ fn rows() -> WindowLayoutQueryScope {
 }
 
 fn fixture(warm: bool) -> (Context, FrameId, WindowId, BufferId) {
-    let mut context = Context::new();
+    fixture_with_mode(warm, GcMode::Generational)
+}
+
+fn fixture_with_mode(warm: bool, gc: GcMode) -> (Context, FrameId, WindowId, BufferId) {
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
+    gc.apply(&mut context);
     let source = context.buffer_manager().current_buffer().unwrap().id();
     context
         .buffer_manager_mut()
@@ -88,6 +124,15 @@ fn rows_lifetime_automatic_numeric_gen1_positive_has_real_geometry_and_drops_lea
         .get_mut(source)
         .unwrap()
         .insert("after observation");
+}
+
+#[test]
+fn rows_lifetime_gen0_refuses_typed_generational_disabled() {
+    let (context, frame, _window, _source) = fixture_with_mode(true, GcMode::Legacy);
+    let refusal = context
+        .begin_static_rows_observation(frame)
+        .expect_err("GEN0 must refuse the canonical Rows observation");
+    assert_eq!(refusal, RowsObservationRefusal::GenerationalDisabled);
 }
 
 #[test]

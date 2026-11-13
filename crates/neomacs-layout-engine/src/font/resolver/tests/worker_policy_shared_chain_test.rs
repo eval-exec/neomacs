@@ -9,7 +9,7 @@ fn selection_size() -> FontSelectionSize {
 
 #[test]
 fn worker_capture_budget_is_independent_of_owner_chain_length() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str(
         "(set-fontset-font t ?好 (font-spec :family \"first\" :registry \"iso10646-1\"))",
     )
@@ -35,7 +35,7 @@ fn worker_capture_budget_is_independent_of_owner_chain_length() {
 
 #[test]
 fn worker_capture_keeps_long_configured_names_in_shared_owner_storage() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str(
         "(set-fontset-font t ?好 (font-spec :family \"first\" :registry \"iso10646-1\"))",
     )

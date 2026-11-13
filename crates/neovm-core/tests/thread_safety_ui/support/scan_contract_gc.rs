@@ -6,7 +6,7 @@
 
 use std::marker::PhantomData;
 
-#[path = "../../../src/tagged/gc/scan_contract.rs"]
+#[path = "../../../../neovm-value/src/tagged/gc/scan_contract.rs"]
 pub mod scan_contract;
 
 #[derive(Default)]
@@ -19,6 +19,13 @@ pub struct TaggedHeap {
 }
 
 impl TaggedHeap {
+    pub fn tagged_heap_identity(&self) -> usize {
+        1
+    }
+
+    /// The owner-alias fixture takes an immutable borrow through the
+    /// historical spelling to pin its E0502 golden; keep it as an alias so
+    /// that fixture and its golden stay unchanged.
     pub fn identity(&self) -> usize {
         1
     }

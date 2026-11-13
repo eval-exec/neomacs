@@ -13,6 +13,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use syn::visit::{self, Visit};
+
+use super::architecture_production_source_roots::{
+    production_file, production_source_roots, workspace_root,
+};
 use syn::{
     Attribute, Expr, GenericArgument, Item, Lit, Meta, PathArguments, Type, UseTree, Visibility,
 };
@@ -44,7 +48,9 @@ fn effect_capability_path(words: &[String]) -> Option<EffectCapability> {
             "RenderCommandSender" => return Some(EffectCapability::RenderCommands),
             "RenderEventLoop"
             | "build_render_event_loop"
-            | "build_render_event_loop_any_thread" => {
+            | "build_render_event_loop_any_thread"
+            | "open_gui_connection_host"
+            | "take_gui_event_loop" => {
                 return Some(EffectCapability::NativeEventLoop);
             }
             "RenderEventLoopProxy" => return Some(EffectCapability::NativeWake),
@@ -175,6 +181,7 @@ fn owner_allows(path: &str, owner: NativeOwner) -> bool {
             // emulator views. Their shared name does not make either semantic
             // caller an owner. Only these exact owner families may borrow them.
             path == "neovm-core/src/emacs_core/display/terminal/pure.rs"
+                || path == "neovm-display/src/emacs_core/display/terminal/pure.rs"
                 || path == format!("{frontend}tty_frontend.rs")
                 || path == format!("{frontend}secondary_tty.rs")
                 || path == format!("{display}terminal/mod.rs")
@@ -1216,8 +1223,10 @@ impl<'ast> Visit<'ast> for Publication {
 fn binding_publication_uses_existing_context_projection() {
     // Set/VarSet/VarBind/Unbind and their JIT shims remain permitted unchanged.
     // Only the actual native effect receiver is certified here.
-    let source = include_str!("../../runtime/eval/mod.rs");
-    let file = syn::parse_file(source).expect("parse evaluator");
+    let path = production_file("src/emacs_core/runtime/eval/mod.rs");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let file = syn::parse_file(&source).expect("parse evaluator");
     let method = file
         .items
         .iter()
@@ -1240,7 +1249,7 @@ fn binding_publication_uses_existing_context_projection() {
         "binding publication must invoke the setter on the alias bound from self.display_host; a void setter may use FIFO one-way publication, result/error operations remain synchronous"
     );
     assert!(
-        scan("neovm-core/src/emacs_core/runtime/eval/mod.rs", source).is_empty(),
+        scan("neovm-core/src/emacs_core/runtime/eval/mod.rs", &source).is_empty(),
         "binding publication acquired explicit native backing outside its projection"
     );
 }
@@ -1461,6 +1470,44 @@ fn accepts_private_native_backing_and_owned_protocol() {
 }
 
 #[test]
+fn rejects_gui_host_open_outside_main_anchors() {
+    let outside = r#"
+        fn prepare_gui_connection() {
+            let host = neomacs_display_runtime::render_thread::open_gui_connection_host("localhost").unwrap();
+            let _loop = neomacs_display_runtime::render_thread::take_gui_event_loop(host);
+        }
+    "#;
+    let details: Vec<_> = scan("neomacs/src/main.rs", outside)
+        .into_iter()
+        .filter(|violation| violation.kind == ViolationKind::OutsideEffectOwner)
+        .map(|violation| violation.detail)
+        .collect();
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("open_gui_connection_host")),
+        "{details:?}"
+    );
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("take_gui_event_loop")),
+        "{details:?}"
+    );
+
+    let inside = r#"
+        fn run() {
+            let host = neomacs_display_runtime::render_thread::open_gui_connection_host("localhost").unwrap();
+            let _loop = neomacs_display_runtime::render_thread::take_gui_event_loop(host);
+        }
+    "#;
+    assert!(
+        scan("neomacs/src/main.rs", inside).is_empty(),
+        "run remains the anchor that may open the GUI host"
+    );
+}
+
+#[test]
 fn ignores_test_only_native_controls_but_not_other_feature_arms() {
     let source = "#[cfg(test)] fn fixture(_: winit::event_loop::EventLoop) {} #[cfg(target_os = \"macos\")] fn production(_: winit::event_loop::EventLoop) {}";
     let violations = scan("neovm-core/src/emacs_core/editing/new_effect.rs", source);
@@ -1598,8 +1645,16 @@ impl<'ast> Visit<'ast> for RealWaitPermitMints {
 
 #[test]
 fn real_wait_permit_is_minted_only_inside_the_physical_native_executor() {
-    let root = neomacs_infra::crate_root!().canonicalize().unwrap();
-    let mut pending = crate_roots(&root);
+    // The permit type lives in the extracted host-effect tree. Seed the module
+    // walk from every production source root so the scan follows the split
+    // instead of stopping at core's re-export (RULE 19).
+    let root = workspace_root().canonicalize().expect("workspace root");
+    let mut pending = Vec::new();
+    for source_root in production_source_roots() {
+        pending.extend(crate_roots(
+            source_root.src.parent().expect("crate source parent"),
+        ));
+    }
     let mut seen = BTreeSet::new();
     let mut mints = Vec::new();
     while let Some(file) = pending.pop() {
@@ -1623,7 +1678,7 @@ fn real_wait_permit_is_minted_only_inside_the_physical_native_executor() {
     assert_eq!(
         mints,
         vec![(
-            "src/host_effect/wake/native_wait.rs".to_owned(),
+            "crates/neovm-eval/src/host_effect/wake/native_wait.rs".to_owned(),
             "BlockingNativeWait".to_owned(),
             "execute".to_owned(),
         )],

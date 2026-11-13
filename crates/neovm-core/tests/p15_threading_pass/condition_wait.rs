@@ -1,12 +1,12 @@
 #[path = "../p15_threading_support/actual_payload.rs"]
 mod actual_payload;
-use actual_payload::{tagged, threading};
+use actual_payload::{tagged, threading, value};
 #[path = "../p15_threading_support/actual_condition_neighbors.rs"]
 mod actual_condition_neighbors;
 use actual_condition_neighbors::{
     ConditionId, MutexId, ThreadKey, Wait, api, emacs_core, heap_types,
 };
-#[path = "../../src/emacs_core/runtime/eval/green/condition_wait.rs"]
+#[path = "../../../neovm-eval/src/emacs_core/runtime/eval/green/condition_wait.rs"]
 mod condition_wait;
 
 fn main() {

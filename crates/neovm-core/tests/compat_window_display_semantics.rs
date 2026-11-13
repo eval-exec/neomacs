@@ -1,8 +1,8 @@
 use neovm_core::buffer::BufferId;
 use neovm_core::emacs_core::{Context, Value, format_eval_result};
 use neovm_core::window::{
-    FrameManager, PresentedWindowRegions, SplitDirection, SplitPlacement, Window,
-    WindowDisplaySnapshot,
+    DisplayFrameExt, DisplayFrameManagerExt, FrameManager, PresentedWindowRegions, SplitDirection,
+    SplitPlacement, Window, WindowDisplaySnapshot,
 };
 
 fn publish_selected_gui_window_regions(
@@ -34,7 +34,7 @@ fn publish_selected_gui_window_regions(
 }
 
 fn run_neovm_gui_eval(body: &str) -> String {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let scratch = eval.buffer_manager_mut().create_buffer("*scratch*");
     eval.buffer_manager_mut().set_current(scratch);
     let frame_id = eval
@@ -50,7 +50,7 @@ fn run_neovm_gui_eval(body: &str) -> String {
 
 #[test]
 fn compat_gui_window_scroll_bars_round_trip() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let scratch = eval.buffer_manager_mut().create_buffer("*scratch*");
     eval.buffer_manager_mut().set_current(scratch);
     let frame_id = eval
@@ -114,7 +114,7 @@ fn compat_gui_window_vscroll_round_trip() {
 
 #[test]
 fn compat_gui_window_body_geometry_excludes_scroll_bar_area() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let scratch = eval.buffer_manager_mut().create_buffer("*scratch*");
     eval.buffer_manager_mut().set_current(scratch);
     let frame_id = eval
@@ -181,7 +181,7 @@ fn compat_gui_set_window_buffer_resets_vscroll_except_same_buffer_keep_margins()
 
 #[test]
 fn compat_gui_set_window_buffer_applies_display_defaults() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let scratch = eval.buffer_manager_mut().create_buffer("*scratch*");
     eval.buffer_manager_mut().set_current(scratch);
     let frame_id = eval
@@ -232,7 +232,7 @@ fn compat_split_window_copies_window_display_state() {
     // (window display state, scroll bar values, etc.). Construct an
     // empty Context first so a TaggedHeap is registered for this
     // thread.
-    let _eval = neovm_core::emacs_core::eval::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut frames = FrameManager::new();
     let frame_id = frames.create_frame("F1", 800, 600, BufferId(1));
     let original_window_id = frames.get(frame_id).expect("frame").window_list()[0];

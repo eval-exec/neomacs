@@ -1,0 +1,4241 @@
+use super::*;
+use crate::emacs_core::eval::VariableView;
+use neovm_edit::buffer::{
+    BufferId, CharLen, CharPos0, CharRange, EmacsBytePos, EmacsByteRange, LispCharPos1,
+};
+use neovm_text::emacs_core::regex::{
+    BufferRegexpMatchContext, BufferRegexpSyntaxProperties, MatchDataSource, MatchGroup,
+    char_pos_to_byte, char_pos_to_byte_lisp_string,
+};
+#[doc(hidden)]
+pub use neovm_value::error::{expect_args, expect_args_range, expect_fixnum, expect_min_args};
+use neovm_value::tagged::SymbolMode;
+use neovm_value::value::ValueKind;
+use strum::IntoStaticStr;
+
+/// GNU search state whose C implementation is held in predeclared `V...`
+/// variables rather than looked up by name for every operation.
+///
+/// The closed enum makes every supported identity explicit. Its exhaustive
+/// cache match means a newly added search variable cannot silently fall back
+/// to runtime string interning.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+enum SearchStateVariable {
+    CaseFoldSearch,
+    InhibitChangingMatchData,
+    CaseSymbolsAsWords,
+}
+
+impl SearchStateVariable {
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn symbol_id(self) -> SymId {
+        use std::sync::OnceLock;
+
+        static CASE_FOLD_SEARCH: OnceLock<SymId> = OnceLock::new();
+        static INHIBIT_CHANGING_MATCH_DATA: OnceLock<SymId> = OnceLock::new();
+        static CASE_SYMBOLS_AS_WORDS: OnceLock<SymId> = OnceLock::new();
+
+        let name: &'static str = self.into();
+        match self {
+            Self::CaseFoldSearch => *CASE_FOLD_SEARCH.get_or_init(|| intern(name)),
+            Self::InhibitChangingMatchData => {
+                *INHIBIT_CHANGING_MATCH_DATA.get_or_init(|| intern(name))
+            }
+            Self::CaseSymbolsAsWords => *CASE_SYMBOLS_AS_WORDS.get_or_init(|| intern(name)),
+        }
+    }
+}
+
+#[inline(always)]
+fn dynamic_or_global_symbol_value(
+    eval: &super::eval::Context,
+    variable: SearchStateVariable,
+) -> Option<Value> {
+    // GNU reads these via `find_symbol_value`: specials never have a lexenv
+    // cell, so skip that probe. The typed read answers the plain, buffer-local
+    // and forwarded shapes from their caches (U2.8).
+    eval.builtin_var_value(variable.symbol_id())
+}
+
+/// Map a regex front-end error string to its Lisp signal.  Compile
+/// errors are `invalid-regexp`; the matcher's fail-stack overflow is a
+/// plain `error` in GNU (`search.c:matcher_overflow`: `error ("Stack
+/// overflow in regexp matcher")`).
+pub(crate) fn regex_error_signal(msg: String) -> neovm_value::error::Flow {
+    if msg == neovm_text::emacs_core::regex_emacs::MATCHER_OVERFLOW_MESSAGE {
+        signal("error", vec![Value::string(msg)])
+    } else {
+        signal(LispCondition::InvalidRegexp, vec![Value::string(msg)])
+    }
+}
+
+// ===========================================================================
+// Search / Regex builtins (evaluator-dependent)
+// ===========================================================================
+
+/// GNU `search.c:282, 376, 1168, 2053` — every search path reads
+/// `Vinhibit_changing_match_data` at the top:
+///
+///     bool modify_match_data = NILP (Vinhibit_changing_match_data)
+///                              && modify_data;
+///
+/// When the variable is non-nil, the match data must stay pinned to
+/// its prior state across the search. Returns `true` when the
+/// variable is currently set (i.e. do NOT modify match data).
+/// Routes through `dynamic_or_global_symbol_value` so let-bindings
+/// and per-buffer overrides are observed, matching the audit #3 fix.
+fn read_inhibit_changing_match_data(eval: &super::eval::Context) -> bool {
+    dynamic_or_global_symbol_value(eval, SearchStateVariable::InhibitChangingMatchData)
+        .is_some_and(|v| !v.is_nil())
+}
+
+#[doc(hidden)]
+pub fn current_word_boundary_lookup(
+    eval: &super::eval::Context,
+) -> neovm_text::emacs_core::regex_emacs::WordBoundaryLookup {
+    // Moved down to the text layer at stage-3b T3 (TextHost read); core calls
+    // downward, text never calls up.
+    neovm_text::emacs_core::regex_emacs::current_word_boundary_lookup(eval)
+}
+
+/// Snapshot the match-time state, borrowing only the obarray so the caller can
+/// still take `&mut eval.buffers` for the search itself.
+fn current_buffer_regexp_match_context<'a>(
+    vars: VariableView<'a>,
+    buffers: &neovm_edit::buffer::BufferManager,
+    word_boundary: neovm_text::emacs_core::regex_emacs::WordBoundaryLookup,
+    syntax_properties: BufferRegexpSyntaxProperties,
+) -> BufferRegexpMatchContext<'a> {
+    BufferRegexpMatchContext::new(
+        neovm_text::emacs_core::syntax::SyntaxProperties::for_scan_with_symbols(
+            syntax_properties.is_honor(),
+            vars,
+            buffers,
+            word_boundary.symbol_mode(),
+        ),
+        word_boundary,
+    )
+}
+
+fn validated_string_syntax_source(
+    value: &Value,
+) -> Result<neovm_text::emacs_core::syntax::StringSyntaxPositionSource<'_>, Flow> {
+    neovm_text::emacs_core::syntax::StringSyntaxPositionSource::try_from(value).map_err(
+        |neovm_text::emacs_core::syntax::StringSyntaxPositionSourceError::NotString| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), *value],
+            )
+        },
+    )
+}
+
+fn string_syntax_position_signal(
+    error: neovm_text::emacs_core::syntax::StringSyntaxPositionError,
+) -> Flow {
+    use neovm_text::emacs_core::syntax::StringSyntaxPositionError;
+    match error {
+        StringSyntaxPositionError::OutOfRange { position } => signal(
+            LispCondition::ArgsOutOfRange,
+            vec![Value::fixnum(position.get()), Value::fixnum(position.get())],
+        ),
+        StringSyntaxPositionError::ToEndIntervals
+        | StringSyntaxPositionError::ForwardIntervals
+        | StringSyntaxPositionError::BackwardIntervals => {
+            signal(LispCondition::Error, vec![Value::string(error.to_string())])
+        }
+    }
+}
+
+/// Internal matching preserves typed syntax failures until its Lisp boundary.
+/// Threading: owned diagnostics only; no searched object or mutator borrow.
+#[derive(Debug, thiserror::Error)]
+#[doc(hidden)]
+pub enum FastStringMatchError {
+    #[error("{0}")]
+    Regexp(String),
+    #[error(transparent)]
+    Syntax(neovm_text::emacs_core::syntax::StringSyntaxPositionError),
+    #[error(transparent)]
+    Source(neovm_text::emacs_core::syntax::StringSyntaxPositionSourceError),
+}
+static_assertions::assert_impl_all!(FastStringMatchError: Send, Sync);
+
+impl FastStringMatchError {
+    #[doc(hidden)]
+    pub fn into_signal(self) -> Flow {
+        match self {
+            Self::Regexp(message) => regex_error_signal(message),
+            Self::Syntax(error) => string_syntax_position_signal(error),
+            // Actual Lisp arguments were checked before this internal API.
+            Self::Source(error) => {
+                signal(LispCondition::Error, vec![Value::string(error.to_string())])
+            }
+        }
+    }
+}
+
+/// The syntax lookup a regexp over STRING runs under: GNU's
+/// `RE_SETUP_SYNTAX_TABLE_FOR_OBJECT` for a string object (src/syntax.c:277),
+/// with the current buffer's syntax table as the base and the STRING's own
+/// intervals supplying each character's positional `syntax-table` property.
+#[inline]
+fn with_string_regexp_syntax_lookup<'a, R>(
+    syntax_table: Option<&neovm_text::emacs_core::syntax::SyntaxTable>,
+    category_table: Option<Value>,
+    word_boundary: neovm_text::emacs_core::regex_emacs::WordBoundaryLookup,
+    source: neovm_text::emacs_core::syntax::StringSyntaxPositionSource<'a>,
+    syntax_properties: neovm_text::emacs_core::syntax::SyntaxProperties<'a>,
+    with_lookup: impl for<'scan> FnOnce(
+        &'scan dyn neovm_text::emacs_core::regex_emacs::SyntaxLookup,
+    ) -> R,
+) -> Result<R, neovm_text::emacs_core::syntax::StringSyntaxPositionError> {
+    super::regex::with_string_syntax_lookup(
+        syntax_table.map(
+            |syntax_table| neovm_text::emacs_core::regex_emacs::BufferSyntaxLookup {
+                syntax_table: *syntax_table,
+                category_table,
+                word_boundary,
+            },
+        ),
+        source,
+        syntax_properties,
+        with_lookup,
+    )
+}
+
+/// The syntax state GNU's internal `fast_string_match_internal`
+/// (`src/search.c:485`) arms before matching: `re_match_object` = the searched
+/// string plus `RE_SETUP_SYNTAX_TABLE_FOR_OBJECT` (`src/syntax.c:277`), whose
+/// `SETUP_BUFFER_SYNTAX_TABLE` takes the base table -- and the category table
+/// and the `parse-sexp-lookup-properties` gate -- from the CURRENT BUFFER,
+/// exactly as the Lisp-visible `string-match` does. Its callers are the
+/// internal matchers: `completion-regexp-list` filtering
+/// (`src/minibuf.c:1592`, `src/dired.c:756`), the `directory-files` MATCH
+/// argument (`src/dired.c:311`) and `Ffind_file_name_handler`
+/// (`src/fileio.c:411`).
+///
+/// Owned and `Copy` so a caller snapshots it once and keeps matching between
+/// `eval.apply` calls (the completion predicate loop) without holding any
+/// borrow of the evaluator. The per-string property resolver is rebuilt from
+/// `(obarray, buffers)` at each match, and only when the snapshot's gate was
+/// set AND the string actually carries intervals -- a match over a
+/// propertyless string runs the position-free path, as GNU's
+/// `update_syntax_table` returns early when `interval_of` finds none.
+#[derive(Clone, Copy)]
+#[doc(hidden)]
+pub struct FastStringMatchSyntax {
+    /// `SETUP_BUFFER_SYNTAX_TABLE`: `None` when there is no current buffer,
+    /// which degrades to GNU's standard classification.
+    base: Option<neovm_text::emacs_core::regex_emacs::BufferSyntaxLookup>,
+    /// The current buffer's `parse-sexp-lookup-properties` at snapshot time.
+    honor_properties: bool,
+}
+
+impl FastStringMatchSyntax {
+    /// Snapshot from the evaluator -- the only constructor, so an internal
+    /// string matcher cannot exist without having consulted the current
+    /// buffer's tables. Infallible: the sole failure inside
+    /// `active_category_table_for_buffer` is the standard category table
+    /// failing to bootstrap, and a `None` category table already degrades to
+    /// the default classification at match time
+    /// (`BufferSyntaxLookup::char_has_category`).
+    #[doc(hidden)]
+    pub fn for_current_buffer(eval: &super::eval::Context) -> Self {
+        let current_buffer = eval.edit.buffers.current_buffer();
+        let base =
+            current_buffer.map(
+                |buffer| neovm_text::emacs_core::regex_emacs::BufferSyntaxLookup {
+                    syntax_table: neovm_text::emacs_core::syntax::SyntaxTable::for_buffer(buffer),
+                    category_table:
+                        neovm_text::emacs_core::category::active_category_table_for_buffer(
+                            current_buffer,
+                        )
+                        .ok(),
+                    word_boundary: current_word_boundary_lookup(eval),
+                },
+            );
+        let honor_properties = base.is_some()
+            && neovm_text::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval);
+        Self {
+            base,
+            honor_properties,
+        }
+    }
+
+    /// GNU `fast_string_match_internal`'s `re_search` over STRING (always
+    /// non-POSIX: `search.c` compiles the pattern with `posix = 0`).
+    #[allow(clippy::too_many_arguments)] // matching options stay explicit at the GNU-regexp boundary
+    #[doc(hidden)]
+    pub fn search(
+        &self,
+        vars: VariableView<'_>,
+        buffers: &neovm_edit::buffer::BufferManager,
+        pattern: &neovm_value::heap_types::LispString,
+        string: &neovm_value::heap_types::LispString,
+        searched_string: super::regex::SearchedString,
+        start: usize,
+        case_fold: bool,
+    ) -> Result<Option<super::regex::StringSearchSuccess>, FastStringMatchError> {
+        let heap_identity = match &searched_string {
+            super::regex::SearchedString::Heap(value) => Some(*value),
+            super::regex::SearchedString::Owned(_) => None,
+        };
+        self.search_with(vars, buffers, string, heap_identity, |syntax| {
+            super::regex::string_search_full_with_case_fold_source_lisp_pattern_posix_syntax(
+                pattern,
+                string,
+                searched_string,
+                start,
+                case_fold,
+                false,
+                None,
+                syntax,
+            )
+        })
+    }
+
+    /// The same engine search for a caller that only needs the match's byte
+    /// start and publishes no registers. `SearchedString` exists to retain the
+    /// payload inside `MatchData`; passing one here would copy the string for
+    /// a retention the caller discards, so this path borrows instead (GNU's
+    /// `fast_string_match_internal` likewise consumes the string by pointer).
+    #[allow(clippy::too_many_arguments)] // matching options stay explicit at the GNU-regexp boundary
+    #[doc(hidden)]
+    pub fn search_start(
+        &self,
+        vars: VariableView<'_>,
+        buffers: &neovm_edit::buffer::BufferManager,
+        pattern: &neovm_value::heap_types::LispString,
+        string: &neovm_value::heap_types::LispString,
+        start: usize,
+        case_fold: bool,
+    ) -> Result<Option<neovm_edit::buffer::EmacsBytePos>, FastStringMatchError> {
+        self.search_with(vars, buffers, string, None, |syntax| {
+            super::regex::string_search_start_with_case_fold_source_lisp_pattern_posix_syntax(
+                pattern, string, start, case_fold, false, None, syntax,
+            )
+        })
+    }
+
+    /// The syntax-source setup shared by every string engine entry: resolve
+    /// the current buffer's syntax/category tables and the searched string's
+    /// syntax properties once, then run `search` against that lookup.
+    #[doc(hidden)]
+    pub fn search_with<T>(
+        &self,
+        vars: VariableView<'_>,
+        buffers: &neovm_edit::buffer::BufferManager,
+        string: &neovm_value::heap_types::LispString,
+        heap_identity: Option<Value>,
+        search: impl for<'scan> FnOnce(
+            &'scan dyn neovm_text::emacs_core::regex_emacs::SyntaxLookup,
+        ) -> Result<Option<T>, String>,
+    ) -> Result<Option<T>, FastStringMatchError> {
+        let source = match heap_identity.as_ref() {
+            Some(value) => {
+                neovm_text::emacs_core::syntax::StringSyntaxPositionSource::try_from(value)
+                    .map_err(FastStringMatchError::Source)?
+            }
+            None => neovm_text::emacs_core::syntax::StringSyntaxPositionSource::owned(string),
+        };
+        let string = source.string();
+        let honor = self.honor_properties
+            && (!string.intervals().is_empty() || supplied_nonidentity_syntax_positions(string));
+        let properties = neovm_text::emacs_core::syntax::SyntaxProperties::for_scan_with_symbols(
+            honor,
+            vars,
+            buffers,
+            self.base
+                .map_or(neovm_value::tagged::SymbolMode::Bare, |base| {
+                    base.word_boundary.symbol_mode()
+                }),
+        );
+        let result = super::regex::with_string_syntax_lookup(self.base, source, properties, search)
+            .map_err(FastStringMatchError::Syntax)?;
+        result.map_err(FastStringMatchError::Regexp)
+    }
+}
+
+fn supplied_nonidentity_syntax_positions(string: &neovm_value::heap_types::LispString) -> bool {
+    string.character_count_kind() == neovm_value::heap_types::StringCharacterCountKind::Supplied
+        && string.is_multibyte()
+        && string.schars() != string.sbytes()
+}
+
+/// Snapshot the string-match property source, borrowing only the obarray.
+///
+/// The gate is the CURRENT BUFFER's `parse-sexp-lookup-properties`, whatever
+/// buffer the string itself came from: GNU tests the C variable mirroring that
+/// buffer-local binding at the `RE_SETUP_SYNTAX_TABLE_FOR_OBJECT` site. Unlike
+/// a buffer search there is nothing to propertize first -- `syntax-propertize`
+/// works on buffers -- so this is a plain read.
+/// `searched` is the string-match STRING argument. A string with no intervals
+/// has no property to read at any position -- GNU's `update_syntax_table`
+/// returns early when `interval_of` finds no interval -- so it is tested first,
+/// ahead of the flag: the test is a pointer load on the string, the flag is a
+/// dynamic-variable lookup, and a `string-match` over a propertyless string
+/// (very nearly all of them) must pay neither that lookup nor the resolver
+/// snapshot behind it.
+pub(crate) fn current_string_match_syntax_properties<'a>(
+    eval: &super::eval::Context,
+    vars: VariableView<'a>,
+    buffers: &neovm_edit::buffer::BufferManager,
+    searched: Option<&Value>,
+) -> neovm_text::emacs_core::syntax::SyntaxProperties<'a> {
+    let honor = searched.is_some_and(|value| {
+        neovm_value::value::string_has_text_properties_for_value(*value)
+            || value
+                .as_lisp_string()
+                .is_some_and(supplied_nonidentity_syntax_positions)
+    }) && neovm_text::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval);
+    neovm_text::emacs_core::syntax::SyntaxProperties::for_scan_with_symbols(
+        honor,
+        vars,
+        buffers,
+        eval.symbol_mode(),
+    )
+}
+
+fn buffer_byte_to_lisp_char(buf: &neovm_edit::buffer::Buffer, byte_pos: EmacsBytePos) -> i64 {
+    buf.emacs_byte_pos_to_lisp_char_pos(byte_pos).as_i64()
+}
+
+fn match_data_for_explicit_string_arg(md: &super::regex::MatchData) -> super::regex::MatchData {
+    match md.source() {
+        MatchDataSource::String => md.clone(),
+        MatchDataSource::Buffer(_) => super::regex::MatchData::string(md.groups_snapshot(), None),
+    }
+}
+
+fn buffer_byte_to_char_pos(buf: &neovm_edit::buffer::Buffer, byte_pos: EmacsBytePos) -> CharPos0 {
+    buf.emacs_byte_pos_to_char_pos_clamped(byte_pos)
+}
+
+/// GNU `search_buffer`'s `n == 0` case: searching zero times does not move
+/// point, and (unless the caller inhibits it) makes the match data an empty
+/// match at point, `set_search_regs (pos_byte, 0)`.
+fn commit_zero_count_search(
+    buffers: &neovm_edit::buffer::BufferManager,
+    buffer_id: neovm_edit::buffer::BufferId,
+    point: EmacsBytePos,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
+) {
+    if let Some(match_data) = match_data
+        && let Some(buf) = buffers.get(buffer_id)
+    {
+        super::regex::SearchRegisters::empty_match_at(point).publish_buffer_into(buf, match_data);
+    }
+}
+
+/// Move point in BUFFER_ID to POINT and, unless the caller inhibits it,
+/// publish the search's REGS as the match data -- in place, GNU's
+/// `search_regs`. The buffer text is unchanged since the search, so the
+/// registers convert against the same text they were found in.
+fn commit_buffer_search_success(
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    buffer_id: neovm_edit::buffer::BufferId,
+    point: EmacsBytePos,
+    regs: &super::regex::SearchRegisters,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
+) -> Result<EmacsBytePos, Flow> {
+    buffers
+        .goto_buffer_emacs_byte_pos(buffer_id, point)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    if let Some(match_data) = match_data
+        && let Some(buf) = buffers.get(buffer_id)
+    {
+        regs.publish_buffer_into(buf, match_data);
+    }
+    Ok(point)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_search_forward(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("search-forward", &args, 1, 4)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_search_forward_4(eval, arg(0), arg(1), arg(2), arg(3))
+}
+/// `search-forward` as registered: fixed arity 4, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_search_forward_4(
+    eval: &mut super::eval::Context,
+    string: Value,
+    bound: Value,
+    noerror: Value,
+    count: Value,
+) -> EvalResult {
+    let mode = eval.symbol_mode();
+    let args: [Value; 4] = [string, bound, noerror, count];
+    let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
+        .map(|v| !v.is_nil())
+        .unwrap_or(true);
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    builtin_search_forward_with_state_with_symbols(
+        case_fold,
+        &mut eval.edit.buffers,
+        match_data,
+        &args,
+        mode,
+    )
+}
+
+pub(crate) fn builtin_search_forward_with_state_with_symbols(
+    case_fold: bool,
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    mut match_data: Option<&mut Option<super::regex::MatchData>>,
+    args: &[Value],
+    mode: SymbolMode,
+) -> EvalResult {
+    expect_args_range("search-forward", args, 1, 4)?;
+    let pattern = expect_lisp_string(&args[0])?;
+    let (current_id, opts, start_pt, start_char) =
+        current_search_context_in_manager(buffers, args, SearchKind::ForwardLiteral)?;
+    if opts.steps == 0 {
+        commit_zero_count_search(buffers, current_id, start_pt, match_data);
+        return Ok(Value::fixnum(start_char));
+    }
+
+    let mut regs = super::regex::SearchRegisters::default();
+    let mut last_pos = None;
+    for _ in 0..opts.steps {
+        let result = {
+            let buf = buffers
+                .get_mut(current_id)
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            match opts.direction {
+                SearchDirection::Forward => super::regex::search_forward_into_with_symbols(
+                    buf,
+                    pattern,
+                    opts.bound.map(|bound| bound.get()),
+                    false,
+                    case_fold,
+                    &mut regs,
+                    mode,
+                ),
+                SearchDirection::Backward => super::regex::search_backward_into_with_symbols(
+                    buf,
+                    pattern,
+                    opts.bound.map(|bound| bound.get()),
+                    false,
+                    case_fold,
+                    &mut regs,
+                    mode,
+                ),
+            }
+        };
+        match result {
+            Ok(Some(point)) => {
+                last_pos = Some(commit_buffer_search_success(
+                    buffers,
+                    current_id,
+                    point,
+                    &regs,
+                    match_data.as_deref_mut(),
+                )?)
+            }
+            Ok(None) => {
+                // regex::search_* with `noerror = false` never returns None.
+                return Err(signal(LispCondition::SearchFailed, vec![args[0]]));
+            }
+            Err(_) => {
+                return handle_search_failure_in_manager(
+                    buffers,
+                    current_id,
+                    args[0],
+                    opts,
+                    start_pt,
+                    SearchErrorKind::NotFound,
+                );
+            }
+        }
+    }
+
+    let end = last_pos.expect("search loop should produce at least one match");
+    buffer_byte_to_char_result_in_manager(buffers, current_id, end)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SearchDirection {
+    Forward,
+    Backward,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SearchNoErrorMode {
+    Signal,
+    KeepPoint,
+    MoveToBound,
+}
+
+#[derive(Clone, Copy)]
+enum SearchKind {
+    ForwardLiteral,
+    BackwardLiteral,
+    ForwardRegexp,
+    BackwardRegexp,
+}
+
+#[derive(Clone, Copy)]
+enum SearchErrorKind {
+    NotFound,
+}
+
+#[derive(Clone, Copy)]
+struct SearchOptions {
+    bound: Option<EmacsBytePos>,
+    direction: SearchDirection,
+    noerror_mode: SearchNoErrorMode,
+    steps: usize,
+}
+
+#[derive(Clone, Copy)]
+struct SearchBound {
+    lisp_pos: LispCharPos1,
+    byte_pos: EmacsBytePos,
+}
+
+fn search_count_arg(args: &[Value]) -> Result<i64, Flow> {
+    match args.get(3) {
+        None => Ok(1),
+        Some(v) if v.is_nil() => Ok(1),
+        Some(v) => match v.kind() {
+            ValueKind::Fixnum(n) => Ok(n),
+            _ => Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("fixnump"), *v],
+            )),
+        },
+    }
+}
+
+fn search_bound_in_manager(
+    buffers: &neovm_edit::buffer::BufferManager,
+    buf: &neovm_edit::buffer::Buffer,
+    value: &Value,
+) -> Result<SearchBound, Flow> {
+    let lisp_pos = LispCharPos1::new(
+        neovm_edit::emacs_core::buffer::expect_integer_or_marker_in_buffers(buffers, value)?,
+    );
+    Ok(SearchBound {
+        lisp_pos,
+        byte_pos: buf.lisp_pos_to_accessible_emacs_byte_pos(lisp_pos),
+    })
+}
+
+fn parse_search_options_in_manager(
+    buffers: &neovm_edit::buffer::BufferManager,
+    buf: &neovm_edit::buffer::Buffer,
+    args: &[Value],
+    kind: SearchKind,
+) -> Result<SearchOptions, Flow> {
+    let count = search_count_arg(args)?;
+    let noerror_mode = match args.get(2) {
+        None => SearchNoErrorMode::Signal,
+        Some(v) if v.is_nil() => SearchNoErrorMode::Signal,
+        Some(v) if v.is_t() => SearchNoErrorMode::KeepPoint,
+        Some(_) => SearchNoErrorMode::MoveToBound,
+    };
+    let bound = match args.get(1) {
+        Some(v) if !v.is_nil() => Some(search_bound_in_manager(buffers, buf, v)?),
+        _ => None,
+    };
+
+    let direction = match kind {
+        SearchKind::ForwardLiteral | SearchKind::ForwardRegexp => {
+            if count > 0 {
+                SearchDirection::Forward
+            } else {
+                SearchDirection::Backward
+            }
+        }
+        SearchKind::BackwardLiteral | SearchKind::BackwardRegexp => {
+            if count < 0 {
+                SearchDirection::Forward
+            } else {
+                SearchDirection::Backward
+            }
+        }
+    };
+    let steps = count.unsigned_abs() as usize;
+
+    if let Some(limit) = bound.map(|bound| bound.lisp_pos.as_i64()) {
+        let point_lisp = buffer_byte_to_lisp_char(buf, buf.point_emacs_byte_pos());
+        match direction {
+            SearchDirection::Forward if limit < point_lisp => {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("Invalid search bound (wrong side of point)")],
+                ));
+            }
+            SearchDirection::Backward if limit > point_lisp => {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("Invalid search bound (wrong side of point)")],
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(SearchOptions {
+        bound: bound.map(|bound| bound.byte_pos),
+        direction,
+        noerror_mode,
+        steps,
+    })
+}
+
+fn current_search_context_in_manager(
+    buffers: &neovm_edit::buffer::BufferManager,
+    args: &[Value],
+    kind: SearchKind,
+) -> Result<
+    (
+        neovm_edit::buffer::BufferId,
+        SearchOptions,
+        EmacsBytePos,
+        i64,
+    ),
+    Flow,
+> {
+    let current_id = buffers
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let buf = buffers
+        .get(current_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let opts = parse_search_options_in_manager(buffers, buf, args, kind)?;
+    let start_pt = buf.point_emacs_byte_pos();
+    let start_char = buffer_byte_to_lisp_char(buf, start_pt);
+    Ok((current_id, opts, start_pt, start_char))
+}
+
+fn buffer_byte_to_char_result_in_manager(
+    buffers: &neovm_edit::buffer::BufferManager,
+    buffer_id: neovm_edit::buffer::BufferId,
+    byte: EmacsBytePos,
+) -> EvalResult {
+    let buf = buffers
+        .get(buffer_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    Ok(Value::from_fixnum(
+        buf.emacs_byte_pos_to_position(byte).into(),
+    ))
+}
+
+fn search_failure_position(buf: &neovm_edit::buffer::Buffer, opts: SearchOptions) -> EmacsBytePos {
+    let accessible = buf.accessible_emacs_byte_region();
+    match opts.bound {
+        Some(limit) => accessible.clamp(limit),
+        None => match opts.direction {
+            SearchDirection::Forward => accessible.end(),
+            SearchDirection::Backward => accessible.start(),
+        },
+    }
+}
+
+fn handle_search_failure_in_manager(
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    buffer_id: neovm_edit::buffer::BufferId,
+    pattern: Value,
+    opts: SearchOptions,
+    start_pt: EmacsBytePos,
+    kind: SearchErrorKind,
+) -> EvalResult {
+    match kind {
+        SearchErrorKind::NotFound => match opts.noerror_mode {
+            SearchNoErrorMode::Signal => {
+                let _ = buffers.goto_buffer_emacs_byte_pos(buffer_id, start_pt);
+                Err(signal(LispCondition::SearchFailed, vec![pattern]))
+            }
+            SearchNoErrorMode::KeepPoint => {
+                let _ = buffers.goto_buffer_emacs_byte_pos(buffer_id, start_pt);
+                Ok(Value::NIL)
+            }
+            SearchNoErrorMode::MoveToBound => {
+                let target = buffers
+                    .get(buffer_id)
+                    .map(|buf| search_failure_position(buf, opts))
+                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+                let _ = buffers.goto_buffer_emacs_byte_pos(buffer_id, target);
+                Ok(Value::NIL)
+            }
+        },
+    }
+}
+
+/// Prepare syntax-table properties through `propertize_target_char`.
+///
+/// PATTERN is the Lisp value, not a borrow of its payload, and that is
+/// load-bearing (DIVERGENCES.md 163): this runs `syntax-propertize-function`
+/// — arbitrary Lisp, a GC safepoint — through `maybe_syntax_propertize_for_scan`.
+/// Taking `&LispString` meant every caller held a borrow into the heap across
+/// that Lisp call, sound only because the argument list roots the string;
+/// taking the `Value` moves the borrow INSIDE, where the compiler can see it
+/// ends before the evaluator is used mutably.
+///
+/// `propertize_target_char` is the last position the matcher can examine,
+/// plus one. GNU's matcher propertizes LAZILY as it scans
+/// (parse_sexp_propertize stops at charpos + 1); neomacs pre-propertizes
+/// because its Rust matcher cannot run re-entrant Lisp, so the target must be
+/// the SEARCH RANGE end — pre-propertizing to point-max made every bounded
+/// syntax-dependent search (looking-back, font-lock anchors) re-propertize
+/// the whole buffer tail after each edit flushed syntax-propertize--done:
+/// O(buffer) per keystroke. `None` keeps the conservative whole-accessible
+/// target (patterns whose scan range is genuinely unbounded).
+///
+/// Also reports whether the pattern reads buffer syntax at all (the
+/// lazy-propertize drivers arm their
+/// frontier only then).
+fn prepare_current_buffer_regexp_syntax_to_reporting(
+    eval: &mut super::eval::Context,
+    pattern: Value,
+    case_fold: bool,
+    posix: bool,
+    propertize_target_char: Option<i64>,
+) -> Result<(BufferRegexpSyntaxProperties, bool), Flow> {
+    prepare_current_buffer_regexp_syntax_to_reporting_compiled(
+        eval,
+        pattern,
+        case_fold,
+        posix,
+        propertize_target_char,
+    )
+    .map(|(props, lazy_relevant, _)| (props, lazy_relevant))
+}
+
+struct RegexpPreparationRootScope(usize);
+
+impl Drop for RegexpPreparationRootScope {
+    fn drop(&mut self) {
+        super::eval::restore_scratch_gc_roots(self.0);
+    }
+}
+
+/// `prepare_current_buffer_regexp_syntax_to_reporting` that also returns the
+/// compiled pattern, for callers that match right after (one cache probe,
+/// not two).
+fn prepare_current_buffer_regexp_syntax_to_reporting_compiled(
+    eval: &mut super::eval::Context,
+    pattern: Value,
+    case_fold: bool,
+    posix: bool,
+    propertize_target_char: Option<i64>,
+) -> Result<
+    (
+        BufferRegexpSyntaxProperties,
+        bool,
+        std::rc::Rc<neovm_text::emacs_core::regex_emacs::CompiledPattern>,
+    ),
+    Flow,
+> {
+    // The borrow of PATTERN's payload lives and dies inside this block, which
+    // is why it may not be a parameter: `maybe_syntax_propertize_for_scan`
+    // below runs `syntax-propertize-function`.
+    let (dependency, compiled) = {
+        let pattern = eval.expect_lisp_string(pattern)?;
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        super::regex::buffer_regexp_syntax_dependency_compiled_with_symbols(
+            buf,
+            pattern,
+            case_fold,
+            posix,
+            eval.symbol_mode(),
+        )
+        .map_err(regex_error_signal)?
+    };
+    let syntax_properties =
+        if neovm_text::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval) {
+            BufferRegexpSyntaxProperties::Honor
+        } else {
+            BufferRegexpSyntaxProperties::Ignore
+        };
+
+    let lazy_relevant = dependency.is_buffer_syntax_dependent() && syntax_properties.is_honor();
+    if lazy_relevant {
+        let accessible_target = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .map(|buf| buf.accessible_char_region().end().get().saturating_add(1))
+            .unwrap_or(1);
+        let target = match propertize_target_char {
+            Some(explicit) => explicit.clamp(1, accessible_target as i64) as usize,
+            None => accessible_target,
+        };
+        // Lisp may replace the case table, evict this compiled pattern from
+        // the cache and collect. Keep its translator alive until that callback
+        // returns; the caller matches without another Lisp safepoint. Syntax
+        // cache identities are not retained by the compiled artifact itself.
+        neovm_text::emacs_core::syntax::maybe_syntax_propertize_for_scan_with_scope(
+            eval,
+            target,
+            || {
+                compiled
+                    .translate
+                    .as_ref()
+                    .and_then(neovm_text::emacs_core::regex_emacs::CaseTranslation::gc_root)
+                    .map(|table| {
+                        let saved_roots = super::eval::save_scratch_gc_roots();
+                        super::eval::push_scratch_gc_root(table);
+                        RegexpPreparationRootScope(saved_roots)
+                    })
+            },
+        )?;
+    }
+
+    Ok((syntax_properties, lazy_relevant, compiled))
+}
+
+/// Lazy `syntax-propertize` driver for a point-anchored match (`looking-at`
+/// and friends), the neomacs form of GNU's `parse_sexp_propertize`: GNU's
+/// `looking_at_1` propertizes `min (zv, 1 + charpos)` at setup and then only
+/// as far as the matcher's syntax-reading ops actually advance. Here the
+/// first attempt propertizes exactly that one char; the armed
+/// [`PropertizeFrontier`] records the first syntax read at or past
+/// `syntax-propertize--done`, and the retry propertizes to it (widened
+/// geometrically so a long `\s-*` run converges in O(log n) attempts rather
+/// than one 500-char chunk per attempt). Before this, `looking-at`
+/// propertized to the accessible end: after every edit flushed `--done`,
+/// `lisp-indent-line`'s `(looking-at "\\s<\\s<\\s<")` re-propertized the
+/// whole buffer tail — O(buffer) per line in comment-region/indent loops.
+struct AnchoredPropertize {
+    target_lisp: i64,
+    point_lisp: i64,
+    lookahead: i64,
+    attempts: u32,
+}
+
+impl AnchoredPropertize {
+    #[doc(hidden)]
+    pub const MAX_ATTEMPTS: u32 = 16;
+
+    #[doc(hidden)]
+    pub fn new(buffers: &neovm_edit::buffer::BufferManager) -> Self {
+        let point_lisp = buffers
+            .current_buffer()
+            .map(|buf| buf.point_char_pos().get() as i64 + 1)
+            .unwrap_or(1);
+        Self {
+            target_lisp: point_lisp.saturating_add(1),
+            point_lisp,
+            lookahead: 0,
+            attempts: 0,
+        }
+    }
+
+    /// The frontier to arm for this attempt: the first byte at or past
+    /// `syntax-propertize--done`, or `None` when the buffer is propertized
+    /// through its accessible end (or propertizing is not in play).
+    #[doc(hidden)]
+    pub fn frontier_byte(
+        eval: &super::eval::Context,
+        lazy_relevant: bool,
+    ) -> Option<neovm_edit::buffer::EmacsBytePos> {
+        if !lazy_relevant {
+            return None;
+        }
+        let done = eval
+            .builtin_var_value(neovm_text::emacs_core::syntax::syntax_propertize_done_sym())?
+            .as_fixnum()?;
+        let buf = eval.edit.buffers.current_buffer()?;
+        let accessible_end_lisp = buf.accessible_char_region().end().get() as i64 + 1;
+        if done >= accessible_end_lisp {
+            return None;
+        }
+        let begin_lisp = buf.accessible_char_region().start().get() as i64 + 1;
+        Some(
+            buf.lisp_pos_to_emacs_byte_pos(neovm_edit::buffer::LispCharPos1::new(
+                done.max(begin_lisp),
+            )),
+        )
+    }
+
+    /// The matcher read syntax at `crossed` (past the frontier): choose the
+    /// next propertize target. Returns false when no further attempt can
+    /// help (no progress possible, or the attempt budget is spent).
+    #[doc(hidden)]
+    pub fn advance(
+        &mut self,
+        buffers: &neovm_edit::buffer::BufferManager,
+        crossed: neovm_edit::buffer::EmacsBytePos,
+    ) -> bool {
+        self.attempts += 1;
+        if self.attempts >= Self::MAX_ATTEMPTS {
+            return false;
+        }
+        let Some(buf) = buffers.current_buffer() else {
+            return false;
+        };
+        let crossed_lisp = buf.emacs_byte_pos_to_char_pos_clamped(crossed).get() as i64 + 1;
+        self.lookahead = self.lookahead.saturating_mul(4).max(512);
+        let next = crossed_lisp
+            .saturating_add(1)
+            .max(self.point_lisp.saturating_add(self.lookahead));
+        if next <= self.target_lisp {
+            return false;
+        }
+        self.target_lisp = next;
+        true
+    }
+}
+
+/// Preparation may hand off a compiled pattern only when no Lisp callback
+/// could have changed its inputs since compilation. Otherwise the caller
+/// must look it up again after syntax propertization.
+struct ReadyRegexpSearch {
+    syntax_properties: BufferRegexpSyntaxProperties,
+    compiled: Option<std::rc::Rc<neovm_text::emacs_core::regex_emacs::CompiledPattern>>,
+}
+
+/// How a buffer regexp search should obtain its syntax-table properties.
+enum RegexpSearchPrep {
+    /// `syntax-propertize` already ran far enough; search directly.
+    Ready(ReadyRegexpSearch),
+    /// Forward search with a finite per-attempt span: the caller runs the
+    /// probe ladder in [`propertize_window_for_forward_regexp`] before the
+    /// committed search. `region_end_char` is the search's reachable end
+    /// (BOUND when given, else the accessible end), so the ladder's final
+    /// rung propertizes exactly what the conservative path always did.
+    Windowed {
+        syntax_properties: BufferRegexpSyntaxProperties,
+        start_char: usize,
+        region_end_char: usize,
+        margin_chars: usize,
+        bound_byte: Option<usize>,
+    },
+}
+
+fn prepare_buffer_regexp_search(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+    kind: SearchKind,
+    case_fold: bool,
+    posix: bool,
+) -> Result<RegexpSearchPrep, Flow> {
+    // GNU `search_command` (src/search.c) runs `CHECK_STRING (string)` before
+    // it looks at COUNT, so a non-string pattern signals even when the search
+    // would do nothing. Keep that order without carrying the borrow past the
+    // `syntax-propertize` below: `let _ =` drops it on this line.
+    let _ = eval.expect_lisp_string(args[0])?;
+    let (_, opts, _, start_char) =
+        current_search_context_in_manager(&eval.edit.buffers, args, kind)?;
+    if opts.steps == 0 {
+        return Ok(RegexpSearchPrep::Ready(ReadyRegexpSearch {
+            syntax_properties:
+                if neovm_text::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval) {
+                    BufferRegexpSyntaxProperties::Honor
+                } else {
+                    BufferRegexpSyntaxProperties::Ignore
+                },
+            compiled: None,
+        }));
+    }
+
+    // The matcher's reachable range: a backward search only examines
+    // positions at or before the starting point (matches end at or before
+    // point), so propertizing through point suffices; a forward search is
+    // capped by its BOUND argument when given. `opts.bound` has BOUND
+    // already coerced from fixnum OR marker (GNU
+    // `CHECK_FIXNUM_COERCE_MARKER`) — newcomment passes `copy-marker`
+    // bounds, and reading only fixnums here made every such search
+    // propertize to point-max instead of the region end.
+    let target = match opts.direction {
+        SearchDirection::Backward => Some(start_char.saturating_add(1)),
+        SearchDirection::Forward => opts.bound.and_then(|bound| {
+            eval.edit.buffers.current_buffer().map(|buf| {
+                // 0-based char of the bound, +1 to 1-based, +1 past it.
+                buf.emacs_byte_pos_to_char_pos_clamped(bound).get() as i64 + 2
+            })
+        }),
+    };
+
+    // A forward search whose pattern has a finite per-attempt span doesn't
+    // need its whole reachable range propertized up front: the probe ladder
+    // covers exactly as much as the search examines. This applies bounded
+    // searches too — newcomment-style loops pass the region end as BOUND,
+    // and re-propertizing edit..BOUND per iteration is the same quadratic.
+    if matches!(opts.direction, SearchDirection::Forward)
+        && opts.steps == 1
+        && neovm_text::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval)
+    {
+        // Warm path: `syntax-propertize--done` already covers the whole
+        // accessible region (fontified buffer, no edits since), so neither
+        // the ladder's probe search nor any propertize call is needed.
+        let done = eval
+            .builtin_var_value(neovm_text::emacs_core::syntax::syntax_propertize_done_sym())
+            .unwrap_or(Value::fixnum(-1));
+        let covered = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .map(|buf| buf.accessible_char_region().end().get() as i64 + 1)
+            .is_some_and(|accessible_target| {
+                // `accessible_target` is the 1-based point-max (end is
+                // 0-based); a BOUND caps the needed coverage at bound + 1,
+                // exactly the old conservative propertize target.
+                let full_target = target
+                    .map(|t| t.clamp(1, accessible_target))
+                    .unwrap_or(accessible_target);
+                matches!(done.kind(), ValueKind::Fixnum(d) if d >= full_target)
+            });
+        if covered {
+            return Ok(RegexpSearchPrep::Ready(ReadyRegexpSearch {
+                syntax_properties: BufferRegexpSyntaxProperties::Honor,
+                compiled: None,
+            }));
+        }
+        let windowed = {
+            let pattern = eval.expect_lisp_string(args[0])?;
+            let buf = eval
+                .edit
+                .buffers
+                .current_buffer()
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            let (dependency, span) = super::regex::buffer_regexp_syntax_dependency_and_span(
+                buf, pattern, case_fold, posix,
+            )
+            .map_err(regex_error_signal)?;
+            (dependency.is_buffer_syntax_dependent())
+                .then_some(span)
+                .flatten()
+                .map(|span| {
+                    let accessible_end = buf.accessible_char_region().end().get();
+                    // With a BOUND, the reachable end is the bound (target
+                    // holds bound + 1), clamped like the conservative path.
+                    let region_end_char = target
+                        .map(|t| ((t - 1).max(1) as usize).min(accessible_end))
+                        .unwrap_or(accessible_end);
+                    (
+                        start_char.max(1) as usize,
+                        region_end_char,
+                        span.saturating_add(2),
+                    )
+                })
+        };
+        if let Some((start_char, region_end_char, margin_chars)) = windowed {
+            return Ok(RegexpSearchPrep::Windowed {
+                syntax_properties: BufferRegexpSyntaxProperties::Honor,
+                start_char,
+                region_end_char,
+                margin_chars,
+                bound_byte: opts.bound.map(|bound| bound.get()),
+            });
+        }
+    }
+
+    prepare_current_buffer_regexp_syntax_to_reporting_compiled(
+        eval, args[0], case_fold, posix, target,
+    )
+    .map(|(syntax_properties, lazy_relevant, compiled)| {
+        RegexpSearchPrep::Ready(ReadyRegexpSearch {
+            syntax_properties,
+            // Syntax-dependent preparation may run arbitrary Lisp. Keep
+            // its subsequent cache lookup so changed tables, strings or
+            // current buffers are observed by the committed search.
+            compiled: (!lazy_relevant).then_some(compiled),
+        })
+    })
+}
+
+/// Unpack a [`RegexpSearchPrep`], running the probe ladder for the
+/// windowed case so the committed search reads only propertized text.
+fn resolve_regexp_search_prep(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+    case_fold: bool,
+    posix: bool,
+    prep: RegexpSearchPrep,
+) -> Result<ReadyRegexpSearch, Flow> {
+    match prep {
+        RegexpSearchPrep::Ready(ready) => Ok(ready),
+        RegexpSearchPrep::Windowed {
+            syntax_properties,
+            start_char,
+            region_end_char,
+            margin_chars,
+            bound_byte,
+        } => {
+            propertize_window_for_forward_regexp(
+                eval,
+                args,
+                case_fold,
+                posix,
+                syntax_properties,
+                start_char,
+                region_end_char,
+                margin_chars,
+                bound_byte,
+            )?;
+            Ok(ReadyRegexpSearch {
+                syntax_properties,
+                compiled: None,
+            })
+        }
+    }
+}
+
+/// Propertize just enough of the buffer for an unbounded forward regexp
+/// search whose pattern has a finite per-attempt span (`margin_chars` =
+/// that span + 2). GNU's matcher extends `syntax-propertize--done` lazily
+/// as it advances (`update_syntax_table_forward` →
+/// `parse_sexp_propertize`, which stops at charpos + 1); our matcher
+/// cannot run Lisp mid-match, and propertizing to point-max on every
+/// search made each syntax-dependent search after a buffer edit re-run
+/// `syntax-propertize` over the whole tail — quadratic under
+/// search/replace loops.
+///
+/// Ladder: propertize a window, run a pure probe through the same
+/// searcher core the committed search uses (no point/match-data commit),
+/// and accept once the found match end clears the window frontier by
+/// `margin_chars`. Every attempt at or before the found start examines at
+/// most its start + span + 1 positions, all inside the window, so the
+/// committed re-run reads only propertized text and returns the identical
+/// result. Failures widen the window ×4 until it covers the region — at
+/// which point behavior equals the old conservative full propertize.
+#[allow(clippy::too_many_arguments)]
+fn propertize_window_for_forward_regexp(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+    case_fold: bool,
+    posix: bool,
+    syntax_properties: BufferRegexpSyntaxProperties,
+    start_char: usize,
+    region_end_char: usize,
+    margin_chars: usize,
+    bound_byte: Option<usize>,
+) -> Result<(), Flow> {
+    // Bounded searches come from region loops (newcomment et al.) whose
+    // matches sit within a line or two; start them on a small window so a
+    // per-edit retreat of `--done` re-propertizes only that much.
+    let base = if bound_byte.is_some() {
+        512usize
+    } else {
+        4096usize
+    };
+    let mut lookahead = base.max(margin_chars.saturating_mul(4));
+    loop {
+        let window_end = start_char.saturating_add(lookahead).min(region_end_char);
+        neovm_text::emacs_core::syntax::maybe_syntax_propertize_for_scan(
+            eval,
+            window_end.saturating_add(1),
+        )?;
+        if window_end >= region_end_char {
+            return Ok(());
+        }
+        let match_context = current_buffer_regexp_match_context(
+            VariableView::new(&eval.obarray, &eval.owner),
+            &eval.edit.buffers,
+            current_word_boundary_lookup(eval),
+            syntax_properties,
+        );
+        let probe = {
+            let pattern = expect_lisp_string(&args[0])?;
+            let Some(buf) = eval.edit.buffers.current_buffer_mut() else {
+                return Ok(());
+            };
+            super::regex::re_search_forward_lisp_with_posix(
+                buf,
+                pattern,
+                bound_byte,
+                false,
+                case_fold,
+                posix,
+                match_context,
+            )
+        };
+        match probe {
+            Ok(Some(success)) => {
+                let (_, end_byte, _) = success.into_parts();
+                let end_char = eval
+                    .edit
+                    .buffers
+                    .current_buffer()
+                    .map(|buf| buf.emacs_byte_pos_to_char_pos_clamped(end_byte).get())
+                    .unwrap_or(usize::MAX);
+                if end_char.saturating_add(margin_chars) <= window_end {
+                    return Ok(());
+                }
+            }
+            // A real regexp error reproduces in the committed search; give
+            // it full coverage so its semantics match the old path exactly.
+            Err(msg) if msg != "Search failed" => {
+                neovm_text::emacs_core::syntax::maybe_syntax_propertize_for_scan(
+                    eval,
+                    region_end_char.saturating_add(1),
+                )?;
+                return Ok(());
+            }
+            Ok(None) | Err(_) => {}
+        }
+        lookahead = lookahead.saturating_mul(4);
+    }
+}
+
+#[doc(hidden)]
+pub fn builtin_search_backward(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let mode = eval.symbol_mode();
+    let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
+        .map(|v| !v.is_nil())
+        .unwrap_or(true);
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    builtin_search_backward_with_state_with_symbols(
+        case_fold,
+        &mut eval.edit.buffers,
+        match_data,
+        &args,
+        mode,
+    )
+}
+
+pub(crate) fn builtin_search_backward_with_state_with_symbols(
+    case_fold: bool,
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    mut match_data: Option<&mut Option<super::regex::MatchData>>,
+    args: &[Value],
+    mode: SymbolMode,
+) -> EvalResult {
+    expect_args_range("search-backward", args, 1, 4)?;
+    let pattern = expect_lisp_string(&args[0])?;
+    let (current_id, opts, start_pt, start_char) =
+        current_search_context_in_manager(buffers, args, SearchKind::BackwardLiteral)?;
+    if opts.steps == 0 {
+        commit_zero_count_search(buffers, current_id, start_pt, match_data);
+        return Ok(Value::fixnum(start_char));
+    }
+
+    let mut regs = super::regex::SearchRegisters::default();
+    let mut last_pos = None;
+    for _ in 0..opts.steps {
+        let result = {
+            let buf = buffers
+                .get_mut(current_id)
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            match opts.direction {
+                SearchDirection::Forward => super::regex::search_forward_into_with_symbols(
+                    buf,
+                    pattern,
+                    opts.bound.map(|bound| bound.get()),
+                    false,
+                    case_fold,
+                    &mut regs,
+                    mode,
+                ),
+                SearchDirection::Backward => super::regex::search_backward_into_with_symbols(
+                    buf,
+                    pattern,
+                    opts.bound.map(|bound| bound.get()),
+                    false,
+                    case_fold,
+                    &mut regs,
+                    mode,
+                ),
+            }
+        };
+        match result {
+            Ok(Some(point)) => {
+                last_pos = Some(commit_buffer_search_success(
+                    buffers,
+                    current_id,
+                    point,
+                    &regs,
+                    match_data.as_deref_mut(),
+                )?)
+            }
+            Ok(None) => {
+                return Err(signal(LispCondition::SearchFailed, vec![args[0]]));
+            }
+            Err(_) => {
+                return handle_search_failure_in_manager(
+                    buffers,
+                    current_id,
+                    args[0],
+                    opts,
+                    start_pt,
+                    SearchErrorKind::NotFound,
+                );
+            }
+        }
+    }
+
+    let end = last_pos.expect("search loop should produce at least one match");
+    buffer_byte_to_char_result_in_manager(buffers, current_id, end)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_re_search_forward(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("re-search-forward", &args, 1, 4)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_re_search_forward_4(eval, arg(0), arg(1), arg(2), arg(3))
+}
+/// `re-search-forward` as registered: fixed arity 4, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_re_search_forward_4(
+    eval: &mut super::eval::Context,
+    regexp: Value,
+    bound: Value,
+    noerror: Value,
+    count: Value,
+) -> EvalResult {
+    let args: [Value; 4] = [regexp, bound, noerror, count];
+    expect_args_range("re-search-forward", &args, 1, 4)?;
+    let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
+        .map(|v| !v.is_nil())
+        .unwrap_or(true);
+    if let Some(result) =
+        buffer_regexp_search_fast(eval, &args, SearchKind::ForwardRegexp, case_fold, false)
+    {
+        // As below: a quit detected during the match wins over its result.
+        eval.maybe_quit()?;
+        return result;
+    }
+    let prep =
+        prepare_buffer_regexp_search(eval, &args, SearchKind::ForwardRegexp, case_fold, false)?;
+    let ready = resolve_regexp_search_prep(eval, &args, case_fold, false, prep)?;
+    // Reuse preparation's pattern when no Lisp could have invalidated it.
+    // A callback-capable path still reads the cache after preparation, so
+    // changes made by syntax-propertize are visible to this search.
+    let compiled = match ready.compiled {
+        Some(compiled) => Some(compiled),
+        // Preparation already validated STRING, COUNT and BOUND. GNU's
+        // zero-count path publishes an empty match without compiling REGEXP.
+        None if count.as_fixnum() == Some(0) => None,
+        None => {
+            let pattern = eval.expect_lisp_string(args[0])?;
+            let buf = eval
+                .edit
+                .buffers
+                .current_buffer()
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            Some(
+                super::regex::buffer_regexp_syntax_dependency_compiled_with_symbols(
+                    buf,
+                    pattern,
+                    case_fold,
+                    false,
+                    eval.symbol_mode(),
+                )
+                .map_err(regex_error_signal)?
+                .1,
+            )
+        }
+    };
+    let word_boundary = if compiled
+        .as_ref()
+        .is_some_and(|compiled| compiled.uses_syntax)
+    {
+        current_word_boundary_lookup(eval)
+    } else {
+        neovm_text::emacs_core::regex_emacs::WordBoundaryLookup::default()
+            .with_symbol_mode(eval.symbol_mode())
+    };
+    let match_context = current_buffer_regexp_match_context(
+        VariableView::new(&eval.obarray, &eval.owner),
+        &eval.edit.buffers,
+        word_boundary,
+        ready.syntax_properties,
+    );
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    let result = re_search_forward_with_state_posix_and_syntax_properties(
+        case_fold,
+        false,
+        match_context,
+        &mut eval.edit.buffers,
+        match_data,
+        &args,
+        compiled.as_deref(),
+    );
+    // Mirrors GNU `search.c:1247,1291`: poll quit after each search
+    // call so a `C-g` that set `tls_quit_pending()` during the match
+    // surfaces as a `quit` signal rather than being interpreted as
+    // `search-failed`. The matcher itself returned None on the TLS
+    // flag; here we promote it.
+    eval.maybe_quit()?;
+    result
+}
+
+/// Shared body for `re-search-forward` and `posix-search-forward`.
+/// When `posix` is true, the matcher runs the GNU POSIX longest-match
+/// algorithm (regex-emacs.c:4143-4344). See audit #2 in
+/// `drafts/regex-search-audit.md`; before this fix the posix builtins
+/// were silent aliases.
+fn re_search_forward_with_state_posix_and_syntax_properties(
+    case_fold: bool,
+    posix: bool,
+    match_context: BufferRegexpMatchContext<'_>,
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
+    args: &[Value],
+    compiled: Option<&neovm_text::emacs_core::regex_emacs::CompiledPattern>,
+) -> EvalResult {
+    let name = if posix {
+        "posix-search-forward"
+    } else {
+        "re-search-forward"
+    };
+    expect_args_range(name, args, 1, 4)?;
+    let pattern = expect_lisp_string(&args[0])?;
+    let context = BufferSearchContext::current(buffers, args, SearchKind::ForwardRegexp)?;
+    run_buffer_regexp_search(
+        case_fold,
+        posix,
+        match_context,
+        buffers,
+        match_data,
+        args,
+        pattern,
+        compiled,
+        context,
+    )
+}
+
+/// One buffer search's parsed arguments and starting state: GNU
+/// `search_command`'s locals, computed once per call.
+#[derive(Clone, Copy)]
+struct BufferSearchContext {
+    buffer: neovm_edit::buffer::BufferId,
+    opts: SearchOptions,
+    start_pt: EmacsBytePos,
+    start_char: i64,
+}
+
+impl BufferSearchContext {
+    /// Parse COUNT, NOERROR and BOUND against the current buffer, in GNU's
+    /// order, signalling as `search_command` does.
+    #[doc(hidden)]
+    pub fn current(
+        buffers: &neovm_edit::buffer::BufferManager,
+        args: &[Value],
+        kind: SearchKind,
+    ) -> Result<Self, Flow> {
+        let (buffer, opts, start_pt, start_char) =
+            current_search_context_in_manager(buffers, args, kind)?;
+        Ok(Self {
+            buffer,
+            opts,
+            start_pt,
+            start_char,
+        })
+    }
+}
+
+/// The search loop shared by the four buffer regexp builtins: COUNT
+/// matches in the parsed direction, point and match data committed after
+/// each, GNU's failure handling after the last. COMPILED is the pattern the
+/// caller already looked up, or `None` to look PATTERN up in the matcher.
+#[allow(clippy::too_many_arguments)] // matching state stays explicit at the GNU-regexp boundary
+fn run_buffer_regexp_search(
+    case_fold: bool,
+    posix: bool,
+    match_context: BufferRegexpMatchContext<'_>,
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    mut match_data: Option<&mut Option<super::regex::MatchData>>,
+    args: &[Value],
+    pattern: &neovm_value::heap_types::LispString,
+    compiled: Option<&neovm_text::emacs_core::regex_emacs::CompiledPattern>,
+    context: BufferSearchContext,
+) -> EvalResult {
+    let BufferSearchContext {
+        buffer: current_id,
+        opts,
+        start_pt,
+        start_char,
+    } = context;
+    if opts.steps == 0 {
+        commit_zero_count_search(buffers, current_id, start_pt, match_data);
+        return Ok(Value::fixnum(start_char));
+    }
+
+    let mut regs = super::regex::SearchRegisters::default();
+    let mut last_pos = None;
+    for _ in 0..opts.steps {
+        let result = {
+            let buf = buffers
+                .get_mut(current_id)
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            match opts.direction {
+                SearchDirection::Forward => match compiled {
+                    Some(compiled) => super::regex::re_search_forward_compiled_into(
+                        buf,
+                        compiled,
+                        opts.bound.map(|bound| bound.get()),
+                        false,
+                        match_context,
+                        &mut regs,
+                    ),
+                    None => super::regex::re_search_forward_lisp_with_posix_into(
+                        buf,
+                        pattern,
+                        opts.bound.map(|bound| bound.get()),
+                        false,
+                        case_fold,
+                        posix,
+                        match_context,
+                        &mut regs,
+                    ),
+                },
+                SearchDirection::Backward => match compiled {
+                    Some(compiled) => super::regex::re_search_backward_compiled_into(
+                        buf,
+                        compiled,
+                        opts.bound.map(|bound| bound.get()),
+                        false,
+                        match_context,
+                        &mut regs,
+                    ),
+                    None => super::regex::re_search_backward_lisp_with_posix_into(
+                        buf,
+                        pattern,
+                        opts.bound.map(|bound| bound.get()),
+                        false,
+                        case_fold,
+                        posix,
+                        match_context,
+                        &mut regs,
+                    ),
+                },
+            }
+        };
+
+        match result {
+            Ok(Some(point)) => {
+                last_pos = Some(commit_buffer_search_success(
+                    buffers,
+                    current_id,
+                    point,
+                    &regs,
+                    match_data.as_deref_mut(),
+                )?)
+            }
+            Ok(None) => {
+                return Err(signal(LispCondition::SearchFailed, vec![args[0]]));
+            }
+            Err(msg) if msg != "Search failed" => {
+                let _ = buffers.goto_buffer_emacs_byte_pos(current_id, start_pt);
+                return Err(regex_error_signal(msg));
+            }
+            Err(_) => {
+                return handle_search_failure_in_manager(
+                    buffers,
+                    current_id,
+                    args[0],
+                    opts,
+                    start_pt,
+                    SearchErrorKind::NotFound,
+                );
+            }
+        }
+    }
+
+    let end = last_pos.expect("search loop should produce at least one match");
+    buffer_byte_to_char_result_in_manager(buffers, current_id, end)
+}
+
+/// U2.8 front end of a buffer regexp search: GNU `search_command` parses its
+/// arguments and compiles the pattern once, then matches. The general path
+/// below does that twice or three times -- a preparation pass
+/// (`prepare_buffer_regexp_search`) and the search itself each parse the
+/// arguments and probe the pattern cache, and both read the syntax switches
+/// -- because preparation may run `syntax-propertize` (Lisp), after which
+/// everything must be re-read.
+///
+/// When no Lisp can run -- the pattern reads no buffer syntax, or
+/// `parse-sexp-lookup-properties` is nil, or `syntax-propertize--done`
+/// already covers the search's reach, or nothing defines
+/// `internal--syntax-propertize` -- this parses once, probes once, and
+/// matches with that. A pattern that reads no syntax also skips the
+/// `syntax-table` property resolver and the word-boundary tables, which the
+/// matcher would never consult.
+///
+/// `None`, having changed nothing observable, sends the call to the general
+/// path: the knob is off, REGEXP is not a string, COUNT is 0, or
+/// `syntax-propertize` may have to run. Errors come out in GNU's order and
+/// are the general path's own: argument checks, then the compile.
+fn buffer_regexp_search_fast(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+    kind: SearchKind,
+    case_fold: bool,
+    posix: bool,
+) -> Option<EvalResult> {
+    if !crate::emacs_core::eval::builtin_frontend_on() || !args[0].is_string() {
+        return None;
+    }
+    let context = match BufferSearchContext::current(&eval.edit.buffers, args, kind) {
+        Ok(context) => context,
+        Err(flow) => return Some(Err(flow)),
+    };
+    if context.opts.steps == 0 {
+        return None;
+    }
+    let compiled = {
+        let pattern = expect_lisp_string(&args[0]).ok()?;
+        let buf = eval.edit.buffers.get(context.buffer)?;
+        match super::regex::buffer_regexp_syntax_dependency_compiled_with_symbols(
+            buf,
+            pattern,
+            case_fold,
+            posix,
+            eval.symbol_mode(),
+        ) {
+            Ok((_, compiled)) => compiled,
+            Err(msg) => return Some(Err(regex_error_signal(msg))),
+        }
+    };
+    let honor = compiled.uses_syntax
+        && neovm_text::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval);
+    if honor {
+        let buf = eval.edit.buffers.get(context.buffer)?;
+        // 1-based point-max, the conservative target; a BOUND caps a
+        // forward search's reach at BOUND + 1, a backward search reaches
+        // point: exactly the targets the general path propertizes to.
+        let accessible_target = buf.accessible_char_region().end().get() + 1;
+        let target = match context.opts.direction {
+            SearchDirection::Forward => context
+                .opts
+                .bound
+                .map(|bound| buf.emacs_byte_pos_to_char_pos_clamped(bound).get() + 2)
+                .map_or(accessible_target, |target| {
+                    target.clamp(1, accessible_target)
+                }),
+            SearchDirection::Backward => {
+                (context.start_char.max(0) as usize + 1).clamp(1, accessible_target)
+            }
+        };
+        if neovm_text::emacs_core::syntax::syntax_propertize_would_run(eval, target) {
+            return None;
+        }
+    }
+    let word_boundary = if compiled.uses_syntax {
+        current_word_boundary_lookup(eval)
+    } else {
+        neovm_text::emacs_core::regex_emacs::WordBoundaryLookup::default()
+            .with_symbol_mode(eval.symbol_mode())
+    };
+    let syntax_properties = if honor {
+        BufferRegexpSyntaxProperties::Honor
+    } else {
+        BufferRegexpSyntaxProperties::Ignore
+    };
+    let match_context = current_buffer_regexp_match_context(
+        VariableView::new(&eval.obarray, &eval.owner),
+        &eval.edit.buffers,
+        word_boundary,
+        syntax_properties,
+    );
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    let pattern = expect_lisp_string(&args[0]).ok()?;
+    note_frontend_fast_call();
+    Some(run_buffer_regexp_search(
+        case_fold,
+        posix,
+        match_context,
+        &mut eval.edit.buffers,
+        match_data,
+        args,
+        pattern,
+        Some(&compiled),
+        context,
+    ))
+}
+
+#[doc(hidden)]
+pub fn builtin_re_search_backward(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    expect_args_range("re-search-backward", &args, 1, 4)?;
+    let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
+        .map(|v| !v.is_nil())
+        .unwrap_or(true);
+    if let Some(result) =
+        buffer_regexp_search_fast(eval, &args, SearchKind::BackwardRegexp, case_fold, false)
+    {
+        eval.maybe_quit()?;
+        return result;
+    }
+    let prep =
+        prepare_buffer_regexp_search(eval, &args, SearchKind::BackwardRegexp, case_fold, false)?;
+    let ready = resolve_regexp_search_prep(eval, &args, case_fold, false, prep)?;
+    // Reuse only callback-free preparation. A callback-capable path leaves
+    // compiled unset and keeps the matcher's fresh pattern lookup below.
+    let word_boundary = if ready
+        .compiled
+        .as_ref()
+        .is_some_and(|compiled| !compiled.uses_syntax)
+    {
+        neovm_text::emacs_core::regex_emacs::WordBoundaryLookup::default()
+            .with_symbol_mode(eval.symbol_mode())
+    } else {
+        current_word_boundary_lookup(eval)
+    };
+    let match_context = current_buffer_regexp_match_context(
+        VariableView::new(&eval.obarray, &eval.owner),
+        &eval.edit.buffers,
+        word_boundary,
+        ready.syntax_properties,
+    );
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    let result = re_search_backward_with_state_posix_and_syntax_properties(
+        case_fold,
+        false,
+        match_context,
+        &mut eval.edit.buffers,
+        match_data,
+        &args,
+        ready.compiled.as_deref(),
+    );
+    // See `builtin_re_search_forward`: promote a TLS-detected quit.
+    eval.maybe_quit()?;
+    result
+}
+
+/// Shared body for `re-search-backward` and `posix-search-backward`.
+/// See [`re_search_forward_with_state_posix_and_syntax_properties`] for the POSIX longest-
+/// match rationale (audit #2).
+fn re_search_backward_with_state_posix_and_syntax_properties(
+    case_fold: bool,
+    posix: bool,
+    match_context: BufferRegexpMatchContext<'_>,
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
+    args: &[Value],
+    compiled: Option<&neovm_text::emacs_core::regex_emacs::CompiledPattern>,
+) -> EvalResult {
+    let name = if posix {
+        "posix-search-backward"
+    } else {
+        "re-search-backward"
+    };
+    expect_args_range(name, args, 1, 4)?;
+    let pattern = expect_lisp_string(&args[0])?;
+    let context = BufferSearchContext::current(buffers, args, SearchKind::BackwardRegexp)?;
+    run_buffer_regexp_search(
+        case_fold,
+        posix,
+        match_context,
+        buffers,
+        match_data,
+        args,
+        pattern,
+        compiled,
+        context,
+    )
+}
+
+#[doc(hidden)]
+pub fn builtin_posix_search_forward(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("posix-search-forward", &args, 1, 4)?;
+    let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
+        .map(|v| !v.is_nil())
+        .unwrap_or(true);
+    if let Some(result) =
+        buffer_regexp_search_fast(eval, &args, SearchKind::ForwardRegexp, case_fold, true)
+    {
+        return result;
+    }
+    let prep =
+        prepare_buffer_regexp_search(eval, &args, SearchKind::ForwardRegexp, case_fold, true)?;
+    let ready = resolve_regexp_search_prep(eval, &args, case_fold, true, prep)?;
+    // Reuse only callback-free preparation. A callback-capable path leaves
+    // compiled unset and keeps the matcher's fresh pattern lookup below.
+    let word_boundary = if ready
+        .compiled
+        .as_ref()
+        .is_some_and(|compiled| !compiled.uses_syntax)
+    {
+        neovm_text::emacs_core::regex_emacs::WordBoundaryLookup::default()
+            .with_symbol_mode(eval.symbol_mode())
+    } else {
+        current_word_boundary_lookup(eval)
+    };
+    let match_context = current_buffer_regexp_match_context(
+        VariableView::new(&eval.obarray, &eval.owner),
+        &eval.edit.buffers,
+        word_boundary,
+        ready.syntax_properties,
+    );
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    re_search_forward_with_state_posix_and_syntax_properties(
+        case_fold,
+        true,
+        match_context,
+        &mut eval.edit.buffers,
+        match_data,
+        &args,
+        ready.compiled.as_deref(),
+    )
+}
+
+#[doc(hidden)]
+pub fn builtin_posix_search_backward(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("posix-search-backward", &args, 1, 4)?;
+    let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
+        .map(|v| !v.is_nil())
+        .unwrap_or(true);
+    if let Some(result) =
+        buffer_regexp_search_fast(eval, &args, SearchKind::BackwardRegexp, case_fold, true)
+    {
+        return result;
+    }
+    let prep =
+        prepare_buffer_regexp_search(eval, &args, SearchKind::BackwardRegexp, case_fold, true)?;
+    let ready = resolve_regexp_search_prep(eval, &args, case_fold, true, prep)?;
+    // Reuse only callback-free preparation. A callback-capable path leaves
+    // compiled unset and keeps the matcher's fresh pattern lookup below.
+    let word_boundary = if ready
+        .compiled
+        .as_ref()
+        .is_some_and(|compiled| !compiled.uses_syntax)
+    {
+        neovm_text::emacs_core::regex_emacs::WordBoundaryLookup::default()
+            .with_symbol_mode(eval.symbol_mode())
+    } else {
+        current_word_boundary_lookup(eval)
+    };
+    let match_context = current_buffer_regexp_match_context(
+        VariableView::new(&eval.obarray, &eval.owner),
+        &eval.edit.buffers,
+        word_boundary,
+        ready.syntax_properties,
+    );
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    re_search_backward_with_state_posix_and_syntax_properties(
+        case_fold,
+        true,
+        match_context,
+        &mut eval.edit.buffers,
+        match_data,
+        &args,
+        ready.compiled.as_deref(),
+    )
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_looking_at(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    expect_args_range("looking-at", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_looking_at_2(eval, arg(0), arg(1))
+}
+/// `looking-at` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_looking_at_2(
+    eval: &mut super::eval::Context,
+    regexp: Value,
+    inhibit_modify: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [regexp, inhibit_modify];
+    expect_args_range("looking-at", &args, 1, 2)?;
+    let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
+        .map(|v| !v.is_nil())
+        .unwrap_or(true);
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    if let Some(result) = looking_at_fast(eval, &args, case_fold, inhibit_changing) {
+        eval.maybe_quit()?;
+        return result;
+    }
+    let mut lazy = AnchoredPropertize::new(&eval.edit.buffers);
+    loop {
+        let (syntax_properties, lazy_relevant, compiled) =
+            prepare_current_buffer_regexp_syntax_to_reporting_compiled(
+                eval,
+                args[0],
+                case_fold,
+                false,
+                Some(lazy.target_lisp),
+            )?;
+        let crossed = std::cell::Cell::new(None);
+        let frontier = AnchoredPropertize::frontier_byte(eval, lazy_relevant)
+            .map(|byte| super::regex::PropertizeFrontier::new(byte, &crossed));
+        // The word-boundary tables (`char-script-table`,
+        // `word-combining-categories`, `word-separating-categories`) are read
+        // by the matcher only at syntax-dependent ops (GNU reads
+        // `Vchar_script_table` inside `wordbound`); a pattern without any
+        // needs no lookup -- three variable reads per call otherwise.
+        let word_boundary = if compiled.uses_syntax {
+            current_word_boundary_lookup(eval)
+        } else {
+            neovm_text::emacs_core::regex_emacs::WordBoundaryLookup::default()
+                .with_symbol_mode(eval.symbol_mode())
+        };
+        let mut match_context = current_buffer_regexp_match_context(
+            VariableView::new(&eval.obarray, &eval.owner),
+            &eval.edit.buffers,
+            word_boundary,
+            syntax_properties,
+        );
+        if let Some(frontier) = frontier {
+            match_context = match_context.with_frontier(frontier);
+        }
+        let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+        let result = builtin_looking_at_with_state_and_syntax_properties(
+            match_context,
+            &eval.edit.buffers,
+            match_data,
+            &args,
+            &compiled,
+        );
+        if let Some(byte) = crossed.get()
+            && lazy.advance(&eval.edit.buffers, byte)
+        {
+            continue;
+        }
+        // Promote a TLS-detected quit to a `quit` signal (see
+        // `builtin_re_search_forward`).
+        eval.maybe_quit()?;
+        return result;
+    }
+}
+
+/// U2.8 front end of `looking-at`: when the pattern cannot make
+/// `syntax-propertize` run -- it reads no buffer syntax, or
+/// `parse-sexp-lookup-properties` is nil -- there is no propertize frontier
+/// to arm and nothing to retry, so one cache probe and one match answer,
+/// without the `syntax-table` property resolver the matcher would never
+/// consult. `None`, having changed nothing observable, leaves the call to
+/// the general loop; a compile error signals here exactly as there.
+fn looking_at_fast(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+    case_fold: bool,
+    inhibit_changing: bool,
+) -> Option<EvalResult> {
+    if !crate::emacs_core::eval::builtin_frontend_on() || !args[0].is_string() {
+        return None;
+    }
+    let compiled = {
+        let pattern = expect_lisp_string(&args[0]).ok()?;
+        let buf = eval.edit.buffers.current_buffer()?;
+        match super::regex::buffer_regexp_syntax_dependency_compiled_with_symbols(
+            buf,
+            pattern,
+            case_fold,
+            false,
+            eval.symbol_mode(),
+        ) {
+            Ok((_, compiled)) => compiled,
+            Err(msg) => return Some(Err(regex_error_signal(msg))),
+        }
+    };
+    if compiled.uses_syntax
+        && neovm_text::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval)
+    {
+        return None;
+    }
+    let word_boundary = if compiled.uses_syntax {
+        current_word_boundary_lookup(eval)
+    } else {
+        neovm_text::emacs_core::regex_emacs::WordBoundaryLookup::default()
+            .with_symbol_mode(eval.symbol_mode())
+    };
+    let match_context = current_buffer_regexp_match_context(
+        VariableView::new(&eval.obarray, &eval.owner),
+        &eval.edit.buffers,
+        word_boundary,
+        BufferRegexpSyntaxProperties::Ignore,
+    );
+    note_frontend_fast_call();
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    Some(builtin_looking_at_with_state_and_syntax_properties(
+        match_context,
+        &eval.edit.buffers,
+        match_data,
+        args,
+        &compiled,
+    ))
+}
+
+fn builtin_looking_at_with_state_and_syntax_properties(
+    match_context: BufferRegexpMatchContext<'_>,
+    buffers: &neovm_edit::buffer::BufferManager,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
+    args: &[Value],
+    compiled: &neovm_text::emacs_core::regex_emacs::CompiledPattern,
+) -> EvalResult {
+    expect_args_range("looking-at", args, 1, 2)?;
+    let inhibit_modify = args.get(1).is_some_and(|arg| !arg.is_nil());
+
+    let buf = buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    if crate::emacs_core::eval::builtin_frontend_on() {
+        // Publish the registers into the match data in place (U2.8).
+        let mut regs = super::regex::SearchRegisters::default();
+        let matched =
+            super::regex::looking_at_compiled_into(buf, compiled, match_context, &mut regs);
+        if matched
+            && !inhibit_modify
+            && let Some(match_data) = match_data
+        {
+            regs.publish_buffer_into(buf, match_data);
+        }
+        return Ok(Value::bool_val(matched));
+    }
+    let result = super::regex::looking_at_compiled(buf, compiled, match_context);
+
+    match result {
+        Ok(published_match_data) => {
+            let matched = published_match_data.is_some();
+            if !inhibit_modify
+                && let (Some(match_data), Some(published_match_data)) =
+                    (match_data, published_match_data)
+            {
+                *match_data = Some(published_match_data);
+            }
+            Ok(Value::bool_val(matched))
+        }
+        Err(msg) => Err(regex_error_signal(msg)),
+    }
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_looking_at_p(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("looking-at-p", &args, 1)?;
+    let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
+        .map(|v| !v.is_nil())
+        .unwrap_or(true);
+    let mut lazy = AnchoredPropertize::new(&eval.edit.buffers);
+    loop {
+        let (syntax_properties, lazy_relevant) = prepare_current_buffer_regexp_syntax_to_reporting(
+            eval,
+            args[0],
+            case_fold,
+            false,
+            Some(lazy.target_lisp),
+        )?;
+        let crossed = std::cell::Cell::new(None);
+        let frontier = AnchoredPropertize::frontier_byte(eval, lazy_relevant)
+            .map(|byte| super::regex::PropertizeFrontier::new(byte, &crossed));
+        let mut match_context = current_buffer_regexp_match_context(
+            eval.variables(),
+            &eval.edit.buffers,
+            current_word_boundary_lookup(eval),
+            syntax_properties,
+        );
+        if let Some(frontier) = frontier {
+            match_context = match_context.with_frontier(frontier);
+        }
+        let result = builtin_looking_at_p_with_state_and_syntax_properties(
+            case_fold,
+            match_context,
+            &eval.edit.buffers,
+            &args,
+        );
+        if let Some(byte) = crossed.get()
+            && lazy.advance(&eval.edit.buffers, byte)
+        {
+            continue;
+        }
+        return result;
+    }
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_looking_at_p_with_state(
+    case_fold: bool,
+    buffers: &neovm_edit::buffer::BufferManager,
+    args: &[Value],
+) -> EvalResult {
+    builtin_looking_at_p_with_state_and_syntax_properties(
+        case_fold,
+        BufferRegexpMatchContext::new(
+            neovm_text::emacs_core::syntax::SyntaxProperties::Ignore,
+            neovm_text::emacs_core::regex_emacs::WordBoundaryLookup::default(),
+        ),
+        buffers,
+        args,
+    )
+}
+
+fn builtin_looking_at_p_with_state_and_syntax_properties(
+    case_fold: bool,
+    match_context: BufferRegexpMatchContext<'_>,
+    buffers: &neovm_edit::buffer::BufferManager,
+    args: &[Value],
+) -> EvalResult {
+    expect_args("looking-at-p", args, 1)?;
+    let pattern = expect_lisp_string(&args[0])?;
+
+    let buf = buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+
+    match super::regex::looking_at_lisp_with_posix(buf, pattern, case_fold, false, match_context) {
+        Ok(published_match_data) => Ok(Value::bool_val(published_match_data.is_some())),
+        Err(msg) => Err(regex_error_signal(msg)),
+    }
+}
+
+#[doc(hidden)]
+pub fn builtin_posix_looking_at(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    expect_args_range("posix-looking-at", &args, 1, 2)?;
+    let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
+        .map(|v| !v.is_nil())
+        .unwrap_or(true);
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let mut lazy = AnchoredPropertize::new(&eval.edit.buffers);
+    loop {
+        let (syntax_properties, lazy_relevant) = prepare_current_buffer_regexp_syntax_to_reporting(
+            eval,
+            args[0],
+            case_fold,
+            true,
+            Some(lazy.target_lisp),
+        )?;
+        let crossed = std::cell::Cell::new(None);
+        let frontier = AnchoredPropertize::frontier_byte(eval, lazy_relevant)
+            .map(|byte| super::regex::PropertizeFrontier::new(byte, &crossed));
+        let mut match_context = current_buffer_regexp_match_context(
+            VariableView::new(&eval.obarray, &eval.owner),
+            &eval.edit.buffers,
+            current_word_boundary_lookup(eval),
+            syntax_properties,
+        );
+        if let Some(frontier) = frontier {
+            match_context = match_context.with_frontier(frontier);
+        }
+        let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+        let result = builtin_posix_looking_at_with_state_and_syntax_properties(
+            case_fold,
+            match_context,
+            &eval.edit.buffers,
+            match_data,
+            &args,
+        );
+        if let Some(byte) = crossed.get()
+            && lazy.advance(&eval.edit.buffers, byte)
+        {
+            continue;
+        }
+        return result;
+    }
+}
+
+fn builtin_posix_looking_at_with_state_and_syntax_properties(
+    case_fold: bool,
+    match_context: BufferRegexpMatchContext<'_>,
+    buffers: &neovm_edit::buffer::BufferManager,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
+    args: &[Value],
+) -> EvalResult {
+    // GNU `src/search.c:Fposix_looking_at` calls `looking_at_1`
+    // with `posix = 1`, which threads into `compile_pattern` and
+    // ultimately into `re_match_2_internal` to enable POSIX
+    // longest-match (regex-emacs.c:4143-4344). See audit #2 in
+    // `drafts/regex-search-audit.md`; this wrapper used to be a
+    // silent alias for `looking-at`.
+    expect_args_range("posix-looking-at", args, 1, 2)?;
+    let pattern = expect_lisp_string(&args[0])?;
+    let inhibit_modify = args.get(1).is_some_and(|arg| !arg.is_nil());
+
+    let buf = buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let result =
+        super::regex::looking_at_lisp_with_posix(buf, pattern, case_fold, true, match_context);
+
+    match result {
+        Ok(published_match_data) => {
+            let matched = published_match_data.is_some();
+            if !inhibit_modify
+                && let (Some(match_data), Some(published_match_data)) =
+                    (match_data, published_match_data)
+            {
+                *match_data = Some(published_match_data);
+            }
+            Ok(Value::bool_val(matched))
+        }
+        Err(msg) => Err(regex_error_signal(msg)),
+    }
+}
+
+fn commit_string_search_success(
+    result: Result<Option<super::regex::StringSearchSuccess>, String>,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
+) -> EvalResult {
+    match result {
+        Ok(Some(success)) => {
+            let start = if let Some(match_data) = match_data {
+                let (start, published_match_data) = success.into_parts();
+                *match_data = Some(published_match_data);
+                start
+            } else {
+                success.into_start()
+            };
+            Ok(Value::fixnum(start.get()))
+        }
+        Ok(None) => {
+            if let Some(Some(match_data)) = match_data {
+                match_data.record_failed_string_search();
+            }
+            Ok(Value::NIL)
+        }
+        Err(msg) => Err(regex_error_signal(msg)),
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // match-time Lisp state stays explicit at this seam
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_string_match_with_state(
+    case_fold: bool,
+    case_translation_table: Option<Value>,
+    syntax_table: Option<&neovm_text::emacs_core::syntax::SyntaxTable>,
+    category_table: Option<Value>,
+    word_boundary: neovm_text::emacs_core::regex_emacs::WordBoundaryLookup,
+    syntax_properties: neovm_text::emacs_core::syntax::SyntaxProperties<'_>,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
+    args: &[Value],
+) -> EvalResult {
+    crate::emacs_core::eval::perf::time_op(
+        crate::emacs_core::eval::perf::PerfOp::StringMatch,
+        || {
+            expect_args_range("string-match", args, 2, 4)?;
+            let inhibit_modify = args.get(3).is_some_and(|v| v.is_truthy());
+
+            match (args[0].kind(), args[1].kind()) {
+                (ValueKind::String, ValueKind::String) => {
+                    let pattern = expect_lisp_string(&args[0])?;
+                    let string = args[1].as_lisp_string().unwrap();
+                    let start =
+                        neovm_text::emacs_core::search::normalize_lisp_string_value_start_arg(
+                            args[1],
+                            args.get(2),
+                        )?;
+                    let result = with_string_regexp_syntax_lookup(
+                        syntax_table,
+                        category_table,
+                        word_boundary,
+                        validated_string_syntax_source(&args[1])?,
+                        syntax_properties,
+                        |syntax| {
+                            super::regex::string_search_full_with_case_fold_source_lisp_pattern_posix_syntax(
+                                pattern,
+                                string,
+                                super::regex::SearchedString::Heap(args[1]),
+                                start,
+                                case_fold,
+                                false,
+                                case_translation_table,
+                                syntax,
+                            )
+                        },
+                    )
+                    .map_err(string_syntax_position_signal)?;
+                    let target = if inhibit_modify { None } else { match_data };
+                    commit_string_search_success(result, target)
+                }
+                _ => {
+                    let pattern = expect_string_lossy(&args[0])?;
+                    let s = expect_string_lossy(&args[1])?;
+                    let start = normalize_string_start_arg(&s, args.get(2))?;
+                    let result = super::regex::string_search_full_with_case_fold_and_posix(
+                        &pattern, &s, start, case_fold, false,
+                    );
+                    let target = if inhibit_modify { None } else { match_data };
+                    commit_string_search_success(result, target)
+                }
+            }
+        },
+    )
+}
+
+/// Context-dependent `string-match`: updates match data on the evaluator.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_string_match(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_string_match_slice(eval, &args)
+}
+
+#[doc(hidden)]
+pub fn builtin_string_match_slice(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
+    let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
+        .map(|v| !v.is_nil())
+        .unwrap_or(true);
+    if let Some(result) = string_match_fast(eval, args, case_fold) {
+        eval.maybe_quit()?;
+        return result;
+    }
+    // The canon TABLE only: regexp compile builds (and caches) the actual
+    // CaseTranslation; constructing its 1KB memo per call was pure waste.
+    let case_translation_table = if case_fold {
+        Some(crate::emacs_core::eval::case_tables::current_case_canon_table(eval)?)
+    } else {
+        None
+    };
+    let current_buffer = eval.edit.buffers.current_buffer();
+    let syntax_table = current_buffer.map(neovm_text::emacs_core::syntax::SyntaxTable::for_buffer);
+    let category_table =
+        Some(neovm_text::emacs_core::category::active_category_table_for_buffer(current_buffer)?);
+    let word_boundary = current_word_boundary_lookup(eval);
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let syntax_properties = current_string_match_syntax_properties(
+        eval,
+        VariableView::new(&eval.obarray, &eval.owner),
+        &eval.edit.buffers,
+        args.get(1),
+    );
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    let result = builtin_string_match_with_state(
+        case_fold,
+        case_translation_table,
+        syntax_table.as_ref(),
+        category_table,
+        word_boundary,
+        syntax_properties,
+        match_data,
+        args,
+    );
+    // Promote a TLS-detected quit (see `builtin_re_search_forward`).
+    eval.maybe_quit()?;
+    result
+}
+
+/// U2.8 front end of `string-match` over two strings: GNU `string_match_1`
+/// compiles once and matches. The general path reads the three
+/// word-boundary tables and snapshots the property resolver before it knows
+/// whether the pattern reads syntax, builds the match data by value through
+/// a heap vector, and moves it into the evaluator's slot.
+///
+/// This probes the pattern cache first -- keyed exactly as the search keys
+/// it -- reads the word-boundary tables and the string's syntax properties
+/// only for a pattern that reads syntax (the category table stays: `\cC`
+/// reads it without reading syntax), matches with that pattern, and
+/// publishes the registers into the match data in place. `None` sends
+/// anything but a well-formed call over two strings to the general path;
+/// errors come out in the general path's order.
+fn string_match_fast(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+    case_fold: bool,
+) -> Option<EvalResult> {
+    if !crate::emacs_core::eval::builtin_frontend_on()
+        || !(2..=4).contains(&args.len())
+        || !args[0].is_string()
+        || !args[1].is_string()
+    {
+        return None;
+    }
+    let case_translation_table = if case_fold {
+        match crate::emacs_core::eval::case_tables::current_case_canon_table(eval) {
+            Ok(table) => Some(table),
+            Err(flow) => return Some(Err(flow)),
+        }
+    } else {
+        None
+    };
+    let current_buffer = eval.edit.buffers.current_buffer();
+    let syntax_table = current_buffer.map(neovm_text::emacs_core::syntax::SyntaxTable::for_buffer);
+    let category_table =
+        match neovm_text::emacs_core::category::active_category_table_for_buffer(current_buffer) {
+            Ok(table) => Some(table),
+            Err(flow) => return Some(Err(flow)),
+        };
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let inhibit_modify = args.get(3).is_some_and(|v| v.is_truthy());
+    let pattern = args[0].as_lisp_string()?;
+    let string = args[1].as_lisp_string()?;
+    let source = match validated_string_syntax_source(&args[1]) {
+        Ok(source) => source,
+        Err(flow) => return Some(Err(flow)),
+    };
+    let start = match neovm_text::emacs_core::search::normalize_lisp_string_value_start_arg(
+        args[1],
+        args.get(2),
+    ) {
+        Ok(start) => start,
+        Err(flow) => return Some(Err(flow)),
+    };
+    let compiled = {
+        // The cache key and a `[[:word:]]` fastmap depend on the base syntax
+        // table alone, so the key lookup needs neither the word-boundary
+        // tables nor the property resolver.
+        match with_string_regexp_syntax_lookup(
+            syntax_table.as_ref(),
+            category_table,
+            neovm_text::emacs_core::regex_emacs::WordBoundaryLookup::default()
+                .with_symbol_mode(eval.symbol_mode()),
+            source,
+            neovm_text::emacs_core::syntax::SyntaxProperties::Ignore,
+            |syntax| {
+                super::regex::compile_string_search_pattern(
+                    pattern,
+                    string,
+                    case_fold,
+                    false,
+                    case_translation_table,
+                    syntax,
+                )
+            },
+        ) {
+            Ok(Ok(compiled)) => compiled,
+            Ok(Err(msg)) => return Some(Err(regex_error_signal(msg))),
+            Err(error) => return Some(Err(string_syntax_position_signal(error))),
+        }
+    };
+    let (word_boundary, syntax_properties) = if compiled.uses_syntax {
+        (
+            current_word_boundary_lookup(eval),
+            current_string_match_syntax_properties(
+                eval,
+                eval.variables(),
+                &eval.edit.buffers,
+                args.get(1),
+            ),
+        )
+    } else {
+        (
+            neovm_text::emacs_core::regex_emacs::WordBoundaryLookup::default()
+                .with_symbol_mode(eval.symbol_mode()),
+            neovm_text::emacs_core::syntax::SyntaxProperties::Ignore,
+        )
+    };
+    // The register carrier stays in place; it must not replace the removed
+    // lookup aggregate with another large by-value return.
+    let mut regs = super::regex::SearchRegisters::default();
+    let found = match with_string_regexp_syntax_lookup(
+        syntax_table.as_ref(),
+        category_table,
+        word_boundary,
+        source,
+        syntax_properties,
+        |syntax| {
+            let found = super::regex::string_search_compiled_into(
+                &compiled, string, start, syntax, &mut regs,
+            );
+            note_frontend_fast_call();
+            found
+        },
+    ) {
+        Ok(found) => found,
+        Err(error) => return Some(Err(string_syntax_position_signal(error))),
+    };
+    Some(match found {
+        Ok(true) => {
+            let target = (!inhibit_modify && !inhibit_changing).then_some(&mut eval.match_data);
+            let start =
+                regs.publish_string_into(super::regex::SearchedString::Heap(args[1]), target);
+            Ok(Value::fixnum(start.get() as i64))
+        }
+        Ok(false) => {
+            if !inhibit_modify
+                && !inhibit_changing
+                && let Some(match_data) = &mut eval.match_data
+            {
+                match_data.record_failed_string_search();
+            }
+            Ok(Value::NIL)
+        }
+        Err(msg) => Err(regex_error_signal(msg)),
+    })
+}
+
+#[allow(clippy::too_many_arguments)] // match-time Lisp state stays explicit at this seam
+pub(crate) fn builtin_posix_string_match_with_state(
+    case_fold: bool,
+    case_translation_table: Option<Value>,
+    syntax_table: Option<&neovm_text::emacs_core::syntax::SyntaxTable>,
+    category_table: Option<Value>,
+    word_boundary: neovm_text::emacs_core::regex_emacs::WordBoundaryLookup,
+    syntax_properties: neovm_text::emacs_core::syntax::SyntaxProperties<'_>,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
+    args: &[Value],
+) -> EvalResult {
+    // GNU `src/search.c:Fposix_string_match` calls `string_match_1`
+    // with `posix = 1`. Before this fix the neomacs builtin was a
+    // silent alias for `string-match` (audit #2). We duplicate the
+    // body of `builtin_string_match_with_state` and route through
+    // the `*_posix` compile helpers so `CompiledPattern::posix` is
+    // set for the matcher.
+    crate::emacs_core::eval::perf::time_op(
+        crate::emacs_core::eval::perf::PerfOp::StringMatch,
+        || {
+            expect_args_range("posix-string-match", args, 2, 4)?;
+            let inhibit_modify = args.get(3).is_some_and(|v| v.is_truthy());
+
+            match (args[0].kind(), args[1].kind()) {
+                (ValueKind::String, ValueKind::String) => {
+                    let pattern = expect_lisp_string(&args[0])?;
+                    let string = args[1].as_lisp_string().unwrap();
+                    let start =
+                        neovm_text::emacs_core::search::normalize_lisp_string_value_start_arg(
+                            args[1],
+                            args.get(2),
+                        )?;
+                    let result = with_string_regexp_syntax_lookup(
+                        syntax_table,
+                        category_table,
+                        word_boundary,
+                        validated_string_syntax_source(&args[1])?,
+                        syntax_properties,
+                        |syntax| {
+                            super::regex::string_search_full_with_case_fold_source_lisp_pattern_posix_syntax(
+                                pattern,
+                                string,
+                                super::regex::SearchedString::Heap(args[1]),
+                                start,
+                                case_fold,
+                                true,
+                                case_translation_table,
+                                syntax,
+                            )
+                        },
+                    )
+                    .map_err(string_syntax_position_signal)?;
+                    let target = if inhibit_modify { None } else { match_data };
+                    commit_string_search_success(result, target)
+                }
+                _ => {
+                    let pattern = expect_string_lossy(&args[0])?;
+                    let s = expect_string_lossy(&args[1])?;
+                    let start = normalize_string_start_arg(&s, args.get(2))?;
+                    let result = super::regex::string_search_full_with_case_fold_and_posix(
+                        &pattern, &s, start, case_fold, true,
+                    );
+                    let target = if inhibit_modify { None } else { match_data };
+                    commit_string_search_success(result, target)
+                }
+            }
+        },
+    )
+}
+
+pub(crate) fn builtin_string_match_p_with_case_fold(
+    case_fold: bool,
+    case_translation_table: Option<Value>,
+    syntax_table: Option<&neovm_text::emacs_core::syntax::SyntaxTable>,
+    category_table: Option<Value>,
+    word_boundary: neovm_text::emacs_core::regex_emacs::WordBoundaryLookup,
+    syntax_properties: neovm_text::emacs_core::syntax::SyntaxProperties<'_>,
+    args: &[Value],
+) -> EvalResult {
+    expect_args_range("string-match-p", args, 2, 3)?;
+    match (args[0].kind(), args[1].kind()) {
+        (ValueKind::String, ValueKind::String) => {
+            let pattern = expect_lisp_string(&args[0])?;
+            let string = args[1].as_lisp_string().unwrap();
+            let start = neovm_text::emacs_core::search::normalize_lisp_string_value_start_arg(
+                args[1],
+                args.get(2),
+            )?;
+            let result = with_string_regexp_syntax_lookup(
+                syntax_table,
+                category_table,
+                word_boundary,
+                validated_string_syntax_source(&args[1])?,
+                syntax_properties,
+                |syntax| {
+                    super::regex::string_search_full_with_case_fold_source_lisp_pattern_posix_syntax(
+                        pattern,
+                        string,
+                        super::regex::SearchedString::Heap(args[1]),
+                        start,
+                        case_fold,
+                        false,
+                        case_translation_table,
+                        syntax,
+                    )
+                },
+            )
+            .map_err(string_syntax_position_signal)?;
+            commit_string_search_success(result, None)
+        }
+        _ => {
+            let pattern = expect_string_lossy(&args[0])?;
+            let s = expect_string_lossy(&args[1])?;
+            let start = normalize_string_start_arg(&s, args.get(2))?;
+            commit_string_search_success(
+                super::regex::string_search_full_with_case_fold_and_posix(
+                    &pattern, &s, start, case_fold, false,
+                ),
+                None,
+            )
+        }
+    }
+}
+
+// There is no `builtin_string_match_p' subr entry point.  GNU DEFUNs
+// `string-match' (src/search.c:442) and writes `string-match-p' as a
+// `defsubst' over it (lisp/subr.el:5941), so every compiled caller inlines
+// `(string-match REGEXP STRING START t)' and the name has no function of its
+// own to reach (DIVERGENCES.md 152).  `builtin_string_match_p_with_case_fold'
+// above stays: `Context::skip_debugger' calls it to match
+// `debug-ignored-errors', which GNU also does from C -- `fast_string_match'
+// at src/eval.c:2163, over src/search.c:485 -- and never through a Lisp name.
+
+#[doc(hidden)]
+pub fn builtin_posix_string_match(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
+        .map(|v| !v.is_nil())
+        .unwrap_or(true);
+    // The canon TABLE only: regexp compile builds (and caches) the actual
+    // CaseTranslation; constructing its 1KB memo per call was pure waste.
+    let case_translation_table = if case_fold {
+        Some(crate::emacs_core::eval::case_tables::current_case_canon_table(eval)?)
+    } else {
+        None
+    };
+    let current_buffer = eval.edit.buffers.current_buffer();
+    let syntax_table = current_buffer.map(neovm_text::emacs_core::syntax::SyntaxTable::for_buffer);
+    let category_table =
+        Some(neovm_text::emacs_core::category::active_category_table_for_buffer(current_buffer)?);
+    let word_boundary = current_word_boundary_lookup(eval);
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let syntax_properties = current_string_match_syntax_properties(
+        eval,
+        VariableView::new(&eval.obarray, &eval.owner),
+        &eval.edit.buffers,
+        args.get(1),
+    );
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    builtin_posix_string_match_with_state(
+        case_fold,
+        case_translation_table,
+        syntax_table.as_ref(),
+        category_table,
+        word_boundary,
+        syntax_properties,
+        match_data,
+        &args,
+    )
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_match_string(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("match-string", &args, 1, 2)?;
+    let group_index = expect_int(&args[0])?;
+    if group_index < 0 {
+        return Err(signal(
+            LispCondition::ArgsOutOfRange,
+            vec![Value::fixnum(group_index), Value::fixnum(0)],
+        ));
+    }
+    let group_index = group_index as usize;
+
+    let md = match &eval.match_data {
+        Some(md) => md,
+        None => return Ok(Value::NIL),
+    };
+
+    let Some(endpoints) = md.lisp_group(group_index) else {
+        return Ok(Value::NIL);
+    };
+    // GNU subr.el:5863-5866 delegates string extraction to substring.
+    // Keep signed END until that boundary normalizes relative indices and
+    // uses the original source object's cached character/byte positions.
+    if let Some(source) = args.get(1).copied().filter(|value| value.is_string()) {
+        return super::strings::builtin_substring_slice(&[
+            source,
+            Value::fixnum(endpoints.start()),
+            Value::fixnum(endpoints.end()),
+        ]);
+    }
+    let Some(group) = md.group(group_index) else {
+        let source = args
+            .get(1)
+            .copied()
+            .filter(|value| value.is_string())
+            .or_else(|| match md.searched_string() {
+                Some(super::regex::SearchedString::Heap(value)) => Some(*value),
+                _ => None,
+            })
+            .unwrap_or(Value::NIL);
+        return Err(signal(
+            LispCondition::ArgsOutOfRange,
+            vec![
+                source,
+                Value::fixnum(endpoints.start()),
+                Value::fixnum(endpoints.end()),
+            ],
+        ));
+    };
+    let start = group.start();
+    let end = group.end();
+
+    let slice_lisp_string = |string: &neovm_value::heap_types::LispString,
+                             use_char_positions: bool| {
+        let (byte_start, byte_end) = if use_char_positions {
+            (
+                char_pos_to_byte_lisp_string(string, start),
+                char_pos_to_byte_lisp_string(string, end),
+            )
+        } else {
+            (start, end)
+        };
+        if byte_end <= string.byte_len() && byte_start <= byte_end {
+            string.slice(byte_start, byte_end).map(Value::heap_string)
+        } else {
+            None
+        }
+    };
+
+    // If an optional second arg is a string, use that first.
+    if args.len() > 1 {
+        let explicit_md = match_data_for_explicit_string_arg(md);
+        let Some(group) = explicit_md.group(group_index) else {
+            return Ok(Value::NIL);
+        };
+        let start = group.start();
+        let end = group.end();
+        if let Some(string) = eval.lisp_string(args[1]) {
+            let (byte_start, byte_end) = (
+                char_pos_to_byte_lisp_string(string, start),
+                char_pos_to_byte_lisp_string(string, end),
+            );
+            if byte_end <= string.byte_len()
+                && byte_start <= byte_end
+                && let Some(slice) = string.slice(byte_start, byte_end).map(Value::heap_string)
+            {
+                return Ok(slice);
+            }
+            return Ok(Value::NIL);
+        }
+
+        if let Some(s) = args[1].as_utf8_str() {
+            let (byte_start, byte_end) = (char_pos_to_byte(s, start), char_pos_to_byte(s, end));
+            if byte_end <= s.len() && byte_start <= byte_end {
+                return Ok(Value::string(&s[byte_start..byte_end]));
+            }
+            return Ok(Value::NIL);
+        }
+    }
+
+    // Otherwise, if the match was against a string, use that string.
+    if let Some(searched) = md.searched_string() {
+        if let super::regex::SearchedString::Heap(val) = searched
+            && let Some(string) = eval.lisp_string(*val)
+        {
+            if let Some(slice) = slice_lisp_string(string, true) {
+                return Ok(slice);
+            }
+            return Ok(Value::NIL);
+        }
+
+        if let Some(string) = searched.as_lisp_string()
+            && let Some(slice) = slice_lisp_string(string, true)
+        {
+            return Ok(slice);
+        }
+        return Ok(Value::NIL);
+    }
+
+    let buf = match eval.edit.buffers.current_buffer() {
+        Some(b) => b,
+        None => return Ok(Value::NIL),
+    };
+    let start_byte = buf.lisp_pos_to_emacs_byte_pos(LispCharPos1::from_one_based_usize(start));
+    let end_byte = buf.lisp_pos_to_emacs_byte_pos(LispCharPos1::from_one_based_usize(end));
+    if end_byte.get() <= buf.total_emacs_byte_len().get() && start_byte <= end_byte {
+        Ok(buf.buffer_substring_value_range(EmacsByteRange::new(start_byte, end_byte)))
+    } else {
+        Ok(Value::NIL)
+    }
+}
+
+pub(crate) fn builtin_match_beginning_with_state(
+    match_data: &Option<super::regex::MatchData>,
+    args: &[Value],
+) -> EvalResult {
+    crate::emacs_core::eval::perf::time_op(
+        crate::emacs_core::eval::perf::PerfOp::MatchBeginning,
+        || {
+            expect_args("match-beginning", args, 1)?;
+            // GNU `match_limit` (search.c) runs SUBEXP through `CHECK_FIXNUM`,
+            // signalling `(wrong-type-argument fixnump …)` — not `integerp`.
+            let group = expect_fixnum(&args[0])?;
+            if group < 0 {
+                return Err(signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![Value::fixnum(group), Value::fixnum(0)],
+                ));
+            }
+            let group = group as usize;
+
+            let md = match match_data {
+                Some(md) => md,
+                None => return Ok(Value::NIL),
+            };
+
+            match md.lisp_group(group) {
+                Some(group) => Ok(Value::fixnum(group.start())),
+                None => Ok(Value::NIL),
+            }
+        },
+    )
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_match_beginning(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("match-beginning", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_match_beginning_1(eval, arg(0))
+}
+/// `match-beginning` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_match_beginning_1(eval: &mut super::eval::Context, subexp: Value) -> EvalResult {
+    let args: [Value; 1] = [subexp];
+    builtin_match_beginning_with_state(&eval.match_data, &args)
+}
+
+pub(crate) fn builtin_match_end_with_state(
+    match_data: &Option<super::regex::MatchData>,
+    args: &[Value],
+) -> EvalResult {
+    crate::emacs_core::eval::perf::time_op(crate::emacs_core::eval::perf::PerfOp::MatchEnd, || {
+        expect_args("match-end", args, 1)?;
+        // GNU `match_limit` (search.c) runs SUBEXP through `CHECK_FIXNUM`,
+        // signalling `(wrong-type-argument fixnump …)` — not `integerp`.
+        let group = expect_fixnum(&args[0])?;
+        if group < 0 {
+            return Err(signal(
+                LispCondition::ArgsOutOfRange,
+                vec![Value::fixnum(group), Value::fixnum(0)],
+            ));
+        }
+        let group = group as usize;
+
+        let md = match match_data {
+            Some(md) => md,
+            None => return Ok(Value::NIL),
+        };
+
+        match md.lisp_group(group) {
+            Some(group) => Ok(Value::fixnum(group.end())),
+            None => Ok(Value::NIL),
+        }
+    })
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_match_end(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    expect_args("match-end", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_match_end_1(eval, arg(0))
+}
+/// `match-end` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_match_end_1(eval: &mut super::eval::Context, subexp: Value) -> EvalResult {
+    let args: [Value; 1] = [subexp];
+    builtin_match_end_with_state(&eval.match_data, &args)
+}
+
+/// How buffer provenance should materialize in a `(match-data)` result.
+///
+/// GNU retains the searched buffer object after it dies, but a marker cannot
+/// attach to that dead buffer.  Keeping those states distinct prevents a
+/// marker from carrying the contradictory combination of a dead buffer ID and
+/// a live-looking position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MatchDataMaterializationSource {
+    String,
+    LiveBuffer(BufferId),
+    DeadBuffer(BufferId),
+}
+
+impl MatchDataMaterializationSource {
+    #[doc(hidden)]
+    pub fn classify(
+        md: &super::regex::MatchData,
+        buffers: &neovm_edit::buffer::BufferManager,
+    ) -> Self {
+        match md.source() {
+            MatchDataSource::String => Self::String,
+            MatchDataSource::Buffer(buffer_id) if buffers.get(buffer_id).is_some() => {
+                Self::LiveBuffer(buffer_id)
+            }
+            MatchDataSource::Buffer(buffer_id) => Self::DeadBuffer(buffer_id),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn buffer_id(self) -> Option<BufferId> {
+        match self {
+            Self::String => None,
+            Self::LiveBuffer(buffer_id) | Self::DeadBuffer(buffer_id) => Some(buffer_id),
+        }
+    }
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_match_data_with_state(
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    match_data: &Option<super::regex::MatchData>,
+    args: &[Value],
+) -> EvalResult {
+    #[cfg(debug_assertions)]
+    super::regex::match_stats::count_full_export();
+    if args.len() > 3 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("match-data"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let reuse = args.get(1).copied().unwrap_or(Value::NIL);
+    if args.get(2).is_some_and(|arg| arg.is_truthy()) {
+        reseat_match_data_markers(buffers, reuse, None);
+    }
+
+    let Some(md) = match_data else {
+        return Ok(Value::NIL);
+    };
+    let integers = args.first().is_some_and(|arg| arg.is_truthy());
+    let source = MatchDataMaterializationSource::classify(md, buffers);
+
+    // Emacs trims trailing unmatched groups from match-data output.
+    let mut trailing = md.group_count();
+    while trailing > 0 && md.lisp_group(trailing - 1).is_none() {
+        trailing -= 1;
+    }
+
+    let mut flat: Vec<Value> = Vec::with_capacity(trailing * 2);
+    for group_index in 0..trailing {
+        let grp = md.lisp_group(group_index);
+        match grp {
+            Some(group) => {
+                let start = group.start();
+                let end = group.end();
+                match source {
+                    MatchDataMaterializationSource::String
+                    | MatchDataMaterializationSource::LiveBuffer(_)
+                    | MatchDataMaterializationSource::DeadBuffer(_)
+                        if integers =>
+                    {
+                        flat.push(Value::fixnum(start));
+                        flat.push(Value::fixnum(end));
+                    }
+                    MatchDataMaterializationSource::String => {
+                        flat.push(Value::fixnum(start));
+                        flat.push(Value::fixnum(end));
+                    }
+                    MatchDataMaterializationSource::LiveBuffer(buffer_id) => {
+                        flat.push(super::marker::make_registered_buffer_marker(
+                            buffers,
+                            buffer_id,
+                            LispCharPos1::new(start),
+                            false,
+                        ));
+                        flat.push(super::marker::make_registered_buffer_marker(
+                            buffers,
+                            buffer_id,
+                            LispCharPos1::new(end),
+                            false,
+                        ));
+                    }
+                    MatchDataMaterializationSource::DeadBuffer(_) => {
+                        // GNU Fmatch_data creates fresh markers and asks
+                        // Fset_marker to attach them to last_thing_searched.
+                        // A dead buffer makes Fset_marker leave them fully
+                        // detached, with no saved last position.
+                        flat.push(super::marker::make_marker_value(None, None, false));
+                        flat.push(super::marker::make_marker_value(None, None, false));
+                    }
+                }
+            }
+            None => {
+                flat.push(Value::NIL);
+                flat.push(Value::NIL);
+            }
+        }
+    }
+
+    if integers && let Some(buffer_id) = source.buffer_id() {
+        flat.push(Value::make_buffer(buffer_id));
+    }
+    Ok(store_match_data_in_reuse(reuse, &flat))
+}
+
+fn store_match_data_in_reuse(reuse: Value, data: &[Value]) -> Value {
+    if !reuse.is_cons() {
+        return Value::list_from_slice(data);
+    }
+
+    let mut index = 0usize;
+    let mut tail = reuse;
+    let mut prev = Value::NIL;
+    while tail.is_cons() {
+        tail.set_car(data.get(index).copied().unwrap_or(Value::NIL));
+        prev = tail;
+        tail = tail.cons_cdr();
+        index += 1;
+    }
+
+    if index < data.len() {
+        prev.set_cdr(Value::list_from_slice(&data[index..]));
+    }
+
+    reuse
+}
+
+/// A position accepted by GNU `set-match-data`.
+///
+/// Detached markers are not errors here: search.c explicitly coerces them to
+/// integer zero.  Model that case instead of losing it in an
+/// `(i64, Option<BufferId>)` pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MatchDataInputPosition {
+    Integer(i64),
+    LiveMarker { position: i64, buffer_id: BufferId },
+    DetachedMarker,
+}
+
+impl MatchDataInputPosition {
+    #[doc(hidden)]
+    pub fn position(self) -> i64 {
+        match self {
+            Self::Integer(position) | Self::LiveMarker { position, .. } => position,
+            Self::DetachedMarker => 0,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn buffer_id(self) -> Option<BufferId> {
+        match self {
+            Self::LiveMarker { buffer_id, .. } => Some(buffer_id),
+            Self::Integer(_) | Self::DetachedMarker => None,
+        }
+    }
+}
+
+fn expect_match_data_position_in_manager(
+    buffers: &neovm_edit::buffer::BufferManager,
+    value: &Value,
+) -> Result<MatchDataInputPosition, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(position) => Ok(MatchDataInputPosition::Integer(position)),
+        _ if super::marker::is_marker(value) => {
+            let fields = super::marker::marker_logical_fields(value)
+                .expect("marker predicate guarantees marker fields");
+            match fields {
+                (Some(buffer_id), Some(position), _) if buffers.get(buffer_id).is_some() => {
+                    Ok(MatchDataInputPosition::LiveMarker {
+                        position: position.as_i64(),
+                        buffer_id,
+                    })
+                }
+                _ => Ok(MatchDataInputPosition::DetachedMarker),
+            }
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integer-or-marker-p"), *value],
+        )),
+    }
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_match_data(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    neovm_value::error::expect_args_range("match-data", &args, 0, 3)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_match_data_3(eval, arg(0), arg(1), arg(2))
+}
+/// `match-data` as registered: fixed arity 3, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_match_data_3(
+    eval: &mut super::eval::Context,
+    integers: Value,
+    reuse: Value,
+    reseat: Value,
+) -> EvalResult {
+    let args: [Value; 3] = [integers, reuse, reseat];
+    builtin_match_data_with_state(&mut eval.edit.buffers, &eval.match_data, &args)
+}
+
+/// Native unwind snapshots preserve signed string registers directly and
+/// marker-backed buffer positions through the existing Lisp snapshot path.
+/// String snapshots own only numeric metadata; the marker list is rooted.
+/// Threading: the marker-bearing variant stays in its originating mutator.
+#[derive(Clone)]
+enum SavedMatchData {
+    String(super::regex::StringMatchRegisterSnapshot),
+    MarkerList {
+        value: Value,
+        _mutator: std::marker::PhantomData<*const ()>,
+    },
+}
+
+impl SavedMatchData {
+    #[doc(hidden)]
+    pub fn capture(eval: &mut super::eval::Context) -> Result<Self, Flow> {
+        if let Some(snapshot) = eval
+            .match_data
+            .as_ref()
+            .and_then(super::regex::MatchData::string_register_snapshot)
+        {
+            return Ok(Self::String(snapshot));
+        }
+        builtin_match_data(eval, Vec::new()).map(|value| Self::MarkerList {
+            value,
+            _mutator: std::marker::PhantomData,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn root(&self, eval: &mut super::eval::Context) {
+        match self {
+            Self::String(_) => {}
+            Self::MarkerList { value, .. } => eval.push_specpdl_root(*value),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn restore(self, eval: &mut super::eval::Context) -> EvalResult {
+        match self {
+            Self::String(snapshot) => {
+                eval.match_data = Some(super::regex::MatchData::from_string_register_snapshot(
+                    snapshot,
+                ));
+                Ok(Value::NIL)
+            }
+            Self::MarkerList { value, .. } => builtin_set_match_data(eval, vec![value, Value::T]),
+        }
+    }
+}
+
+/// Run native evaluator work with GNU `record_unwind_save_match_data`
+/// semantics.
+///
+/// This is the Rust-side equivalent of GNU `search.c` saving `(match-data)` on
+/// the unwind stack and restoring it with `(set-match-data SAVED t)`.  The
+/// closure boundary makes restoration unavoidable on both `Ok` and `Flow`
+/// exits, while the rooted [`SavedMatchData`] keeps its marker list alive
+/// across arbitrary Lisp execution and GC.
+pub(crate) fn with_preserved_match_data<T>(
+    eval: &mut super::eval::Context,
+    operation: impl FnOnce(&mut super::eval::Context) -> Result<T, Flow>,
+) -> Result<T, Flow> {
+    let roots = eval.save_specpdl_roots();
+    let saved = match SavedMatchData::capture(eval) {
+        Ok(saved) => saved,
+        Err(flow) => {
+            eval.restore_specpdl_roots(roots);
+            return Err(flow);
+        }
+    };
+    saved.root(eval);
+
+    let operation_result = operation(eval);
+    let restore_result = saved.restore(eval);
+    eval.restore_specpdl_roots(roots);
+
+    match operation_result {
+        Err(flow) => Err(flow),
+        Ok(value) => restore_result.map(|_| value),
+    }
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_set_match_data_with_state(
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    match_data: &mut Option<super::regex::MatchData>,
+    args: &[Value],
+) -> EvalResult {
+    expect_min_args("set-match-data", args, 1)?;
+    if args.len() > 2 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("set-match-data"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    if args[0].is_nil() {
+        *match_data = None;
+        return Ok(Value::NIL);
+    }
+
+    let items = list_to_vec(&args[0]).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("listp"), args[0]],
+        )
+    })?;
+
+    let explicit_buffer_id = if items.len() % 2 == 1 {
+        items.last().and_then(|value| value.as_buffer_id())
+    } else {
+        None
+    };
+    let pair_len = items.len() - usize::from(explicit_buffer_id.is_some());
+
+    let mut groups: Vec<Option<MatchGroup>> = Vec::with_capacity(pair_len / 2);
+    let mut searched_buffer = explicit_buffer_id;
+    let mut i = 0usize;
+    while i + 1 < pair_len {
+        let start_v = &items[i];
+        let end_v = &items[i + 1];
+
+        if start_v.is_nil() && end_v.is_nil() {
+            groups.push(None);
+            i += 2;
+            continue;
+        }
+
+        let start = expect_match_data_position_in_manager(buffers, start_v)?;
+        let end = expect_match_data_position_in_manager(buffers, end_v)?;
+        if searched_buffer.is_none() {
+            searched_buffer = start.buffer_id().or(end.buffer_id());
+        }
+        let start = start.position();
+        let end = end.position();
+
+        // Emacs treats negative marker positions as an end sentinel and
+        // truncates remaining groups.
+        if start < 0 || end < 0 {
+            break;
+        }
+
+        groups.push(Some(MatchGroup::new(start as usize, end as usize)));
+        i += 2;
+    }
+
+    if groups.is_empty() {
+        *match_data = None;
+    } else if let Some(searched_buffer) = searched_buffer {
+        *match_data = Some(super::regex::MatchData::buffer_lisp_chars(
+            groups,
+            searched_buffer,
+        ));
+    } else {
+        *match_data = Some(super::regex::MatchData::string(groups, None));
+    }
+
+    if args.get(1).is_some_and(|arg| arg.is_truthy()) {
+        reseat_match_data_markers(buffers, args[0], Some(pair_len));
+    }
+
+    Ok(Value::NIL)
+}
+
+fn reseat_match_data_markers(
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    list: Value,
+    max_cells: Option<usize>,
+) {
+    let mut tail = list;
+    let mut seen = 0usize;
+    while tail.is_cons() && max_cells.is_none_or(|limit| seen < limit) {
+        let item = tail.cons_car();
+        if super::marker::is_marker(&item) {
+            super::marker::detach_marker_in_buffers(buffers, &item);
+            tail.set_car(Value::NIL);
+        }
+        tail = tail.cons_cdr();
+        seen += 1;
+    }
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_set_match_data(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    neovm_value::error::expect_args_range("set-match-data", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_set_match_data_2(eval, arg(0), arg(1))
+}
+/// `set-match-data` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_set_match_data_2(
+    eval: &mut super::eval::Context,
+    list: Value,
+    reseat: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [list, reseat];
+    builtin_set_match_data_with_state(&mut eval.edit.buffers, &mut eval.match_data, &args)
+}
+
+fn translate_match_data(
+    match_data: &mut Option<super::regex::MatchData>,
+    delta: i64,
+) -> Result<(), Flow> {
+    if let Some(md) = match_data {
+        md.translate_positions(delta).map_err(|error| {
+            signal(LispCondition::Error, vec![Value::string(error.to_string())])
+        })?;
+    }
+    Ok(())
+}
+
+pub(crate) fn builtin_match_data_translate_with_state(
+    _buffers: &neovm_edit::buffer::BufferManager,
+    match_data: &mut Option<super::regex::MatchData>,
+    args: &[Value],
+) -> EvalResult {
+    expect_args("match-data--translate", args, 1)?;
+    let delta = expect_fixnum(&args[0])?;
+    translate_match_data(match_data, delta)?;
+    Ok(Value::NIL)
+}
+
+#[doc(hidden)]
+pub fn builtin_match_data_translate(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_match_data_translate_with_state(&eval.edit.buffers, &mut eval.match_data, &args)
+}
+
+#[derive(Clone, Copy)]
+struct BufferReplacementCoordinates {
+    old_char_range: CharRange,
+    replacement_char_len: CharLen,
+}
+
+impl BufferReplacementCoordinates {
+    #[doc(hidden)]
+    pub fn published_match_data_bounds(self) -> (usize, usize, usize) {
+        let oldstart = self.old_char_range.start_lisp().to_one_based_usize();
+        let oldend = self.old_char_range.end_lisp().to_one_based_usize();
+        (
+            oldstart,
+            oldend,
+            oldstart.saturating_add(self.replacement_char_len.get()),
+        )
+    }
+}
+
+fn update_match_data_after_buffer_replace(
+    match_data: &mut Option<super::regex::MatchData>,
+    replacement: BufferReplacementCoordinates,
+) {
+    let Some(md) = match_data else {
+        return;
+    };
+
+    let (oldstart, oldend, newend) = replacement.published_match_data_bounds();
+    let change = newend as i64 - oldend as i64;
+    md.map_lisp_positions(|match_group| {
+        let mut start = match_group.start();
+        let mut end = match_group.end();
+
+        if start <= oldstart {
+            // Keep starts for enclosing groups, matching GNU's optimistic
+            // `update_search_regs` heuristic.
+        } else if start >= oldend {
+            start = (start as i64 + change) as usize;
+        } else {
+            start = oldstart;
+        }
+
+        if end >= oldend {
+            end = (end as i64 + change) as usize;
+        } else if end > oldstart {
+            end = oldstart;
+        }
+        MatchGroup::new(start, end)
+    });
+}
+
+/// GNU's string replacement path needs the original object for its cache.
+/// This cold path serves supplied counts and signed, nonsliceable registers;
+/// ordinary computed strings keep the existing metadata path.
+/// No Lisp callback or collection boundary occurs while payloads are borrowed.
+#[cold]
+#[inline(never)]
+fn replace_match_declared_string(
+    args: &[Value],
+    md: &super::regex::MatchData,
+    subexp: usize,
+    vars: crate::emacs_core::eval::VariableView<'_>,
+    mode: SymbolMode,
+) -> EvalResult {
+    let obarray = vars.obarray();
+    let source = args.get(3).copied().unwrap_or(Value::NIL);
+    let string = source.as_lisp_string().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), source],
+        )
+    })?;
+    let replacement = args.first().copied().unwrap_or(Value::NIL);
+    let replacement_string = replacement.as_lisp_string().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), replacement],
+        )
+    })?;
+    let subexp_value = args.get(4).copied().unwrap_or(Value::NIL);
+    let Some(endpoints) = md.lisp_group(subexp) else {
+        return Err(signal(
+            LispCondition::Error,
+            vec![
+                Value::string(super::regex::REPLACE_MATCH_SUBEXP_MISSING),
+                subexp_value,
+            ],
+        ));
+    };
+    let start = endpoints.start();
+    let end = endpoints.end();
+    let bounds_error = || {
+        signal(
+            LispCondition::ArgsOutOfRange,
+            vec![Value::fixnum(start), Value::fixnum(end)],
+        )
+    };
+    // GNU search.c:2417-2427 checks raw registers; relative negative END
+    // applies only to subsequent Fsubstring back-reference extraction.
+    if start > end || end > string.schars() as i64 {
+        return Err(bounds_error());
+    }
+    let fixedcase = args.get(1).is_some_and(|value| value.is_truthy());
+    let literal = args.get(2).is_some_and(|value| value.is_truthy());
+
+    // GNU search.c:2439-2465 consults START's cache before walking the
+    // logical match for case analysis. It does not convert END here.
+    let matched = if fixedcase {
+        None
+    } else {
+        let byte_start =
+            neovm_value::string_pos_cache::string_char_to_byte(source, string, start as usize);
+        let mut byte = byte_start;
+        let bytes = string.as_bytes();
+        let mut copy = Vec::new();
+        for _ in start..end {
+            if byte == bytes.len() {
+                copy.push(0); // only the initialized terminator
+                byte += 1;
+                continue;
+            }
+            let tail = bytes.get(byte..).ok_or_else(bounds_error)?;
+            let step = if string.is_multibyte() {
+                neovm_value::heap_types::decode_declared_multibyte_char(tail).1
+            } else {
+                1
+            };
+            let unit = tail.get(..step).ok_or_else(bounds_error)?;
+            copy.extend_from_slice(unit);
+            byte += step;
+        }
+        Some(if string.is_multibyte() {
+            neovm_value::heap_types::LispString::from_emacs_bytes(copy)
+        } else {
+            neovm_value::heap_types::LispString::from_unibyte(copy)
+        })
+    };
+
+    // Fsubstring order in GNU search.c:2513-2514 is observable through the
+    // original source's position cache, even for the same logical registers.
+    let before =
+        super::strings::builtin_substring_slice(&[source, Value::fixnum(0), Value::fixnum(start)])?;
+    let after = super::strings::builtin_substring_slice(&[source, Value::fixnum(end), Value::NIL])?;
+
+    let mut middle = replacement;
+    if !literal && replacement_string.as_bytes().contains(&b'\\') {
+        // substring_both copies literal pieces with known character/byte
+        // pairs; only Fsubstring of matched groups touches SOURCE's cache.
+        let literal_piece = |byte_start, byte_end, char_start, char_end| -> EvalResult {
+            let slice = replacement_string
+                .slice_with_char_bounds(byte_start, byte_end, char_start, char_end)
+                .ok_or_else(|| {
+                    signal(
+                        LispCondition::ArgsOutOfRange,
+                        vec![
+                            replacement,
+                            Value::fixnum(char_start as i64),
+                            Value::fixnum(char_end as i64),
+                        ],
+                    )
+                })?;
+            Ok(Value::heap_string(slice))
+        };
+        let group_piece = |index| -> EvalResult {
+            let (start, end) = md
+                .lisp_group(index)
+                .map(|group| (group.start(), group.end()))
+                .unwrap_or((0, 0));
+            super::strings::builtin_substring_slice(&[
+                source,
+                Value::fixnum(start),
+                Value::fixnum(end),
+            ])
+        };
+        let mut pieces = Vec::new();
+        let bytes = replacement_string.as_bytes();
+        let mut byte = 0usize;
+        let mut character = 0usize;
+        let mut last_byte = 0usize;
+        let mut last_character = 0usize;
+        while byte < bytes.len() {
+            let code_step = |offset| {
+                if replacement_string.is_multibyte() {
+                    let (c, n) =
+                        neovm_value::heap_types::decode_declared_multibyte_char(&bytes[offset..]);
+                    (c.code(), n)
+                } else {
+                    (u32::from(bytes[offset]), 1)
+                }
+            };
+            let slash_byte = byte;
+            let slash_character = character;
+            let (code, step) = code_step(byte);
+            if step > bytes.len() - byte {
+                return Err(bounds_error());
+            }
+            byte += step;
+            character += 1;
+            if code != u32::from(b'\\') {
+                continue;
+            }
+            if byte == bytes.len() {
+                let style =
+                    neovm_text::emacs_core::coding::effective_text_quoting_style(vars, mode);
+                return Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string(
+                        neovm_text::emacs_core::coding::requote_c_error_message(
+                            "Invalid use of `\\' in replacement text",
+                            style,
+                        ),
+                    )],
+                ));
+            }
+            let escaped_byte = byte;
+            let (escaped, step) = code_step(byte);
+            if step > bytes.len() - byte {
+                return Err(bounds_error());
+            }
+            byte += step;
+            character += 1;
+            match escaped {
+                code if code == u32::from(b'&')
+                    || (u32::from(b'1')..=u32::from(b'9')).contains(&code) =>
+                {
+                    if slash_character != last_character {
+                        pieces.push(literal_piece(
+                            last_byte,
+                            slash_byte,
+                            last_character,
+                            slash_character,
+                        )?);
+                    }
+                    let index = if code == u32::from(b'&') {
+                        subexp
+                    } else {
+                        (code - u32::from(b'0')) as usize
+                    };
+                    pieces.push(group_piece(index)?);
+                    last_byte = byte;
+                    last_character = character;
+                }
+                code if code == u32::from(b'\\') => {
+                    pieces.push(literal_piece(
+                        last_byte,
+                        escaped_byte,
+                        last_character,
+                        character - 1,
+                    )?);
+                    last_byte = byte;
+                    last_character = character;
+                }
+                code if code == u32::from(b'?') => {} // GNU's string-path exception
+                _ => {
+                    let style =
+                        neovm_text::emacs_core::coding::effective_text_quoting_style(vars, mode);
+                    return Err(signal(
+                        LispCondition::Error,
+                        vec![Value::string(
+                            neovm_text::emacs_core::coding::requote_c_error_message(
+                                "Invalid use of `\\' in replacement text",
+                                style,
+                            ),
+                        )],
+                    ));
+                }
+            }
+        }
+        if character != last_character {
+            pieces.push(literal_piece(last_byte, byte, last_character, character)?);
+        }
+        middle = super::strings::builtin_concat_slice(&pieces)?;
+    }
+    if let Some(matched) = matched.as_ref() {
+        let middle_string = expect_lisp_string(&middle)?;
+        middle = Value::heap_string(
+            neovm_text::emacs_core::casefiddle::apply_replace_match_case_lisp(
+                middle_string,
+                matched,
+            ),
+        );
+    }
+    super::strings::builtin_concat_slice(&[before, middle, after])
+}
+
+/// Variant that also carries the current value of
+/// `case-symbols-as-words` into the case-preservation decision for
+/// `replace-match` with FIXEDCASE=nil. Audit findings #14/#20 in
+/// `drafts/regex-search-audit.md`.
+pub(crate) fn builtin_replace_match_with_state_and_flags(
+    vars: VariableView<'_>,
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    match_data: &mut Option<super::regex::MatchData>,
+    args: &[Value],
+    _case_symbols_as_words: bool,
+    mode: neovm_value::tagged::value::SymbolMode,
+) -> EvalResult {
+    expect_min_args("replace-match", args, 1)?;
+    if args.len() > 5 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("replace-match"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let newtext_lisp = expect_lisp_string(&args[0])?;
+    let fixedcase = args.get(1).is_some_and(|arg| arg.is_truthy());
+    let literal = args.get(2).is_some_and(|arg| arg.is_truthy());
+    let raw_subexp = args.get(4).copied().unwrap_or(Value::NIL);
+    let string_arg = if args.get(3).is_some_and(|arg| !arg.is_nil()) {
+        Some(expect_lisp_string(&args[3])?)
+    } else {
+        None
+    };
+    let subexp = if args.get(4).is_some_and(|arg| !arg.is_nil()) {
+        let n = expect_int(&args[4])?;
+        if n < 0 {
+            return if let Some(source) = string_arg.as_ref() {
+                Err(signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![
+                        Value::fixnum(n),
+                        Value::fixnum(0),
+                        Value::fixnum(source.schars() as i64),
+                    ],
+                ))
+            } else {
+                Err(signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![Value::fixnum(n)],
+                ))
+            };
+        }
+        n as usize
+    } else {
+        0usize
+    };
+
+    let md_snapshot = match_data.clone();
+    let missing_subexp_error = super::regex::REPLACE_MATCH_SUBEXP_MISSING;
+    let missing_subexp_signal = |subexp_value: Value| {
+        signal(
+            "error",
+            vec![Value::string(missing_subexp_error), subexp_value],
+        )
+    };
+    // C-level `error()' messages are requoted via `text-quoting-style' by
+    // GNU's doprnt (e.g. "Invalid use of `\\' ..." -> curly quotes).
+    let quoting_style = neovm_text::emacs_core::coding::effective_text_quoting_style(vars, mode);
+    let c_error = |msg: String| {
+        signal(
+            "error",
+            vec![Value::string(
+                neovm_text::emacs_core::coding::requote_c_error_message(&msg, quoting_style),
+            )],
+        )
+    };
+
+    if let Some(source) = string_arg {
+        if md_snapshot.is_none() {
+            return Err(missing_subexp_signal(raw_subexp));
+        }
+        if let Some(md) = md_snapshot.as_ref()
+            && subexp >= md.group_count()
+        {
+            return Err(signal(
+                LispCondition::ArgsOutOfRange,
+                vec![
+                    Value::fixnum(subexp as i64),
+                    Value::fixnum(0),
+                    Value::fixnum(md.group_count().saturating_sub(1) as i64),
+                ],
+            ));
+        }
+        if let Some(md) = md_snapshot.as_ref() {
+            let declared_source = source.character_count_kind()
+                == neovm_value::heap_types::StringCharacterCountKind::Supplied;
+            let unchecked_subexp = md.lisp_group(subexp).is_some() && md.group(subexp).is_none();
+            let unchecked_backref = !literal
+                && newtext_lisp.as_bytes().contains(&b'\\')
+                && (0..md.group_count())
+                    .any(|index| md.lisp_group(index).is_some() && md.group(index).is_none());
+            if declared_source || unchecked_subexp || unchecked_backref {
+                return replace_match_declared_string(args, md, subexp, vars, mode);
+            }
+        }
+        let string_md_snapshot = md_snapshot.as_ref().map(match_data_for_explicit_string_arg);
+        return match neovm_text::emacs_core::search::replace_match_lisp_string_with_syntax(
+            source,
+            newtext_lisp,
+            fixedcase,
+            literal,
+            subexp,
+            &string_md_snapshot,
+        ) {
+            Ok(result) => Ok(Value::heap_string(result)),
+            Err(msg) if msg == missing_subexp_error => Err(missing_subexp_signal(raw_subexp)),
+            Err(msg) => Err(c_error(msg)),
+        };
+    }
+
+    if let Some(md) = md_snapshot.as_ref()
+        && subexp >= md.group_count()
+    {
+        return Err(signal(
+            LispCondition::ArgsOutOfRange,
+            vec![
+                Value::fixnum(subexp as i64),
+                Value::fixnum(0),
+                Value::fixnum(md.group_count().saturating_sub(1) as i64),
+            ],
+        ));
+    }
+
+    let current_id = buffers
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let (old_byte_range, old_char_range, replacement, case_action) = {
+        let buf = buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        // GNU checks the subexpression against the *accessible* portion of the
+        // current buffer and reports both endpoints (search.c:2418-2427).
+        if let Some(group) = md_snapshot.as_ref().and_then(|md| md.group(subexp)) {
+            let begv = buf.point_min_lisp_char_pos().to_one_based_usize();
+            let zv = buf.point_max_lisp_char_pos().to_one_based_usize();
+            if group.start() < begv || group.end() > zv {
+                return Err(signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![
+                        Value::fixnum(group.start() as i64),
+                        Value::fixnum(group.end() as i64),
+                    ],
+                ));
+            }
+        }
+        let replacement = neovm_text::emacs_core::search::compute_buffer_replacement_lisp_string(
+            buf,
+            newtext_lisp,
+            fixedcase,
+            literal,
+            subexp,
+            &md_snapshot,
+            mode,
+        )
+        .map_err(|msg| {
+            if msg == missing_subexp_error {
+                missing_subexp_signal(raw_subexp)
+            } else {
+                c_error(msg)
+            }
+        })?;
+        let case_action = if fixedcase {
+            neovm_text::emacs_core::casefiddle::ReplaceMatchCaseAction::NoChange
+        } else {
+            let matched_range = EmacsByteRange::new(
+                EmacsBytePos::new(replacement.0),
+                EmacsBytePos::new(replacement.1),
+            );
+            let matched = buf.buffer_substring_lisp_string_range(matched_range);
+            neovm_text::emacs_core::casefiddle::replace_match_case_action_lisp_default(&matched)
+        };
+        (
+            EmacsByteRange::new(
+                EmacsBytePos::new(replacement.0),
+                EmacsBytePos::new(replacement.1),
+            ),
+            CharRange::new(
+                buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(replacement.0)),
+                buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(replacement.1)),
+            ),
+            replacement.2,
+            case_action,
+        )
+    };
+    let replacement_len = replacement.sbytes();
+    let replacement_char_len = CharLen::new(replacement.schars());
+    let old_range = buffers
+        .edit_range_for_buffer_emacs_byte_range(current_id, old_byte_range)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+
+    super::super::fns::replace_buffer_region_lisp_string_in_manager(
+        buffers,
+        current_id,
+        old_range,
+        &replacement,
+    )?;
+    let replacement_byte_range = EmacsByteRange::new(
+        old_byte_range.start(),
+        old_byte_range
+            .start()
+            .add_len(neovm_edit::buffer::EmacsByteLen::new(replacement_len)),
+    );
+    if case_action != neovm_text::emacs_core::casefiddle::ReplaceMatchCaseAction::NoChange
+        && old_byte_range.start() < replacement_byte_range.end()
+        && let Some(buf) = buffers.get_mut(current_id)
+    {
+        let start_char = buffer_byte_to_char_pos(buf, replacement_byte_range.start());
+        let cased_text = buf.buffer_substring_lisp_string_range(replacement_byte_range);
+        let mut undo_list = buf.get_undo_list();
+        if !neovm_edit::buffer::undo::undo_list_is_disabled(&undo_list) {
+            let end_char = start_char.add_len(CharLen::new(cased_text.schars()));
+            neovm_edit::buffer::undo::undo_list_record_delete(
+                &mut undo_list,
+                start_char,
+                cased_text.clone(),
+                end_char,
+            );
+            neovm_edit::buffer::undo::undo_list_record_insert(
+                &mut undo_list,
+                start_char,
+                CharLen::new(cased_text.schars()),
+            );
+            buf.set_undo_list(undo_list);
+        }
+    }
+    // GNU `src/search.c:Freplace_match` records the caller's old point while
+    // editing, then "officially" moves point to NEWPOINT, the end of the
+    // replacement text.  Lisp parsers such as `xml-parse-string` depend on
+    // this to continue after an expanded entity rather than re-reading the
+    // replacement from its beginning.
+    let _ = buffers.goto_buffer_emacs_byte_pos(current_id, replacement_byte_range.end());
+    update_match_data_after_buffer_replace(
+        match_data,
+        BufferReplacementCoordinates {
+            old_char_range,
+            replacement_char_len,
+        },
+    );
+    Ok(Value::NIL)
+}
+
+/// A register pair through GNU `update_search_regs` (search.c:3115-3145) for
+/// a replacement of `[old_start, old_end)` that now ends at `new_end`.
+/// Starts at or before the replaced start stay put, ends at or after the
+/// replaced end shift by the length change, and positions inside collapse
+/// to the replaced start.
+fn gnu_update_search_regs(
+    group: MatchGroup,
+    old_start: i64,
+    old_end: i64,
+    new_end: i64,
+) -> MatchGroup {
+    let change = new_end - old_end;
+    let start = group.start() as i64;
+    let start = if start <= old_start {
+        start
+    } else if start >= old_end {
+        start + change
+    } else {
+        old_start
+    };
+    let end = group.end() as i64;
+    let end = if end >= old_end {
+        end + change
+    } else if end > old_start {
+        old_start
+    } else {
+        end
+    };
+    MatchGroup::new(
+        usize::try_from(start).unwrap_or(0),
+        usize::try_from(end).unwrap_or(0),
+    )
+}
+
+/// Move the registers onto the range a buffer `replace-match` replaces once
+/// its before-change callbacks edited the buffer.
+///
+/// GNU keeps SUB_START in a marker across the callbacks and replaces from
+/// there (`replace_range`'s PRESERVE_PTR), so the registers follow the same
+/// shift; every register is also kept inside the live accessible region,
+/// where the stale numbers could otherwise point past the text.
+fn rebase_match_data_onto_prepared_range(
+    eval: &mut super::eval::Context,
+    measured: neovm_edit::buffer::TextEditRange,
+    prepared: neovm_edit::buffer::TextEditRange,
+) {
+    let Some((begv, zv)) = eval.edit.buffers.current_buffer().map(|buf| {
+        (
+            buf.point_min_lisp_char_pos().to_one_based_usize(),
+            buf.point_max_lisp_char_pos().to_one_based_usize(),
+        )
+    }) else {
+        return;
+    };
+    let delta = prepared.char_start().get() as i64 - measured.char_start().get() as i64;
+    if let Some(md) = eval.match_data.as_mut() {
+        md.map_lisp_positions(|group| {
+            let group = group.translate_saturating(delta);
+            let start = group.start().clamp(begv, zv);
+            MatchGroup::new(start, group.end().clamp(start, zv))
+        });
+    }
+}
+
+#[doc(hidden)]
+pub fn builtin_replace_match(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
+    // GNU `src/search.c:2485-2505` consults `case-symbols-as-words`
+    // when classifying the matched text for FIXEDCASE=nil. Read it
+    // from the current dynamic environment once and thread it down.
+    // See audit finding #20 in `drafts/regex-search-audit.md`.
+    let case_symbols_as_words =
+        dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseSymbolsAsWords)
+            .map(|v| !v.is_nil())
+            .unwrap_or(false);
+
+    // Determine whether this is a buffer replacement (4th arg nil/absent) so we
+    // can fire modification hooks.  String replacements don't touch the buffer.
+    let is_buffer_replace = args.len() < 4 || args[3].is_nil();
+
+    if is_buffer_replace {
+        // Try to compute the match region for before-change signalling.
+        let subexp = if args.len() >= 5 && !args[4].is_nil() {
+            match expect_int(&args[4]) {
+                Ok(n) if n >= 0 => n as usize,
+                _ => {
+                    return builtin_replace_match_with_state_and_flags(
+                        VariableView::new(&eval.obarray, &eval.owner),
+                        &mut eval.edit.buffers,
+                        &mut eval.match_data,
+                        &args,
+                        case_symbols_as_words,
+                        symbol_mode,
+                    );
+                }
+            }
+        } else {
+            0usize
+        };
+        if let Some(ref md) = eval.match_data
+            && !md.source().is_string()
+            && md.group(subexp).is_some()
+        {
+            let newtext_lisp = eval.expect_lisp_string(args[0])?;
+            let fixedcase = args.get(1).is_some_and(|arg| arg.is_truthy());
+            let literal = args.get(2).is_some_and(|arg| arg.is_truthy());
+            let raw_subexp = args.get(4).copied().unwrap_or(Value::NIL);
+            let missing_subexp_error = super::regex::REPLACE_MATCH_SUBEXP_MISSING;
+            // C-level `error()' messages are requoted via
+            // `text-quoting-style' by GNU's doprnt.
+            let quoting_style = neovm_text::emacs_core::coding::effective_text_quoting_style(
+                eval.variables(),
+                eval.symbol_mode(),
+            );
+            let change =
+                {
+                    let buf =
+                        eval.edit.buffers.current_buffer().ok_or_else(|| {
+                            signal("error", vec![Value::string("No current buffer")])
+                        })?;
+                    let (oldstart, oldend, replacement) =
+                        neovm_text::emacs_core::search::compute_buffer_replacement_lisp_string(
+                            buf,
+                            newtext_lisp,
+                            fixedcase,
+                            literal,
+                            subexp,
+                            &eval.match_data,
+                            eval.symbol_mode(),
+                        )
+                        .map_err(|msg| {
+                            if msg == missing_subexp_error {
+                                signal(
+                                    "error",
+                                    vec![Value::string(missing_subexp_error), raw_subexp],
+                                )
+                            } else {
+                                signal(
+                                    "error",
+                                    vec![Value::string(
+                                        neovm_text::emacs_core::coding::requote_c_error_message(
+                                            &msg,
+                                            quoting_style,
+                                        ),
+                                    )],
+                                )
+                            }
+                        })?;
+                    let current_id =
+                        eval.edit.buffers.current_buffer_id().ok_or_else(|| {
+                            signal("error", vec![Value::string("No current buffer")])
+                        })?;
+
+                    super::editfns::text_change_for_lisp_string_replacement_in_manager(
+                        &eval.edit.buffers,
+                        current_id,
+                        EmacsByteRange::new(EmacsBytePos::new(oldstart), EmacsBytePos::new(oldend)),
+                        &replacement,
+                    )?
+                };
+            // GNU `replace_range (sub_start, sub_end, ..., true, ...)`
+            // (search.c Freplace_match): the before-change callbacks run
+            // first and may edit the buffer; the replaced range is then
+            // re-measured from the preserved start (insdel.c:1502-1513).
+            let measured_at = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .and_then(|id| neovm_edit::buffer::TextMeasurement::of(&eval.edit.buffers, id));
+            let pending = super::editfns::PendingTextEdit::new(
+                change.old_range(),
+                super::editfns::RemeasureRule::ReplaceRange,
+            );
+            let Some(prepared) = pending.prepare(eval)? else {
+                return Ok(Value::NIL);
+            };
+            let live = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .and_then(|id| neovm_edit::buffer::TextMeasurement::of(&eval.edit.buffers, id));
+            let rebased = live != measured_at;
+            let measured = change.old_range();
+            let registers_before_rebase = rebased.then(|| eval.match_data.clone()).flatten();
+            let change = if rebased {
+                rebase_match_data_onto_prepared_range(eval, measured, prepared.range());
+                neovm_edit::buffer::TextChange::new(prepared.range(), change.new_extent())
+            } else {
+                change
+            };
+            let symbol_mode = eval.symbol_mode();
+            let result = builtin_replace_match_with_state_and_flags(
+                VariableView::new(&eval.obarray, &eval.owner),
+                &mut eval.edit.buffers,
+                &mut eval.match_data,
+                &args,
+                case_symbols_as_words,
+                symbol_mode,
+            )?;
+            if let Some(mut registers) = registers_before_rebase {
+                // GNU never moves the registers for the callbacks' edits; it
+                // only runs `update_search_regs (from, to, from + SCHARS (new))`
+                // for the range it replaced (insdel.c replace_range).
+                let from = prepared.range().char_start().to_lisp().as_i64();
+                let to = prepared.range().char_end().to_lisp().as_i64();
+                let new_end = from + change.new_extent().chars().get() as i64;
+                registers
+                    .map_lisp_positions(|group| gnu_update_search_regs(group, from, to, new_end));
+                eval.match_data = Some(registers);
+            }
+            if rebased {
+                // GNU computes `newpoint = sub_start + SCHARS (newtext)` from
+                // the start it read BEFORE the callbacks and moves point there
+                // (search.c Freplace_match), however the callbacks moved the text.
+                let newpoint = measured.char_start().add_len(change.new_extent().chars());
+                if let Some((id, byte_pos)) = eval.edit.buffers.current_buffer().map(|buf| {
+                    let accessible = buf.point_min_char_pos()..=buf.point_max_char_pos();
+                    let newpoint = newpoint.clamp(*accessible.start(), *accessible.end());
+                    (buf.id(), buf.char_pos_to_emacs_byte_pos_clamped(newpoint))
+                }) {
+                    let _ = eval.edit.buffers.goto_buffer_emacs_byte_pos(id, byte_pos);
+                }
+            }
+            super::editfns::signal_after_text_change(eval, change)?;
+            return Ok(result);
+        }
+    }
+
+    // Fallback: string replacement or no match data — no buffer hooks needed.
+    builtin_replace_match_with_state_and_flags(
+        VariableView::new(&eval.obarray, &eval.owner),
+        &mut eval.edit.buffers,
+        &mut eval.match_data,
+        &args,
+        case_symbols_as_words,
+        symbol_mode,
+    )
+}
+
+#[cfg(test)]
+#[path = "tests/search_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "search/tests/gc_tls_ownership_test.rs"]
+mod gc_tls_ownership;
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// Test hook: calls a U2.8 front-end fast path answered.  Passive
+    /// instrumentation (a counter read by tests only); re-gated so the
+    /// re-homed core test can observe it.  OBSERVE-ONLY.
+    pub(crate) static FRONTEND_FAST_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline(always)]
+fn note_frontend_fast_call() {
+    #[cfg(any(test, feature = "test-support"))]
+    FRONTEND_FAST_CALLS.with(|calls| calls.set(calls.get() + 1));
+}
+
+/// Copied fast-path call count for the re-homed search front-end oracle.
+/// Passive instrumentation: the counter never changes results or control
+/// flow (OBSERVE-ONLY); the TLS cell itself stays private.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn frontend_fast_calls_for_test() -> usize {
+    FRONTEND_FAST_CALLS.with(std::cell::Cell::get)
+}

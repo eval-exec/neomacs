@@ -87,7 +87,8 @@ fn accepted_terminal_frame_pool_answers_a_split_child_before_redisplay() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     eval.set_variable("accepted-pool-child", Value::make_window(child.0));
     // Expectations are the cold-second-child TEXT fields captured from GNU
     // 31.1 by posn_object_extent_oracle's split-cold fixture: the first stored

@@ -1,3 +1,14 @@
+warning: unexpected `cfg` condition value: `test-support`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  |     #[cfg(any(test, feature = "test-support"))]
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `contract-fixtures`, `dbus-vendored`, `default`, `desktop-font-settings`, `display-stop-validate`, `fuzzing`, `gc-memory-telemetry`, `jit`, `perf-probes`, `redisplay-test-policy`, `sound`, `sqlite`, `vm-profile`, and `webview`
+  = help: consider adding `test-support` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `#[warn(unexpected_cfgs)]` on by default
+
 error[E0277]: the trait bound `NativePollLease: Clone` is not satisfied
  --> tests/host_effect_ui/wake_lease_no_clone.rs:7:22
   |
@@ -10,8 +21,8 @@ note: required by a bound in `requires_clone`
 4 | fn requires_clone<T: Clone>() {}
   |                      ^^^^^ required by this bound in `requires_clone`
 help: consider annotating `NativePollLease` with `#[derive(Clone)]`
- --> tests/host_effect_ui/support/../../../src/host_effect/wake.rs
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
   |
     + #[derive(Clone)]
-    | pub(crate) struct NativePollLease {
+    | pub struct NativePollLease {
     |

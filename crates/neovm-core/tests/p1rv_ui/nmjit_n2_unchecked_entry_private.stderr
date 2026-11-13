@@ -1,13 +1,17 @@
-error[E0624]: associated function `admit` is private
+error[E0599]: no associated function or constant named `admit` found for struct `ParallelHeapEra<'heap, K>` in the current scope
  --> tests/p1rv_ui/nmjit_n2_unchecked_entry_private.rs:4:30
   |
-4 |       let _ = ParallelHeapEra::admit;
-  |                                ^^^^^ private associated function
+4 |     let _ = ParallelHeapEra::admit;
+  |                              ^^^^^ associated function or constant not found in `ParallelHeapEra<'_, Baton>`
   |
- ::: src/emacs_core/runtime/eval/world/era.rs
+help: there is an associated function `admit_with` with a similar name
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs
   |
-  | /     pub(crate) fn admit(
-  | |         admission: gc::Gen1Admission<'heap>,
-  | |         keeper: Baton,
-  | |     ) -> Result<Self, gc::EraAdmissionFailure<'heap, Baton>> {
-  | |____________________________________________________________- private associated function defined here
+  | /     pub unsafe fn admit_with(
+  | |         admission: Gen1Admission<'heap>,
+  | |         keeper: K,
+  | |         prepare: impl FnOnce(
+... |
+  | |         >,
+  | |     ) -> Result<Self, EraAdmissionFailure<'heap, K>> {
+  | |____________________________________________________^

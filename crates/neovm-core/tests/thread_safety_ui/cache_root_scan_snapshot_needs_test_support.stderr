@@ -1,0 +1,27 @@
+error[E0599]: no variant, associated function, or constant named `snapshot` found for enum `CacheRootScan` in the current scope
+  --> tests/thread_safety_ui/cache_root_scan_snapshot_needs_test_support.rs:24:49
+   |
+24 |     let _scan = cache_root_scan::CacheRootScan::snapshot(false);
+   |                                                 ^^^^^^^^ variant, associated function, or constant not found in `CacheRootScan`
+   |
+  ::: tests/thread_safety_ui/../../../neovm-value/src/tagged/gc/cache_root_scan.rs
+   |
+   | pub enum CacheRootScan {
+   | ---------------------- variant, associated function, or constant `snapshot` not found for this enum
+   |
+help: there is a variant with a similar name
+   |
+24 -     let _scan = cache_root_scan::CacheRootScan::snapshot(false);
+24 +     let _scan = cache_root_scan::CacheRootScan::Snapshot { token: /* value */, collection_in_progress: /* value */ };
+   |
+
+error[E0599]: no associated function or constant named `new` found for struct `SnapshotToken` in the current scope
+  --> tests/thread_safety_ui/cache_root_scan_snapshot_needs_test_support.rs:25:50
+   |
+25 |     let _token = cache_root_scan::SnapshotToken::new();
+   |                                                  ^^^ associated function or constant not found in `SnapshotToken`
+   |
+  ::: tests/thread_safety_ui/../../../neovm-value/src/tagged/gc/cache_root_scan.rs
+   |
+   | pub(crate) struct SnapshotToken {
+   | ------------------------------- associated function or constant `new` not found for this struct

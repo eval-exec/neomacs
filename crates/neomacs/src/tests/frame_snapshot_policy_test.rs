@@ -1,6 +1,7 @@
 //! Real public snapshot ownership regressions. Each fixture owns a scoped
 //! numeric hook policy before Context creation and until that Context drops.
 //! No process environment or Lisp state is shared across mutators.
+use neovm_core::window::{DisplayFrameExt, DisplayFrameManagerExt};
 
 use super::super::super::frame_layout::{install_frame_snapshot_fn, run_tty_layout_tree};
 use super::initialized_redisplay_test_frame;

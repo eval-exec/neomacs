@@ -7,25 +7,30 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 11 |     ThreadTransfer::<Context>::transfer();
    |                                ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<neovm_core::Context>` due to unsatisfied trait bounds
    |
-  ::: src/emacs_core/runtime/eval/mod.rs
+  ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs
    |
    | pub struct Context {
    | ------------------ doesn't satisfy `neovm_core::Context: Send`
    |
-  ::: src/emacs_core/display/display_host/mod.rs
+  ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs
    |
    | pub trait DisplayHost {
    | --------------------- doesn't satisfy `(dyn DisplayHost + 'static): Send`
    |
-  ::: src/emacs_core/display/terminal/pure.rs
+  ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/protocol/tty_host.rs
    |
    | pub trait TtyFrameHostFactory {
    | ----------------------------- doesn't satisfy `(dyn TtyFrameHostFactory + 'static): Send`
    |
+  ::: $WORKSPACE/crates/neovm-value/src/cold_retained.rs
+   |
+   | pub trait ColdRetained: 'static {}
+   | ------------------------------- doesn't satisfy `_: Send` or `_: Sync`
+   |
    = note: the following trait bounds were not satisfied:
            `*mut TaggedValue: Send`
            which is required by `neovm_core::Context: Send`
-           `NonNull<keymap::SelectedGlobalMap>: Send`
+           `NonNull<SelectedGlobalMap>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<Option<LispString>>: Send`
            which is required by `neovm_core::Context: Send`
@@ -39,13 +44,11 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<Option<(FrameId, u64)>>: Send`
            which is required by `neovm_core::Context: Send`
-           `NonNull<neovm_core::buffer::buffer::BufferStorage>: Send`
-           which is required by `neovm_core::Context: Send`
-           `NonNull<Option<eval::RedisplaySignature>>: Send`
+           `NonNull<Option<RedisplaySignature>>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<BookmarkManager>: Send`
            which is required by `neovm_core::Context: Send`
-           `NonNull<rect::RectangleState>: Send`
+           `NonNull<neovm_core::emacs_core::rect::RectangleState>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<InteractiveRegistry>: Send`
            which is required by `neovm_core::Context: Send`
@@ -57,7 +60,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<Vec<eval::PendingSafeFuncall>>: Send`
            which is required by `neovm_core::Context: Send`
-           `NonNull<Option<eval::DaemonState>>: Send`
+           `NonNull<Option<neovm_core::emacs_core::eval::DaemonState>>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<ProcessManager>: Send`
            which is required by `neovm_core::Context: Send`
@@ -69,11 +72,11 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<neovm_core::emacs_core::Obarray>: Send`
            which is required by `neovm_core::Context: Send`
-           `NonNull<symbol::CanonicalDispatchCells>: Send`
+           `NonNull<neovm_core::emacs_core::symbol::CanonicalDispatchCells>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<Vec<SymId>>: Send`
            which is required by `neovm_core::Context: Send`
-           `NonNull<xwidget::XwidgetState>: Send`
+           `NonNull<XwidgetState>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<VariableWatcherList>: Send`
            which is required by `neovm_core::Context: Send`
@@ -83,7 +86,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<AutoloadManager>: Send`
            which is required by `neovm_core::Context: Send`
-           `NonNull<treesit::TreeSitterManager>: Send`
+           `NonNull<neovm_core::emacs_core::treesit::TreeSitterManager>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<FrameManager>: Send`
            which is required by `neovm_core::Context: Send`
@@ -97,7 +100,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<eval::MacroPerfStats>: Send`
            which is required by `neovm_core::Context: Send`
-           `NonNull<builtins::fringe_bitmap::FringeBitmapRegistry>: Send`
+           `NonNull<neovm_eval::emacs_core::builtins::fringe_bitmap::FringeBitmapRegistry>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<TaggedValue>: Send`
            which is required by `neovm_core::Context: Send`
@@ -105,31 +108,33 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<i64>: Send`
            which is required by `neovm_core::Context: Send`
-           `*mut hashtab::HashTestGcInhibitAccounting: Send`
+           `*mut neovm_core::emacs_core::hashtab::HashTestGcInhibitAccounting: Send`
            which is required by `neovm_core::Context: Send`
-           `NonNull<neovm_core::buffer::Buffer>: Send`
+           `NonNull<neovm_core::buffer::buffer::BufferStorage>: Send`
            which is required by `neovm_core::Context: Send`
-           `RefCell<ccl::CclRegistry>: Sync`
+           `RefCell<neovm_core::emacs_core::ccl::CclRegistry>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `RefCell<charset::CharsetRegistry>: Sync`
+           `RefCell<neovm_core::emacs_core::charset::CharsetRegistry>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `RefCell<xfaces::FaceAttrState>: Sync`
+           `RefCell<FaceAttrState>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `RefCell<neovm_core::emacs_core::terminal::pure::TerminalLispRegistry>: Sync`
+           `RefCell<TerminalLispRegistry>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `RefCell<builtins::collections::HashTableTestRegistry>: Sync`
+           `RefCell<neovm_core::emacs_core::builtins::collections::HashTableTestRegistry>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `RefCell<builtins::file_notify::FileNotifyState>: Sync`
+           `RefCell<neovm_core::emacs_core::builtins::file_notify::FileNotifyState>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `RefCell<HashMap<i64, builtins::hooks::WindowConfigurationSnapshot>>: Sync`
+           `RefCell<HashMap<i64, neovm_core::emacs_core::builtins::WindowConfigurationSnapshot>>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `RefCell<Vec<Option<dynamic_module::GlobalRefEntry>>>: Sync`
+           `RefCell<Vec<Option<GlobalRefEntry>>>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `*const (): Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<()>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<eval::owner_bindings::OwnerSlab>: Send`
+           which is required by `neovm_core::Context: Send`
+           `NonNull<neovm_core::buffer::Buffer>: Send`
            which is required by `neovm_core::Context: Send`
            `(dyn for<'a> FnMut(&'a mut neovm_core::Context, FrameId, WindowId, WindowLayoutQueryScope) -> WindowLayoutQueryOutcome + 'static): Send`
            which is required by `neovm_core::Context: Send`
@@ -153,65 +158,71 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `*const u8: Send`
            which is required by `neovm_core::Context: Send`
-           `RefCell<eval::owner_bindings::OwnerSlabRegistry>: Sync`
+           `RefCell<eval::owner_bindings::OwnerSlabRegistry>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `RefCell<ThreadProjectionTable>: Sync`
+           `RefCell<ThreadProjectionTable>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Cell<eval::admission::ThreadingMode>: Sync`
+           `Cell<eval::admission::ThreadingMode>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `RefCell<Option<std::boxed::Box<eval::green::GreenRuntime>>>: Sync`
+           `RefCell<Option<std::boxed::Box<eval::green::GreenRuntime>>>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Cell<Option<ThreadId>>: Sync`
+           `Cell<Option<ThreadId>>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut u8: Sync`
+           `*mut u8: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `NonNull<TaggedHeap>: Sync`
+           `(dyn neovm_value::cold_retained::ColdRetained + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut (): Sync`
+           `(dyn neovm_value::cold_retained::ColdRetained + 'static): Send`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<owned_roots::OwnedRootRegistry>: Sync`
+           `NonNull<TaggedHeap>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<neovm_core::emacs_core::Obarray>: Sync`
+           `*mut (): std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<Vec<SymId>>: Sync`
+           `UnsafeCell<owned_roots::OwnedRootRegistry>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<VariableWatcherList>: Sync`
+           `UnsafeCell<neovm_core::emacs_core::Obarray>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<HashSet<SymId>>: Sync`
+           `UnsafeCell<Vec<SymId>>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<AutoloadManager>: Sync`
+           `UnsafeCell<VariableWatcherList>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<treesit::TreeSitterManager>: Sync`
+           `UnsafeCell<HashSet<SymId>>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<FrameManager>: Sync`
+           `UnsafeCell<AutoloadManager>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<CodingSystemManager>: Sync`
+           `UnsafeCell<neovm_core::emacs_core::treesit::TreeSitterManager>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<eval::MacroPerfStats>: Sync`
+           `UnsafeCell<FrameManager>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<neovm_core::buffer::buffer::BufferStorage>: Sync`
+           `UnsafeCell<CodingSystemManager>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<eval::global_state::GlobalState>: Sync`
+           `UnsafeCell<eval::MacroPerfStats>: std::marker::Sync`
+           which is required by `neovm_core::Context: Send`
+           `UnsafeCell<neovm_core::buffer::buffer::BufferStorage>: std::marker::Sync`
+           which is required by `neovm_core::Context: Send`
+           `UnsafeCell<eval::global_state::GlobalState>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `*mut (): Send`
            which is required by `neovm_core::Context: Send`
            `*mut GcHeader: Send`
            which is required by `neovm_core::Context: Send`
-           `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
-           which is required by `neovm_core::Context: Send`
            `Rc<eval::tier_i::compile::TierCode>: Send`
            which is required by `neovm_core::Context: Send`
-           `Rc<face::FaceStorage>: Send`
+           `Rc<neovm_core::emacs_core::eval::data::face::FaceStorage>: Send`
            which is required by `neovm_core::Context: Send`
            `Rc<HashMap<LispFaceId, TaggedValue>>: Send`
            which is required by `neovm_core::Context: Send`
            `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Send`
            which is required by `neovm_core::Context: Send`
+           `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<RefCell<Vec<std::rc::Weak<[TaggedValue]>>>>: Send`
+           which is required by `neovm_core::Context: Send`
            `*mut emacs_value_tag: Send`
            which is required by `neovm_core::Context: Send`
-           `*mut GcHeader: Sync`
+           `*mut GcHeader: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Cell<u8>: Sync`
+           `Cell<u8>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `*mut HashTableObj: Send`
            which is required by `neovm_core::Context: Send`
@@ -219,17 +230,17 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `*mut *mut MarkerObj: Send`
            which is required by `neovm_core::Context: Send`
-           `Rc<xdisp::mode_line_output::OutputState>: Send`
+           `Rc<redisplay::OutputState>: Send`
            which is required by `neovm_core::Context: Send`
-           `Cell<CanonicalArm>: Sync`
+           `Cell<CanonicalArm>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `NonNull<ByteCodeFunction>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<[Op]>: Send`
            which is required by `neovm_core::Context: Send`
-           `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: Sync`
+           `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Cell<usize>: Sync`
+           `Cell<usize>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `*mut u8: Send`
            which is required by `neovm_core::Context: Send`
@@ -249,23 +260,15 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `*mut TaggedHeap: Send`
            which is required by `neovm_core::Context: Send`
-           `*const (): Sync`
+           `*const (): std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Rc<RefCell<neovm_core::buffer::buffer_text::BufferTextStorage>>: Send`
+           `*mut HashTableObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Rc<Cell<VisitedFileModtime>>: Send`
+           `*mut FinalizerObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Rc<RefCell<shared::SharedUndoStateInner>>: Send`
+           `*mut *mut MarkerObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut HashTableObj: Sync`
-           which is required by `neovm_core::Context: Send`
-           `*mut FinalizerObj: Sync`
-           which is required by `neovm_core::Context: Send`
-           `*mut *mut MarkerObj: Sync`
-           which is required by `neovm_core::Context: Send`
-           `Cell<()>: Sync`
-           which is required by `neovm_core::Context: Send`
-           `std::rc::Weak<[TaggedValue]>: Send`
+           `Cell<()>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `*mut VectorObj: Send`
            which is required by `neovm_core::Context: Send`
@@ -289,19 +292,23 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<LispFwd>: Send`
            which is required by `neovm_core::Context: Send`
-           `Rc<window::word_wrap::CachedWordWrapPolicy>: Send`
+           `Rc<RefCell<neovm_core::buffer::buffer_text::BufferTextStorage>>: Send`
            which is required by `neovm_core::Context: Send`
-           `*mut ConsCell: Sync`
+           `Rc<Cell<VisitedFileModtime>>: Send`
            which is required by `neovm_core::Context: Send`
-           `*mut FloatObj: Sync`
+           `Rc<RefCell<shared::SharedUndoStateInner>>: Send`
            which is required by `neovm_core::Context: Send`
-           `*mut VecLikeHeader: Sync`
+           `*mut ConsCell: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut StringObj: Sync`
+           `*mut FloatObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `OnceCell<collection_reads::store_state::ObservationWorld>: Sync`
+           `*mut VecLikeHeader: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Cell<*mut TaggedHeap>: Sync`
+           `*mut StringObj: std::marker::Sync`
+           which is required by `neovm_core::Context: Send`
+           `OnceCell<collection_reads::store_state::ObservationWorld>: std::marker::Sync`
+           which is required by `neovm_core::Context: Send`
+           `Cell<*mut TaggedHeap>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `Rc<()>: Send`
            which is required by `neovm_core::Context: Send`
@@ -309,57 +316,59 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `*const tree_sitter::ffi::TSTree: Send`
            which is required by `neovm_core::Context: Send`
-           `Rc<Vec<AutomaticCompositionSpan>>: Send`
+           `Rc<CachedWordWrapPolicy>: Send`
            which is required by `neovm_core::Context: Send`
-           `Rc<Cell<Vec<TaggedValue>>>: Sync`
+           `Rc<Cell<Vec<TaggedValue>>>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Rc<Cell<*const ()>>: Sync`
+           `Rc<Cell<*const ()>>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Cell<u64>: Sync`
+           `Cell<u64>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Cell<NonNull<[Cell<usize>; 8192]>>: Sync`
+           `Cell<NonNull<[Cell<usize>; 8192]>>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Cell<collection_reads::JournalPolicy>: Sync`
+           `Cell<collection_reads::JournalPolicy>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Cell<bool>: Sync`
+           `Cell<bool>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Cell<gc::barrier_window::BarrierWindow>: Sync`
+           `Cell<neovm_core::tagged::gc::BarrierWindow>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `Rc<collection_reads::store_state::WorldObservations>: Send`
            which is required by `neovm_core::Context: Send`
-           `Rc<OverlayList>: Send`
+           `Rc<Vec<AutomaticCompositionSpan>>: Send`
            which is required by `neovm_core::Context: Send`
            `(dyn for<'a> Fn(&'a LispString) -> Vec<LispString> + 'static): Send`
            which is required by `neovm_core::Context: Send`
-           `*mut VectorObj: Sync`
+           `*mut VectorObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut ByteCodeObj: Sync`
+           `*mut ByteCodeObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut LambdaObj: Sync`
+           `*mut LambdaObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut MacroObj: Sync`
+           `*mut MacroObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut RecordObj: Sync`
+           `*mut RecordObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut SymbolWithPosObj: Sync`
+           `*mut SymbolWithPosObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut MarkerObj: Sync`
+           `*mut MarkerObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*mut BignumObj: Sync`
+           `*mut BignumObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*const LispSymbol: Sync`
+           `*const LispSymbol: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*const Atomic<u32>: Sync`
+           `*const Atomic<u32>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `Rc<()>: Sync`
+           `Rc<OverlayList>: Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<()>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `(dyn std::any::Any + 'static): Send`
            which is required by `neovm_core::Context: Send`
-           `UnsafeCell<TaggedValue>: Sync`
+           `UnsafeCell<TaggedValue>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*const AtomicTaggedValue: Sync`
+           `*const AtomicTaggedValue: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*const TaggedValue: Sync`
+           `*const TaggedValue: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
-           `*const CharTableObj: Sync`
+           `*const CharTableObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`

@@ -7,7 +7,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 11 |     ThreadTransfer::<CompiledLeaf>::transfer();
    |                                     ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<CompiledLeaf>` due to unsatisfied trait bounds
    |
-  ::: src/emacs_core/runtime/jit/compile/leaf.rs
+  ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs
    |
    | pub struct CompiledLeaf {
    | ----------------------- doesn't satisfy `CompiledLeaf: Send`

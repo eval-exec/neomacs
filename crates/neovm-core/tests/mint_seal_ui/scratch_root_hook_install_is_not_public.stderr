@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `install_scratch_root_hooks` is unsafe and requires unsafe block
+  --> tests/mint_seal_ui/scratch_root_hook_install_is_not_public.rs:19:13
+   |
+19 |     let _ = install_scratch_root_hooks(&HOOKS);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior

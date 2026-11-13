@@ -508,7 +508,7 @@ fn first_visit_with_setup_and_gc(
                 "ordinary point motion must still run viewport resolution"
             );
         }
-        let (replay, faces) = engine
+        let (replay, faces, _) = engine
             .prepared_viewports
             .replay(frame, display_window, &requested_key, true)
             .expect("ready coverage must satisfy the requested key");
@@ -764,7 +764,7 @@ fn offscreen_capture_budget_ignores_unused_retained_matrix_capacity() {
     let mut key = engine.retained_window_matrices[&window_id].key.clone();
     key.window_start = 120 * 23;
     key.point = 125 * 23;
-    let (replay, _) = engine
+    let (replay, _, _) = engine
         .prepared_viewports
         .replay(frame, window_id, &key, false)
         .expect("unused slots must not exceed the prepared-cache capacity either");
@@ -1651,7 +1651,7 @@ fn worker_keeps_complete_prefix_before_unsupported_rows() {
         );
         key.window_start += line.len() as i64;
         key.point = key.window_start;
-        let (prefix, _) = engine
+        let (prefix, _, _) = engine
             .prepared_viewports
             .scroll_replay(frame, owner, &key, 0)
             .unwrap();
@@ -3737,7 +3737,7 @@ fn repeated_idle_preview_preserves_a_complete_prepared_page() {
     let mut key = engine.retained_window_matrices[&owner].key.clone();
     key.window_start = start as i64;
     key.point = (start + 5 * line.len()) as i64;
-    let (before, _) = engine
+    let (before, _, _) = engine
         .prepared_viewports
         .replay(frame, owner, &key, false)
         .expect("initial full page");
@@ -3757,7 +3757,7 @@ fn repeated_idle_preview_preserves_a_complete_prepared_page() {
         assert!(std::time::Instant::now() < deadline);
         std::thread::yield_now();
     }
-    let (after, _) = engine
+    let (after, _, _) = engine
         .prepared_viewports
         .replay(frame, owner, &key, false)
         .expect("short preview must preserve the complete prepared page");

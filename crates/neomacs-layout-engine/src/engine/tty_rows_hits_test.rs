@@ -488,22 +488,25 @@ fn tty_rows_hit_normal_gc_hook_query_observes_actual_driver_extent() {
     let reports = Rc::new(RefCell::new(Vec::new()));
     let callback_engine = Rc::clone(&engine);
     let callback_reports = Rc::clone(&reports);
-    context.install_window_layout_query(move |context, frame, window, scope| {
-        let mut sink = |_context: &mut Context, report| callback_reports.borrow_mut().push(report);
-        match callback_engine
-            .borrow_mut()
-            .query_window_layout_observed_with_policy(
-                context,
-                frame,
-                window,
-                scope,
-                &on_policy(),
-                Some(&mut sink),
-            ) {
-            Ok(query) => neovm_core::window::WindowLayoutQueryOutcome::Ready(query),
-            Err(failure) => neovm_core::window::WindowLayoutQueryOutcome::Failed(failure),
-        }
-    });
+    context
+        .install_window_layout_query(move |context, frame, window, scope| {
+            let mut sink =
+                |_context: &mut Context, report| callback_reports.borrow_mut().push(report);
+            match callback_engine
+                .borrow_mut()
+                .query_window_layout_observed_with_policy(
+                    context,
+                    frame,
+                    window,
+                    scope,
+                    &on_policy(),
+                    Some(&mut sink),
+                ) {
+                Ok(query) => neovm_core::window::WindowLayoutQueryOutcome::Ready(query),
+                Err(failure) => neovm_core::window::WindowLayoutQueryOutcome::Failed(failure),
+            }
+        })
+        .expect("install the layout-query handler");
     // Define the hook before capture so its function/variable identities are
     // not installed after a purported cached prefix. No raw Context alias or
     // inaccessible gc_driver_active field is touched from Layout.

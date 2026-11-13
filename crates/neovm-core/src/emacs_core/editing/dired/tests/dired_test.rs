@@ -16,12 +16,12 @@ thread_local! {
 
 /// Test helper: create a fresh eval context for dired tests.
 fn test_eval_ctx() -> super::super::eval::Context {
-    super::super::eval::Context::new()
+    crate::test_utils::new_context()
 }
 
 fn call_directory_files_and_attributes(args: Vec<Value>) -> EvalResult {
     DIRED_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(super::super::eval::Context::new());
+        let mut ctx = Box::new(crate::test_utils::new_context());
         let result = builtin_directory_files_and_attributes(&mut ctx, args);
         *slot.borrow_mut() = Some(ctx);
         result
@@ -30,7 +30,7 @@ fn call_directory_files_and_attributes(args: Vec<Value>) -> EvalResult {
 
 fn call_file_name_all_completions(args: Vec<Value>) -> EvalResult {
     DIRED_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(super::super::eval::Context::new());
+        let mut ctx = Box::new(crate::test_utils::new_context());
         let result = builtin_file_name_all_completions(&mut ctx, args);
         *slot.borrow_mut() = Some(ctx);
         result
@@ -39,7 +39,7 @@ fn call_file_name_all_completions(args: Vec<Value>) -> EvalResult {
 
 fn call_file_attributes(args: Vec<Value>) -> EvalResult {
     DIRED_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(super::super::eval::Context::new());
+        let mut ctx = Box::new(crate::test_utils::new_context());
         let result = builtin_file_attributes(&mut ctx, args);
         *slot.borrow_mut() = Some(ctx);
         result
@@ -99,8 +99,8 @@ fn directory_files_and_attributes_decodes_names_before_matching_and_returning_th
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("Übung – Lösung.zip"), "").unwrap();
 
-    let mut eval = Context::new();
-    eval.obarray.set_symbol_value(
+    let mut eval = crate::test_utils::new_context();
+    eval.obarray_view_mut().set_symbol_value(
         "default-file-name-coding-system",
         Value::symbol("utf-8-unix"),
     );
@@ -254,6 +254,7 @@ fn test_directory_files_and_attributes_count_and_id_format() {
 
 #[test]
 fn file_id_format_domain_matches_gnu_dired() {
+    crate::test_utils::init_test_tracing();
     let integer_name: &'static str = FileIdFormat::Integer.into();
     let string_name: &'static str = FileIdFormat::String.into();
 
@@ -295,7 +296,7 @@ fn test_directory_files_and_attributes_eval_respects_default_directory() {
     fs::write(fixture.join("alpha.txt"), "").unwrap();
     fs::write(fixture.join("beta.el"), "").unwrap();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let base_str = format!("{}/", base.to_string_lossy());
     eval.set_variable("default-directory", Value::string(&base_str));
 
@@ -355,8 +356,8 @@ fn file_name_completion_decodes_the_common_prefix_before_returning_it() {
     create_file(&dir, "Übung – Lösung.pdf", "");
     create_file(&dir, "Übung – Lösung.tex", "");
 
-    let mut eval = Context::new();
-    eval.obarray.set_symbol_value(
+    let mut eval = crate::test_utils::new_context();
+    eval.obarray_view_mut().set_symbol_value(
         "default-file-name-coding-system",
         Value::symbol("utf-8-unix"),
     );
@@ -379,8 +380,8 @@ fn file_name_all_completions_decodes_names_before_returning_them() {
     let (dir, dir_str) = make_test_dir("fnac_unicode");
     create_file(&dir, "Übung – Lösung.zip", "");
 
-    let mut eval = Context::new();
-    eval.obarray.set_symbol_value(
+    let mut eval = crate::test_utils::new_context();
+    eval.obarray_view_mut().set_symbol_value(
         "default-file-name-coding-system",
         Value::symbol("utf-8-unix"),
     );
@@ -486,7 +487,7 @@ fn test_file_name_completion_predicate_with_eval() {
     create_file(&dir, "alpha.txt", "");
     fs::create_dir(dir.join("subdir")).unwrap();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("default-directory", Value::string("/tmp/"));
 
     let dirs_only_none = builtin_file_name_completion(
@@ -533,7 +534,7 @@ fn test_file_name_completion_eval_relative_directory() {
     create_file(&fixture_dir, "alpha.txt", "");
     fs::create_dir(fixture_dir.join("subdir")).unwrap();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "default-directory",
         Value::string(ensure_trailing_slash(&base_str)),
@@ -582,8 +583,8 @@ fn test_file_name_all_completions_honors_completion_regexp_list() {
     create_file(&dir, "init.el", "");
     create_file(&dir, "packages.el", "");
 
-    let mut eval = super::super::eval::Context::new();
-    eval.obarray.set_symbol_value(
+    let mut eval = crate::test_utils::new_context();
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("con")]),
     );
@@ -610,10 +611,10 @@ fn test_file_name_all_completions_regexps_fold_when_completion_ignore_case() {
     create_file(&dir, "config.el", "");
     create_file(&dir, "custom.el", "");
 
-    let mut eval = super::super::eval::Context::new();
-    eval.obarray
+    let mut eval = crate::test_utils::new_context();
+    eval.obarray_view_mut()
         .set_symbol_value("completion-ignore-case", Value::T);
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("con")]),
     );
@@ -638,8 +639,8 @@ fn test_file_name_all_completions_matches_directory_regex_before_slash() {
     let (dir, dir_str) = make_test_dir("fnac_completion_regexp_dir");
     fs::create_dir(dir.join("subdir")).unwrap();
 
-    let mut eval = super::super::eval::Context::new();
-    eval.obarray.set_symbol_value(
+    let mut eval = crate::test_utils::new_context();
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("subdir$")]),
     );
@@ -653,7 +654,7 @@ fn test_file_name_all_completions_matches_directory_regex_before_slash() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].as_utf8_str(), Some("subdir/"));
 
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("subdir/$")]),
     );
@@ -675,8 +676,8 @@ fn test_file_name_completion_honors_completion_regexp_list() {
     create_file(&dir, "custom.el", "");
     create_file(&dir, "init.el", "");
 
-    let mut eval = super::super::eval::Context::new();
-    eval.obarray.set_symbol_value(
+    let mut eval = crate::test_utils::new_context();
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("con")]),
     );
@@ -699,10 +700,10 @@ fn test_file_name_completion_regexps_fold_when_completion_ignore_case() {
     create_file(&dir, "config.el", "");
     create_file(&dir, "custom.el", "");
 
-    let mut eval = super::super::eval::Context::new();
-    eval.obarray
+    let mut eval = crate::test_utils::new_context();
+    eval.obarray_view_mut()
         .set_symbol_value("completion-ignore-case", Value::T);
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("con")]),
     );
@@ -778,7 +779,7 @@ fn test_file_name_all_completions_eval_relative_directory() {
     create_file(&fixture_dir, "alpha.txt", "");
     fs::create_dir(fixture_dir.join("subdir")).unwrap();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "default-directory",
         Value::string(ensure_trailing_slash(&base_str)),
@@ -858,7 +859,7 @@ fn test_file_attributes_non_string_returns_nil_like_gnu() {
 #[test]
 fn test_file_attributes_accepts_raw_unibyte_filename_value() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let raw = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![0xFF]));
     let result = builtin_file_attributes(&mut eval, vec![raw]).unwrap();
     assert!(result.is_nil());
@@ -926,7 +927,7 @@ fn test_file_attributes_eval_respects_default_directory() {
     let (dir, dir_str) = make_test_dir("fa_eval");
     create_file(&dir, "alpha.txt", "x");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "default-directory",
         Value::string(ensure_trailing_slash(&dir_str)),
@@ -990,7 +991,7 @@ fn test_file_attributes_symlink_size_is_link_string_length_like_gnu() {
 #[test]
 fn test_file_attributes_lessp() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let f1 = Value::cons(Value::string("alpha.txt"), Value::NIL);
     let f2 = Value::cons(Value::string("beta.txt"), Value::NIL);
 
@@ -1004,7 +1005,7 @@ fn test_file_attributes_lessp() {
 #[test]
 fn test_file_attributes_lessp_equal() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let f1 = Value::cons(Value::string("same.txt"), Value::NIL);
     let f2 = Value::cons(Value::string("same.txt"), Value::NIL);
 
@@ -1015,7 +1016,7 @@ fn test_file_attributes_lessp_equal() {
 #[test]
 fn test_file_attributes_lessp_bad_args_match_gnu_order() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = builtin_file_attributes_lessp(
         &mut eval,
         vec![Value::string("alpha"), Value::string("beta")],
@@ -1045,7 +1046,7 @@ fn test_file_attributes_lessp_bad_args_match_gnu_order() {
 #[test]
 fn test_file_attributes_lessp_coerces_nil_car_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Both cars are nil -> string-lessp "nil" "nil" -> nil (no error).
     let f1 = Value::cons(Value::NIL, Value::cons(Value::fixnum(1), Value::NIL));
     let f2 = Value::cons(Value::NIL, Value::cons(Value::fixnum(2), Value::NIL));
@@ -1286,7 +1287,7 @@ fn file_name_completion_reads_current_buffer_syntax_table() {
         .expect("set-syntax-table");
     eval.eval_str("(modify-syntax-entry ?z \" \")")
         .expect("modify-syntax-entry");
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("\\`\\sw+\\'")]),
     );
@@ -1364,7 +1365,7 @@ fn directory_files_and_attributes_match_reads_current_buffer_syntax_table() {
 #[test]
 fn completion_ignored_extensions_is_special_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // GNU `syms_of_dired` (src/dired.c) registers this with DEFVAR_LISP and
     // initializes it to nil; lisp/bindings.el then `setq's the real list.

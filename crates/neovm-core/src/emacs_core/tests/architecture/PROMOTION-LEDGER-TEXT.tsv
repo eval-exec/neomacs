@@ -1,0 +1,529 @@
+item	kind	old_vis	file:line	module	reason
+buffer_id	const fn	pub(crate)	crates/neovm-text/src/code_conversion_workspace.rs:62	code_conversion_workspace	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+CodeConversionWorkspace	struct	pub(crate)	crates/neovm-text/src/code_conversion_workspace.rs:69	code_conversion_workspace	stage-3b text K1 bulk row; core callers (3 sites)
+acquire	method	pub(crate)	crates/neovm-text/src/code_conversion_workspace.rs:80	code_conversion_workspace	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+release	method	pub(crate)	crates/neovm-text/src/code_conversion_workspace.rs:129	code_conversion_workspace	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+replace_contents	method	pub(crate)	crates/neovm-text/src/code_conversion_workspace.rs:150	code_conversion_workspace	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+expect_min_max_args	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:19	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (1 sites)
+expect_int	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:36	emacs_core::casefiddle	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+CaseAction	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:263	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (5 sites)
+case_encoding_for_current_buffer	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:289	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (3 sites)
+upcase_word_predicate	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:306	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (2 sites)
+CaseNatnum	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:367	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (2 sites)
+CaseNatnumError	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:372	emacs_core::casefiddle	stage-3b text K1 bulk row; E0446 public TryFrom Error surface for core-visible CaseNatnum
+casify	method	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:404	emacs_core::casefiddle	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+casify_lisp_string	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:748	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (2 sites)
+noncontiguous_case_regions	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:810	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (1 sites)
+CasedRegion	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:849	emacs_core::casefiddle	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+casify_region_text	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:853	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (1 sites)
+CasingChangedSpan	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:893	emacs_core::casefiddle	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+changed_char_span	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:896	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (1 sites)
+capitalize_with_word_pred	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:962	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (1 sites)
+upcase_initials_with_word_pred	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:1016	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (1 sites)
+ReplaceMatchCaseAction	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:1112	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (2 sites)
+replace_match_case_action_lisp_default	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:1121	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (1 sites)
+apply_replace_match_case_lisp	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:1205	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_char_resolve_modifiers	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:1375	emacs_core::casefiddle	stage-3b text K1 bulk row; core callers (1 sites)
+text	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:1410	emacs_core::casefiddle	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+expansions	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:1415	emacs_core::casefiddle	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+storage_shape	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:1420	emacs_core::casefiddle	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+offset	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:1428	emacs_core::casefiddle	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+old_len	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:1433	emacs_core::casefiddle	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+new_len	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/casefiddle/mod.rs:1438	emacs_core::casefiddle	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+cache_standard_case_table_object	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:33	emacs_core::casetab	stage-3b text K1 bulk row; core callers (1 sites)
+cache_standard_case_table_heap	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:39	emacs_core::casetab	stage-3b text K1 bulk row; core callers (1 sites)
+activate_casetab_thread_locals	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:57	emacs_core::casetab	stage-3b text K1 bulk row; core callers (2 sites)
+standard_case_table_object_symbol_id	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:280	emacs_core::casetab	stage-3b text K1 bulk row; core callers (2 sites)
+ensure_standard_case_table_object_in_state_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:379	emacs_core::casetab	stage-3b text K1 bulk row; core callers (1 sites)
+current_case_table_for_buffer_in_state_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:400	emacs_core::casetab	stage-3b text K1 bulk row; core callers (1 sites)
+CaseMap	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:464	emacs_core::casetab	stage-3b text K1 bulk row; core callers (2 sites)
+CaseTableOverride	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:480	emacs_core::casetab	stage-3b text K1 bulk row; core callers (4 sites)
+from_installed_tables	method	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:503	emacs_core::casetab	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+none	method	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:521	emacs_core::casetab	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+is_custom	method	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:527	emacs_core::casetab	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+map	method	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:581	emacs_core::casetab	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+set_current_case_table_for_buffer_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:603	emacs_core::casetab	stage-3b text K1 bulk row; core callers (1 sites)
+case_table_extra	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:626	emacs_core::casetab	stage-3b text K1 bulk row; core callers (1 sites)
+ensure_case_table_derived_slots_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:708	emacs_core::casetab	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_case_table_p_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:785	emacs_core::casetab	stage-3b text K1 bulk row; core callers (1 sites)
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/casetab/mod.rs:803	emacs_core::casetab	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+restore_standard_category_table_object	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:46	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+category_bit_runs_in_table	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:200	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+ensure_standard_category_table_object	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:287	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+active_category_table_for_buffer	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:485	emacs_core::category	stage-3b text K1 bulk row; core callers (6 sites)
+builtin_make_category_table	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:528	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_make_category_set	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:562	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_category_set_mnemonics	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:590	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_modify_category_entry	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:612	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_define_category	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:691	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_category_docstring	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:722	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_get_unused_category	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:735	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_char_category_set	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:752	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_category_table	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:764	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_standard_category_table	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:777	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_set_category_table	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:786	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_category_table_p_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:816	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_copy_category_table_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:824	emacs_core::category	stage-3b text K1 bulk row; core callers (1 sites)
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/category/mod.rs:844	emacs_core::category	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+CclRegistry	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:61	emacs_core::ccl	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+with_ccl_obarray	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:159	emacs_core::ccl	stage-3b text K1 bulk row; core callers (4 sites)
+CclRegistryHandle	type	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:236	emacs_core::ccl	stage-3b text K1 bulk row; core callers (2 sites)
+current_ccl_registry_handle	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:239	emacs_core::ccl	stage-3b text K1 bulk row; core callers (2 sites)
+install_ccl_registry_handle	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:244	emacs_core::ccl	stage-3b text K1 bulk row; core callers (1 sites)
+reset_ccl_registry	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:250	emacs_core::ccl	stage-3b text K1 bulk row; core callers (1 sites)
+park_ccl_registry	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:256	emacs_core::ccl	stage-3b text K1 bulk row; core callers (1 sites)
+collect_ccl_registry_gc_roots	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:262	emacs_core::ccl	stage-3b text K1 bulk row; core callers (2 sites)
+unregister_registered_ccl_program	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:282	emacs_core::ccl	stage-3b text K1 bulk row; core callers (1 sites)
+is_registered_ccl_program	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:289	emacs_core::ccl	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_ccl_program_p_impl_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:1357	emacs_core::ccl	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_ccl_execute_impl_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:1377	emacs_core::ccl	stage-3b text K1 bulk row; core callers (2 sites)
+builtin_ccl_execute_on_string_impl_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:1478	emacs_core::ccl	stage-3b text K1 bulk row; core callers (2 sites)
+builtin_register_ccl_program_impl_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:1559	emacs_core::ccl	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_register_code_conversion_map_impl_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:1602	emacs_core::ccl	stage-3b text K1 bulk row; core callers (1 sites)
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/ccl/mod.rs:1638	emacs_core::ccl	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+CharsetMethodSnapshot	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:265	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+CharsetSubsetSpecSnapshot	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:291	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+CharsetInfoSnapshot	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:300	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+CharsetRegistrySnapshot	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:321	emacs_core::charset	stage-3b text K1 bulk row; core callers (2 sites)
+CharsetRegistry	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:361	emacs_core::charset	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+warm_carrier_charset_registry	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1223	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+reset_charset_registry	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1229	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+CharsetRegistryHandle	type	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1253	emacs_core::charset	stage-3b text K1 bulk row; core callers (2 sites)
+current_charset_registry_handle	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1256	emacs_core::charset	stage-3b text K1 bulk row; core callers (2 sites)
+install_charset_registry_handle	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1261	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+collect_charset_registry_gc_roots	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1267	emacs_core::charset	stage-3b text K1 bulk row; core callers (2 sites)
+snapshot_charset_registry	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1281	emacs_core::charset	stage-3b text K1 bulk row; core callers (2 sites)
+restore_charset_registry	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1286	emacs_core::charset	stage-3b text K1 bulk row; core callers (2 sites)
+set_charset_plist_registry	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1292	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+charset_target_ranges	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1297	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+map_charset_char_ranges	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1398	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+charset_exists	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1445	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+charset_contains_char	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1450	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+charset_canonical_name	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1925	emacs_core::charset	stage-3b text K1 PC7-surface row: the display fontset canonicalizes encodings at definition (lead #469 P3 port; upstream core-local pub(crate) call across the split boundary)
+builtin_charsetp_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1995	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_charset_priority_list	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2033	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_set_charset_priority_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2061	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+char_charset_name	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2110	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_char_charset_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2134	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_split_char	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2184	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_charset_plist_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2215	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_charset_id_internal_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2250	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_make_char_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2476	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_define_charset_internal_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2522	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_find_charset_region	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2694	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_encode_big5_char	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2725	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_decode_big5_char	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2733	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_encode_sjis_char	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2741	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_decode_sjis_char	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2749	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_get_unused_iso_final_char	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2758	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_declare_equiv_charset_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2796	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_define_charset_alias_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2835	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_find_charset_string	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2854	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_decode_char_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2890	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_encode_char_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2917	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_unify_charset_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2942	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_clear_charset_maps	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2993	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_charset_after	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:3007	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+park_carrier_tls	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:3113	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+reset_carrier_tls	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:3120	emacs_core::charset	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:3127	emacs_core::charset	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+OptimizeCharTableTest	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:39	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+builtin_char_table_subtype	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:39	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+char_table_default	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:40	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+char_table_external_slots	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:40	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+char_table_length	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:41	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+char_table_local_entries	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:41	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+char_table_local_entries_with_symbols	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:42	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+char_table_ref_and_range_with_symbols	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:43	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+copy_char_table_with_symbols	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:44	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+ct_lookup_with_symbols	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:45	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+ct_ref_with_symbols	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:45	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+display_dependency_children	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:46	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+for_each_char_table_mapping_with_symbols	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:47	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+for_each_non_nil_char_table_run	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:47	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+for_each_non_nil_char_table_run_with_symbols	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:48	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+inline_vector_tag_shape	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:48	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+is_char_table	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:49	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+make_char_table_from_external_slots	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:49	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+make_char_table_from_external_slots_with_symbols	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:50	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+make_char_table_value	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:50	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+make_char_table_with_extra_slots	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:51	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+make_sub_char_table_from_external_slots	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:51	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+optimize_char_table_with_symbols	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:52	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+sub_char_table_external_slots	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:53	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+bool_vector_length	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:63	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+is_bool_vector	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:63	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+char_table_write_tick	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:65	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+builtin_make_char_table	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:151	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+fill_char_table_from_fillarray	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:176	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_char_table_p	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:192	emacs_core::chartable	stage-3b text K1 bulk row; core callers (2 sites)
+builtin_set_char_table_range_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:210	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_set_char_table_range_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:217	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_set_char_table_range_with_style	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:232	emacs_core::chartable	stage-3b text K1 bulk row; core callers (3 sites)
+builtin_char_table_range_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:306	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_char_table_range_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:313	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_char_table_range_with_style	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:326	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_char_table_parent	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:404	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_set_char_table_parent	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:414	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_map_char_table	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:463	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_char_table_extra_slot	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:484	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_set_char_table_extra_slot	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:503	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_get_unicode_property_internal_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:549	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_put_unicode_property_internal_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:659	emacs_core::chartable	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_bool_vector	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:699	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+builtin_bool_vector_count_consecutive	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:699	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+builtin_bool_vector_count_population	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:700	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+builtin_bool_vector_exclusive_or	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:700	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+builtin_bool_vector_intersection	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:701	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+builtin_bool_vector_not	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:701	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+builtin_bool_vector_p	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:701	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+builtin_bool_vector_set_difference	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:702	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+builtin_bool_vector_subsetp	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:702	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+builtin_bool_vector_union	use	pub(crate)	crates/neovm-text/src/emacs_core/text/chartable/mod.rs:702	emacs_core::chartable	stage-3b text K1 bulk row: re-export leaf needed by core
+from_lisp	method	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:315	emacs_core::coding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+TextQuotingStyle	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:495	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+from_symbol_value	method	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:504	emacs_core::coding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+effective_text_quoting_style	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:743	emacs_core::coding	stage-3b text K1 bulk row; core callers (8 sites)
+requote_c_error_message	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:807	emacs_core::coding	stage-3b text K1 bulk row; core callers (8 sites)
+contains_runtime_symbol	method	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1594	emacs_core::coding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+keyboard_coding_sym	method	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1688	emacs_core::coding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+terminal_coding_sym	method	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1710	emacs_core::coding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+mode_line_mnemonic	method	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1722	emacs_core::coding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+dump_keyboard_coding_sym	method	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1740	emacs_core::coding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+dump_terminal_coding_sym	method	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1744	emacs_core::coding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+from_dump	method	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1748	emacs_core::coding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+invalidate_lookup_cache	method	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1770	emacs_core::coding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+record_lisp_define_coding_system_internal	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1834	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+record_lisp_define_coding_system_alias	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1858	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_coding_system_aliases	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1993	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_coding_system_plist	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:2450	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_coding_system_put	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:2606	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_coding_system_base	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:2707	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_coding_system_eol_type	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:2745	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+WriteCodingClass	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:2814	emacs_core::coding	stage-3b text K1 bulk row; core callers (3 sites)
+classify_write_coding	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:2833	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+raw_text_coding_system	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:2865	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+EolParent	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:2882	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+coding_inherit_eol_type	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:2897	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+coding_inherit_eol_type_unix	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:2933	emacs_core::coding	stage-3b text K1 bulk row; core callers (2 sites)
+builtin_coding_system_p	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:3191	emacs_core::coding	stage-3b text K1 bulk row; core callers (3 sites)
+builtin_check_coding_system	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:3209	emacs_core::coding	stage-3b text K1 bulk row; core callers (5 sites)
+builtin_check_coding_systems_region	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:3337	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_unencodable_char_position	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:3431	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_define_coding_system_internal	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:3620	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_define_coding_system_alias	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:3775	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_set_coding_system_priority	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:3810	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+coding_category_priority_list	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:3991	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+SourceBlock	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:4160	emacs_core::coding	stage-3b text K1 bulk row; core callers (8 sites)
+builtin_detect_coding_string	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:5566	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_detect_coding_region	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:5616	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_keyboard_coding_system	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:5655	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_terminal_coding_system	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:5666	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_set_keyboard_coding_system_internal	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:5756	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_set_terminal_coding_system_internal	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:5770	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_set_safe_terminal_coding_system_internal	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:5784	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_text_quoting_style	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:5805	emacs_core::coding	stage-3b text K1 bulk row; core callers (2 sites)
+builtin_set_text_conversion_style	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:5812	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_coding_system_priority_list	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:5822	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_find_coding_systems_region_internal	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/coding/mod.rs:6176	emacs_core::coding	stage-3b text K1 bulk row; core callers (1 sites)
+install_substrate_seams	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/composite/mod.rs:29	emacs_core::composite	stage-3b text K1 facade row: core registration/display call through the composite facade
+compose_region_internal	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/composite/mod.rs:137	emacs_core::composite	stage-3b text K1 facade row: core registration/display call through the composite facade
+find_composition_internal	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/composite/mod.rs:1269	emacs_core::composite	stage-3b text K1 facade row: core registration/display call through the composite facade
+composition_get_gstring	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/composite/mod.rs:1467	emacs_core::composite	stage-3b text K1 facade row: core registration/display call through the composite facade
+composition_gstring_p	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/composite/mod.rs:1553	emacs_core::composite	stage-3b text K1 facade row: core registration/display call through the composite facade
+compose_string	fn	private	crates/neovm-text/src/emacs_core/text/composite/mod.rs:1634	emacs_core::composite	stage-3b text K1 facade row: core registration/display call through the composite facade
+clear_cache	fn	private	crates/neovm-text/src/emacs_core/text/composite/mod.rs:1644	emacs_core::composite	stage-3b text K1 facade row: core registration/display call through the composite facade
+sort_rules	fn	private	crates/neovm-text/src/emacs_core/text/composite/mod.rs:1652	emacs_core::composite	stage-3b text K1 facade row: core registration/display call through the composite facade
+world_state_placeholder	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/composite/mod.rs:1703	emacs_core::composite	stage-3b text K1 facade row: core registration/display call through the composite facade
+swap_world_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/composite/mod.rs:1713	emacs_core::composite	stage-3b text K1 facade row: core registration/display call through the composite facade
+require_string	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/format/mod.rs:17	emacs_core::format	stage-3b text K1 bulk row; core callers (1 sites)
+BrokenDownTime	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/format/mod.rs:34	emacs_core::format	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+unix_to_broken_down	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/format/mod.rs:112	emacs_core::format	stage-3b text K1 bulk row; core callers (1 sites)
+current_unix_timestamp	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/format/mod.rs:251	emacs_core::format	stage-3b text K1 bulk row; core callers (1 sites)
+format_time	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/format/mod.rs:392	emacs_core::format	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_json_serialize_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/json/mod.rs:1441	emacs_core::json	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_json_parse_string_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/json/mod.rs:1475	emacs_core::json	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_json_parse_buffer	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/json/mod.rs:1516	emacs_core::json	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_json_insert	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/json/mod.rs:1547	emacs_core::json	stage-3b text K1 bulk row; core callers (1 sites)
+CompiledPattern	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:238	emacs_core::regex	stage-3b text K1 bulk row; core callers (6 sites)
+gc_root	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:589	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+MATCHER_OVERFLOW_MESSAGE	const	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:1155	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+WordBoundaryLookup	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:3983	emacs_core::regex	stage-3b text K1 bulk row; core callers (16 sites)
+current_word_boundary_lookup	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:4025	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+symbol_mode	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:4061	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+with_symbol_mode	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:4066	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+SyntaxLookup	trait	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:4446	emacs_core::regex	stage-3b text K1 bulk row; core callers (2 sites)
+BufferSyntaxLookup	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:4577	emacs_core::regex	stage-3b text K1 bulk row; core callers (3 sites)
+reset_carrier_tls	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:10547	emacs_core::regex	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:10559	emacs_core::regex	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+REPLACE_MATCH_SUBEXP_MISSING	const	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:59	emacs_core::regex	stage-3b text K1 bulk row; core callers (3 sites)
+EmacsRegexpError	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:85	emacs_core::regex	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+PropertizeFrontier	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:151	emacs_core::regex	stage-3b text K1 bulk row; core callers (3 sites)
+with_string_syntax_lookup	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:290	emacs_core::regex	stage-3b text K1 bulk row; core callers (2 sites)
+BufferRegexpSyntaxDependency	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:539	emacs_core::regex	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+BufferRegexpSyntaxProperties	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:549	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+BufferRegexpMatchContext	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:567	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+new	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:575	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+with_frontier	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:588	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+reset_regex_thread_locals	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:708	emacs_core::regex	stage-3b text K1 bulk row; core callers (3 sites)
+activate_regex_thread_locals	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:717	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+collect_regex_gc_roots	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:735	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+MatchDataSource	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:830	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+SearchRegisters	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:882	emacs_core::regex	stage-3b text K1 bulk row; core callers (7 sites)
+empty_match_at	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:907	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+publish_buffer_into	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:956	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+publish_string_into	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1006	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+compile_string_search_pattern	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1077	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+string_search_compiled_into	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1100	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+BufferSearchSuccess	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1185	emacs_core::regex	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+StringSearchSuccess	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1190	emacs_core::regex	stage-3b text K1 bulk row; core callers (2 sites)
+LispMatchEndpoints	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1269	emacs_core::regex	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+start	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1275	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+end	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1279	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+StringMatchRegisterSnapshot	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1282	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+as_lisp_string	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1432	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+string_register_snapshot	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1460	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+from_string_register_snapshot	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1470	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+string	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1482	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+buffer_lisp_chars	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1504	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+searched_string	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1519	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+source	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1527	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+record_failed_string_search	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1541	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+group_count	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1551	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+group	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1559	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+lisp_group	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1585	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+groups_snapshot	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1637	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+translate_positions	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1644	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+map_lisp_positions	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1684	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+into_parts	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1840	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+into_start	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:1868	emacs_core::regex	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+buffer_regexp_syntax_dependency_compiled_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:2652	emacs_core::regex	stage-3b text K1 bulk row; core callers (4 sites)
+buffer_regexp_syntax_dependency_and_span	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:2684	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+predicate_match	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:3476	emacs_core::regex	stage-3b text K1 bulk row; core callers (2 sites)
+predicate_match_ignore_case	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:3492	emacs_core::regex	stage-3b text K1 bulk row; core callers (3 sites)
+treesit_predicate_match_lisp	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:3536	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+search_forward_into_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:3616	emacs_core::regex	stage-3b text K1 bulk row; core callers (2 sites)
+search_backward_into_with_symbols	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:3715	emacs_core::regex	stage-3b text K1 bulk row; core callers (2 sites)
+re_search_forward_lisp_with_posix	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:4049	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+re_search_forward_lisp_with_posix_into	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:4073	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+re_search_forward_compiled_into	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:4140	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+re_search_backward_lisp_with_posix_into	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:4195	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+re_search_backward_compiled_into	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:4259	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+looking_at_lisp_with_posix	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:4375	emacs_core::regex	stage-3b text K1 bulk row; core callers (2 sites)
+looking_at_compiled	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:4433	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+looking_at_compiled_into	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:4463	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+string_search_full_with_case_fold_source_lisp_pattern_posix_syntax	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:4787	emacs_core::regex	stage-3b text K1 bulk row; core callers (4 sites)
+string_search_start_with_case_fold_source_lisp_pattern_posix_syntax	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:4815	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+string_search_full_with_case_fold_and_posix	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:4866	emacs_core::regex	stage-3b text K1 bulk row; core callers (3 sites)
+match_stats	mod	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:5392	emacs_core::regex	stage-3b text K1 bulk row; core callers (1 sites)
+count_full_export	method	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:5422	emacs_core::regex	stage-3b text K1 facade row: core match-data stats call (debug)
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/regex/mod.rs:5513	emacs_core::regex	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+normalize_lisp_string_value_start_arg	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/search/mod.rs:151	emacs_core::search	stage-3b text K1 bulk row; core callers (4 sites)
+builtin_regexp_quote	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/search/mod.rs:230	emacs_core::search	stage-3b text K1 bulk row; core callers (1 sites)
+replace_match_lisp_string_with_syntax	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/search/mod.rs:522	emacs_core::search	stage-3b text K1 bulk row; core callers (1 sites)
+compute_buffer_replacement_lisp_string	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/search/mod.rs:617	emacs_core::search	stage-3b text K1 bulk row; core callers (2 sites)
+storage_code_step	use	pub(crate)	crates/neovm-text/src/emacs_core/text/string_escape/mod.rs:13	emacs_core::string_escape	stage-3b text K1 bulk row: re-export leaf needed by core
+octal_escape_unibyte_eight_bit	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/string_escape/mod.rs:33	emacs_core::string_escape	stage-3b text K1 bulk row; core callers (1 sites)
+parse_cache	mod	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:30	emacs_core::syntax	stage-3b text K1 bulk row; core callers (2 sites)
+buffer_char_to_emacs_byte_pos	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:66	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+buffer_byte_to_lisp_pos	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:135	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+restore_standard_syntax_table_object	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:170	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+restore_syntax_code_objects	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:179	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+snapshot_syntax_code_objects	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:188	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+CommentEndEscapePolicy	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:275	emacs_core::syntax	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+SexpScanPolicy	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:326	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+for_context	method	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:333	emacs_core::syntax	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+install_substrate_seams	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:398	emacs_core::syntax	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+ensure_syntax_code_objects	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:642	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+forward_word_with_options	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:1333	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+word_boundary_table_active	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:1432	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+word_motion_with_table	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:1459	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+forward_word_destination	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:1640	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_string_to_syntax	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:2920	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+sync_current_buffer_syntax_table_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:3068	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+SyntaxProperties	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:3354	emacs_core::syntax	stage-3b text K1 bulk row; core callers (12 sites)
+StringSyntaxPositionSource	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:3627	emacs_core::syntax	stage-3b text K1 bulk row; core callers (5 sites)
+StringSyntaxPositionSourceError	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:3643	emacs_core::syntax	stage-3b text K1 bulk row; core callers (2 sites)
+owned	const fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:3670	emacs_core::syntax	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+string	const fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:3678	emacs_core::syntax	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+StringSyntaxPositionError	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:3712	emacs_core::syntax	stage-3b text K1 bulk row; core callers (4 sites)
+parse_sexp_lookup_properties_enabled	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:4721	emacs_core::syntax	stage-3b text K1 bulk row; core callers (9 sites)
+syntax_propertize_done_sym	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:4737	emacs_core::syntax	stage-3b text K1 bulk row; core callers (2 sites)
+maybe_syntax_propertize_for_scan	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:4743	emacs_core::syntax	stage-3b text K1 bulk row; core callers (3 sites)
+maybe_syntax_propertize_for_scan_with_scope	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:4753	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+syntax_propertize_would_run	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:4811	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+syntax_propertize_frontier_for_scan	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:4834	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_syntax_class_to_char	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:4853	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_matching_paren	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:4890	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_standard_syntax_table	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:4937	emacs_core::syntax	stage-3b text K1 bulk row; core callers (2 sites)
+builtin_syntax_table_0	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:4968	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_set_syntax_table_1	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:4988	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_modify_syntax_entry	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:5000	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_char_syntax_1	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:5019	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+casing_word_predicate	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:5084	emacs_core::syntax	stage-3b text K1 bulk row; core callers (4 sites)
+expect_forward_comment_count	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:5179	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+forward_comment_in_buffers	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:5203	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+forward_comment_scan_in_buffer	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:5231	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_backward_prefix_chars_in_buffers	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:6268	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_scan_lists_3	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:6520	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_scan_sexps_2	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:6665	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_parse_partial_sexp_6	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:7456	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_skip_syntax_forward_2	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:7655	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_skip_syntax_backward_2	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:7782	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_copy_syntax_table_in_state	use	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:7929	emacs_core::syntax	stage-3b text K1 facade row: symbol_policy glob re-export used by core registration
+builtin_syntax_table_p_in_state	use	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:7929	emacs_core::syntax	stage-3b text K1 facade row: symbol_policy glob re-export used by core registration
+reset_carrier_tls	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:7941	emacs_core::syntax	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:7953	emacs_core::syntax	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+comment_end_escape	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:8005	emacs_core::syntax	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+reset_carrier_tls	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/parse_cache.rs:1491	emacs_core::syntax	stage-3b text K1 facade row: core carrier TLS reset hook
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/parse_cache.rs:1498	emacs_core::syntax	stage-3b text K1 facade row: core carrier TLS debug fingerprint hook
+builtin_syntax_table_p_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/symbol_policy.rs:301	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_copy_syntax_table_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/symbol_policy.rs:309	emacs_core::syntax	stage-3b text K1 bulk row; core callers (1 sites)
+for_scan_with_symbols	method	pub(crate)	crates/neovm-text/src/emacs_core/text/syntax/symbol_policy.rs:318	emacs_core::syntax	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+PARSER_SLOT_LANGUAGE	const	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:20	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+PARSER_SLOT_TAG	const	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:24	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+PARSER_SLOT_EMBED_LEVEL	const	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:26	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+PARSER_SLOT_NOTIFIERS	const	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:28	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+PARSER_SLOT_INCLUDED_RANGES	const	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:30	emacs_core::treesit	stage-3b text K1 bulk row; core callers (3 sites)
+NODE_SLOT_PARSER	const	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:36	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+QUERY_SLOT_LANGUAGE	const	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:42	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+QUERY_SLOT_SOURCE	const	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:44	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+LoadedLanguage	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:77	emacs_core::treesit	stage-3b text K1 bulk row; core callers (2 sites)
+LineColCache	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:87	emacs_core::treesit	stage-3b text K1 bulk row; core callers (5 sites)
+SourceByteRange	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:95	emacs_core::treesit	stage-3b text K1 bulk row; core callers (5 sites)
+ParserInputRevision	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:117	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+for_buffer	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:123	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+ParsedTree	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:145	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+new	const fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:153	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+tree	const fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:158	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+visible	const fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:162	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+ParserFreshness	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:261	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+ParserReparseKind	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:272	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+reparse_kind	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:282	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+start	const fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:324	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+end	const fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:329	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+ParserEntry	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:330	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+NodeEntry	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:355	emacs_core::treesit	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+QueryEntry	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:361	emacs_core::treesit	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+QueryPredicateArg	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:366	emacs_core::treesit	stage-3b text K1 bulk row; core callers (13 sites)
+QueryPredicate	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:373	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+RawQueryCapture	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:389	emacs_core::treesit	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+RawQueryMatch	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:393	emacs_core::treesit	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+EmacsQuery	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:396	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+new	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:409	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+capture_names	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:424	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+predicates	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:428	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+matches	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:432	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+TreeSitterManager	struct	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:720	emacs_core::treesit	stage-3b text K1 bulk row; core callers (6 sites)
+roots	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:757	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+loaded_language	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:765	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+cache_loaded_language	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:772	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+find_reusable_parser	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:777	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+insert_parser	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:796	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+parser	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:830	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+parser_mut	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:835	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+parser_values_for	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:840	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+mark_parser_deleted	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:875	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+insert_node	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:884	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+node	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:904	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+clear_nodes_for_parser	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:909	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+insert_query	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:914	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+query	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:928	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+query_mut	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:933	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+linecol_cache	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:938	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+set_linecol_cache	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:943	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+enable_linecol_tracking	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:953	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+note_buffer_change	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:969	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+sync_visible_region	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:990	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+has_editable_tree	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1010	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+has_pending_edit	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1017	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+begin_buffer_edit	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1022	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+finish_buffer_edit	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1055	emacs_core::treesit	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+ParserTagFilter	enum	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1100	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+make_parser_value	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1115	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+make_node_value	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1134	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+make_query_value	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1143	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+parser_id	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1153	emacs_core::treesit	stage-3b text K1 bulk row; core callers (2 sites)
+node_id	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1158	emacs_core::treesit	stage-3b text K1 bulk row; core callers (1 sites)
+query_id	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1163	emacs_core::treesit	stage-3b text K1 bulk row; core callers (5 sites)
+is_parser	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1168	emacs_core::treesit	stage-3b text K1 bulk row; core callers (2 sites)
+is_node	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1173	emacs_core::treesit	stage-3b text K1 bulk row; core callers (2 sites)
+is_compiled_query	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1178	emacs_core::treesit	stage-3b text K1 bulk row; core callers (5 sites)
+line	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1234	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+col	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1239	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+bytepos	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1244	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+language	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1252	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+filename	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1257	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+steps	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1273	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+value	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1282	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+set_value	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1287	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+generation	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1292	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+set_generation	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1297	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+orig_buffer_id	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1302	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+deleted	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1307	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+need_to_gc_buffer	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1312	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+set_need_to_gc_buffer	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1317	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+freshness	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1322	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+set_freshness	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1327	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+tree	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1332	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+set_tree	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1337	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+last_changed_ranges_mut	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1342	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+set_last_changed_ranges	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1347	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+tracking_linecol	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1352	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+parser_mut	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1357	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+parser_id	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1365	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+raw	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1370	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+compiled	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1383	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+set_compiled	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1388	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+pattern_index	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1394	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+captures_len	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1399	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+into_captures	method	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1404	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+index	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1412	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+node	field-accessor	pub(crate)	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1417	emacs_core::treesit	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+from_loaded_parts	method	private	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1428	emacs_core::treesit	stage-3b text K1 signed constructor for a closed struct literal (E0451); fields stay private
+from_parts	method	private	crates/neovm-text/src/emacs_core/text/treesit/mod.rs:1444	emacs_core::treesit	stage-3b text K1 signed constructor for a closed struct literal (E0451); fields stay private
+builtin_libxml_available_p	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/xml/mod.rs:608	emacs_core::xml	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_libxml_parse_html_region	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/xml/mod.rs:615	emacs_core::xml	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_libxml_parse_xml_region	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/xml/mod.rs:642	emacs_core::xml	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_zlib_available_p	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/zlib/mod.rs:24	emacs_core::zlib	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_zlib_decompress_region	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/zlib/mod.rs:36	emacs_core::zlib	stage-3b text K1 bulk row; core callers (1 sites)
+CharacterWidthPolicy	struct	pub(crate)	crates/neovm-text/src/encoding.rs:93	encoding	stage-3b text K1 bulk row; core callers (4 sites)
+from_context	method	pub(crate)	crates/neovm-text/src/encoding.rs:120	encoding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+width	method	pub(crate)	crates/neovm-text/src/encoding.rs:171	encoding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+char_width_table_value	fn	pub(crate)	crates/neovm-text/src/encoding.rs:213	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+char_width_in_table	fn	pub(crate)	crates/neovm-text/src/encoding.rs:225	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+default_char_width_table	fn	pub(crate)	crates/neovm-text/src/encoding.rs:243	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+coding_name_requires_detection	fn	pub(crate)	crates/neovm-text/src/encoding.rs:523	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+detected_coding_name	fn	pub(crate)	crates/neovm-text/src/encoding.rs:549	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+DecodedProcessRun	struct	pub(crate)	crates/neovm-text/src/encoding.rs:601	encoding	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+coding_inherit_unix_eol_type	fn	pub(crate)	crates/neovm-text/src/encoding.rs:656	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+coding_system_family	fn	pub(crate)	crates/neovm-text/src/encoding.rs:706	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+encode_lisp_string	fn	pub(crate)	crates/neovm-text/src/encoding.rs:1157	encoding	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+decode_bytes	fn	pub(crate)	crates/neovm-text/src/encoding.rs:1333	encoding	stage-3b text K1 bulk row; disambiguated via E0603 defined-here span
+decode_bytes_to_lisp_string	fn	pub(crate)	crates/neovm-text/src/encoding.rs:1413	encoding	stage-3b text K1 bulk row; core callers (2 sites)
+builtin_encode_coding_string_in_context	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5390	encoding	stage-3b text K1 bulk row; core callers (2 sites)
+builtin_decode_coding_string_in_context	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5405	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+EncodedTextBytes	struct	pub(crate)	crates/neovm-text/src/encoding.rs:5426	encoding	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+from_symbol	method	pub(crate)	crates/neovm-text/src/encoding.rs:5440	encoding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+symbol	method	pub(crate)	crates/neovm-text/src/encoding.rs:5445	encoding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+RuntimeCodingMetadata	struct	pub(crate)	crates/neovm-text/src/encoding.rs:5453	encoding	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+metadata	method	pub(crate)	crates/neovm-text/src/encoding.rs:5459	encoding	stage-3b text K1 PC7-surface row: core-called associated function widened to doc(hidden) pub
+encode_external_text_in_context	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5531	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+encode_process_text_in_context	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5542	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+encode_file_region_in_context	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5569	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+DecodedFileBytes	struct	pub(crate)	crates/neovm-text/src/encoding.rs:5587	encoding	stage-3b text K1 private-type-surface row: type named in a core-visible API signature
+decode_file_bytes_in_context	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5593	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+decode_process_run_in_context	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5652	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_encode_coding_region	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5912	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_decode_coding_region	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5920	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_char_width_in_context	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5935	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_string_bytes_1	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5976	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_multibyte_string_p_1	fn	pub(crate)	crates/neovm-text/src/encoding.rs:5991	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_char_or_string_p_1	fn	pub(crate)	crates/neovm-text/src/encoding.rs:6180	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+builtin_max_char	fn	pub(crate)	crates/neovm-text/src/encoding.rs:6225	encoding	stage-3b text K1 bulk row; core callers (1 sites)
+bytes	field-accessor	pub(crate)	crates/neovm-text/src/encoding.rs:6258	encoding	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+into_bytes	method	pub(crate)	crates/neovm-text/src/encoding.rs:6263	encoding	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+coding_system	field-accessor	pub(crate)	crates/neovm-text/src/encoding.rs:6268	encoding	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+into_parts	method	pub(crate)	crates/neovm-text/src/encoding.rs:6276	encoding	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
+info	field-accessor	pub(crate)	crates/neovm-text/src/encoding.rs:6292	encoding	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+eol_type	field-accessor	pub(crate)	crates/neovm-text/src/encoding.rs:6297	encoding	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)

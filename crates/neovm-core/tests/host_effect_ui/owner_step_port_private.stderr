@@ -1,3 +1,35 @@
+warning: type `ResultAssociation` is more private than the item `OwnerStepResult::<'s>::association`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/owner_step.rs
+  |
+  |               pub(crate) fn association(&self) -> ResultAssociation {
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `OwnerStepResult::<'s>::association` is reachable at visibility `pub(crate)`
+...
+  | / step_families!(
+  | |     (
+  | |         Redisplay,
+  | |         redisplay,
+... |
+  | |     ),
+  | | );
+  | |_- in this macro invocation
+  |
+note: but type `ResultAssociation` is only usable at visibility `pub(self)`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/owner_step.rs
+  |
+  |           enum ResultAssociation {
+  |           ^^^^^^^^^^^^^^^^^^^^^^
+...
+  | / step_families!(
+  | |     (
+  | |         Redisplay,
+  | |         redisplay,
+... |
+  | |     ),
+  | | );
+  | |_- in this macro invocation
+  = note: `#[warn(private_interfaces)]` on by default
+  = note: this warning originates in the macro `step_families` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0451]: fields `key`, `_kind` and `_requester` of struct `OwnerResumePort` are private
   --> tests/host_effect_ui/owner_step_port_private.rs:8:9
    |

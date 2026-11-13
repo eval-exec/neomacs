@@ -14,7 +14,7 @@ help: the type constructed contains `FontReply<'_>` due to the type of the argum
    |                                                            |
    |                                                            this argument influences the type of `Returned`
 note: tuple variant defined here
-  --> src/host_effect/contracts.rs
+  --> $WORKSPACE/crates/neovm-eval/src/host_effect/contracts.rs
    |
    |     Returned(R),
    |     ^^^^^^^^

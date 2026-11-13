@@ -1,0 +1,8768 @@
+//! Window, frame, and display-related builtins for the Elisp VM.
+//!
+//! Bridges the `FrameManager` (in `crate::window`) to Elisp by exposing
+//! builtins such as `selected-window`, `split-window-internal`,
+//! `selected-frame`, etc.
+//! Frames are represented as frame handles. Windows are represented as window
+//! handles, while legacy integer designators are still accepted in resolver
+//! paths for compatibility.
+
+mod split_request;
+pub(crate) use split_request::SiblingResize;
+
+use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
+use crate::window::WindowChromeLine;
+use crate::window::body::{WindowBodyAxis, WindowBodyCellSize, WindowBodyUnit};
+use crate::window::geometry::PublishedWindowRegions;
+use crate::window::{
+    CombinationLimit, CursorTypeSymbol, DeleteResize, ForcedBodyRedisplay, FrameDeletion,
+    FrameDeletionSelectionPolicy, FrameDivider, FrameFocusTracking, FrameFullscreen, FrameId,
+    FrameManager, FrameParam, FrameParamKey, FrameVisibility, Rect, SelectedFrameAfterDeletion,
+    SplitDirection, SplitPlacement, Window, WindowBufferDisplayDefaults, WindowFringeDefaults,
+    WindowId, WindowMargins, WindowScrollBarDefaults, is_valid_horizontal_scroll_bar_value,
+    is_valid_vertical_scroll_bar_value, window_first_child_id, window_next_sibling_id,
+    window_parent_id, window_prev_sibling_id,
+};
+use neomacs_display_protocol::TransitionDirection;
+use neovm_edit::buffer::{BufferId, BufferManager, EmacsBytePos, LispCharPos1};
+use neovm_edit::emacs_core::display_metrics::{LineWrap, MotionEngine};
+use neovm_eval::emacs_core::eval::VariableView;
+use neovm_eval::emacs_core::eval::data::minibuffer::MinibufferManager;
+use neovm_eval::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
+pub(crate) use neovm_value::error::{
+    expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
+};
+use neovm_value::intern::{SymId, intern, resolve_sym};
+use neovm_value::value::{Value, ValueKind, VecLikeType, list_to_vec};
+use std::collections::HashSet;
+use strum::{EnumString, IntoStaticStr};
+
+mod body_geometry;
+mod redisplay_core_defaults;
+
+use crate::emacs_core::xfaces::realization::XfacesRealizationContextExt;
+use crate::window::display::WindowDisplayContextExt;
+use neovm_edit::emacs_core::edit_host::EditHost;
+pub(crate) use redisplay_core_defaults::restore_gnu_configuration_hook_default;
+
+fn navigation_transition_direction(value: Value) -> Result<TransitionDirection, Flow> {
+    value
+        .as_bare_symbol_name()
+        .and_then(|name| name.parse().ok())
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("neomacs--transition-direction-p"), value],
+            )
+        })
+}
+
+fn lisp_char_pos_from_one_based_usize(pos: usize) -> LispCharPos1 {
+    LispCharPos1::from_one_based_usize(pos)
+}
+
+// Moved down from the evaluator builtins (stage-4 K2 display): this is
+// redisplay/window behaviour, not a Lisp-only entry.
+#[doc(hidden)]
+pub fn builtin_resize_mini_window_internal(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("resize-mini-window-internal", &args, 1)?;
+    // GNU spells this `CHECK_LIVE_WINDOW (window)' (`src/window.c'): WINDOW is
+    // REQUIRED, so nil is rejected rather than defaulted, and an internal or
+    // deleted window signals `window-live-p'.  Testing `as_window_id' instead
+    // accepted any window OBJECT and only failed later, when the live-only
+    // frame lookup missed, with a plain `error "Window not found"' -- a
+    // condition GNU never reaches.
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (fid, window_id) = crate::emacs_core::window_cmds::check_window_id_in_state(
+        frames,
+        buffers,
+        &args[0],
+        neovm_eval::emacs_core::eval::data::window_state::WindowDomain::Live,
+    )?;
+    let frame = eval
+        .frame_manager_mut()
+        .get_mut(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    if frame.minibuffer_window != Some(window_id) {
+        return Err(signal(
+            "error",
+            vec![Value::string("Not a valid minibuffer window")],
+        ));
+    }
+
+    let root_height = frame.root_window().bounds().height.max(0.0) as i64;
+    let root_new = frame
+        .root_window()
+        .new_pixel()
+        .ok_or_else(|| signal("error", vec![Value::string("Cannot resize mini window")]))?;
+    let (mini_height, mini_new) = {
+        let mini = frame.minibuffer_leaf.as_ref().ok_or_else(|| {
+            signal(
+                "error",
+                vec![Value::string("Cannot resize a minibuffer-only frame")],
+            )
+        })?;
+        (
+            mini.bounds().height.max(0.0) as i64,
+            mini.new_pixel()
+                .ok_or_else(|| signal("error", vec![Value::string("Cannot resize mini window")]))?,
+        )
+    };
+
+    let old_total = root_height.saturating_add(mini_height);
+    let new_total = root_new.saturating_add(mini_new);
+    if !crate::window::window_resize_check(
+        frame.tree(),
+        frame.tree().root_id(),
+        neovm_value::display_vocab::SplitDirection::Vertical,
+        neovm_edit::emacs_core::display_metrics::WindowBodyCellSize::new(
+            frame.char_width,
+            frame.char_height,
+        ),
+    ) || mini_new <= 0
+        || old_total != new_total
+    {
+        return Err(signal(
+            "error",
+            vec![Value::string("Cannot resize mini window")],
+        ));
+    }
+
+    let char_width = frame.char_width;
+    let char_height = frame.char_height;
+    let geometry_changed = root_height != root_new || mini_height != mini_new;
+    let is_tty = frame.effective_window_system().is_none();
+    let root = frame.tree().root_id();
+    crate::window::window_resize_apply(frame.tree_mut(), root, false, char_width, char_height);
+    let mini = frame
+        .minibuffer_leaf
+        .as_mut()
+        .expect("minibuffer leaf validated before resize mutation");
+    let bounds = *mini.bounds();
+    mini.set_bounds(neovm_edit::emacs_core::display_metrics::Rect::new(
+        bounds.x,
+        bounds.y,
+        bounds.width,
+        mini_new as f32,
+    ));
+    mini.set_new_pixel(None);
+    frame.recalculate_minibuffer_bounds();
+    // Legacy has no GNU frame-local redisplay/current-matrix validity flag.
+    // A real allocation change must therefore forget the physical matrix,
+    // including a shrink/grow cycle completed before its next presentation.
+    // This uses existing output ownership, not the optional callback policy.
+    if geometry_changed && !eval.gnu_redisplay_hooks_policy_enabled() {
+        eval.invalidate_redisplay();
+        if is_tty {
+            eval.gnu_request_frame_redraw(fid);
+        }
+    }
+    // The successful primitive is the common GNU resize_mini_window_apply
+    // seam, including direct window.el calls outside preparatory redisplay.
+    eval.gnu_publish_mini_geometry_changed(fid);
+    Ok(Value::T)
+}
+// ---------------------------------------------------------------------------
+// The new-size slots (GNU `src/window.c`)
+//
+// `window-new-pixel`, `window-new-total`, `window-new-normal` and their three
+// setters all decode WINDOW with GNU's `decode_valid_window`: a nil or omitted
+// WINDOW is the SELECTED window, an internal window is accepted, and anything
+// else -- a deleted window included -- signals `window-valid-p`.  Resolving
+// through the shared window decoder with the `window-valid-p` predicate *is*
+// that contract; a private designator helper used to stand in for it, and
+// because it had no nil arm a `(set-window-new-pixel nil SIZE)` silently
+// discarded the write that `window.el`'s resize engine depends on.
+// ---------------------------------------------------------------------------
+
+/// Validate `split-window-internal`'s OLD argument the way GNU does.
+///
+/// `Fsplit_window_internal` opens with `decode_valid_window (old)`, so OLD is
+/// a `window-valid-p` argument -- an INTERNAL window is accepted, a deleted
+/// one is not -- and `CHECK_VALID_WINDOW` names `Qwindow_valid_p`
+/// unconditionally (`src/window.h`), for a non-window designator just as much
+/// as for a dead window.  Going through the shared decoder with
+/// [`WindowDomain::Valid`] *is* that contract; a private helper used to stand
+/// in for it and reported `windowp` for anything that was not a window
+/// designator, a branch GNU's macro does not have.
+///
+/// It also fixes the check ORDER: GNU decodes OLD before it `CHECK_FIXNUM`s
+/// PIXEL-SIZE, so a call with both arguments wrong must name the window.
+pub(crate) fn validate_split_window_target(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    window: &Value,
+) -> Result<(), Flow> {
+    resolve_window_id_with_pred_in_state(frames, buffers, Some(window), WindowDomain::Valid)
+        .map(|_| ())
+}
+
+/// `(split-window-internal OLD PIXEL-SIZE SIDE NORMAL-SIZE &optional REFER)`
+///
+/// GNU `src/window.c::Fsplit_window_internal` honors all five
+/// arguments. The fourth argument NORMAL-SIZE seeds the new
+/// window's `normal_lines`/`normal_cols` slot so future
+/// proportional resizes preserve the requested ratio. The fifth
+/// argument REFER lets `set-window-configuration` revive a
+/// previously-deleted window by id, restoring its parameters,
+/// dedication, and history alists.
+///
+/// Window audit Critical 5 in `drafts/window-system-audit.md`:
+/// neomacs accepts both arguments for arity compatibility but
+/// drops them on the floor. NORMAL-SIZE is observable as soon as
+/// audit Critical 7 lands the per-window normal-size fields; REFER
+/// is observable when window.el's `display-buffer` falls back to
+/// reviving a deleted window inside `set-window-configuration`.
+///
+/// Both fixes are deferred until the structural prereqs land
+/// (per-window normal_lines/cols storage and a deleted-window
+/// revival registry).
+#[doc(hidden)]
+pub fn builtin_split_window_internal(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("split-window-internal", &args, 4, 5)?;
+    // GNU checks OLD before PIXEL-SIZE (`src/window.c`):
+    //
+    //     struct window *o = decode_valid_window (old);
+    //     ...
+    //     CHECK_FIXNUM (pixel_size);
+    //
+    // so when both are wrong it names the window.  Validate OLD through the
+    // same resolver the split itself uses, then require the size.
+    //
+    // PIXEL-SIZE is `CHECK_FIXNUM`ed unconditionally: it is a required
+    // argument and `lisp/window.el`'s `split-window` computes a real
+    // `new-pixel-size` before calling in.  Exempting nil accepted a call GNU
+    // rejects, and let every in-tree caller omit a size without noticing.
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    validate_split_window_target(frames, buffers, &args[0])?;
+    let _ = expect_fixnum(&args[1])?;
+    // SIDE is deliberately NOT type-checked.  GNU never validates it: it
+    // reduces it to `horflag' and a before/after test, both plain `EQ'
+    // comparisons against a closed set of symbols (`src/window.c'), so a
+    // fixnum or a string SIDE is not an error -- it just means "below".
+    // A `symbolp' check here rejected calls GNU accepts.
+
+    // REFER is accepted for arity compatibility and ignored.  NORMAL-SIZE is
+    // NOT ignored: GNU stages it as the new window's `new_normal'
+    // (`src/window.c:5650') for `window_resize_apply' to commit, and
+    // `lisp/window.el' relies on that to give the new window its proportional
+    // share -- especially under `window-combination-resize', where every
+    // sibling's fraction is restaged too.
+    if let Some(refer) = args.get(4) {
+        let _ = refer;
+    }
+    // GNU `Fsplit_window_internal` reads the dynamic variable
+    // `window-combination-limit' to decide whether to interpose a new parent
+    // window (`src/window.c:5426').  Only the symbol `t' forces one; `lisp/window.el'
+    // binds it to t for, among others, a split whose target has a side-window
+    // sibling, which is what keeps a frame's main area in its own combination.
+    let combination_limit = crate::window::CombinationLimit::from_is_t(
+        neovm_eval::emacs_core::builtins::misc_eval::dynamic_or_global_symbol_value(
+            eval,
+            "window-combination-limit",
+        )
+        .is_some_and(|value| value.is_t()),
+    );
+    let sibling_resize = SiblingResize::from(
+        neovm_eval::emacs_core::builtins::misc_eval::dynamic_or_global_symbol_value(
+            eval,
+            "window-combination-resize",
+        )
+        .unwrap_or(Value::NIL),
+    );
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let result = split_window_internal_impl_in_state_with_normal(
+        frames,
+        buffers,
+        args[0],
+        args[1],
+        args[2],
+        args[3],
+        combination_limit,
+        sibling_resize,
+    )?;
+    if neovm_edit::emacs_core::redisplay_policy::gnu_redisplay_hooks_enabled()
+        && let Some(window) = result.as_window_id().map(crate::window::WindowId)
+        && let Some(frame) = eval.frame_manager().find_window_frame_id(window)
+    {
+        // No arbitrary Lisp occurs between the structural commit above and
+        // these publications. GNU has FRAME_WINDOW_CHANGE already set by
+        // window_resize_apply before set_window_buffer's eager scroll hook.
+        eval.gnu_mark_frame_redisplay(frame);
+        eval.gnu_mark_frame_window_change(frame);
+        eval.gnu_mark_window_mode_line(window);
+        super::xdisp::run_window_scroll_functions_for_window(eval, result)?;
+    }
+    // GNU does NOT run `window-configuration-change-hook' eagerly from
+    // `split-window-internal'.  It is deferred to `run_window_change_functions'
+    // during redisplay (window.c:4308-4312); neomacs mirrors this in
+    // `run_redisplay_window_change_hooks'.  Firing it here diverged from GNU in
+    // batch (no redisplay), where the hook must not run.
+    Ok(result)
+}
+
+/// GNU's `decode_live_window` (`src/window.c`): nil is the SELECTED window and
+/// everything else must be a LIVE window -- an internal window, a deleted
+/// window, a frame and a symbol are all rejected against `window-live-p`.
+///
+/// This exists as its own decoder rather than going through
+/// `validate_optional_window_designator_in_state`, whose `predicate` argument
+/// only chooses the error TEXT: its check is `find_window`, which matches any
+/// node of the window tree, so asking it for `window-live-p` still accepts an
+/// internal window and merely misreports the reason when it fails.
+pub(crate) fn decode_live_window_id(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    arg: Option<&Value>,
+) -> Result<WindowId, Flow> {
+    resolve_window_id_with_pred(eval, arg, WindowDomain::Live).map(|(_frame, window)| window)
+}
+
+fn decode_valid_window_id(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    arg: Option<&Value>,
+) -> Result<WindowId, Flow> {
+    resolve_window_id_with_pred(eval, arg, WindowDomain::Valid).map(|(_frame, window)| window)
+}
+
+// ---------------------------------------------------------------------------
+// The old-size slots (GNU `src/window.c`)
+//
+// These used to live in `builtins/stubs.rs` behind `expect_window_live_or_nil`
+// / `expect_window_valid_or_nil`, two helpers that differ from each other only
+// in the predicate they name -- both merely tag-test `is_window()`.  A helper
+// holding no `FrameManager` cannot tell a live window from an internal or a
+// deleted one, so all of them accepted every window object and returned a
+// value where GNU signals.  Taking `eval` is what makes the check possible;
+// the domain then picks both the lookup and the predicate.
+//
+// The values are still placeholders (`0` / nil) -- see the note on
+// `window-lines-pixel-dimensions` below.  What is fixed here is the DECODE.
+// ---------------------------------------------------------------------------
+
+/// `(coordinates-in-window-p COORDINATES WINDOW)` -- GNU `src/window.c`
+/// (`Fcoordinates_in_window_p` over `coordinates_in_window`).
+///
+/// COORDINATES are FRAME-relative: the docstring says "distances measured in
+/// characters from the upper-left corner of the frame".  The answer is
+/// window-relative for the text area, and a SYMBOL naming the part otherwise:
+///
+///     case ON_TEXT:
+///       x -= window_box_left (w, TEXT_AREA);
+///       y -= WINDOW_TOP_EDGE_Y (w);
+///       return Fcons (...);
+///     case ON_MODE_LINE:       return Qmode_line;
+///     case ON_VERTICAL_BORDER: return Qvertical_line;
+///     case ON_HEADER_LINE:     return Qheader_line;
+///     case ON_TAB_LINE:        return Qtab_line;
+///
+/// This used to test the input against the window's SIZE -- reading it as
+/// window-relative -- and return the input cons unchanged, so it answered for
+/// the wrong region in every window not at the frame origin, and never named a
+/// part at all.
+///
+/// The parts GNU distinguishes that are NOT modelled here are the ones with no
+/// char-cell existence: fringes, margins, scroll bars and dividers.  On a
+/// char-cell frame those have zero extent, so the classification below is
+/// complete for one; on a GUI frame it is not, and that is the remaining gap.
+#[doc(hidden)]
+pub fn builtin_coordinates_in_window_p(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("coordinates-in-window-p", &args, 2)?;
+    // GNU decodes WINDOW before it `CHECK_CONS`es COORDINATES.
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let live = decode_live_window_in_state(frames, buffers, args.get(1))?;
+
+    if !args[0].is_cons() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("consp"), args[0]],
+        ));
+    }
+    let number = |value: Value| -> Result<f64, Flow> {
+        match value.kind() {
+            ValueKind::Fixnum(n) => Ok(n as f64),
+            ValueKind::Float => Ok(value.xfloat()),
+            _ => Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("numberp"), value],
+            )),
+        }
+    };
+    let x = number(args[0].cons_car())?;
+    let y = number(args[0].cons_cdr())?;
+
+    // A live window is a valid one; widening is the allowed direction.
+    let window: ValidWindow = live.into();
+    // GNU works this out in PIXELS.  It converts COORDINATES from canonical
+    // character units with `FRAME_PIXEL_X_FROM_CANON_X` /
+    // `FRAME_PIXEL_Y_FROM_CANON_Y` and compares against `WINDOW_LEFT_EDGE_X` /
+    // `WINDOW_TOP_EDGE_Y`, which are the internal border plus the window's
+    // PIXEL edge (`src/window.h:758,797`) -- `pixel_top`, not `top_line`.
+    //
+    // The two are not the same origin: the frame's top margin sits above the
+    // pixel origin but is counted in character rows, so after a split the
+    // upper window has `top_line` 1 and `pixel_top` 0.  Measuring from
+    // `top_line`, as this did, shifted every answer down one row -- `(0 . 0)`
+    // reported nil and `(0 . 11)` reported text where GNU says `mode-line`.
+    //
+    // Pixels also settle the chrome comparisons below, which come from
+    // `chrome_height_pixels` and were being compared against a character-unit
+    // `y`: that agrees only while a character cell is one pixel tall, which is
+    // true on a terminal and false on a GUI frame.
+    let (char_width, char_height) = frames
+        .get(window.frame())
+        .map(|frame| {
+            (
+                frame.char_width.max(1.0) as f64,
+                frame.char_height.max(1.0) as f64,
+            )
+        })
+        .unwrap_or((1.0, 1.0));
+    let w = get_window(frames, window)?;
+    let bounds = *w.bounds();
+    let (left, top) = (bounds.x as f64, bounds.y as f64);
+    let (width, height) = (bounds.width as f64, bounds.height as f64);
+    let x = x * char_width;
+    let y = y * char_height;
+
+    // ON_NOTHING: outside the window's frame-relative box.
+    if x < left || x >= left + width || y < top || y >= top + height {
+        return Ok(Value::NIL);
+    }
+
+    let chrome = |line| {
+        body_geometry::chrome_height_pixels(frames, buffers, window.frame(), window.window(), line)
+    };
+    let mode_line = chrome(WindowChromeLine::ModeLine)? as f64;
+    let tab_line = chrome(WindowChromeLine::TabLine)? as f64;
+    let header_line = chrome(WindowChromeLine::HeaderLine)? as f64;
+
+    // GNU orders these mode-line, then tab-line, then header-line.
+    if mode_line > 0.0 && y >= top + height - mode_line {
+        return Ok(Value::symbol("mode-line"));
+    }
+    if tab_line > 0.0 && y < top + tab_line {
+        return Ok(Value::symbol("tab-line"));
+    }
+    if header_line > 0.0 && y < top + tab_line + header_line {
+        return Ok(Value::symbol("header-line"));
+    }
+    // ON_VERTICAL_BORDER: the last column of a window that is not rightmost.
+    if let Some(frame) = frames.get(window.frame())
+        && !window_is_rightmost(frame, window.window())
+        && x >= left + width - char_width
+    {
+        return Ok(Value::symbol("vertical-line"));
+    }
+
+    // ON_TEXT.  GNU returns canonical char units, which on a char-cell frame
+    // are whole characters whatever the input was -- `(5.5 . 3.0)` answers
+    // `(5 . 3)`.
+    Ok(Value::cons(
+        Value::fixnum(((x - left) / char_width) as i64),
+        Value::fixnum(((y - top) / char_height) as i64),
+    ))
+}
+
+/// `(window-old-body-pixel-width &optional WINDOW)`; GNU `decode_live_window`.
+#[doc(hidden)]
+pub fn builtin_window_old_body_pixel_width(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-old-body-pixel-width", &args, 1)?;
+    let _ = decode_live_window_id(eval, args.first())?;
+    Ok(Value::fixnum(0))
+}
+
+/// `(window-old-body-pixel-height &optional WINDOW)`; GNU `decode_live_window`.
+#[doc(hidden)]
+pub fn builtin_window_old_body_pixel_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-old-body-pixel-height", &args, 1)?;
+    let _ = decode_live_window_id(eval, args.first())?;
+    Ok(Value::fixnum(0))
+}
+
+/// `(window-old-pixel-width &optional WINDOW)`; GNU `decode_valid_window`, so
+/// an INTERNAL window is accepted here where the body-pixel pair rejects it.
+#[doc(hidden)]
+pub fn builtin_window_old_pixel_width(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-old-pixel-width", &args, 1)?;
+    let _ = decode_valid_window_id(eval, args.first())?;
+    Ok(Value::fixnum(0))
+}
+
+/// `(window-old-pixel-height &optional WINDOW)`; GNU `decode_valid_window`.
+#[doc(hidden)]
+pub fn builtin_window_old_pixel_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-old-pixel-height", &args, 1)?;
+    let _ = decode_valid_window_id(eval, args.first())?;
+    Ok(Value::fixnum(0))
+}
+
+/// `(window-lines-pixel-dimensions &optional WINDOW FIRST LAST BODY INVERSE LEFT)`
+/// -- GNU `Fwindow_lines_pixel_dimensions` (src/window.c:2159), over the rows
+/// of the window's last redisplay.
+///
+/// The value is a list of `(X . Y)` conses, one per row, in row order:
+///
+///   * `X` is the pixel x of the row's right edge -- GNU's `row->pixel_width`,
+///     which is `row->x` plus every glyph advance plus the one-cell space
+///     `append_space_for_newline` leaves at the end of a line for the cursor
+///     (src/xdisp.c:24142, summed by `compute_line_metrics`,
+///     src/xdisp.c:24071).  INVERSE reports the distance from that edge back
+///     to the window's right edge instead, which is what measuring the empty
+///     space beside the text wants.
+///   * `Y` is the row's BOTTOM edge, `row->y + row->height`, minus the tab-
+///     and header-line heights when BODY is non-nil.
+///   * LEFT switches from the whole row to its LEFTMOST glyph, for
+///     right-to-left buffers.
+///
+/// BODY also moves both boundaries: the first row becomes the window's first
+/// text row (past the tab and header lines), and `max_y` becomes the text
+/// area's bottom rather than the whole window's.
+///
+/// Rows are reported while `row->y + row->height < max_y`, in the matrix's own
+/// order.  A window with no current matrix -- batch, a pseudo window, or one
+/// whose redisplay has not run since the last change -- gives nil, GNU's "no
+/// information available".
+#[doc(hidden)]
+pub fn builtin_window_lines_pixel_dimensions(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("window-lines-pixel-dimensions", &args, 0, 6)?;
+    // GNU decodes WINDOW before it looks at any other argument, so a dead or
+    // internal window signals here whatever the rest of the call says.
+    let window_id = decode_live_window_id(eval, args.first())?;
+    let body = args.get(3).is_some_and(|value| value.is_truthy());
+    let inverse = args.get(4).is_some_and(|value| value.is_truthy());
+    let left = args.get(5).is_some_and(|value| value.is_truthy());
+
+    // GNU: `if (noninteractive || w->pseudo_window_p) return Qnil;`
+    if eval.noninteractive() {
+        return Ok(Value::NIL);
+    }
+    let Some((fid, buffer_id)) = eval
+        .frame_manager()
+        .find_window_frame_id(window_id)
+        .and_then(|fid| {
+            let buffer_id = eval
+                .frame_manager()
+                .get(fid)?
+                .find_window(window_id)?
+                .buffer_id()?;
+            Some((fid, buffer_id))
+        })
+    else {
+        return Ok(Value::NIL);
+    };
+
+    // GNU bails when `!w->window_end_valid || windows_or_buffers_changed ||
+    // b->clip_changed || b->prevent_redisplay_optimizations_p ||
+    // window_outdated (w)` -- redisplay has not run since the last change.
+    // `fresh_window_display_snapshot` is that same gate for retained rows, so
+    // a stale matrix answers nil rather than yesterday's geometry.
+    let Some(snapshot) = eval.fresh_window_display_snapshot(fid, window_id, buffer_id) else {
+        return Ok(Value::NIL);
+    };
+    let Some(frame) = eval.frame_manager().get(fid) else {
+        return Ok(Value::NIL);
+    };
+    let Some(window) = frame.find_window(window_id).cloned() else {
+        return Ok(Value::NIL);
+    };
+    let char_width = frame.char_width.max(1.0).round() as i64;
+    let window_pixel_width = window_width_pixels(&window);
+    let window_pixel_height = window_height_pixels(&window);
+    let body_width = window_body_width_pixels(&eval.frame_manager(), fid, &window);
+    // GNU's `window_width`: the whole window, or -- under BODY -- the body
+    // width in pixels that INVERSE measures back from.
+    let reference_width = if body { body_width } else { window_pixel_width };
+    // `window_text_bottom_y (w)`: the top of the mode line.
+    let text_bottom = window_pixel_height.saturating_sub(snapshot.mode_line_height.max(0));
+    let max_y = if body {
+        text_bottom
+    } else {
+        window_pixel_height
+    };
+    // GNU's `subtract`: what the returned y is expressed relative to.
+    let subtract = if body {
+        snapshot.top_chrome_height().max(0)
+    } else {
+        0
+    };
+
+    let mut rows: Vec<crate::window::DisplayRowSnapshot> = snapshot
+        .rows
+        .iter()
+        .filter(|row| row.height > 0 || row.end_x != row.start_x)
+        .cloned()
+        .collect();
+    rows.sort_by(|a, b| a.row.cmp(&b.row));
+
+    let top_chrome_rows = snapshot.top_chrome_rows().max(0);
+    let default_first = if body {
+        rows.iter()
+            .position(|row| row.row >= top_chrome_rows)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let default_last = rows.len().saturating_sub(1);
+    // GNU's `check_integer_range (first, 0, matrix->nrows)` admits the
+    // one-past-the-end index its default LAST uses.
+    let index_range = 0..=rows.len() as i64;
+    let start = match args.get(1) {
+        Some(value) if !value.is_nil() => check_row_index(value, index_range.clone())?,
+        _ => default_first,
+    };
+    let end = match args.get(2) {
+        Some(value) if !value.is_nil() => check_row_index(value, index_range)?,
+        _ => default_last,
+    };
+
+    let mut out = Vec::new();
+    for row in rows
+        .iter()
+        .skip(start)
+        .take(end.saturating_sub(start).saturating_add(1))
+    {
+        // GNU: `while (row <= end_row && row->enabled_p && row->y +
+        // row->height < max_y)`.
+        if row.y.saturating_add(row.height) >= max_y {
+            break;
+        }
+        let width = row_pixel_width(row, char_width, body_width);
+        let leftmost = if left {
+            leftmost_glyph_width(snapshot, row, char_width)
+        } else {
+            width
+        };
+        let x = match (left, inverse) {
+            (false, false) => width,
+            (false, true) => reference_width.saturating_sub(width),
+            (true, false) => reference_width.saturating_sub(leftmost),
+            (true, true) => leftmost,
+        };
+        out.push(Value::cons(
+            Value::fixnum(x),
+            Value::fixnum(row.y.saturating_add(row.height).saturating_sub(subtract)),
+        ));
+    }
+    Ok(Value::list(out))
+}
+
+/// GNU's `row->pixel_width`, reconstructed from the row Neomacs rendered.
+///
+/// A [`crate::window::DisplayRowSnapshot`] publishes the pen at each end of the
+/// row (`start_x` / `end_x`), so `end_x - start_x` is the width of the glyphs it
+/// drew -- GNU's `row->x + sum (glyphs[i].pixel_width)` without the end-of-line
+/// space.  GNU's display engine adds that space unconditionally
+/// (`append_space_for_newline`, src/xdisp.c:24142, summed by
+/// `compute_line_metrics`, src/xdisp.c:24071), which is why a row of two
+/// characters measures 27 and not 18 in a 9-pixel cell.
+///
+/// The cell is added here only when the row has one to give: it must have
+/// stopped short of the body's right edge (a row that reaches the edge was
+/// continued or truncated, and a truncated row produces no glyph at all) and
+/// must not carry a truncated tail.  Neomacs really draws that cell -- the
+/// `cursor_col` of a row whose point is at end of line is the column past its
+/// last glyph -- so this reports a cell Neomacs has, not one only GNU has.
+fn row_pixel_width(
+    row: &crate::window::DisplayRowSnapshot,
+    char_width: i64,
+    body_width: i64,
+) -> i64 {
+    let used = row.end_x.saturating_sub(row.start_x).max(0);
+    if used >= body_width || row.truncated_end_buffer_pos.is_some() {
+        return used;
+    }
+    used.saturating_add(char_width)
+}
+
+/// Width of the row's LEFTMOST glyph, for LEFT.
+///
+/// GNU reads `row->glyphs[TEXT_AREA][0].pixel_width` -- one glyph, not the
+/// row.  A Neomacs row publishes each visible span as a
+/// [`crate::window::DisplayPointSnapshot`], so the leftmost span's own width is
+/// that glyph's advance.  A row with no published span (an empty line) falls
+/// back to one character cell, which is the space GNU's engine appends there.
+fn leftmost_glyph_width(
+    snapshot: &crate::window::WindowDisplaySnapshot,
+    row: &crate::window::DisplayRowSnapshot,
+    char_width: i64,
+) -> i64 {
+    snapshot
+        .iter_row_points(row.row)
+        .filter(|point| point.width > 0)
+        .min_by_key(|point| point.x)
+        .map(|point| point.width)
+        .unwrap_or(char_width)
+}
+
+fn check_row_index(value: &Value, range: std::ops::RangeInclusive<i64>) -> Result<usize, Flow> {
+    let Some(index) = value.as_int() else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), *value],
+        ));
+    };
+    if !range.contains(&index) {
+        // GNU's `check_integer_range`.
+        return Err(signal(
+            LispCondition::ArgsOutOfRange,
+            vec![
+                Value::fixnum(index),
+                Value::fixnum(*range.start()),
+                Value::fixnum(*range.end()),
+            ],
+        ));
+    }
+    Ok(index as usize)
+}
+
+/// `(window-new-pixel &optional WINDOW)` -> WINDOW's pending pixel size.
+#[doc(hidden)]
+pub fn builtin_window_new_pixel(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-new-pixel", &args, 1)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    Ok(Value::fixnum(
+        eval.frame_manager().window_new_pixel(window).unwrap_or(0),
+    ))
+}
+
+/// `(window-new-total &optional WINDOW)` -> WINDOW's pending total size.
+#[doc(hidden)]
+pub fn builtin_window_new_total(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-new-total", &args, 1)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    Ok(Value::fixnum(
+        eval.frame_manager().window_new_total(window).unwrap_or(0),
+    ))
+}
+
+/// `(window-new-normal &optional WINDOW)` -> WINDOW's pending normal size.
+#[doc(hidden)]
+pub fn builtin_window_new_normal(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-new-normal", &args, 1)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    Ok(eval.frame_manager().window_new_normal(window))
+}
+
+/// `(set-window-new-pixel WINDOW SIZE &optional ADD)` -> the stored size.
+///
+/// GNU decodes WINDOW before it range-checks SIZE, and returns the slot rather
+/// than the argument, so an ADD sum is what comes back.
+#[doc(hidden)]
+pub fn builtin_set_window_new_pixel(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("set-window-new-pixel", &args, 2)?;
+    expect_max_args("set-window-new-pixel", &args, 3)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    let add = args.get(2).is_some_and(|value| value.is_truthy());
+    let operation = if add {
+        crate::window::WindowPixelOperation::Add(
+            neovm_value::tagged::value::Fixnum::try_from(
+                eval.frame_manager().window_new_pixel(window).unwrap_or(0),
+            )
+            .map_err(|error| match error {
+                neovm_value::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                    signal(LispCondition::OverflowError, vec![])
+                }
+            })?,
+        )
+    } else {
+        crate::window::WindowPixelOperation::Set
+    };
+    let (size_min, size_max) = operation.bounds();
+    if !args[1].is_integer() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), args[1]],
+        ));
+    }
+    let integer = args[1].as_fixnum().or_else(|| {
+        args[1]
+            .as_bignum()
+            .and_then(|integer| i64::try_from(integer).ok())
+    });
+    let out_of_range = || {
+        signal(
+            LispCondition::ArgsOutOfRange,
+            vec![
+                args[1],
+                Value::make_int(size_min),
+                Value::make_int(size_max),
+            ],
+        )
+    };
+    let integer = integer.ok_or_else(out_of_range)?;
+    let size = crate::window::WindowPixelStage::try_from((integer, operation)).map_err(
+        |error| match error {
+            crate::window::WindowSizeError::OutOfRange => out_of_range(),
+        },
+    )?;
+    Ok(Value::from_fixnum(
+        eval.frame_manager_mut()
+            .set_window_new_pixel(window, size)
+            .into(),
+    ))
+}
+
+/// `(set-window-new-total WINDOW SIZE &optional ADD)` -> the stored size.
+#[doc(hidden)]
+pub fn builtin_set_window_new_total(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("set-window-new-total", &args, 2)?;
+    expect_max_args("set-window-new-total", &args, 3)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    let size =
+        crate::window::WindowTotal::try_from(expect_fixnum(&args[1])?).map_err(
+            |error| match error {
+                neovm_value::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                    signal(LispCondition::OverflowError, vec![])
+                }
+            },
+        )?;
+    let update = if args.get(2).is_some_and(|value| value.is_truthy()) {
+        crate::window::NewTotalUpdate::Add
+    } else {
+        crate::window::NewTotalUpdate::Replace
+    };
+    let stored = eval
+        .frame_manager_mut()
+        .set_window_new_total(window, size, update)
+        .map_err(|error| match error {
+            neovm_value::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                signal(LispCondition::OverflowError, vec![])
+            }
+        })?;
+    Ok(Value::from_fixnum(stored.into()))
+}
+
+/// `(set-window-new-normal WINDOW &optional SIZE)` -> SIZE.
+///
+/// GNU returns the argument here, not the slot.
+#[doc(hidden)]
+pub fn builtin_set_window_new_normal(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("set-window-new-normal", &args, 1)?;
+    expect_max_args("set-window-new-normal", &args, 2)?;
+    let window = decode_valid_window_id(eval, args.first())?;
+    let size = args.get(1).copied().unwrap_or(Value::NIL);
+    eval.frame_manager_mut().set_window_new_normal(window, size);
+    Ok(size)
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Extract an integer from a Value.
+pub(crate) fn expect_int(value: &Value) -> Result<i64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(n) => Ok(n),
+        _other => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), *value],
+        )),
+    }
+}
+
+/// Extract a numeric value from a Value.
+fn expect_number(value: &Value) -> Result<f64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(n) => Ok(n as f64),
+        ValueKind::Float => Ok(value.xfloat()),
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("numberp"), *value],
+        )),
+    }
+}
+
+fn expect_buffer_name_string(value: &Value) -> Result<String, Flow> {
+    value
+        .as_lisp_string()
+        .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes()))
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), *value],
+            )
+        })
+}
+
+/// Decode the optional Lisp unit argument accepted by `window-body-*`.
+///
+/// This deliberately mirrors GNU `window_body_unit_from_symbol`: `nil` means
+/// canonical frame cells, the exact symbol `remap` means buffer-remapped
+/// default-face cells, and every other non-nil value means pixels.
+fn window_body_unit_from_lisp(value: Option<&Value>) -> WindowBodyUnit {
+    match value {
+        None => WindowBodyUnit::CanonicalChars,
+        Some(value) if value.is_nil() => WindowBodyUnit::CanonicalChars,
+        Some(value) if value.is_bare_symbol_named("remap") => WindowBodyUnit::RemappedChars,
+        Some(_) => WindowBodyUnit::Pixels,
+    }
+}
+
+fn find_buffer_by_name_arg(
+    buffers: &BufferManager,
+    value: &Value,
+) -> Result<Option<BufferId>, Flow> {
+    let name = expect_buffer_name_string(value)?;
+    Ok(buffers.find_buffer_by_name(&name))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, EnumString)]
+#[strum(serialize_all = "kebab-case")]
+enum AllFramesSymbol {
+    Visible,
+}
+
+impl AllFramesSymbol {
+    fn from_lisp_value(value: Value) -> Option<Self> {
+        value.as_bare_symbol_name()?.parse().ok()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AllFramesScope {
+    BaseFrame,
+    AllFrames,
+    VisibleFrames,
+    VisibleOrIconifiedFrames,
+    SpecificFrame(FrameId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) enum SplitWindowSide {
+    Above,
+    Below,
+    Left,
+    Right,
+}
+
+impl SplitWindowSide {
+    /// GNU's SIDE decode (`Fsplit_window_internal', `src/window.c') is TOTAL:
+    /// it never validates the argument, it just reduces it to two booleans
+    /// over a closed set of symbols --
+    ///
+    ///     bool horflag = EQ (side, Qt) || EQ (side, Qleft) || EQ (side, Qright);
+    ///     ...
+    ///     if (EQ (side, Qabove) || EQ (side, Qleft))   /* insert before OLD */
+    ///
+    /// -- so every Lisp value names a side, and anything the grammar does not
+    /// recognise (a fixnum, a string, `below', an unrelated symbol) is
+    /// horizontal=false, before=false, i.e. `below'.  These four variants are
+    /// exactly the product of GNU's two bools, which is why this can return
+    /// `Self' rather than `Option<Self>': an `Option' here would invent a
+    /// failure mode GNU does not have, and that invented `None' is precisely
+    /// what a spurious `symbolp' type-check on SIDE was once built on.
+    pub(crate) fn from_side_argument(value: &Value) -> Self {
+        if value.is_t() {
+            return Self::Right;
+        }
+        value
+            .as_bare_symbol_name()
+            .and_then(|name| name.parse().ok())
+            .unwrap_or(Self::Below)
+    }
+
+    pub(crate) fn is_horizontal(self) -> bool {
+        matches!(self, Self::Left | Self::Right)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn name(self) -> &'static str {
+        self.into()
+    }
+}
+
+fn decode_all_frames_scope(
+    frames: &FrameManager,
+    value: Option<Value>,
+) -> Result<AllFramesScope, Flow> {
+    let Some(value) = value else {
+        return Ok(AllFramesScope::BaseFrame);
+    };
+    if value.is_nil() {
+        return Ok(AllFramesScope::BaseFrame);
+    }
+    if value == Value::T {
+        return Ok(AllFramesScope::AllFrames);
+    }
+    if AllFramesSymbol::from_lisp_value(value) == Some(AllFramesSymbol::Visible) {
+        return Ok(AllFramesScope::VisibleFrames);
+    }
+    if value.as_fixnum() == Some(0) {
+        return Ok(AllFramesScope::VisibleOrIconifiedFrames);
+    }
+    if let Some(raw_id) = value.as_frame_id() {
+        let frame_id = FrameId(raw_id);
+        if frames.get(frame_id).is_none() {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("frame-live-p"), value],
+            ));
+        }
+        return Ok(AllFramesScope::SpecificFrame(frame_id));
+    }
+    Ok(AllFramesScope::BaseFrame)
+}
+
+fn frame_ids_for_all_frames_scope(
+    frames: &FrameManager,
+    base_fid: FrameId,
+    scope: AllFramesScope,
+) -> Vec<FrameId> {
+    let mut ids = match scope {
+        AllFramesScope::BaseFrame => vec![base_fid],
+        AllFramesScope::AllFrames => frames.frame_list(),
+        AllFramesScope::VisibleFrames => frames
+            .frame_list()
+            .into_iter()
+            .filter(|frame_id| {
+                frames
+                    .get(*frame_id)
+                    .is_some_and(|frame| frame.visibility.is_visible())
+            })
+            .collect(),
+        AllFramesScope::VisibleOrIconifiedFrames => frames
+            .frame_list()
+            .into_iter()
+            .filter(|frame_id| {
+                frames
+                    .get(*frame_id)
+                    .is_some_and(|frame| frame.visibility.is_visible_or_iconified())
+            })
+            .collect(),
+        AllFramesScope::SpecificFrame(frame_id) => vec![frame_id],
+    };
+    ids.sort_by_key(|frame_id| frame_id.0);
+    if let Some(start_pos) = ids.iter().position(|frame_id| *frame_id == base_fid) {
+        ids.rotate_left(start_pos);
+    }
+    ids
+}
+
+#[derive(Clone, Debug)]
+enum IntegerOrMarkerArg {
+    Int(i64),
+    Marker { raw: Value, position: Option<i64> },
+}
+
+fn parse_integer_or_marker_arg(value: &Value) -> Result<IntegerOrMarkerArg, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(n) => Ok(IntegerOrMarkerArg::Int(n)),
+        _ if value.is_marker() => {
+            let position = neovm_edit::emacs_core::marker::marker_logical_fields(value)
+                .and_then(|(_, position, _)| position.map(|pos| pos.as_i64()));
+            Ok(IntegerOrMarkerArg::Marker {
+                raw: *value,
+                position,
+            })
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integer-or-marker-p"), *value],
+        )),
+    }
+}
+
+fn clamped_window_position_in_state(
+    frames: &FrameManager,
+    buffers: &BufferManager,
+    fid: FrameId,
+    wid: WindowId,
+    pos: i64,
+) -> Option<LispCharPos1> {
+    if pos <= 0 {
+        return None;
+    }
+    let requested = pos as usize;
+    let Some(Window::Leaf { buffer_id, .. }) =
+        frames.get(fid).and_then(|frame| frame.find_window(wid))
+    else {
+        return Some(LispCharPos1::from_one_based_usize(requested));
+    };
+    let buffer_end = buffers
+        .get(*buffer_id)
+        .map(|buf| buf.total_char_len().get().saturating_add(1))
+        .unwrap_or(requested);
+    Some(LispCharPos1::from_one_based_usize(
+        requested.min(buffer_end.max(1)),
+    ))
+}
+
+/// Extract a number-or-marker argument as f64.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn expect_number_or_marker(value: &Value) -> Result<f64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(n) => Ok(n as f64),
+        ValueKind::Float => Ok(value.xfloat()),
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("number-or-marker-p"), *value],
+        )),
+    }
+}
+
+/// Parse a window margin argument (`nil` or non-negative integer).
+fn expect_margin_width(value: &Value) -> Result<usize, Flow> {
+    const MAX_MARGIN: i64 = 2_147_483_647;
+    match value.kind() {
+        ValueKind::Nil => Ok(0),
+        ValueKind::Fixnum(n) => {
+            if !(0..=MAX_MARGIN).contains(&n) {
+                return Err(signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![
+                        Value::fixnum(n),
+                        Value::fixnum(0),
+                        Value::fixnum(MAX_MARGIN),
+                    ],
+                ));
+            }
+            Ok(n as usize)
+        }
+        _other => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), *value],
+        )),
+    }
+}
+
+fn buffer_margin_width(
+    buffers: &BufferManager,
+    buffer_id: BufferId,
+    name: &str,
+) -> Result<usize, Flow> {
+    let value = buffers
+        .get(buffer_id)
+        .and_then(|buffer| buffer.buffer_local_value(name))
+        .unwrap_or(Value::NIL);
+    expect_margin_width(&value)
+}
+
+fn buffer_local_value(buffers: &BufferManager, buffer_id: BufferId, name: &str) -> Value {
+    buffers
+        .get(buffer_id)
+        .and_then(|buffer| buffer.buffer_local_value(name))
+        .unwrap_or(Value::NIL)
+}
+
+fn buffer_local_optional_dimension(
+    buffers: &BufferManager,
+    buffer_id: BufferId,
+    name: &str,
+) -> Result<Option<i32>, Flow> {
+    let value = buffer_local_value(buffers, buffer_id, name);
+    if value.is_nil() {
+        Ok(None)
+    } else {
+        Ok(Some(i32::try_from(expect_int(&value)?).map_err(|_| {
+            signal(
+                LispCondition::ArgsOutOfRange,
+                vec![value, Value::fixnum(0), Value::fixnum(i64::from(i32::MAX))],
+            )
+        })?))
+    }
+}
+
+fn valid_vertical_scroll_bar_type(value: Value) -> bool {
+    is_valid_vertical_scroll_bar_value(value)
+}
+
+fn valid_horizontal_scroll_bar_type(value: Value) -> bool {
+    is_valid_horizontal_scroll_bar_value(value)
+}
+
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+fn window_value(wid: WindowId) -> Value {
+    Value::make_window(wid.0)
+}
+
+/// GNU's two frame-argument domains, as a closed set.
+///
+/// The frame decoders differ only in whether a dead frame is admitted, and --
+/// like the window ones -- each fixes the predicate its rejection reports.
+#[doc(hidden)]
+pub use neovm_value::display_vocab::FrameDomain;
+
+pub(crate) use neovm_eval::emacs_core::eval::data::window_state::WindowDomain;
+
+/// Frame lookup stays with the window tree; the domain itself is plain data.
+pub(crate) trait WindowDomainFrameOf {
+    fn frame_of(self, frames: &FrameManager, window: WindowId) -> Option<FrameId>;
+}
+
+impl WindowDomainFrameOf for WindowDomain {
+    fn frame_of(self, frames: &FrameManager, window: WindowId) -> Option<FrameId> {
+        match self {
+            Self::Live => frames.find_window_frame_id(window),
+            Self::Valid => frames.find_valid_window_frame_id(window),
+            Self::Any => frames.any_window_frame_id(window),
+        }
+    }
+}
+
+fn resolve_window_frame_id_for_pred(
+    frames: &FrameManager,
+    wid: WindowId,
+    pred: WindowDomain,
+) -> Option<FrameId> {
+    pred.frame_of(frames, wid)
+}
+
+/// GNU has no integer windows.  A window is a `Lisp_Window` pseudovector and
+/// `WINDOWP` is a tag test (`src/window.h`), so no fixnum can ever name one.
+/// Accepting `Fixnum(n) => WindowId(n)` here made every predicate and decoder
+/// built on this function accept a raw integer -- and since ids start at 1,
+/// small integers named REAL windows: `(windowp 1)` was `t` and
+/// `(window-buffer 1)` handed back a live buffer.
+pub(crate) fn window_id_from_designator(value: &Value) -> Option<WindowId> {
+    match value.kind() {
+        ValueKind::Veclike(VecLikeType::Window) => Some(WindowId(value.as_window_id().unwrap())),
+        _ => None,
+    }
+}
+
+/// Resolve an optional window designator.
+///
+/// - nil/omitted => selected window of selected frame
+/// - non-nil invalid designator => `(wrong-type-argument PRED VALUE)`
+fn resolve_window_id_with_pred(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    arg: Option<&Value>,
+    pred: WindowDomain,
+) -> Result<(FrameId, WindowId), Flow> {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    resolve_window_id_with_pred_in_state(frames, buffers, arg, pred)
+}
+
+fn resolve_window_id_with_pred_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: Option<&Value>,
+    pred: WindowDomain,
+) -> Result<(FrameId, WindowId), Flow> {
+    if arg.is_none_or(|v| v.is_nil()) {
+        let frame_id = ensure_selected_frame_id_in_state(frames, buffers);
+        let frame = frames
+            .get(frame_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?;
+        return Ok((frame_id, frame.selected_window));
+    }
+    let val = arg.unwrap(); // None case handled above
+    let Some(wid) = window_id_from_designator(val) else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol(pred.predicate()), *val],
+        ));
+    };
+    if let Some(frame_id) = resolve_window_frame_id_for_pred(frames, wid, pred) {
+        Ok((frame_id, wid))
+    } else {
+        Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol(pred.predicate()), *val],
+        ))
+    }
+}
+
+fn resolve_window_id_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: Option<&Value>,
+) -> Result<(FrameId, WindowId), Flow> {
+    resolve_window_id_with_pred_in_state(frames, buffers, arg, WindowDomain::Live)
+}
+
+fn window_is_rightmost(frame: &crate::window::Frame, window_id: WindowId) -> bool {
+    frame
+        .find_window(window_id)
+        .is_none_or(|window| window.bounds().x + window.bounds().width >= frame.width as f32 - 1.0)
+}
+
+fn window_is_bottommost(frame: &crate::window::Frame, window_id: WindowId) -> bool {
+    frame.find_window(window_id).is_none_or(|window| {
+        window.bounds().y + window.bounds().height >= frame.height as f32 - 1.0
+    })
+}
+
+fn resolve_window_object_id_with_pred_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: Option<&Value>,
+    pred: WindowDomain,
+) -> Result<WindowId, Flow> {
+    if arg.is_none_or(|v| v.is_nil()) {
+        let (_fid, wid) = resolve_window_id_with_pred_in_state(frames, buffers, None, pred)?;
+        return Ok(wid);
+    }
+    let val = arg.unwrap();
+    let Some(wid) = window_id_from_designator(val) else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol(pred.predicate()), *val],
+        ));
+    };
+    if frames.is_window_object_id(wid) {
+        Ok(wid)
+    } else {
+        Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol(pred.predicate()), *val],
+        ))
+    }
+}
+
+/// Resolve a frame designator, signaling predicate-shaped type errors.
+///
+/// When ARG is nil/omitted, GNU Emacs resolves against the selected frame.
+/// In batch compatibility mode we bootstrap that frame on demand.
+pub(crate) fn resolve_frame_id(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    arg: Option<&Value>,
+    predicate: FrameDomain,
+) -> Result<FrameId, Flow> {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    resolve_frame_id_in_state(frames, buffers, arg, predicate)
+}
+
+#[doc(hidden)]
+pub fn resolve_frame_id_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: Option<&Value>,
+    predicate: FrameDomain,
+) -> Result<FrameId, Flow> {
+    if arg.is_none_or(|v| v.is_nil()) {
+        return Ok(ensure_selected_frame_id_in_state(frames, buffers));
+    }
+    let val = arg.unwrap();
+    // No `Fixnum` arm: GNU has no integer frames any more than integer
+    // windows -- `framep` is a tag test on a `Lisp_Frame` pseudovector.
+    match val.kind() {
+        ValueKind::Veclike(VecLikeType::Frame) => {
+            let raw_id = val.as_frame_id().unwrap();
+            let fid = FrameId(raw_id);
+            if frames.get(fid).is_some() {
+                Ok(fid)
+            } else {
+                Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![
+                        Value::symbol(predicate.predicate()),
+                        Value::make_frame(raw_id),
+                    ],
+                ))
+            }
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol(predicate.predicate()), *val],
+        )),
+    }
+}
+
+fn resolve_frame_or_window_frame_id_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: Option<&Value>,
+    predicate: FrameDomain,
+) -> Result<FrameId, Flow> {
+    if arg.is_none_or(|v| v.is_nil()) {
+        return Ok(ensure_selected_frame_id_in_state(frames, buffers));
+    }
+    let val = arg.unwrap();
+    match val.kind() {
+        ValueKind::Veclike(VecLikeType::Frame) => {
+            let raw_id = val.as_frame_id().unwrap();
+            let fid = FrameId(raw_id);
+            if frames.get(fid).is_some() {
+                Ok(fid)
+            } else {
+                Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![
+                        Value::symbol(predicate.predicate()),
+                        Value::make_frame(raw_id),
+                    ],
+                ))
+            }
+        }
+        ValueKind::Veclike(VecLikeType::Window) => {
+            let raw_id = val.as_window_id().unwrap();
+            let wid = WindowId(raw_id);
+            if let Some(fid) = frames.find_valid_window_frame_id(wid) {
+                return Ok(fid);
+            }
+            Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![
+                    Value::symbol(predicate.predicate()),
+                    Value::make_window(raw_id),
+                ],
+            ))
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol(predicate.predicate()), *val],
+        )),
+    }
+}
+
+/// Helper: get a reference to a leaf window by id.
+fn get_leaf(frames: &FrameManager, fid: FrameId, wid: WindowId) -> Result<&Window, Flow> {
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    frame
+        .find_window(wid)
+        .ok_or_else(|| signal("error", vec![Value::string("Window not found")]))
+}
+
+// ---------------------------------------------------------------------------
+// Proof-carrying window tokens
+//
+// GNU's three window decoders are not interchangeable, and which one a subr
+// calls is a contract fixed by its C (`src/window.c`).  Every bug in this
+// family so far has been a subr performing a different check from the one it
+// names -- a predicate string that drifted from the lookup beside it, or a
+// second helper answering the same question differently (which became a
+// Lisp-reachable panic in `internal-merge-in-global-face`).
+//
+// These types make the decode's OUTPUT carry the proof.  The fields are
+// private and no constructor is exported, so the only way to hold one is to
+// have actually decoded -- an accessor that demands a token therefore cannot be
+// reached with an id that skipped the check.  Widening is allowed, because
+// GNU's domains nest (live windows are valid, valid windows are windows);
+// narrowing is not, because that is the direction that loses a guarantee.
+//
+//     LiveWindow  ⊂  ValidWindow  ⊂  AnyWindow
+//     window-live-p  window-valid-p  windowp
+// ---------------------------------------------------------------------------
+
+/// A window that passed GNU's `decode_live_window` (`CHECK_LIVE_WINDOW`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LiveWindow {
+    frame: FrameId,
+    window: WindowId,
+}
+
+/// A window that passed GNU's `decode_valid_window` (`CHECK_VALID_WINDOW`);
+/// an INTERNAL window qualifies, a deleted one does not.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ValidWindow {
+    frame: FrameId,
+    window: WindowId,
+}
+
+/// A window that passed GNU's `decode_any_window` (`CHECK_WINDOW`); a DELETED
+/// window qualifies, so this carries no frame -- a deleted window has none.
+#[allow(dead_code)] // parity surface: GNU's third decoder domain (lattice above); no subr decodes into it yet
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AnyWindow {
+    window: WindowId,
+}
+
+impl ValidWindow {
+    pub(crate) fn frame(self) -> FrameId {
+        self.frame
+    }
+    pub(crate) fn window(self) -> WindowId {
+        self.window
+    }
+}
+
+impl AnyWindow {
+    #[allow(dead_code)] // parity surface: accessor of the `AnyWindow` token, see above
+    pub(crate) fn window(self) -> WindowId {
+        self.window
+    }
+}
+
+impl From<LiveWindow> for ValidWindow {
+    /// Every live window is a valid one -- GNU's `WINDOW_LIVE_P` is
+    /// `WINDOWP (w) && BUFFERP (w->contents)`, `WINDOW_VALID_P` the weaker
+    /// `WINDOWP (w) && !NILP (w->contents)`.
+    fn from(w: LiveWindow) -> Self {
+        Self {
+            frame: w.frame,
+            window: w.window,
+        }
+    }
+}
+
+impl From<ValidWindow> for AnyWindow {
+    fn from(w: ValidWindow) -> Self {
+        Self { window: w.window }
+    }
+}
+
+impl From<LiveWindow> for AnyWindow {
+    fn from(w: LiveWindow) -> Self {
+        Self { window: w.window }
+    }
+}
+
+/// GNU `decode_live_window`: nil is the selected window, everything else must
+/// be live.
+pub(crate) fn decode_live_window_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: Option<&Value>,
+) -> Result<LiveWindow, Flow> {
+    let (frame, window) =
+        resolve_window_id_with_pred_in_state(frames, buffers, arg, WindowDomain::Live)?;
+    Ok(LiveWindow { frame, window })
+}
+
+/// GNU's bare `CHECK_VALID_WINDOW (window)` -- no nil defaulting, for the subrs
+/// whose C spells the check that way (`window-combination-limit` and its
+/// setter).
+pub(crate) fn check_valid_window_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: &Value,
+) -> Result<ValidWindow, Flow> {
+    let (frame, window) = check_window_id_in_state(frames, buffers, arg, WindowDomain::Valid)?;
+    Ok(ValidWindow { frame, window })
+}
+
+/// GNU `decode_valid_window`: nil is the selected window, an INTERNAL window is
+/// accepted, a deleted one is not.
+pub(crate) fn decode_valid_window_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: Option<&Value>,
+) -> Result<ValidWindow, Flow> {
+    let (frame, window) =
+        resolve_window_id_with_pred_in_state(frames, buffers, arg, WindowDomain::Valid)?;
+    Ok(ValidWindow { frame, window })
+}
+
+/// Read a window (leaf or internal, including the root window) out of the
+/// tree.
+///
+/// Takes a [`ValidWindow`] rather than a bare id: reaching a window at all
+/// means it passed `decode_valid_window` or stronger, which is exactly GNU's
+/// precondition for touching `w->contents`.  Before this the signature was
+/// `(frames, FrameId, WindowId)` and any pair of integers would do -- which is
+/// how `resize-mini-window-internal` came to accept an internal window by
+/// calling `as_window_id()` and skipping the decoders entirely.
+fn get_window(frames: &FrameManager, w: ValidWindow) -> Result<&Window, Flow> {
+    let frame = frames
+        .get(w.frame())
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    // find_window checks root_window tree + minibuffer_leaf
+    frame
+        .find_window(w.window())
+        .ok_or_else(|| signal("error", vec![Value::string("Window not found")]))
+}
+
+/// Ensure a selected frame exists and return its id.
+///
+/// In batch compatibility mode, GNU Emacs still has an initial frame (`F1`).
+/// When the evaluator has no frame yet, synthesize one on demand.
+#[doc(hidden)]
+pub fn ensure_selected_frame_id(eval: &mut neovm_eval::emacs_core::eval::Context) -> FrameId {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    ensure_selected_frame_id_in_state(frames, buffers)
+}
+
+#[doc(hidden)]
+pub fn ensure_selected_frame_id_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+) -> FrameId {
+    ensure_selected_frame_id_in_state_with_policy(frames, buffers, true)
+}
+
+#[doc(hidden)]
+pub fn seed_batch_startup_frame_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+) -> FrameId {
+    ensure_selected_frame_id_in_state_with_policy(frames, buffers, false)
+}
+
+fn ensure_selected_frame_id_in_state_with_policy(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    warn_on_create: bool,
+) -> FrameId {
+    if let Some(fid) = frames.selected_frame().map(|f| f.id) {
+        return fid;
+    }
+
+    if warn_on_create {
+        tracing::warn!(
+            "ensure_selected_frame_id_in_state: no selected frame present; synthesizing fallback batch-style frame"
+        );
+    }
+
+    let buf_id = buffers
+        .current_buffer()
+        .map(|b| b.id())
+        .unwrap_or_else(|| buffers.create_buffer("*scratch*"));
+    // GNU batch startup exposes an 80x24 text window plus a 1-line minibuffer.
+    // Keep the synthetic startup frame in character-cell units so the GNU
+    // `window.el` geometry helpers behave the same way in batch mode.
+    //
+    // The frame pixel-height must include the minibuffer (24 text + 1 mini = 25)
+    // so that `recalculate_minibuffer_bounds()` correctly computes
+    // max_root_h = 25 - 1 = 24 instead of clamping the root to 23.
+    let fid = frames.create_frame("F1", 80, 25, buf_id);
+    let minibuffer_buf_id = buffers
+        .find_buffer_by_name(" *Minibuf-0*")
+        .unwrap_or_else(|| buffers.create_buffer(" *Minibuf-0*"));
+    if let Some(frame) = frames.get_mut(fid) {
+        frame.initial = true;
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+        frame.font_pixel_size = 1.0;
+        frame.set_window_system(None);
+        frame.set_parameter(Value::symbol("width"), Value::fixnum(80));
+        frame.set_parameter(Value::symbol("height"), Value::fixnum(25));
+        // NO `display-type' and NO `background-mode' here.  This is GNU's
+        // `make_initial_frame' (src/frame.c:1423), called from
+        // `init_window_once' (src/window.c:9148) BEFORE loadup
+        // (src/emacs.c:2006), and it sets neither.  Both are DERIVED, by
+        // `frame-set-background-mode' (lisp/frame.el:1526), which C reaches
+        // only through `init_faces_initial' (src/dispnew.c:7178) ->
+        // `tty-set-up-initial-frame-faces' (lisp/faces.el:2409) from
+        // `init_display' (src/dispnew.c:7413-7422) -- after the pdump is
+        // loaded, never during loadup.  Measured on GNU 31.0.90, `src/temacs
+        // --batch -l loadup': `background-mode=nil display-type=nil'.
+        // Seeding them here made `show-paren-match's `((background dark)
+        // (min-colors 4))' clause (lisp/faces.el:3161) match its first
+        // conjunct during `(load "faces")' and call `display-color-cells',
+        // which is `lisp/frame.el:2966' and still void ninety-five files
+        // later in GNU.  DIVERGENCES.md 157.
+        // The root window covers the 24-line text area (not the minibuffer).
+        frame
+            .root_window_mut()
+            .set_bounds(Rect::new(0.0, 0.0, 80.0, 24.0));
+        if let Some(Window::Leaf {
+            window_start,
+            point,
+            ..
+        }) = frame.find_window_mut(frame.selected_window)
+        {
+            *window_start = LispCharPos1::ONE;
+            *point = LispCharPos1::ONE;
+        }
+        {
+            let sel = frame.selected_window;
+            if let Some(w) = frame.find_window_mut(sel) {
+                crate::window::window_markers::attach_window_position_markers(buffers, w);
+            }
+        }
+        if let Some(minibuffer_leaf) = frame.minibuffer_leaf.as_mut() {
+            minibuffer_leaf.set_buffer(minibuffer_buf_id);
+            minibuffer_leaf.set_bounds(Rect::new(0.0, 24.0, 80.0, 1.0));
+            crate::window::window_markers::attach_window_position_markers(buffers, minibuffer_leaf);
+        }
+        frame.recalculate_minibuffer_bounds();
+    }
+    fid
+}
+
+/// Compute the height of a window in lines.
+fn window_height_lines(w: &Window, char_height: f32) -> i64 {
+    w.total_lines(char_height)
+}
+
+/// Compute the committed width of a window in columns.
+fn window_width_cols(w: &Window, char_width: f32) -> i64 {
+    w.total_columns(char_width)
+}
+
+/// GNU `init_iterator`'s line-wrap decision for one window+buffer pair
+/// (src/xdisp.c:3413-3426), as the typed [`LineWrap`] it resolves to.
+///
+/// Every input is read the way GNU reads it:
+///
+/// * `truncate-lines` and `word-wrap` are per-buffer slots -- GNU spells them
+///   `BVAR (current_buffer, truncate_lines)` / `BVAR (current_buffer,
+///   word_wrap)`.
+/// * `truncate-partial-width-windows` is a `DEFVAR_LISP`, so `setq-local`
+///   localizes the symbol and the C global `Vtruncate_partial_width_windows`
+///   always holds the value swapped in for `current_buffer`.  It is therefore
+///   a BUFFER-LOCAL-then-global read, not a global one -- GNU's own Lisp
+///   predicate says so in as many words:
+///
+///   ```elisp
+///   (defun truncated-partial-width-window-p (&optional window)
+///     ...
+///     (unless (window-full-width-p window)
+///       (let ((t-p-w-w (buffer-local-value 'truncate-partial-width-windows
+///                                          (window-buffer window))))
+///         (if (integerp t-p-w-w)
+///             (< (window-total-width window) t-p-w-w)
+///           t-p-w-w))))
+///   ```
+///   (lisp/window.el:11285-11298).
+///
+///   `visual-line-mode' depends on exactly that: it does
+///   `(setq-local truncate-partial-width-windows nil)` (lisp/simple.el:8716)
+///   so a window narrower than the 50-column default still wraps.  Reading the
+///   global here instead made every partial-width `visual-line-mode` window
+///   report TRUNCATE, which collapses `beginning-of-visual-line` --
+///   `(vertical-motion 0)`, lisp/simple.el:8573 -- onto the LOGICAL line start.
+/// * A horizontally scrolled window never wraps (`!it->w->hscroll`).
+/// * Whether `WORD_WRAP` is on the menu at all is the ENGINE's question, not
+///   this window's: `init_iterator` -- and therefore `word-wrap` -- is reached
+///   only from the interactive arm of `Fvertical_motion`
+///   (src/indent.c:2280-2287).  See [`MotionEngine`].
+pub(crate) fn window_line_wrap(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    window: Option<Value>,
+    current_buffer_id: BufferId,
+    engine: MotionEngine,
+) -> LineWrap {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let Ok((fid, wid)) = resolve_window_id_with_pred_in_state(
+        frames,
+        buffers,
+        window.as_ref(),
+        crate::emacs_core::window_cmds::WindowDomain::Live,
+    ) else {
+        return LineWrap::WindowWrap;
+    };
+    let current_buffer = eval.edit.buffers.get(current_buffer_id);
+    let read = |symbol: neovm_value::intern::WellKnown| {
+        neovm_edit::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
+            eval.variables(),
+            &[],
+            current_buffer,
+            &symbol,
+        )
+    };
+    // GNU's wrapping method when the window does not truncate.  The buffer
+    // asks for word wrapping; the engine decides whether that request can be
+    // honoured at all.
+    let wrapped = engine.continuation_wrap(
+        read(neovm_value::intern::WellKnown::WordWrap).is_some_and(|value| !value.is_nil()),
+    );
+
+    if read(neovm_value::intern::WellKnown::TruncateLines).is_some_and(|value| !value.is_nil()) {
+        return LineWrap::Truncate;
+    }
+    let hscroll_nonzero = eval
+        .frame_manager()
+        .get(fid)
+        .and_then(|frame| frame.find_window(wid))
+        .is_some_and(|window| matches!(window, Window::Leaf { hscroll, .. } if *hscroll != 0));
+    if hscroll_nonzero {
+        return LineWrap::Truncate;
+    }
+
+    let root_wid = match eval.frame_manager().get(fid) {
+        Some(frame) => frame.root_window().id(),
+        None => return wrapped,
+    };
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let window_cols = window_total_width_impl(frames, buffers, vec![window_value(wid)])
+        .ok()
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(0);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let root_cols = window_total_width_impl(frames, buffers, vec![window_value(root_wid)])
+        .ok()
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(window_cols);
+    if window_cols >= root_cols {
+        return wrapped;
+    }
+
+    // Re-read through the buffer: `eval.buffers` was borrowed mutably above.
+    let current_buffer = eval.edit.buffers.get(current_buffer_id);
+    let partial_width_truncates =
+        match neovm_edit::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
+            eval.variables(),
+            &[],
+            current_buffer,
+            &neovm_value::intern::WellKnown::TruncatePartialWidthWindows,
+        ) {
+            Some(value) if value.is_nil() => false,
+            Some(value) if value.is_fixnum() => window_cols < value.as_fixnum().unwrap(),
+            Some(_) => true,
+            None => false,
+        };
+    if partial_width_truncates {
+        LineWrap::Truncate
+    } else {
+        wrapped
+    }
+}
+
+fn window_height_pixels(w: &Window) -> i64 {
+    w.bounds().height.max(0.0) as i64
+}
+
+fn window_width_pixels(w: &Window) -> i64 {
+    w.bounds().width.max(0.0) as i64
+}
+
+fn window_body_horizontal_offsets_pixels(
+    frames: &FrameManager,
+    fid: FrameId,
+    w: &Window,
+) -> (i64, i64) {
+    let Some(frame) = frames.get(fid) else {
+        return (0, 0);
+    };
+    match w {
+        Window::Leaf { margins, .. } => {
+            let char_width = frame.char_width.max(1.0);
+            let left_margin = (margins.left() as f32 * char_width).round().max(0.0) as i64;
+            let right_margin = (margins.right() as f32 * char_width).round().max(0.0) as i64;
+            let graphical = frame.effective_window_system().is_some();
+            let (left_fringe, right_fringe) = if graphical {
+                let (left, right, _, _) = frames
+                    .window_fringes(w.id())
+                    .unwrap_or((0, 0, false, false));
+                (left, right)
+            } else {
+                (0, 0)
+            };
+            let left_scroll_bar = frames.window_left_scroll_bar_area_width(w.id());
+            let right_scroll_bar = frames.window_right_scroll_bar_area_width(w.id());
+            // GNU `window_body_width` (`src/window.c`) removes the explicit
+            // right divider from every non-rightmost window.  On text
+            // terminals without such a divider it instead reserves one
+            // canonical column for the vertical separator.
+            let right_divider_or_tty_separator = if window_is_rightmost(frame, w.id()) {
+                0
+            } else {
+                let divider = frame.effective_divider_width(FrameDivider::Right);
+                if divider > 0 {
+                    divider
+                } else if graphical {
+                    0
+                } else {
+                    char_width.round().max(1.0) as i64
+                }
+            };
+            (
+                left_scroll_bar
+                    .saturating_add(left_fringe)
+                    .saturating_add(left_margin),
+                right_scroll_bar
+                    .saturating_add(right_fringe)
+                    .saturating_add(right_margin)
+                    .saturating_add(right_divider_or_tty_separator),
+            )
+        }
+        Window::Internal { .. } => (0, 0),
+    }
+}
+
+/// Text-area width of a leaf window in pixels (total minus scroll bars,
+/// fringes, margins, and the right divider or terminal separator).  Shared
+/// with auto-hscroll (`super::hscroll`) so the column geometry it follows
+/// matches what `window-body-width` reports and what the layout engine renders.
+pub(crate) fn window_body_width_pixels(frames: &FrameManager, fid: FrameId, w: &Window) -> i64 {
+    let total = window_width_pixels(w);
+    let (left, right) = window_body_horizontal_offsets_pixels(frames, fid, w);
+    total.saturating_sub(left.saturating_add(right))
+}
+
+fn is_minibuffer_window(frames: &FrameManager, fid: FrameId, wid: WindowId) -> bool {
+    frames
+        .get(fid)
+        .is_some_and(|frame| frame.minibuffer_window == Some(wid))
+}
+
+fn filtered_window_prev_buffers(
+    prev_raw: Value,
+    discarded_buffers: &[Value],
+) -> Result<Vec<Value>, Flow> {
+    let prev_entries = list_to_vec(&prev_raw).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("listp"), prev_raw],
+        )
+    })?;
+    Ok(prev_entries
+        .into_iter()
+        .filter(|entry| {
+            let Some(items) = list_to_vec(entry) else {
+                return true;
+            };
+            !items
+                .first()
+                .is_some_and(|first| discarded_buffers.contains(first))
+        })
+        .collect())
+}
+
+fn filtered_window_next_buffers(
+    next_raw: Value,
+    discarded_buffers: &[Value],
+) -> Result<Vec<Value>, Flow> {
+    let next_entries = list_to_vec(&next_raw).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("listp"), next_raw],
+        )
+    })?;
+    Ok(next_entries
+        .into_iter()
+        .filter(|entry| !discarded_buffers.contains(entry))
+        .collect())
+}
+
+fn discard_buffers_from_window_history(
+    frames: &mut FrameManager,
+    wid: WindowId,
+    discarded_buffers: &[Value],
+) -> Result<(), Flow> {
+    let prev = filtered_window_prev_buffers(frames.window_prev_buffers(wid), discarded_buffers)?;
+    frames.set_window_prev_buffers(wid, Value::list(prev));
+    let next = filtered_window_next_buffers(frames.window_next_buffers(wid), discarded_buffers)?;
+    frames.set_window_next_buffers(wid, Value::list(next));
+    Ok(())
+}
+
+fn should_record_window_history_buffer(
+    frames: &FrameManager,
+    minibuffers: &MinibufferManager,
+    buffers: &BufferManager,
+    fid: FrameId,
+    wid: WindowId,
+    buffer_id: BufferId,
+) -> bool {
+    if is_minibuffer_window(frames, fid, wid) {
+        return minibuffers.has_buffer(buffer_id);
+    }
+    buffers
+        .get(buffer_id)
+        .is_some_and(|buffer| !buffer.name_starts_with_space())
+}
+
+pub(crate) use neovm_eval::emacs_core::eval::data::window_state::WindowBufferHistoryChange;
+
+/// Apply the history part of GNU `record-window-buffer` for a window that is
+/// about to change buffers.  Both ordinary `set-window-buffer` and window
+/// configuration restoration cross this seam.
+#[doc(hidden)]
+pub fn record_window_buffer_change_history_in_state(
+    frames: &mut FrameManager,
+    minibuffers: &MinibufferManager,
+    buffers: &BufferManager,
+    frame_id: FrameId,
+    window_id: WindowId,
+    change: WindowBufferHistoryChange,
+) -> Result<bool, Flow> {
+    let outgoing_buffer = Value::make_buffer(change.outgoing_buffer_id);
+    let incoming_buffer = Value::make_buffer(change.incoming_buffer_id);
+    let history_entry = Value::list(vec![
+        outgoing_buffer,
+        neovm_edit::emacs_core::marker::make_marker_value(
+            Some(change.outgoing_buffer_id),
+            Some(change.outgoing_window_start.max(LispCharPos1::ONE)),
+            false,
+        ),
+        neovm_edit::emacs_core::marker::make_marker_value(
+            Some(change.outgoing_buffer_id),
+            Some(change.outgoing_window_point.max(LispCharPos1::ONE)),
+            false,
+        ),
+    ]);
+
+    // GNU removes both the outgoing buffer (before re-adding it at the front)
+    // and the incoming buffer (which is no longer a previous buffer).
+    let filtered_prev = filtered_window_prev_buffers(
+        frames.window_prev_buffers(window_id),
+        &[outgoing_buffer, incoming_buffer],
+    )?;
+    frames.set_window_next_buffers(window_id, Value::NIL);
+
+    let record_outgoing = should_record_window_history_buffer(
+        frames,
+        minibuffers,
+        buffers,
+        frame_id,
+        window_id,
+        change.outgoing_buffer_id,
+    );
+    if record_outgoing {
+        let mut next_prev = Vec::with_capacity(filtered_prev.len() + 1);
+        next_prev.push(history_entry);
+        next_prev.extend(filtered_prev);
+        frames.set_window_prev_buffers(window_id, Value::list(next_prev));
+    } else {
+        frames.set_window_prev_buffers(window_id, Value::list(filtered_prev));
+    }
+
+    Ok(record_outgoing && !is_minibuffer_window(frames, frame_id, window_id))
+}
+
+// ===========================================================================
+// Window queries
+// ===========================================================================
+/// Return the selected window as a typed editor-domain identifier.
+pub(crate) fn selected_window_id(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+) -> Result<WindowId, Flow> {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let fid = ensure_selected_frame_id_in_state(frames, buffers);
+    frames
+        .get(fid)
+        .map(|frame| frame.selected_window)
+        .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))
+}
+
+/// `(selected-window)` -> window object.
+#[doc(hidden)]
+pub fn builtin_selected_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    expect_args("selected-window", &args, 0)?;
+    Ok(window_value(selected_window_id(eval)?))
+}
+
+/// `(old-selected-window)` -> previous selected window.
+#[doc(hidden)]
+pub fn builtin_old_selected_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("old-selected-window", &args, 0)?;
+    let fid = ensure_selected_frame_id(eval);
+    let selected_wid = eval
+        .frame_manager()
+        .get(fid)
+        .map(|frame| frame.selected_window)
+        .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?;
+    let old_wid = eval
+        .frame_manager()
+        .old_selected_window()
+        .unwrap_or(selected_wid);
+    Ok(window_value(old_wid))
+}
+/// `(frame-selected-window &optional FRAME-OR-WINDOW)` -> selected window of
+/// FRAME-OR-WINDOW's frame.
+///
+/// GNU `Fframe_selected_window` (`src/window.c`) takes FRAME-OR-WINDOW, not a
+/// frame: `nil` means the selected frame, a `WINDOW_VALID_P` argument names its
+/// own frame, and only anything else is checked with `CHECK_LIVE_FRAME`.
+/// `WINDOW_VALID_P` admits INTERNAL windows, which is the arm `window--transpose`
+/// (`lisp/window-x.el`) depends on when it asks for the selected window of the
+/// parent window it is rotating -- without it `C-x w r <right>`
+/// (`window-layout-rotate-clockwise`) died with
+/// "Wrong type argument: frame-live-p, #<window N>".
+///
+/// Resolve through the shared frame-or-window decoder, the same one
+/// `frame-root-window` and `frame-first-window` use; this subr was the one
+/// member of that family still going through the frame-only decoder.
+#[doc(hidden)]
+pub fn builtin_frame_selected_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("frame-selected-window", &args, 1)?;
+    let fid = resolve_frame_or_window_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    Ok(window_value(frame.selected_window))
+}
+/// `(frame-old-selected-window &optional FRAME)` -> the previously
+/// selected window of FRAME.
+///
+/// Mirrors GNU `Fframe_old_selected_window` (`src/frame.c`):
+/// returns the value of `frame->old_selected_window`, which is
+/// updated by `select-window` / `set-frame-selected-window` /
+/// `set-window-configuration` whenever the live `selected_window`
+/// changes. Window audit Critical 8 in
+/// `drafts/window-system-audit.md`: this builtin used to be a
+/// stub returning `nil`, so blink-cursor-mode and other Lisp
+/// callers that branch on the previous selection always took the
+/// "no previous selection" path.
+#[doc(hidden)]
+pub fn builtin_frame_old_selected_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("frame-old-selected-window", &args, 1)?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    Ok(frame
+        .old_selected_window
+        .map(window_value)
+        .unwrap_or(Value::NIL))
+}
+
+fn frame_root_position(frames: &FrameManager, fid: FrameId) -> (i64, i64) {
+    let mut x = 0;
+    let mut y = 0;
+    let mut current = Some(fid);
+    let mut seen = HashSet::new();
+    while let Some(frame_id) = current {
+        if !seen.insert(frame_id) {
+            break;
+        }
+        let Some(frame) = frames.get(frame_id) else {
+            break;
+        };
+        x += frame.left_pos;
+        y += frame.top_pos;
+        current = frames.frame_parent_id(frame_id);
+    }
+    (x, y)
+}
+
+fn tty_frame_edges_value(frame: &crate::window::Frame) -> Value {
+    Value::list(vec![
+        Value::fixnum(frame.left_pos),
+        Value::fixnum(frame.top_pos),
+        Value::fixnum(frame.left_pos + i64::from(frame.width)),
+        Value::fixnum(frame.top_pos + i64::from(frame.height)),
+    ])
+}
+
+/// `(tty-frame-edges &optional FRAME TYPE)` -> native terminal frame edges.
+#[doc(hidden)]
+pub fn builtin_tty_frame_edges(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("tty-frame-edges", &args, 2)?;
+    let fid = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let frame = eval
+        .frame_manager()
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    if frame.initial || frame.effective_window_system().is_some() {
+        return Ok(Value::NIL);
+    }
+    Ok(tty_frame_edges_value(frame))
+}
+
+/// `(neomacs-frame-edges &optional FRAME TYPE)` -> GUI frame edges.
+///
+/// GNU's toolkit-specific `*-frame-edges` functions return a four-number
+/// edge list for `outer-edges`, `native-edges` (or nil), and `inner-edges`.
+/// Neomacs renders frames into one GPU-composited display surface, so native
+/// and outer edges currently coincide; inner edges exclude the frame's
+/// internal border just like GNU's `frame_geometry`.
+#[doc(hidden)]
+pub fn builtin_neomacs_frame_edges(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
+    expect_max_args("neomacs-frame-edges", &args, 2)?;
+    let fid = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let frame = eval
+        .frame_manager()
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    if frame.initial || frame.effective_window_system().is_none() {
+        return Ok(Value::NIL);
+    }
+
+    let (left, top) = eval
+        .frame_manager()
+        .frame_origin_in_root(fid)
+        .ok_or_else(|| {
+            signal(
+                "error",
+                vec![Value::string("Frame origin unavailable for frame edges")],
+            )
+        })?;
+    let mut left = left.round() as i64;
+    let mut top = top.round() as i64;
+    let mut right = left.saturating_add(i64::from(frame.width));
+    let mut bottom = top.saturating_add(i64::from(frame.height));
+
+    if args
+        .get(1)
+        .is_some_and(|value| value.is_symbol_named("inner-edges", symbol_mode))
+    {
+        let border = frame.internal_border_width().max(0);
+        left = left.saturating_add(border);
+        top = top.saturating_add(border);
+        right = right.saturating_sub(border);
+        bottom = bottom.saturating_sub(border);
+    }
+
+    Ok(Value::list(vec![
+        Value::fixnum(left),
+        Value::fixnum(top),
+        Value::fixnum(right),
+        Value::fixnum(bottom),
+    ]))
+}
+
+/// `(tty-frame-geometry &optional FRAME)` -> terminal frame geometry alist.
+#[doc(hidden)]
+pub fn builtin_tty_frame_geometry(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("tty-frame-geometry", &args, 1)?;
+    let fid = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let frame = eval
+        .frame_manager()
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    if frame.initial || frame.effective_window_system().is_some() {
+        return Ok(Value::NIL);
+    }
+    Ok(Value::list(vec![
+        Value::cons(
+            Value::symbol("outer-position"),
+            Value::cons(Value::fixnum(frame.left_pos), Value::fixnum(frame.top_pos)),
+        ),
+        Value::cons(
+            Value::symbol("outer-size"),
+            Value::cons(
+                Value::fixnum(frame.width.into()),
+                Value::fixnum(frame.height.into()),
+            ),
+        ),
+        Value::cons(Value::symbol("outer-border-width"), Value::fixnum(0)),
+        Value::cons(Value::symbol("native-edges"), tty_frame_edges_value(frame)),
+    ]))
+}
+
+/// `(tty-frame-list-z-order &optional FRAME)` -> topmost first.
+#[doc(hidden)]
+pub fn builtin_tty_frame_list_z_order(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("tty-frame-list-z-order", &args, 1)?;
+    let fid = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let mut frames = eval
+        .frame_manager()
+        .frames_in_reverse_z_order(fid, crate::window::RenderFrameVisibility::VisibleOnly);
+    frames.reverse();
+    Ok(Value::list(
+        frames
+            .into_iter()
+            .map(|frame_id| Value::make_frame(frame_id.0))
+            .collect(),
+    ))
+}
+
+/// `(tty-frame-at X Y)` -> (FRAME CX CY), respecting TTY child-frame z-order.
+#[doc(hidden)]
+pub fn builtin_tty_frame_at(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("tty-frame-at", &args, 2)?;
+    let (Some(x), Some(y)) = (args[0].as_fixnum(), args[1].as_fixnum()) else {
+        return Ok(Value::NIL);
+    };
+    let Some(selected) = eval.frame_manager().selected_frame().map(|frame| frame.id) else {
+        return Ok(Value::NIL);
+    };
+    let mut frames = eval
+        .frame_manager()
+        .frames_in_reverse_z_order(selected, crate::window::RenderFrameVisibility::VisibleOnly);
+    frames.reverse();
+    for fid in frames {
+        let Some(frame) = eval.frame_manager().get(fid) else {
+            continue;
+        };
+        let (fx, fy) = frame_root_position(&eval.frame_manager(), fid);
+        let width = i64::from(frame.width);
+        let height = i64::from(frame.height);
+        let is_child = frame.parent_frame.as_frame_id().is_some();
+
+        if is_child && !frame.undecorated {
+            if fy - 1 <= y && y <= fy + height && (x == fx - 1 || x == fx + width) {
+                return Ok(Value::list(vec![
+                    Value::make_frame(fid.0),
+                    Value::fixnum(x - fx),
+                    Value::fixnum(y - fy),
+                ]));
+            }
+            if fx - 1 <= x && x <= fx + width && (y == fy - 1 || y == fy + height) {
+                return Ok(Value::list(vec![
+                    Value::make_frame(fid.0),
+                    Value::fixnum(x - fx),
+                    Value::fixnum(y - fy),
+                ]));
+            }
+        }
+
+        if fx <= x && x < fx + width && fy <= y && y < fy + height {
+            return Ok(Value::list(vec![
+                Value::make_frame(fid.0),
+                Value::fixnum(x - fx),
+                Value::fixnum(y - fy),
+            ]));
+        }
+    }
+    Ok(Value::NIL)
+}
+
+/// `(set-frame-selected-window FRAME WINDOW &optional NORECORD)` -> WINDOW.
+#[doc(hidden)]
+pub fn builtin_set_frame_selected_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("set-frame-selected-window", &args, 2)?;
+    expect_max_args("set-frame-selected-window", &args, 3)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let wid = match window_id_from_designator(&args[1]) {
+        Some(wid) => {
+            if eval.frame_manager().find_window_frame_id(wid).is_none() {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("window-live-p"), args[1]],
+                ));
+            }
+            wid
+        }
+        None => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("window-live-p"), args[1]],
+            ));
+        }
+    };
+    let window_fid = eval
+        .frame_manager()
+        .find_window_frame_id(wid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    if window_fid != fid {
+        return Err(signal(
+            "error",
+            vec![Value::string(
+                "In `set-frame-selected-window', WINDOW is not on FRAME",
+            )],
+        ));
+    }
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
+    if fid == selected_fid {
+        let mut select_args = vec![window_value(wid)];
+        if let Some(norecord) = args.get(2) {
+            select_args.push(*norecord);
+        }
+        return builtin_select_window(eval, select_args);
+    }
+
+    let frame = eval
+        .frame_manager_mut()
+        .get_mut(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    // GNU `Fset_frame_selected_window` does NOT touch
+    // `frame->old_selected_window`. The "old" snapshot is
+    // updated only by `window_change_record` (GNU
+    // `src/window.c:3954-3990`) at redisplay time. neomacs's
+    // analog runs from `frame_window_hook_record_from_live_state`
+    // in `builtins/hooks.rs`. Window audit Critical 8.
+    frame.selected_window = wid;
+    Ok(window_value(wid))
+}
+/// `(frame-first-window &optional FRAME-OR-WINDOW)` -> first window on frame.
+#[doc(hidden)]
+pub fn builtin_frame_first_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("frame-first-window", &args, 1)?;
+    let fid = resolve_frame_or_window_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let first = frame
+        .window_list()
+        .first()
+        .copied()
+        .unwrap_or(frame.selected_window);
+    Ok(window_value(first))
+}
+/// `(frame-root-window &optional FRAME-OR-WINDOW)` -> root window on frame.
+#[doc(hidden)]
+pub fn builtin_frame_root_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("frame-root-window", &args, 1)?;
+    let fid = resolve_frame_or_window_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    Ok(window_value(frame.root_window().id()))
+}
+/// `(minibuffer-window &optional FRAME)` -> minibuffer window of FRAME.
+#[doc(hidden)]
+pub fn builtin_minibuffer_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("minibuffer-window", &args, 1)?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    match frame.minibuffer_window {
+        Some(wid) => Ok(window_value(wid)),
+        None => Ok(Value::NIL),
+    }
+}
+/// `(window-minibuffer-p &optional WINDOW)` -> t when WINDOW is minibuffer.
+#[doc(hidden)]
+pub fn builtin_window_minibuffer_p(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-minibuffer-p", &args, 1)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let is_minibuffer = frames
+        .get(fid)
+        .is_some_and(|frame| frame.minibuffer_window == Some(wid));
+    Ok(Value::bool_val(is_minibuffer))
+}
+
+/// `(minibuffer-selected-window)` -> selected window active at minibuffer entry.
+#[doc(hidden)]
+pub fn builtin_minibuffer_selected_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("minibuffer-selected-window", &args, 0)?;
+    Ok(eval
+        .minibuffer_selected_window_id()
+        .map(window_value)
+        .unwrap_or(Value::NIL))
+}
+
+/// `(active-minibuffer-window)` -> nil in batch.
+#[doc(hidden)]
+pub fn builtin_active_minibuffer_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("active-minibuffer-window", &args, 0)?;
+    Ok(active_minibuffer_window_id(eval)
+        .map(window_value)
+        .unwrap_or(Value::NIL))
+}
+
+fn active_minibuffer_window_id(eval: &neovm_eval::emacs_core::eval::Context) -> Option<WindowId> {
+    eval.active_minibuffer_window_id()
+}
+/// `(window-frame &optional WINDOW)` -> frame of WINDOW.
+#[doc(hidden)]
+pub fn builtin_window_frame(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-frame", &args, 1)?;
+    let (fid, _wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    Ok(Value::make_frame(fid.0))
+}
+/// `(window-buffer &optional WINDOW)` -> buffer object.
+#[doc(hidden)]
+pub fn builtin_window_buffer(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-buffer", &args, 1)?;
+    let resolve_buffer = |frames: &FrameManager, fid: FrameId, wid: WindowId| -> EvalResult {
+        let w = get_leaf(frames, fid, wid)?;
+        match w.buffer_id() {
+            Some(bid) => Ok(Value::make_buffer(bid)),
+            None => Ok(Value::NIL),
+        }
+    };
+
+    if args.first().is_none_or(|v| v.is_nil()) {
+        let (fid, wid) =
+            resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Any)?;
+        return resolve_buffer(frames, fid, wid);
+    }
+    let val = args.first().unwrap();
+    let Some(wid) = window_id_from_designator(val) else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("windowp"), *val],
+        ));
+    };
+    if let Some(fid) = frames.find_window_frame_id(wid) {
+        return resolve_buffer(frames, fid, wid);
+    }
+    if frames.is_window_object_id(wid) {
+        return Ok(Value::NIL);
+    }
+    Err(signal(
+        LispCondition::WrongTypeArgument,
+        vec![Value::symbol("windowp"), *val],
+    ))
+}
+/// `(window-display-table &optional WINDOW)` -> display table or nil.
+#[doc(hidden)]
+pub fn builtin_window_display_table(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-display-table", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    Ok(frames.window_display_table(wid))
+}
+/// `(set-window-display-table WINDOW TABLE)` -> TABLE.
+#[doc(hidden)]
+pub fn builtin_set_window_display_table(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("set-window-display-table", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let table = args[1];
+    frames.set_window_display_table(wid, table);
+    Ok(table)
+}
+/// `(window-cursor-type &optional WINDOW)` -> cursor type object.
+#[doc(hidden)]
+pub fn builtin_window_cursor_type(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-cursor-type", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    Ok(frames.window_cursor_type(wid))
+}
+/// `(set-window-cursor-type WINDOW TYPE)` -> TYPE.
+///
+/// Mirrors GNU `src/window.c:8601-8635 (Fset_window_cursor_type)`,
+/// which validates TYPE before storing it on the window. The
+/// allowed shapes are:
+///
+///   nil | t | box | hollow | bar | hbar
+///   (box . INTEGERP)  (bar . INTEGERP)  (hbar . INTEGERP)
+///
+/// Anything else triggers `(error "Invalid cursor type")`. Cursor
+/// audit Finding 3 in `drafts/cursor-audit.md`: this builtin used
+/// to silently accept any value, which made invalid Lisp typos
+/// (e.g. a number, a random symbol, a cons with a non-integer
+/// width) look correct until the renderer hit them.
+#[doc(hidden)]
+pub fn builtin_set_window_cursor_type(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("set-window-cursor-type", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let cursor_type = args[1];
+
+    if !is_valid_cursor_type(cursor_type) {
+        return Err(neovm_value::error::signal(
+            "error",
+            vec![Value::string("Invalid cursor type")],
+        ));
+    }
+
+    frames.set_window_cursor_type(wid, cursor_type);
+    // GNU window.c:8658 marks even a same-value cursor assignment.
+    eval.gnu_mark_window_redisplay(wid);
+    Ok(cursor_type)
+}
+
+#[doc(hidden)]
+pub fn builtin_window_cursor_info(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-cursor-info", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let Some(frame) = frames.get(fid) else {
+        return Ok(Value::NIL);
+    };
+    let Some(window) = frame.find_window(wid) else {
+        return Ok(Value::NIL);
+    };
+    let Some(display) = window.display() else {
+        return Ok(Value::NIL);
+    };
+    if !display.phys_cursor_on_p || display.cursor_off_p {
+        return Ok(Value::NIL);
+    }
+    let Some(cursor) = display.phys_cursor.as_ref() else {
+        return Ok(Value::NIL);
+    };
+    Ok(Value::vector(vec![
+        frames.window_cursor_type(wid),
+        Value::fixnum(cursor.x),
+        Value::fixnum(cursor.y),
+        Value::fixnum(cursor.width),
+        Value::fixnum(cursor.height),
+        Value::fixnum(cursor.ascent),
+    ]))
+}
+
+/// Returns true if VALUE is a legal `cursor-type` per GNU
+/// `src/window.c:8616-8626`.
+fn is_valid_cursor_type(value: Value) -> bool {
+    if value.is_nil() || value == Value::T {
+        return true;
+    }
+    if CursorTypeSymbol::from_symbol_value(&value).is_some() {
+        return true;
+    }
+    if matches!(value.kind(), neovm_value::value::ValueKind::Cons) {
+        let head_ok = value
+            .cons_car()
+            .as_bare_symbol_name()
+            .and_then(CursorTypeSymbol::from_symbol_name)
+            .is_some_and(CursorTypeSymbol::accepts_width_tail);
+        let tail = value.cons_cdr();
+        let tail_ok = tail.is_integer();
+        return head_ok && tail_ok;
+    }
+    false
+}
+/// `(window-parameter WINDOW PARAMETER)` -> window parameter or nil.
+#[doc(hidden)]
+pub fn builtin_window_parameter(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("window-parameter", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let wid = resolve_window_object_id_with_pred_in_state(
+        frames,
+        buffers,
+        args.first(),
+        WindowDomain::Any,
+    )?;
+    Ok(frames.window_parameter(wid, &args[1]).unwrap_or(Value::NIL))
+}
+/// `(set-window-parameter WINDOW PARAMETER VALUE)` -> VALUE.
+#[doc(hidden)]
+pub fn builtin_set_window_parameter(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
+    expect_args("set-window-parameter", &args, 3)?;
+    let gnu_filtered_parameter = neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled()
+        && args[1].as_symbol_id(symbol_mode).is_some_and(|parameter| {
+            eval.obarray()
+                .get_property_id(parameter, intern(":filtered"))
+                == Some(Value::T)
+        })
+        && eval
+            .special_variable_value_by_id(intern("window-auto-redraw-on-parameter-change"))
+            .is_none_or(|enabled| enabled.is_truthy());
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let wid = resolve_window_object_id_with_pred_in_state(
+        frames,
+        buffers,
+        args.first(),
+        WindowDomain::Any,
+    )?;
+    let value = args[2];
+    let redraw_frame = if gnu_filtered_parameter
+        && frames.window_parameter(wid, &args[1]).unwrap_or(Value::NIL) != value
+    {
+        frames.find_window_frame_id(wid).filter(|frame| {
+            frames
+                .get(*frame)
+                .is_some_and(|frame| frame.effective_window_system().is_some())
+        })
+    } else {
+        None
+    };
+    // This owner runs before setting the alist, as GNU does. No Lisp callback
+    // or allocation safepoint occurs while reading the existing parameter.
+    if let Some(frame) = redraw_frame {
+        crate::emacs_core::dispnew::pure::publish_gnu_frame_redraw(eval, frame);
+    }
+    eval.frame_manager_mut()
+        .set_window_parameter(wid, args[1], value);
+    // A window parameter named after one of the chrome formats OVERRIDES the
+    // buffer-local value (`eval_status_line_format_value` consults the window
+    // parameter first), so setting one changes this window's chrome with none
+    // of the buffer-scoped triggers firing. GNU has no such override and so
+    // needs no equivalent; here it is a window-scoped dirty event, the same
+    // shape as `set-window-start`.
+    if let Some(name) = args[1].as_symbol_name(symbol_mode)
+        && neovm_edit::buffer::buffer::variable_affects_chrome(name)
+    {
+        eval.mark_chrome_dirty_window(wid);
+    }
+    Ok(value)
+}
+/// `(window-parameters &optional WINDOW)` -> alist of parameters.
+#[doc(hidden)]
+pub fn builtin_window_parameters(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-parameters", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    Ok(frames.window_parameters_alist(wid))
+}
+/// `(window-parent &optional WINDOW)` -> parent window or nil.
+#[doc(hidden)]
+pub fn builtin_window_parent(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-parent", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let Some(frame) = frames.get(fid) else {
+        return Err(signal("error", vec![Value::string("Frame not found")]));
+    };
+    Ok(window_parent_id(frame, wid).map_or(Value::NIL, window_value))
+}
+/// `(window-top-child &optional WINDOW)` -> top child for vertical combinations.
+#[doc(hidden)]
+pub fn builtin_window_top_child(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-top-child", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let Some(frame) = frames.get(fid) else {
+        return Err(signal("error", vec![Value::string("Frame not found")]));
+    };
+    Ok(
+        window_first_child_id(frame, wid, SplitDirection::Vertical)
+            .map_or(Value::NIL, window_value),
+    )
+}
+/// `(window-left-child &optional WINDOW)` -> left child for horizontal combinations.
+#[doc(hidden)]
+pub fn builtin_window_left_child(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-left-child", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let Some(frame) = frames.get(fid) else {
+        return Err(signal("error", vec![Value::string("Frame not found")]));
+    };
+    Ok(
+        window_first_child_id(frame, wid, SplitDirection::Horizontal)
+            .map_or(Value::NIL, window_value),
+    )
+}
+/// `(window-next-sibling &optional WINDOW)` -> next sibling or nil.
+#[doc(hidden)]
+pub fn builtin_window_next_sibling(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-next-sibling", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let Some(frame) = frames.get(fid) else {
+        return Err(signal("error", vec![Value::string("Frame not found")]));
+    };
+    Ok(window_next_sibling_id(frame, wid).map_or(Value::NIL, window_value))
+}
+/// `(window-prev-sibling &optional WINDOW)` -> previous sibling or nil.
+#[doc(hidden)]
+pub fn builtin_window_prev_sibling(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-prev-sibling", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let Some(frame) = frames.get(fid) else {
+        return Err(signal("error", vec![Value::string("Frame not found")]));
+    };
+    Ok(window_prev_sibling_id(frame, wid).map_or(Value::NIL, window_value))
+}
+/// `(window-normal-size &optional WINDOW HORIZONTAL)` -> proportional size.
+///
+/// Mirrors GNU `src/window.c:973`:
+///
+///   return NILP (horizontal) ? w->normal_lines : w->normal_cols;
+///
+/// The persistent `normal_lines` and `normal_cols` slots are
+/// stored on `Window::Leaf` / `Window::Internal` (initialized to
+/// 1.0, updated by `window-resize-apply` from `new_normal`). See
+/// audit Critical 7 in `drafts/window-system-audit.md`.
+#[doc(hidden)]
+pub fn builtin_window_normal_size(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-normal-size", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let horizontal = args.get(1).is_some_and(|v| v.is_truthy());
+    let Some(frame) = frames.get(fid) else {
+        return Err(signal("error", vec![Value::string("Frame not found")]));
+    };
+    let window = frame
+        .find_window(wid)
+        .ok_or_else(|| signal("error", vec![Value::string("Window not found")]))?;
+    Ok(if horizontal {
+        window.normal_cols()
+    } else {
+        window.normal_lines()
+    })
+}
+/// `(window-start &optional WINDOW)` -> integer position.
+#[doc(hidden)]
+pub fn builtin_window_start(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-start", &args, 1)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let w = get_leaf(frames, fid, wid)?;
+    match w {
+        Window::Leaf { window_start, .. } => Ok(Value::fixnum(window_start.as_i64())),
+        _ => Ok(Value::fixnum(0)),
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowEndQueryPolicy {
+    LastPresented,
+    EnsureCurrent,
+}
+
+fn current_buffer_z(
+    buffers: &BufferManager,
+    buffer_id: BufferId,
+    fallback: LispCharPos1,
+) -> LispCharPos1 {
+    buffers
+        .get(buffer_id)
+        .map(|buffer| {
+            LispCharPos1::from_one_based_usize(buffer.point_max_char_pos().get().saturating_add(1))
+        })
+        .unwrap_or(fallback)
+}
+
+/// Resolve GNU `window-end` semantics behind one typed query seam.
+///
+/// `EnsureCurrent` delegates to the frontend's synchronous layout adapter,
+/// which runs the same row producer as redisplay. A missing adapter behaves
+/// like GNU's noninteractive/initial-frame case and returns the last recorded
+/// value. A busy adapter signals instead of disguising stale state as an
+/// updated answer; there is no second approximation algorithm.
+fn query_window_end(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    fid: FrameId,
+    wid: WindowId,
+    policy: WindowEndQueryPolicy,
+) -> EvalResult {
+    let noninteractive = eval.noninteractive();
+    let frame_initial = eval
+        .frame_manager()
+        .get(fid)
+        .is_some_and(|frame| frame.initial);
+    let (window_start, buffer_id, window_end) = match get_leaf(&eval.frame_manager(), fid, wid)? {
+        Window::Leaf {
+            window_start,
+            buffer_id,
+            window_end,
+            ..
+        } => (*window_start, *buffer_id, *window_end),
+        Window::Internal { .. } => return Ok(Value::NIL),
+    };
+    let buffer_z = current_buffer_z(&eval.edit.buffers, buffer_id, window_start);
+    let stored_end = window_end.charpos_from_z(buffer_z);
+    if policy == WindowEndQueryPolicy::LastPresented || noninteractive || frame_initial {
+        return Ok(Value::fixnum(stored_end.as_i64()));
+    }
+    if window_end.is_current()
+        && eval
+            .fresh_window_display_snapshot(fid, wid, buffer_id)
+            .is_some()
+    {
+        // GNU Fwindow_end only constructs a stack-local iterator when the
+        // window's accepted end is no longer valid. The full retained-layout
+        // token is Neomacs's authoritative equivalent of GNU's validity bits.
+        return Ok(Value::fixnum(stored_end.as_i64()));
+    }
+
+    match eval.query_window_layout(fid, wid) {
+        crate::window::WindowLayoutQueryOutcome::Ready(query) => {
+            return Ok(Value::fixnum(query.end().as_i64()));
+        }
+        crate::window::WindowLayoutQueryOutcome::Unavailable => {}
+        crate::window::WindowLayoutQueryOutcome::LayoutBusy => {
+            return Err(signal(
+                LispCondition::Error,
+                vec![Value::string(
+                    "Window layout query reentered an active layout callback",
+                )],
+            ));
+        }
+        crate::window::WindowLayoutQueryOutcome::Failed(failure) => {
+            return Err(signal(
+                LispCondition::Error,
+                vec![Value::string(failure.message())],
+            ));
+        }
+    }
+
+    Ok(Value::fixnum(stored_end.as_i64()))
+}
+
+/// `(window-end &optional WINDOW UPDATE)` -> integer position.
+#[doc(hidden)]
+pub fn builtin_window_end(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-end", &args, 2)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::WindowDomain::Live,
+    )?;
+    let policy = if args.get(1).is_some_and(|arg| !arg.is_nil()) {
+        WindowEndQueryPolicy::EnsureCurrent
+    } else {
+        WindowEndQueryPolicy::LastPresented
+    };
+    query_window_end(eval, fid, wid, policy)
+}
+/// `(window-point &optional WINDOW)` -> integer position.
+#[doc(hidden)]
+pub fn builtin_window_point(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-point", &args, 1)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let w = get_leaf(frames, fid, wid)?;
+    match w {
+        Window::Leaf {
+            buffer_id, point, ..
+        } => {
+            let selected_live_window = frames
+                .selected_frame()
+                .is_some_and(|frame| frame.id == fid && frame.selected_window == wid);
+            if selected_live_window && let Some(buffer) = buffers.get(*buffer_id) {
+                return Ok(Value::fixnum(
+                    buffer.point_char_pos().get().saturating_add(1) as i64,
+                ));
+            }
+            Ok(Value::fixnum(point.as_i64()))
+        }
+        _ => Ok(Value::fixnum(0)),
+    }
+}
+/// `(set-window-start WINDOW POS &optional NOFORCE)` -> POS.
+#[doc(hidden)]
+pub fn builtin_set_window_start(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("set-window-start", &args, 2)?;
+    expect_max_args("set-window-start", &args, 3)?;
+    let chrome_dirty_window;
+    let result = {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (fid, wid) = resolve_window_id_with_pred_in_state(
+            frames,
+            buffers,
+            args.first(),
+            WindowDomain::Live,
+        )?;
+        let pos = parse_integer_or_marker_arg(&args[1])?;
+        // GNU Fset_window_start: w->force_start = !NILP (noforce) ? 0 : 1 —
+        // an explicit start is honored by the next redisplay (point moves
+        // into the window if needed) unless NOFORCE asks for the soft mode.
+        let force_start_p = args.get(2).is_none_or(|noforce| noforce.is_nil());
+        // GNU `Fset_window_start` calls `wset_update_mode_line (w)`
+        // (window.c:1969): a moved window start changes `%p`/`%l`, and it is
+        // window-scoped, not buffer-scoped.
+        chrome_dirty_window = Some(wid);
+        let is_minibuffer = frames
+            .get(fid)
+            .is_some_and(|frame| frame.minibuffer_window == Some(wid));
+        match pos {
+            IntegerOrMarkerArg::Int(pos) => {
+                if !is_minibuffer
+                    && let Some(clamped) =
+                        clamped_window_position_in_state(frames, buffers, fid, wid, pos)
+                    && let Some(window) = frames
+                        .get_mut(fid)
+                        .and_then(|frame| frame.find_window_mut(wid))
+                {
+                    crate::window::window_markers::set_window_start_with_marker(
+                        buffers, window, clamped,
+                    );
+                    set_window_force_start(window, force_start_p);
+                }
+                Value::fixnum(pos)
+            }
+            IntegerOrMarkerArg::Marker { raw, position } => {
+                if !is_minibuffer
+                    && let Some(pos) = position
+                    && let Some(clamped) =
+                        clamped_window_position_in_state(frames, buffers, fid, wid, pos)
+                    && let Some(window) = frames
+                        .get_mut(fid)
+                        .and_then(|frame| frame.find_window_mut(wid))
+                {
+                    crate::window::window_markers::set_window_start_with_marker(
+                        buffers, window, clamped,
+                    );
+                    set_window_force_start(window, force_start_p);
+                }
+                raw
+            }
+        }
+    };
+    if let Some(window) = chrome_dirty_window {
+        eval.mark_chrome_dirty_window(window);
+        eval.gnu_mark_window_mode_line(window);
+    }
+    Ok(result)
+}
+fn set_window_force_start(window: &mut Window, force: bool) {
+    if let Window::Leaf { force_start, .. } = window {
+        *force_start = force;
+    }
+    // GNU `Fset_window_start` clears `w->window_end_valid` for every call,
+    // NOFORCE or not (src/window.c:1970, "Bug#15957"): the recorded end
+    // belongs to the rows the previous start produced, and the next
+    // redisplay must not take it as evidence about the new start.  With
+    // NOFORCE this used to keep the record current, so a start set near
+    // EOB from a window that had shown an earlier page was recentered
+    // around point instead of being displayed as GNU's "same window start"
+    // branch does (src/xdisp.c:20972-21060) when point is visible from it.
+    window.invalidate_window_end();
+}
+
+/// `(set-window-point WINDOW POS)` -> POS.
+#[doc(hidden)]
+pub fn builtin_set_window_point(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("set-window-point", &args, 2)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let globally_selected = frames.selected_frame().map(|frame| frame.selected_window);
+    let pos = parse_integer_or_marker_arg(&args[1])?;
+    let is_minibuffer = frames
+        .get(fid)
+        .is_some_and(|frame| frame.minibuffer_window == Some(wid));
+    let result = match pos {
+        IntegerOrMarkerArg::Int(pos) => {
+            if !is_minibuffer
+                && let Some(clamped) =
+                    clamped_window_position_in_state(frames, buffers, fid, wid, pos)
+            {
+                let selected_live_window =
+                    if neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+                        globally_selected == Some(wid)
+                    } else {
+                        frames
+                            .get(fid)
+                            .is_some_and(|frame| frame.selected_window == wid)
+                    };
+                let mut buffer_to_move = None;
+                if let Some(window) = frames
+                    .get_mut(fid)
+                    .and_then(|frame| frame.find_window_mut(wid))
+                {
+                    let buffer_id = window.buffer_id();
+                    crate::window::window_markers::set_window_point_with_marker(
+                        buffers, window, clamped,
+                    );
+                    if selected_live_window
+                        && let Some(buffer_id) = buffer_id
+                        && let Some(buffer) = buffers.get(buffer_id)
+                    {
+                        buffer_to_move =
+                            Some((buffer_id, buffer.lisp_pos_to_emacs_byte_pos(clamped)));
+                    }
+                }
+                if let Some((buffer_id, byte_pos)) = buffer_to_move {
+                    let _ = buffers.goto_buffer_emacs_byte_pos(buffer_id, byte_pos);
+                }
+            }
+            Ok(Value::fixnum(pos))
+        }
+        IntegerOrMarkerArg::Marker { raw, position } => {
+            if is_minibuffer {
+                return Ok(raw);
+            }
+            let pos = position.ok_or_else(|| {
+                signal(
+                    "error",
+                    vec![Value::string("Marker does not point anywhere")],
+                )
+            })?;
+            if let Some(clamped) = clamped_window_position_in_state(frames, buffers, fid, wid, pos)
+            {
+                let selected_live_window =
+                    if neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+                        globally_selected == Some(wid)
+                    } else {
+                        frames
+                            .get(fid)
+                            .is_some_and(|frame| frame.selected_window == wid)
+                    };
+                let mut buffer_to_move = None;
+                if let Some(window) = frames
+                    .get_mut(fid)
+                    .and_then(|frame| frame.find_window_mut(wid))
+                {
+                    let buffer_id = window.buffer_id();
+                    crate::window::window_markers::set_window_point_with_marker(
+                        buffers, window, clamped,
+                    );
+                    if selected_live_window
+                        && let Some(buffer_id) = buffer_id
+                        && let Some(buffer) = buffers.get(buffer_id)
+                    {
+                        buffer_to_move =
+                            Some((buffer_id, buffer.lisp_pos_to_emacs_byte_pos(clamped)));
+                    }
+                }
+                if let Some((buffer_id, byte_pos)) = buffer_to_move {
+                    let _ = buffers.goto_buffer_emacs_byte_pos(buffer_id, byte_pos);
+                }
+                Ok(Value::fixnum(clamped.as_i64()))
+            } else {
+                Ok(Value::fixnum(1))
+            }
+        }
+    };
+    // GNU window.c:1929-1933 publishes only the nonselected marker path.
+    if globally_selected != Some(wid) {
+        eval.gnu_mark_window_redisplay(wid);
+    }
+    result
+}
+/// `(window-use-time &optional WINDOW)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_use_time(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-use-time", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    Ok(Value::fixnum(frames.window_use_time(wid)))
+}
+/// `(window-bump-use-time &optional WINDOW)` -> integer or nil.
+#[doc(hidden)]
+pub fn builtin_window_bump_use_time(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-bump-use-time", &args, 1)?;
+    let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
+    let selected_wid = frames
+        .get(selected_fid)
+        .map(|frame| frame.selected_window)
+        .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?;
+    let target_wid = if args.first().is_none_or(|v| v.is_nil()) {
+        selected_wid
+    } else {
+        let val = args.first().unwrap();
+        match val.kind() {
+            ValueKind::Veclike(VecLikeType::Window) => {
+                let raw_id = val.as_window_id().unwrap();
+                let wid = WindowId(raw_id);
+                if frames.find_window_frame_id(wid).is_none() {
+                    return Err(signal(
+                        LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("window-live-p"), Value::make_window(raw_id)],
+                    ));
+                }
+                wid
+            }
+            _ => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("window-live-p"), *val],
+                ));
+            }
+        }
+    };
+    Ok(
+        match frames.bump_window_use_time(selected_wid, target_wid) {
+            Some(use_time) => Value::fixnum(use_time),
+            None => Value::NIL,
+        },
+    )
+}
+/// `(window-old-point &optional WINDOW)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_old_point(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-old-point", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let w = get_leaf(frames, fid, wid)?;
+    match w {
+        Window::Leaf { old_point, .. } => {
+            Ok(Value::fixnum((*old_point).max(LispCharPos1::ONE).as_i64()))
+        }
+        _ => Ok(Value::fixnum(1)),
+    }
+}
+/// `(window-old-buffer &optional WINDOW)` -> the buffer WINDOW last showed.
+///
+/// GNU decodes WINDOW with `decode_any_window` -- `CHECK_WINDOW`, the loosest
+/// of its three decoders -- so the docstring can say "WINDOW can be any window
+/// and defaults to the selected one" (`src/window.c`).  An internal window is
+/// an answer (always nil), and so is a window that has since been DELETED;
+/// only a non-window signals, and it signals `windowp`, not `window-live-p`.
+///
+/// The value is still a stub.  GNU answers from `w->old_buffer` and
+/// `w->change_stamp`:
+///
+/// ```c
+///   return (NILP (w->old_buffer)                                   ? Qnil
+///           : (w->change_stamp != WINDOW_XFRAME (w)->change_stamp) ? Qt
+///           : w->old_buffer);
+/// ```
+///
+/// Neomacs keeps the equivalent of `old_buffer` -- `WindowHookSnapshot::buffer_id`
+/// in `frame.window_hook_record`, written where GNU runs
+/// `run_window_change_functions` -- but has no per-window change stamp to
+/// decide the `t` arm, which GNU uses for a window restored from a window
+/// configuration.  Wiring that up is tracked as Phase 4 of
+/// `drafts/window-system-audit.md`; returning nil is what this build honestly
+/// knows, and inventing a `t` here would report a distinction nothing behind
+/// it can make.
+#[doc(hidden)]
+pub fn builtin_window_old_buffer(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-old-buffer", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let window = resolve_window_object_id_with_pred_in_state(
+        frames,
+        buffers,
+        args.first(),
+        WindowDomain::Any,
+    )?;
+    Ok(match frames.window_old_buffer(window) {
+        crate::window::WindowOldBuffer::NeverRecorded => Value::NIL,
+        crate::window::WindowOldBuffer::StaleEpoch => Value::T,
+        crate::window::WindowOldBuffer::Recorded(buffer) => buffers
+            .get(buffer)
+            .map_or(Value::NIL, |_| Value::make_buffer(buffer)),
+    })
+}
+/// `(window-prev-buffers &optional WINDOW)` -> previous buffer list or nil.
+#[doc(hidden)]
+pub fn builtin_window_prev_buffers(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-prev-buffers", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    Ok(frames.window_prev_buffers(wid))
+}
+/// `(window-next-buffers &optional WINDOW)` -> next buffer list or nil.
+#[doc(hidden)]
+pub fn builtin_window_next_buffers(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-next-buffers", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    Ok(frames.window_next_buffers(wid))
+}
+/// `(set-window-prev-buffers WINDOW PREV-BUFFERS)` -> PREV-BUFFERS.
+#[doc(hidden)]
+pub fn builtin_set_window_prev_buffers(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("set-window-prev-buffers", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let value = args[1];
+    frames.set_window_prev_buffers(wid, value);
+    Ok(value)
+}
+/// `(set-window-next-buffers WINDOW NEXT-BUFFERS)` -> NEXT-BUFFERS.
+#[doc(hidden)]
+pub fn builtin_set_window_next_buffers(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("set-window-next-buffers", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let value = args[1];
+    frames.set_window_next_buffers(wid, value);
+    Ok(value)
+}
+
+/// `(window-discard-buffer-from-window BUFFER WINDOW &optional ALL)` -> nil.
+#[doc(hidden)]
+pub fn builtin_window_discard_buffer_from_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_min_args("window-discard-buffer-from-window", &args, 2)?;
+    expect_max_args("window-discard-buffer-from-window", &args, 3)?;
+    let buffer_id = match args.first().and_then(|v| v.as_buffer_id()) {
+        Some(bid) if buffers.get(bid).is_some() => bid,
+        _ => {
+            return Err(signal("error", vec![Value::string("Not a live buffer")]));
+        }
+    };
+    let wid = match args.get(1).and_then(window_id_from_designator) {
+        Some(wid) if frames.is_live_window_id(wid) => wid,
+        _ => return Err(signal("error", vec![Value::string("Not a live window")])),
+    };
+    discard_buffers_from_window_history(frames, wid, &[Value::make_buffer(buffer_id)])?;
+    Ok(Value::NIL)
+}
+
+/// `(combine-windows FIRST LAST)` -> nil or a new internal parent window.
+///
+/// GNU `Fcombine_windows` starts by decoding both arguments with
+/// `decode_valid_window`, so nil defaults to the selected window and
+/// non-window values signal `window-valid-p`.
+#[doc(hidden)]
+pub fn builtin_combine_windows(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("combine-windows", &args, 2)?;
+    let (_first_fid, first_wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let (_last_fid, last_wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.get(1), WindowDomain::Valid)?;
+
+    if first_wid == last_wid {
+        return Err(signal(
+            "error",
+            vec![Value::string("Cannot combine a window with itself")],
+        ));
+    }
+
+    Ok(Value::NIL)
+}
+
+/// `(uncombine-window WINDOW)` -> t if WINDOW was flattened, else nil.
+///
+/// GNU `Funcombine_window` validates with `decode_valid_window` before testing
+/// whether WINDOW is an internal combination of the same direction as its
+/// parent.
+#[doc(hidden)]
+pub fn builtin_uncombine_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("uncombine-window", &args, 1)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+
+    if frames
+        .get(fid)
+        .is_some_and(|frame| frame.minibuffer_window == Some(wid))
+    {
+        return Err(signal(
+            "error",
+            vec![Value::string("Cannot uncombine a mini window")],
+        ));
+    }
+
+    Ok(Value::NIL)
+}
+
+/// `(window-left-column &optional WINDOW)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_left_column(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-left-column", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    // GNU `Fwindow_left_column` returns `w->left_col` directly. See
+    // `Window::left_col`.
+    Ok(Value::fixnum(w.left_col()))
+}
+/// `(window-top-line &optional WINDOW)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_top_line(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-top-line", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    // GNU `Fwindow_top_line` returns `w->top_line` directly (the stored
+    // character-line edge maintained by the resize passes, decoupled from pixel
+    // geometry -- it includes FRAME_TOP_MARGIN, which has no pixel height in
+    // batch). See `Window::top_line`.
+    Ok(Value::fixnum(w.top_line()))
+}
+
+fn geometry_invariant(message: impl Into<String>) -> Flow {
+    signal(
+        "error",
+        vec![Value::string(format!(
+            "GUI geometry invariant violated: {}",
+            message.into()
+        ))],
+    )
+}
+
+/// Return regions from the latest completed redisplay, independent of which
+/// presentation the renderer currently has active.
+///
+/// GNU `window-*` primitives query synchronous editor/current-matrix state;
+/// they do not wait for a compositor or renderer acknowledgement.
+fn published_window_regions<'a>(
+    frames: &'a FrameManager,
+    fid: FrameId,
+    wid: WindowId,
+) -> Result<Option<PublishedWindowRegions<'a>>, Flow> {
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let Some(snapshot) = frame.redisplay_snapshot(wid) else {
+        return Ok(None);
+    };
+    Ok(snapshot
+        .regions_materialized
+        .then(|| PublishedWindowRegions::new(&snapshot.regions)))
+}
+
+/// Map a published-geometry validation failure to the same Lisp error the
+/// full `WindowRegions` conversion reported.
+fn published_geometry<T>(
+    result: Result<T, crate::window::geometry::GeometryError>,
+) -> Result<T, Flow> {
+    result.map_err(|error| geometry_invariant(format!("{error:?}")))
+}
+
+fn tty_batch_pixel_left(window: &Window, char_width: f32) -> i64 {
+    if char_width > 0.0 {
+        (window.bounds().x / char_width) as i64
+    } else {
+        0
+    }
+}
+
+fn tty_batch_pixel_top(window: &Window, char_height: f32) -> i64 {
+    if char_height > 0.0 {
+        (window.bounds().y / char_height) as i64
+    } else {
+        0
+    }
+}
+/// `(window-pixel-left &optional WINDOW)` -> integer.
+///
+/// Graphical frames report the stored frame-relative pixel coordinate.  In
+/// batch-mode GNU Emacs, this helper reports character-cell units instead.
+#[doc(hidden)]
+pub fn builtin_window_pixel_left(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-pixel-left", &args, 1)?;
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    let frame = frames.get(window.frame());
+    let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
+    let cw = frame.map(|frame| frame.char_width).unwrap_or(8.0);
+    let left = if graphical {
+        // GNU `Fwindow_pixel_left` returns `w->pixel_left` directly.
+        w.bounds().x as i64
+    } else {
+        tty_batch_pixel_left(w, cw)
+    };
+    Ok(Value::fixnum(left))
+}
+/// `(window-pixel-top &optional WINDOW)` -> integer.
+///
+/// Graphical frames report the stored frame-relative pixel coordinate.  In
+/// batch-mode GNU Emacs, this helper reports character-cell units instead.
+#[doc(hidden)]
+pub fn builtin_window_pixel_top(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-pixel-top", &args, 1)?;
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    let frame = frames.get(window.frame());
+    let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
+    let ch = frame.map(|frame| frame.char_height).unwrap_or(16.0);
+    let top = if graphical {
+        // GNU `Fwindow_pixel_top` returns `w->pixel_top` directly.
+        w.bounds().y as i64
+    } else {
+        tty_batch_pixel_top(w, ch)
+    };
+    Ok(Value::fixnum(top))
+}
+/// `(window-hscroll &optional WINDOW)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_hscroll(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-hscroll", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let w = get_leaf(frames, fid, wid)?;
+    match w {
+        Window::Leaf { hscroll, .. } => Ok(Value::fixnum(*hscroll as i64)),
+        _ => Ok(Value::fixnum(0)),
+    }
+}
+/// `(set-window-hscroll WINDOW NCOLS)` -> integer.
+#[doc(hidden)]
+pub fn builtin_set_window_hscroll(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("set-window-hscroll", &args, 2)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let cols = expect_fixnum(&args[1])?.max(0) as usize;
+    let mut changed = false;
+    if let Some(Window::Leaf {
+        hscroll,
+        suspend_auto_hscroll,
+        ..
+    }) = frames
+        .get_mut(fid)
+        .and_then(|frame| frame.find_window_mut(wid))
+    {
+        changed = *hscroll != cols;
+        *hscroll = cols;
+        // GNU `set_window_hscroll` (src/window.c:1289) suspends auto hscroll
+        // so an explicit set-window-hscroll is not immediately overridden by
+        // the auto-hscroll redisplay pass; it is un-suspended once window
+        // point explicitly moves (hscroll_window_tree STEP 4).
+        *suspend_auto_hscroll = true;
+    }
+    if changed {
+        eval.gnu_mark_window_redisplay(wid);
+    }
+    Ok(Value::fixnum(cols as i64))
+}
+
+fn scroll_prefix_value(value: &Value) -> i64 {
+    neovm_value::prefix::prefix_numeric_value(value)
+}
+
+fn default_scroll_columns_in_state(frames: &FrameManager, fid: FrameId, wid: WindowId) -> i64 {
+    let char_width = frames.get(fid).map(|f| f.char_width).unwrap_or(8.0);
+    let window_cols = get_leaf(frames, fid, wid)
+        .ok()
+        .map(|leaf| {
+            if char_width > 0.0 {
+                (leaf.bounds().width / char_width).floor() as i64
+            } else {
+                80
+            }
+        })
+        .unwrap_or(80);
+    (window_cols - 2).max(1)
+}
+/// `(scroll-left &optional SET-MINIMUM ARG)` -> new horizontal scroll amount.
+#[doc(hidden)]
+pub fn builtin_scroll_left(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("scroll-left", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) = resolve_window_id_in_state(frames, buffers, None)?;
+    let base = frames
+        .get(fid)
+        .and_then(|frame| frame.find_window(wid))
+        .and_then(|window| match window {
+            Window::Leaf { hscroll, .. } => Some(*hscroll as i64),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let delta = if args.first().is_none_or(|v| v.is_nil()) {
+        default_scroll_columns_in_state(frames, fid, wid)
+    } else {
+        scroll_prefix_value(args.first().unwrap())
+    };
+    let next = crate::window::HorizontalScroll::saturating(i128::from(base) + i128::from(delta));
+    let result = Value::from_fixnum(next.into());
+    let next = i64::from(next);
+    // GNU `scroll-left` (src/window.c:7113): the optional second argument
+    // SET-MINIMUM (non-nil in an interactive call via the `\np` spec) makes
+    // the new scroll amount the lower bound for automatic hscrolling.
+    let set_minimum = args.get(1).is_some_and(|v| !v.is_nil());
+    if let Some(Window::Leaf {
+        hscroll,
+        min_hscroll,
+        suspend_auto_hscroll,
+        ..
+    }) = frames
+        .get_mut(fid)
+        .and_then(|frame| frame.find_window_mut(wid))
+    {
+        *hscroll = next as usize;
+        if set_minimum {
+            *min_hscroll = *hscroll;
+        }
+        // GNU suspends auto hscroll after any scroll-left/right so the manual
+        // scroll position is honored until window point explicitly moves.
+        *suspend_auto_hscroll = true;
+    }
+    // Both GNU commands use changed-only set_window_hscroll.
+    if next != base {
+        eval.gnu_mark_window_redisplay(wid);
+    }
+    Ok(result)
+}
+/// `(scroll-right &optional SET-MINIMUM ARG)` -> new horizontal scroll amount.
+#[doc(hidden)]
+pub fn builtin_scroll_right(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("scroll-right", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) = resolve_window_id_in_state(frames, buffers, None)?;
+    let base = frames
+        .get(fid)
+        .and_then(|frame| frame.find_window(wid))
+        .and_then(|window| match window {
+            Window::Leaf { hscroll, .. } => Some(*hscroll as i64),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let delta = if args.first().is_none_or(|v| v.is_nil()) {
+        default_scroll_columns_in_state(frames, fid, wid)
+    } else {
+        scroll_prefix_value(args.first().unwrap())
+    };
+    let next = crate::window::HorizontalScroll::saturating(i128::from(base) - i128::from(delta));
+    let result = Value::from_fixnum(next.into());
+    let next = i64::from(next);
+    // GNU `scroll-right` (src/window.c:7139): mirror of scroll-left.
+    let set_minimum = args.get(1).is_some_and(|v| !v.is_nil());
+    if let Some(Window::Leaf {
+        hscroll,
+        min_hscroll,
+        suspend_auto_hscroll,
+        ..
+    }) = frames
+        .get_mut(fid)
+        .and_then(|frame| frame.find_window_mut(wid))
+    {
+        *hscroll = next as usize;
+        if set_minimum {
+            *min_hscroll = *hscroll;
+        }
+        *suspend_auto_hscroll = true;
+    }
+    // Both GNU commands use changed-only set_window_hscroll.
+    if next != base {
+        eval.gnu_mark_window_redisplay(wid);
+    }
+    Ok(result)
+}
+/// `(window-vscroll &optional WINDOW PIXELWISE)` -> number.
+///
+/// GNU stores vertical scroll on each window in pixels. Batch-mode windows
+/// report zero; GUI windows report either pixels or canonical line units.
+#[doc(hidden)]
+pub fn builtin_window_vscroll(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-vscroll", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let pixelwise = args.get(1).is_some_and(|v| v.is_truthy());
+    Ok(frames
+        .window_vscroll(wid, pixelwise)
+        .unwrap_or(Value::fixnum(0)))
+}
+/// `(set-window-vscroll WINDOW VSCROLL &optional PIXELWISE PRESERVE)` -> number.
+#[doc(hidden)]
+pub fn builtin_set_window_vscroll(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_min_args("set-window-vscroll", &args, 2)?;
+    expect_max_args("set-window-vscroll", &args, 4)?;
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let next_vscroll = expect_number(&args[1])?;
+    let pixelwise = args.get(2).is_some_and(|v| v.is_truthy());
+    let preserve = args.get(3).is_some_and(|v| v.is_truthy());
+    let previous = frames.window_vscroll(wid, true);
+    let result = frames
+        .set_window_vscroll(wid, next_vscroll, pixelwise, preserve)
+        .unwrap_or(Value::fixnum(0));
+    let changed = frames.window_vscroll(wid, true) != previous;
+    if changed {
+        eval.gnu_mark_window_redisplay(wid);
+    }
+    Ok(result)
+}
+/// `(set-window-margins WINDOW LEFT-WIDTH &optional RIGHT-WIDTH)` -> changed-p.
+#[doc(hidden)]
+pub fn builtin_set_window_margins(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_min_args("set-window-margins", &args, 2)?;
+    expect_max_args("set-window-margins", &args, 3)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let left = expect_margin_width(&args[1])?;
+    let right = if let Some(arg) = args.get(2) {
+        expect_margin_width(arg)?
+    } else {
+        0
+    };
+
+    if let Some(Window::Leaf { margins, .. }) = frames
+        .get_mut(fid)
+        .and_then(|frame| frame.find_window_mut(wid))
+    {
+        let next = WindowMargins::new(left, right);
+        if *margins != next {
+            *margins = next;
+            if let Some(frame) = frames.get_mut(fid) {
+                frame.tty_posn_apply_window_adjustment(wid);
+            }
+            // GNU apply_window_adjustment (window.c:8415-8421).
+            eval.gnu_mark_window_redisplay(wid);
+            return Ok(Value::T);
+        }
+    }
+    Ok(Value::NIL)
+}
+/// `(window-margins &optional WINDOW)` -> margins pair or nil.
+#[doc(hidden)]
+pub fn builtin_window_margins(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-margins", &args, 1)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let w = get_leaf(frames, fid, wid)?;
+    let margins = match w {
+        Window::Leaf { margins, .. } => *margins,
+        _ => WindowMargins::ZERO,
+    };
+    let left = margins.left();
+    let right = margins.right();
+    let left_v = if left == 0 {
+        Value::NIL
+    } else {
+        Value::fixnum(left as i64)
+    };
+    let right_v = if right == 0 {
+        Value::NIL
+    } else {
+        Value::fixnum(right as i64)
+    };
+    Ok(Value::cons(left_v, right_v))
+}
+/// `(window-fringes &optional WINDOW)` -> fringe tuple.
+#[doc(hidden)]
+pub fn builtin_window_fringes(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-fringes", &args, 1)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (left, right, outside, persistent) =
+        frames.window_fringes(wid).unwrap_or((0, 0, false, false));
+    Ok(Value::list(vec![
+        Value::fixnum(left),
+        Value::fixnum(right),
+        if outside { Value::T } else { Value::NIL },
+        if persistent { Value::T } else { Value::NIL },
+    ]))
+}
+/// `(set-window-fringes WINDOW LEFT &optional RIGHT OUTSIDE-MARGINS PERSISTENT)` -> nil.
+#[doc(hidden)]
+pub fn builtin_set_window_fringes(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_min_args("set-window-fringes", &args, 2)?;
+    expect_max_args("set-window-fringes", &args, 5)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    if frames
+        .get(fid)
+        .is_none_or(|frame| frame.effective_window_system().is_none())
+    {
+        return Ok(Value::NIL);
+    }
+    let left = if args[1].is_nil() {
+        None
+    } else {
+        Some(i32::try_from(expect_int(&args[1])?).map_err(|_| {
+            signal(
+                LispCondition::ArgsOutOfRange,
+                vec![
+                    args[1],
+                    Value::fixnum(0),
+                    Value::fixnum(i64::from(i32::MAX)),
+                ],
+            )
+        })?)
+    };
+    let right = if let Some(arg) = args.get(2) {
+        if arg.is_nil() {
+            None
+        } else {
+            Some(i32::try_from(expect_int(arg)?).map_err(|_| {
+                signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![*arg, Value::fixnum(0), Value::fixnum(i64::from(i32::MAX))],
+                )
+            })?)
+        }
+    } else {
+        left
+    };
+    let before = frames
+        .window_fringes(wid)
+        .map(|(left, right, outside, _)| (left, right, outside));
+    let changed = frames.set_window_fringes(
+        wid,
+        left,
+        right,
+        args.get(3).is_some_and(|value| value.is_truthy()),
+        args.get(4).is_some_and(|value| value.is_truthy()),
+    );
+    let geometry_changed = frames
+        .window_fringes(wid)
+        .map(|(left, right, outside, _)| (left, right, outside))
+        != before;
+    let is_gui = frames
+        .find_window_frame_id(wid)
+        .and_then(|frame| frames.get(frame))
+        .is_some_and(|frame| frame.effective_window_system().is_some());
+    if geometry_changed && is_gui {
+        // GNU set_window_fringes raises global ALL before apply_window_adjustment.
+        eval.gnu_mark_windows_all();
+        eval.gnu_mark_window_redisplay(wid);
+    }
+    Ok(Value::bool_val(changed))
+}
+/// `(window-scroll-bars &optional WINDOW)` -> scroll-bar tuple.
+#[doc(hidden)]
+pub fn builtin_window_scroll_bars(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-scroll-bars", &args, 1)?;
+    let (_fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (width, columns, vertical_type, height, lines, horizontal_type, persistent) = frames
+        .window_scroll_bars(wid)
+        .unwrap_or((Value::NIL, 0, Value::T, Value::NIL, 0, Value::T, false));
+    Ok(Value::list(vec![
+        width,
+        Value::fixnum(columns),
+        vertical_type,
+        height,
+        Value::fixnum(lines),
+        horizontal_type,
+        if persistent { Value::T } else { Value::NIL },
+    ]))
+}
+/// `(set-window-scroll-bars WINDOW &optional WIDTH VERTICAL-TYPE HEIGHT HORIZONTAL-TYPE)` -> nil.
+#[doc(hidden)]
+pub fn builtin_set_window_scroll_bars(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_min_args("set-window-scroll-bars", &args, 1)?;
+    expect_max_args("set-window-scroll-bars", &args, 6)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    if frames
+        .get(fid)
+        .is_none_or(|frame| frame.effective_window_system().is_none())
+    {
+        return Ok(Value::NIL);
+    }
+    let width = if let Some(arg) = args.get(1) {
+        if arg.is_nil() {
+            None
+        } else {
+            Some(i32::try_from(expect_int(arg)?).map_err(|_| {
+                signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![*arg, Value::fixnum(0), Value::fixnum(i64::from(i32::MAX))],
+                )
+            })?)
+        }
+    } else {
+        None
+    };
+    let vertical_type = args.get(2).copied().unwrap_or(Value::T);
+    if !valid_vertical_scroll_bar_type(vertical_type) {
+        return Err(signal(
+            "error",
+            vec![Value::string("Invalid type of vertical scroll bar")],
+        ));
+    }
+    let height = if let Some(arg) = args.get(3) {
+        if arg.is_nil() {
+            None
+        } else {
+            Some(i32::try_from(expect_int(arg)?).map_err(|_| {
+                signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![*arg, Value::fixnum(0), Value::fixnum(i64::from(i32::MAX))],
+                )
+            })?)
+        }
+    } else {
+        None
+    };
+    let horizontal_type = args.get(4).copied().unwrap_or(Value::T);
+    if !valid_horizontal_scroll_bar_type(horizontal_type) {
+        return Err(signal(
+            "error",
+            vec![Value::string("Invalid type of horizontal scroll bar")],
+        ));
+    }
+    let before = frames.window_scroll_bars(wid).map(
+        |(width, cols, vertical, height, lines, horizontal, _)| {
+            (width, cols, vertical, height, lines, horizontal)
+        },
+    );
+    let changed = frames.set_window_scroll_bars(
+        wid,
+        width,
+        vertical_type,
+        height,
+        horizontal_type,
+        args.get(5).is_some_and(|value| value.is_truthy()),
+    );
+    let geometry_changed = frames.window_scroll_bars(wid).map(
+        |(width, cols, vertical, height, lines, horizontal, _)| {
+            (width, cols, vertical, height, lines, horizontal)
+        },
+    ) != before;
+    let is_gui = frames
+        .find_window_frame_id(wid)
+        .and_then(|frame| frames.get(frame))
+        .is_some_and(|frame| frame.effective_window_system().is_some());
+    if geometry_changed && is_gui {
+        eval.gnu_mark_window_redisplay(wid);
+    }
+    Ok(Value::bool_val(changed))
+}
+
+/// `(window-scroll-bar-width &optional WINDOW)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_scroll_bar_width(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-scroll-bar-width", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    if let Some(regions) = published_window_regions(frames, fid, wid)? {
+        return Ok(Value::fixnum(published_geometry(
+            regions.scroll_bar_width_pixels(),
+        )?));
+    }
+    Ok(Value::fixnum(frames.window_scroll_bar_area_width(wid)))
+}
+
+/// `(window-scroll-bar-height &optional WINDOW)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_scroll_bar_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-scroll-bar-height", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    if let Some(regions) = published_window_regions(frames, fid, wid)? {
+        return Ok(Value::fixnum(published_geometry(
+            regions.horizontal_scroll_bar_height_pixels(),
+        )?));
+    }
+    Ok(Value::fixnum(frames.window_scroll_bar_area_height(wid)))
+}
+/// `(window-mode-line-height &optional WINDOW)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_mode_line_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-mode-line-height", &args, 1)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let height =
+        body_geometry::chrome_height_pixels(frames, buffers, fid, wid, WindowChromeLine::ModeLine)?;
+    Ok(Value::fixnum(height))
+}
+/// `(window-header-line-height &optional WINDOW)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_header_line_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-header-line-height", &args, 1)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    Ok(Value::fixnum(body_geometry::chrome_height_pixels(
+        frames,
+        buffers,
+        fid,
+        wid,
+        WindowChromeLine::HeaderLine,
+    )?))
+}
+/// `(window-tab-line-height &optional WINDOW)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_tab_line_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-tab-line-height", &args, 1)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    Ok(Value::fixnum(body_geometry::chrome_height_pixels(
+        frames,
+        buffers,
+        fid,
+        wid,
+        WindowChromeLine::TabLine,
+    )?))
+}
+
+/// `(window-pixel-height &optional WINDOW)` -> integer.
+///
+/// In batch-mode GNU Emacs, these "pixel" helpers report character-cell units.
+#[doc(hidden)]
+pub fn builtin_window_pixel_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-pixel-height", &args, 1)?;
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    // GNU `Fwindow_pixel_height` returns `w->pixel_height` directly.  This is
+    // synchronous window-layout state and exists before the first redisplay;
+    // it is not a query against the last frame presented by the renderer.
+    Ok(Value::fixnum(window_height_pixels(w)))
+}
+/// `(window-pixel-width &optional WINDOW)` -> integer.
+///
+/// In batch-mode GNU Emacs, these "pixel" helpers report character-cell units.
+#[doc(hidden)]
+pub fn builtin_window_pixel_width(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-pixel-width", &args, 1)?;
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    // GNU `Fwindow_pixel_width` returns `w->pixel_width` directly.  Keep this
+    // public Lisp primitive on the logical-layout side of the geometry seam.
+    Ok(Value::fixnum(window_width_pixels(w)))
+}
+/// `(window-body-height &optional WINDOW PIXELWISE)` -> integer.
+///
+/// Returns the body height of WINDOW.  PIXELWISE follows GNU's three-state
+/// contract: nil uses canonical lines, `remap` uses the buffer-remapped
+/// default face, and every other non-nil value uses pixels.
+/// Body excludes the window's actual chrome, scroll bar and divider areas.
+#[doc(hidden)]
+pub fn builtin_window_body_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    expect_max_args("window-body-height", &args, 2)?;
+    let unit = window_body_unit_from_lisp(args.get(1));
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::WindowDomain::Live,
+    )?;
+    let remapped = remapped_window_body_cell_size(eval, fid, unit);
+    window_body_height_for_window(
+        &eval.frame_manager(),
+        &eval.edit.buffers,
+        fid,
+        wid,
+        unit,
+        remapped,
+    )
+}
+
+fn window_body_height_impl(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-body-height", &args, 2)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let unit = window_body_unit_from_lisp(args.get(1));
+    window_body_height_for_window(frames, buffers, fid, wid, unit, None)
+}
+
+fn canonical_window_body_cell_size(frames: &FrameManager, fid: FrameId) -> WindowBodyCellSize {
+    frames
+        .get(fid)
+        .map(|frame| WindowBodyCellSize::new(frame.char_width, frame.char_height))
+        .unwrap_or_else(|| WindowBodyCellSize::new(8.0, 16.0))
+}
+
+fn remapped_window_body_cell_size(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    fid: FrameId,
+    unit: WindowBodyUnit,
+) -> Option<WindowBodyCellSize> {
+    if unit != WindowBodyUnit::RemappedChars {
+        return None;
+    }
+    let font = super::font::resolve_current_buffer_remapped_default_face_font(eval, fid)?;
+    Some(WindowBodyCellSize::new(
+        font.font.char_width(),
+        font.font.line_height(),
+    ))
+}
+
+/// Logical body dimensions for GNU window-change records, without Lisp or
+/// display-motion queries. The caller owns its Context exclusively; these
+/// borrowed managers contain no new cache or cross-mutator state.
+#[doc(hidden)]
+pub fn hook_window_body_dimensions(
+    frames: &FrameManager,
+    buffers: &BufferManager,
+    fid: FrameId,
+    wid: WindowId,
+) -> Result<(i64, i64), Flow> {
+    let window = get_leaf(frames, fid, wid)?;
+    Ok((
+        window_body_width_pixels(frames, fid, window),
+        body_geometry::body_height_pixels(frames, buffers, fid, wid)?,
+    ))
+}
+
+fn window_body_height_for_window(
+    frames: &FrameManager,
+    buffers: &BufferManager,
+    fid: FrameId,
+    wid: WindowId,
+    unit: WindowBodyUnit,
+    remapped: Option<WindowBodyCellSize>,
+) -> EvalResult {
+    let pixels = body_geometry::body_height_pixels(frames, buffers, fid, wid)?;
+    Ok(Value::fixnum(unit.measure(
+        WindowBodyAxis::Height,
+        pixels,
+        canonical_window_body_cell_size(frames, fid),
+        remapped,
+    )))
+}
+/// `(window-body-width &optional WINDOW PIXELWISE)` -> integer.
+///
+/// Returns the body width of WINDOW.  PIXELWISE follows GNU's three-state
+/// contract: nil uses canonical columns, `remap` uses the buffer-remapped
+/// default face, and every other non-nil value uses pixels.
+#[doc(hidden)]
+pub fn builtin_window_body_width(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    expect_max_args("window-body-width", &args, 2)?;
+    let unit = window_body_unit_from_lisp(args.get(1));
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::WindowDomain::Live,
+    )?;
+    let remapped = remapped_window_body_cell_size(eval, fid, unit);
+    let window = get_leaf(&eval.frame_manager(), fid, wid)?;
+    let pixels = match published_window_regions(&eval.frame_manager(), fid, wid)? {
+        Some(regions) => published_geometry(regions.text_body_width_pixels())?,
+        None => window_body_width_pixels(&eval.frame_manager(), fid, window),
+    };
+    Ok(Value::fixnum(unit.measure(
+        WindowBodyAxis::Width,
+        pixels,
+        canonical_window_body_cell_size(&eval.frame_manager(), fid),
+        remapped,
+    )))
+}
+/// `(window-text-height &optional WINDOW PIXELWISE)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_text_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    eval.sync_pending_resize_events();
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-text-height", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let pixelwise = args.get(1).is_some_and(|v| v.is_truthy());
+    let body = body_geometry::body_height_pixels(frames, buffers, fid, wid)?;
+    if pixelwise {
+        Ok(Value::fixnum(body))
+    } else {
+        let char_height = frames
+            .get(fid)
+            .map(|frame| frame.char_height.max(1.0))
+            .unwrap_or(16.0);
+        let height = (body as f32 / char_height).floor() as i64;
+        Ok(Value::fixnum(height))
+    }
+}
+/// `(window-text-width &optional WINDOW PIXELWISE)` -> integer.
+#[doc(hidden)]
+pub fn builtin_window_text_width(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    eval.sync_pending_resize_events();
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-text-width", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let w = get_leaf(frames, fid, wid)?;
+    let pixelwise = args.get(1).is_some_and(|v| v.is_truthy());
+    if pixelwise {
+        let width = match published_window_regions(frames, fid, wid)? {
+            Some(regions) => published_geometry(regions.text_body_width_pixels())?,
+            None => window_body_width_pixels(frames, fid, w),
+        };
+        Ok(Value::fixnum(width))
+    } else {
+        let cw = frames
+            .get(fid)
+            .map(|f| f.char_width.max(1.0))
+            .unwrap_or(8.0);
+        let width = match published_window_regions(frames, fid, wid)? {
+            Some(regions) => published_geometry(regions.text_body_width_pixels())?,
+            None => window_body_width_pixels(frames, fid, w),
+        };
+        Ok(Value::fixnum((width as f32 / cw).floor() as i64))
+    }
+}
+/// `(window-total-height &optional WINDOW ROUND)` -> integer.
+///
+/// Works for both leaf and internal windows, matching GNU Emacs.
+#[doc(hidden)]
+pub fn builtin_window_total_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    window_total_height_impl(frames, buffers, args)
+}
+
+pub(crate) fn window_total_height_impl(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-total-height", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    let ch = frames
+        .get(window.frame())
+        .map(|f| f.char_height)
+        .unwrap_or(16.0);
+    Ok(Value::fixnum(
+        match args.get(1).and_then(|value| value.as_bare_symbol_name()) {
+            Some("floor") => (w.bounds().height / ch.max(1.0)).floor() as i64,
+            Some("ceiling") => (w.bounds().height / ch.max(1.0)).ceil() as i64,
+            _ => window_height_lines(w, ch),
+        },
+    ))
+}
+/// `(window-total-width &optional WINDOW ROUND)` -> integer.
+///
+/// Works for both leaf and internal windows, matching GNU Emacs.
+#[doc(hidden)]
+pub fn builtin_window_total_width(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    window_total_width_impl(frames, buffers, args)
+}
+
+pub(crate) fn window_total_width_impl(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-total-width", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    let cw = frames
+        .get(window.frame())
+        .map(|f| f.char_width)
+        .unwrap_or(8.0);
+    Ok(Value::fixnum(
+        match args.get(1).and_then(|value| value.as_bare_symbol_name()) {
+            Some("floor") => (w.bounds().width / cw.max(1.0)).floor() as i64,
+            Some("ceiling") => (w.bounds().width / cw.max(1.0)).ceil() as i64,
+            _ => window_width_cols(w, cw),
+        },
+    ))
+}
+/// `(window-list &optional FRAME MINIBUF WINDOW)` -> list of window objects.
+#[doc(hidden)]
+pub fn builtin_window_list(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-list", &args, 3)?;
+    let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
+    // GNU validates WINDOW before FRAME mismatch checks.
+    let requested_start_window = if args.get(2).is_none_or(|v| v.is_nil()) {
+        None
+    } else {
+        let arg = args.get(2).unwrap();
+        let Some(wid) = window_id_from_designator(arg) else {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("windowp"), *arg],
+            ));
+        };
+        if let Some(window_fid) = frames.find_window_frame_id(wid) {
+            Some((wid, window_fid))
+        } else if frames.is_window_object_id(wid) {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("window-live-p"), *arg],
+            ));
+        } else {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("windowp"), *arg],
+            ));
+        }
+    };
+    let fid = if args.first().is_none_or(|v| v.is_nil()) {
+        selected_fid
+    } else {
+        let val = args.first().unwrap();
+        match val.kind() {
+            // No `Fixnum` arm -- an integer is not a frame; see
+            // `frame::builtin_framep`.
+            ValueKind::Veclike(VecLikeType::Frame) => {
+                let raw_id = val.as_frame_id().unwrap();
+                let fid = FrameId(raw_id);
+                if frames.get(fid).is_some() {
+                    fid
+                } else {
+                    return Err(signal(
+                        "error",
+                        vec![Value::string("Window is on a different frame")],
+                    ));
+                }
+            }
+            _ => {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("Window is on a different frame")],
+                ));
+            }
+        }
+    };
+    let include_minibuffer = args.get(1).is_some_and(|v| *v == Value::T);
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let start_wid = if let Some((wid, window_fid)) = requested_start_window {
+        if window_fid != fid {
+            return Err(signal(
+                "error",
+                vec![Value::string("Window is on a different frame")],
+            ));
+        }
+        wid
+    } else {
+        frame.selected_window
+    };
+    let mut window_ids = frame.window_list();
+    if let Some(pos) = window_ids.iter().position(|wid| *wid == start_wid) {
+        window_ids.rotate_left(pos);
+    }
+    let mut ids: Vec<Value> = window_ids.into_iter().map(window_value).collect();
+    if include_minibuffer && let Some(minibuffer_wid) = frame.minibuffer_window {
+        ids.push(window_value(minibuffer_wid));
+    }
+    Ok(Value::list(ids))
+}
+/// `(window-list-1 &optional WINDOW MINIBUF ALL-FRAMES)` -> list of live windows.
+#[doc(hidden)]
+pub fn builtin_window_list_1(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let active_minibuffer_window = active_minibuffer_window_id(eval);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-list-1", &args, 3)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, start_wid) = if args.first().is_none_or(|v| v.is_nil()) {
+        resolve_window_id_with_pred_in_state(frames, buffers, None, WindowDomain::Live)?
+    } else {
+        let val = args.first().unwrap();
+        if let Some(raw_id) = val.as_window_id() {
+            let wid = WindowId(raw_id);
+            if let Some(fid) = frames.find_window_frame_id(wid) {
+                (fid, wid)
+            } else {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("window-live-p"), args[0]],
+                ));
+            }
+        } else {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("window-live-p"), *val],
+            ));
+        }
+    };
+
+    let scope = decode_all_frames_scope(frames, args.get(2).copied())?;
+    let mut frame_ids = frame_ids_for_all_frames_scope(frames, fid, scope);
+    if frame_ids.is_empty() {
+        frame_ids.push(fid);
+    }
+
+    #[derive(Clone, Copy)]
+    enum MinibufferListMode {
+        None,
+        Active(WindowId),
+        All,
+    }
+
+    let minibuffer_list_mode = match args.get(1).copied() {
+        Some(value) if value == Value::T => MinibufferListMode::All,
+        Some(value) if !value.is_nil() => MinibufferListMode::None,
+        _ => active_minibuffer_window
+            .map(MinibufferListMode::Active)
+            .unwrap_or(MinibufferListMode::None),
+    };
+    let mut seen_window_ids: HashSet<u64> = HashSet::new();
+    let mut windows: Vec<Value> = Vec::new();
+
+    for frame_id in frame_ids {
+        let Some(frame) = frames.get(frame_id) else {
+            continue;
+        };
+
+        // GNU Emacs starts traversal at WINDOW when it appears in the returned list.
+        let mut window_ids = frame.window_list();
+        if frame_id == fid
+            && let Some(start_index) = window_ids.iter().position(|wid| *wid == start_wid)
+        {
+            window_ids.rotate_left(start_index);
+        }
+
+        for window_id in window_ids {
+            if seen_window_ids.insert(window_id.0) {
+                windows.push(window_value(window_id));
+            }
+        }
+
+        let minibuffer_wid = match minibuffer_list_mode {
+            MinibufferListMode::None => None,
+            MinibufferListMode::Active(wid) => {
+                (frame.minibuffer_window == Some(wid)).then_some(wid)
+            }
+            MinibufferListMode::All => frame.minibuffer_window,
+        };
+        if let Some(minibuffer_wid) = minibuffer_wid
+            && seen_window_ids.insert(minibuffer_wid.0)
+        {
+            windows.push(window_value(minibuffer_wid));
+        }
+    }
+
+    Ok(Value::list(windows))
+}
+
+/// `(get-buffer-window &optional BUFFER-OR-NAME ALL-FRAMES)` -> window or nil.
+///
+/// Search the GNU `ALL-FRAMES` scope for a window showing the requested buffer.
+#[doc(hidden)]
+pub fn builtin_get_buffer_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("get-buffer-window", &args, 2)?;
+    let fid = ensure_selected_frame_id(eval);
+    let target = match args.first().copied() {
+        Some(value) if !value.is_nil() => match value.kind() {
+            ValueKind::String => match find_buffer_by_name_arg(&eval.edit.buffers, &value)? {
+                Some(id) => id,
+                None => return Ok(Value::NIL),
+            },
+            ValueKind::Veclike(VecLikeType::Buffer) => {
+                let bid = value.as_buffer_id().unwrap();
+                if eval.edit.buffers.get(bid).is_none() {
+                    return Ok(Value::NIL);
+                }
+                bid
+            }
+            _ => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), value],
+                ));
+            }
+        },
+        _ => match eval.edit.buffers.current_buffer_id() {
+            Some(buffer_id) => buffer_id,
+            None => return Ok(Value::NIL),
+        },
+    };
+    let scope = decode_all_frames_scope(&eval.frame_manager(), args.get(1).copied())?;
+    for frame_id in frame_ids_for_all_frames_scope(&eval.frame_manager(), fid, scope) {
+        let Some(frame) = eval.frame_manager().get(frame_id) else {
+            continue;
+        };
+        // GNU's `window_loop` starts each search at the selected window of
+        // its base frame.  Apart from matching its traversal order, this is
+        // the public selection policy of `get-buffer-window`: when the same
+        // buffer is displayed more than once, the selected window wins.
+        let mut window_ids = frame.window_list();
+        if let Some(selected_index) = window_ids
+            .iter()
+            .position(|window_id| *window_id == frame.selected_window)
+        {
+            window_ids.rotate_left(selected_index);
+        }
+        for wid in window_ids {
+            let matches = frame
+                .find_window(wid)
+                .and_then(|w| w.buffer_id())
+                .is_some_and(|bid| bid == target);
+            if matches {
+                return Ok(window_value(wid));
+            }
+        }
+    }
+
+    Ok(Value::NIL)
+}
+/// `(window-dedicated-p &optional WINDOW)` -> t or nil.
+#[doc(hidden)]
+pub fn builtin_window_dedicated_p(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-dedicated-p", &args, 1)?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let w = get_leaf(frames, fid, wid)?;
+    match w {
+        Window::Leaf { dedicated, .. } => Ok(*dedicated),
+        _ => Ok(Value::NIL),
+    }
+}
+/// `(set-window-dedicated-p WINDOW FLAG)` -> FLAG.
+#[doc(hidden)]
+pub fn builtin_set_window_dedicated_p(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("set-window-dedicated-p", &args, 2)?;
+    let flag = args[1];
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    if let Some(w) = frames.get_mut(fid).and_then(|f| f.find_window_mut(wid))
+        && let Window::Leaf { dedicated, .. } = w
+    {
+        *dedicated = flag;
+    }
+    Ok(flag)
+}
+/// `(windowp OBJ)` -> t if OBJ is a window object/designator that exists.
+///
+/// GNU `src/window.c::Fwindowp` is a pure type check on the
+/// Lisp value: `WINDOWP(obj)` checks the tag of the boxed Lisp
+/// object and returns immediately. neomacs walks the live frame
+/// manager because windows are stored as `WindowId(u64)` rather
+/// than as a tagged Lisp value, which means a window object that
+/// exists in the obarray but not in any frame's window tree
+/// returns `nil` here. Window audit Critical 6 in
+/// `drafts/window-system-audit.md` tracks adding a
+/// `VecLikeType::Window` so this becomes a tag check.
+///
+/// The semantic difference is observable in tests that hold a
+/// `Value` reference to a window, delete it, and then call
+/// `windowp` on the dangling reference. GNU returns `t` (it's
+/// still a window value, just not live); neomacs returns `nil`.
+/// `window-valid-p` and `window-live-p` correctly already test
+/// for liveness, so the divergence is restricted to the
+/// "exists at all" boundary that `windowp` is supposed to
+/// answer.
+#[doc(hidden)]
+pub fn builtin_windowp(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let frames = &eval.frame_manager();
+    expect_args("windowp", &args, 1)?;
+    let wid = match window_id_from_designator(&args[0]) {
+        Some(wid) => wid,
+        None => return Ok(Value::NIL),
+    };
+    Ok(Value::bool_val(frames.is_window_object_id(wid)))
+}
+/// `(window-valid-p OBJ)` -> t if OBJ is a live window.
+#[doc(hidden)]
+pub fn builtin_window_valid_p(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let frames = &eval.frame_manager();
+    expect_args("window-valid-p", &args, 1)?;
+    let wid = match window_id_from_designator(&args[0]) {
+        Some(wid) => wid,
+        None => return Ok(Value::NIL),
+    };
+    Ok(Value::bool_val(frames.is_valid_window_id(wid)))
+}
+/// `(window-live-p OBJ)` -> t if OBJ is a live leaf window.
+#[doc(hidden)]
+pub fn builtin_window_live_p(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    let frames = &eval.frame_manager();
+    expect_args("window-live-p", &args, 1)?;
+    let wid = match window_id_from_designator(&args[0]) {
+        Some(wid) => wid,
+        None => return Ok(Value::NIL),
+    };
+    Ok(Value::bool_val(frames.is_live_window_id(wid)))
+}
+/// `(window-at X Y &optional FRAME)` -> window object or nil.
+#[doc(hidden)]
+pub fn builtin_window_at(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_min_args("window-at", &args, 2)?;
+    expect_max_args("window-at", &args, 3)?;
+    let x = expect_number(&args[0])?;
+    let y = expect_number(&args[1])?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.get(2),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let total_cols = frame_total_cols(frame) as f64;
+    let total_lines = frame_total_lines(frame) as f64;
+    if x < 0.0 || y < 0.0 || x >= total_cols || y >= total_lines {
+        return Ok(Value::NIL);
+    }
+
+    let px = (x * frame.char_width as f64) as f32;
+    let py = (y * frame.char_height as f64) as f32;
+    if let Some(wid) = frame.window_at(px, py) {
+        return Ok(window_value(wid));
+    }
+
+    if let (Some(minibuffer_wid), Some(minibuffer_leaf)) =
+        (frame.minibuffer_window, frame.minibuffer_leaf.as_ref())
+        && minibuffer_leaf.bounds().contains(px, py)
+    {
+        return Ok(window_value(minibuffer_wid));
+    }
+
+    Ok(Value::NIL)
+}
+
+// ===========================================================================
+// Window manipulation
+// ===========================================================================
+
+/// Split WINDOW, honoring the NORMAL-SIZE argument from
+/// `split-window-internal`.
+///
+/// Mirrors GNU `src/window.c::Fsplit_window_internal` (lines
+/// 5374-5644). The fourth argument NORMAL-SIZE seeds the new
+/// sibling's `normal_lines` (vertical split) or `normal_cols`
+/// (horizontal split), overriding the auto-computed fraction
+/// from the split bounds. Audit Critical 5 in
+/// `drafts/window-system-audit.md`.
+pub(crate) fn split_window_internal_impl_in_state_with_normal(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    window: Value,
+    size: Value,
+    side: Value,
+    normal_size: Value,
+    combination_limit: CombinationLimit,
+    sibling_resize: SiblingResize,
+) -> EvalResult {
+    let target = decode_valid_window_in_state(frames, buffers, Some(&window))?;
+    let (fid, wid) = (target.frame(), target.window());
+
+    // GNU `Fsplit_window_internal` treats SIDE t as `right`, and every value
+    // it does not recognise -- nil, `below', an unrelated symbol, a fixnum,
+    // a string -- as the vertical/default side.  The decode is total.
+    let side_kind = SplitWindowSide::from_side_argument(&side);
+    let direction = if side_kind.is_horizontal() {
+        SplitDirection::Horizontal
+    } else {
+        SplitDirection::Vertical
+    };
+    let placement = match side_kind {
+        SplitWindowSide::Above | SplitWindowSide::Left => SplitPlacement::BeforeTarget,
+        SplitWindowSide::Below | SplitWindowSide::Right => SplitPlacement::AfterTarget,
+    };
+
+    // Unlike the high-level `split-window` command, GNU's primitive takes
+    // a positive new-window pixel size. Validate before mutating either tree.
+    let size = expect_fixnum(&size)?;
+    if is_minibuffer_window(frames, fid, wid) {
+        return Err(signal(
+            LispCondition::Error,
+            vec![Value::string("Attempt to split minibuffer window")],
+        ));
+    }
+    let frame = frames.get(fid).ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("Cannot split window")],
+        )
+    })?;
+    let request = split_request::SplitRequest::try_from(split_request::SplitRequestInput {
+        frame,
+        old: wid,
+        size,
+        direction,
+        limit: combination_limit,
+        sibling_resize,
+    })
+    .map_err(|error| {
+        // GNU temporarily reduces this staging slot while validating siblings.
+        // A rejected plan changes this slot but never changes physical geometry.
+        match error {
+            split_request::SplitRequestError::NewTooSmall => {}
+            split_request::SplitRequestError::OldResizeFailed => {}
+            split_request::SplitRequestError::SumDoesNotFit => {}
+            split_request::SplitRequestError::ParentResizeFailed { parent, pending } => {
+                if let Some(parent) = frames
+                    .get_mut(fid)
+                    .and_then(|frame| frame.find_window_mut(parent))
+                {
+                    parent.set_new_pixel(Some(i64::from(pending)));
+                }
+            }
+        }
+        signal(LispCondition::Error, vec![Value::string(error.to_string())])
+    })?;
+    if let Some(frame) = frames.get_mut(fid) {
+        request.prepare_tree_split(frame);
+    }
+    let size_opt = Some(request.size());
+
+    // GNU's `window_point` reads the selected window's live buffer point.  Keep
+    // the leaf cache in sync before cloning the window tree so a same-buffer
+    // split inherits that effective point, not a stale marker value.
+    remember_selected_window_point_in_state(frames, buffers, fid);
+
+    // Use the same buffer as the window being split.
+    let buf_id = {
+        let w = get_window(frames, target)?;
+        if let Some(buffer_id) = w.buffer_id() {
+            buffer_id
+        } else {
+            frames
+                .get(fid)
+                .and_then(|frame| frame.find_window(frame.selected_window))
+                .and_then(Window::buffer_id)
+                .unwrap_or(BufferId(0))
+        }
+    };
+
+    let new_wid = frames
+        .split_window_with_combination_limit(
+            fid,
+            wid,
+            direction,
+            buf_id,
+            size_opt,
+            placement,
+            combination_limit,
+        )
+        .ok_or_else(|| signal("error", vec![Value::string("Cannot split window")]))?;
+
+    // GNU `Fsplit_window_internal` finishes by staging the new window's own
+    // size and normal size and then committing the whole parent combination
+    // (`src/window.c:5636-5672`):
+    //
+    //     wset_new_pixel (n, pixel_size);
+    //     wset_new_normal (n, normal_size);
+    //     ...
+    //     window_resize_apply (p, horflag);
+    //
+    // Under `window-combination-resize' the new window's space comes from EVERY
+    // sibling, not just the split target, and `window.el' has already staged
+    // each sibling's share -- so the primitive must apply that plan instead of
+    // computing a layout of its own.
+    frames.apply_staged_split_sizes(fid, new_wid, Some(request.size()), normal_size, direction);
+
+    // GNU allocates independent start/point/old-point markers for the new
+    // live leaf.  `FrameManager::split_window` intentionally clears marker IDs
+    // copied from the old leaf; attach fresh markers before returning the Lisp
+    // window object so subsequent buffer edits adjust both windows.
+    if let Some(frame) = frames.get_mut(fid)
+        && let Some(new_window) = frame.find_window_mut(new_wid)
+    {
+        crate::window::window_markers::attach_window_position_markers(buffers, new_window);
+    }
+
+    Ok(window_value(new_wid))
+}
+/// `(delete-window-internal WINDOW)` -> nil.
+///
+/// GNU Emacs exposes this primitive for low-level window internals. For the
+/// compatibility surface we mirror the observable error behavior used by the
+/// vm-compat coverage corpus.
+#[doc(hidden)]
+pub fn builtin_delete_window_internal(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("delete-window-internal", &args, 1)?;
+
+    let wid = resolve_window_object_id_with_pred_in_state(
+        frames,
+        buffers,
+        args.first(),
+        WindowDomain::Any,
+    )?;
+    if !frames.is_valid_window_id(wid) {
+        // GNU Emacs treats deleting an already deleted window object as a no-op.
+        return Ok(Value::NIL);
+    }
+
+    let fid = frames
+        .find_valid_window_frame_id(wid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    // GNU's guard is that the window has NO PARENT (`src/window.c`):
+    //
+    //     parent = w->parent;
+    //     if (NILP (parent))
+    //       error ("Attempt to delete minibuffer or sole ordinary window");
+    //
+    // Exactly two windows on a frame are parentless -- the minibuffer and the
+    // root -- and the message names both.  Testing `minibuffer ||
+    // window_list().len() <= 1` instead came close but not close enough:
+    // `window_list` counts LEAVES, so once the frame is split the root is an
+    // internal window with two leaves under it, and deleting the ROOT slipped
+    // past this to fail later as a plain "Deletion failed".
+    if window_parent_id(frame, wid).is_none() {
+        return Err(signal(
+            "error",
+            vec![Value::string(
+                "Attempt to delete minibuffer or sole ordinary window",
+            )],
+        ));
+    }
+
+    // GNU `Fdelete_window_internal` commits the sizes `lisp/window.el`'s
+    // `delete-window` staged in `new_pixel` (`window_resize_apply`), rather
+    // than laying the surviving windows out afresh.  The Lisp layer is what
+    // decides which sibling absorbs the deleted window's space.
+    if frames.delete_window_with_resize(fid, wid, DeleteResize::ApplyStaged) {
+        // GNU `Fdelete_window_internal` sets `FRAME_WINDOW_CHANGE` after the
+        // tree mutation (window.c).  `run_window_change_functions` promotes
+        // that frame flag to `windows_or_buffers_changed` before
+        // `update_menu_bar` (xdisp.c), so deleting Calendar's temporary
+        // window rebuilds the menu. This and an ordinary-window buffer swap
+        // are separate mutation sites with the same typed GNU
+        // `windows_or_buffers_changed` rebuild reason.
+        eval.gnu_mark_frame_redisplay(fid);
+        eval.gnu_mark_frame_window_change(fid);
+        eval.request_menu_bar_rebuild(
+            neovm_eval::emacs_core::eval::MenuBarRebuildReason::WindowsOrBuffersChanged,
+        );
+        Ok(Value::NIL)
+    } else {
+        Err(signal("error", vec![Value::string("Deletion failed")]))
+    }
+}
+/// `(delete-other-windows-internal &optional WINDOW ROOT)` -> nil.
+///
+/// Replace ROOT with its descendant WINDOW, defaulting ROOT to WINDOW's frame
+/// root.
+#[doc(hidden)]
+pub fn builtin_delete_other_windows_internal(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("delete-other-windows-internal", &args, 2)?;
+    let (fid, keep_wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let root_wid = if args.get(1).is_none_or(|root| root.is_nil()) {
+        frame.root_window().id()
+    } else {
+        let root_wid = resolve_window_object_id_with_pred_in_state(
+            frames,
+            buffers,
+            args.get(1),
+            crate::emacs_core::window_cmds::WindowDomain::Valid,
+        )?;
+        if frames.find_valid_window_frame_id(root_wid) != Some(fid) {
+            return Err(signal(
+                "error",
+                vec![Value::string(
+                    "Specified root is not an ancestor of specified window",
+                )],
+            ));
+        }
+        root_wid
+    };
+    let changes_tree = keep_wid != root_wid;
+    if !frames.keep_only_window_in_subtree(fid, keep_wid, root_wid) {
+        return Err(signal(
+            "error",
+            vec![Value::string(
+                "Specified root is not an ancestor of specified window",
+            )],
+        ));
+    }
+    let selected_buffer = if let Some(frame) = frames.get_mut(fid) {
+        if frame
+            .find_window(keep_wid)
+            .is_some_and(crate::window::Window::is_leaf)
+        {
+            frame.select_window(keep_wid);
+        }
+        frame
+            .find_window(frame.selected_window)
+            .and_then(|window| window.buffer_id())
+    } else {
+        None
+    };
+    if let Some(buffer_id) = selected_buffer {
+        buffers.switch_current(buffer_id);
+    }
+    if changes_tree {
+        eval.gnu_mark_frame_redisplay(fid);
+        eval.gnu_mark_frame_window_change(fid);
+    }
+    Ok(Value::NIL)
+}
+#[doc(hidden)]
+pub fn remember_selected_window_point_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    fid: FrameId,
+) {
+    let Some(frame) = frames.get(fid) else {
+        return;
+    };
+    let selected_wid = frame.selected_window;
+    let Some(buffer_id) = frame
+        .find_window(selected_wid)
+        .and_then(|window| window.buffer_id())
+    else {
+        return;
+    };
+    let Some(point) = buffers
+        .get(buffer_id)
+        .map(|buffer| buffer.point_char_pos().get().saturating_add(1))
+    else {
+        return;
+    };
+    if let Some(window) = frames
+        .get_mut(fid)
+        .and_then(|frame| frame.find_window_mut(selected_wid))
+    {
+        crate::window::window_markers::set_window_point_with_marker(
+            buffers,
+            window,
+            lisp_char_pos_from_one_based_usize(point),
+        );
+    }
+}
+
+#[doc(hidden)]
+pub fn sync_selected_window_buffer_in_state(
+    frames: &FrameManager,
+    buffers: &mut BufferManager,
+    fid: FrameId,
+) {
+    let Some((buffer_id, point)) = frames
+        .get(fid)
+        .and_then(|frame| frame.find_window(frame.selected_window))
+        .and_then(|window| match window {
+            Window::Leaf {
+                buffer_id, point, ..
+            } => Some((*buffer_id, *point)),
+            Window::Internal { .. } => None,
+        })
+    else {
+        return;
+    };
+    // GNU `command_loop_1` only realigns `current_buffer` with
+    // `selected_window` via `set_buffer_internal`; it does not call
+    // `record_buffer`.  Selection/display primitives record explicitly.
+    buffers.switch_current_unrecorded(buffer_id);
+    if let Some(buffer) = buffers.get(buffer_id) {
+        let byte_pos = buffer.lisp_pos_to_emacs_byte_pos(point);
+        let _ = buffers.goto_buffer_emacs_byte_pos(buffer_id, byte_pos);
+    }
+}
+
+fn selected_window_buffer_state_in_frame(
+    frames: &FrameManager,
+    fid: FrameId,
+) -> Option<(WindowId, BufferId)> {
+    let frame = frames.get(fid)?;
+    let selected_wid = frame.selected_window;
+    let buffer_id = frame.find_window(selected_wid)?.buffer_id()?;
+    Some((selected_wid, buffer_id))
+}
+
+fn note_selected_window_buffer_in_state(
+    frames: &FrameManager,
+    buffers: &mut BufferManager,
+    fid: FrameId,
+) {
+    let Some((selected_wid, buffer_id)) = selected_window_buffer_state_in_frame(frames, fid) else {
+        return;
+    };
+    if let Some(buffer) = buffers.get_mut(buffer_id) {
+        buffer.set_last_selected_window(Some(selected_wid));
+    }
+}
+
+fn update_buffer_display_metadata_in_state(
+    buffers: &mut BufferManager,
+    buffer_id: BufferId,
+) -> EvalResult {
+    let display_time = neovm_value::time_core::current_time_value(
+        neovm_value::time_core::LispTimeOutput::LegacyList,
+    );
+    let Some(buffer) = buffers.get_mut(buffer_id) else {
+        return Ok(Value::NIL);
+    };
+    if let Some(count) = buffer
+        .buffer_local_value("buffer-display-count")
+        .and_then(|v| v.as_fixnum())
+    {
+        buffer.set_buffer_local(
+            "buffer-display-count",
+            Value::fixnum(count.saturating_add(1)),
+        );
+    }
+    buffer.set_buffer_local("buffer-display-time", display_time);
+    Ok(Value::NIL)
+}
+
+#[doc(hidden)]
+pub fn record_buffer_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    buffer_id: BufferId,
+    fid: FrameId,
+) -> EvalResult {
+    // Move to front of global buffer order (Vbuffer_alist equivalent).
+    buffers.note_buffer_display(buffer_id);
+    // Update frame buffer lists (GNU record_buffer, buffer.c:2223-2225).
+    if let Some(frame) = frames.get_mut(fid) {
+        frame.buffer_list.retain(|bid| *bid != buffer_id);
+        frame.buffer_list.insert(0, buffer_id);
+        frame.buried_buffer_list.retain(|bid| *bid != buffer_id);
+    }
+    Ok(Value::NIL)
+}
+
+fn window_displays_buffer(frames: &FrameManager, window_id: WindowId, buffer_id: BufferId) -> bool {
+    frames
+        .find_window_frame_id(window_id)
+        .and_then(|frame_id| frames.get(frame_id))
+        .and_then(|frame| frame.find_window(window_id))
+        .and_then(Window::buffer_id)
+        == Some(buffer_id)
+}
+
+/// `(select-window WINDOW &optional NORECORD)` -> WINDOW.
+#[doc(hidden)]
+pub fn builtin_select_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("select-window", &args, 1)?;
+    expect_max_args("select-window", &args, 2)?;
+    let wid = match args.first().and_then(window_id_from_designator) {
+        Some(wid) => wid,
+        None => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("window-live-p"), args[0]],
+            ));
+        }
+    };
+    select_window(
+        eval,
+        wid,
+        args.get(1).copied().unwrap_or(Value::NIL),
+        FrameFocusTracking::FollowSelection,
+    )
+}
+
+/// Commit window/frame/buffer selection together before running Lisp hooks.
+/// Frame selection and input-driven frame switches share this transaction.
+pub(crate) fn select_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    wid: WindowId,
+    norecord: Value,
+    focus_tracking: FrameFocusTracking,
+) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
+    // GNU `Fselect_window' does `CHECK_LIVE_WINDOW(window)': an internal
+    // (non-leaf) window such as `(window-parent W)' is a valid window but not a
+    // *live* one, so selecting it signals `wrong-type-argument window-live-p'.
+    if !eval.frame_manager().is_live_window_id(wid) {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("window-live-p"), window_value(wid)],
+        ));
+    }
+    let old_selected = eval
+        .frame_manager()
+        .selected_frame()
+        .map(|frame| frame.selected_window);
+    let selection_changed = eval
+        .frame_manager()
+        .selected_frame()
+        .is_none_or(|frame| frame.selected_window != wid);
+    if selection_changed {
+        // Publish while the old window is still globally selected. GNU
+        // window.c:542-553 treats non-nil NORECORD other than this symbol
+        // as global SOME without marking either individual window.
+        eval.gnu_mark_selection(
+            old_selected,
+            wid,
+            norecord.is_nil() || norecord.is_symbol_named("mark-for-redisplay", symbol_mode),
+        );
+    }
+    let (record_selection, run_buffer_list_hook, frame_changed, reset_input_frame) = {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
+        // GNU `select_window' derives WINDOW_FRAME and selects that frame when
+        // it differs.  Posframe/transient relies on this for child-frame roots.
+        let fid = frames.find_window_frame_id(wid).ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("window-live-p"), window_value(wid)],
+            )
+        })?;
+        let record_selection = norecord.is_nil();
+        remember_selected_window_point_in_state(frames, buffers, selected_fid);
+        {
+            let frame = frames
+                .get_mut(fid)
+                .ok_or_else(|| signal("error", vec![Value::string("No window frame")]))?;
+            if !frame.select_window(wid) {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("window-live-p"), window_value(wid)],
+                ));
+            }
+        }
+        let frame_changed = fid != selected_fid;
+        let reset_input_frame = frame_changed
+            && frames
+                .get(fid)
+                .is_some_and(|frame| frame.effective_window_system().is_some())
+            && !frames.frame_ancestor_p(fid, selected_fid);
+        if frame_changed && !frames.select_frame_with_focus_tracking(fid, focus_tracking) {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("window-live-p"), window_value(wid)],
+            ));
+        }
+        if record_selection {
+            let _ = frames.note_window_selected(wid);
+        }
+        sync_selected_window_buffer_in_state(frames, buffers, fid);
+        note_selected_window_buffer_in_state(frames, buffers, fid);
+        // GNU Fselect_window calls record_buffer when NORECORD is nil.
+        // record_buffer updates buffer lists and hooks; display count/time are
+        // updated by set_window_buffer, not by selecting an already visible
+        // window.
+        if record_selection
+            && let Some(buffer_id) = frames
+                .get(fid)
+                .and_then(|f| f.find_window(wid))
+                .and_then(Window::buffer_id)
+        {
+            record_buffer_in_state(frames, buffers, buffer_id, fid)?;
+        }
+        let run_buffer_list_hook = record_selection
+            && selected_window_buffer_state_in_frame(frames, fid)
+                .is_some_and(|(_, buffer_id)| !buffers.buffer_hooks_inhibited(buffer_id));
+        (
+            record_selection,
+            run_buffer_list_hook,
+            frame_changed,
+            reset_input_frame,
+        )
+    };
+    if frame_changed {
+        super::frame::sync_gui_frame_focus_redirects(eval)?;
+        eval.sync_keyboard_terminal_owner();
+    }
+    if selection_changed {
+        // GNU window.c marks old/new chrome only for recorded selection or
+        // mark-for-redisplay. Temporary hook selection raises SOME through
+        // gnu_mark_selection without invalidating retained mode-line output.
+        if eval.gnu_redisplay_hooks_policy_enabled() {
+            if norecord.is_nil() || norecord.is_symbol_named("mark-for-redisplay", symbol_mode) {
+                if let Some(old) = old_selected {
+                    eval.mark_chrome_dirty_window(old);
+                }
+                eval.mark_chrome_dirty_window(wid);
+            }
+        } else {
+            eval.mark_chrome_dirty_all();
+        }
+        eval.request_menu_bar_rebuild(
+            neovm_eval::emacs_core::eval::MenuBarRebuildReason::WindowsOrBuffersChanged,
+        );
+    }
+    if record_selection && run_buffer_list_hook {
+        neovm_eval::emacs_core::builtins::run_buffer_list_update_hook(eval)?;
+    }
+    // GNU select_window crosses frames through Fselect_frame/do_switch_frame.
+    // Invalidate its cached input owner for a non-ancestor GUI switch, so a
+    // subsequent physical key can reselect its source without a new focus
+    // notification. Do not reset TTYs, where post-command selection can loop.
+    if reset_input_frame {
+        eval.command_loop_mut()
+            .keyboard
+            .kboard
+            .clear_internal_last_event_frame();
+    }
+    Ok(window_value(wid))
+}
+/// `(other-window-for-scrolling)` -> window object used for scrolling.
+#[doc(hidden)]
+pub fn builtin_other_window_for_scrolling(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("other-window-for-scrolling", &args, 0)?;
+    let fid = ensure_selected_frame_id_in_state(frames, buffers);
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?;
+    let windows = frame.window_list();
+    if windows.len() <= 1 {
+        return Err(signal(
+            "error",
+            vec![Value::string("There is no other window")],
+        ));
+    }
+    let selected = frame.selected_window;
+    let other = windows
+        .into_iter()
+        .find(|wid| *wid != selected)
+        .unwrap_or(selected);
+    Ok(window_value(other))
+}
+/// `(next-window &optional WINDOW MINIBUF ALL-FRAMES)` -> window object.
+#[doc(hidden)]
+pub fn builtin_next_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("next-window", &args, 3)?;
+    let (fid, wid) = resolve_window_id_in_state(frames, buffers, args.first())?;
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let list = frame.window_list();
+    if list.is_empty() {
+        return Ok(Value::NIL);
+    }
+    let idx = list.iter().position(|w| *w == wid).unwrap_or(0);
+    let next = (idx + 1) % list.len();
+    Ok(window_value(list[next]))
+}
+/// `(previous-window &optional WINDOW MINIBUF ALL-FRAMES)` -> window object.
+#[doc(hidden)]
+pub fn builtin_previous_window(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("previous-window", &args, 3)?;
+    let (fid, wid) = resolve_window_id_in_state(frames, buffers, args.first())?;
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let list = frame.window_list();
+    if list.is_empty() {
+        return Ok(Value::NIL);
+    }
+    let idx = list.iter().position(|w| *w == wid).unwrap_or(0);
+    let prev = if idx == 0 { list.len() - 1 } else { idx - 1 };
+    Ok(window_value(list[prev]))
+}
+/// Redisplay obligations produced by one successful `set-window-buffer`.
+///
+/// GNU's `set_window_buffer` always calls `wset_update_mode_line`; changing an
+/// ordinary window's buffer additionally records `FRAME_WINDOW_CHANGE`, while
+/// minibuffer windows are deliberately excluded (window.c).  Keeping those
+/// cases as an enum prevents the two effects from being collapsed when the
+/// structural mutation is performed through split Rust borrows.  The immediate
+/// chrome invalidation is published here; redisplay's window-hook snapshot owns
+/// the later ordinary-window change notification.
+#[must_use = "a window-buffer transition must publish its redisplay effects"]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowBufferDisplayEffect {
+    SameBuffer(crate::window::WindowId),
+    MinibufferChanged(crate::window::WindowId),
+    OrdinaryWindowChanged(crate::window::WindowId),
+}
+
+impl WindowBufferDisplayEffect {
+    fn classify(window: crate::window::WindowId, changed: bool, minibuffer_window: bool) -> Self {
+        match (changed, minibuffer_window) {
+            (false, _) => Self::SameBuffer(window),
+            (true, true) => Self::MinibufferChanged(window),
+            (true, false) => Self::OrdinaryWindowChanged(window),
+        }
+    }
+
+    fn window(self) -> crate::window::WindowId {
+        match self {
+            Self::SameBuffer(window)
+            | Self::MinibufferChanged(window)
+            | Self::OrdinaryWindowChanged(window) => window,
+        }
+    }
+
+    fn apply(self, eval: &mut neovm_eval::emacs_core::eval::Context) {
+        let window = self.window();
+        // `mark_chrome_dirty_window` is GNU's wset_update_mode_line /
+        // wset_redisplay pair.  It already crosses the broad menu boundary for
+        // every nonselected window, exactly as `wset_redisplay` does.
+        eval.mark_chrome_dirty_window(window);
+        eval.gnu_mark_window_mode_line(window);
+
+        // Do not promote `OrdinaryWindowChanged` directly to a menu rebuild.
+        // GNU records FRAME_WINDOW_CHANGE here, but `prepare_menu_bars` runs
+        // before `run_window_change_functions` observes that flag.  Therefore
+        // a selected-window switch between equally modified buffers retains
+        // the prepared menu (Buffer Menu and Ibuffer rely on this timing).
+        // Neomacs' redisplay-owned window-hook snapshot observes the ordinary
+        // buffer transition independently; this effect only publishes the
+        // immediate wset_update_mode_line / wset_redisplay obligation.
+    }
+}
+
+/// `(set-window-buffer WINDOW BUFFER-OR-NAME &optional KEEP-MARGINS)` -> nil.
+#[doc(hidden)]
+pub fn builtin_set_window_buffer(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("set-window-buffer", &args, 2)?;
+    expect_max_args("set-window-buffer", &args, 3)?;
+    let (fid, wid, buf_id, keep_margins, run_buffer_list_hook, display_effect) = {
+        let (frames, buffers, minibuffers) = eval.frame_manager_buffers_and_minibuffers_mut();
+        let (fid, wid) = resolve_window_id_in_state(frames, buffers, args.first())?;
+        let buf_id = match args[1].kind() {
+            ValueKind::Veclike(VecLikeType::Buffer) => {
+                let bid = args[1].as_buffer_id().unwrap();
+                if buffers.get(bid).is_none() {
+                    return Err(signal(
+                        "error",
+                        vec![Value::string("Attempt to display deleted buffer")],
+                    ));
+                }
+                bid
+            }
+            ValueKind::String => match find_buffer_by_name_arg(buffers, &args[1])? {
+                Some(id) => id,
+                None => {
+                    return Err(signal(
+                        LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("bufferp"), Value::NIL],
+                    ));
+                }
+            },
+            _ => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), args[1]],
+                ));
+            }
+        };
+
+        let keep_margins = args.get(2).is_some_and(|arg| !arg.is_nil());
+        let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
+        let mut old_state = None;
+        if let Some(Window::Leaf {
+            buffer_id,
+            window_start,
+            point,
+            dedicated,
+            ..
+        }) = frames.get_mut(fid).and_then(|f| f.find_window_mut(wid))
+        {
+            old_state = Some((*buffer_id, *window_start, *point, *dedicated));
+        }
+        let mut run_buffer_list_hook = false;
+        if let Some((old_buffer_id, old_window_start, old_point, dedicated)) = old_state {
+            if dedicated == Value::T && old_buffer_id != buf_id {
+                let old_buffer_name = buffers
+                    .get(old_buffer_id)
+                    .map(|buffer| buffer.name_runtime_string_owned())
+                    .unwrap_or_else(|| "*deleted*".to_string());
+                return Err(signal(
+                    "error",
+                    vec![Value::string(format!(
+                        "Window is dedicated to ‘{old_buffer_name}’"
+                    ))],
+                ));
+            }
+            if let Some(buffer) = buffers.get_mut(old_buffer_id) {
+                buffer.set_last_window_start(old_window_start.max(LispCharPos1::ONE));
+            }
+            let selected_buffer_id = frames
+                .get(selected_fid)
+                .and_then(|frame| frame.find_window(frame.selected_window))
+                .and_then(Window::buffer_id);
+            let old_buffer_last_selected_window = buffers
+                .get(old_buffer_id)
+                .and_then(|buffer| buffer.last_selected_window());
+            let preserve_old_buffer_point = selected_buffer_id == Some(old_buffer_id)
+                || old_buffer_last_selected_window.is_some_and(|last_selected_window| {
+                    last_selected_window != wid
+                        && window_displays_buffer(frames, last_selected_window, old_buffer_id)
+                });
+            if !preserve_old_buffer_point {
+                let old_point_byte_pos = buffers.get(old_buffer_id).map(|buffer| {
+                    buffer.lisp_pos_to_emacs_byte_pos(old_point.max(LispCharPos1::ONE))
+                });
+                if let Some(old_point_byte_pos) = old_point_byte_pos {
+                    let _ = buffers.goto_buffer_emacs_byte_pos(old_buffer_id, old_point_byte_pos);
+                }
+            }
+            if old_buffer_id != buf_id
+                && let Some(buffer) = buffers.get_mut(old_buffer_id)
+                && buffer.last_selected_window() == Some(wid)
+            {
+                buffer.set_last_selected_window(None);
+            }
+            if old_buffer_id != buf_id {
+                run_buffer_list_hook = record_window_buffer_change_history_in_state(
+                    frames,
+                    minibuffers,
+                    buffers,
+                    fid,
+                    wid,
+                    WindowBufferHistoryChange {
+                        outgoing_buffer_id: old_buffer_id,
+                        incoming_buffer_id: buf_id,
+                        outgoing_window_start: old_window_start,
+                        outgoing_window_point: old_point,
+                    },
+                )?;
+            } else {
+                discard_buffers_from_window_history(frames, wid, &[Value::make_buffer(buf_id)])?;
+            }
+        }
+        let changed = old_state.is_some_and(|(old_buffer_id, _, _, _)| old_buffer_id != buf_id);
+        let minibuffer_window = frames
+            .get(fid)
+            .is_some_and(|frame| frame.minibuffer_window == Some(wid));
+        let display_effect = WindowBufferDisplayEffect::classify(wid, changed, minibuffer_window);
+        (
+            fid,
+            wid,
+            buf_id,
+            keep_margins,
+            run_buffer_list_hook,
+            display_effect,
+        )
+    };
+    if run_buffer_list_hook {
+        neovm_eval::emacs_core::builtins::run_buffer_list_update_hook(eval)?;
+    }
+    {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        if buffers.get(buf_id).is_none() {
+            return Err(signal(
+                "error",
+                vec![Value::string("Attempt to display deleted buffer")],
+            ));
+        }
+        let next_margins = if keep_margins {
+            None
+        } else {
+            Some(WindowMargins::new(
+                buffer_margin_width(buffers, buf_id, "left-margin-width")?,
+                buffer_margin_width(buffers, buf_id, "right-margin-width")?,
+            ))
+        };
+        let next_fringes = if keep_margins {
+            None
+        } else {
+            Some(WindowFringeDefaults::new(
+                buffer_local_optional_dimension(buffers, buf_id, "left-fringe-width")?,
+                buffer_local_optional_dimension(buffers, buf_id, "right-fringe-width")?,
+                buffer_local_value(buffers, buf_id, "fringes-outside-margins").is_truthy(),
+            ))
+        };
+        let next_scroll_bars = if keep_margins {
+            None
+        } else {
+            let vertical_type = buffer_local_value(buffers, buf_id, "vertical-scroll-bar");
+            if !valid_vertical_scroll_bar_type(vertical_type) {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("Invalid type of vertical scroll bar")],
+                ));
+            }
+            let horizontal_type = buffer_local_value(buffers, buf_id, "horizontal-scroll-bar");
+            if !valid_horizontal_scroll_bar_type(horizontal_type) {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("Invalid type of horizontal scroll bar")],
+                ));
+            }
+            Some(WindowScrollBarDefaults::new(
+                buffer_local_optional_dimension(buffers, buf_id, "scroll-bar-width")?,
+                vertical_type,
+                buffer_local_optional_dimension(buffers, buf_id, "scroll-bar-height")?,
+                horizontal_type,
+            ))
+        };
+        let old_state = frames
+            .get(fid)
+            .and_then(|frame| frame.find_window(wid))
+            .and_then(|window| match window {
+                Window::Leaf {
+                    buffer_id,
+                    window_start,
+                    point,
+                    dedicated,
+                    ..
+                } => Some((*buffer_id, *window_start, *point, *dedicated)),
+                _ => None,
+            });
+        let selected_window = frames.get(fid).map(|frame| frame.selected_window);
+        let same_buffer = old_state.is_some_and(|(old_buffer_id, _, _, _)| old_buffer_id == buf_id);
+        let (next_window_start, next_point) = if same_buffer && keep_margins {
+            old_state
+                .map(|(_, window_start, point, _)| {
+                    (
+                        window_start.max(LispCharPos1::ONE),
+                        point.max(LispCharPos1::ONE),
+                    )
+                })
+                .unwrap_or((LispCharPos1::ONE, LispCharPos1::ONE))
+        } else {
+            buffers
+                .get(buf_id)
+                .map(|buf| {
+                    (
+                        buf.last_window_start().max(LispCharPos1::ONE),
+                        lisp_char_pos_from_one_based_usize(
+                            buf.point_char_pos().get().saturating_add(1).max(1),
+                        ),
+                    )
+                })
+                .unwrap_or((LispCharPos1::ONE, LispCharPos1::ONE))
+        };
+        frames.apply_set_window_buffer_state(
+            wid,
+            buf_id,
+            next_window_start,
+            next_point,
+            same_buffer && keep_margins,
+            WindowBufferDisplayDefaults {
+                margins: next_margins,
+                fringes: next_fringes,
+                scroll_bars: next_scroll_bars,
+            },
+        );
+        // GNU clears current rows even for the same buffer when margins are
+        // reset. Adjustment can then repopulate only a changed real allocation;
+        // the entire operation precedes eager window-scroll-functions.
+        if !keep_margins && let Some(frame) = frames.get_mut(fid) {
+            frame.tty_posn_apply_window_adjustment(wid);
+        }
+        // Mirror GNU: non-T dedication (side, soft, etc.) is cleared
+        // when the buffer changes (switch-to-buffer / set-window-buffer).
+        if old_state.is_some_and(|(old_buf, _, _, ded)| {
+            old_buf != buf_id && ded != Value::NIL && ded != Value::T
+        }) && let Some(frame) = frames.get_mut(fid)
+            && let Some(Window::Leaf { dedicated, .. }) = frame.find_window_mut(wid)
+        {
+            *dedicated = Value::NIL;
+        }
+        update_buffer_display_metadata_in_state(buffers, buf_id)?;
+        if let Some(frame) = frames.get_mut(fid)
+            && let Some(window) = frame.find_window_mut(wid)
+        {
+            super::super::window::window_markers::attach_window_position_markers(buffers, window);
+        }
+        if selected_window == Some(wid)
+            && let Some(buffer) = buffers.get_mut(buf_id)
+        {
+            buffer.set_last_selected_window(Some(wid));
+        }
+    }
+    display_effect.apply(eval);
+    super::xdisp::run_window_scroll_functions_for_window(eval, window_value(wid))?;
+    // GNU sets this after the eager scroll callbacks (window.c:4427).
+    if matches!(
+        display_effect,
+        WindowBufferDisplayEffect::OrdinaryWindowChanged(_)
+    ) {
+        eval.gnu_mark_frame_window_change(fid);
+    }
+    Ok(Value::NIL)
+}
+
+/// Record direction for the next accepted content replacement in WINDOW.
+/// Lisp commands own semantic navigation; redisplay consumes this durable,
+/// typed intent only after publishing the matching presentation.
+#[doc(hidden)]
+pub fn builtin_neomacs_record_window_navigation_intent(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("neomacs--record-window-navigation-intent", &args, 1)?;
+    expect_max_args("neomacs--record-window-navigation-intent", &args, 2)?;
+    let direction = navigation_transition_direction(args[0])?;
+    let (_, window_id) = resolve_window_id_with_pred(eval, args.get(1), WindowDomain::Live)?;
+    eval.frame_manager_mut()
+        .record_window_navigation_intent(window_id, direction);
+    Ok(Value::NIL)
+}
+
+/// Record direction for the next accepted frame-content replacement.
+#[doc(hidden)]
+pub fn builtin_neomacs_record_frame_navigation_intent(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("neomacs--record-frame-navigation-intent", &args, 1)?;
+    expect_max_args("neomacs--record-frame-navigation-intent", &args, 2)?;
+    let direction = navigation_transition_direction(args[0])?;
+    let frame_id = resolve_frame_id(
+        eval,
+        args.get(1),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    eval.frame_manager_mut()
+        .record_frame_navigation_intent(frame_id, direction);
+    Ok(Value::NIL)
+}
+
+const MIN_FRAME_COLS: i64 = 10;
+pub(crate) const MIN_FRAME_TEXT_LINES: i64 = 5;
+pub(crate) const FRAME_TEXT_LINES_PARAM: &str = "neovm--frame-text-lines";
+pub(crate) const FRAME_TOTAL_COLS_PARAM: &str = "neovm--frame-total-cols";
+pub(crate) const FRAME_TOTAL_LINES_PARAM: &str = "neovm--frame-total-lines";
+pub(crate) const LIVE_GUI_RESIZE_ACK_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(1);
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FrameSizeParam {
+    Cells(i64),
+    TextPixels(u32),
+}
+
+impl FrameSizeParam {
+    fn is_zero(self) -> bool {
+        match self {
+            Self::Cells(n) => n == 0,
+            Self::TextPixels(px) => px == 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FrameResizeRequest {
+    /// Preserve the current text height exactly, including partial rows.
+    TextWidth(u32),
+    TextPixels {
+        width: u32,
+        height: u32,
+    },
+    Cells {
+        cols: i64,
+        total_lines: i64,
+    },
+}
+
+impl FrameResizeRequest {
+    pub(crate) fn text_pixels(
+        self,
+        frames: &FrameManager,
+        fid: FrameId,
+    ) -> Result<(u32, u32), Flow> {
+        match self {
+            Self::TextWidth(width) => {
+                let frame = frames
+                    .get(fid)
+                    .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+                Ok((width.max(1), frame_text_height_pixels(frame)))
+            }
+            Self::TextPixels { width, height } => Ok((width.max(1), height.max(1))),
+            Self::Cells { cols, total_lines } => {
+                live_gui_resize_pixels_from_logical_size(frames, fid, cols, total_lines)
+            }
+        }
+    }
+
+    pub(crate) fn logical_size(
+        self,
+        frames: &FrameManager,
+        fid: FrameId,
+    ) -> Result<(i64, i64), Flow> {
+        let frame = frames
+            .get(fid)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        Ok(match self {
+            Self::TextWidth(width) => (
+                ((width as f32) / frame.char_width.max(1.0))
+                    .floor()
+                    .max(1.0) as i64,
+                frame_total_lines(frame),
+            ),
+            Self::Cells { cols, total_lines } => (cols.max(1), total_lines.max(1)),
+            Self::TextPixels { width, height } => {
+                let char_width = frame.char_width.max(1.0);
+                let char_height = frame.char_height.max(1.0);
+                (
+                    ((width as f32) / char_width).floor().max(1.0) as i64,
+                    ((height as f32) / char_height).floor().max(1.0) as i64,
+                )
+            }
+        })
+    }
+}
+
+pub(crate) fn frame_total_cols(frame: &crate::window::Frame) -> i64 {
+    frame
+        .fixed_parameter(crate::window::FrameQueryParam::TotalCols)
+        .and_then(|v| v.as_int())
+        .or_else(|| {
+            frame
+                .fixed_parameter(crate::window::FrameQueryParam::Width)
+                .and_then(|v| v.as_int())
+        })
+        .unwrap_or(frame.columns() as i64)
+}
+
+pub(crate) fn frame_is_top_level_non_window(frame: &crate::window::Frame) -> bool {
+    frame.effective_window_system().is_none() && frame.parent_frame.as_frame_id().is_none()
+}
+
+/// GNU `Fframe_parameters` reports the `height` parameter of a top-level
+/// terminal frame from live geometry as FRAME_LINES (frame.c): the whole
+/// terminal minus the realized menu-bar / tab-bar rows (the minibuffer stays
+/// INCLUDED). `frame.lines()` is FRAME_TOTAL_LINES (the whole terminal), so
+/// subtract the top margin here. Only realized (displayed) chrome reduces the
+/// count; a non-displayed frame (--batch) keeps FRAME_LINES == FRAME_TOTAL_LINES,
+/// matching the batch geometry the oracle pins (frame-total-lines == frame-height).
+pub(crate) fn frame_realized_lines(frame: &crate::window::Frame) -> i64 {
+    let total = frame.lines() as i64;
+    let top_margin = if frame.displays_chrome {
+        frame.frame_top_margin()
+    } else {
+        0
+    };
+    (total - top_margin).max(1)
+}
+
+fn frame_non_text_height_pixels(frame: &crate::window::Frame) -> u32 {
+    // GNU frame text size includes the minibuffer window.  Only true frame
+    // chrome lives outside the text area for sizing math here.
+    frame
+        .menu_bar_height
+        .saturating_add(frame.tool_bar_height)
+        .saturating_add(frame.tab_bar_height)
+}
+
+fn frame_non_text_width_pixels_in_state(frames: &FrameManager, fid: FrameId) -> u32 {
+    frames
+        .get(fid)
+        .map(|frame| frame.horizontal_non_text_width().max(0) as u32)
+        .unwrap_or(0)
+}
+
+fn frame_internal_border_total_pixels(frame: &crate::window::Frame) -> u32 {
+    u32::try_from(frame.internal_border_width().max(0))
+        .unwrap_or(u32::MAX / 2)
+        .saturating_mul(2)
+}
+
+pub(crate) fn frame_non_text_total_width_pixels_in_state(
+    frames: &FrameManager,
+    fid: FrameId,
+) -> u32 {
+    let border = frames
+        .get(fid)
+        .map(frame_internal_border_total_pixels)
+        .unwrap_or(0);
+    frame_non_text_width_pixels_in_state(frames, fid).saturating_add(border)
+}
+
+pub(crate) fn frame_non_text_total_height_pixels(frame: &crate::window::Frame) -> u32 {
+    frame_non_text_height_pixels(frame).saturating_add(frame_internal_border_total_pixels(frame))
+}
+
+pub(crate) fn frame_text_width_pixels_in_state(frames: &FrameManager, fid: FrameId) -> u32 {
+    let Some(frame) = frames.get(fid) else {
+        return 0;
+    };
+    frame
+        .width
+        .saturating_sub(frame_non_text_total_width_pixels_in_state(frames, fid))
+        .max(1)
+}
+
+pub(crate) fn frame_text_height_pixels(frame: &crate::window::Frame) -> u32 {
+    frame
+        .height
+        .saturating_sub(frame_non_text_total_height_pixels(frame))
+        .max(1)
+}
+
+pub(crate) fn parse_frame_size_param(value: Value) -> Option<FrameSizeParam> {
+    if let Some(n) = value.as_int().filter(|n| *n >= 0) {
+        return Some(FrameSizeParam::Cells(n));
+    }
+    if value.is_cons()
+        && value
+            .cons_car()
+            .as_bare_symbol_name()
+            .is_some_and(|name| name == "text-pixels")
+    {
+        return value
+            .cons_cdr()
+            .as_int()
+            .filter(|n| *n >= 0 && *n <= i64::from(u32::MAX))
+            .map(|n| FrameSizeParam::TextPixels(n as u32));
+    }
+    None
+}
+
+pub(crate) fn frame_size_param_to_cells(param: FrameSizeParam, item_size: f32) -> i64 {
+    match param {
+        FrameSizeParam::Cells(n) => n,
+        FrameSizeParam::TextPixels(px) => {
+            ((px as f32) / item_size.max(1.0)).floor().max(1.0) as i64
+        }
+    }
+}
+
+pub(crate) fn frame_size_param_to_pixels(param: FrameSizeParam, item_size: f32) -> u32 {
+    match param {
+        FrameSizeParam::Cells(n) => {
+            let unit = item_size.max(1.0).round() as i64;
+            n.saturating_mul(unit).max(1).min(u32::MAX as i64) as u32
+        }
+        FrameSizeParam::TextPixels(px) => px.max(1),
+    }
+}
+
+pub(crate) fn frame_total_lines(frame: &crate::window::Frame) -> i64 {
+    frame
+        .fixed_parameter(crate::window::FrameQueryParam::TotalLines)
+        .and_then(|v| v.as_int())
+        .or_else(|| {
+            frame
+                .fixed_parameter(crate::window::FrameQueryParam::Height)
+                .and_then(|v| v.as_int())
+        })
+        .unwrap_or(frame.lines() as i64)
+}
+
+fn clamp_frame_dimension(value: i64, minimum: i64) -> i64 {
+    value.max(minimum).min(u32::MAX as i64)
+}
+
+pub(crate) fn set_frame_text_size(frame: &mut crate::window::Frame, cols: i64, text_lines: i64) {
+    let is_child_frame = frame.parent_frame.as_frame_id().is_some();
+    let min_cols = if is_child_frame { 1 } else { MIN_FRAME_COLS };
+    let min_text_lines = if is_child_frame {
+        1
+    } else {
+        MIN_FRAME_TEXT_LINES
+    };
+    let cols = clamp_frame_dimension(cols, min_cols);
+    let text_lines = clamp_frame_dimension(text_lines, min_text_lines);
+    let minibuffer_lines = i64::from(frame.minibuffer_leaf.is_some());
+    let total_lines = text_lines
+        .saturating_add(minibuffer_lines)
+        .min(u32::MAX as i64);
+
+    frame.set_parameter(Value::symbol("width"), Value::fixnum(cols));
+    frame.set_parameter(Value::symbol("height"), Value::fixnum(total_lines));
+    frame.set_parameter(
+        Value::symbol(FRAME_TEXT_LINES_PARAM),
+        Value::fixnum(text_lines),
+    );
+    if frame.parent_frame.as_frame_id().is_some() {
+        let char_width = frame.char_width.max(1.0).round() as u32;
+        let char_height = frame.char_height.max(1.0).round() as u32;
+        frame.width = (cols as u32).saturating_mul(char_width).max(1);
+        frame.height = (total_lines as u32).saturating_mul(char_height).max(1);
+        frame.sync_window_area_bounds();
+    }
+}
+
+fn live_gui_resize_pixels_from_logical_size(
+    frames: &FrameManager,
+    fid: FrameId,
+    desired_cols: i64,
+    desired_total_lines: i64,
+) -> Result<(u32, u32), Flow> {
+    let frame = frames
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let char_width = frame.char_width.max(1.0).round();
+    let char_height = frame.char_height.max(1.0).round();
+    let non_text_height = frame_non_text_height_pixels(frame);
+    let total_height_px = ((desired_total_lines.max(1) as f32) * char_height)
+        .round()
+        .max(1.0) as u32;
+    let text_width_px = ((desired_cols.max(1) as f32) * char_width).round().max(1.0) as u32;
+    let text_height_px = total_height_px
+        .saturating_sub(non_text_height)
+        .max(char_height.round().max(1.0) as u32);
+    Ok((text_width_px, text_height_px))
+}
+
+pub(crate) fn resize_live_gui_frame(
+    frames: &mut FrameManager,
+    buffers: &BufferManager,
+    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    fid: FrameId,
+    text_width_px: u32,
+    text_height_px: u32,
+    pretend: bool,
+) -> Result<(), Flow> {
+    let (total_width_px, total_height_px, title, cols, text_lines) = {
+        let frame = frames
+            .get(fid)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        let char_width = frame.char_width.max(1.0).round();
+        let char_height = frame.char_height.max(1.0).round();
+        let cols = ((text_width_px as f32) / char_width).floor().max(1.0) as i64;
+        let text_lines = ((text_height_px as f32) / char_height).floor().max(1.0) as i64;
+        let non_text_width = frame_non_text_total_width_pixels_in_state(frames, fid);
+        let non_text_height = frame_non_text_total_height_pixels(frame);
+        let title = frame.host_title_lisp_string();
+        (
+            text_width_px.saturating_add(non_text_width).max(1),
+            text_height_px.saturating_add(non_text_height).max(1),
+            title,
+            cols,
+            text_lines,
+        )
+    };
+
+    {
+        let frame = frames
+            .get_mut(fid)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        frame.clear_pending_gui_resize();
+        tracing::debug!(
+            "resize_live_gui_frame: fid={:?} pretend={} total={}x{} cols={} text_lines={}",
+            fid,
+            pretend,
+            total_width_px,
+            total_height_px,
+            cols,
+            text_lines
+        );
+        if pretend {
+            set_frame_text_size(frame, cols, text_lines);
+        } else {
+            frame.resize_pixelwise_with_buffer_constraints(
+                buffers,
+                total_width_px,
+                total_height_px,
+            );
+            frame.set_parameter(
+                Value::symbol(FRAME_TEXT_LINES_PARAM),
+                Value::fixnum(text_lines),
+            );
+        }
+    }
+
+    let is_child_frame = frames
+        .get(fid)
+        .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some());
+    if !pretend
+        && !is_child_frame
+        && let Some(host) = display_host.as_mut()
+    {
+        let (geometry_hints, visibility, decorated) = frames
+            .get(fid)
+            .map(|frame| {
+                (
+                    frame.gui_geometry_hints(),
+                    frame.visibility,
+                    frame
+                        .known_parameter(FrameParam::Undecorated)
+                        .is_none_or(|value| value.is_nil()),
+                )
+            })
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        tracing::debug!(
+            "resize_live_gui_frame: notifying host fid={:?} size={}x{} title={:?}",
+            fid,
+            total_width_px,
+            total_height_px,
+            title
+        );
+        host.resize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+            frame_id: fid,
+            width: total_width_px,
+            height: total_height_px,
+            title,
+            geometry_hints,
+            visibility,
+            decorated,
+            fullscreen: None,
+        })
+        .map_err(|message| signal("error", vec![Value::string(message)]))?;
+    }
+
+    Ok(())
+}
+
+pub(crate) fn request_live_gui_frame_resize(
+    frames: &mut FrameManager,
+    buffers: &BufferManager,
+    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    fid: FrameId,
+    text_width_px: u32,
+    text_height_px: u32,
+    pretend: bool,
+) -> Result<(), Flow> {
+    let (total_width_px, total_height_px, title, cols, text_lines) = {
+        let frame = frames
+            .get(fid)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        let char_width = frame.char_width.max(1.0).round();
+        let char_height = frame.char_height.max(1.0).round();
+        let cols = ((text_width_px as f32) / char_width).floor().max(1.0) as i64;
+        let text_lines = ((text_height_px as f32) / char_height).floor().max(1.0) as i64;
+        let non_text_width = frame_non_text_total_width_pixels_in_state(frames, fid);
+        let non_text_height = frame_non_text_total_height_pixels(frame);
+        let title = frame.host_title_lisp_string();
+        (
+            text_width_px.saturating_add(non_text_width).max(1),
+            text_height_px.saturating_add(non_text_height).max(1),
+            title,
+            cols,
+            text_lines,
+        )
+    };
+
+    tracing::debug!(
+        "request_live_gui_frame_resize: fid={:?} pretend={} total={}x{} cols={} text_lines={} host={}",
+        fid,
+        pretend,
+        total_width_px,
+        total_height_px,
+        cols,
+        text_lines,
+        display_host.is_some()
+    );
+
+    if pretend {
+        let frame = frames
+            .get_mut(fid)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        frame.clear_pending_gui_resize();
+        set_frame_text_size(frame, cols, text_lines);
+        return Ok(());
+    }
+
+    if let Some(frame) = frames.get_mut(fid) {
+        frame.clear_pending_gui_resize();
+    }
+
+    let is_child_frame = frames
+        .get(fid)
+        .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some());
+    if !is_child_frame && let Some(host) = display_host.as_mut() {
+        let (geometry_hints, visibility, decorated) = frames
+            .get(fid)
+            .map(|frame| {
+                (
+                    frame.gui_geometry_hints(),
+                    frame.visibility,
+                    frame
+                        .known_parameter(FrameParam::Undecorated)
+                        .is_none_or(|value| value.is_nil()),
+                )
+            })
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        host.resize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+            frame_id: fid,
+            width: total_width_px,
+            height: total_height_px,
+            title,
+            geometry_hints,
+            visibility,
+            decorated,
+            fullscreen: None,
+        })
+        .map_err(|message| signal("error", vec![Value::string(message)]))?;
+        return Ok(());
+    }
+
+    let frame = frames
+        .get_mut(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    frame.resize_pixelwise_with_buffer_constraints(buffers, total_width_px, total_height_px);
+    frame.set_parameter(
+        Value::symbol(FRAME_TEXT_LINES_PARAM),
+        Value::fixnum(text_lines),
+    );
+    Ok(())
+}
+
+pub(crate) fn flush_pending_live_gui_resize(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    fid: FrameId,
+) -> Result<bool, Flow> {
+    let pending = eval
+        .frame_manager()
+        .get(fid)
+        .and_then(|frame| frame.pending_gui_resize);
+    let Some(pending) = pending else {
+        return Ok(false);
+    };
+
+    let (text_width_px, text_height_px) = live_gui_resize_pixels_from_logical_size(
+        &eval.frame_manager(),
+        fid,
+        pending.width_cols,
+        pending.total_lines,
+    )?;
+
+    tracing::debug!(
+        "flush_pending_live_gui_resize: fid={:?} cols={} total_lines={} text={}x{}",
+        fid,
+        pending.width_cols,
+        pending.total_lines,
+        text_width_px,
+        text_height_px
+    );
+
+    if pending.is_queued() {
+        let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+        super::frame::request_live_gui_frame_resize_and_keep_pending(
+            frames,
+            buffers,
+            display_host,
+            fid,
+            FrameResizeRequest::Cells {
+                cols: pending.width_cols,
+                total_lines: pending.total_lines,
+            },
+        )?;
+    }
+    Ok(eval
+        .frame_manager_mut()
+        .get_mut(fid)
+        .and_then(|frame| frame.pending_gui_resize.as_mut())
+        .is_some_and(|pending| pending.take_native_wait()))
+}
+
+// ===========================================================================
+// Scroll / frame visibility command shims
+// ===========================================================================
+
+fn scroll_up_batch_error() -> Flow {
+    signal(LispCondition::EndOfBuffer, vec![])
+}
+
+fn scroll_down_batch_error() -> Flow {
+    signal(LispCondition::BeginningOfBuffer, vec![])
+}
+
+fn scroll_lines_in_state(
+    vars: VariableView<'_>,
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: Option<&Value>,
+    direction: i64,
+) -> i64 {
+    if let Some(v) = arg
+        && !v.is_nil()
+    {
+        if neovm_value::value::eq_value(v, &Value::symbol("-")) {
+            let wh = window_body_height_impl(frames, buffers, vec![])
+                .ok()
+                .and_then(|v| v.as_fixnum())
+                .unwrap_or(24);
+            let ctx = vars
+                .value_by_name("next-screen-context-lines")
+                .and_then(|v| v.as_fixnum())
+                .unwrap_or(2);
+            return -((wh - ctx).max(1) * direction);
+        }
+        // Explicit line count.
+        let n = match v.kind() {
+            ValueKind::Fixnum(n) => n,
+            _ => 1,
+        };
+        return n * direction;
+    }
+    // nil or absent: full window minus context lines.
+    let wh = window_body_height_impl(frames, buffers, vec![])
+        .ok()
+        .and_then(|v| v.as_fixnum())
+        .unwrap_or(24);
+    let ctx = vars
+        .value_by_name("next-screen-context-lines")
+        .and_then(|v| v.as_fixnum())
+        .unwrap_or(2);
+    (wh - ctx).max(1) * direction
+}
+/// `(scroll-up &optional ARG)` — scroll text upward (forward in buffer).
+///
+/// Mirror GNU Emacs Fscroll_up (window.c): move point forward by ARG lines
+/// (or a windowful if nil).  Signals end-of-buffer if already at end.
+#[doc(hidden)]
+pub fn builtin_scroll_up(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("scroll-up", &args, 1)?;
+    let arg = args.first().cloned();
+    if neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        let frame = ensure_selected_frame_id(eval);
+        if let Some(window) = eval
+            .frame_manager()
+            .get(frame)
+            .map(|frame| frame.selected_window)
+        {
+            // GNU window.c:6163, before Lisp-bearing motion queries.
+            eval.gnu_mark_window_redisplay(window);
+        }
+    }
+    if crate::emacs_core::xdisp::motion::paging::try_scroll(eval, arg, 1)? {
+        eval.invalidate_redisplay();
+        return Ok(Value::NIL);
+    }
+    let (obarray, owner, frames, buffers) = eval.variable_view_and_frames_buffers_mut();
+    let lines = scroll_lines_in_state(
+        VariableView::new(obarray, owner),
+        frames,
+        buffers,
+        arg.as_ref(),
+        1,
+    );
+    let result = scroll_by_screen_lines(eval, lines);
+    eval.invalidate_redisplay();
+    result
+}
+/// `(scroll-down &optional ARG)` — scroll text downward (backward in buffer).
+///
+/// Mirror GNU Emacs Fscroll_down (window.c): move point backward by ARG lines
+/// (or a windowful if nil).  Signals beginning-of-buffer if already at start.
+#[doc(hidden)]
+pub fn builtin_scroll_down(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("scroll-down", &args, 1)?;
+    let arg = args.first().cloned();
+    if neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        let frame = ensure_selected_frame_id(eval);
+        if let Some(window) = eval
+            .frame_manager()
+            .get(frame)
+            .map(|frame| frame.selected_window)
+        {
+            // GNU window.c:6163, before Lisp-bearing motion queries.
+            eval.gnu_mark_window_redisplay(window);
+        }
+    }
+    if crate::emacs_core::xdisp::motion::paging::try_scroll(eval, arg, -1)? {
+        eval.invalidate_redisplay();
+        return Ok(Value::NIL);
+    }
+    let (obarray, owner, frames, buffers) = eval.variable_view_and_frames_buffers_mut();
+    let lines = scroll_lines_in_state(
+        VariableView::new(obarray, owner),
+        frames,
+        buffers,
+        arg.as_ref(),
+        -1,
+    );
+    let result = scroll_by_screen_lines(eval, lines);
+    eval.invalidate_redisplay();
+    result
+}
+
+/// Point's location relative to the screen-line viewport used by scrolling.
+///
+/// This is deliberately independent of [`crate::window::WindowEndState`]: a
+/// stale window-end record says only that redisplay has not refreshed a cache;
+/// it says nothing about whether point is visible from the current start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+enum PointViewportLocation {
+    Before,
+    Visible,
+    After,
+}
+
+/// The current viewport expressed in buffer positions.
+///
+/// `exclusive_end` is the first screen-line start below the viewport.  When it
+/// reaches `buffer_end`, the end-of-buffer insertion position remains visible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+struct ScreenLineViewport {
+    start: EmacsBytePos,
+    exclusive_end: EmacsBytePos,
+    buffer_end: EmacsBytePos,
+}
+
+impl ScreenLineViewport {
+    fn locate(self, point: EmacsBytePos) -> PointViewportLocation {
+        if point < self.start {
+            PointViewportLocation::Before
+        } else if point < self.exclusive_end
+            || (self.exclusive_end == self.buffer_end && point <= self.buffer_end)
+        {
+            PointViewportLocation::Visible
+        } else {
+            PointViewportLocation::After
+        }
+    }
+}
+
+/// Why a scroll operation chose its starting position.
+///
+/// Keeping the reason in the type makes the GNU-compatible recovery path an
+/// explicit consequence of point visibility, rather than a boolean cache
+/// heuristic hidden in the caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+enum ScrollOrigin {
+    WindowStart(EmacsBytePos),
+    RecoveredAroundPoint(EmacsBytePos),
+}
+
+impl ScrollOrigin {
+    const fn position(self) -> EmacsBytePos {
+        match self {
+            Self::WindowStart(position) | Self::RecoveredAroundPoint(position) => position,
+        }
+    }
+}
+
+fn screen_line_viewport(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    buffer_id: BufferId,
+    window_id: WindowId,
+    start: EmacsBytePos,
+    body_height: i64,
+    buffer_end: EmacsBytePos,
+) -> Result<ScreenLineViewport, Flow> {
+    let exclusive_end = neovm_edit::emacs_core::indent::screen_line_motion_target(
+        eval,
+        buffer_id,
+        start,
+        Some(Value::make_window(window_id.0)),
+        body_height,
+    )?
+    .0;
+    Ok(ScreenLineViewport {
+        start,
+        exclusive_end,
+        buffer_end,
+    })
+}
+
+fn scroll_origin(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    buffer_id: BufferId,
+    window_id: WindowId,
+    window_start: EmacsBytePos,
+    point: EmacsBytePos,
+    body_height: i64,
+) -> Result<ScrollOrigin, Flow> {
+    // GNU window_scroll_line_based / window_scroll_pixel_based gate the
+    // recovery on `Fpos_visible_in_window_p (PT, window)` — a DISPLAY-STATE
+    // predicate, not a geometric one: a never-displayed window (every
+    // --batch window, a fresh split before redisplay) answers nil, so GNU
+    // scrolls from `vertical-motion -(ht/2)` around point even when point
+    // lies geometrically inside [start, start + height).  Asking our own
+    // `pos-visible-in-window-p` keeps the two in lock-step (it answers nil
+    // when noninteractive, matrix-exact or geometric from the CURRENT start
+    // otherwise — so queued interactive scrolls still stay monotonic).
+    let point_lisp = match eval.edit.buffers.get(buffer_id) {
+        Some(buf) => buf.emacs_byte_pos_to_lisp_char_pos(point),
+        None => return Ok(ScrollOrigin::WindowStart(window_start)),
+    };
+    let visible = crate::emacs_core::xdisp::builtin_pos_visible_in_window_p_ctx(
+        eval,
+        vec![
+            Value::fixnum(point_lisp.as_i64()),
+            Value::make_window(window_id.0),
+        ],
+    )?
+    .is_truthy();
+    if visible {
+        Ok(ScrollOrigin::WindowStart(window_start))
+    } else {
+        let recovered = neovm_edit::emacs_core::indent::screen_line_motion_target(
+            eval,
+            buffer_id,
+            point,
+            Some(Value::make_window(window_id.0)),
+            -(body_height / 2),
+        )?
+        .0;
+        Ok(ScrollOrigin::RecoveredAroundPoint(recovered))
+    }
+}
+
+fn scroll_by_screen_lines(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    lines: i64,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    crate::emacs_core::xdisp::motion::paging::commit_scroll_plan(eval, |eval| {
+        plan_scroll_by_screen_lines(eval, lines)
+    })?;
+    Ok(Value::NIL)
+}
+
+fn plan_scroll_by_screen_lines(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    lines: i64,
+) -> Result<Option<crate::window::WindowScrollUpdate>, neovm_value::error::Flow> {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (fid, wid) = resolve_window_id_in_state(frames, buffers, None)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let body_height = window_body_height_impl(frames, buffers, vec![])
+        .ok()
+        .and_then(|v| v.as_fixnum())
+        .unwrap_or(24)
+        .max(1);
+    let (buffer_id, window_point, window_start) = match get_leaf(&eval.frame_manager(), fid, wid)? {
+        Window::Leaf {
+            buffer_id,
+            point,
+            window_start,
+            ..
+        } => (*buffer_id, *point, *window_start),
+        _ => return Ok(None),
+    };
+    let Some(buf) = eval.edit.buffers.get(buffer_id) else {
+        return Ok(None);
+    };
+    let accessible = buf.accessible_emacs_byte_region();
+    let selected_live_window = eval
+        .frame_manager()
+        .get(fid)
+        .is_some_and(|frame| frame.selected_window == wid);
+    let effective_point = if selected_live_window {
+        lisp_char_pos_from_one_based_usize(buf.point_char_pos().get().saturating_add(1))
+    } else {
+        window_point
+    };
+    let pt = accessible
+        .clamp(buf.lisp_pos_to_emacs_byte_pos(effective_point))
+        .get();
+    let begv = accessible.start().get();
+    let zv = accessible.end().get();
+    let window_start = accessible.clamp(buf.lisp_pos_to_emacs_byte_pos(window_start));
+    let start = scroll_origin(
+        eval,
+        buffer_id,
+        wid,
+        window_start,
+        EmacsBytePos::new(pt),
+        body_height,
+    )?
+    .position()
+    .get();
+
+    let pos;
+    let mut next_point = pt;
+    if lines > 0 {
+        pos = neovm_edit::emacs_core::indent::screen_line_motion_target(
+            eval,
+            buffer_id,
+            EmacsBytePos::new(start),
+            Some(Value::make_window(wid.0)),
+            lines,
+        )?
+        .0
+        .get();
+        if pos >= zv {
+            return Err(scroll_up_batch_error());
+        }
+        if pos > pt {
+            next_point = pos;
+        }
+    } else if lines < 0 {
+        if start <= begv {
+            return Err(scroll_down_batch_error());
+        }
+        pos = neovm_edit::emacs_core::indent::screen_line_motion_target(
+            eval,
+            buffer_id,
+            EmacsBytePos::new(start),
+            Some(Value::make_window(wid.0)),
+            lines,
+        )?
+        .0
+        .get();
+        // GNU window_scroll_line_based: after scrolling backward, a point that
+        // fell BELOW the new window is pulled up to the start of the last
+        // fully-visible line; a point still visible stays put. When the window
+        // now reaches end-of-buffer, `bottom` clamps to ZV and everything up to
+        // ZV (including point-max) is visible, so point must NOT be pulled.
+        let viewport = screen_line_viewport(
+            eval,
+            buffer_id,
+            wid,
+            EmacsBytePos::new(pos),
+            body_height,
+            EmacsBytePos::new(zv),
+        )?;
+        match viewport.locate(EmacsBytePos::new(pt)) {
+            PointViewportLocation::After => {
+                next_point = neovm_edit::emacs_core::indent::screen_line_motion_target(
+                    eval,
+                    buffer_id,
+                    viewport.exclusive_end,
+                    Some(Value::make_window(wid.0)),
+                    -1,
+                )?
+                .0
+                .get();
+            }
+            PointViewportLocation::Before | PointViewportLocation::Visible => {}
+        }
+    } else {
+        pos = start;
+    }
+
+    let Some(buf) = eval.edit.buffers.get(buffer_id) else {
+        return Ok(None);
+    };
+    let start_lisp = buf.emacs_byte_pos_to_lisp_char_pos(EmacsBytePos::new(pos));
+    let point_lisp = buf.emacs_byte_pos_to_lisp_char_pos(EmacsBytePos::new(next_point));
+    Ok(Some(crate::window::WindowScrollUpdate {
+        frame: fid,
+        window: wid,
+        buffer: buffer_id,
+        start: start_lisp,
+        point: point_lisp,
+        hidden_top_pixels: 0,
+    }))
+}
+
+/// `(recenter &optional ARG REDISPLAY)` — center point in window.
+///
+/// Mirror GNU Emacs Frecenter (window.c): adjust window-start so that
+/// point appears at the center of the window, or at line ARG from the
+/// top (or bottom if ARG is negative).
+#[doc(hidden)]
+pub fn builtin_recenter(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    use crate::emacs_core::xdisp::motion::recenter::{RecenterTarget, resolve};
+
+    expect_max_args("recenter", &args, 2)?;
+    let redraw = RecenterRedraw::from_call(eval, &args);
+    let Some(RecenterOrigin {
+        frame: fid,
+        window: wid,
+        buffer: buffer_id,
+        point: pt,
+        placement,
+        canonical_rows: target_line,
+    }) = recenter_backward_origin(eval, &args)?
+    else {
+        return Ok(Value::NIL);
+    };
+
+    if redraw == RecenterRedraw::FullFrame {
+        // GNU redraws before display motion; a callback/error must already
+        // observe the frame/window marks (window.c:7265-7272).
+        crate::emacs_core::dispnew::pure::publish_gnu_frame_redraw(eval, fid);
+    }
+
+    // Move back `target_line` SCREEN lines, through the same display-motion
+    // seam `vertical-motion` and window scrolling use. GNU's positive-ARG
+    // branch runs the display iterator for exactly this --  `start_display`,
+    // `move_it_by_lines (&it, 0)` onto the head of point's screen line, then
+    // `move_it_by_lines (&it, -nlines)` (src/window.c:7395-7407) -- so
+    // invisible text, continuation rows and display properties all count the
+    // way redisplay counts them. Walking buffer newlines here instead made a
+    // hidden line consume one of the ARG lines and left window-start one line
+    // short of GNU's.
+    let pos = match resolve(eval, fid, wid, buffer_id, placement)? {
+        Some(RecenterTarget::Keep) => return Ok(Value::NIL),
+        Some(RecenterTarget::Start(position)) => position,
+        None => {
+            neovm_edit::emacs_core::indent::screen_line_motion_target(
+                eval,
+                buffer_id,
+                pt,
+                None,
+                -target_line,
+            )?
+            .0
+        }
+    };
+
+    {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let Some(buf) = buffers.get(buffer_id) else {
+            return Ok(Value::NIL);
+        };
+        let pos_lisp = buf.emacs_byte_pos_to_lisp_char_pos(pos).as_i64();
+        if let Some(clamped) = clamped_window_position_in_state(frames, buffers, fid, wid, pos_lisp)
+            && let Some(window) = frames
+                .get_mut(fid)
+                .and_then(|frame| frame.find_window_mut(wid))
+        {
+            crate::window::window_markers::set_window_start_with_marker(buffers, window, clamped);
+            window.invalidate_window_end();
+            if let Window::Leaf {
+                vscroll,
+                preserve_vscroll_p,
+                ..
+            } = window
+            {
+                *vscroll = 0;
+                *preserve_vscroll_p = false;
+            }
+        }
+    }
+
+    // GNU window.c:7454 marks even a same-start recenter.
+    eval.gnu_mark_window_redisplay(wid);
+    match redraw {
+        RecenterRedraw::Window => eval.invalidate_redisplay(),
+        RecenterRedraw::FullFrame => {}
+    }
+    Ok(Value::NIL)
+}
+
+/// Physical redraw selected by GNU `Frecenter`'s ARG/REDISPLAY/policy gate.
+///
+/// REDISPLAY alone is not enough: GNU redraws only for a nil ARG, an enabled
+/// `recenter-redisplay`, and (for the special `tty` policy) a terminal frame.
+/// `recenter-top-bottom`'s first `C-l` supplies exactly that combination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecenterRedraw {
+    Window,
+    FullFrame,
+}
+
+impl RecenterRedraw {
+    fn from_call(eval: &neovm_eval::emacs_core::eval::Context, args: &[Value]) -> Self {
+        let symbol_mode = eval.symbol_mode();
+        let centers_without_prefix = args.first().is_none_or(|arg| arg.is_nil());
+        let redisplay_requested = args.get(1).is_some_and(|value| value.is_truthy());
+        if !centers_without_prefix || !redisplay_requested {
+            return Self::Window;
+        }
+
+        let policy = eval.visible_variable_value_or_nil("recenter-redisplay");
+        if policy.is_nil() {
+            return Self::Window;
+        }
+        if policy.as_symbol_name(symbol_mode) == Some("tty")
+            && eval
+                .frame_manager()
+                .selected_frame()
+                .is_none_or(|frame| frame.effective_window_system().is_some())
+        {
+            return Self::Window;
+        }
+        Self::FullFrame
+    }
+}
+
+struct RecenterOrigin {
+    frame: FrameId,
+    window: WindowId,
+    buffer: BufferId,
+    point: EmacsBytePos,
+    placement: crate::emacs_core::xdisp::motion::recenter::RecenterPlacement,
+    canonical_rows: i64,
+}
+
+/// Resolve the target window, source point and requested placement before
+/// redraw. Canonical rows retain the initial-frame/batch fallback geometry.
+/// `Ok(None)` means the selected window is not a leaf.
+fn recenter_backward_origin(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+) -> Result<Option<RecenterOrigin>, Flow> {
+    use crate::emacs_core::xdisp::motion::recenter::RecenterPlacement;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+
+    let wh = window_body_height_impl(frames, buffers, vec![])
+        .ok()
+        .and_then(|v| v.as_fixnum())
+        .unwrap_or(24);
+
+    // Determine target line from top of window where point should appear.
+    let placement = RecenterPlacement::from_argument(args.first());
+    let target_line = placement.canonical_rows(wh);
+
+    // Compute new window-start by moving backward target_line lines from point.
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) = resolve_window_id_in_state(frames, buffers, None)?;
+    let (buffer_id, window_point) = match get_leaf(frames, fid, wid)? {
+        Window::Leaf {
+            buffer_id, point, ..
+        } => {
+            if buffers.current_buffer_id() != Some(*buffer_id) {
+                let quoting_style = neovm_text::emacs_core::coding::effective_text_quoting_style(
+                    eval.variables(),
+                    eval.symbol_mode(),
+                );
+                let message = neovm_text::emacs_core::coding::requote_c_error_message(
+                    "`recenter'ing a window that does not display current-buffer",
+                    quoting_style,
+                );
+                return Err(signal("error", vec![Value::string(message)]));
+            }
+            let point = buffers
+                .get(*buffer_id)
+                .map(|buf| {
+                    lisp_char_pos_from_one_based_usize(buf.point_char_pos().get().saturating_add(1))
+                })
+                .unwrap_or(*point);
+            (*buffer_id, point)
+        }
+        _ => return Ok(None),
+    };
+    let Some(buf) = buffers.get(buffer_id) else {
+        return Ok(None);
+    };
+    let accessible = buf.accessible_emacs_byte_region();
+    let pt = accessible.clamp(buf.lisp_pos_to_emacs_byte_pos(window_point));
+
+    Ok(Some(RecenterOrigin {
+        frame: fid,
+        window: wid,
+        buffer: buffer_id,
+        point: pt,
+        placement,
+        canonical_rows: target_line,
+    }))
+}
+
+// ===========================================================================
+// Frame operations
+// ===========================================================================
+
+#[doc(hidden)]
+pub fn selected_frame_impl(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("selected-frame", &args, 0)?;
+    let fid = ensure_selected_frame_id_in_state(frames, buffers);
+    Ok(Value::make_frame(fid.0))
+}
+#[derive(Clone, Copy)]
+enum ChildMinibuffer {
+    Own,
+    Shared(WindowId),
+    Only,
+}
+
+fn resolve_child_shared_minibuffer(
+    frames: &FrameManager,
+    parent_id: FrameId,
+    minibuffer_param: Option<Value>,
+) -> Result<ChildMinibuffer, Flow> {
+    let Some(minibuffer_param) = minibuffer_param else {
+        return Ok(ChildMinibuffer::Own);
+    };
+
+    if minibuffer_param.is_nil() || matches!(minibuffer_param.as_bare_symbol_name(), Some("none")) {
+        return Ok(frames
+            .root_frame_id(parent_id)
+            .and_then(|root_id| frames.get(root_id))
+            .and_then(|root| root.minibuffer_window)
+            .map_or(ChildMinibuffer::Own, ChildMinibuffer::Shared));
+    }
+    if matches!(minibuffer_param.as_bare_symbol_name(), Some("only")) {
+        return Ok(ChildMinibuffer::Only);
+    }
+
+    let Some(raw_window_id) = minibuffer_param.as_window_id() else {
+        return Ok(ChildMinibuffer::Own);
+    };
+    let window_id = WindowId(raw_window_id);
+    let valid_minibuffer = frames
+        .find_valid_window_frame_id(window_id)
+        .and_then(|frame_id| {
+            let owner = frames.get(frame_id)?;
+            (owner.minibuffer_window == Some(window_id)
+                && frames.root_frame_id(frame_id) == frames.root_frame_id(parent_id))
+            .then_some(())
+        })
+        .is_some();
+    if valid_minibuffer {
+        Ok(ChildMinibuffer::Shared(window_id))
+    } else {
+        Err(signal(
+            "error",
+            vec![Value::string(
+                "The `minibuffer' parameter does not specify a valid minibuffer window",
+            )],
+        ))
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn make_frame_plain(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    make_frame_plain_on_terminal(frames, buffers, args, 0, 800, 600)
+}
+
+pub(crate) fn make_frame_plain_on_terminal(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    args: Vec<Value>,
+    terminal_id: u64,
+    default_width: u32,
+    default_height: u32,
+) -> EvalResult {
+    expect_max_args("make-frame", &args, 1)?;
+    let mut width = default_width;
+    let mut height = default_height;
+    let mut requested_width = None;
+    let mut requested_height = None;
+    let mut requested_name = None;
+    let mut all_params: Vec<(Value, Value)> = Vec::new();
+    let mut parent_frame = Value::NIL;
+    let mut left = 0_i64;
+    let mut top = 0_i64;
+    let mut visibility = None;
+    let mut minibuffer_param = None;
+    let mut undecorated = false;
+    let mut no_accept_focus = false;
+    let mut no_split = false;
+
+    // Parse optional alist parameters.
+    if let Some(params) = args.first()
+        && let Some(items) = neovm_value::value::list_to_vec(params)
+    {
+        for item in &items {
+            if item.is_cons() {
+                let pair_car = item.cons_car();
+                let pair_cdr = item.cons_cdr();
+                if let Some(key) = pair_car.as_bare_symbol_id() {
+                    all_params.push((pair_car, pair_cdr));
+                    match resolve_sym(key) {
+                        "width" => {
+                            if let Some(size) = parse_frame_size_param(pair_cdr) {
+                                requested_width = Some(size);
+                                width = frame_size_param_to_cells(size, 1.0).max(1) as u32;
+                            }
+                        }
+                        "height" => {
+                            if let Some(size) = parse_frame_size_param(pair_cdr) {
+                                requested_height = Some(size);
+                                height = frame_size_param_to_cells(size, 1.0).max(1) as u32;
+                            }
+                        }
+                        "name" => {
+                            if let Some(value) = frame_name_parameter_value(&pair_cdr) {
+                                requested_name = (!value.is_nil()).then_some(value);
+                            }
+                        }
+                        "parent-frame" => {
+                            if pair_cdr
+                                .as_frame_id()
+                                .map(|id| frames.get(FrameId(id)).is_some())
+                                .unwrap_or(false)
+                            {
+                                parent_frame = pair_cdr;
+                            }
+                        }
+                        "left" => {
+                            if let Some(n) = pair_cdr.as_int() {
+                                left = n;
+                            }
+                        }
+                        "top" => {
+                            if let Some(n) = pair_cdr.as_int() {
+                                top = n;
+                            }
+                        }
+                        "visibility" => {
+                            visibility = Some(FrameVisibility::from_lisp_value(pair_cdr))
+                        }
+                        "minibuffer" => minibuffer_param = Some(pair_cdr),
+                        "undecorated" => undecorated = pair_cdr.is_truthy(),
+                        "no-accept-focus" => no_accept_focus = pair_cdr.is_truthy(),
+                        "unsplittable" => no_split = pair_cdr.is_truthy(),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // GNU `Fmake_terminal_frame` consumes `frame_next_F_name` for every new
+    // terminal frame before applying an optional explicit `name` parameter.
+    // Keep that presentation sequence independent of FrameId allocation.
+    let generated_name = frames.next_generated_tty_frame_name();
+    let explicit_name = requested_name.is_some();
+    let name = requested_name.unwrap_or(generated_name);
+
+    let parent_id = parent_frame.as_frame_id().map(FrameId);
+    if let Some(parent_id) = parent_id {
+        let metrics = frames.get(parent_id).map(|parent| {
+            (
+                parent.terminal_id,
+                parent.char_width.max(1.0),
+                parent.char_height.max(1.0),
+                parent.font_pixel_size.max(1.0),
+            )
+        });
+        if let Some((terminal_id, char_width, char_height, font_pixel_size)) = metrics {
+            if let Some(size) = requested_width {
+                width = frame_size_param_to_cells(size, char_width).max(1) as u32;
+            }
+            if let Some(size) = requested_height {
+                height = frame_size_param_to_cells(size, char_height).max(1) as u32;
+            }
+            width = width.max(1);
+            height = height.max(1);
+            let buf_id = buffers
+                .current_buffer()
+                .map(|b| b.id())
+                .unwrap_or(BufferId(0));
+            let fid =
+                frames.create_frame_value_on_terminal(name, terminal_id, width, height, buf_id);
+            let child_minibuffer =
+                resolve_child_shared_minibuffer(frames, parent_id, minibuffer_param)?;
+            let minibuffer_buffer_id = if matches!(child_minibuffer, ChildMinibuffer::Only) {
+                Some(
+                    buffers
+                        .find_buffer_by_name(" *Minibuf-0*")
+                        .unwrap_or_else(|| buffers.create_buffer(" *Minibuf-0*")),
+                )
+            } else {
+                None
+            };
+            let z_order = 1 + frames.max_child_z_order(parent_id);
+            let frame = frames
+                .get_mut(fid)
+                .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+            if explicit_name {
+                frame.set_name_value(name);
+            } else {
+                frame.set_generated_name_value(name);
+            }
+            frame.parent_frame = parent_frame;
+            frame.z_order = z_order;
+            frame.left_pos = left;
+            frame.top_pos = top;
+            frame.width = width;
+            frame.height = height;
+            frame.char_width = char_width;
+            frame.char_height = char_height;
+            frame.font_pixel_size = font_pixel_size;
+            frame.visibility = visibility.unwrap_or(frame.visibility);
+            frame.undecorated = undecorated;
+            frame.no_accept_focus = no_accept_focus;
+            frame.no_split = no_split;
+            match child_minibuffer {
+                ChildMinibuffer::Shared(shared_minibuffer) => {
+                    frame.minibuffer_leaf = None;
+                    frame.minibuffer_window = Some(shared_minibuffer);
+                }
+                ChildMinibuffer::Only => {
+                    frame.minibuffer_leaf = None;
+                    frame.minibuffer_window = Some(frame.root_window().id());
+                    frame.no_split = true;
+                    frame.root_window_mut().reset_mode_line_base();
+                    if let Some(minibuffer_buffer_id) = minibuffer_buffer_id
+                        && let Window::Leaf { buffer_id, .. } = frame.root_window_mut()
+                    {
+                        *buffer_id = minibuffer_buffer_id;
+                    }
+                }
+                ChildMinibuffer::Own => {}
+            }
+            for (key, value) in all_params {
+                if let Some(param_key) = FrameParamKey::from_symbol_value(key) {
+                    frame.set_parameter_key(param_key, value);
+                } else {
+                    frame.set_parameter(key, value);
+                }
+            }
+            frame.set_parameter(Value::symbol("width"), Value::fixnum(i64::from(width)));
+            frame.set_parameter(Value::symbol("height"), Value::fixnum(i64::from(height)));
+            if let ChildMinibuffer::Shared(shared_minibuffer) = child_minibuffer {
+                frame.set_parameter(
+                    Value::symbol("minibuffer"),
+                    Value::make_window(shared_minibuffer.0),
+                );
+            }
+            frame.set_known_parameter(FrameParam::ParentFrame, parent_frame);
+            frame.set_parameter(Value::symbol("left"), Value::fixnum(left));
+            frame.set_parameter(Value::symbol("top"), Value::fixnum(top));
+            frame.sync_tab_bar_height_from_parameters();
+            frame.sync_menu_bar_height_from_parameters();
+            frame.sync_tool_bar_height_from_parameters();
+            frame.sync_window_area_bounds();
+            crate::window::window_markers::attach_frame_window_position_markers(buffers, frame);
+            tracing::debug!(
+                "make_frame_plain: created tty child frame {:?} parent={:?} pos={}x{} size={}x{}",
+                fid,
+                parent_id,
+                left,
+                top,
+                width,
+                height
+            );
+            return Ok(Value::make_frame(fid.0));
+        }
+    }
+
+    // Use the current buffer (or BufferId(0) as fallback) for the initial window.
+    if let Some(size) = requested_width {
+        width = frame_size_param_to_cells(size, 1.0).max(1) as u32;
+    }
+    if let Some(size) = requested_height {
+        height = frame_size_param_to_cells(size, 1.0).max(1) as u32;
+    }
+    let buf_id = buffers
+        .current_buffer()
+        .map(|b| b.id())
+        .unwrap_or(BufferId(0));
+    let fid = frames.create_frame_value_on_terminal(name, terminal_id, width, height, buf_id);
+    if let Some(frame) = frames.get_mut(fid) {
+        // This constructor is exclusively for termcap frames.  Their geometry
+        // is already expressed in character cells, and GNU initializes both
+        // `column_width' and `line_height' to one in `make_frame'.  Keeping the
+        // invariant here prevents a TTY created by a GUI daemon from inheriting
+        // the GUI Frame defaults (8x16) and laying out only a fraction of its
+        // actual columns.
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+        if let Some(minibuffer) = frame.minibuffer_leaf.as_mut() {
+            let bounds = *minibuffer.bounds();
+            minibuffer.set_bounds(crate::window::Rect::new(
+                bounds.x,
+                bounds.y,
+                bounds.width,
+                1.0,
+            ));
+        }
+        if explicit_name {
+            frame.set_name_value(name);
+        } else {
+            frame.set_generated_name_value(name);
+        }
+        for (key, value) in all_params {
+            frame.set_parameter(key, value);
+        }
+        frame.set_parameter(Value::symbol("width"), Value::fixnum(i64::from(width)));
+        frame.set_parameter(Value::symbol("height"), Value::fixnum(i64::from(height)));
+        frame.visibility = visibility.unwrap_or(frame.visibility);
+        frame.undecorated = undecorated;
+        frame.no_accept_focus = no_accept_focus;
+        frame.no_split = no_split;
+        frame.sync_tab_bar_height_from_parameters();
+        frame.sync_menu_bar_height_from_parameters();
+        frame.sync_tool_bar_height_from_parameters();
+        frame.sync_window_area_bounds();
+        crate::window::window_markers::attach_frame_window_position_markers(buffers, frame);
+    }
+    tracing::debug!(
+        "make_frame_plain: created plain frame {:?} size={}x{} name={}",
+        fid,
+        width,
+        height,
+        name.as_lisp_string()
+            .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes()))
+            .unwrap_or_default()
+    );
+    Ok(Value::make_frame(fid.0))
+}
+
+#[derive(Default)]
+struct ParsedGuiFrameParams {
+    name: Option<Value>,
+    title: Option<Value>,
+    width: Option<FrameSizeParam>,
+    height: Option<FrameSizeParam>,
+    visibility: Option<FrameVisibility>,
+    parent_frame: Option<FrameId>,
+    left: Option<super::frame::position::FramePositionSpec>,
+    top: Option<super::frame::position::FramePositionSpec>,
+    fullscreen: Option<FrameFullscreen>,
+    minibuffer: Option<Value>,
+    internal_border_width: Option<i64>,
+    child_frame_border_width: Option<i64>,
+    undecorated: bool,
+    no_accept_focus: bool,
+    unsplittable: bool,
+    all: std::collections::HashMap<SymId, Value>,
+}
+
+#[derive(Clone, Copy)]
+struct GuiFrameMetrics {
+    width_px: u32,
+    height_px: u32,
+    char_width: f32,
+    char_height: f32,
+    font_pixel_size: f32,
+    minibuffer_height: f32,
+    device_scale_factor: f64,
+}
+
+pub(crate) fn stringish_value(value: &Value) -> Option<Value> {
+    match value.kind() {
+        ValueKind::String => Some(*value),
+        ValueKind::Symbol(id) => Some(Value::string(resolve_sym(id))),
+        _ => None,
+    }
+}
+
+pub(crate) fn frame_name_parameter_value(value: &Value) -> Option<Value> {
+    if value.is_nil() {
+        Some(Value::NIL)
+    } else {
+        stringish_value(value)
+    }
+}
+
+fn parse_gui_frame_params(value: Option<&Value>) -> ParsedGuiFrameParams {
+    let mut parsed = ParsedGuiFrameParams::default();
+    let Some(value) = value else {
+        return parsed;
+    };
+    let Some(items) = list_to_vec(value) else {
+        return parsed;
+    };
+    for item in items {
+        if !item.is_cons() {
+            continue;
+        };
+        let pair_car = item.cons_car();
+        let pair_cdr = item.cons_cdr();
+        let Some(key) = pair_car.as_bare_symbol_id() else {
+            continue;
+        };
+        // GNU frame arguments use assq: prepending an entry overrides older
+        // entries, including an explicit nil. Typed fields follow that order.
+        if parsed.all.contains_key(&key) {
+            continue;
+        }
+        parsed.all.insert(key, pair_cdr);
+        match resolve_sym(key) {
+            "name" => parsed.name = stringish_value(&pair_cdr),
+            "title" => parsed.title = stringish_value(&pair_cdr),
+            "width" => {
+                parsed.width = parse_frame_size_param(pair_cdr).filter(|size| !size.is_zero());
+            }
+            "height" => {
+                parsed.height = parse_frame_size_param(pair_cdr).filter(|size| !size.is_zero());
+            }
+            "visibility" => parsed.visibility = Some(FrameVisibility::from_lisp_value(pair_cdr)),
+            "parent-frame" => {
+                if let Some(id) = pair_cdr.as_frame_id() {
+                    parsed.parent_frame = Some(FrameId(id));
+                }
+            }
+            "left" => parsed.left = super::frame::position::FramePositionSpec::from_lisp(pair_cdr),
+            "top" => parsed.top = super::frame::position::FramePositionSpec::from_lisp(pair_cdr),
+            "fullscreen" => parsed.fullscreen = FrameFullscreen::from_symbol_value(&pair_cdr),
+            "minibuffer" => parsed.minibuffer = Some(pair_cdr),
+            "internal-border-width" => parsed.internal_border_width = pair_cdr.as_int(),
+            "child-frame-border-width" => parsed.child_frame_border_width = pair_cdr.as_int(),
+            "undecorated" => parsed.undecorated = pair_cdr.is_truthy(),
+            "no-accept-focus" => parsed.no_accept_focus = pair_cdr.is_truthy(),
+            "unsplittable" => parsed.unsplittable = pair_cdr.is_truthy(),
+            _ => {}
+        }
+    }
+    parsed
+}
+
+fn parsed_effective_internal_border_width(
+    parsed: &ParsedGuiFrameParams,
+    is_child_frame: bool,
+) -> u32 {
+    if is_child_frame && let Some(width) = parsed.child_frame_border_width {
+        return width.max(0) as u32;
+    }
+    parsed
+        .internal_border_width
+        .map(|width| width.max(0) as u32)
+        .unwrap_or(0)
+}
+
+fn current_gui_frame_metrics_in_state(frames: &FrameManager) -> GuiFrameMetrics {
+    if let Some(frame) = frames.selected_frame() {
+        // A frame's minibuffer defaults to a single text line (GNU
+        // `make-frame` / `Fframe_char_height`); the layout-engine
+        // `resize_mini_window` pass grows it on demand for multi-line
+        // messages. Falling back to two lines here seeded every GUI frame
+        // with a permanently two-line echo area, since grow-only never
+        // shrinks an over-allocated mini-window back down.
+        let minibuffer_height = frame
+            .minibuffer_leaf
+            .as_ref()
+            .map(|leaf| leaf.bounds().height.max(frame.char_height).max(1.0))
+            .unwrap_or_else(|| frame.char_height.max(1.0));
+        return GuiFrameMetrics {
+            width_px: frame.width.max(1),
+            height_px: frame.height.max(minibuffer_height.ceil() as u32 + 1),
+            char_width: frame.char_width.max(1.0),
+            char_height: frame.char_height.max(1.0),
+            font_pixel_size: frame.font_pixel_size.max(1.0),
+            minibuffer_height,
+            device_scale_factor: frame.device_scale_factor,
+        };
+    }
+    GuiFrameMetrics {
+        width_px: 960,
+        height_px: 640,
+        char_width: 8.0,
+        char_height: 16.0,
+        font_pixel_size: 16.0,
+        minibuffer_height: 32.0,
+        device_scale_factor: 1.0,
+    }
+}
+
+fn current_primary_window_size(
+    display_host: &Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+) -> Option<neovm_eval::emacs_core::eval::GuiFrameHostSize> {
+    display_host
+        .as_ref()
+        .and_then(|host| host.current_primary_window_size())
+        .filter(|size| size.width > 0 && size.height > 0)
+}
+
+/// `(x-create-frame PARMS)` -> frame.
+///
+/// GNU Emacs owns `make-frame` in Lisp and delegates the host-window boundary
+/// to the C primitive `x-create-frame`.  NeoVM mirrors that split here:
+/// this builtin realizes a fresh Lisp frame object and lets the frontend
+/// binary decide whether to adopt the existing primary window or create a
+/// new top-level OS window for it.
+#[doc(hidden)]
+pub fn builtin_x_create_frame(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    mut args: Vec<Value>,
+) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
+    expect_args("x-create-frame", &args, 1)?;
+    // GNU gui_display_get_arg resolves frame alist, default-frame-alist,
+    // then the display resource. Keep explicit nil distinct from absence.
+    let explicit = parse_gui_frame_params(args.first());
+    let defaults = eval.eval_symbol_by_id(intern("default-frame-alist")).ok();
+    let defaults = parse_gui_frame_params(defaults.as_ref());
+    let display = explicit
+        .all
+        .get(&intern("display"))
+        .or_else(|| defaults.all.get(&intern("display")))
+        .copied();
+    super::display::ensure_daemon_graphical_connection(eval, display)?;
+    // GNU xfns.c supplies mode-derived defaults through gui_default_parameter
+    // at creation, never through redisplay. Preserve explicit nil/zero and
+    // default-frame-alist overrides. Child/minibuffer-only frames have no bars.
+    for (parameter, mode) in [
+        (FrameParam::MenuBarLines, "menu-bar-mode"),
+        (FrameParam::ToolBarLines, "tool-bar-mode"),
+    ] {
+        let symbol = parameter.symbol();
+        let key = symbol
+            .as_symbol_id(symbol_mode)
+            .expect("known frame parameter symbol");
+        if !explicit.all.contains_key(&key) {
+            let value = defaults.all.get(&key).copied().unwrap_or_else(|| {
+                let enabled = explicit.parent_frame.is_none()
+                    && explicit.minibuffer != Some(Value::symbol("only"))
+                    && eval
+                        .builtin_var_value(intern(mode))
+                        .is_some_and(|value| value.is_truthy());
+                Value::fixnum(i64::from(enabled))
+            });
+            args[0] = Value::cons(Value::cons(symbol, value), args[0]);
+        }
+    }
+    for name in ["alpha", "alpha-background"] {
+        let key = intern(name);
+        if !explicit.all.contains_key(&key)
+            && let Some(value) = defaults.all.get(&key)
+        {
+            args[0] = Value::cons(Value::cons(Value::symbol(name), *value), args[0]);
+        }
+    }
+    let font_key = intern("font");
+    if !parse_gui_frame_params(args.first())
+        .all
+        .contains_key(&font_key)
+    {
+        let defaults = eval.eval_symbol_by_id(intern("default-frame-alist")).ok();
+        let default_font = parse_gui_frame_params(defaults.as_ref())
+            .all
+            .get(&font_key)
+            .copied();
+        let font = if let Some(font) = default_font {
+            Some(font)
+        } else if super::display::x_window_system_active(eval) {
+            let resource = super::display::builtin_x_get_resource(
+                eval,
+                vec![Value::string("font"), Value::string("Font")],
+            )?;
+            (!resource.is_nil()).then_some(resource)
+        } else {
+            None
+        };
+        if let Some(font) = font {
+            args[0] = Value::cons(Value::cons(Value::symbol("font"), font), args[0]);
+        }
+    }
+    tracing::debug!(
+        "builtin_x_create_frame: syncing pending resize events before frame realization"
+    );
+    // Existing windows can have queued resize events when Lisp requests
+    // another frame. Apply them before inheriting geometry. The opening GUI
+    // frame obtains its own font and dimensions from the host below.
+    eval.sync_pending_resize_events();
+    let opening_gui_frame = eval
+        .display_host
+        .as_ref()
+        .is_some_and(|host| host.opening_gui_frame_pending());
+    // Reopening a daemon GUI from its retained terminal uses native font
+    // defaults even after the one-shot primary window was adopted. Its Lisp
+    // default face needs the same font initialization as the opening frame.
+    let needs_graphical_face_defaults = opening_gui_frame
+        || eval
+            .frame_manager()
+            .selected_frame()
+            .is_some_and(|frame| frame.effective_window_system().is_none());
+    let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+    let result = x_create_frame_impl(frames, buffers, display_host, args);
+    eval.sync_keyboard_terminal_owner();
+    if let Ok(value) = &result
+        && let Some(id) = value.as_frame_id()
+    {
+        let frame_id = FrameId(id);
+        if needs_graphical_face_defaults
+            && eval.frame_manager().get(frame_id).is_some_and(|frame| {
+                frame.parent_frame.is_nil()
+                    && frame
+                        .parameter("font-parameter")
+                        .is_some_and(|font| super::font::is_font_object(&font))
+            })
+        {
+            // GNU init_frame_faces realizes the newly opened GUI font before
+            // faces.el recalculates frame-local definitions. Do not inherit
+            // the startup terminal's synthetic "default" family/height here.
+            // This seeds only the frame-local face: Lisp's subsequent global
+            // merge still applies the user's early-init new-frame overrides.
+            super::font::seed_live_frame_default_face_from_font_parameter(eval, frame_id);
+            eval.initialize_display_faces_for_frame(frame_id);
+        }
+        // The frame is already live and realized. Like GNU x_set_frame_alpha,
+        // which ignores X errors, a host opacity failure must not turn into a
+        // signal that hides the new frame from its caller.
+        for (what, sync) in [
+            (
+                "alpha",
+                super::frame::sync_gui_frame_alpha(eval, FrameId(id)),
+            ),
+            (
+                "focus redirects",
+                super::frame::sync_gui_frame_focus_redirects(eval),
+            ),
+        ] {
+            if let Err(err) = sync {
+                tracing::warn!(
+                    frame_id = id,
+                    ?err,
+                    "x-create-frame: failed to sync GUI frame {what}"
+                );
+            }
+        }
+        // Raw x-create-frame callers do not run frame-after-make-frame. A
+        // visible first frame is already finalized at this boundary. GNU's
+        // faces wrapper explicitly creates it invisible while applying its
+        // delayed font/face parameters, so that path still publishes later.
+        if opening_gui_frame {
+            let request = eval.frame_manager().get(frame_id).and_then(|frame| {
+                (frame.parent_frame.is_nil() && frame.visibility.is_visible())
+                    .then(|| neovm_eval::emacs_core::eval::GuiFrameHostRequest::for_frame(frame))
+            });
+            if let Some(request) = request
+                && let Some(host) = eval.display_host.as_mut()
+            {
+                host.finish_gui_frame_creation(request)
+                    .map_err(|message| signal("error", vec![Value::string(message)]))?;
+            }
+        }
+    }
+    result
+}
+
+/// Create and realize a GUI frame using its parent or native host defaults.
+/// The evaluator wrapper subsequently initializes Lisp faces and publishes
+/// the opening frame after its creation-time parameters have been installed.
+pub(crate) fn x_create_frame_impl(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("x-create-frame", &args, 1)?;
+
+    let parsed = parse_gui_frame_params(args.first());
+    for (key, value) in &parsed.all {
+        match FrameParamKey::from_symbol_id(*key) {
+            FrameParamKey::Known(FrameParam::Alpha) => {
+                crate::window::frame_alpha::pair(*value)?;
+            }
+            FrameParamKey::Known(FrameParam::AlphaBackground) => {
+                crate::window::frame_alpha::component(*value, 1.0)?;
+            }
+            _ => {}
+        }
+    }
+    tracing::debug!(
+        "x_create_frame_impl: display_host_available={} params={:?}",
+        display_host.is_some(),
+        args.first()
+    );
+    let explicit_font_value = Value::symbol("font")
+        .as_bare_symbol_id()
+        .and_then(|font_key| parsed.all.get(&font_key).copied());
+    let explicit_font = explicit_font_value.is_some();
+    let parent_id = parsed
+        .parent_frame
+        .filter(|parent_id| frames.get(*parent_id).is_some());
+    let opening_frame_adoption = parent_id.is_none()
+        && display_host
+            .as_ref()
+            .is_some_and(|host| host.opening_gui_frame_pending());
+    // A daemon can return to its initial TTY frame after its last GUI frame
+    // closes. New top-level GUI frames still need native identity and font
+    // defaults, independently of the one-shot primary-window adoption.
+    let needs_graphical_defaults = parent_id.is_none()
+        && (opening_frame_adoption
+            || frames
+                .selected_frame()
+                .is_some_and(|frame| frame.effective_window_system().is_none()));
+    let initial_defaults = if needs_graphical_defaults {
+        display_host
+            .as_mut()
+            .map(|host| host.prepare_initial_gui_frame())
+            .transpose()
+            .map_err(|message| signal("error", vec![Value::string(message)]))?
+            .flatten()
+    } else {
+        None
+    };
+    let parent_frame_value = parent_id
+        .map(|parent_id| Value::make_frame(parent_id.0))
+        .unwrap_or(Value::NIL);
+    let inherited_font_state = if explicit_font {
+        None
+    } else {
+        parent_id
+            .and_then(|parent_id| frames.get(parent_id))
+            .and_then(|parent| {
+                let public_font = parent.known_parameter(FrameParam::Font)?;
+                let font_parameter =
+                    parent.fixed_parameter(crate::window::FrameQueryParam::FontParameter)?;
+                Some((public_font, font_parameter))
+            })
+    };
+    let inherited_display_identity = initial_defaults
+        .as_ref()
+        .map(|defaults| crate::window::FrameDisplayIdentity::Graphical(defaults.display.clone()))
+        .or_else(|| {
+            parent_id
+                .and_then(|parent_id| frames.get(parent_id))
+                .or_else(|| frames.selected_frame())
+                .map(|frame| frame.display_identity().clone())
+        })
+        .unwrap_or_default();
+    let metrics = initial_defaults
+        .as_ref()
+        .map(|defaults| GuiFrameMetrics {
+            width_px: defaults.size.width,
+            height_px: defaults.size.height,
+            char_width: defaults.font.font.char_width(),
+            char_height: defaults.font.font.line_height(),
+            font_pixel_size: defaults.font.font.font_size_px(),
+            minibuffer_height: defaults.font.font.line_height(),
+            device_scale_factor: 1.0,
+        })
+        .or_else(|| {
+            parent_id
+                .and_then(|parent_id| frames.get(parent_id))
+                .map(|parent| GuiFrameMetrics {
+                    width_px: parent.width.max(1),
+                    height_px: parent.height.max(1),
+                    char_width: parent.char_width.max(1.0),
+                    char_height: parent.char_height.max(1.0),
+                    font_pixel_size: parent.font_pixel_size.max(1.0),
+                    device_scale_factor: parent.device_scale_factor,
+                    minibuffer_height: parent
+                        .minibuffer_leaf
+                        .as_ref()
+                        .map(|leaf| leaf.bounds().height.max(parent.char_height).max(1.0))
+                        // A frame's minibuffer defaults to one text line (GNU
+                        // `make-frame`); see current_gui_frame_metrics_in_state.
+                        .unwrap_or_else(|| parent.char_height.max(1.0)),
+                })
+        })
+        .unwrap_or_else(|| current_gui_frame_metrics_in_state(frames));
+    let host_size = initial_defaults
+        .as_ref()
+        .map(|defaults| defaults.size)
+        .or_else(|| current_primary_window_size(&*display_host));
+    let is_child_frame = parent_id.is_some();
+    let internal_border_width = parsed_effective_internal_border_width(&parsed, is_child_frame);
+    let width_px = parsed
+        .width
+        .map(|size| {
+            frame_size_param_to_pixels(size, metrics.char_width)
+                .saturating_add(2 * internal_border_width)
+        })
+        .unwrap_or_else(|| {
+            if is_child_frame {
+                metrics.width_px
+            } else {
+                host_size.map(|size| size.width).unwrap_or(metrics.width_px)
+            }
+        });
+    let text_height_px = parsed.height.map(|size| {
+        frame_size_param_to_pixels(size, metrics.char_height)
+            .saturating_add(2 * internal_border_width)
+    });
+    let height_px = text_height_px.unwrap_or_else(|| {
+        if is_child_frame {
+            metrics.height_px
+        } else {
+            host_size
+                .map(|size| size.height)
+                .unwrap_or(metrics.height_px)
+        }
+    });
+    tracing::debug!(
+        "x-create-frame: parsed width={:?} height={:?} host_size={:?} metrics={}x{} char={}x{} mini_h={} -> size={}x{}",
+        parsed.width,
+        parsed.height,
+        host_size,
+        metrics.width_px,
+        metrics.height_px,
+        metrics.char_width,
+        metrics.char_height,
+        metrics.minibuffer_height,
+        width_px,
+        height_px
+    );
+    let explicit_title = parsed.title;
+    let host_title = explicit_title
+        .and_then(|title| title.as_lisp_string().cloned())
+        .or_else(|| parsed.name.and_then(|name| name.as_lisp_string().cloned()))
+        .unwrap_or_else(|| neovm_value::heap_types::LispString::from_utf8("Neomacs"));
+    let name = parsed
+        .name
+        .unwrap_or_else(|| Value::heap_string(host_title.clone()));
+    let current_buffer_id = buffers
+        .current_buffer()
+        .map(|buffer| buffer.id())
+        .unwrap_or_else(|| buffers.create_buffer("*scratch*"));
+    let child_minibuffer = parent_id
+        .map(|parent_id| resolve_child_shared_minibuffer(frames, parent_id, parsed.minibuffer))
+        .transpose()?
+        .unwrap_or(ChildMinibuffer::Own);
+    let z_order = parent_id.map(|parent_id| 1 + frames.max_child_z_order(parent_id));
+    let minibuffer_buffer_id = if matches!(child_minibuffer, ChildMinibuffer::Only) {
+        Some(
+            buffers
+                .find_buffer_by_name(" *Minibuf-0*")
+                .unwrap_or_else(|| buffers.create_buffer(" *Minibuf-0*")),
+        )
+    } else {
+        buffers.find_buffer_by_name(" *Minibuf-0*")
+    };
+    let fid = frames.create_frame_value(name, width_px, height_px, current_buffer_id);
+    {
+        let frame = frames
+            .get_mut(fid)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        frame.set_name_value(name);
+        if let Some(title) = explicit_title {
+            frame.set_title_value(title);
+        } else {
+            frame.clear_title();
+        }
+        frame.width = width_px;
+        frame.height = height_px;
+        frame.visibility = parsed.visibility.unwrap_or(frame.visibility);
+        frame.parent_frame = parent_frame_value;
+        if let Some(z_order) = z_order {
+            frame.z_order = z_order;
+        }
+        frame.left_pos = 0;
+        frame.top_pos = 0;
+        frame.undecorated = parsed.undecorated;
+        frame.no_accept_focus = parsed.no_accept_focus;
+        frame.no_split = parsed.unsplittable;
+        frame.char_width = metrics.char_width;
+        frame.char_height = metrics.char_height;
+        frame.font_pixel_size = metrics.font_pixel_size;
+        frame.device_scale_factor = metrics.device_scale_factor;
+        frame.set_window_system(Some(Value::symbol(
+            crate::emacs_core::display::gui_window_system_symbol(),
+        )));
+        frame.set_display_identity(inherited_display_identity);
+        // NO `display-type' and NO `background-mode' here either.  GNU's
+        // `x-create-frame' (src/xfns.c:4916) does not set them; its Lisp
+        // caller `x-create-frame-with-faces' (lisp/faces.el:2242-2243) does,
+        // by running `(frame-set-background-mode frame t)' and then
+        // `(face-set-after-frame-default frame parameters)' -- the same pair
+        // `tty-set-up-initial-frame-faces' runs for a terminal frame.
+        // `frame.el's `make-frame' funcalls `frame-creation-function', which
+        // reaches that Lisp, so a frame built through Lisp still gets both.
+        // DIVERGENCES.md 157.
+        frame.install_gnu_gui_default_parameters();
+        if let Some(defaults) = &initial_defaults {
+            frame.font_ascent = defaults
+                .font
+                .font
+                .metrics
+                .ascent
+                .clamp(0, defaults.font.font.metrics.height) as f32;
+            let mut face = crate::face::Face::new("default");
+            face.height = Some(crate::face::FaceHeight::Absolute(
+                defaults.font.height_tenths,
+            ));
+            let opened = super::font::opened_font_from_resolved_match(
+                &face,
+                &neovm_eval::emacs_core::eval::ResolvedFontMatch {
+                    font: defaults.font.font.clone(),
+                    glyph_code: None,
+                },
+            );
+            frame.set_known_parameter(
+                FrameParam::Font,
+                super::font::public_frame_font_parameter_value(opened),
+            );
+            frame.set_parameter(Value::symbol("font-parameter"), opened);
+        }
+        if let Some((public_font, font_parameter)) = inherited_font_state {
+            frame.set_known_parameter(FrameParam::Font, public_font);
+            frame.set_parameter(Value::symbol("font-parameter"), font_parameter);
+        }
+        for (key, value) in parsed.all {
+            frame.set_parameter_key(FrameParamKey::from_symbol_id(key), value);
+        }
+        frame.set_known_parameter(FrameParam::ParentFrame, parent_frame_value);
+        frame.set_parameter(Value::symbol("left"), Value::fixnum(frame.left_pos));
+        frame.set_parameter(Value::symbol("top"), Value::fixnum(frame.top_pos));
+        match child_minibuffer {
+            ChildMinibuffer::Shared(shared_minibuffer) => {
+                frame.minibuffer_leaf = None;
+                frame.minibuffer_window = Some(shared_minibuffer);
+                frame.set_parameter(
+                    Value::symbol("minibuffer"),
+                    Value::make_window(shared_minibuffer.0),
+                );
+            }
+            ChildMinibuffer::Only => {
+                frame.minibuffer_leaf = None;
+                frame.minibuffer_window = Some(frame.root_window().id());
+                frame.no_split = true;
+            }
+            ChildMinibuffer::Own => {}
+        }
+        let root_buffer_id = if matches!(child_minibuffer, ChildMinibuffer::Only) {
+            minibuffer_buffer_id.unwrap_or(current_buffer_id)
+        } else {
+            current_buffer_id
+        };
+        frame.root_window_mut().reset_mode_line_base();
+        if let Window::Leaf { buffer_id, .. } = frame.root_window_mut() {
+            *buffer_id = root_buffer_id;
+        }
+        if let Some(minibuffer_leaf) = frame.minibuffer_leaf.as_mut() {
+            if let Some(minibuffer_buffer_id) = minibuffer_buffer_id {
+                minibuffer_leaf.set_buffer(minibuffer_buffer_id);
+            }
+            minibuffer_leaf.set_bounds(Rect::new(
+                0.0,
+                0.0,
+                width_px as f32,
+                metrics.minibuffer_height.min(height_px as f32),
+            ));
+        }
+        // x-create-frame builds a GUI frame that is shown, so its menu/tab/tool
+        // bars occupy window rows (GNU realizes FRAME_TOP_MARGIN only on shown
+        // frames). Mark it displaying chrome before the area reflow so the bar
+        // rows are reserved above the root window.
+        frame.displays_chrome = true;
+        frame.sync_tab_bar_height_from_parameters();
+        frame.sync_menu_bar_height_from_parameters();
+        frame.sync_tool_bar_height_from_parameters();
+        frame.sync_window_area_bounds();
+        crate::window::window_markers::attach_frame_window_position_markers(buffers, frame);
+    }
+    let initial_text_size = initial_defaults.as_ref().map(|_| {
+        let frame = frames.get(fid).expect("new graphical frame exists");
+        (
+            frame_text_width_pixels_in_state(frames, fid),
+            frame_text_height_pixels(frame),
+        )
+    });
+    if let Some(font_value) = explicit_font_value {
+        super::font::sync_live_frame_font_parameter_in_state(frames, display_host, fid, font_value);
+        if let Some(frame) = frames.get_mut(fid) {
+            frame.sync_window_area_bounds();
+        }
+    }
+    if let Some((old_text_width, old_text_height)) = initial_text_size {
+        let frame = frames.get(fid).expect("new graphical frame exists");
+        let width = parsed.width.map_or_else(
+            || {
+                if frame.char_width != metrics.char_width {
+                    ((old_text_width as f32 / metrics.char_width)
+                        .floor()
+                        .max(1.0)
+                        * frame.char_width)
+                        .round() as u32
+                } else {
+                    old_text_width
+                }
+            },
+            |size| frame_size_param_to_pixels(size, frame.char_width),
+        );
+        let height = parsed.height.map_or_else(
+            || {
+                if frame.char_height != metrics.char_height {
+                    ((old_text_height as f32 / metrics.char_height)
+                        .floor()
+                        .max(1.0)
+                        * frame.char_height)
+                        .round() as u32
+                } else {
+                    old_text_height
+                }
+            },
+            |size| frame_size_param_to_pixels(size, frame.char_height),
+        );
+        // No native allocation exists yet. Finish logical geometry against
+        // the actual opened font, then publish it in the realization request.
+        resize_live_gui_frame(frames, buffers, &mut None, fid, width, height, false)?;
+    }
+    if is_child_frame {
+        // Resolve text dimensions after installing effective chrome and the
+        // child's opened font. The provisional inherited metrics above cannot
+        // size an explicit child font or account for its fringes/scrollbars.
+        let frame = frames.get(fid).expect("new child frame exists");
+        let width = parsed.width.map_or_else(
+            || frame_text_width_pixels_in_state(frames, fid),
+            |size| frame_size_param_to_pixels(size, frame.char_width),
+        );
+        let height = parsed.height.map_or_else(
+            || frame_text_height_pixels(frame),
+            |size| frame_size_param_to_pixels(size, frame.char_height),
+        );
+        resize_live_gui_frame(frames, buffers, display_host, fid, width, height, false)?;
+    }
+    super::frame::position::apply_frame_position(frames, fid, parsed.left, parsed.top);
+    if !is_child_frame && let Some(host) = display_host.as_mut() {
+        let (width, height, geometry_hints, visibility, decorated) = frames
+            .get(fid)
+            .map(|frame| {
+                (
+                    frame.width,
+                    frame.height,
+                    frame.gui_geometry_hints(),
+                    frame.visibility,
+                    frame
+                        .known_parameter(FrameParam::Undecorated)
+                        .is_none_or(|value| value.is_nil()),
+                )
+            })
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        host.realize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+            frame_id: fid,
+            width,
+            height,
+            title: host_title,
+            geometry_hints,
+            visibility,
+            decorated,
+            fullscreen: parsed.fullscreen,
+        })
+        .map_err(|message| signal("error", vec![Value::string(message)]))?;
+    }
+    if is_child_frame {
+        tracing::info!(
+            frame_id = fid.0,
+            parent_frame_id = parent_id.map(|parent| parent.0).unwrap_or(0),
+            visible = frames
+                .get(fid)
+                .is_some_and(|frame| frame.visibility.is_visible()),
+            width_px,
+            height_px,
+            left = frames.get(fid).map(|frame| frame.left_pos),
+            top = frames.get(fid).map(|frame| frame.top_pos),
+            "child_frame_lifecycle: core_created"
+        );
+    }
+    if !is_child_frame && opening_frame_adoption {
+        frames.select_frame(fid);
+        if let Some(selected_wid) = frames.get(fid).map(|frame| frame.selected_window) {
+            let _ = frames.note_window_selected(selected_wid);
+        }
+        buffers.switch_current(current_buffer_id);
+    }
+    Ok(Value::make_frame(fid.0))
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeleteFrameMode {
+    Public { force_non_nil: bool },
+    Noelisp,
+}
+
+impl DeleteFrameMode {
+    fn runs_hooks_immediately(self) -> bool {
+        matches!(self, Self::Public { .. })
+    }
+
+    fn force_non_nil(self) -> bool {
+        match self {
+            Self::Public { force_non_nil } => force_non_nil,
+            Self::Noelisp => true,
+        }
+    }
+
+    fn bypasses_only_frame_check(self) -> bool {
+        matches!(self, Self::Noelisp)
+    }
+
+    fn allows_terminal_cascade(self) -> bool {
+        matches!(self, Self::Public { .. })
+    }
+}
+
+/// GNU other_frames distinguishes deleting a frame from merely hiding it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OtherFramePurpose {
+    MakeInvisible,
+    Delete { force_non_nil: bool },
+}
+
+pub(crate) fn other_frames_in_state(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    target: crate::window::FrameId,
+    purpose: OtherFramePurpose,
+) -> bool {
+    let target_is_terminal = eval
+        .frame_manager()
+        .get(target)
+        .is_some_and(|frame| frame.effective_window_system().is_none());
+    eval.frame_manager()
+        .frame_list()
+        .into_iter()
+        .filter(|frame_id| *frame_id != target)
+        .filter(|frame_id| eval.frame_manager().frame_parent_id(*frame_id).is_none())
+        .any(|frame_id| {
+            eval.frame_manager().get(frame_id).is_some_and(|frame| {
+                frame.visibility.is_visible_or_iconified()
+                    || match purpose {
+                        OtherFramePurpose::MakeInvisible => false,
+                        OtherFramePurpose::Delete { force_non_nil } => {
+                            // GNU frame.c:other_frames permits retiring the
+                            // startup terminal for an invisible GUI frame.
+                            force_non_nil
+                                || (target_is_terminal && frame.effective_window_system().is_some())
+                        }
+                    }
+            })
+        })
+}
+
+fn direct_child_frame_ids(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    parent_id: crate::window::FrameId,
+) -> Vec<FrameId> {
+    eval.frame_manager()
+        .frame_list()
+        .into_iter()
+        .filter(|frame_id| eval.frame_manager().frame_parent_id(*frame_id) == Some(parent_id))
+        .collect()
+}
+
+pub(crate) fn delete_frame_owned(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    fid: crate::window::FrameId,
+    mode: DeleteFrameMode,
+) -> EvalResult {
+    if eval.frame_manager().get(fid).is_none() {
+        return Ok(Value::NIL);
+    }
+    let force_non_nil = mode.force_non_nil();
+    if !mode.bypasses_only_frame_check()
+        && !other_frames_in_state(eval, fid, OtherFramePurpose::Delete { force_non_nil })
+    {
+        return Err(signal(
+            "error",
+            vec![Value::string(if force_non_nil {
+                "Attempt to delete the only frame"
+            } else {
+                "Attempt to delete the sole visible or iconified frame"
+            })],
+        ));
+    }
+    if !force_non_nil
+        && eval.daemon().is_some()
+        && eval
+            .frame_manager()
+            .get(fid)
+            .is_some_and(|frame| frame.initial)
+    {
+        return Err(signal(
+            "error",
+            vec![Value::string("Attempt to delete daemon's initial frame")],
+        ));
+    }
+    for child_id in direct_child_frame_ids(eval, fid) {
+        if eval.frame_manager().get(child_id).is_some() {
+            let _ = delete_frame_owned(
+                eval,
+                child_id,
+                DeleteFrameMode::Public {
+                    force_non_nil: false,
+                },
+            )?;
+        }
+    }
+    if eval.frame_manager().get(fid).is_none() {
+        return Ok(Value::NIL);
+    }
+    let terminal_id = eval
+        .frame_manager()
+        .get(fid)
+        .map(|frame| frame.terminal_id)
+        .unwrap_or(crate::emacs_core::terminal::pure::TERMINAL_ID);
+    let was_gui_child_frame = eval.frame_manager().get(fid).is_some_and(|frame| {
+        frame.effective_window_system().is_some() && frame.parent_frame.as_frame_id().is_some()
+    });
+    let was_top_level_gui_frame = eval.frame_manager().get(fid).is_some_and(|frame| {
+        frame.effective_window_system().is_some() && frame.parent_frame.as_frame_id().is_none()
+    });
+    let frame_value = Value::make_frame(fid.0);
+    if mode.runs_hooks_immediately() {
+        let delete_hook = neovm_eval::emacs_core::hook_runtime::hook_symbol_by_name(
+            eval,
+            "delete-frame-functions",
+        );
+        let _ = neovm_eval::emacs_core::hook_runtime::safe_run_named_hook(
+            eval,
+            delete_hook,
+            &[frame_value],
+        )?;
+    } else {
+        eval.queue_pending_safe_hook("delete-frame-functions", &[frame_value]);
+    }
+    if eval.frame_manager().get(fid).is_none() {
+        return Ok(Value::NIL);
+    }
+    let selected_frame_before_delete = eval.frame_manager().selected_frame().map(|frame| frame.id);
+    if selected_frame_before_delete == Some(fid) {
+        let selection_policy = if eval
+            .special_variable_value_by_id(intern("delete-frame-choose-selected"))
+            == Some(Value::symbol("mru"))
+        {
+            FrameDeletionSelectionPolicy::MostRecentlyUsed
+        } else {
+            FrameDeletionSelectionPolicy::FrameListOrder
+        };
+        if let Some(replacement) = eval
+            .frame_manager()
+            .replacement_frame_for_deletion(fid, selection_policy)
+        {
+            if let Some(new_window) = eval
+                .frame_manager()
+                .get(replacement)
+                .map(|frame| frame.selected_window)
+            {
+                let old_window = eval
+                    .frame_manager()
+                    .selected_frame()
+                    .map(|frame| frame.selected_window);
+                eval.gnu_mark_selection(old_window, new_window, true);
+            }
+            if !eval.frame_manager_mut().select_frame(replacement) {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("Cannot select replacement frame")],
+                ));
+            }
+            if let Some(selected_wid) = eval
+                .frame_manager()
+                .get(replacement)
+                .map(|frame| frame.selected_window)
+            {
+                let _ = eval.frame_manager_mut().note_window_selected(selected_wid);
+            }
+            let (frames, buffers) = eval.frame_manager_read_and_buffers_mut();
+            sync_selected_window_buffer_in_state(frames, buffers, replacement);
+        }
+    }
+    super::frame::sync_gui_frame_focus_redirects(eval)?;
+    match eval.frame_manager_mut().delete_frame(fid) {
+        FrameDeletion::NotFound => {
+            return Err(signal("error", vec![Value::string("Cannot delete frame")]));
+        }
+        FrameDeletion::Deleted {
+            selected: SelectedFrameAfterDeletion::Unchanged,
+        } => {}
+        FrameDeletion::Deleted {
+            selected: SelectedFrameAfterDeletion::Replaced(replacement),
+        } => {
+            let (frames, buffers) = eval.frame_manager_read_and_buffers_mut();
+            sync_selected_window_buffer_in_state(frames, buffers, replacement);
+        }
+        FrameDeletion::Deleted {
+            selected: SelectedFrameAfterDeletion::Cleared,
+        } => {}
+    }
+    if let Some(host) = eval.display_host.as_mut() {
+        host.retire_gui_frame_alpha(fid)
+            .map_err(|message| signal("error", vec![Value::string(message)]))?;
+        if was_gui_child_frame {
+            tracing::info!(
+                frame_id = fid.0,
+                "child_frame_lifecycle: core_delete_notify_remove"
+            );
+            host.remove_gui_child_frame(fid)
+                .map_err(|message| signal("error", vec![Value::string(message)]))?;
+        } else if was_top_level_gui_frame {
+            host.destroy_gui_frame(fid)
+                .map_err(|message| signal("error", vec![Value::string(message)]))?;
+        }
+    }
+    let terminal_is_empty = eval
+        .frame_manager()
+        .frame_list()
+        .into_iter()
+        .all(|frame_id| {
+            eval.frame_manager()
+                .get(frame_id)
+                .is_none_or(|frame| frame.terminal_id != terminal_id)
+        });
+    // The host owns its graphical connection independently of any frame.
+    // GNU toolkit backends likewise retain an empty display connection.
+    use crate::emacs_core::terminal::pure::TerminalOutputMethod;
+    let frame_owns_terminal =
+        match crate::emacs_core::terminal::pure::live_terminal_output_method_for_id(terminal_id) {
+            Some(TerminalOutputMethod::WindowSystem) => false,
+            Some(TerminalOutputMethod::Initial | TerminalOutputMethod::Termcap) | None => true,
+        };
+    if mode.allows_terminal_cascade()
+        && frame_owns_terminal
+        && terminal_is_empty
+        && !eval.frame_manager().frame_list().is_empty()
+        && let Some(terminal) =
+            crate::emacs_core::terminal::pure::terminal_handle_value_for_id(terminal_id)
+    {
+        let _ = crate::emacs_core::terminal::pure::delete_terminal_owned(
+            eval,
+            crate::emacs_core::terminal::pure::terminal_handle_id(&terminal)
+                .expect("live terminal handle id"),
+            crate::emacs_core::terminal::pure::DeleteTerminalMode::Public {
+                force_non_nil: true,
+            },
+        )?;
+    }
+    eval.sync_keyboard_terminal_owner();
+    // GNU frame.c:3096 raises update_mode_lines ALL after deleting a
+    // non-tooltip frame and before the after-deletion hooks. Neo's window
+    // frame manager does not represent tooltip pseudo-frames.
+    if neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        eval.gnu_mark_mode_lines_all();
+        eval.request_global_mode_line_update();
+    }
+    if mode.runs_hooks_immediately() {
+        let after_delete_hook = neovm_eval::emacs_core::hook_runtime::hook_symbol_by_name(
+            eval,
+            "after-delete-frame-functions",
+        );
+        let _ = neovm_eval::emacs_core::hook_runtime::safe_run_named_hook(
+            eval,
+            after_delete_hook,
+            &[frame_value],
+        )?;
+    } else {
+        eval.queue_pending_safe_hook("after-delete-frame-functions", &[frame_value]);
+    }
+    Ok(Value::NIL)
+}
+
+#[doc(hidden)]
+pub fn builtin_window_bottom_divider_width(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-bottom-divider-width", &args, 1)?;
+    let (fid, wid) = resolve_window_id_with_pred(eval, args.first(), WindowDomain::Live)?;
+    let frame = eval
+        .frame_manager()
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let width = if window_is_bottommost(frame, wid) {
+        0
+    } else {
+        frame.effective_divider_width(FrameDivider::Bottom)
+    };
+    Ok(Value::fixnum(width))
+}
+
+#[doc(hidden)]
+pub fn builtin_window_right_divider_width(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-right-divider-width", &args, 1)?;
+    let (fid, wid) = resolve_window_id_with_pred(eval, args.first(), WindowDomain::Live)?;
+    let frame = eval
+        .frame_manager()
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let width = if window_is_rightmost(frame, wid) {
+        0
+    } else {
+        frame.effective_divider_width(FrameDivider::Right)
+    };
+    Ok(Value::fixnum(width))
+}
+
+// `frame-initial-p` lives in `emacs_core::terminal::pure`, where GNU keeps it
+// (src/terminal.c): its argument is a frame OR a terminal, and only the
+// terminal module can answer the terminal half.
+
+// ===========================================================================
+// Bootstrap variables
+// ===========================================================================
+
+/// GNU's bare `CHECK_VALID_WINDOW (window)`, as distinct from
+/// `decode_valid_window (window)`: there is NO nil defaulting.
+///
+/// A subr whose C spells the check this way takes WINDOW as a REQUIRED
+/// argument, so nil is not "the selected window" -- it is simply not a valid
+/// window, and signals `window-valid-p`.  `window-combination-limit` and its
+/// setter are both written that way (`src/window.c`).  Resolving nil to the
+/// selected window instead accepted a call GNU rejects, and then failed
+/// further in with a plain `error` about internal windows.
+pub(crate) fn check_window_id_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: &Value,
+    domain: WindowDomain,
+) -> Result<(FrameId, WindowId), Flow> {
+    if arg.is_nil() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol(domain.predicate()), *arg],
+        ));
+    }
+    resolve_window_id_with_pred_in_state(frames, buffers, Some(arg), domain)
+}
+
+/// `(window-combination-limit WINDOW)` -> nil or t.
+///
+/// Mirrors GNU Emacs: returns the combination limit of an internal window.
+/// Signals an error if WINDOW is a leaf window.
+#[doc(hidden)]
+pub fn builtin_window_combination_limit(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("window-combination-limit", &args, 1)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let window = check_valid_window_in_state(frames, buffers, &args[0])?;
+    let w = get_window(frames, window)?;
+    match w.combination_limit() {
+        Some(true) => Ok(Value::T),
+        Some(false) => Ok(Value::NIL),
+        None => Err(signal(
+            "error",
+            vec![Value::string(
+                "Combination limit is meaningful for internal windows only",
+            )],
+        )),
+    }
+}
+/// `(set-window-combination-limit WINDOW LIMIT)` -> LIMIT.
+///
+/// Set the combination limit of an internal window.
+/// Signals an error if WINDOW is a leaf window.
+#[doc(hidden)]
+pub fn builtin_set_window_combination_limit(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_args("set-window-combination-limit", &args, 2)?;
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    // GNU spells this `CHECK_VALID_WINDOW (window)' too, so nil is rejected
+    // rather than standing in for the selected window.
+    let (fid, wid) = check_window_id_in_state(frames, buffers, &args[0], WindowDomain::Valid)?;
+    let limit = args[1].is_truthy();
+    let frame = frames
+        .get_mut(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let w = frame
+        .find_window_mut(wid)
+        .ok_or_else(|| signal("error", vec![Value::string("Window not found")]))?;
+    if w.is_leaf() {
+        return Err(signal(
+            "error",
+            vec![Value::string(
+                "Combination limit is meaningful for internal windows only",
+            )],
+        ));
+    }
+    w.set_combination_limit(limit);
+    Ok(args[1])
+}
+/// `(window-resize-apply &optional FRAME HORIZONTAL)` -> t or nil.
+///
+/// Apply requested pixel size values for the window-tree of FRAME.
+/// Mirrors GNU Emacs `Fwindow_resize_apply` in window.c.
+#[doc(hidden)]
+pub fn builtin_window_resize_apply(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-resize-apply", &args, 2)?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let horflag = args.get(1).is_some_and(|v| v.is_truthy());
+
+    let frame = frames
+        .get_mut(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+
+    let cw = frame.char_width;
+    let ch = frame.char_height;
+
+    // Validate: root's new_pixel must match the frame dimension.
+    if !crate::window::window_resize_check(
+        frame.tree(),
+        frame.tree().root_id(),
+        if horflag {
+            crate::window::SplitDirection::Horizontal
+        } else {
+            crate::window::SplitDirection::Vertical
+        },
+        crate::window::body::WindowBodyCellSize::new(cw, ch),
+    ) {
+        return Ok(Value::NIL);
+    }
+
+    // Check root's new_pixel matches frame size.
+    let root_new = frame.root_window().new_pixel().unwrap_or_else(|| {
+        let b = frame.root_window().bounds();
+        if horflag {
+            b.width as i64
+        } else {
+            b.height as i64
+        }
+    });
+    let frame_dim = if horflag {
+        frame.root_window().bounds().width as i64
+    } else {
+        frame.root_window().bounds().height as i64
+    };
+    if root_new != frame_dim {
+        return Ok(Value::NIL);
+    }
+
+    // Apply. The recursive walk reads new_pixel directly from each
+    // node now (audit Structural 1).
+    let root = frame.tree().root_id();
+    crate::window::window_resize_apply(frame.tree_mut(), root, horflag, cw, ch);
+
+    // Recalculate minibuffer position after tree resize.
+    frame.recalculate_minibuffer_bounds();
+    frame.tty_posn_adjust_current_matrices();
+    // GNU window_resize_apply marks FRAME_WINDOW_CHANGE, and its public
+    // pixel primitive additionally calls fset_redisplay (window.c:4994).
+    eval.gnu_mark_frame_redisplay(fid);
+    eval.gnu_mark_frame_window_change(fid);
+
+    Ok(Value::T)
+}
+/// `(window-resize-apply-total &optional FRAME HORIZONTAL)` -> t.
+///
+/// Apply requested total (character-cell) size values for the window-tree of FRAME.
+/// Mirrors GNU Emacs `Fwindow_resize_apply_total` in window.c.
+#[doc(hidden)]
+pub fn builtin_window_resize_apply_total(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    expect_max_args("window-resize-apply-total", &args, 2)?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let horflag = args.get(1).is_some_and(|v| v.is_truthy());
+
+    let frame = frames
+        .get_mut(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+
+    let cw = frame.char_width;
+    let ch = frame.char_height;
+
+    // GNU `Fwindow_resize_apply_total` (window.c:5016) roots the character-line
+    // geometry at the frame's top margin: `r->left_col = 0; r->top_line =
+    // FRAME_TOP_MARGIN(f)`. In batch the margin is a line count with no pixel
+    // height, so the root's top_line sits below the menu/tab-bar rows while its
+    // pixel top stays 0. The recursive pass then flows the char edges to
+    // children.
+    let top_margin = frame.frame_top_margin();
+    frame.root_window_mut().set_left_col(0);
+    frame.root_window_mut().set_top_line(top_margin);
+    let root = frame.tree().root_id();
+    crate::window::window_resize_apply_total(frame.tree_mut(), root, horflag, cw, ch);
+
+    // GNU updates the minibuffer's character grid only. Its pixel bounds,
+    // like the root's, were already installed by the pixel resize pass.
+    if frame.minibuffer_window.is_some()
+        && let Some(mb) = frame.minibuffer_leaf.as_mut()
+    {
+        if let Some(total) = mb.new_total() {
+            mb.commit_cell_total(horflag, total.max(0));
+        }
+    }
+    if !horflag {
+        frame.sync_minibuffer_top_line_after_root_resize();
+    }
+
+    Ok(Value::T)
+}
+
+// ===========================================================================
+// balance-windows
+// ===========================================================================
+
+// ===========================================================================
+// enlarge-window / shrink-window
+// ===========================================================================
+
+// ===========================================================================
+// window-tree
+// ===========================================================================
+
+// ===========================================================================
+// fit-window-to-buffer
+// ===========================================================================
+
+/// (force-window-update &optional OBJECT) -> t/nil
+///
+/// GNU `Fforce_window_update` (`src/window.c:4492`):
+///
+/// - nil OBJECT: mark every window (`windows_or_buffers_changed`), return t.
+/// - a live WINDOW: mark that window's body and its displayed buffer, return t.
+/// - a buffer or buffer name: return t iff that live buffer is shown in some
+///   window, marking every window displaying it.
+/// - anything else (a dead window, an undisplayed or dead buffer, a string
+///   naming no buffer, an arbitrary object): return nil without signaling.
+///
+/// Body invalidation travels through [`ForcedBodyRedisplay`] so it is explicit
+/// and typed, and never through the generic redisplay generation: a
+/// presentation-only redisplay request must not relayout body text.
+///
+/// Each successful branch also raises GNU's global `update_mode_lines`
+/// trigger through the existing chrome/menu boundary. This does not widen
+/// the independently scoped body invalidation.
+#[doc(hidden)]
+pub fn builtin_force_window_update(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("force-window-update", &args, 1)?;
+    let target = if let Some(object) = args.first().filter(|value| !value.is_nil()) {
+        if let Some(id) = object.as_window_id() {
+            let window = WindowId(id);
+            if !eval.frame_manager().is_live_window_id(window) {
+                return Ok(Value::NIL);
+            }
+            ForcedBodyRedisplay::Window(window)
+        } else {
+            // Unknown names and killed buffers do not signal. GNU's buffer
+            // walk requires exact contents on a visible frame and excludes
+            // minibuffers; explicit window forcing still accepts a live mini.
+            let buffer = match object.kind() {
+                ValueKind::Veclike(VecLikeType::Buffer) => object
+                    .as_buffer_id()
+                    .filter(|id| eval.edit.buffers.get(*id).is_some()),
+                ValueKind::String => find_buffer_by_name_arg(&eval.edit.buffers, object)?,
+                _ => None,
+            };
+            let Some(buffer) = buffer else {
+                return Ok(Value::NIL);
+            };
+            let base_frame = ensure_selected_frame_id(eval);
+            let displayed = frame_ids_for_all_frames_scope(
+                &eval.frame_manager(),
+                base_frame,
+                AllFramesScope::VisibleFrames,
+            )
+            .into_iter()
+            .filter_map(|id| eval.frame_manager().get(id))
+            .any(|frame| {
+                frame.window_list().into_iter().any(|window| {
+                    frame.find_window(window).and_then(Window::buffer_id) == Some(buffer)
+                })
+            });
+            if !displayed {
+                return Ok(Value::NIL);
+            }
+            ForcedBodyRedisplay::Buffer(buffer)
+        }
+    } else {
+        ForcedBodyRedisplay::AllWindows
+    };
+
+    // Explicit forcing always moves the retained-body revision, independently
+    // of the optional GNU hook owner. Both policies use this one body request.
+    eval.force_body_redisplay(target);
+    if neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        match target {
+            ForcedBodyRedisplay::AllWindows => eval.gnu_mark_windows_all(),
+            ForcedBodyRedisplay::Window(window) => eval.gnu_mark_window_redisplay(window),
+            ForcedBodyRedisplay::Buffer(buffer) => {
+                let mut windows = Vec::new();
+                for fid in eval.frame_manager().frame_list() {
+                    if let Some(frame) = eval.frame_manager().get(fid)
+                        && frame.visibility.is_visible()
+                    {
+                        for window in frame.window_list() {
+                            if frame.find_window(window).and_then(Window::buffer_id) == Some(buffer)
+                            {
+                                windows.push(window);
+                            }
+                        }
+                    }
+                }
+                for window in windows {
+                    eval.gnu_mark_window_redisplay(window);
+                }
+            }
+        }
+    }
+    eval.request_mode_line_update(neovm_eval::emacs_core::eval::ModeLineUpdateTarget::AllBuffers);
+    Ok(Value::T)
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+#[cfg(test)]
+#[path = "tests/window_cmds_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "tests/selection_chrome_test.rs"]
+mod selection_chrome_tests;
+
+#[cfg(test)]
+#[path = "tests/terminal_frame_deletion.rs"]
+mod terminal_frame_deletion_tests;

@@ -11,10 +11,12 @@
 //!   `this-command-keys-vector`, `thing-at-point`, `bounds-of-thing-at-point`,
 //!   `symbol-at-point`.
 
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::VariableView;
 use crate::tagged::SymbolMode;
+use crate::window::DisplayFrameManagerExt;
 use std::collections::HashMap;
 
 use super::error::{EvalResult, Flow, FlowKind, FlowResultExt, signal};
@@ -25,14 +27,14 @@ use super::keyboard::pure::{
     KEY_CHAR_SUPER, make_event_array_value,
 };
 use super::keymap::{
-    DefaultBindingMode, KeymapMarker, KeymapMutationEpoch,
+    DefaultBindingMode, KeymapMarker,
     command_remapping_command_name as keymap_command_remapping_command_name,
     command_remapping_lookup_in_keymaps as keymap_command_remapping_lookup_in_keymaps,
     command_remapping_lookup_in_lisp_keymap as keymap_command_remapping_lookup_in_lisp_keymap,
     command_remapping_normalize_target as keymap_command_remapping_normalize_target,
     current_active_maps_for_position, current_active_maps_for_position_read_only, get_keyelt,
     get_keymap_in_obarray, is_list_keymap, key_binding_apply_remap_in_active_maps,
-    key_event_to_emacs_event, keymap_mutation_epoch, list_keymap_for_each_binding,
+    key_event_to_emacs_event, list_keymap_for_each_binding,
     lookup_key_in_keymaps_in_obarray_runtime, lookup_keymap_with_partial,
     minor_mode_key_binding_in_context, resolve_active_key_binding, where_is_keymaps_in_context,
 };
@@ -41,32 +43,28 @@ use super::value::*;
 use crate::buffer::EmacsBytePos;
 use crate::emacs_core::SymId;
 use crate::emacs_core::intern::WellKnown;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
-/// GNU's predeclared `Qinteractive_form` identity.
-///
-/// Both the `interactive-form` property key and the function designator are
-/// the same canonical symbol. Keeping that fact behind a zero-sized type
-/// prevents hot command classification from falling back to string interning,
-/// while `id` versus `value` makes the required representation explicit at
-/// each call site.
-pub(crate) struct InteractiveFormSymbol;
+// Interactive command registry/spec substrate moved to the eval manifest (stage-4 W1/E4).
+// Core command modules keep the historical paths through this re-export.
+pub use crate::emacs_core::eval::interactive_registry::{
+    BuiltinInteractiveSpec, InteractiveFormSymbol, InteractiveRegistry, InteractiveSpec,
+    WhereIsDefinitionKey, WhereIsKeymapState, WhereIsReverseIndex,
+    expect_optional_command_keys_vector, interactive_form_from_spec_value,
+    registered_builtin_interactive_form, registered_builtin_interactive_spec,
+    registry_interactive_form, sync_interactive_registry_for_symbol_definition,
+    validate_call_interactively_args, value_is_interactive_autoload, value_list_to_vec,
+};
 
-impl InteractiveFormSymbol {
-    #[inline(always)]
-    pub(crate) fn id() -> SymId {
-        static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
-        if let Some(id) = SYMBOL.get() {
-            *id
-        } else {
-            *SYMBOL.get_or_init(|| intern("interactive-form"))
-        }
-    }
-
-    #[inline(always)]
-    pub(crate) fn value() -> Value {
-        Value::from_sym_id(Self::id())
-    }
-}
+// `call-interactively` planning data lives in the eval manifest (stage-4
+// W1/E4; peer ruling 13:1xZ). Core keeps the acquisition bodies and these
+// historical paths for its tests.
+pub(crate) use crate::emacs_core::eval::call_interactively::{
+    CallInteractivelyArgsSpec, CallInteractivelyCommandIdentity, CallInteractivelyPlan,
+    InteractiveInvocationContext, InteractivePrefixFlag, eval_interactive_form_value,
+    parse_interactive_code_entries, plan_call_interactively_after_interactive_form_in_state,
+    value_is_interactive_form,
+};
 
 /// GNU's predeclared `Qcommandp` identity.
 ///
@@ -92,444 +90,13 @@ impl CommandpSymbol {
 // InteractiveSpec — describes how a command reads its arguments
 // ---------------------------------------------------------------------------
 
-/// Interactive argument specification for a command.
-#[derive(Clone, Debug)]
-pub struct InteractiveSpec {
-    /// GNU-style SPEC payload from `(interactive SPEC)`.
-    pub spec: Value,
-}
-
-impl InteractiveSpec {
-    /// Create a new interactive spec from a code string.
-    pub fn new(code: impl Into<String>) -> Self {
-        Self {
-            spec: Value::string(code.into()),
-        }
-    }
-
-    /// Create a spec directly from a Lisp value.
-    pub fn from_value(spec: Value) -> Self {
-        Self { spec }
-    }
-
-    /// Create a spec with no arguments (plain interactive command).
-    pub fn no_args() -> Self {
-        Self { spec: Value::NIL }
-    }
-
-    pub fn string_code_runtime_owned(&self) -> Option<String> {
-        match self.spec.kind() {
-            ValueKind::Nil => Some(String::new()),
-            ValueKind::String => self
-                .spec
-                .as_lisp_string()
-                .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes())),
-            _ => None,
-        }
-    }
-}
-
-/// Static interactive metadata attached to a registered Rust subr.
-///
-/// GNU stores this beside arity and the function pointer in `Lisp_Subr`.
-/// Representing control strings and Lisp forms as distinct states prevents
-/// command validation from drifting away from argument preparation.
-///
-/// There is deliberately no "no arguments" variant: a GNU `DEFUN`'s intspec is
-/// a string or a Lisp form and never nil, so `(interactive-form 'recursive-edit)`
-/// is `(interactive "")`, not `(interactive nil)`.  The variant that used to be
-/// here existed for `ignore` alone, which is `lisp/subr.el:501` and not a subr
-/// at all (DIVERGENCES.md 152).
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum BuiltinInteractiveSpec {
-    String(&'static str),
-    Form(fn() -> Value),
-}
-
-impl BuiltinInteractiveSpec {
-    fn into_spec_value(self) -> Value {
-        match self {
-            Self::String(code) => Value::string(code),
-            Self::Form(build) => build(),
-        }
-    }
-
-    fn into_interactive_form(self) -> Value {
-        interactive_form_from_spec_value(self.into_spec_value())
-    }
-}
-
 // ---------------------------------------------------------------------------
 // InteractiveRegistry — tracks which functions are interactive commands
 // ---------------------------------------------------------------------------
 
-/// The keymap state from which a reverse index was derived.
-///
-/// GNU compares the active keymap list with `equal` and separately flushes its
-/// cache at keymap mutation chokepoints. Storing both inputs makes stale reuse
-/// unrepresentable through this interface.
-struct WhereIsKeymapState {
-    mutation_epoch: KeymapMutationEpoch,
-    keymaps: Vec<Value>,
-}
-
-impl WhereIsKeymapState {
-    fn new(keymaps: &[Value]) -> Self {
-        Self {
-            mutation_epoch: keymap_mutation_epoch(),
-            keymaps: keymaps.to_vec(),
-        }
-    }
-
-    fn matches(&self, keymaps: &[Value]) -> bool {
-        self.mutation_epoch == keymap_mutation_epoch() && self.keymaps == keymaps
-    }
-}
-
-/// Definition identity used by GNU's reverse-keymap cache.
-///
-/// A symbol and its canonical subr denote the same command even though their
-/// Lisp representations differ. Other definitions retain Lisp `equal`
-/// semantics through `Value`'s `Eq`/`Hash` implementation.
-#[derive(Clone, Hash, Eq, PartialEq)]
-enum WhereIsDefinitionKey {
-    Command(SymId),
-    Equal(Value),
-}
-
-impl WhereIsDefinitionKey {
-    fn from_value(value: Value) -> Option<Self> {
-        if value.is_nil() || is_list_keymap(&value, SymbolMode::Bare) {
-            return None;
-        }
-        if let Some(symbol) = value.as_bare_symbol_id().or_else(|| value.as_subr_id()) {
-            return Some(Self::Command(symbol));
-        }
-        Some(Self::Equal(value))
-    }
-
-    fn trace_roots_with(&self, visit: &mut (impl FnMut(Value) + ?Sized)) {
-        if let Self::Equal(value) = self
-            && value.is_heap_object()
-        {
-            visit(*value);
-        }
-    }
-}
-
-/// Reverse lookup for every definition reachable from one active keymap set.
-///
-/// This is deliberately a complete index rather than a per-command memo: an
-/// empty M-x affixation asks about thousands of distinct commands exactly
-/// once, so per-command caching would leave its first invocation quadratic.
-struct WhereIsReverseIndex {
-    state: WhereIsKeymapState,
-    sequences_by_definition: HashMap<WhereIsDefinitionKey, Vec<Vec<Value>>>,
-    remapping_by_command: HashMap<SymId, Value>,
-    /// The heap objects this index keeps alive, collected once at build time.
-    ///
-    /// The index is a complete reverse map of every accessible binding, so
-    /// enumerating its roots means walking every key sequence of every
-    /// definition -- tens of thousands of events, nearly all of which are
-    /// integers and so not roots at all.  Root seeding runs twice per
-    /// collection cycle, and this index is replaced wholesale rather than
-    /// mutated, so the answer is the same every time it is asked.  Computing
-    /// it with the index turns that repeated scan into a walk of the few
-    /// values that are actually roots.
-    traced_roots: Vec<Value>,
-}
-
-impl WhereIsReverseIndex {
-    fn sequences_for(&self, definition: Value) -> Vec<Vec<Value>> {
-        WhereIsDefinitionKey::from_value(definition)
-            .and_then(|key| self.sequences_by_definition.get(&key))
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    fn remapping_for(&self, command: SymId) -> Option<Value> {
-        self.remapping_by_command.get(&command).copied()
-    }
-
-    /// Every heap object reachable from the index, in one pass over it.
-    ///
-    /// Kept beside `trace_roots_with` so the two cannot drift: this is the
-    /// definition of the index's root set, and the collector reads the vector
-    /// this produces.
-    fn collect_traced_roots(
-        state: &WhereIsKeymapState,
-        sequences_by_definition: &HashMap<WhereIsDefinitionKey, Vec<Vec<Value>>>,
-        remapping_by_command: &HashMap<SymId, Value>,
-    ) -> Vec<Value> {
-        let mut roots = Vec::new();
-        roots.extend(state.keymaps.iter().copied());
-        for (definition, sequences) in sequences_by_definition {
-            definition.trace_roots_with(&mut |root| roots.push(root));
-            for event in sequences.iter().flatten() {
-                if event.is_heap_object() {
-                    roots.push(*event);
-                }
-            }
-        }
-        for remapping in remapping_by_command.values() {
-            if remapping.is_heap_object() {
-                roots.push(*remapping);
-            }
-        }
-        roots.shrink_to_fit();
-        roots
-    }
-
-    fn trace_roots_with(&self, visit: &mut (impl FnMut(Value) + ?Sized)) {
-        for root in &self.traced_roots {
-            visit(*root);
-        }
-    }
-}
-
-/// Registry for interactive command specifications.
-///
-/// Tracks which function symbols are interactive (i.e., can be called via
-/// `M-x` or key bindings) and their argument specs.
-pub struct InteractiveRegistry {
-    /// Map from function symbol to its interactive spec.
-    specs: HashMap<SymId, InteractiveSpec>,
-    /// The subset of `specs` whose spec is a heap object, i.e. the only
-    /// entries that are GC roots.
-    ///
-    /// `specs` holds an entry for every interactive command, thousands of
-    /// them restored in bulk from the dump, and almost none of their specs
-    /// are heap objects.  Root seeding runs twice per collection cycle, so
-    /// filtering the whole map each time walks tens of thousands of entries
-    /// to find single digits.  Maintaining the answer at the four points that
-    /// can change it costs nothing measurable and makes seeding proportional
-    /// to the root count rather than the command count.
-    heap_specs: HashMap<SymId, Value>,
-    /// Stack tracking whether the current function was called interactively.
-    interactive_call_stack: Vec<bool>,
-    /// GNU-shaped lazy reverse-keymap index used by menu-free
-    /// `where-is-internal` lookups.
-    where_is_reverse_index: Option<WhereIsReverseIndex>,
-    /// Number of complete reverse-keymap scans performed by
-    /// `where-is-internal` in this evaluator.
-    ///
-    /// Test-only instrumentation makes the performance contract observable
-    /// without depending on wall-clock timing.
-    #[cfg(test)]
-    where_is_reverse_index_build_count: usize,
-    /// Number of command-remapping queries answered by the reverse index.
-    #[cfg(test)]
-    where_is_reverse_index_remapping_lookup_count: usize,
-}
-
-impl InteractiveRegistry {
-    pub fn new() -> Self {
-        Self {
-            specs: HashMap::new(),
-            heap_specs: HashMap::new(),
-            interactive_call_stack: Vec::new(),
-            where_is_reverse_index: None,
-            #[cfg(test)]
-            where_is_reverse_index_build_count: 0,
-            #[cfg(test)]
-            where_is_reverse_index_remapping_lookup_count: 0,
-        }
-    }
-
-    /// Register a function symbol as interactive with the given spec.
-    pub fn register_interactive(&mut self, symbol: SymId, spec: InteractiveSpec) {
-        if spec.spec.is_heap_object() {
-            self.heap_specs.insert(symbol, spec.spec);
-        } else {
-            // A re-registration can replace a heap spec with a non-heap one.
-            self.heap_specs.remove(&symbol);
-        }
-        self.specs.insert(symbol, spec);
-    }
-
-    pub fn unregister_interactive(&mut self, symbol: SymId) {
-        self.heap_specs.remove(&symbol);
-        self.specs.remove(&symbol);
-    }
-
-    /// Check if a function symbol is registered as interactive.
-    pub fn is_interactive(&self, symbol: SymId) -> bool {
-        self.specs.contains_key(&symbol)
-    }
-
-    /// Get the interactive spec for a function symbol, if registered.
-    pub fn get_spec(&self, symbol: SymId) -> Option<&InteractiveSpec> {
-        self.specs.get(&symbol)
-    }
-
-    /// Push an interactive call frame.
-    pub fn push_interactive_call(&mut self, is_interactive: bool) {
-        self.interactive_call_stack.push(is_interactive);
-    }
-
-    /// Pop an interactive call frame.
-    pub fn pop_interactive_call(&mut self) {
-        self.interactive_call_stack.pop();
-    }
-
-    /// Check if the current function was called interactively.
-    pub fn is_called_interactively(&self) -> bool {
-        self.interactive_call_stack.last().copied().unwrap_or(false)
-    }
-
-    // pdump accessors
-    pub(crate) fn dump_specs(&self) -> &HashMap<SymId, InteractiveSpec> {
-        &self.specs
-    }
-    pub(crate) fn from_dump(specs: HashMap<SymId, InteractiveSpec>) -> Self {
-        let heap_specs = specs
-            .iter()
-            .filter(|(_, spec)| spec.spec.is_heap_object())
-            .map(|(symbol, spec)| (*symbol, spec.spec))
-            .collect();
-        Self {
-            specs,
-            heap_specs,
-            interactive_call_stack: Vec::new(),
-            where_is_reverse_index: None,
-            #[cfg(test)]
-            where_is_reverse_index_build_count: 0,
-            #[cfg(test)]
-            where_is_reverse_index_remapping_lookup_count: 0,
-        }
-    }
-
-    #[cfg(test)]
-    fn note_where_is_reverse_index_build(&mut self) {
-        self.where_is_reverse_index_build_count += 1;
-    }
-
-    #[cfg(test)]
-    fn where_is_reverse_index_build_count(&self) -> usize {
-        self.where_is_reverse_index_build_count
-    }
-
-    #[cfg(test)]
-    fn where_is_reverse_index_remapping_lookup_count(&self) -> usize {
-        self.where_is_reverse_index_remapping_lookup_count
-    }
-
-    fn cached_where_is_sequences(
-        &self,
-        keymaps: &[Value],
-        definition: Value,
-    ) -> Option<Vec<Vec<Value>>> {
-        self.cached_where_is_reverse_index(keymaps)
-            .map(|index| index.sequences_for(definition))
-    }
-
-    fn cached_where_is_reverse_index(&self, keymaps: &[Value]) -> Option<&WhereIsReverseIndex> {
-        self.where_is_reverse_index
-            .as_ref()
-            .filter(|index| index.state.matches(keymaps))
-    }
-
-    fn install_where_is_reverse_index(&mut self, index: WhereIsReverseIndex) {
-        self.where_is_reverse_index = Some(index);
-        #[cfg(test)]
-        self.note_where_is_reverse_index_build();
-    }
-
-    fn clear_where_is_reverse_index(&mut self) {
-        self.where_is_reverse_index = None;
-    }
-
-    #[cfg(test)]
-    fn note_where_is_reverse_index_remapping_lookup(&mut self) {
-        self.where_is_reverse_index_remapping_lookup_count += 1;
-    }
-
-    pub(crate) fn trace_roots_with(&self, visit: &mut (impl FnMut(Value) + ?Sized)) {
-        for spec in self.heap_specs.values() {
-            visit(*spec);
-        }
-        if let Some(index) = &self.where_is_reverse_index {
-            index.trace_roots_with(visit);
-        }
-    }
-}
-
-impl Default for InteractiveRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-fn interactive_form_from_spec_value(spec: Value) -> Value {
-    Value::list(vec![
-        Value::symbol(crate::emacs_core::intern::WellKnown::Interactive),
-        spec,
-    ])
-}
-
-pub(crate) fn registry_interactive_form(
-    registry: &InteractiveRegistry,
-    symbol: SymId,
-) -> Option<Value> {
-    registry
-        .get_spec(symbol)
-        .map(|spec| interactive_form_from_spec_value(spec.spec))
-}
-
-fn registered_builtin_interactive_spec(symbol: SymId) -> Option<BuiltinInteractiveSpec> {
-    super::eval::lookup_global_subr_entry(symbol).and_then(|entry| entry.interactive_spec)
-}
-
-pub(crate) fn registered_builtin_interactive_form(symbol: SymId) -> Option<Value> {
-    registered_builtin_interactive_spec(symbol).map(BuiltinInteractiveSpec::into_interactive_form)
-}
-
-pub(crate) fn sync_interactive_registry_for_symbol_definition(
-    interactive: &mut InteractiveRegistry,
-    symbol: SymId,
-    definition: Value,
-    symbol_mode: SymbolMode,
-) {
-    // The mutable registry owns Lisp definitions whose command identity is not
-    // part of their function object (notably interactive autoloads). Rust
-    // subrs keep their immutable command contract in `SubrEntry`; copying it
-    // here would create a second source of truth and unnecessarily serialize
-    // heap-backed interactive forms into pdump images.
-    let replacement = if value_is_interactive_autoload(&definition, symbol_mode) {
-        Some(InteractiveSpec::no_args())
-    } else {
-        None
-    };
-
-    if let Some(spec) = replacement {
-        interactive.register_interactive(symbol, spec);
-    } else {
-        interactive.unregister_interactive(symbol);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Expect helpers (local to this module)
 // ---------------------------------------------------------------------------
-
-fn expect_optional_command_keys_vector(keys: Option<&Value>) -> Result<(), Flow> {
-    if let Some(keys_value) = keys
-        && !keys_value.is_nil()
-        && !keys_value.is_vector()
-    {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("vectorp"), *keys_value],
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_call_interactively_args(args: &[Value]) -> Result<(), Flow> {
-    expect_min_args("call-interactively", args, 1)?;
-    expect_max_args("call-interactively", args, 3)?;
-    expect_optional_command_keys_vector(args.get(2))
-}
 
 // ---------------------------------------------------------------------------
 // Built-in functions (evaluator-dependent)
@@ -555,7 +122,7 @@ pub(crate) fn builtin_call_interactively(eval: &mut Context, args: &[Value]) -> 
     let result = (|| {
         let interactive_form = eval.apply(InteractiveFormSymbol::value(), vec![func_val])?;
         let plan = plan_call_interactively_after_interactive_form_in_state(
-            &eval.obarray,
+            &eval.obarray(),
             eval.read_command_keys(),
             &args,
             interactive_form,
@@ -593,7 +160,7 @@ pub(crate) fn builtin_called_interactively_p(eval: &mut Context, args: Vec<Value
             ],
         ));
     }
-    if !eval.interactive.is_called_interactively() {
+    if !eval.interactive().is_called_interactively() {
         return Ok(Value::NIL);
     }
 
@@ -623,7 +190,7 @@ pub(crate) fn builtin_commandp_interactive(eval: &mut Context, args: &[Value]) -
     let for_call_interactively = args.get(1).is_some_and(|value| !value.is_nil());
 
     let classification = classify_command_designator_in_state(
-        &eval.obarray,
+        &eval.obarray(),
         &args[0],
         for_call_interactively,
         symbol_mode,
@@ -641,7 +208,7 @@ pub(crate) fn builtin_commandp_interactive(eval: &mut Context, args: &[Value]) -
     let mut fun = args[0];
     while let Some(symbol) = fun.as_symbol_id(symbol_mode) {
         if eval
-            .obarray
+            .obarray()
             .get_property_id(symbol, InteractiveFormSymbol::id())
             .is_some_and(|value| !value.is_nil())
         {
@@ -660,7 +227,7 @@ pub(crate) fn builtin_commandp_interactive(eval: &mut Context, args: &[Value]) -
             return Err(signal("error", vec![Value::string(message)]));
         }
         let Some(next) = crate::emacs_core::builtins::symbols::symbol_function_cell_in_obarray(
-            &eval.obarray,
+            &eval.obarray(),
             symbol,
         ) else {
             return Ok(Value::NIL);
@@ -819,11 +386,11 @@ pub(crate) fn builtin_command_modes_impl(
             let Some(probe) = function.bytecode_interactive_probe() else {
                 return Ok(Value::NIL);
             };
-            if probe.slot_count <= 5 {
+            if probe.slot_count() <= 5 {
                 return Ok(Value::NIL);
             };
             Ok(probe
-                .interactive
+                .interactive()
                 .map(|spec| command_modes_from_stored_interactive_spec(spec, symbol_mode))
                 .unwrap_or(Value::NIL))
         }
@@ -845,7 +412,7 @@ pub(crate) fn builtin_command_modes_impl(
 
 pub(crate) fn builtin_command_modes(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
-    builtin_command_modes_impl(&eval.obarray, &args, symbol_mode)
+    builtin_command_modes_impl(&eval.obarray(), &args, symbol_mode)
 }
 
 /// `(command-remapping COMMAND &optional POSITION KEYMAP)` -- return remapped
@@ -910,44 +477,6 @@ pub(crate) fn builtin_command_remapping_impl(
     )
 }
 
-fn value_list_to_vec(list: &Value) -> Option<Vec<Value>> {
-    let mut values = Vec::new();
-    let mut cursor = *list;
-    loop {
-        match cursor.kind() {
-            ValueKind::Nil => return Some(values),
-            ValueKind::Cons => {
-                let pair_car = cursor.cons_car();
-                let pair_cdr = cursor.cons_cdr();
-                values.push(pair_car);
-                cursor = pair_cdr;
-            }
-            _ => return None,
-        }
-    }
-}
-
-fn value_is_interactive_form(value: &Value, symbol_mode: SymbolMode) -> bool {
-    match value.kind() {
-        ValueKind::Cons => {
-            let pair_car = value.cons_car();
-            let _pair_cdr = value.cons_cdr();
-            pair_car.as_symbol_id(symbol_mode) == Some(INTERACTIVE_SYMBOL.id())
-        }
-        _ => false,
-    }
-}
-
-fn value_is_interactive_autoload(value: &Value, symbol_mode: SymbolMode) -> bool {
-    if !super::autoload::is_autoload_value(value, symbol_mode) {
-        return false;
-    }
-    let Some(items) = value_list_to_vec(value) else {
-        return false;
-    };
-    items.get(3).is_some_and(|v| !v.is_nil())
-}
-
 fn is_valid_docstring_reference(value: Value) -> bool {
     value.is_fixnum()
         || value.is_string()
@@ -961,7 +490,7 @@ fn closure_interactive_form_fallback(value: Value) -> InteractiveFormFallback {
             .is_some_and(|doc| !doc.is_nil() && !is_valid_docstring_reference(doc)),
         ValueKind::Veclike(VecLikeType::ByteCode) => value
             .bytecode_interactive_probe()
-            .and_then(|probe| probe.doc_form)
+            .and_then(|probe| probe.doc_form())
             .is_some_and(|doc| !is_valid_docstring_reference(doc)),
         _ => false,
     };
@@ -1071,7 +600,7 @@ fn classify_command_object_in_state(
         ValueKind::Veclike(VecLikeType::ByteCode) => {
             if value
                 .bytecode_interactive_probe()
-                .is_some_and(|probe| probe.slot_count > 5)
+                .is_some_and(|probe| probe.slot_count() > 5)
             {
                 CommandpClassification::Interactive
             } else {
@@ -1394,113 +923,6 @@ fn quotify_history_arg(value: Value, symbol_mode: SymbolMode) -> Value {
     }
 }
 
-/// Environment in which GNU `call-interactively` evaluates a Lisp-form
-/// interactive specification.
-///
-/// `callint.c:Fcall_interactively` does not use the caller's ambient lexical
-/// environment.  It passes an interpreted closure's `CLOSURE_CONSTANTS` to
-/// `Feval`, and passes nil for every other callable representation.  Keeping
-/// that choice in the type prevents a form spec from being detached from the
-/// environment required to evaluate it.
-#[derive(Clone, Copy, Debug)]
-enum InteractiveFormEnvironment {
-    Dynamic,
-    InterpretedClosure(Value),
-}
-
-impl InteractiveFormEnvironment {
-    fn for_callable(callable: Value) -> Self {
-        if callable
-            .closure_body_value()
-            .is_some_and(|body| body.is_cons())
-        {
-            Self::InterpretedClosure(callable.closure_env().flatten().unwrap_or(Value::NIL))
-        } else {
-            Self::Dynamic
-        }
-    }
-
-    fn lexical_arg(self) -> Value {
-        match self {
-            Self::Dynamic => Value::NIL,
-            Self::InterpretedClosure(environment) => environment,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct InteractiveFormSpec {
-    form: Value,
-    environment: InteractiveFormEnvironment,
-}
-
-#[derive(Clone, Debug)]
-enum ParsedInteractiveSpec {
-    NoArgs,
-    StringCode(crate::heap_types::LispString),
-    Form(InteractiveFormSpec),
-}
-
-/// Operations preceding interactive argument acquisition, in source order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InteractivePrefixFlag {
-    RequireWritableBuffer,
-    SelectEventWindow,
-    HandleShiftSelection,
-}
-
-impl InteractivePrefixFlag {
-    fn from_byte(byte: u8) -> Option<Self> {
-        match byte {
-            b'*' => Some(Self::RequireWritableBuffer),
-            b'@' => Some(Self::SelectEventWindow),
-            b'^' => Some(Self::HandleShiftSelection),
-            _ => None,
-        }
-    }
-
-    fn requires_runtime(self) -> bool {
-        match self {
-            Self::RequireWritableBuffer => false,
-            Self::SelectEventWindow | Self::HandleShiftSelection => true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct ParsedInteractiveStringCode {
-    prefix_flags: Vec<InteractivePrefixFlag>,
-    entries: Vec<(char, crate::heap_types::LispString)>,
-}
-
-#[derive(Clone, Debug, Default)]
-struct InteractiveInvocationContext {
-    command_keys: Vec<Value>,
-    next_event_with_parameters_index: usize,
-    has_command_keys_context: bool,
-    pending_up_event: Option<Value>,
-}
-
-impl InteractiveInvocationContext {
-    fn from_keys_arg_in_state(read_command_keys: &[Value], keys: Option<&Value>) -> Self {
-        let mut context = Self::default();
-        if let Some(keys_val) = keys
-            && keys_val.is_vector()
-            && let Some(vec_data) = keys_val.as_vector_data()
-            && !vec_data.is_empty()
-        {
-            context.command_keys = vec_data.clone();
-            context.has_command_keys_context = true;
-            return context;
-        }
-        if !read_command_keys.is_empty() {
-            context.command_keys = read_command_keys.to_vec();
-            context.has_command_keys_context = true;
-        }
-        context
-    }
-}
-
 fn interactive_event_symbol_name(event: &Value, symbol_mode: SymbolMode) -> Option<&'static str> {
     match symbol_mode.unwrap(*event).kind() {
         ValueKind::Symbol(id) => Some(resolve_sym(id)),
@@ -1568,13 +990,13 @@ fn interactive_capture_up_event_in_eval(
     context: &mut InteractiveInvocationContext,
 ) -> Result<(), Flow> {
     let symbol_mode = eval.symbol_mode();
-    context.pending_up_event = None;
+    context.set_pending_up_event(None);
     if interactive_last_key_sequence_event(sequence)
         .is_some_and(|event| interactive_event_is_down_event(&event, symbol_mode))
     {
-        let up_event = super::lread::builtin_read_event(eval, vec![])?;
+        let up_event = super::keyboard::builtin_read_event(eval, vec![])?;
         if !up_event.is_nil() {
-            context.pending_up_event = Some(up_event);
+            context.set_pending_up_event(Some(up_event));
         }
     }
     Ok(())
@@ -1586,21 +1008,24 @@ fn interactive_capture_up_event_in_vm_batch_runtime(
     context: &mut InteractiveInvocationContext,
 ) -> Result<(), Flow> {
     let symbol_mode = shared.symbol_mode();
-    context.pending_up_event = None;
+    context.set_pending_up_event(None);
     if interactive_last_key_sequence_event(sequence)
         .is_some_and(|event| interactive_event_is_down_event(&event, symbol_mode))
-        && let Some(up_event) = super::lread::builtin_read_event_in_runtime(shared, &[])?
-        && !up_event.is_nil()
     {
-        context.pending_up_event = Some(up_event);
+        // GNU reads the up event with `Fread_event`, which checks `inhibit-interaction` first.
+        crate::emacs_core::minibuffer::barf_if_interaction_inhibited(shared)?;
+        if let Some(up_event) = super::keyboard::builtin_read_event_in_runtime(shared, &[])?
+            && !up_event.is_nil()
+        {
+            context.set_pending_up_event(Some(up_event));
+        }
     }
     Ok(())
 }
 
 fn interactive_u_arg(context: &mut InteractiveInvocationContext) -> Value {
     context
-        .pending_up_event
-        .take()
+        .take_pending_up_event()
         .map(|event| Value::vector(vec![event]))
         .unwrap_or(Value::NIL)
 }
@@ -1631,7 +1056,6 @@ static OVERWRITE_MODE: WellKnown = WellKnown::OverwriteMode;
 static OVERWRITE_MODE_BINARY: WellKnown = WellKnown::OverwriteModeBinary;
 static UNDO_AUTO_AMALGAMATE: WellKnown = WellKnown::UndoAutoAmalgamate;
 static BARF_IF_BUFFER_READ_ONLY: WellKnown = WellKnown::BarfIfBufferReadOnly;
-static INTERACTIVE_SYMBOL: WellKnown = WellKnown::Interactive;
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn dynamic_buffer_or_global_symbol_value(
@@ -1717,7 +1141,7 @@ fn interactive_prefix_numeric_arg_in_state(
 }
 
 fn interactive_region_args(eval: &Context, missing_mark_signal: &str) -> Result<Vec<Value>, Flow> {
-    interactive_region_args_in_buffers(&eval.buffers, missing_mark_signal)
+    interactive_region_args_in_buffers(&eval.edit.buffers, missing_mark_signal)
 }
 
 fn interactive_region_args_in_buffers(
@@ -1745,7 +1169,7 @@ fn interactive_region_args_in_buffers(
 }
 
 fn interactive_point_arg(eval: &Context) -> Result<Value, Flow> {
-    interactive_point_arg_in_buffers(&eval.buffers)
+    interactive_point_arg_in_buffers(&eval.edit.buffers)
 }
 
 fn interactive_point_arg_in_buffers(buffers: &crate::buffer::BufferManager) -> Result<Value, Flow> {
@@ -1757,7 +1181,7 @@ fn interactive_point_arg_in_buffers(buffers: &crate::buffer::BufferManager) -> R
 }
 
 fn interactive_mark_arg(eval: &Context) -> Result<Value, Flow> {
-    interactive_mark_arg_in_buffers(&eval.buffers)
+    interactive_mark_arg_in_buffers(&eval.edit.buffers)
 }
 
 fn interactive_mark_arg_in_buffers(buffers: &crate::buffer::BufferManager) -> Result<Value, Flow> {
@@ -1802,7 +1226,7 @@ fn interactive_next_event_with_parameters_in_state(
     dynamic: &[OrderedRuntimeBindingMap],
     context: &mut InteractiveInvocationContext,
 ) -> Option<Value> {
-    if context.has_command_keys_context {
+    if context.has_command_keys_context() {
         return interactive_next_event_with_parameters_from_keys(context);
     }
     interactive_last_input_event_with_parameters_in_state(vars, dynamic)
@@ -1823,13 +1247,13 @@ fn interactive_args_from_string_code_in_state(
     // Defer before any effect: Lisp hooks and shift-selection policy cannot
     // execute through this split-state seam, and prefix order is observable.
     if parsed
-        .prefix_flags
+        .prefix_flags()
         .iter()
         .any(|flag| flag.requires_runtime())
     {
         return Ok(None);
     }
-    for flag in &parsed.prefix_flags {
+    for flag in parsed.prefix_flags() {
         match flag {
             InteractivePrefixFlag::RequireWritableBuffer => {
                 interactive_require_writable_current_buffer_in_state(vars, dynamic, buffers)?;
@@ -1840,12 +1264,12 @@ fn interactive_args_from_string_code_in_state(
             }
         }
     }
-    if parsed.entries.is_empty() {
+    if parsed.entries().is_empty() {
         return Ok(Some(Vec::new()));
     }
 
     let mut args = Vec::new();
-    for (letter, _prompt) in parsed.entries {
+    for (letter, _prompt) in parsed.entries().iter().cloned() {
         let Some(control) = InteractiveControlLetter::from_char(letter) else {
             return Ok(None);
         };
@@ -1912,14 +1336,14 @@ fn interactive_args_from_string_code_in_vm_runtime(
     let roots = shared.save_specpdl_roots();
     let result = (|| -> Result<Option<Vec<Value>>, Flow> {
         let parsed = parse_interactive_code_entries(code);
-        interactive_apply_prefix_flags(shared, &parsed.prefix_flags, context)?;
-        if parsed.entries.is_empty() {
+        interactive_apply_prefix_flags(shared, parsed.prefix_flags(), context)?;
+        if parsed.entries().is_empty() {
             return Ok(Some(Vec::new()));
         }
 
         let mut args = Vec::new();
         let mut visible_args = Vec::new();
-        for (letter, prompt) in parsed.entries {
+        for (letter, prompt) in parsed.entries().iter().cloned() {
             let prompt = interactive_prompt_with_visible_args(shared, &prompt, &visible_args)?;
             let args_before = args.len();
             let Some(control) = InteractiveControlLetter::from_char(letter) else {
@@ -1932,7 +1356,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     args.push(super::minibuffer::finish_read_command_with_minibuffer(
                         &letter_args,
                         |minibuffer_args| {
-                            super::reader::finish_read_from_minibuffer_in_vm_runtime(
+                            super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
                                 shared,
                                 minibuffer_args,
                             )
@@ -1940,7 +1364,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     )?);
                 }
                 InteractiveControlLetter::ExistingBuffer => {
-                    let default = interactive_current_buffer_default(&shared.buffers);
+                    let default = interactive_current_buffer_default(&shared.edit.buffers);
                     let letter_args = [Value::heap_string(prompt.clone()), default, Value::T];
                     args.push(super::minibuffer::finish_read_buffer_in_vm_runtime(
                         shared,
@@ -1948,7 +1372,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     )?);
                 }
                 InteractiveControlLetter::Buffer => {
-                    let default = interactive_other_buffer_default(&mut shared.buffers);
+                    let default = interactive_other_buffer_default(&mut shared.edit.buffers);
                     let letter_args = [Value::heap_string(prompt.clone()), default, Value::NIL];
                     args.push(super::minibuffer::finish_read_buffer_in_vm_runtime(
                         shared,
@@ -1957,12 +1381,14 @@ fn interactive_args_from_string_code_in_vm_runtime(
                 }
                 InteractiveControlLetter::Character => {
                     let letter_args = [Value::heap_string(prompt.clone())];
+                    // GNU reads it with `Fread_char`, which checks `inhibit-interaction` first.
+                    crate::emacs_core::minibuffer::barf_if_interaction_inhibited(shared)?;
                     let arg = if let Some(arg) =
-                        super::reader::builtin_read_char_in_runtime(shared, &letter_args)?
+                        super::keyboard::builtin_read_char_in_runtime(shared, &letter_args)?
                     {
                         arg
                     } else {
-                        super::reader::finish_read_char_interactive_in_runtime(
+                        super::keyboard::finish_read_char_interactive_in_runtime(
                             shared,
                             &letter_args,
                         )?
@@ -1970,7 +1396,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     args.push(arg);
                 }
                 InteractiveControlLetter::Point => {
-                    args.push(interactive_point_arg_in_buffers(&shared.buffers)?)
+                    args.push(interactive_point_arg_in_buffers(&shared.edit.buffers)?)
                 }
                 control @ (InteractiveControlLetter::DirectoryName
                 | InteractiveControlLetter::ExistingFile
@@ -2000,13 +1426,13 @@ fn interactive_args_from_string_code_in_vm_runtime(
                 InteractiveControlLetter::KeySequence => {
                     let letter_args = [Value::heap_string(prompt.clone())];
                     let arg = if let Some(arg) =
-                        super::reader::builtin_read_key_sequence_in_runtime(shared, &letter_args)?
+                        super::keyboard::builtin_read_key_sequence_in_runtime(shared, &letter_args)?
                     {
                         arg
                     } else {
-                        super::reader::finish_read_key_sequence_interactive_in_runtime(
+                        super::keyboard::finish_read_key_sequence_interactive_in_runtime(
                             shared,
-                            super::reader::read_key_sequence_options_from_args(&letter_args),
+                            super::keyboard::read_key_sequence_options_from_args(&letter_args),
                         )?
                     };
                     interactive_capture_up_event_in_vm_batch_runtime(shared, &arg, context)?;
@@ -2015,15 +1441,15 @@ fn interactive_args_from_string_code_in_vm_runtime(
                 InteractiveControlLetter::KeySequenceVector => {
                     let letter_args = [Value::heap_string(prompt.clone())];
                     let arg = if let Some(arg) =
-                        super::reader::builtin_read_key_sequence_vector_in_runtime(
+                        super::keyboard::builtin_read_key_sequence_vector_in_runtime(
                             shared,
                             &letter_args,
                         )? {
                         arg
                     } else {
-                        super::reader::finish_read_key_sequence_vector_interactive_in_runtime(
+                        super::keyboard::finish_read_key_sequence_vector_interactive_in_runtime(
                             shared,
-                            super::reader::read_key_sequence_options_from_args(&letter_args),
+                            super::keyboard::read_key_sequence_options_from_args(&letter_args),
                         )?
                     };
                     interactive_capture_up_event_in_vm_batch_runtime(shared, &arg, context)?;
@@ -2037,11 +1463,11 @@ fn interactive_args_from_string_code_in_vm_runtime(
                         Value::NIL,
                         Value::T,
                     ];
-                    super::reader::builtin_read_string_in_runtime(shared, &letter_args)?;
-                    args.push(super::reader::finish_read_string_with_minibuffer(
+                    super::minibuffer::builtin_read_string_in_runtime(shared, &letter_args)?;
+                    args.push(super::minibuffer::finish_read_string_with_minibuffer(
                         &letter_args,
                         |minibuffer_args| {
-                            super::reader::finish_read_from_minibuffer_in_vm_runtime(
+                            super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
                                 shared,
                                 minibuffer_args,
                             )
@@ -2049,7 +1475,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     )?);
                 }
                 InteractiveControlLetter::Mark => {
-                    args.push(interactive_mark_arg_in_buffers(&shared.buffers)?)
+                    args.push(interactive_mark_arg_in_buffers(&shared.edit.buffers)?)
                 }
                 InteractiveControlLetter::NumberOrPrefix => {
                     let raw = interactive_prefix_raw_arg_in_state(shared.variables(), &[], kind);
@@ -2069,12 +1495,12 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     interactive_prefix_raw_arg_in_state(shared.variables(), &[], kind),
                 ),
                 InteractiveControlLetter::Region => args.extend(
-                    interactive_region_args_in_buffers(&shared.buffers, "error")?,
+                    interactive_region_args_in_buffers(&shared.edit.buffers, "error")?,
                 ),
                 InteractiveControlLetter::ActiveRegion => {
                     if interactive_use_region_p_in_vm_runtime(shared)? {
                         args.extend(interactive_region_args_in_buffers(
-                            &shared.buffers,
+                            &shared.edit.buffers,
                             "error",
                         )?);
                     } else {
@@ -2090,11 +1516,11 @@ fn interactive_args_from_string_code_in_vm_runtime(
                 }
                 InteractiveControlLetter::String => {
                     let letter_args = [Value::heap_string(prompt.clone())];
-                    super::reader::builtin_read_string_in_runtime(shared, &letter_args)?;
-                    args.push(super::reader::finish_read_string_with_minibuffer(
+                    super::minibuffer::builtin_read_string_in_runtime(shared, &letter_args)?;
+                    args.push(super::minibuffer::finish_read_string_with_minibuffer(
                         &letter_args,
                         |minibuffer_args| {
-                            super::reader::finish_read_from_minibuffer_in_vm_runtime(
+                            super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
                                 shared,
                                 minibuffer_args,
                             )
@@ -2103,11 +1529,11 @@ fn interactive_args_from_string_code_in_vm_runtime(
                 }
                 InteractiveControlLetter::Symbol => {
                     let letter_args = [Value::heap_string(prompt.clone())];
-                    super::reader::builtin_read_string_in_runtime(shared, &letter_args)?;
-                    let sym_name = super::reader::finish_read_string_with_minibuffer(
+                    super::minibuffer::builtin_read_string_in_runtime(shared, &letter_args)?;
+                    let sym_name = super::minibuffer::finish_read_string_with_minibuffer(
                         &letter_args,
                         |minibuffer_args| {
-                            super::reader::finish_read_from_minibuffer_in_vm_runtime(
+                            super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
                                 shared,
                                 minibuffer_args,
                             )
@@ -2132,7 +1558,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     args.push(super::minibuffer::finish_read_variable_with_minibuffer(
                         &letter_args,
                         |minibuffer_args| {
-                            super::reader::finish_read_from_minibuffer_in_vm_runtime(
+                            super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
                                 shared,
                                 minibuffer_args,
                             )
@@ -2140,7 +1566,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     )?);
                 }
                 InteractiveControlLetter::CodingSystem => {
-                    args.push(super::lread::builtin_read_coding_system(
+                    args.push(super::minibuffer::builtin_read_coding_system(
                         shared,
                         vec![Value::heap_string(prompt.clone())],
                     )?)
@@ -2168,19 +1594,19 @@ fn interactive_read_expression_arg(
     prompt: crate::heap_types::LispString,
 ) -> Result<Value, Flow> {
     let input =
-        super::reader::builtin_read_from_minibuffer(eval, vec![Value::heap_string(prompt)])?;
-    super::reader::builtin_read(eval, vec![input])
+        super::minibuffer::builtin_read_from_minibuffer(eval, vec![Value::heap_string(prompt)])?;
+    super::minibuffer::builtin_read(eval, vec![input])
 }
 
 fn interactive_read_expression_arg_in_vm_runtime(
     shared: &mut super::eval::Context,
     prompt: crate::heap_types::LispString,
 ) -> Result<Value, Flow> {
-    let input = super::reader::finish_read_from_minibuffer_in_vm_runtime(
+    let input = super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
         shared,
         &[Value::heap_string(prompt)],
     )?;
-    super::reader::builtin_read(shared, vec![input])
+    super::minibuffer::builtin_read(shared, vec![input])
 }
 
 fn interactive_eval_expression_arg_in_vm_runtime(
@@ -2195,7 +1621,8 @@ fn interactive_read_coding_system_optional_arg(
     eval: &mut super::eval::Context,
     prompt: crate::heap_types::LispString,
 ) -> Result<Value, Flow> {
-    match super::lread::builtin_read_coding_system(eval, vec![Value::heap_string(prompt)]).kinded()
+    match super::minibuffer::builtin_read_coding_system(eval, vec![Value::heap_string(prompt)])
+        .kinded()
     {
         Ok(value) => Ok(value),
         Err(FlowKind::Signal(sig)) if sig.symbol == intern("end-of-file") => Ok(Value::NIL),
@@ -2272,7 +1699,7 @@ fn interactive_first_event_with_parameters_from_keys(
     context: &InteractiveInvocationContext,
 ) -> Option<Value> {
     context
-        .command_keys
+        .command_keys()
         .iter()
         .copied()
         .find(interactive_event_with_parameters_p)
@@ -2282,7 +1709,7 @@ fn interactive_first_event_with_parameters(
     eval: &Context,
     context: &InteractiveInvocationContext,
 ) -> Option<Value> {
-    if context.has_command_keys_context {
+    if context.has_command_keys_context() {
         return interactive_first_event_with_parameters_from_keys(context);
     }
     interactive_last_input_event_with_parameters(eval)
@@ -2305,11 +1732,15 @@ fn interactive_inactive_minibuffer_target_p(
     eval: &Context,
     window_id: crate::window::WindowId,
 ) -> bool {
-    eval.frames.frame_list().into_iter().any(|frame_id| {
-        eval.frames
-            .get(frame_id)
-            .is_some_and(|frame| frame.minibuffer_window == Some(window_id))
-    }) && (*eval.active_minibuffer_window) != Some(window_id)
+    eval.frame_manager()
+        .frame_list()
+        .into_iter()
+        .any(|frame_id| {
+            eval.frame_manager()
+                .get(frame_id)
+                .is_some_and(|frame| frame.minibuffer_window == Some(window_id))
+        })
+        && (*eval.active_minibuffer_window()) != Some(window_id)
 }
 
 fn interactive_select_window_from_prefix_context(
@@ -2354,7 +1785,7 @@ fn interactive_apply_prefix_flags(
                 interactive_require_writable_current_buffer_in_state(
                     eval.variables(),
                     &[],
-                    &eval.buffers,
+                    &eval.edit.buffers,
                 )?
             }
             InteractivePrefixFlag::SelectEventWindow => {
@@ -2381,14 +1812,7 @@ fn interactive_event_with_parameters_p(event: &Value) -> bool {
 fn interactive_next_event_with_parameters_from_keys(
     context: &mut InteractiveInvocationContext,
 ) -> Option<Value> {
-    while context.next_event_with_parameters_index < context.command_keys.len() {
-        let event = context.command_keys[context.next_event_with_parameters_index];
-        context.next_event_with_parameters_index += 1;
-        if interactive_event_with_parameters_p(&event) {
-            return Some(event);
-        }
-    }
-    None
+    context.next_event_with_parameters()
 }
 
 fn interactive_last_input_event_with_parameters(eval: &Context) -> Option<Value> {
@@ -2400,166 +1824,10 @@ fn interactive_next_event_with_parameters(
     eval: &Context,
     context: &mut InteractiveInvocationContext,
 ) -> Option<Value> {
-    if context.has_command_keys_context {
+    if context.has_command_keys_context() {
         return interactive_next_event_with_parameters_from_keys(context);
     }
     interactive_last_input_event_with_parameters(eval)
-}
-
-/// Parse a prepared interactive spec value.
-///
-/// The input may be an `(interactive SPEC)` form returned by
-/// `interactive-form`, or the already-extracted SPEC stored by a closure.
-fn parse_interactive_spec_from_value(
-    spec: &Value,
-    environment: InteractiveFormEnvironment,
-    symbol_mode: SymbolMode,
-) -> Option<ParsedInteractiveSpec> {
-    if value_is_interactive_form(spec, symbol_mode) {
-        let items = value_list_to_vec(spec)?;
-        return match items.get(1) {
-            Some(nested_spec) => {
-                parse_interactive_spec_from_value(nested_spec, environment, symbol_mode)
-            }
-            None => Some(ParsedInteractiveSpec::NoArgs),
-        };
-    }
-    match spec.kind() {
-        ValueKind::Nil => Some(ParsedInteractiveSpec::NoArgs),
-        ValueKind::String => {
-            let s = spec
-                .as_lisp_string()
-                .cloned()
-                .expect("ValueKind::String must carry LispString payload");
-            if s.is_empty() {
-                Some(ParsedInteractiveSpec::NoArgs)
-            } else {
-                Some(ParsedInteractiveSpec::StringCode(s))
-            }
-        }
-        _ => {
-            // Could be a form to evaluate.  Preserve its evaluation
-            // environment as part of the parsed state so no caller can
-            // accidentally evaluate it in the ambient lexical scope.
-            Some(ParsedInteractiveSpec::Form(InteractiveFormSpec {
-                form: *spec,
-                environment,
-            }))
-        }
-    }
-}
-
-fn prepare_call_interactively_spec(
-    function: Value,
-    interactive_form: Value,
-    environment: InteractiveFormEnvironment,
-    symbol_mode: SymbolMode,
-) -> Result<ParsedInteractiveSpec, Flow> {
-    if !interactive_form.is_cons() {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("commandp"), function],
-        ));
-    }
-
-    let tail = interactive_form.cons_cdr();
-    let spec = if tail.is_nil() {
-        Value::NIL
-    } else if tail.is_cons() {
-        tail.cons_car()
-    } else {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("listp"), tail],
-        ));
-    };
-
-    parse_interactive_spec_from_value(&spec, environment, symbol_mode).ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("listp"), spec],
-        )
-    })
-}
-
-fn interactive_form_value_to_args(value: Value) -> Result<Vec<Value>, Flow> {
-    if value.is_nil() {
-        return Ok(Vec::new());
-    }
-    if let Some(values) = value_list_to_vec(&value) {
-        return Ok(values);
-    }
-    Err(signal(
-        LispCondition::WrongTypeArgument,
-        vec![Value::symbol("listp"), value],
-    ))
-}
-
-fn parse_interactive_prefix_flags(line: &[u8]) -> (Vec<InteractivePrefixFlag>, usize) {
-    let mut flags = Vec::new();
-    let mut offset = 0usize;
-    while let Some(&byte) = line.get(offset) {
-        if let Some(flag) = InteractivePrefixFlag::from_byte(byte) {
-            flags.push(flag);
-            offset += 1;
-        } else {
-            break;
-        }
-    }
-    (flags, offset)
-}
-
-fn empty_lisp_string_like(
-    template: &crate::heap_types::LispString,
-) -> crate::heap_types::LispString {
-    if template.is_multibyte() {
-        crate::heap_types::LispString::from_emacs_bytes(Vec::new())
-    } else {
-        crate::heap_types::LispString::from_unibyte(Vec::new())
-    }
-}
-
-fn parse_interactive_code_entries(
-    code: &crate::heap_types::LispString,
-) -> ParsedInteractiveStringCode {
-    let mut parsed = ParsedInteractiveStringCode::default();
-    if code.is_empty() {
-        return parsed;
-    }
-
-    let bytes = code.as_bytes();
-    let mut line_start = 0usize;
-    let mut index = 0usize;
-    while line_start <= bytes.len() {
-        let rel_end = bytes[line_start..]
-            .iter()
-            .position(|&byte| byte == b'\n')
-            .map(|offset| line_start + offset)
-            .unwrap_or(bytes.len());
-        let line = code
-            .slice(line_start, rel_end)
-            .unwrap_or_else(|| empty_lisp_string_like(code));
-        let line_bytes = line.as_bytes();
-        let mut entry_offset = 0usize;
-        if index == 0 {
-            let (flags, stripped) = parse_interactive_prefix_flags(line_bytes);
-            parsed.prefix_flags = flags;
-            entry_offset = stripped;
-        }
-        if entry_offset < line_bytes.len() {
-            let letter = line_bytes[entry_offset] as char;
-            let prompt = line
-                .slice(entry_offset + 1, line_bytes.len())
-                .unwrap_or_else(|| empty_lisp_string_like(&line));
-            parsed.entries.push((letter, prompt));
-        }
-        if rel_end == bytes.len() {
-            break;
-        }
-        line_start = rel_end + 1;
-        index += 1;
-    }
-    parsed
 }
 
 fn interactive_prompt_with_visible_args(
@@ -2619,12 +1887,21 @@ fn root_new_interactive_args(
     }
 }
 
-fn invalid_interactive_control_letter_error(letter: char) -> Flow {
+/// GNU `Fcall_interactively` (src/callint.c) signals this with `error`, whose format string goes
+/// through `doprnt`: the grave accent and apostrophe around `%c` follow `text-quoting-style`, but
+/// the letter itself is inserted as it is, and the octal code takes 3 digits (`%03o`).
+fn invalid_interactive_control_letter_error(eval: &Context, letter: char) -> Flow {
     let codepoint = letter as u32;
+    let style = crate::emacs_core::coding::effective_text_quoting_style(
+        eval.variables(),
+        eval.symbol_mode(),
+    );
+    let open = crate::emacs_core::coding::requote_c_error_message("`", style);
+    let close = crate::emacs_core::coding::requote_c_error_message("'", style);
     signal(
         "error",
         vec![Value::string(format!(
-            "Invalid control letter \u{2018}{letter}\u{2019} (#o{codepoint:o}, #x{codepoint:04x}) in interactive calling string"
+            "Invalid control letter {open}{letter}{close} (#o{codepoint:03o}, #x{codepoint:04x}) in interactive calling string"
         ))],
     )
 }
@@ -2638,8 +1915,8 @@ fn interactive_args_from_string_code(
     let roots = eval.save_specpdl_roots();
     let result = (|| -> Result<Option<Vec<Value>>, Flow> {
         let parsed = parse_interactive_code_entries(code);
-        interactive_apply_prefix_flags(eval, &parsed.prefix_flags, context)?;
-        if parsed.entries.is_empty() {
+        interactive_apply_prefix_flags(eval, parsed.prefix_flags(), context)?;
+        if parsed.entries().is_empty() {
             return Ok(Some(Vec::new()));
         }
 
@@ -2652,9 +1929,9 @@ fn interactive_args_from_string_code(
         // slot at each iteration (spec entries are few, so the rebuild is
         // trivially cheap).
         let args_root_slot = eval.push_specpdl_root_slot(Value::NIL);
-        for (letter, prompt) in parsed.entries {
+        for (letter, prompt) in parsed.entries().iter().cloned() {
             let mut holder = Value::NIL;
-            for value in args.iter().chain(context.pending_up_event.iter()) {
+            for value in args.iter().chain(context.pending_up_event().iter()) {
                 if value.is_heap_object() {
                     holder = Value::cons(*value, holder);
                 }
@@ -2663,7 +1940,7 @@ fn interactive_args_from_string_code(
             let prompt = interactive_prompt_with_visible_args(eval, &prompt, &visible_args)?;
             let args_before = args.len();
             let control = InteractiveControlLetter::from_char(letter)
-                .ok_or_else(|| invalid_interactive_control_letter_error(letter))?;
+                .ok_or_else(|| invalid_interactive_control_letter_error(eval, letter))?;
             match control {
                 InteractiveControlLetter::FunctionName => {
                     args.push(super::minibuffer::builtin_read_command(
@@ -2676,22 +1953,21 @@ fn interactive_args_from_string_code(
                         eval,
                         vec![
                             Value::heap_string(prompt),
-                            interactive_current_buffer_default(&eval.buffers),
+                            interactive_current_buffer_default(&eval.edit.buffers),
                             Value::T,
                         ],
                     )?)
                 }
                 InteractiveControlLetter::Buffer => {
-                    let default = interactive_other_buffer_default(&mut eval.buffers);
+                    let default = interactive_other_buffer_default(&mut eval.edit.buffers);
                     args.push(super::minibuffer::builtin_read_buffer(
                         eval,
                         vec![Value::heap_string(prompt), default, Value::NIL],
                     )?)
                 }
-                InteractiveControlLetter::Character => args.push(super::reader::builtin_read_char(
-                    eval,
-                    vec![Value::heap_string(prompt)],
-                )?),
+                InteractiveControlLetter::Character => args.push(
+                    super::keyboard::builtin_read_char(eval, vec![Value::heap_string(prompt)])?,
+                ),
                 InteractiveControlLetter::Command => {
                     args.push(super::minibuffer::builtin_read_command(
                         eval,
@@ -2721,7 +1997,7 @@ fn interactive_args_from_string_code(
                 }
                 InteractiveControlLetter::Ignore => args.push(Value::NIL),
                 InteractiveControlLetter::KeySequence => {
-                    let arg = super::reader::builtin_read_key_sequence(
+                    let arg = super::keyboard::builtin_read_key_sequence(
                         eval,
                         vec![Value::heap_string(prompt)],
                     )?;
@@ -2729,7 +2005,7 @@ fn interactive_args_from_string_code(
                     args.push(arg);
                 }
                 InteractiveControlLetter::KeySequenceVector => {
-                    let arg = super::reader::builtin_read_key_sequence_vector(
+                    let arg = super::keyboard::builtin_read_key_sequence_vector(
                         eval,
                         vec![Value::heap_string(prompt)],
                     )?;
@@ -2737,7 +2013,7 @@ fn interactive_args_from_string_code(
                     args.push(arg);
                 }
                 InteractiveControlLetter::StringWithInputMethod => args.push(
-                    super::reader::builtin_read_string(eval, vec![Value::heap_string(prompt)])?,
+                    super::minibuffer::builtin_read_string(eval, vec![Value::heap_string(prompt)])?,
                 ),
                 InteractiveControlLetter::Mark => args.push(interactive_mark_arg(eval)?),
                 InteractiveControlLetter::NumberOrPrefix => {
@@ -2772,18 +2048,19 @@ fn interactive_args_from_string_code(
                     }
                 }
                 InteractiveControlLetter::Symbol => {
-                    let sym_name =
-                        super::reader::builtin_read_string(eval, vec![Value::heap_string(prompt)])?;
+                    let sym_name = super::minibuffer::builtin_read_string(
+                        eval,
+                        vec![Value::heap_string(prompt)],
+                    )?;
                     if let Some(name) = sym_name.as_utf8_str() {
                         args.push(Value::symbol(name));
                     } else {
                         return Ok(None);
                     }
                 }
-                InteractiveControlLetter::String => args.push(super::reader::builtin_read_string(
-                    eval,
-                    vec![Value::heap_string(prompt)],
-                )?),
+                InteractiveControlLetter::String => args.push(
+                    super::minibuffer::builtin_read_string(eval, vec![Value::heap_string(prompt)])?,
+                ),
                 InteractiveControlLetter::Number => args.push(
                     read_number_through_the_function_cell(eval, Value::heap_string(prompt))?,
                 ),
@@ -2802,7 +2079,7 @@ fn interactive_args_from_string_code(
                     )?)
                 }
                 InteractiveControlLetter::CodingSystem => {
-                    args.push(super::lread::builtin_read_coding_system(
+                    args.push(super::minibuffer::builtin_read_coding_system(
                         eval,
                         vec![Value::heap_string(prompt)],
                     )?)
@@ -2825,199 +2102,6 @@ fn interactive_args_from_string_code(
     result
 }
 
-fn eval_interactive_form_value(
-    eval: &mut super::eval::Context,
-    spec: InteractiveFormSpec,
-) -> Result<Vec<Value>, Flow> {
-    let roots = eval.save_specpdl_roots();
-    eval.push_specpdl_root(spec.form);
-    eval.push_specpdl_root(spec.environment.lexical_arg());
-    let result = (|| -> Result<Vec<Value>, Flow> {
-        let value =
-            eval.eval_value_with_lexical_arg(spec.form, Some(spec.environment.lexical_arg()))?;
-        interactive_form_value_to_args(value)
-    })();
-    eval.restore_specpdl_roots(roots);
-    result
-}
-
-fn resolve_command_target_in_state(
-    obarray: &Obarray,
-    designator: &Value,
-    symbol_mode: SymbolMode,
-) -> Option<(Option<SymId>, Value)> {
-    if let Some(symbol) = designator.as_symbol_id(symbol_mode) {
-        if let Some((resolved_symbol, value)) =
-            resolve_function_designator_symbol_in_state(obarray, symbol)
-        {
-            return Some((Some(resolved_symbol), value));
-        }
-        return None;
-    }
-    match designator.kind() {
-        ValueKind::Subr(id) => Some((Some(id), *designator)),
-        ValueKind::Veclike(VecLikeType::Subr) => {
-            let id = designator.as_subr_id().unwrap();
-            Some((Some(id), *designator))
-        }
-        _ => Some((designator.as_symbol_id(symbol_mode), *designator)),
-    }
-}
-
-/// Command identity that belongs to the caller of `call-interactively`.
-///
-/// GNU saves these four variables together in `Fcall_interactively` and
-/// restores them together after interactive argument acquisition. Keeping
-/// them in one Rust value prevents an interpreter or bytecode call path from
-/// restoring only a subset and exposing a mixed command identity.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct CallInteractivelyCommandIdentity {
-    this_command: Value,
-    this_original_command: Value,
-    real_this_command: Value,
-    last_command: Value,
-}
-
-impl CallInteractivelyCommandIdentity {
-    pub(crate) fn capture(eval: &Context) -> Self {
-        // GNU's `Fcall_interactively` saves these four DEFVAR_LISP cells by
-        // identity; the command-loop enum is their one native spelling set.
-        use crate::emacs_core::eval::command_loop::CommandLoopSymbol;
-        Self {
-            this_command: eval
-                .eval_symbol_by_id(CommandLoopSymbol::ThisCommand.id())
-                .unwrap_or(Value::NIL),
-            this_original_command: eval
-                .eval_symbol_by_id(CommandLoopSymbol::ThisOriginalCommand.id())
-                .unwrap_or(Value::NIL),
-            real_this_command: eval
-                .eval_symbol_by_id(CommandLoopSymbol::RealThisCommand.id())
-                .unwrap_or(Value::NIL),
-            last_command: eval
-                .eval_symbol_by_id(CommandLoopSymbol::LastCommand.id())
-                .unwrap_or(Value::NIL),
-        }
-    }
-
-    pub(crate) fn push_gc_roots(self, eval: &mut Context) {
-        for value in self.values() {
-            eval.push_specpdl_root(value);
-        }
-    }
-
-    pub(crate) fn values(self) -> [Value; 4] {
-        [
-            self.this_command,
-            self.this_original_command,
-            self.real_this_command,
-            self.last_command,
-        ]
-    }
-
-    fn restore(self, eval: &mut Context) {
-        use crate::emacs_core::eval::command_loop::CommandLoopSymbol;
-        eval.assign_by_id(CommandLoopSymbol::ThisCommand.id(), self.this_command);
-        eval.assign_by_id(
-            CommandLoopSymbol::ThisOriginalCommand.id(),
-            self.this_original_command,
-        );
-        eval.assign_by_id(
-            CommandLoopSymbol::RealThisCommand.id(),
-            self.real_this_command,
-        );
-        eval.assign_by_id(CommandLoopSymbol::LastCommand.id(), self.last_command);
-    }
-}
-
-pub(crate) struct CallInteractivelyPlan {
-    invocation_function: Value,
-    func: Value,
-    interactive_spec: ParsedInteractiveSpec,
-    context: InteractiveInvocationContext,
-    record_flag: bool,
-    command_identity: CallInteractivelyCommandIdentity,
-}
-
-impl CallInteractivelyPlan {
-    pub(crate) fn gc_roots(&self) -> Vec<Value> {
-        let mut roots = vec![self.invocation_function, self.func];
-        roots.extend(self.command_identity.values());
-        if let ParsedInteractiveSpec::Form(spec) = self.interactive_spec {
-            roots.push(spec.form);
-            roots.push(spec.environment.lexical_arg());
-        }
-        roots
-    }
-
-    /// Consume argument-acquisition state and make the command invocable.
-    ///
-    /// The invocation function remains private until this transition restores
-    /// GNU's saved command identity, so call paths outside this module cannot
-    /// accidentally invoke a command from an unrestored plan.
-    pub(crate) fn restore_for_invocation(
-        self,
-        eval: &mut Context,
-    ) -> RestoredCallInteractivelyInvocation {
-        self.command_identity.restore(eval);
-        RestoredCallInteractivelyInvocation {
-            function: self.invocation_function,
-        }
-    }
-}
-
-/// A `call-interactively` target whose caller command identity is restored.
-pub(crate) struct RestoredCallInteractivelyInvocation {
-    function: Value,
-}
-
-impl RestoredCallInteractivelyInvocation {
-    pub(crate) fn into_funcall_args(self, call_args: Vec<Value>) -> Vec<Value> {
-        let mut funcall_args = Vec::with_capacity(call_args.len() + 1);
-        funcall_args.push(self.function);
-        funcall_args.extend(call_args);
-        funcall_args
-    }
-}
-
-pub(crate) fn plan_call_interactively_after_interactive_form_in_state(
-    obarray: &Obarray,
-    read_command_keys: &[Value],
-    args: &[Value],
-    interactive_form: Value,
-    command_identity: CallInteractivelyCommandIdentity,
-    symbol_mode: SymbolMode,
-) -> Result<CallInteractivelyPlan, Flow> {
-    validate_call_interactively_args(args)?;
-
-    let func_val = args[0];
-    if !interactive_form.is_cons() {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("commandp"), func_val],
-        ));
-    }
-    let Some((_, func)) = resolve_command_target_in_state(obarray, &func_val, symbol_mode) else {
-        return Err(signal(LispCondition::VoidFunction, vec![func_val]));
-    };
-    let interactive_spec = prepare_call_interactively_spec(
-        func_val,
-        interactive_form,
-        InteractiveFormEnvironment::for_callable(func),
-        symbol_mode,
-    )?;
-    let context =
-        InteractiveInvocationContext::from_keys_arg_in_state(read_command_keys, args.get(2));
-    let record_flag = args.get(1).is_some_and(|value| value.is_truthy());
-    Ok(CallInteractivelyPlan {
-        invocation_function: func_val,
-        func,
-        interactive_spec,
-        context,
-        record_flag,
-        command_identity,
-    })
-}
-
 /// The `command-history` form of each argument a string spec produces.
 ///
 /// Returns `None` when the flattened table does not cover the arguments that
@@ -3029,7 +2113,11 @@ fn string_code_history_forms(
     arg_count: usize,
 ) -> Option<Vec<ArgHistoryForm>> {
     let mut forms = Vec::with_capacity(arg_count);
-    for (letter, _) in parse_interactive_code_entries(code).entries {
+    for (letter, _) in parse_interactive_code_entries(code)
+        .entries()
+        .iter()
+        .cloned()
+    {
         forms.extend_from_slice(InteractiveControlLetter::from_char(letter)?.history_forms());
     }
     (forms.len() == arg_count).then_some(forms)
@@ -3048,7 +2136,7 @@ fn fix_recorded_command_args(eval: &mut Context, function: Value, args: &mut Vec
     let reps = function
         .as_symbol_id(symbol_mode)
         .and_then(|symbol| {
-            eval.obarray
+            eval.obarray()
                 .get_property_id(symbol, intern("interactive-args"))
         })
         .unwrap_or(Value::NIL);
@@ -3097,12 +2185,12 @@ fn fixed_arity_of_function(eval: &mut Context, function: Value) -> Option<(usize
 fn record_call_interactively_command_history(
     eval: &mut Context,
     invocation_function: Value,
-    interactive_spec: &ParsedInteractiveSpec,
+    string_code: Option<&crate::heap_types::LispString>,
     call_args: &[Value],
 ) -> Result<(), Flow> {
     let symbol_mode = eval.symbol_mode();
-    let mut recorded: Vec<Value> = match interactive_spec {
-        ParsedInteractiveSpec::StringCode(code) => {
+    let mut recorded: Vec<Value> = match string_code {
+        Some(code) => {
             let forms = string_code_history_forms(code, call_args.len());
             call_args
                 .iter()
@@ -3131,7 +2219,7 @@ fn record_call_interactively_command_history(
     command.append(&mut recorded);
     let command = Value::list(command);
 
-    if eval.obarray.fboundp("add-to-history") {
+    if eval.obarray().fboundp("add-to-history") {
         let _ = eval.apply(
             Value::symbol("add-to-history"),
             vec![
@@ -3166,7 +2254,7 @@ pub(crate) fn finish_call_interactively_in_eval(
         }
     };
     let should_record =
-        plan.record_flag || eval.interactive_minibuffer_read_count() != minibuffer_reads_before;
+        plan.record_flag() || eval.interactive_minibuffer_read_count() != minibuffer_reads_before;
     for value in &call_args {
         eval.push_specpdl_root(*value);
     }
@@ -3174,8 +2262,8 @@ pub(crate) fn finish_call_interactively_in_eval(
         if should_record {
             record_call_interactively_command_history(
                 eval,
-                plan.invocation_function,
-                &plan.interactive_spec,
+                plan.invocation_function(),
+                plan.spec_string_code(),
                 &call_args,
             )?;
         }
@@ -3197,17 +2285,19 @@ pub(crate) fn resolve_call_interactively_target_and_args_in_eval(
     eval: &mut Context,
     plan: &mut CallInteractivelyPlan,
 ) -> Result<(Value, Vec<Value>), Flow> {
-    let func = plan.func;
-    let call_args = match &plan.interactive_spec {
-        ParsedInteractiveSpec::NoArgs => Vec::new(),
-        ParsedInteractiveSpec::StringCode(code) => interactive_args_from_string_code(
+    let func = plan.target_function();
+    let call_args = match plan.args_spec() {
+        CallInteractivelyArgsSpec::NoArgs => Vec::new(),
+        CallInteractivelyArgsSpec::StringCode(code) => interactive_args_from_string_code(
             eval,
-            code,
+            &code,
             CommandInvocationKind::CallInteractively,
-            &mut plan.context,
+            plan.context_mut(),
         )?
         .unwrap_or_default(),
-        ParsedInteractiveSpec::Form(form) => eval_interactive_form_value(eval, *form)?,
+        CallInteractivelyArgsSpec::Form { value, lexical_arg } => {
+            eval_interactive_form_value(eval, value, lexical_arg)?
+        }
     };
     Ok((func, call_args))
 }
@@ -3221,21 +2311,21 @@ pub(crate) fn resolve_call_interactively_target_and_args_in_state(
     specpdl: &[crate::emacs_core::eval::SpecBinding],
     plan: &mut CallInteractivelyPlan,
 ) -> Result<Option<(Value, Vec<Value>)>, Flow> {
-    let func = plan.func;
-    match &plan.interactive_spec {
-        ParsedInteractiveSpec::NoArgs => Ok(Some((func, Vec::new()))),
-        ParsedInteractiveSpec::StringCode(code) => interactive_args_from_string_code_in_state(
+    let func = plan.target_function();
+    match plan.args_spec() {
+        CallInteractivelyArgsSpec::NoArgs => Ok(Some((func, Vec::new()))),
+        CallInteractivelyArgsSpec::StringCode(code) => interactive_args_from_string_code_in_state(
             vars,
             dynamic,
             buffers,
             custom,
             specpdl,
-            code,
+            &code,
             CommandInvocationKind::CallInteractively,
-            &mut plan.context,
+            plan.context_mut(),
         )
         .map(|maybe_args| maybe_args.map(|args| (func, args))),
-        ParsedInteractiveSpec::Form(_) => Ok(None),
+        CallInteractivelyArgsSpec::Form { .. } => Ok(None),
     }
 }
 
@@ -3243,18 +2333,20 @@ pub(crate) fn resolve_call_interactively_target_and_args_in_vm_runtime(
     shared: &mut super::eval::Context,
     plan: &mut CallInteractivelyPlan,
 ) -> Result<Option<(Value, Vec<Value>)>, Flow> {
-    let func = plan.func;
-    match plan.interactive_spec.clone() {
-        ParsedInteractiveSpec::NoArgs => Ok(Some((func, Vec::new()))),
-        ParsedInteractiveSpec::StringCode(code) => interactive_args_from_string_code_in_vm_runtime(
-            shared,
-            &code,
-            CommandInvocationKind::CallInteractively,
-            &mut plan.context,
-        )
-        .map(|maybe_args| maybe_args.map(|args| (func, args))),
-        ParsedInteractiveSpec::Form(form) => {
-            eval_interactive_form_value(shared, form).map(|args| Some((func, args)))
+    let func = plan.target_function();
+    match plan.args_spec() {
+        CallInteractivelyArgsSpec::NoArgs => Ok(Some((func, Vec::new()))),
+        CallInteractivelyArgsSpec::StringCode(code) => {
+            interactive_args_from_string_code_in_vm_runtime(
+                shared,
+                &code,
+                CommandInvocationKind::CallInteractively,
+                plan.context_mut(),
+            )
+            .map(|maybe_args| maybe_args.map(|args| (func, args)))
+        }
+        CallInteractivelyArgsSpec::Form { value, lexical_arg } => {
+            eval_interactive_form_value(shared, value, lexical_arg).map(|args| Some((func, args)))
         }
     }
 }
@@ -3273,6 +2365,23 @@ pub(crate) fn resolve_call_interactively_target_and_args_with_vm_fallback(
     let result = resolve_call_interactively_target_and_args_in_eval(shared, plan);
     shared.restore_specpdl_roots(roots);
     result
+}
+
+// The one canonical `call-interactively` acquisition table (peer ruling
+// 13:1xZ, PC2 shape). The implementation stays here because it binds the
+// minibuffer/reader Lisp entries; eval owns the plan and dispatches through
+// this descriptor once core installs it at `new_inner`/`from_dump`.
+static CANONICAL_CALL_INTERACTIVELY_HOOKS:
+    crate::emacs_core::eval::call_interactively::CallInteractivelyHooks =
+    crate::emacs_core::eval::call_interactively::CallInteractivelyHooks::new(
+        resolve_call_interactively_target_and_args_with_vm_fallback,
+    );
+
+/// The one canonical call-interactively acquisition descriptor (published
+/// only by the one core boot entry, peer follow-up F2).
+pub(crate) fn canonical_call_interactively_hooks()
+-> &'static crate::emacs_core::eval::call_interactively::CallInteractivelyHooks {
+    &CANONICAL_CALL_INTERACTIVELY_HOOKS
 }
 
 /// `(self-insert-command N &optional C)` -- insert character C (or the last
@@ -3383,13 +2492,14 @@ pub(crate) fn builtin_self_insert_command(eval: &mut Context, args: Vec<Value>) 
     for _ in 0..spaces_to_insert {
         text.push(' ');
     }
-    if let Some(current_id) = eval.buffers.current_buffer_id() {
+    if let Some(current_id) = eval.edit.buffers.current_buffer_id() {
         if chars_to_delete > 0 {
             // GNU `replace_range (PT, PT + chars_to_delete, string)` followed by
             // `Fforward_char (n)`: replace the overwritten run with the inserted
             // characters (plus any padding spaces), then move point past the
             // inserted characters so the cursor lands after C.
             let (point_pos, accessible_end) = eval
+                .edit
                 .buffers
                 .get(current_id)
                 .map(|b| {
@@ -3405,6 +2515,7 @@ pub(crate) fn builtin_self_insert_command(eval: &mut Context, args: Vec<Value>) 
                     break;
                 }
                 match eval
+                    .edit
                     .buffers
                     .get(current_id)
                     .and_then(|b| b.char_after_emacs_byte_len(del_end))
@@ -3414,11 +2525,13 @@ pub(crate) fn builtin_self_insert_command(eval: &mut Context, args: Vec<Value>) 
                 }
             }
             let start_char = eval
+                .edit
                 .buffers
                 .get(current_id)
                 .map(|b| b.emacs_byte_pos_to_lisp_char_pos(point_pos).as_i64())
                 .unwrap_or(1);
             let end_char = eval
+                .edit
                 .buffers
                 .get(current_id)
                 .map(|b| b.emacs_byte_pos_to_lisp_char_pos(del_end).as_i64())
@@ -3513,9 +2626,10 @@ fn self_insert_expand_abbrev_at_word_boundary(
     }
 
     let should_expand = eval
+        .edit
         .buffers
         .current_buffer_id()
-        .and_then(|buffer_id| eval.buffers.get(buffer_id))
+        .and_then(|buffer_id| eval.edit.buffers.get(buffer_id))
         .is_some_and(|buffer| {
             let syntax = super::syntax::SyntaxTable::for_buffer(buffer);
             let point = buffer.point_emacs_byte_pos();
@@ -3572,12 +2686,12 @@ fn self_insert_overwrite_plan(eval: &mut Context, c: char, n: i64) -> Result<(us
     if overwrite.is_nil() {
         return Ok((0, 0));
     }
-    let Some(current_id) = eval.buffers.current_buffer_id() else {
+    let Some(current_id) = eval.edit.buffers.current_buffer_id() else {
         return Ok((0, 0));
     };
     // Require PT < ZV (there must be a character to overwrite).
     let (point_pos, accessible_end, c2) = {
-        let Some(buf) = eval.buffers.get(current_id) else {
+        let Some(buf) = eval.edit.buffers.get(current_id) else {
             return Ok((0, 0));
         };
         let pt = buf.point_emacs_byte_pos();
@@ -3631,7 +2745,7 @@ fn self_insert_overwrite_plan(eval: &mut Context, c: char, n: i64) -> Result<(us
     // chars_to_delete = PT - pos (characters between the original point and the
     // column-target point).
     let (new_point, prev_is_tab) = {
-        let Some(buf) = eval.buffers.get(current_id) else {
+        let Some(buf) = eval.edit.buffers.get(current_id) else {
             return Ok((0, 0));
         };
         let np = buf.point_emacs_byte_pos();
@@ -3660,11 +2774,13 @@ fn self_insert_overwrite_plan(eval: &mut Context, c: char, n: i64) -> Result<(us
 
     // SET_PT (pos): restore point to where the cursor was before the trial move.
     let start_char = eval
+        .edit
         .buffers
         .get(current_id)
         .map(|b| b.emacs_byte_pos_to_lisp_char_pos(point_pos).as_i64())
         .unwrap_or(1);
-    eval.buffers
+    eval.edit
+        .buffers
         .goto_buffer_emacs_byte_pos(current_id, point_pos);
     let _ = start_char;
 
@@ -3678,7 +2794,7 @@ fn byte_pos_char_distance(
     beg: EmacsBytePos,
     end: EmacsBytePos,
 ) -> usize {
-    let Some(buf) = eval.buffers.get(buf_id) else {
+    let Some(buf) = eval.edit.buffers.get(buf_id) else {
         return 0;
     };
     let beg_char = buf.emacs_byte_pos_to_lisp_char_pos(beg).as_i64();
@@ -3723,9 +2839,10 @@ impl NewlineFillStraddle {
             return Ok(());
         }
         let Some(buffer) = eval
+            .edit
             .buffers
             .current_buffer_id()
-            .and_then(|buffer_id| eval.buffers.get(buffer_id))
+            .and_then(|buffer_id| eval.edit.buffers.get(buffer_id))
         else {
             return Ok(());
         };
@@ -3767,7 +2884,7 @@ fn self_insert_should_auto_fill(eval: &Context, ch: char) -> bool {
 /// `(keyboard-quit)` -- cancel the current command sequence.
 /// `(key-binding KEY &optional ACCEPT-DEFAULTS NO-REMAP POSITION)`
 /// Return the binding for KEY in the current keymaps.
-pub(crate) fn builtin_key_binding(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+pub fn builtin_key_binding(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     builtin_key_binding_impl(eval, args)
 }
 
@@ -3785,8 +2902,8 @@ pub(crate) fn builtin_key_binding_impl(
     // key_events_from_designator below.
     if let Some(position) = args.get(3)
         && let ValueKind::Fixnum(pos_int) = position.kind()
-        && let Some(buf_id) = ctx.buffers.current_buffer_id()
-        && let Some(buf) = ctx.buffers.get(buf_id)
+        && let Some(buf_id) = ctx.edit.buffers.current_buffer_id()
+        && let Some(buf) = ctx.edit.buffers.get(buf_id)
     {
         // Lisp positions are 1-based character positions, so
         // valid range is `[char_min + 1, char_max + 1]`.
@@ -3849,7 +2966,7 @@ pub(crate) fn builtin_local_key_binding_impl(
     expect_min_args("local-key-binding", &args, 1)?;
     expect_max_args("local-key-binding", &args, 2)?;
 
-    if ctx.buffers.current_local_map().is_nil() {
+    if ctx.edit.buffers.current_local_map().is_nil() {
         return Ok(Value::NIL);
     }
 
@@ -3867,7 +2984,7 @@ pub(crate) fn builtin_local_key_binding_impl(
     };
     let emacs_events: Vec<Value> = events.iter().map(key_event_to_emacs_event).collect();
     Ok(lookup_keymap_with_partial(
-        &ctx.buffers.current_local_map(),
+        &ctx.edit.buffers.current_local_map(),
         &emacs_events,
         symbol_mode,
     ))
@@ -3995,7 +3112,7 @@ fn where_is_sequence_is_non_key_event(
 
 /// `(where-is-internal DEFINITION &optional KEYMAP FIRSTONLY NOINDIRECT NO-REMAP)`
 /// Return list of key sequences that invoke DEFINITION.
-pub(crate) fn builtin_where_is_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+pub fn builtin_where_is_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
     expect_min_args("where-is-internal", &args, 1)?;
     expect_max_args("where-is-internal", &args, 5)?;
@@ -4350,7 +3467,7 @@ fn command_remapping_explicit_keymaps(ctx: &Context, value: &Value) -> Vec<Value
     if items.is_empty() {
         return Vec::new();
     }
-    if get_keymap_in_obarray(&ctx.obarray, &items[0], false, symbol_mode)
+    if get_keymap_in_obarray(&ctx.obarray(), &items[0], false, symbol_mode)
         .ok()
         .filter(|value| is_list_keymap(value, symbol_mode))
         .is_none()
@@ -4361,7 +3478,7 @@ fn command_remapping_explicit_keymaps(ctx: &Context, value: &Value) -> Vec<Value
     items
         .into_iter()
         .filter_map(|item| {
-            get_keymap_in_obarray(&ctx.obarray, &item, false, symbol_mode)
+            get_keymap_in_obarray(&ctx.obarray(), &item, false, symbol_mode)
                 .ok()
                 .filter(|value| is_list_keymap(value, symbol_mode))
         })
@@ -4692,14 +3809,14 @@ fn where_is_raw_sequences(
     if no_menu_bindings && !noindirect && eval.symbol_mode() == SymbolMode::Bare {
         ensure_where_is_reverse_index(eval, keymaps);
         return eval
-            .interactive
+            .interactive()
             .cached_where_is_sequences(keymaps, definition)
             .expect("where-is reverse index was just ensured");
     }
 
     // GNU clears the shared reverse cache when asked to use a lookup mode for
     // which the index is not semantically complete.
-    eval.interactive.clear_where_is_reverse_index();
+    eval.interactive_mut().clear_where_is_reverse_index();
     let mut sequences = Vec::new();
     for keymap in keymaps {
         collect_where_is_sequences_value(
@@ -4718,7 +3835,7 @@ fn where_is_raw_sequences(
 
 fn ensure_where_is_reverse_index(eval: &mut Context, keymaps: &[Value]) {
     if eval
-        .interactive
+        .interactive()
         .cached_where_is_reverse_index(keymaps)
         .is_some()
     {
@@ -4726,7 +3843,7 @@ fn ensure_where_is_reverse_index(eval: &mut Context, keymaps: &[Value]) {
     }
 
     let index = build_where_is_reverse_index(eval.obarray(), keymaps);
-    eval.interactive.install_where_is_reverse_index(index);
+    eval.interactive_mut().install_where_is_reverse_index(index);
 }
 
 fn where_is_indexed_command_remapping(
@@ -4736,14 +3853,14 @@ fn where_is_indexed_command_remapping(
 ) -> Option<Value> {
     let symbol_mode = eval.symbol_mode();
     if symbol_mode == SymbolMode::Positioned {
-        eval.interactive.clear_where_is_reverse_index();
+        eval.interactive_mut().clear_where_is_reverse_index();
         return command_remapping_lookup_in_keymaps(keymaps, command, symbol_mode);
     }
     ensure_where_is_reverse_index(eval, keymaps);
     #[cfg(test)]
-    eval.interactive
+    eval.interactive_mut()
         .note_where_is_reverse_index_remapping_lookup();
-    eval.interactive
+    eval.interactive()
         .cached_where_is_reverse_index(keymaps)
         .expect("where-is reverse index was just ensured")
         .remapping_for(command)
@@ -4806,17 +3923,7 @@ fn build_where_is_reverse_index(obarray: &Obarray, keymaps: &[Value]) -> WhereIs
     }
 
     let state = WhereIsKeymapState::new(keymaps);
-    let traced_roots = WhereIsReverseIndex::collect_traced_roots(
-        &state,
-        &sequences_by_definition,
-        &remapping_by_command,
-    );
-    WhereIsReverseIndex {
-        state,
-        sequences_by_definition,
-        remapping_by_command,
-        traced_roots,
-    }
+    WhereIsReverseIndex::from_parts(state, sequences_by_definition, remapping_by_command)
 }
 
 fn collect_where_is_sequences_value(

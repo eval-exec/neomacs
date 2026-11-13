@@ -61,6 +61,42 @@ fn overlay_arrow_matches_gnu() {
     assert_pair_exact_display("overlay_arrow", &gnu, &neo);
 }
 
+/// A BUFFER-LOCAL `overlay-arrow-position`.  GNU's redisplay reads the
+/// variable with the window's buffer current (`find_symbol_value`,
+/// xdisp.c:17074-17083), so the local marker draws while the global default
+/// stays nil.  The default-only read this branch replaced drew nothing here;
+/// this is the end-to-end twin of the layout-engine pin
+/// `tty_overlay_arrow_reads_the_window_buffers_local_position`.
+#[test]
+fn overlay_arrow_reads_a_buffer_local_position_matches_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(30), scratch_ready);
+
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn (switch-to-buffer (get-buffer-create \"arrow-local\")) \
+         (erase-buffer) (insert \"alpha\\nbeta\\ngamma\\n\") \
+         (goto-char (point-min)) (forward-line 1) \
+         (set (make-local-variable 'overlay-arrow-position) (point-marker)) nil)",
+    );
+
+    let arrow_drawn = |grid: &[String]| grid.iter().any(|row| row.contains("=>"));
+    gnu.read_until(Duration::from_secs(10), arrow_drawn);
+    neo.read_until(Duration::from_secs(12), arrow_drawn);
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+
+    if !arrow_drawn(&gnu.text_grid()) {
+        dump_pair_grids("overlay_arrow_buffer_local", &gnu, &neo);
+    }
+    assert!(
+        arrow_drawn(&gnu.text_grid()),
+        "GNU did not draw the buffer-local overlay arrow, so this test would be vacuous"
+    );
+
+    assert_pair_exact_display("overlay_arrow_buffer_local", &gnu, &neo);
+}
+
 /// An arrow on an EMPTY line. GNU draws it there too — the row's whole content
 /// is its newline — and this is the case that exposed the row test's bound:
 /// our `end_charpos` is the newline's own position, so `start == end` on an

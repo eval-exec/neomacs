@@ -93,3 +93,94 @@ fn emacs_default_suffixes_leave_jka_compr_alone() {
     assert!(!startup.contains("jka-compr"), "{startup}");
     assert!(!startup.contains("load-suffixes"), "{startup}");
 }
+
+/// A compressed GNU install turns the source policy into a decompression
+/// exercise: `make install` gzips Lisp, `load-suffixes` is narrowed to
+/// `.el`, and jka-compr's verbose messages paint the echo area.  The
+/// helm-gitignore TUI capture saw exactly `[uncompressing
+/// rfc6068.el.gz...done]` spliced into Helm's `pattern:` line (P2
+/// baseline), so the source-parity startup must silence that install-only
+/// chatter.  The shadow `.el.gz` makes the condition observable
+/// regardless of how the attested oracle was installed.
+#[cfg(unix)]
+#[test]
+fn source_startup_silences_jka_compr_messages_for_compressed_libraries() {
+    use std::process::Command;
+
+    let (root, package_dir) = fixture();
+    let shadow = root.path().join("shadow");
+    fs::create_dir_all(&shadow).expect("create shadow load-path");
+    let plain = shadow.join("rfc6068.el");
+    fs::write(&plain, "(provide 'rfc6068)\n").expect("write shadow source");
+    let gzip = Command::new("gzip")
+        .arg("-c")
+        .arg(&plain)
+        .output()
+        .expect("run gzip");
+    assert!(gzip.status.success(), "gzip failed: {gzip:?}");
+    fs::write(shadow.join("rfc6068.el.gz"), &gzip.stdout).expect("write compressed shadow");
+    fs::remove_file(&plain).expect("remove the plain shadow so load picks the compressed one");
+
+    let prepared =
+        PreparedPackageSet::from_package_dir(("example", "1.2.3"), "example.el", package_dir)
+            .expect("describe prepared package")
+            .with_load_suffixes(LoadSuffixes::Source)
+            .with_prelude(&format!(
+                "(add-to-list 'load-path {})",
+                elisp_string(&shadow.to_string_lossy())
+            ));
+    let startup = prepared
+        .write_startup_file(&root.path().join("launch"))
+        .expect("write startup file");
+    let oracle = neomacs_test_oracle::gnu::gnu_oracle().executable_path();
+    let home = root.path().join("home");
+    let tmp = root.path().join("tmp");
+    let runtime = root.path().join("runtime");
+    for directory in [&home, &tmp, &runtime] {
+        fs::create_dir_all(directory).expect("create canonical oracle roots");
+    }
+
+    // The oracle is an editor: spawn it through the one canonical package
+    // environment instead of hand-applying HOME/TMPDIR/TZ to a raw Command
+    // (the spawn-architecture tripwire requires this builder).
+    let environment = neomacs_test_env::CanonicalEnvironment::package(
+        &home,
+        &tmp,
+        neomacs_test_env::PackagePaths {
+            scratch_root: root.path().to_path_buf(),
+            workspace_root: neomacs_infra::workspace_root(),
+            runtime_dir: runtime,
+            melpa_cache_root: root.path().to_path_buf(),
+        },
+    )
+    .expect("canonical package environment for the oracle probe");
+    let mut command = environment.command(&oracle);
+    command
+        .arg("--batch")
+        .arg("--quick")
+        .arg("--load")
+        .arg(&startup)
+        .arg("--eval")
+        .arg(r#"(progn (require 'rfc6068) (princ "NEOMACS-JKA-OK"))"#);
+    for (name, value) in prepared.process_environment() {
+        command.env(name, value);
+    }
+    let output = command.output().expect("run the GNU oracle");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "GNU failed: {output:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("NEOMACS-JKA-OK"),
+        "the shadow library did not load:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        !combined.contains("uncompressing"),
+        "the source-parity startup must silence jka-compr's verbose decompression \
+         messages, which otherwise paint the echo area:\n{combined}"
+    );
+}

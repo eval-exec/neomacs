@@ -1,22 +1,10 @@
-error[E0603]: struct `BlvPtr` is private
- --> tests/thread_safety_ui/thread_projection_blv_forge.rs:5:47
-  |
-5 | fn forge(blv: neovm_core::emacs_core::symbol::BlvPtr) -> CanonicalArm {
-  |                                               ^^^^^^ private struct
-  |
-note: the struct `BlvPtr` is defined here
- --> src/emacs_core/runtime/symbol/mod.rs
-  |
-  |     BlvPtr, DumpedCell, DumpedSymbolFlags, LISP_SYMBOL_FLAGS_OFFSET,
-  |     ^^^^^^
-
 error[E0624]: associated function `new` is private
- --> tests/thread_safety_ui/thread_projection_blv_forge.rs:6:76
+ --> tests/thread_safety_ui/thread_projection_blv_forge.rs:6:65
   |
-6 |     CanonicalArm::Localized(neovm_core::emacs_core::forward::CanonicalBlv::new(blv))
-  |                                                                            ^^^ private associated function
+6 |     CanonicalArm::Localized(neovm_value::forward::CanonicalBlv::new(blv))
+  |                                                                 ^^^ private associated function
   |
- ::: src/emacs_core/runtime/forward/thread_projection.rs
+ ::: $WORKSPACE/crates/neovm-value/src/forward/thread_projection.rs
   |
   |     pub(crate) fn new(blv: BlvPtr) -> Self {
   |     -------------------------------------- private associated function defined here

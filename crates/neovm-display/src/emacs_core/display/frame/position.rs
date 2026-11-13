@@ -1,0 +1,164 @@
+//! Decode Lisp frame-position intent before resolving it against geometry.
+//!
+//! GNU frame.c uses the same forms in gui_figure_window_size and
+//! gui_set_frame_parameters. In particular, (+ -10) is NOT the same as -10.
+
+use crate::emacs_core::window_cmds::expect_int;
+use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
+use crate::window::{FrameId, FrameManager};
+use neovm_value::error::{Flow, LispCondition, signal};
+use neovm_value::value::Value;
+
+/// A validated position request, not a resolved parent-local coordinate.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FramePositionSpec(PositionKind);
+
+#[derive(Clone, Copy, Debug)]
+enum PositionKind {
+    Absolute(i32),
+    /// Signed displacement from the parent's far edge, less the child extent.
+    FarEdge(i64),
+    Proportional(f64),
+}
+
+/// Integer coordinate contracts differ between GNU's public frame APIs.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FrameCoordinateOrigin {
+    /// Negative values are offsets from the right/bottom edge.
+    SignedEdges,
+    /// Negative values remain outside the left/top edge.
+    Absolute,
+}
+
+impl FramePositionSpec {
+    fn signed_edges(offset: i32) -> Self {
+        Self(if offset < 0 {
+            PositionKind::FarEdge(i64::from(offset))
+        } else {
+            PositionKind::Absolute(offset)
+        })
+    }
+
+    /// Strict integer API admission, unlike permissive frame-parameter parsing.
+    pub(crate) fn from_coordinate(
+        value: Value,
+        origin: FrameCoordinateOrigin,
+    ) -> Result<Self, Flow> {
+        let offset = i32::try_from(expect_int(&value)?).map_err(|_| {
+            signal(
+                LispCondition::ArgsOutOfRange,
+                vec![
+                    value,
+                    Value::fixnum(i64::from(i32::MIN)),
+                    Value::fixnum(i64::from(i32::MAX)),
+                ],
+            )
+        })?;
+        Ok(match origin {
+            FrameCoordinateOrigin::SignedEdges => Self::signed_edges(offset),
+            FrameCoordinateOrigin::Absolute => Self(PositionKind::Absolute(offset)),
+        })
+    }
+
+    pub(crate) fn from_lisp(value: Value) -> Option<Self> {
+        let kind = if let Some(integer) = value.as_int() {
+            return Some(Self::signed_edges(i32::try_from(integer).ok()?));
+        } else if value.as_bare_symbol_name() == Some("-") {
+            PositionKind::FarEdge(0)
+        } else if value.is_cons() && value.cons_cdr().is_cons() {
+            let offset = i32::try_from(value.cons_cdr().cons_car().as_int()?).ok()?;
+            match value.cons_car().as_bare_symbol_name()? {
+                "+" => PositionKind::Absolute(offset),
+                "-" if offset != i32::MIN => PositionKind::FarEdge(-i64::from(offset)),
+                _ => return None,
+            }
+        } else {
+            let fraction = value.as_float().filter(|v| (0.0..=1.0).contains(v))?;
+            PositionKind::Proportional(fraction)
+        };
+        Some(Self(kind))
+    }
+
+    fn resolve(self, parent_extent: Option<u32>, child_extent: u32) -> i64 {
+        match self.0 {
+            PositionKind::Absolute(offset) => i64::from(offset),
+            PositionKind::FarEdge(offset) => parent_extent.map_or(offset, |parent| {
+                i64::from(parent) - i64::from(child_extent) + offset
+            }),
+            PositionKind::Proportional(fraction) => {
+                // No desktop workarea is available here for top-level frames.
+                // Preserve the existing zero default in that case; native
+                // top-level placement remains the platform host's concern.
+                let available = parent_extent
+                    .unwrap_or(child_extent)
+                    .saturating_sub(child_extent);
+                (fraction * f64::from(available)) as i64
+            }
+        }
+    }
+}
+
+/// The absolute display position a top-level window should move to, or
+/// `None` unless both edges are absolute.
+///
+/// GNU's `gui_set_frame_parameters_1` (src/frame.c) also moves the window
+/// for a lone `left` or `top`, taking the other edge from `f->left_pos` /
+/// `f->top_pos`, which GNU keeps equal to the native position.  Neomacs does
+/// not read the native position back, so the stored edge can be stale (moved
+/// by the user or the window manager) or an unresolved far-edge offset;
+/// moving with it would put the window in the wrong place.  A far-edge or
+/// proportional edge needs the window's outer size and the workarea, which
+/// the evaluator does not have either.
+pub(crate) fn absolute_window_position(
+    left: Option<FramePositionSpec>,
+    top: Option<FramePositionSpec>,
+) -> Option<(i32, i32)> {
+    match (left?.0, top?.0) {
+        (PositionKind::Absolute(x), PositionKind::Absolute(y)) => Some((x, y)),
+        _ => None,
+    }
+}
+
+/// Resolve only after size/font changes, then publish numeric parent-local
+/// coordinates. Renderers never have to interpret Lisp position expressions.
+///
+/// Returns true when the resolved placement differs from the frame's previous
+/// one. Callers that own the evaluator must then mark the frame for redisplay:
+/// a GUI child frame's placement only reaches the compositor through the next
+/// published display state, and a position-only change leaves the redisplay
+/// signature untouched.  GNU instead moves the native window inside the same
+/// call (`set_frame_offset_hook`, src/frame.c:5366-5369); Neomacs composites
+/// child frames itself, so the publish is the move.
+pub(crate) fn apply_frame_position(
+    frames: &mut FrameManager,
+    fid: FrameId,
+    left: Option<FramePositionSpec>,
+    top: Option<FramePositionSpec>,
+) -> bool {
+    let Some(frame) = frames.get(fid) else {
+        return false;
+    };
+    let parent = frame
+        .parent_frame
+        .as_frame_id()
+        .map(FrameId)
+        .and_then(|id| frames.get(id));
+    let left = left.map(|spec| spec.resolve(parent.map(|p| p.width), frame.width));
+    let top = top.map(|spec| spec.resolve(parent.map(|p| p.height), frame.height));
+    let frame = frames
+        .get_mut(fid)
+        .expect("position target was just resolved");
+    let mut moved = false;
+    if let Some(left) = left {
+        moved |= frame.left_pos != left;
+        frame.left_pos = left;
+        frame.set_parameter(Value::symbol("left"), Value::fixnum(left));
+    }
+    if let Some(top) = top {
+        moved |= frame.top_pos != top;
+        frame.top_pos = top;
+        frame.set_parameter(Value::symbol("top"), Value::fixnum(top));
+    }
+    moved
+}

@@ -8,11 +8,12 @@
 
 use crate::display_cursor::cursor_window_matches_current;
 use crate::display_item::{DisplayLineHeightPolicy, DisplayRowBreak};
+use crate::display_row::builder::DisplayRowVerticalMetrics;
 use crate::display_row::face_state::{DisplayRowFace, DisplayRowMeasurementMode};
 use crate::display_row::line_end::{
     LineEndContext, LineEndExtend, LineEndFillGeometry, NoNamedLineEndFaces, plan,
 };
-use crate::display_row::metrics::DisplayRowFallbackMetrics;
+use crate::display_row::metrics::{DisplayLineHeightMetrics, DisplayRowFallbackMetrics};
 use crate::glyph_row_writer::push_stretch_to_area;
 use neomacs_display_protocol::face::BoxVerticalEdges;
 use neomacs_display_protocol::frame_glyphs::PhysCursor;
@@ -30,6 +31,7 @@ use neomacs_display_protocol::types::{Color, FaceId, Rect};
 pub(crate) struct DisplayRowLineEndFinalizer {
     row_break: DisplayRowBreak,
     row_break_face_id: FaceId,
+    newline_font_metrics: Option<DisplayRowVerticalMetrics>,
     remaining_width_px: f32,
     fallback_metrics: DisplayRowFallbackMetrics,
     base_background: Color,
@@ -61,6 +63,7 @@ impl DisplayRowLineEndFinalizer {
         Self {
             row_break,
             row_break_face_id,
+            newline_font_metrics: None,
             remaining_width_px,
             fallback_metrics,
             base_background,
@@ -70,11 +73,51 @@ impl DisplayRowLineEndFinalizer {
         }
     }
 
-    pub(crate) fn finalize(self, row: &mut GlyphRow, faces: &[DisplayRowFace]) {
-        if self.row_break.line_height != DisplayLineHeightPolicy::Default
+    /// Preserve captured font extents rather than reconstructing them from
+    /// render faces, whose descent is rounded to an integer.
+    pub(crate) fn with_newline_font_metrics(mut self, metrics: DisplayRowVerticalMetrics) -> Self {
+        self.newline_font_metrics = Some(metrics);
+        self
+    }
+
+    /// Resolve applicable line height and append newline/extension glyphs.
+    /// Return authoritative metrics only when height resolution ran.
+    pub(crate) fn finalize(
+        self,
+        row: &mut GlyphRow,
+        faces: &[DisplayRowFace],
+    ) -> Option<DisplayLineHeightMetrics> {
+        let default = (
+            self.fallback_metrics.row_height(),
+            self.fallback_metrics.ascent(),
+        );
+        let face = self
+            .newline_font_metrics
+            .map(|metrics| (metrics.height_px(), metrics.ascent_px()))
+            .or_else(|| {
+                faces
+                    .iter()
+                    .find(|face| face.face_id == self.row_break_face_id)
+                    .map(|face| (face.metrics.line_height_px(), face.metrics.ascent_px()))
+            })
+            .unwrap_or(default);
+        let mut resolved = DisplayLineHeightMetrics {
+            height: row.height_px,
+            ascent: row.ascent_px,
+            newline_height: face.0,
+            newline_ascent: face.1,
+        };
+        let resolve_height = self.row_break.line_height != DisplayLineHeightPolicy::Default
+            || self.newline_font_metrics.is_some()
+                && crate::display_row::metrics::newline_requires_height_resolution(
+                    self.row_break.line_height,
+                    face,
+                    default,
+                );
+        let resolve_height = resolve_height
             && (self.measurement_mode.uses_concrete_font_geometry()
-                || self.row_break.line_height == DisplayLineHeightPolicy::ContentOnly)
-        {
+                || self.row_break.line_height == DisplayLineHeightPolicy::ContentOnly);
+        if resolve_height {
             let (height, ascent) = display_row_visible_content_metrics(
                 row,
                 self.fallback_metrics.row_height(),
@@ -86,25 +129,14 @@ impl DisplayRowLineEndFinalizer {
                         .map(|face| (face.metrics.line_height_px(), face.metrics.ascent_px()))
                 },
             );
-            let face = faces
-                .iter()
-                .find(|face| face.face_id == self.row_break_face_id)
-                .map(|face| (face.metrics.line_height_px(), face.metrics.ascent_px()))
-                .unwrap_or((
-                    self.fallback_metrics.row_height(),
-                    self.fallback_metrics.ascent(),
-                ));
-            let metrics = crate::display_row::metrics::resolve_line_height(
+            resolved = crate::display_row::metrics::resolve_line_height(
                 self.row_break.line_height,
                 (height, ascent),
                 face,
-                (
-                    self.fallback_metrics.row_height(),
-                    self.fallback_metrics.ascent(),
-                ),
+                default,
             );
-            row.height_px = metrics.height;
-            row.ascent_px = metrics.ascent;
+            row.height_px = resolved.height;
+            row.ascent_px = resolved.ascent;
         }
 
         // GNU order at a line end -- append_space_for_newline first, then
@@ -147,11 +179,15 @@ impl DisplayRowLineEndFinalizer {
         // own metrics; a prepared program starts from the frame fallback, so
         // reading the row here made a rich line's fill one pixel taller than
         // fresh layout.  Use the line-break face's metrics in both paths.
-        let break_face_metrics = faces
-            .iter()
-            .find(|face| face.face_id == self.row_break_face_id)
-            .map(|face| (face.metrics.line_height_px(), face.metrics.ascent_px()));
-        let (height_px, ascent_px) = break_face_metrics.unwrap_or((row.height_px, row.ascent_px));
+        let (height_px, ascent_px) = if self.newline_font_metrics.is_some() {
+            (resolved.newline_height, resolved.newline_ascent)
+        } else {
+            faces
+                .iter()
+                .find(|face| face.face_id == self.row_break_face_id)
+                .map(|face| (face.metrics.line_height_px(), face.metrics.ascent_px()))
+                .unwrap_or((row.height_px, row.ascent_px))
+        };
         let height_px = height_px.max(1.0);
         let geometry = LineEndFillGeometry {
             content_x: 0.0,
@@ -168,6 +204,7 @@ impl DisplayRowLineEndFinalizer {
         plan(&ctx)
             .resolve(&ctx, geometry, &mut NoNamedLineEndFaces)
             .apply_to(row);
+        resolve_height.then_some(resolved)
     }
 }
 
@@ -192,8 +229,10 @@ pub(crate) fn display_row_visible_content_metrics(
         );
         let ascent = ascent.max(0.0).min(height);
         let descent = (height - ascent).max(0.0);
-        max_ascent = max_ascent.max((ascent - glyph.vertical_offset_px).max(0.0));
-        max_descent = max_descent.max((descent + glyph.vertical_offset_px).max(0.0));
+        // GNU take_vertical_position_into_account enlarges only the side
+        // displaced by raise/lower; the opposite logical extent is retained.
+        max_ascent = max_ascent.max(ascent - glyph.vertical_offset_px.min(0.0));
+        max_descent = max_descent.max(descent + glyph.vertical_offset_px.max(0.0));
     }
     if saw_glyph {
         let height = (max_ascent + max_descent).max(1.0);

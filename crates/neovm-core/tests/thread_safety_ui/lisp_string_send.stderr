@@ -6,7 +6,7 @@ error[E0277]: `*const u8` cannot be sent between threads safely
   |
   = help: within `LispString`, the trait `Send` is not implemented for `*const u8`
 note: required because it appears within the type `LispString`
- --> src/heap_types.rs
+ --> $WORKSPACE/crates/neovm-value/src/heap_types.rs
   |
   | pub struct LispString {
   |            ^^^^^^^^^^

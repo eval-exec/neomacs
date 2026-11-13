@@ -13,22 +13,38 @@ fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
 use crate::emacs_core::load::{
-    apply_ldefs_boot_autoloads_for_names, bootstrap_load_path_entries,
-    create_runtime_startup_evaluator_cached, find_file_in_load_path, get_load_path, load_file,
+    apply_ldefs_boot_autoloads_for_names, bootstrap_load_path_entries, find_file_in_load_path,
+    get_load_path, load_file,
 };
+use crate::emacs_core::load_boot::create_runtime_startup_evaluator_cached;
 use crate::emacs_core::value::Value;
 use crate::emacs_core::{Context, format_eval_result};
 use crate::heap_types::LispString;
 use std::path::PathBuf;
 
-/// Initialize the tracing subscriber for test output.
+pub(crate) use neovm_value::test_support::authority::with_legacy_gc;
+pub use neovm_value::test_utils::{cargo_workspace_root, nextest_workspace_root, workspace_root};
+
+/// Initialize process-wide test tracing and publish the canonical eval hook
+/// set for this test process.
 ///
-/// Thin wrapper around [`crate::logging::init_for_tests`] kept for the
-/// many existing call sites in this crate's test files. Tests never
-/// write to a log file regardless of `NEOMACS_LOG_TO_FILE` — output is
-/// always routed through the test harness's writer.
+/// Production builds every `Context` from `install_eval_hooks`'s proof, so an
+/// eval read path never runs before its cold tables exist. Core tests that
+/// drive eval-side machinery (a bare process manager, a symbol world fixture)
+/// before any `Context` exists must boot the same set first; otherwise the
+/// fail-closed read guards panic. Both steps are idempotent and the hook set
+/// publishes only descriptor slots, so this stays a test-harness concern.
 pub fn init_test_tracing() {
-    crate::logging::init_for_tests();
+    neovm_value::test_utils::init_test_tracing();
+    ensure_eval_hooks_installed();
+}
+
+/// Publish the one canonical eval hook set for this test process.
+///
+/// Idempotent; any later `Context` construction in the same process re-runs
+/// the same publication entry and receives the same set.
+pub fn ensure_eval_hooks_installed() {
+    crate::emacs_core::eval_hook_installers::install_eval_hooks();
 }
 
 /// The abbreviation the platform's own `gmtime_r` reports for UTC.
@@ -84,26 +100,6 @@ pub fn signal_data_bytes(flow: crate::emacs_core::error::Flow) -> (String, Vec<V
     }
 }
 
-/// The workspace root baked in at compile time — the **build** machine's
-/// path, wrong for archive-shipped binaries on every other runner.  Only
-/// [`workspace_root`] reads it.
-pub fn cargo_workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
-}
-
-/// The workspace root nextest exports at runtime: the live workspace on
-/// the running machine.  `None` outside nextest.
-pub fn nextest_workspace_root() -> Option<PathBuf> {
-    std::env::var_os("NEXTEST_WORKSPACE_ROOT").map(PathBuf::from)
-}
-
-/// The workspace root of the machine *running* the test: nextest's runtime
-/// value when present, the compile-time constant otherwise.  The fallback
-/// order lives here once, so no call site can get it wrong.
-pub fn workspace_root() -> PathBuf {
-    nextest_workspace_root().unwrap_or_else(cargo_workspace_root)
-}
-
 /// Find a GNU Lisp file on `load_path`, naming the workspace root and which
 /// variable chose it when the file is missing.  The bare "cannot find
 /// emacs-lisp/debug-early" this replaces cost a full triage: the archived
@@ -133,7 +129,7 @@ pub fn load_minimal_gnu_backquote_runtime(eval: &mut Context) {
         "load-path",
         Value::list(bootstrap_load_path_entries(&lisp_dir)),
     );
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for name in &[
         "emacs-lisp/debug-early",
         "emacs-lisp/byte-run",
@@ -151,7 +147,7 @@ pub fn load_gnu_macroexp_runtime(eval: &mut Context) {
     if eval.obarray().symbol_function("macroexp-progn").is_some() {
         return;
     }
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for name in &["emacs-lisp/macroexp", "emacs-lisp/pcase"] {
         let path = find_required_lisp_file(name, &load_path);
         load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
@@ -444,7 +440,7 @@ pub fn load_gnu_elisp_syntax_table_runtime(eval: &mut Context) {
 /// full `loadup.el` startup.
 pub fn load_minimal_gnu_help_runtime(eval: &mut Context) {
     load_minimal_gnu_backquote_runtime(eval);
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for name in &[
         "keymap",
         "widget",
@@ -564,7 +560,7 @@ fn is_named_defun_value(form: &Value, name: &str) -> bool {
 /// Create a bare evaluator with GNU `ldefs-boot.el` autoload cells restored
 /// for the named symbols and a bootstrap-compatible `load-path`.
 pub fn eval_with_ldefs_boot_autoloads(names: &[&str]) -> Context {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let project_root = workspace_root();
     let lisp_dir = project_root.join("lisp");
     eval.set_variable(
@@ -715,34 +711,38 @@ fn probe_sandbox() -> Option<std::ffi::OsString> {
         })
 }
 
-/// Construct a legacy-GC fixture with the knob selected before heap creation.
-/// Nextest gives each test its own process. Restore the caller's environment
-/// on return or unwind; an existing heap's generation mode is never changed.
-pub(crate) fn with_legacy_gc<T>(create: impl FnOnce() -> T) -> T {
-    struct RestoreGenerationalKnob(Option<std::ffi::OsString>);
-
-    impl Drop for RestoreGenerationalKnob {
-        fn drop(&mut self) {
-            unsafe {
-                match self.0.take() {
-                    Some(previous) => std::env::set_var("NEOVM_GC_GENERATIONAL", previous),
-                    None => std::env::remove_var("NEOVM_GC_GENERATIONAL"),
-                }
-            }
-        }
-    }
-
-    let _restore = RestoreGenerationalKnob(std::env::var_os("NEOVM_GC_GENERATIONAL"));
-    unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
-    create()
+/// Create a bare (non-bootstrap) evaluator with the real canonical hook set
+/// installed through the one core boot facade (E3a). The only legal bare
+/// constructor for tests; never a local mint.
+pub fn new_context() -> Context {
+    crate::emacs_core::eval_hook_installers::new_context()
 }
 
 /// Create a cached runtime-startup evaluator for tests that need the full
 /// GNU bootstrap surface.
+///
+/// The returned evaluator must carry the BYTE-COMPILED loadup image: a
+/// source-only Lisp tree silently changes observable semantics (notably the
+/// `wrong-number-of-arguments` data, which follows the callee kind), so the
+/// precondition below fails loudly and names the fix instead of letting a
+/// batch oracle report a misleading divergence (peer 14:19Z condition 2).
 pub fn runtime_startup_context() -> Context {
-    match create_runtime_startup_evaluator_cached() {
+    let mut context = match create_runtime_startup_evaluator_cached() {
         Ok(context) => context,
         Err(error) => panic!("bootstrap: {}", format_bootstrap_error(&error)),
+    };
+    assert_preloaded_lisp_is_byte_compiled(&mut context);
+    context
+}
+
+/// A known preloaded defun must be a byte-code function, proving the Lisp
+/// tree was built (`cargo xtask fresh-build`), not merely present as source.
+fn assert_preloaded_lisp_is_byte_compiled(context: &mut Context) {
+    let byte_compiled = context
+        .eval_str("(byte-code-function-p (symbol-function 'minibuffer-window-active-p))")
+        .expect("preloaded Lisp probe evaluates");
+    if byte_compiled.is_nil() {
+        panic!("preloaded Lisp is not byte-compiled: run cargo xtask fresh-build");
     }
 }
 
@@ -863,7 +863,7 @@ mod tests {
         // rest of the run.
         unsafe { std::env::set_var("NEXTEST_WORKSPACE_ROOT", probe.path()) };
 
-        let mut eval = Context::new();
+        let mut eval = new_context();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             load_minimal_gnu_backquote_runtime(&mut eval);
         }));
@@ -884,10 +884,13 @@ mod tests {
 }
 
 /// Accepted viewport publication for counter-only frontend fixtures.
+///
+/// ONE HOME: the implementation lives in display's test hub (display owns the
+/// window-presentation APIs it drives); core re-exports it for its test tree.
 #[cfg(test)]
-#[path = "test_utils/mock_redisplay.rs"]
-pub mod mock_redisplay;
+pub use neovm_display::test_utils::mock_redisplay;
 
-pub(crate) use crate::emacs_core::eval::subr_abi::{
-    SubrValueExt, builtin_hof_entry_for_test, leaked_subr_metadata_for_test,
+pub(crate) use crate::emacs_core::eval::SubrValueExt;
+pub(crate) use neovm_eval::test_support::authority::{
+    builtin_hof_entry_for_test, leaked_subr_metadata_for_test,
 };

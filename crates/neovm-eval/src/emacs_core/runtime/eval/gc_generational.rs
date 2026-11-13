@@ -1,0 +1,41 @@
+//! Root enumeration at the generational collector's stop-all boundary.
+
+use super::*;
+
+impl Context {
+    /// The current runtime registers one mutator. A future runtime registry
+    /// can supply the same iterator after stopping all its mutators.
+    #[inline]
+    #[doc(hidden)]
+    pub fn stopped_mutators_world_stopped(&mut self) -> impl Iterator<Item = &mut Context> {
+        std::iter::once(self)
+    }
+
+    /// Seed every registered mutator's roots without keeping an unrooted
+    /// collection of Values across allocation or a safe point.
+    ///
+    /// # Safety
+    ///
+    /// Every registered mutator is stopped; `heap_ptr` names their collector
+    /// heap with no concurrent marker running. Enumeration reads Context
+    /// state and only appends roots to the collector's gray worklist.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub unsafe fn seed_registered_mutator_roots_world_stopped(
+        &mut self,
+        heap_ptr: *mut neovm_value::tagged::gc::TaggedHeap,
+    ) -> neovm_value::tagged::gc::RootSeedBreakdown {
+        let mut registered = self.stopped_mutators_world_stopped();
+        let Some(first) = registered.next() else {
+            return Default::default();
+        };
+        let mut roots = unsafe { first.seed_all_context_roots(heap_ptr) };
+        for mutator in registered {
+            let next = unsafe { mutator.seed_all_context_roots(heap_ptr) };
+            roots.total_us = roots.total_us.saturating_add(next.total_us);
+            roots.groups.extend(next.groups);
+        }
+        roots
+    }
+}

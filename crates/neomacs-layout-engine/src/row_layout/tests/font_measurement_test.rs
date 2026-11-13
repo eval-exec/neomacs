@@ -321,7 +321,7 @@ fn worker_matches_pinned_native_cjk_metrics_through_a_long_fontset_chain() {
     use crate::display_item::*;
     use crate::font::metrics::test_catalog::standard_catalog;
 
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str(
         r#"(progn
            (set-fontset-font t ?好 "font-policy-specific-0")

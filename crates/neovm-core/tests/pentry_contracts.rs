@@ -17,7 +17,7 @@ fn pentry_compile_contracts() {
 
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let capability = fs::read_to_string(
-        manifest.join("src/emacs_core/runtime/eval/parallel_entry/capability.rs"),
+        manifest.join("../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs"),
     )
     .expect("real production-entry capability source");
     let bounds = fs::read_to_string(manifest.join("tests/pentry_ui/support/thread_bounds.rs"))
@@ -98,7 +98,7 @@ fn pentry_compile_contracts() {
             .expect("negative fixture body");
         let fixture = fixture
             .replace(
-                "../../src/emacs_core/runtime/eval/parallel_entry/capability.rs",
+                "../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs",
                 "capability.rs",
             )
             .replace("support/thread_bounds.rs", "thread_bounds.rs");
@@ -111,7 +111,8 @@ fn pentry_compile_contracts() {
     // schema. These controls classify/rename one declaration, leaving every
     // validator check unchanged. A duplicate remains a duplicate even when the
     // two registrations request different authorities.
-    let schema_path = manifest.join("src/emacs_core/lisp/native/subr/effect_schema.rs");
+    let schema_path =
+        manifest.join("../neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs");
     let schema = fs::read_to_string(&schema_path).expect("real inventory schema validator");
     let schema_mutations = [
         (
@@ -139,7 +140,7 @@ fn pentry_compile_contracts() {
         );
         assert!(!before.contains('\n') && !after.contains('\n'));
         let fixture = fixture.replacen(before, after, 1).replace(
-            "../../src/emacs_core/lisp/native/subr/effect_schema.rs",
+            "../../../neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs",
             "effect_schema.rs",
         );
         let path = directory.join(format!("{name}_mutation.rs"));

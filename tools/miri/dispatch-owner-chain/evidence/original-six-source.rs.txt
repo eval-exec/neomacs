@@ -1,0 +1,99 @@
+//! Reduced pointer-ordering experiments on one u64, not Context/JIT fixtures.
+
+#[cfg(test)]
+mod tests {
+    unsafe fn callback(raw: *mut u64) {
+        let owner = unsafe { &mut *raw };
+        *owner += 10;
+    }
+
+    fn release(owner: &mut u64) {
+        *owner -= 1;
+    }
+
+    // call_spec_finish creates its typed owner, calls through an older raw
+    // ancestor, then reuses the owner for release and later bookkeeping.
+    unsafe fn old_dispatch(raw: *mut u64) {
+        let owner = unsafe { &mut *raw };
+        unsafe { callback(raw) };
+        release(owner);
+        unsafe { callback(raw) };
+        *owner -= 1;
+    }
+
+    unsafe fn fresh_dispatch(raw: *mut u64) {
+        let owner = unsafe { &mut *raw };
+        unsafe { callback(owner as *mut u64) };
+        release(owner);
+        unsafe { callback(owner as *mut u64) };
+        *owner -= 1;
+    }
+
+    #[test]
+    fn dispatch_old_ancestor_after_owner_creation() {
+        let mut counter = 1;
+        unsafe { old_dispatch(&mut counter) };
+        assert_eq!(counter, 19);
+    }
+
+    #[test]
+    fn dispatch_fresh_raw_per_callback() {
+        let mut counter = 1;
+        unsafe { fresh_dispatch(&mut counter) };
+        assert_eq!(counter, 19);
+    }
+
+    fn normalize_mut(owner: &mut u64) {
+        *owner += 1;
+    }
+
+    // apply.rs derives a whole-owner raw pointer, then its normalization
+    // branch mutably uses the typed owner before calling the raw seam.
+    fn old_apply_mut(owner: &mut u64) {
+        let raw = owner as *mut u64;
+        normalize_mut(owner);
+        unsafe { callback(raw) };
+    }
+
+    fn fresh_apply_mut(owner: &mut u64) {
+        normalize_mut(owner);
+        unsafe { callback(owner as *mut u64) };
+    }
+
+    #[test]
+    fn apply_old_raw_before_mutable_owner_normalization() {
+        let mut counter = 1;
+        old_apply_mut(&mut counter);
+        assert_eq!(counter, 12);
+    }
+
+    #[test]
+    fn apply_fresh_raw_after_mutable_owner_normalization() {
+        let mut counter = 1;
+        fresh_apply_mut(&mut counter);
+        assert_eq!(counter, 12);
+    }
+
+    // Separate a mere typed scalar read from the actually mutable setup
+    // above. Neither model adds black_box, explicit retags or fake activation.
+    fn old_apply_read(owner: &mut u64) -> u64 {
+        let raw = owner as *mut u64;
+        let before = *owner;
+        unsafe { callback(raw) };
+        before
+    }
+
+    #[test]
+    fn apply_old_raw_before_plain_owner_read_control() {
+        let mut counter = 1;
+        assert_eq!(old_apply_read(&mut counter), 1);
+        assert_eq!(counter, 11);
+    }
+
+    #[test]
+    fn direct_raw_callback_control() {
+        let mut counter = 1;
+        unsafe { callback(&mut counter) };
+        assert_eq!(counter, 11);
+    }
+}

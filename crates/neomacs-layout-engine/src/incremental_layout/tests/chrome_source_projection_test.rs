@@ -5,6 +5,7 @@ use super::super::{
     ChromeRowInputs, DisplayRowFallbackMetrics, DisplayTabPolicy, ImageScaleEnvironment, Rect,
     ResolvedFace, WindowChromeKind,
 };
+use neovm_core::window::DisplayFrameManagerExt;
 
 fn inputs() -> ChromeRowInputs {
     ChromeRowInputs {
@@ -148,7 +149,7 @@ fn source_projection_policy_is_explicit_and_invalid_values_opt_out() {
 
 #[test]
 fn source_projection_empty_still_binds_the_root() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let v = values(&mut eval, r#"(list "root")"#);
     let projection = compare(v[0], &[]);
     assert_eq!(projection.root_index, None);
@@ -159,7 +160,7 @@ fn source_projection_empty_still_binds_the_root() {
 
 #[test]
 fn source_projection_root_late_preserves_both_numberings_and_span_offsets() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let v = values(&mut eval, r#"(list "root" "a" "b")"#);
     let spans = [
         (v[1], 0, 2, 3),
@@ -199,7 +200,7 @@ fn source_projection_root_late_preserves_both_numberings_and_span_offsets() {
 
 #[test]
 fn source_projection_structural_equal_sources_keep_first_objects_despite_properties() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let v = values(
         &mut eval,
         r#"(list (copy-sequence "root")
@@ -241,7 +242,7 @@ fn source_projection_structural_equal_sources_keep_first_objects_despite_propert
 
 #[test]
 fn source_projection_root_present_absent_and_repetition_match_existing_consumers() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let v = values(&mut eval, r#"(list "root" "a" "b")"#);
     for spans in [
         vec![(v[0], 0, 4, 0)],
@@ -254,7 +255,7 @@ fn source_projection_root_present_absent_and_repetition_match_existing_consumers
 
 #[test]
 fn source_projection_encoding_shapes_match_structural_equal_without_eq_shortcuts() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let v = values(
         &mut eval,
         r#"(list "root" (unibyte-string 65) (string-to-multibyte "A")
@@ -305,7 +306,7 @@ fn source_projection_encoding_shapes_match_structural_equal_without_eq_shortcuts
 
 #[test]
 fn source_projection_fingerprint_modes_preserve_plain_and_refused_rows() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     for form in [
         r#""plain""#,
         r#"(propertize "x" 'face 'bold 'help-echo "fresh")"#,
@@ -338,7 +339,7 @@ fn source_projection_fingerprint_modes_preserve_plain_and_refused_rows() {
 
 #[test]
 fn source_projection_installs_fresh_first_representatives_before_collection() {
-    let mut eval = Box::new(Context::new());
+    let mut eval = Box::new(neovm_core::emacs_core::eval_hook_installers::new_context());
     eval.setup_thread_locals();
     let v = values(
         &mut eval,
@@ -382,7 +383,7 @@ fn source_projection_installs_fresh_first_representatives_before_collection() {
 
 #[test]
 fn source_projection_formatted_sidecar_preserves_eval_count_and_exact_bindings() {
-    let mut eval = Box::new(Context::new());
+    let mut eval = Box::new(neovm_core::emacs_core::eval_hook_installers::new_context());
     eval.setup_thread_locals();
     eval.set_variable("noninteractive", Value::NIL);
     let buffer_id = eval.buffer_manager().current_buffer().expect("buffer").id();

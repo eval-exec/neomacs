@@ -4,10 +4,10 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
 9 |     ThreadSharing::<Obarray>::check();
   |                               ^^^^^ associated function or constant cannot be called on `ThreadSharing<neovm_core::emacs_core::Obarray>` due to unsatisfied trait bounds
   |
- ::: src/emacs_core/runtime/symbol/mod.rs
+ ::: $WORKSPACE/crates/neovm-value/src/symbol/mod.rs
   |
   | pub struct Obarray {
-  | ------------------ doesn't satisfy `neovm_core::emacs_core::Obarray: Sync`
+  | ------------------ doesn't satisfy `neovm_core::emacs_core::Obarray: std::marker::Sync`
   |
  ::: tests/thread_safety_ui/support/thread_bounds.rs
   |
@@ -15,13 +15,13 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
   | --------------------------- associated function or constant `check` not found for this struct
   |
   = note: the following trait bounds were not satisfied:
-          `NonNull<LispBufferLocalValue>: Sync`
-          which is required by `neovm_core::emacs_core::Obarray: Sync`
-          `NonNull<LispFwd>: Sync`
-          which is required by `neovm_core::emacs_core::Obarray: Sync`
-          `UnsafeCell<u8>: Sync`
-          which is required by `neovm_core::emacs_core::Obarray: Sync`
-          `UnsafeCell<usize>: Sync`
-          which is required by `neovm_core::emacs_core::Obarray: Sync`
-          `UnsafeCell<TaggedValue>: Sync`
-          which is required by `neovm_core::emacs_core::Obarray: Sync`
+          `NonNull<LispBufferLocalValue>: std::marker::Sync`
+          which is required by `neovm_core::emacs_core::Obarray: std::marker::Sync`
+          `NonNull<LispFwd>: std::marker::Sync`
+          which is required by `neovm_core::emacs_core::Obarray: std::marker::Sync`
+          `UnsafeCell<u8>: std::marker::Sync`
+          which is required by `neovm_core::emacs_core::Obarray: std::marker::Sync`
+          `UnsafeCell<usize>: std::marker::Sync`
+          which is required by `neovm_core::emacs_core::Obarray: std::marker::Sync`
+          `UnsafeCell<TaggedValue>: std::marker::Sync`
+          which is required by `neovm_core::emacs_core::Obarray: std::marker::Sync`

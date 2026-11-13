@@ -30,7 +30,10 @@ fn aot_call_bearing_deopt_across_call_side_effect_once_and_eq() {
     // The crate-internal self-test does the full emit→place→serve-from-AOT→assert
     // (call-bearing serve + deopt-across-call side-effect-exactly-once + #A
     // eq-identity + #B non-UTF-8). Returns Err(reason) on any failure.
-    let r = neovm_core::emacs_core::jit::aot::testkit_call_bearing_selftest(dir.path());
+    let r = neovm_core::emacs_core::jit::aot::testkit_call_bearing_selftest(
+        dir.path(),
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+    );
     unsafe {
         std::env::remove_var("NEOVM_AOT");
         std::env::remove_var("NEOVM_AOT_DIR");
@@ -60,7 +63,10 @@ fn aot_baseline_tier_emit_serve_and_forced_deopt_match_interp() {
         std::env::set_var("NEOVM_AOT_DIR", dir.path());
         std::env::set_var("NEOVM_JIT_REOPT", "off");
     }
-    let r = neovm_core::emacs_core::jit::aot::testkit_baseline_aot_selftest(dir.path());
+    let r = neovm_core::emacs_core::jit::aot::testkit_baseline_aot_selftest(
+        dir.path(),
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+    );
     unsafe {
         std::env::remove_var("NEOVM_AOT");
         std::env::remove_var("NEOVM_AOT_DIR");
@@ -84,8 +90,10 @@ fn aot_baseline_deep_rawslot_deopt_matches_interp() {
         std::env::set_var("NEOVM_AOT", "force");
         std::env::set_var("NEOVM_AOT_DIR", dir.path());
     }
-    let r =
-        neovm_core::emacs_core::jit::aot::testkit_baseline_deep_rawslot_deopt_selftest(dir.path());
+    let r = neovm_core::emacs_core::jit::aot::testkit_baseline_deep_rawslot_deopt_selftest(
+        dir.path(),
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+    );
     unsafe {
         std::env::remove_var("NEOVM_AOT");
         std::env::remove_var("NEOVM_AOT_DIR");
@@ -109,7 +117,10 @@ fn aot_baseline_callbuiltinsym_relocs_callee_by_name_and_matches_interp() {
         std::env::set_var("NEOVM_AOT", "force");
         std::env::set_var("NEOVM_AOT_DIR", dir.path());
     }
-    let r = neovm_core::emacs_core::jit::aot::testkit_callbuiltinsym_aot_selftest(dir.path());
+    let r = neovm_core::emacs_core::jit::aot::testkit_callbuiltinsym_aot_selftest(
+        dir.path(),
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+    );
     unsafe {
         std::env::remove_var("NEOVM_AOT");
         std::env::remove_var("NEOVM_AOT_DIR");
@@ -138,7 +149,10 @@ fn aot_baseline_cbsym_intrinsic_hits_fast_shim_via_dlopen() {
         std::env::set_var("NEOVM_AOT", "force");
         std::env::set_var("NEOVM_AOT_DIR", dir.path());
     }
-    let r = neovm_core::emacs_core::jit::aot::testkit_cbsym_aot_fast_shim_selftest(dir.path());
+    let r = neovm_core::emacs_core::jit::aot::testkit_cbsym_aot_fast_shim_selftest(
+        dir.path(),
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+    );
     unsafe {
         std::env::remove_var("NEOVM_AOT");
         std::env::remove_var("NEOVM_AOT_DIR");
@@ -164,7 +178,10 @@ fn aot_baseline_symbol_const_and_var_ops_reloc_sym_by_name() {
         std::env::set_var("NEOVM_AOT", "force");
         std::env::set_var("NEOVM_AOT_DIR", dir.path());
     }
-    let r = neovm_core::emacs_core::jit::aot::testkit_baseline_op_symbol_reloc_selftest(dir.path());
+    let r = neovm_core::emacs_core::jit::aot::testkit_baseline_op_symbol_reloc_selftest(
+        dir.path(),
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+    );
     unsafe {
         std::env::remove_var("NEOVM_AOT");
         std::env::remove_var("NEOVM_AOT_DIR");
@@ -179,5 +196,8 @@ fn aot_baseline_symbol_const_and_var_ops_reloc_sym_by_name() {
 #[test]
 fn aot_mir_cons_reconstruction_preserves_precise_frames() {
     let dir = tempfile::tempdir().expect("tempdir");
-    neovm_core::emacs_core::jit::aot::testkit_mir_cons_reconstruction_selftest(dir.path());
+    neovm_core::emacs_core::jit::aot::testkit_mir_cons_reconstruction_selftest(
+        dir.path(),
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+    );
 }

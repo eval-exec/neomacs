@@ -3506,10 +3506,14 @@ If FUNCTION is nil, then it is not called.")
   "Upper limit on `magic-mode-alist' regexp matches.
 Also applies to `magic-fallback-mode-alist'.")
 
-(defun set-auto-mode--find-matching-alist-entry (alist name case-insensitive)
-  "Find first matching entry in ALIST for file NAME.
-
-If CASE-INSENSITIVE, the file system of file NAME is case-insensitive."
+(defun set-auto-mode--from-matching-alist-entry (alist name case-insensitive
+                                                 keep-mode-if-same dir-local)
+  "Apply matching entries in ALIST for file NAME.
+CASE-INSENSITIVE non-nil means NAME is on a case-insensitive file system.
+Defer a continuation handler until another match or the end of the search.
+Intermediate handlers preserve the current mode; the final handler uses
+KEEP-MODE-IF-SAME.  Validate every directory-local handler before calling
+it.  Return non-nil if the final handler was accepted."
   (let (mode)
     (while name
       (let ((newmode
@@ -3528,22 +3532,32 @@ If CASE-INSENSITIVE, the file system of file NAME is case-insensitive."
                        (assoc-default name alist 'string-match)))))))
         (when newmode
           (when mode
-            ;; We had already found a mode but in a (REGEXP MODE t)
-            ;; entry, so we still have to run MODE.  Let's do it now.
-            ;; FIXME: It's kind of ugly to run the function here.
-            ;; An alternative could be to return a list of functions and
-            ;; callers.
-            (set-auto-mode-0 mode t))
+            ;; A later match makes the pending handler intermediate.
+            ;; Check it immediately before invocation, even though its
+            ;; name was found on the preceding iteration.
+            (if (and dir-local
+                     (not (set-auto-mode--dir-local-valid-p mode)))
+                (message "Ignoring invalid mode `%S'" mode)
+              (set-auto-mode-0 mode t)))
           (setq mode newmode))
         (if (and newmode
                  (not (functionp newmode))
                  (consp newmode)
                  (cadr newmode))
-            ;; It's a (REGEXP MODE t): Keep looking but remember the MODE.
+            ;; The continuation flag is independent of a nil MODE.
             (setq mode (car newmode)
                   name (substring name 0 (match-beginning 0)))
           (setq name nil))))
-    mode))
+    (when mode
+      ;; No later match was found.  This includes a terminal continuation.
+      ;; Return nil after rejection so the caller can try its fallback.
+      (if (and dir-local
+               (not (set-auto-mode--dir-local-valid-p mode)))
+          (progn
+            (message "Ignoring invalid mode `%S'" mode)
+            nil)
+        (set-auto-mode-0 mode keep-mode-if-same)
+        t))))
 
 (defun set-auto-mode--apply-alist (alist keep-mode-if-same dir-local)
   "Helper function for `set-auto-mode'.
@@ -3555,8 +3569,7 @@ Return non-nil if the mode was set, nil otherwise.
 DIR-LOCAL non-nil means this call is via directory-locals, and
 extra checks should be done."
   (if buffer-file-name
-      (let (mode
-            (name buffer-file-name)
+      (let ((name buffer-file-name)
             (remote-id (file-remote-p buffer-file-name))
             (case-insensitive-p (file-name-case-insensitive-p
                                  buffer-file-name)))
@@ -3566,15 +3579,8 @@ extra checks should be done."
         (when (and (stringp remote-id)
                    (string-match (regexp-quote remote-id) name))
           (setq name (substring name (match-end 0))))
-        (setq mode (set-auto-mode--find-matching-alist-entry
-                    alist name case-insensitive-p))
-        (when (and dir-local mode
-                   (not (set-auto-mode--dir-local-valid-p mode)))
-          (message "Ignoring invalid mode `%S'" mode)
-          (setq mode nil))
-        (when mode
-          (set-auto-mode-0 mode keep-mode-if-same)
-          t))))
+        (set-auto-mode--from-matching-alist-entry
+         alist name case-insensitive-p keep-mode-if-same dir-local))))
 
 (defun set-auto-mode--dir-local-valid-p (mode)
   "Say whether MODE can be used in a .dir-local.el `auto-mode-alist'."

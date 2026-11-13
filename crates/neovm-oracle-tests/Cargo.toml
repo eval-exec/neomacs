@@ -30,6 +30,10 @@ tempfile.workspace = true
 tracing.workspace = true
 
 [lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): the 2026-11-04 eval split left
+# EditHost::sync_window_positions delegating to itself; make that class of
+# accidental self-recursion a hard error in every target of the crate.
+unconditional_recursion = "deny"
 unused_imports = "allow"
 unused_variables = "allow"
 dead_code = "allow"

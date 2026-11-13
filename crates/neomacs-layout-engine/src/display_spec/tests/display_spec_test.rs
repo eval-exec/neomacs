@@ -25,7 +25,7 @@ fn parsed_image_ascent(value: Option<Value>) -> DisplayImageAscentPolicy {
 
 #[test]
 fn image_data_base_uri_survives_as_an_explicit_resource_capability() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let image = Value::list(vec![
         Value::symbol("image"),
@@ -49,7 +49,7 @@ fn image_data_base_uri_survives_as_an_explicit_resource_capability() {
 
 #[test]
 fn image_slice_resolves_fixnums_as_pixels_and_floats_as_fractions() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let slice = parse_display_image_slice(Value::list(vec![
         Value::symbol("slice"),
@@ -71,7 +71,7 @@ fn image_slice_resolves_fixnums_as_pixels_and_floats_as_fractions() {
 
 #[test]
 fn image_scale_default_survives_parsing_until_frame_realization() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let image = Value::list(vec![
         Value::symbol("image"),
@@ -117,7 +117,7 @@ fn image_scale_default_survives_parsing_until_frame_realization() {
 
 #[test]
 fn image_dimensions_resolve_gnu_face_relative_units_in_logical_pixels() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let dimensions = DisplayImageDimensionEnvironment::new(14.0, 18.0, 7.2);
     let scale = ImageScaleEnvironment::default();
@@ -162,7 +162,7 @@ fn image_dimensions_resolve_gnu_face_relative_units_in_logical_pixels() {
 
 #[test]
 fn image_ascent_parses_gnu_domain_and_defaults_invalid_values() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     assert_eq!(
         parsed_image_ascent(None),
@@ -192,7 +192,7 @@ fn image_ascent_parses_gnu_domain_and_defaults_invalid_values() {
 
 #[test]
 fn image_margin_preserves_gnu_scalar_and_pair_geometry() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let scalar = Value::list(vec![
         Value::symbol("image"),
@@ -227,7 +227,7 @@ fn image_margin_preserves_gnu_scalar_and_pair_geometry() {
 
 #[test]
 fn image_background_is_only_decoder_input_not_opacity_evidence() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let explicit = Value::list(vec![
         Value::symbol("image"),
@@ -250,7 +250,7 @@ fn image_background_is_only_decoder_input_not_opacity_evidence() {
 
 #[test]
 fn video_opacity_is_clamped_at_the_typed_display_boundary() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let spec = |opacity| {
         Value::list(vec![
             Value::symbol("video"),
@@ -283,7 +283,7 @@ fn video_opacity_is_clamped_at_the_typed_display_boundary() {
 
 #[test]
 fn parse_display_fringe_layout_left_with_face() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let layout = parse_display_fringe_layout(&Value::list(vec![
         Value::symbol("left-fringe"),
         Value::symbol("magit-fringe-bitmap>"),
@@ -301,7 +301,7 @@ fn parse_display_fringe_layout_left_with_face() {
 
 #[test]
 fn parse_display_fringe_layout_right_without_face() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let layout = parse_display_fringe_layout(&Value::list(vec![
         Value::symbol("right-fringe"),
         Value::symbol("right-arrow"),
@@ -314,7 +314,7 @@ fn parse_display_fringe_layout_right_without_face() {
 
 #[test]
 fn parse_display_fringe_layout_rejects_non_fringe_and_missing_bitmap() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // Not a fringe head.
     assert!(
         parse_display_fringe_layout(&Value::list(vec![

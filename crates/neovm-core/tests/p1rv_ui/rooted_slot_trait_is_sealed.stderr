@@ -10,17 +10,17 @@ help: the trait `transport::shared_root::cons_root::sealed::Slot` is not impleme
 3 | struct ForgedRootSlot;
   | ^^^^^^^^^^^^^^^^^^^^^
 help: the following other types implement trait `transport::shared_root::cons_root::sealed::Slot`
- --> src/tagged/transport/cons_root.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/transport/cons_root.rs
   |
   | impl RootSlotOps for SharedRoot {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SharedRoot`
   |
- ::: src/tagged/gc/mutator_registration/root_slot.rs
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/root_slot.rs
   |
   | impl RootSlotOps for OwnerRootSlot<'_> {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `OwnerRootSlot<'_>`
 note: required by a bound in `RootedSlot`
- --> src/tagged/transport/cons_root.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/transport/cons_root.rs
   |
   | pub trait RootedSlot: sealed::Slot {}
   |                       ^^^^^^^^^^^^ required by this bound in `RootedSlot`

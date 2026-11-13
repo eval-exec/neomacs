@@ -7,7 +7,88 @@ license.workspace = true
 repository.workspace = true
 description = "Lower NeoVM runtime utilities shared with the core crate"
 
+[build-dependencies]
+# Host-cfg probe shared by core/system/value/eval (build_support/host_cfg.rs).
+pkg-config.workspace = true
+
 [dependencies]
+# B3 TEST-SUPPORT-VIS: pub only in the test-support build; the
+# annotation is on exact test-provider defs.
+visibility = { version = "0.1.1", optional = true }
+bitflags.workspace = true
+bytemuck.workspace = true
+hashbrown.workspace = true
+libc.workspace = true
+getrandom.workspace = true
+malachite.workspace = true
+memchr.workspace = true
+neovm-display-identity.workspace = true
+num_enum.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, optional = true }
+smallvec.workspace = true
 static_assertions.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
+typed-index-collections.workspace = true
+unicode-general-category.workspace = true
+# Windows process/file identity (moved from core w32/security.rs, stage-4
+# W1/E3e): Foundation handles, the SID/security descriptor queries, and the
+# process-token calls.
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+# The lower layer carries the same cfg vocabulary as `neovm-core`: the moved
+# modules gate code on these names, so the features must exist here even when
+# their only effect is to select already-moved code.  No Cranelift, SQLite or
+# evaluator dependency leaks into the lower layer through them.
+[features]
+default = ["jit", "sqlite"]
+# Diagnostic inventory walks and JSONL records; absent from ordinary builds.
+gc-memory-telemetry = ["dep:serde_json"]
+jit = []
+perf-probes = []
+sqlite = []
+# Markers matching core's forwarding: value's source branches on the dbus and
+# wkwebview host cfgs, so its build script must reach the same host view.
+dbus-vendored = []
+webview = []
+# The moved system-vocabulary table (system_vocab/c_features.rs) decides
+# whether this build advertises GNU's `dynamic-setting` and
+# `system-font-setting` features (src/xsettings.c:1409,1417).  The native
+# GSettings subscription lives in neomacs-display-runtime, which enables
+# neovm-core's feature; core and eval forward it here so the table evaluates
+# the same host view from the crate that now owns the source.  Without this
+# forwarding the runtime reported both features absent even though
+# loadup.el:305 needs `(featurep 'dynamic-setting)` to load
+# lisp/dynamic-setting.el, so a live desktop-font change updated the native
+# preference but never reached the frame.
+desktop-font-settings = []
+# Test-only read surface for core-owned tests of moved modules.  Under peer
+# ruling 02:2xZ (TEST-SUPPORT-VIS, B3) each item needed by a re-homed test
+# keeps its production visibility and gains
+# `#[cfg_attr(feature = "test-support", visibility::make(pub))]`; the visibility
+# crate is compiled only here.  Only neovm-core's [dev-dependencies] may enable
+# this feature (peer ruling A2 and the manifest architecture guard); it is off
+# in every product profile.
+test-support = ["dep:visibility"]
+# Dedicated test-only thread fallback heap (peer ruling 06:4xZ, A-prime;
+# CI amendment 15:2xZ O1): compiles the lazy per-thread TaggedHeap that
+# cfg(test) builds of this crate have always had, for a dependency test
+# graph that cannot see cfg(test).  The compiled-in feature only makes the
+# fallback AVAILABLE: `with_tagged_heap` creates it only after a test tree
+# arms it through the shared test_utils::init_test_tracing, because a
+# unified `cargo nextest archive --workspace` build enables every dev-dep
+# feature for every dependent.  Only the six split crates'
+# [dev-dependencies] enable the feature; no product crate does.
+# Implies test-support so the existing thread_exit_leak cfg arm compiles; no second #[path] mount.
+test-thread-fallback-heap = ["test-support"]
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

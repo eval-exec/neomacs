@@ -1,0 +1,10915 @@
+//! Bytecode virtual machine — stack-based interpreter.
+
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::function_slots::ArgTemplateExt as _;
+use crate::emacs_core::bytecode::function_slots::DynamicArglistExt as _;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
+use crate::emacs_core::bytecode::function_slots::StackParamShapeExt as _;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
+use std::sync::OnceLock;
+
+use crate::emacs_core::jit::NumericFeedbackExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
+use smallvec::SmallVec;
+
+#[path = "frame_bindings.rs"]
+mod frame_bindings;
+use frame_bindings::BindStack;
+
+use super::arith_kind::ArithGenericKind;
+use super::chunk::ByteCodeFunction;
+use super::opcode::Op;
+use crate::emacs_core::builtins;
+use crate::emacs_core::builtins::IntegerOp;
+use crate::emacs_core::eval::{
+    BytecodeBacktraceFrame, BytecodeStackCallDispatch, CallableRoot, ConditionFrame, LispArgVec,
+    ResumeTarget, RootedCallable, lookup_global_subr_entry, subr_call_entry_from_value,
+};
+use neovm_value::error::*;
+use neovm_value::intern::{SymId, intern, lookup_interned, resolve_sym};
+// storage_char_len and storage_substring no longer needed here — using emacs_char + LispString
+use crate::emacs_core::eval::subr_abi::{SubrFn, SubrObj};
+use neovm_value::display_vocab::FrameId;
+use neovm_value::tagged::header::SubrDispatchKind;
+use neovm_value::tagged::value::{FIXNUM_CHECK_MASK, FIXNUM_CHECK_VALUE, FIXNUM_SHIFT};
+use neovm_value::value::*;
+
+/// Dynamic, execution-weighted opcode histogram for the Tier-0 interpreter
+/// dispatch loop. Compiled in ONLY under the `vm-profile` feature, so the
+/// production loop's bump site vanishes entirely — zero cost when off (no env
+/// check, no branch). This is the EXECUTION-weighted op-mix the deferred JIT
+/// work (tier-0 ICs / quickening) needs to size itself; distinct from the
+/// STATIC per-compiled-function op-mix behind `NEOVM_JIT_PROFILE`
+/// (jit/compile.rs), which counts a function's ops once at compile time.
+#[cfg(feature = "vm-profile")]
+pub(crate) mod vm_profile {
+    use super::Op;
+    use neovm_value::intern::SymId;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::fmt::Write as _;
+
+    /// Entry-kind tags for the bytecode call-op that dispatched a builtin.
+    /// Round-2 intrinsics enter the JIT through DIFFERENT lowerings, so the
+    /// adjudication needs to know, per builtin, which op population it comes
+    /// from: `Op::Call` (generic funcall — the `find_spec_sites` speculation
+    /// path from round 1) vs `Op::CallBuiltinSym` (buffer/point ops, the
+    /// `neovm_jit_named_builtin` lowering that would need a NEW spec-site
+    /// extension) vs `Op::CallBuiltin` (constant-pool primitive name).
+    pub(crate) const ENTRY_CALL: u8 = 1;
+    pub(crate) const ENTRY_CALLBUILTINSYM: u8 = 2;
+    pub(crate) const ENTRY_CALLBUILTIN: u8 = 3;
+
+    /// `Op::Call` callee resolution-kind classes (Task-4 counters): what the
+    /// current dispatch path does with the callee value, classified BEFORE the
+    /// call so the closure-vs-builtin split of the `Op::Call` population is
+    /// measured directly instead of derived by subtraction.
+    pub(crate) const CK_BUILTIN_SYM: u8 = 0; // symbol -> subr cell / global subr entry
+    pub(crate) const CK_CLOSURE_SYM: u8 = 1; // symbol -> bytecode cell (re-resolved per call)
+    pub(crate) const CK_OTHER_SYM: u8 = 2; // symbol -> lambda/advice/alias/autoload/void/overrides
+    pub(crate) const CK_CLOSURE_VAL: u8 = 3; // bytecode object callee (no resolution to cache)
+    pub(crate) const CK_SUBR_VAL: u8 = 4; // subr object callee
+    pub(crate) const CK_OTHER_VAL: u8 = 5; // any other callee value
+    pub(crate) const CK_COUNT: usize = 6;
+    const CK_NAMES: [&str; CK_COUNT] = [
+        "builtin-sym (symbol -> subr cell/global entry)",
+        "closure-sym (symbol -> bytecode cell; re-resolved per call)",
+        "other-sym   (lambda/advice/alias/autoload/void/overrides)",
+        "closure-val (bytecode object callee; no resolution)",
+        "subr-val    (subr object callee)",
+        "other-val   (any other callee value)",
+    ];
+
+    /// Per-site callee keys: symbols carry their SymId (tag 1 in the low
+    /// bits); non-symbol callees collapse into one bucket per value class —
+    /// a symbol-keyed call IC cannot cache them, so per-value identity churn
+    /// (fresh closures per iteration) must not masquerade as polymorphism.
+    pub(crate) const SITE_KEY_CLOSURE_VAL: u64 = 2;
+    pub(crate) const SITE_KEY_SUBR_VAL: u64 = 3;
+    pub(crate) const SITE_KEY_OTHER_VAL: u64 = 4;
+    pub(crate) fn site_key_for_symbol(id: SymId) -> u64 {
+        ((id.to_raw() as u64) << 3) | 1
+    }
+    fn site_key_name(key: u64) -> String {
+        if key & 7 == 1 {
+            // SAFETY: round-trip of an interned id stored in a packed site/var-read stats key (peer seal N8).
+            neovm_value::intern::resolve_sym(unsafe { SymId::from_raw((key >> 3) as u32) })
+                .to_string()
+        } else {
+            match key {
+                SITE_KEY_CLOSURE_VAL => "#<closure-val>".to_string(),
+                SITE_KEY_SUBR_VAL => "#<subr-val>".to_string(),
+                _ => "#<other-val>".to_string(),
+            }
+        }
+    }
+
+    /// `Op::VarRef` resolution classes (Task-4 BLV sizing): which branch of
+    /// `fast_path_var_ref`/`lookup_var_id` the read takes. `PLAIN_NIL` is
+    /// interesting on its own: a nil-valued Plainval read still pays a
+    /// buffer-local probe (the buffer-undo-list compat shim), win or lose.
+    pub(crate) const VR_PLAIN: u8 = 0; // Plainval, non-nil, direct return
+    pub(crate) const VR_PLAIN_NIL: u8 = 1; // Plainval nil; buffer-local probe MISSED
+    pub(crate) const VR_PLAIN_NIL_BLV: u8 = 2; // Plainval nil; buffer-local probe HIT
+    pub(crate) const VR_LOCALIZED: u8 = 3; // SYMBOL_LOCALIZED (true BLV machinery)
+    pub(crate) const VR_FORWARDED: u8 = 4; // SYMBOL_FORWARDED (per-buffer/C slot)
+    pub(crate) const VR_SLOW_OTHER: u8 = 5; // unbound/alias-to-plain/error paths
+    pub(crate) const VR_COUNT: usize = 6;
+    const VR_NAMES: [&str; VR_COUNT] = [
+        "plain         (Plainval non-nil, direct)",
+        "plain-nil     (Plainval nil; BLV probe MISS — probe still paid)",
+        "plain-nil-blv (Plainval nil; BLV probe HIT — buffer-local value)",
+        "localized     (SYMBOL_LOCALIZED — true BLV machinery)",
+        "forwarded     (SYMBOL_FORWARDED — per-buffer/C slot)",
+        "slow-other    (unbound / alias-to-plain / error paths)",
+    ];
+
+    /// (function identity, call-site pc) — one bytecode `Op::Call` site.
+    type SiteId = (usize, u32);
+    /// Per-site callee histogram rows: (callee key, execution count).
+    type SiteRows = Vec<(u64, u64)>;
+
+    thread_local! {
+        static OP_COUNTS: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
+        /// Adjacent executed-opcode PAIRS, and the previous op's name.
+        ///
+        /// Single-op frequencies say which arms are hot; they do not say which
+        /// FUSIONS are worth writing. A superinstruction (the existing
+        /// `Dup`/`StackRef`/`Lss`/`GotoIfNil` arm is one) removes a dispatch
+        /// only for the pair it matches, so the pair distribution is what
+        /// justifies adding another.
+        static OP_PAIR_COUNTS: RefCell<HashMap<(String, String), u64>> =
+            RefCell::new(HashMap::new());
+        static PREV_OP: RefCell<Option<String>> = const { RefCell::new(None) };
+        static SUBR_COUNTS: RefCell<HashMap<SymId, u64>> = RefCell::new(HashMap::new());
+        /// (callee SymId, ENTRY_* tag) -> count of bytecode call-ops that
+        /// dispatched that callee through that op. Populated at the run_loop
+        /// call arms (not `subr_entry_from_value`), so each count attributes to
+        /// the STATIC callee symbol of the exact op that issued the call — the
+        /// Op::Call-vs-CallBuiltinSym entry split the round-2 report needs.
+        static ENTRY_COUNTS: RefCell<HashMap<(u32, u8), u64>> = RefCell::new(HashMap::new());
+        /// Execution counts per CK_* resolution kind at the Op::Call arm.
+        static CALL_KIND_COUNTS: RefCell<[u64; CK_COUNT]> = const { RefCell::new([0; CK_COUNT]) };
+        /// (function identity, call-site pc) -> per-site callee histogram.
+        /// Identity is the `&ByteCodeFunction` address: stable while alive
+        /// (non-moving GC); free-then-reuse ABA is acceptable measurement
+        /// noise. Execution-WEIGHTED, unlike the JIT `FeedbackVec` (a 3-state
+        /// lattice, per-instance, not enumerable without a heap walk) — this
+        /// is the per-site polymorphism table the T1 report flagged missing.
+        static CALL_SITES: RefCell<HashMap<SiteId, SiteRows>> = RefCell::new(HashMap::new());
+        /// (symbol, VR_* class) -> Op::VarRef read count.
+        static VARREF_COUNTS: RefCell<HashMap<(u32, u8), u64>> = RefCell::new(HashMap::new());
+        /// Reads whose resolution crossed a variable alias (any class).
+        static VARREF_ALIAS: RefCell<u64> = const { RefCell::new(0) };
+    }
+
+    /// Bump the per-builtin call histogram. Hooked at `subr_entry_from_value`
+    /// (eval.rs), the single resolver every subr dispatch path funnels through
+    /// (tree-walk eval, Op::Call funcall, and CallBuiltinSym via
+    /// funcall_general), so this ranks WHICH builtins a workload actually
+    /// calls — the input the JIT builtin-intrinsics work needs (the op
+    /// histogram above strips the callee).
+    pub(crate) fn bump_subr(id: SymId) {
+        SUBR_COUNTS.with(|c| {
+            *c.borrow_mut().entry(id).or_insert(0) += 1;
+        });
+    }
+
+    /// Record a bytecode call-op targeting `sym`, split by the dispatching op
+    /// (`ENTRY_*`). Hooked in `run_loop`'s `Op::Call`/`Op::CallBuiltin`/
+    /// `Op::CallBuiltinSym` arms so the round-2 report can show, per builtin,
+    /// the Op::Call-vs-CallBuiltinSym entry split (the two lowerings).
+    ///
+    /// This is a superset denominator of `bump_subr`: an `Op::Call` whose
+    /// callee is a bytecode object (not a subr) also lands here, but such rows
+    /// are filtered out of the ranking, which is keyed by the SUBR-MIX totals.
+    /// Conversely, calls that never traverse `run_loop` (tree-walked eval,
+    /// direct `funcall`/`apply`) are counted only in the SUBR-MIX total and
+    /// show up as the report's "other" column.
+    pub(crate) fn bump_entry(sym: SymId, kind: u8) {
+        ENTRY_COUNTS.with(|c| {
+            *c.borrow_mut().entry((sym.to_raw(), kind)).or_insert(0) += 1;
+        });
+    }
+
+    /// Bump the executed-op histogram (once per dispatched op while profiling).
+    /// Keyed by the variant name without operands ("StackRef(3)" -> "StackRef").
+    pub(crate) fn bump(op: &Op) {
+        let dbg = format!("{op:?}");
+        let name = dbg.split(['(', ' ', '{']).next().unwrap_or(dbg.as_str());
+        OP_COUNTS.with(|c| {
+            let mut m = c.borrow_mut();
+            if let Some(v) = m.get_mut(name) {
+                *v += 1;
+            } else {
+                m.insert(name.to_string(), 1);
+            }
+        });
+        PREV_OP.with(|prev| {
+            let mut prev = prev.borrow_mut();
+            if let Some(prev_name) = prev.as_deref() {
+                OP_PAIR_COUNTS.with(|c| {
+                    let mut m = c.borrow_mut();
+                    if let Some(v) = m.get_mut(&(prev_name.to_string(), name.to_string())) {
+                        *v += 1;
+                    } else {
+                        m.insert((prev_name.to_string(), name.to_string()), 1);
+                    }
+                });
+            }
+            *prev = Some(name.to_string());
+        });
+    }
+
+    /// Record one `Op::Call` execution: its CK_* resolution kind plus the
+    /// callee key under its call site (function identity, pc).
+    pub(crate) fn bump_call_site(func_ident: usize, pc: u32, key: u64, kind: u8) {
+        CALL_KIND_COUNTS.with(|c| c.borrow_mut()[kind as usize] += 1);
+        CALL_SITES.with(|c| {
+            let mut m = c.borrow_mut();
+            let per_site = m.entry((func_ident, pc)).or_default();
+            if let Some(row) = per_site.iter_mut().find(|row| row.0 == key) {
+                row.1 += 1;
+            } else {
+                per_site.push((key, 1));
+            }
+        });
+    }
+
+    /// Record one `Op::VarRef` execution under its symbol + VR_* class.
+    pub(crate) fn bump_varref(sym: SymId, class: u8, via_alias: bool) {
+        VARREF_COUNTS.with(|c| {
+            *c.borrow_mut().entry((sym.to_raw(), class)).or_insert(0) += 1;
+        });
+        if via_alias {
+            VARREF_ALIAS.with(|c| *c.borrow_mut() += 1);
+        }
+    }
+
+    /// Clear the histograms (call before a measured workload).
+    pub(crate) fn reset() {
+        OP_COUNTS.with(|c| c.borrow_mut().clear());
+        OP_PAIR_COUNTS.with(|c| c.borrow_mut().clear());
+        PREV_OP.with(|c| *c.borrow_mut() = None);
+        SUBR_COUNTS.with(|c| c.borrow_mut().clear());
+        ENTRY_COUNTS.with(|c| c.borrow_mut().clear());
+        CALL_KIND_COUNTS.with(|c| *c.borrow_mut() = [0; CK_COUNT]);
+        CALL_SITES.with(|c| c.borrow_mut().clear());
+        VARREF_COUNTS.with(|c| c.borrow_mut().clear());
+        VARREF_ALIAS.with(|c| *c.borrow_mut() = 0);
+        crate::emacs_core::eval::reset_var_cache_events();
+    }
+
+    /// Format the OP-MIX + SUBR-MIX (with the per-builtin entry split) into a
+    /// String. Shared by [`dump`] and the `neovm--vm-profile-dump` debug subr.
+    pub(crate) fn report(label: &str) -> String {
+        let mut out = String::new();
+        let mut rows: Vec<(String, u64)> =
+            OP_COUNTS.with(|c| c.borrow().iter().map(|(k, v)| (k.clone(), *v)).collect());
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let total: u64 = rows.iter().map(|r| r.1).sum();
+        let _ = writeln!(
+            out,
+            "=== OP-MIX [{label}]: {total} ops executed, {} distinct ===",
+            rows.len()
+        );
+        for (name, count) in &rows {
+            let pct = 100.0 * *count as f64 / total.max(1) as f64;
+            let _ = writeln!(out, "  {name:<16} {count:>12}  {pct:5.2}%");
+        }
+
+        // Adjacent pairs: which superinstruction would actually pay.
+        let mut pair_rows: Vec<((String, String), u64)> =
+            OP_PAIR_COUNTS.with(|c| c.borrow().iter().map(|(k, v)| (k.clone(), *v)).collect());
+        pair_rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let pair_total: u64 = pair_rows.iter().map(|r| r.1).sum();
+        let _ = writeln!(
+            out,
+            "=== OP-PAIRS [{label}]: {pair_total} transitions, {} distinct ===",
+            pair_rows.len()
+        );
+        for ((a, b), count) in pair_rows.iter().take(25) {
+            let pct = 100.0 * *count as f64 / pair_total.max(1) as f64;
+            let _ = writeln!(out, "  {a:<16} -> {b:<16} {count:>12}  {pct:5.2}%");
+        }
+
+        let entry: HashMap<(u32, u8), u64> = ENTRY_COUNTS.with(|c| c.borrow().clone());
+        let mut subr_rows: Vec<(SymId, u64)> =
+            SUBR_COUNTS.with(|c| c.borrow().iter().map(|(k, v)| (*k, *v)).collect());
+        subr_rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_raw().cmp(&b.0.to_raw())));
+        let subr_total: u64 = subr_rows.iter().map(|r| r.1).sum();
+        let _ = writeln!(
+            out,
+            "=== SUBR-MIX [{label}]: {subr_total} builtin calls, {} distinct ===",
+            subr_rows.len()
+        );
+        let _ = writeln!(
+            out,
+            "  (entry split: Op::Call | CBSym=CallBuiltinSym | CBtin=CallBuiltin | other=tree-walk/funcall)"
+        );
+        let _ = writeln!(
+            out,
+            "  {:<28} {:>12} {:>6}  {:>11} {:>11} {:>8} {:>11}",
+            "builtin", "calls", "%", "Op::Call", "CBSym", "CBtin", "other"
+        );
+        for (id, count) in subr_rows.iter().take(120) {
+            let name = neovm_value::intern::resolve_sym(*id);
+            let pct = 100.0 * *count as f64 / subr_total.max(1) as f64;
+            let opcall = entry.get(&(id.to_raw(), ENTRY_CALL)).copied().unwrap_or(0);
+            let cbsym = entry
+                .get(&(id.to_raw(), ENTRY_CALLBUILTINSYM))
+                .copied()
+                .unwrap_or(0);
+            let cbtin = entry
+                .get(&(id.to_raw(), ENTRY_CALLBUILTIN))
+                .copied()
+                .unwrap_or(0);
+            let other = count.saturating_sub(opcall + cbsym + cbtin);
+            let _ = writeln!(
+                out,
+                "  {name:<28} {count:>12} {pct:5.2}%  {opcall:>11} {cbsym:>11} {cbtin:>8} {other:>11}"
+            );
+        }
+
+        // --- CALL-KIND: closure-vs-builtin split of the Op::Call population ---
+        let kinds = CALL_KIND_COUNTS.with(|c| *c.borrow());
+        let kind_total: u64 = kinds.iter().sum();
+        let _ = writeln!(
+            out,
+            "=== CALL-KIND [{label}]: {kind_total} Op::Call executions ==="
+        );
+        for (i, name) in CK_NAMES.iter().enumerate() {
+            let count = kinds[i];
+            let pct = 100.0 * count as f64 / kind_total.max(1) as f64;
+            let _ = writeln!(out, "  {name:<60} {count:>12}  {pct:5.2}%");
+        }
+
+        // --- CALL-SITES: execution-weighted per-site polymorphism ---
+        let sites: Vec<(SiteId, SiteRows)> =
+            CALL_SITES.with(|c| c.borrow().iter().map(|(k, v)| (*k, v.clone())).collect());
+        let site_total_execs: u64 = sites.iter().flat_map(|s| s.1.iter().map(|r| r.1)).sum();
+        let _ = writeln!(
+            out,
+            "=== CALL-SITES [{label}]: {} sites, {site_total_execs} executions ===",
+            sites.len()
+        );
+        let mut by_arity = [(0u64, 0u64); 3]; // [1, 2, >=3] -> (sites, execs)
+        let mut nonsym = (0u64, 0u64); // sites with any non-symbol callee key
+        for (_, rows) in &sites {
+            let execs: u64 = rows.iter().map(|r| r.1).sum();
+            let bucket = (rows.len().min(3)) - 1;
+            by_arity[bucket].0 += 1;
+            by_arity[bucket].1 += execs;
+            if rows.iter().any(|r| r.0 & 7 != 1) {
+                nonsym.0 += 1;
+                nonsym.1 += rows
+                    .iter()
+                    .filter(|r| r.0 & 7 != 1)
+                    .map(|r| r.1)
+                    .sum::<u64>();
+            }
+        }
+        for (i, label_txt) in ["1 callee (monomorphic)", "2 callees", ">=3 callees"]
+            .iter()
+            .enumerate()
+        {
+            let (s, e) = by_arity[i];
+            let spct = 100.0 * s as f64 / (sites.len().max(1)) as f64;
+            let epct = 100.0 * e as f64 / site_total_execs.max(1) as f64;
+            let _ = writeln!(
+                out,
+                "  {label_txt:<24} {s:>8} sites {spct:5.2}%  |  {e:>12} execs {epct:5.2}%"
+            );
+        }
+        let _ = writeln!(
+            out,
+            "  non-symbol-callee execs: {} (at {} sites) — not symbol-IC-cacheable",
+            nonsym.1, nonsym.0
+        );
+        let mut poly: Vec<&(SiteId, SiteRows)> = sites.iter().filter(|s| s.1.len() > 1).collect();
+        poly.sort_by_key(|s| std::cmp::Reverse(s.1.iter().map(|r| r.1).sum::<u64>()));
+        for ((func_ident, pc), rows) in poly.iter().take(12) {
+            let execs: u64 = rows.iter().map(|r| r.1).sum();
+            let mut rows = rows.clone();
+            rows.sort_by_key(|r| std::cmp::Reverse(r.1));
+            let callees = rows
+                .iter()
+                .map(|(k, n)| format!("{}({n})", site_key_name(*k)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let _ = writeln!(
+                out,
+                "  poly site fn@{func_ident:#x} pc={pc} execs={execs}: {callees}"
+            );
+        }
+
+        // --- VARREF-MIX: per-class + per-symbol Op::VarRef breakdown ---
+        let varrefs: Vec<((u32, u8), u64)> =
+            VARREF_COUNTS.with(|c| c.borrow().iter().map(|(k, v)| (*k, *v)).collect());
+        let vr_total: u64 = varrefs.iter().map(|r| r.1).sum();
+        let mut vr_class = [0u64; VR_COUNT];
+        let mut per_sym: HashMap<u32, [u64; VR_COUNT]> = HashMap::new();
+        for ((sym, class), count) in &varrefs {
+            vr_class[*class as usize] += count;
+            per_sym.entry(*sym).or_default()[*class as usize] += count;
+        }
+        let _ = writeln!(
+            out,
+            "=== VARREF-MIX [{label}]: {vr_total} reads, {} distinct symbols ===",
+            per_sym.len()
+        );
+        for (i, name) in VR_NAMES.iter().enumerate() {
+            let count = vr_class[i];
+            let pct = 100.0 * count as f64 / vr_total.max(1) as f64;
+            let _ = writeln!(out, "  {name:<64} {count:>12}  {pct:5.2}%");
+        }
+        let alias = VARREF_ALIAS.with(|c| *c.borrow());
+        let _ = writeln!(out, "  via-alias (any class): {alias}");
+        let blv_value = vr_class[VR_PLAIN_NIL_BLV as usize] + vr_class[VR_LOCALIZED as usize];
+        let buffer_consulting =
+            blv_value + vr_class[VR_PLAIN_NIL as usize] + vr_class[VR_FORWARDED as usize];
+        let _ = writeln!(
+            out,
+            "  buffer-local VALUE reads (plain-nil-blv+localized): {blv_value} ({:.2}%)",
+            100.0 * blv_value as f64 / vr_total.max(1) as f64
+        );
+        let _ = writeln!(
+            out,
+            "  buffer-CONSULTING reads (+plain-nil probes+forwarded): {buffer_consulting} ({:.2}%)",
+            100.0 * buffer_consulting as f64 / vr_total.max(1) as f64
+        );
+        let mut sym_rows: Vec<(u32, [u64; VR_COUNT], u64)> = per_sym
+            .into_iter()
+            .map(|(sym, classes)| (sym, classes, classes.iter().sum::<u64>()))
+            .collect();
+        sym_rows.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+        let _ = writeln!(
+            out,
+            "  {:<36} {:>11} {:>6} | {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}",
+            "symbol", "reads", "%", "plain", "pl-nil", "nil-blv", "localizd", "forward", "slow"
+        );
+        for (sym, classes, total) in sym_rows.iter().take(40) {
+            // SAFETY: round-trip of an interned id stored in a packed site/var-read stats key (peer seal N8).
+            let name = neovm_value::intern::resolve_sym(unsafe { SymId::from_raw(*sym) });
+            let pct = 100.0 * *total as f64 / vr_total.max(1) as f64;
+            let _ = writeln!(
+                out,
+                "  {name:<36} {total:>11} {pct:5.2}% | {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}",
+                classes[0], classes[1], classes[2], classes[3], classes[4], classes[5]
+            );
+        }
+        // --- VAR-CACHE: the P1.4 Stage A cached variable tiers ---
+        out.push_str(&crate::emacs_core::eval::var_cache_census_report(label));
+        out
+    }
+
+    /// Print the OP-MIX + SUBR-MIX (with entry split) to stderr.
+    pub(crate) fn dump(label: &str) {
+        eprint!("{}", report(label));
+    }
+}
+
+/// Local marker for catch/condition-case frames mirrored into the shared
+/// condition runtime.
+#[derive(Clone, Debug)]
+enum Handler {
+    /// Local marker corresponding to a catch/condition-case frame already
+    /// stored in `Context.condition_stack`.
+    Condition,
+}
+
+type HandlerStack = SmallVec<[Handler; 4]>;
+#[cfg(test)]
+thread_local! {
+    static RUN_LOOP_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static RUN_LOOP_MAX_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ITERATIVE_CONTEXT_BC_FRAMES_MAX: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static GENERIC_BYTECODE_CLEANUP_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static OPCODE_DISPATCH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static INLINE_BUILTIN_DIRECT_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ARITH_INTEGER_FAST_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// TEST-ONLY: direct all-integer answers `Vm::arith_integer_fast` has given
+/// on this thread (engagement evidence for the interpreter and JIT tests).
+#[cfg(test)]
+pub(crate) fn arith_integer_fast_count() -> usize {
+    ARITH_INTEGER_FAST_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+struct RunLoopDepthGuard;
+
+#[cfg(test)]
+impl RunLoopDepthGuard {
+    #[doc(hidden)]
+    pub fn enter() -> Self {
+        RUN_LOOP_DEPTH.with(|depth| {
+            let current = depth.get() + 1;
+            depth.set(current);
+            RUN_LOOP_MAX_DEPTH.with(|maximum| maximum.set(maximum.get().max(current)));
+        });
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for RunLoopDepthGuard {
+    fn drop(&mut self) {
+        RUN_LOOP_DEPTH.with(|depth| depth.set(depth.get() - 1));
+    }
+}
+
+#[cfg(test)]
+fn reset_run_loop_max_depth() {
+    RUN_LOOP_DEPTH.with(|depth| depth.set(0));
+    RUN_LOOP_MAX_DEPTH.with(|maximum| maximum.set(0));
+}
+
+#[cfg(test)]
+fn run_loop_max_depth() -> usize {
+    RUN_LOOP_MAX_DEPTH.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn reset_iterative_context_bc_frames_max() {
+    ITERATIVE_CONTEXT_BC_FRAMES_MAX.with(|maximum| maximum.set(0));
+}
+
+#[cfg(test)]
+fn observe_iterative_context_bc_frames_len(len: usize) {
+    ITERATIVE_CONTEXT_BC_FRAMES_MAX.with(|maximum| maximum.set(maximum.get().max(len)));
+}
+
+#[cfg(test)]
+fn iterative_context_bc_frames_max() -> usize {
+    ITERATIVE_CONTEXT_BC_FRAMES_MAX.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn reset_generic_bytecode_cleanup_count() {
+    GENERIC_BYTECODE_CLEANUP_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn generic_bytecode_cleanup_count() -> usize {
+    GENERIC_BYTECODE_CLEANUP_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn reset_opcode_dispatch_count() {
+    OPCODE_DISPATCH_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn opcode_dispatch_count() -> usize {
+    OPCODE_DISPATCH_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn reset_inline_builtin_direct_count() {
+    INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn inline_builtin_direct_count() -> usize {
+    INLINE_BUILTIN_DIRECT_COUNT.with(std::cell::Cell::get)
+}
+
+use crate::emacs_core::eval::SpecBinding;
+
+#[cold]
+#[inline(never)]
+fn invalid_bytecode_flow() -> Flow {
+    signal("error", vec![Value::string("Invalid byte-code")])
+}
+
+/// GNU bytecode.c:538-541 signals the raw descriptor pair (mandatory .
+/// nonrest), even when the `&rest` bit is set; a frame the host cannot
+/// represent is invalid byte-code.
+#[cold]
+#[inline(never)]
+fn stack_call_shape_flow(
+    template: super::ArgTemplate,
+    nargs: usize,
+    error: super::function_slots::CallShapeError,
+) -> Flow {
+    match error {
+        super::function_slots::CallShapeError::Arity => signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::cons(
+                    Value::fixnum(template.mandatory() as i64),
+                    Value::fixnum(template.nonrest()),
+                ),
+                Value::fixnum(nargs as i64),
+            ],
+        ),
+        super::function_slots::CallShapeError::Shape(_) => invalid_bytecode_flow(),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn trace_invalid_bytecode_site(
+    func: &ByteCodeFunction,
+    reason: &str,
+    pc: usize,
+    frame_base: usize,
+    frame_limit: usize,
+    stack_len: usize,
+    op: Option<&Op>,
+) {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    if !*ENABLED.get_or_init(|| std::env::var_os("NEOMACS_TRACE_INVALID_BYTECODE").is_some()) {
+        return;
+    }
+
+    let ops = func.executable_ops();
+    let gnu_byte_offset = func.executable_gnu_byte_offset_map().and_then(|map| {
+        map.iter()
+            .find_map(|entry| (entry.instruction_index == pc).then_some(entry.byte_offset))
+    });
+    let op_window_start = pc.saturating_sub(8);
+    let op_window_end = (pc + 8).min(ops.len());
+    let op_window = ops[op_window_start..op_window_end]
+        .iter()
+        .enumerate()
+        .map(|(idx, op)| format!("{}:{:?}", op_window_start + idx, op))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let raw_bytes = func.gnu_bytecode_bytes.as_ref().map(|bytes| {
+        let start = gnu_byte_offset.unwrap_or(0).saturating_sub(12);
+        let end = (gnu_byte_offset.unwrap_or(0) + 24).min(bytes.len());
+        bytes[start..end]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    });
+    tracing::error!(
+        reason,
+        pc,
+        gnu_byte_offset,
+        ?op,
+        op_window,
+        raw_bytes,
+        stack_len,
+        frame_base,
+        frame_limit,
+        max_stack = func.max_stack.get(),
+        ops_len = ops.len(),
+        constants_len = func.constants.len(),
+        lexical = func.lexical,
+        "Invalid byte-code"
+    );
+}
+
+/// A6: register-resident operand-stack cursor for `run_loop`.
+///
+/// Holds the operand stack's base pointer and logical length in locals so
+/// per-opcode stack traffic is plain pointer arithmetic instead of a
+/// `self.ctx.bc_buf` pointer/len load chain plus a len store per op. GNU
+/// Emacs keeps `top` and `pc` in registers the same way (bytecode.c, "The
+/// interpreter can be compiled one of two ways" / exec_byte_code locals).
+///
+/// GNU can leave `top` unpublished across calls because its GC marks the
+/// whole `maxdepth` region of each bytecode frame conservatively. Our GC is
+/// precise — the roots are exactly `bc_buf[..len]` at a safe point — so this
+/// cursor imposes a publication discipline instead:
+///
+/// - `publish` (which takes `self` BY VALUE) writes the logical length back
+///   into `bc_buf` before any escape into `Context`/eval that could reach a
+///   GC safe point, run Lisp, or push/truncate `bc_buf`. Because `publish`
+///   moves the cursor, any stale use after an escape is a borrow-check error,
+///   and `acquire` must re-derive base+len afterwards (the Vec may have
+///   reallocated).
+/// - The cursor itself never grows the Vec: pushes are bounded by
+///   `frame_limit`, whose capacity `run_frame` reserved up front. Vec-growing
+///   operations (e.g. Op::Apply's list spread) run published.
+/// - In debug builds a thread-local flag turns a missed publication before GC
+///   into a deterministic panic instead of silent heap corruption; GC entry
+///   asserts it via `debug_assert_no_live_stack_cursor`.
+pub(crate) struct StackCursor {
+    base: *mut Value,
+    len: usize,
+}
+
+/// Sole-owner interpreter phase, coupled to the existing operand cursor.
+///
+/// The witness contains no manager pointer. The closed World builder proves
+/// exactly one Context owns the views; Vm.ctx remains the actual owner borrow.
+/// Publication consumes both parts before synchronous callbacks/GC. Private
+/// driver code must rejoin the original VM; the ZST proves construction policy
+/// and phase consumption, not owner identity. This permits no second facade or yield.
+#[must_use = "publish this phase before an operation that can run Lisp or collect"]
+struct RunLoopCursor {
+    operands: StackCursor,
+    phase: crate::emacs_core::eval::world::SoleOwnerDriver,
+}
+
+/// Published operands have no usable cursor or manager projection.
+#[derive(Debug)]
+#[must_use = "consume this return capability when the original VM rejoins"]
+struct PublishedSolePhase {
+    phase: crate::emacs_core::eval::world::PublishedSoleOwnerDriver,
+}
+static_assertions::assert_not_impl_any!(RunLoopCursor: Send, Sync, Copy, Clone);
+static_assertions::assert_not_impl_any!(PublishedSolePhase: Send, Sync, Copy, Clone);
+static_assertions::assert_eq_size!(RunLoopCursor, StackCursor);
+static_assertions::const_assert_eq!(
+    std::mem::align_of::<RunLoopCursor>(),
+    std::mem::align_of::<StackCursor>()
+);
+static_assertions::const_assert_eq!(std::mem::size_of::<PublishedSolePhase>(), 0);
+
+impl std::fmt::Debug for RunLoopCursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunLoopCursor")
+            .field("operand_base", &self.operands.base)
+            .field("operand_len", &self.operands.len)
+            .field("phase", &self.phase)
+            .finish()
+    }
+}
+
+impl RunLoopCursor {
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn acquire(
+        vm: &mut Vm<'_>,
+        phase: crate::emacs_core::eval::world::SoleOwnerDriver,
+    ) -> Self {
+        Self {
+            operands: StackCursor::acquire(vm.ctx),
+            phase,
+        }
+    }
+
+    /// The private driver keeps the existing two operand words in locals.
+    /// The affine policy witness must move back with them before every escape.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (StackCursor, crate::emacs_core::eval::world::SoleOwnerDriver) {
+        (self.operands, self.phase)
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn publish(self, vm: &mut Vm<'_>) -> PublishedSolePhase {
+        self.operands.publish(vm.ctx);
+        PublishedSolePhase {
+            phase: self.phase.into_published(),
+        }
+    }
+}
+
+impl PublishedSolePhase {
+    /// Rejoin through the original VM receiver retained by the private driver.
+    /// No identity is encoded in the ZST; this receiver policy remains audited.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn rejoin(self, vm: &mut Vm<'_>) -> RunLoopCursor {
+        RunLoopCursor::acquire(vm, self.phase.into_running())
+    }
+
+    /// Retire a published activation on a normal or nonlocal final exit.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn finish(self) {}
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static STACK_CURSOR_LIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Debug hook for GC entry points: a collection must never observe a live
+/// (unpublished) operand-stack cursor — it would mark a stale stack length.
+#[cfg(debug_assertions)]
+pub(crate) fn debug_assert_no_live_stack_cursor() {
+    STACK_CURSOR_LIVE.with(|flag| {
+        assert!(
+            !flag.get(),
+            "GC entered while a bytecode StackCursor held unpublished stack state"
+        );
+    });
+}
+
+impl StackCursor {
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn acquire(ctx: &mut crate::emacs_core::eval::Context) -> Self {
+        #[cfg(debug_assertions)]
+        STACK_CURSOR_LIVE.with(|flag| {
+            assert!(!flag.get(), "acquired a StackCursor while another is live");
+            flag.set(true);
+        });
+        Self {
+            base: ctx.bc_buf.as_mut_ptr(),
+            len: ctx.bc_buf.len(),
+        }
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn publish(self, ctx: &mut crate::emacs_core::eval::Context) {
+        #[cfg(debug_assertions)]
+        STACK_CURSOR_LIVE.with(|flag| flag.set(false));
+        debug_assert!(self.len <= ctx.bc_buf.capacity());
+        // SAFETY: every slot below `len` was either already initialized in
+        // bc_buf or written through the cursor; Value is Copy with no Drop.
+        unsafe { ctx.bc_buf.set_len(self.len) }
+    }
+
+    /// Debug-only: mirror the live length into the context so
+    /// Context-side debug assertions (which cannot see the cursor) stay
+    /// accurate while the cursor remains live across the iterative call
+    /// transition. Release builds never observe the stale length on this
+    /// path.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn debug_sync_len(&self, ctx: &mut crate::emacs_core::eval::Context) {
+        debug_assert!(self.len <= ctx.bc_buf.capacity());
+        // SAFETY: same initialization argument as `publish`.
+        unsafe { ctx.bc_buf.set_len(self.len) }
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn pop(&mut self) -> Option<Value> {
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        // SAFETY: len was > 0, so slot len-1 is initialized.
+        Some(unsafe { self.base.add(self.len).read() })
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn truncate(&mut self, new_len: usize) {
+        if new_len < self.len {
+            self.len = new_len;
+        }
+    }
+
+    /// SAFETY: caller must have checked `self.len < frame_limit`, and
+    /// `frame_limit <= bc_buf.capacity()` (reserved by run_frame).
+    #[inline(always)]
+    #[doc(hidden)]
+    pub unsafe fn push_unchecked(&mut self, value: Value) {
+        unsafe { self.base.add(self.len).write(value) };
+        self.len += 1;
+    }
+}
+
+impl std::ops::Deref for StackCursor {
+    type Target = [Value];
+    #[inline(always)]
+    fn deref(&self) -> &[Value] {
+        // SAFETY: base/len describe the initialized prefix of bc_buf, which
+        // cannot move while the cursor is live (no Vec growth unpublished).
+        unsafe { std::slice::from_raw_parts(self.base, self.len) }
+    }
+}
+
+impl std::ops::DerefMut for StackCursor {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut [Value] {
+        // SAFETY: as Deref, and the cursor has exclusive access to the frame.
+        unsafe { std::slice::from_raw_parts_mut(self.base, self.len) }
+    }
+}
+
+/// One-word proof that a call target resolved to an ordinary builtin subr.
+///
+/// A symbol value denotes the legacy static-table fallback; a subr value is
+/// the exact live function-cell object read by Bcall. Constructors validate
+/// the corresponding metadata before creating the token, so dispatch can
+/// materialize the relatively large [`SubrEntry`] only after selecting the
+/// builtin branch.
+/// A builtin resolved for a stack call: the subr `Value` itself. The call
+/// reads arity and the function pointer straight off the `SubrObj` it points
+/// at (`dispatch_parts`) -- GNU's `Lisp_Subr *` in hand -- instead of copying
+/// a 56-byte registry entry out of a thread-local per call. One word, so the
+/// classification stays register-sized through every Bcall.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub(crate) struct ResolvedBuiltinCallee(Value);
+
+/// One-word proof that a value is the bytecode object read from a symbol's
+/// live function cell.
+///
+/// The wrapper is deliberately distinct from an arbitrary [`Value`]: only a
+/// successfully classified function-cell read can populate the symbol-call
+/// cache, so a cache hit can skip both the paged symbol lookup and the heap
+/// kind check without making an unchecked value callable.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct ResolvedByteCodeCallee(Value);
+
+/// Proof that a resolved bytecode callee may enter the current Tier-0 driver
+/// directly for the exact argument count carried by its cache key.
+///
+/// Construction is private to [`Vm::resolve_interpreter_stack_call_target`]:
+/// it requires both an interpreter-only execution policy and GNU
+/// `setup_frame` eligibility.  Keeping this distinct from a merely resolved
+/// bytecode object makes accidentally bypassing adaptive tier dispatch or
+/// arity handling unrepresentable at the call site.
+#[derive(Clone, Copy)]
+struct PreparedInterpreterCall {
+    callee: ResolvedByteCodeCallee,
+    /// Resolved once, when this cache entry was filled.
+    code: ActiveCodeView,
+}
+
+/// Result of GNU `Bcall`'s single live function-cell read.
+///
+/// Keeping this closed prevents the bytecode call path from first probing one
+/// target class and then re-resolving the same mutable symbol cell in a second
+/// helper.  Every direct branch carries the exact live callee it classified;
+/// aliases, autoloads, advice and compiler overrides remain on `Generic`.
+#[derive(Clone, Copy)]
+enum ResolvedStackCallTarget {
+    Interpreter {
+        call: PreparedInterpreterCall,
+    },
+    ByteCode {
+        callee: ResolvedByteCodeCallee,
+    },
+    Builtin {
+        callee: ResolvedBuiltinCallee,
+    },
+    /// A builtin with a Bcall leaf, resolved under `NEOVM_VM_LEAF`
+    /// (`vm_leaf`): the call runs the leaf and pushes GNU's frame only when
+    /// it signals.
+    BuiltinLeaf {
+        callee: ResolvedBuiltinCallee,
+        leaf: crate::emacs_core::subr::leaf::LeafId,
+    },
+    Generic,
+}
+
+#[derive(Clone, Copy)]
+struct InterpreterFrameCleanup {
+    condition_stack_base: usize,
+    specpdl_base: usize,
+}
+
+/// Storage protocol for the Lisp value that keeps an executing bytecode
+/// function alive.
+///
+/// Entry/recursive frames own a `Context::bc_frames` entry. Iterative children
+/// instead reuse the caller's consumed function-designator operand. Keeping
+/// release behind closed marker types makes popping the context stack for an
+/// operand-rooted child impossible at the call site, with no runtime tag or
+/// extra field in [`InterpreterFrame`].
+trait BytecodeFrameRootStorage {
+    fn release(ctx: &mut crate::emacs_core::eval::Context);
+}
+
+enum ContextBytecodeFrameRoot {}
+
+impl BytecodeFrameRootStorage for ContextBytecodeFrameRoot {
+    #[inline(always)]
+    fn release(ctx: &mut crate::emacs_core::eval::Context) {
+        ctx.bc_frames.pop();
+    }
+}
+
+enum ConsumedCallOperandFrameRoot {}
+
+impl BytecodeFrameRootStorage for ConsumedCallOperandFrameRoot {
+    #[inline(always)]
+    fn release(_ctx: &mut crate::emacs_core::eval::Context) {}
+}
+
+/// Suspended Tier-0 execution position, including the JIT OSR latch.
+///
+/// GNU's `bc_frame` saves one program-counter pointer. Neomacs also needs to
+/// remember whether it already attempted OSR in that frame, but a live Rust
+/// `Vec<Op>` index can never occupy usize's high bit: allocations are bounded
+/// by `isize::MAX` bytes. Packing the latch there keeps the resume state one
+/// word wide and makes frame copies match GNU's compact saved-register shape.
+#[cfg(feature = "jit")]
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct InterpreterResumePoint(usize);
+
+#[cfg(feature = "jit")]
+impl InterpreterResumePoint {
+    #[doc(hidden)]
+    pub const OSR_TRIED_FLAG: usize = 1usize << (usize::BITS - 1);
+    #[doc(hidden)]
+    pub const PC_MASK: usize = !Self::OSR_TRIED_FLAG;
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn new(pc: usize, osr_tried: bool) -> Self {
+        debug_assert_eq!(
+            pc & Self::OSR_TRIED_FLAG,
+            0,
+            "a live bytecode instruction index cannot occupy usize's high bit"
+        );
+        Self(pc | (usize::from(osr_tried) * Self::OSR_TRIED_FLAG))
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn pc(self) -> usize {
+        self.0 & Self::PC_MASK
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn osr_tried(self) -> bool {
+        self.0 & Self::OSR_TRIED_FLAG != 0
+    }
+}
+
+/// Whether the loop may transfer into native code again after an
+/// [`OsrOutcome::Interpret`].
+#[cfg(feature = "jit")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OsrRetry {
+    /// Latch the frame onto the interpreter: nothing transferred, or the
+    /// OSR leaf that deopted is still cached (it would deopt again).
+    Latch,
+    /// The precise deopt's invalidation dropped the OSR leaf (`jit::reopt`):
+    /// a later hot back-edge may transfer into one compiled from the widened
+    /// feedback. Bounded: invalidations per source are bounded.
+    Allowed,
+}
+
+/// The outcome of [`Vm::osr_transfer`]. Two words, so the driver's frame
+/// carries no `EvalResult` slot for it.
+#[cfg(feature = "jit")]
+enum OsrOutcome {
+    /// Interpret on from `pc`: the branch target when nothing transferred or
+    /// a plain deopt ran no side effect, the deopt pc when a precise deopt's
+    /// captured state was installed in the frame.
+    Interpret { pc: usize, retry: OsrRetry },
+    /// The function ran to completion, with this value.
+    Returned(Value),
+    /// The function exited nonlocally; the flow is stashed
+    /// ([`crate::emacs_core::jit::compile::take_pending_flow`]).
+    Exited,
+}
+
+/// One-word immutable code handle for the function executed by a frame.
+///
+/// The entry pointer is borrowed for exactly the `run_loop` call. Every nested
+/// frame's consumed caller operand owns the exact Lisp value and keeps its
+/// pointer live. Bytecode arena slots are immovable, and published bytecode is
+/// immutable in production, so the handle can retain the already checked
+/// address instead of repeating tagged-object classification each time GNU's
+/// `Breturn` resumes a caller. Whether a frame is the entry frame is represented
+/// by the caller stack, not by a nullable code sentinel, so every frame has
+/// valid code.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct InterpreterFunction(std::ptr::NonNull<ByteCodeFunction>);
+
+impl InterpreterFunction {
+    #[doc(hidden)]
+    pub fn new(code: &ByteCodeFunction) -> Self {
+        Self(std::ptr::NonNull::from(code))
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn code(&self) -> &ByteCodeFunction {
+        // SAFETY: the entry borrow outlives `run_loop`; every nested frame's
+        // consumed caller operand roots its immutable, immovable bytecode arena
+        // slot.
+        unsafe { self.0.as_ref() }
+    }
+}
+
+/// GNU's `bytestr_data`/`vectorp` register pair: the executing frame's
+/// instruction stream and constant pool, resolved once when the frame is
+/// built.
+///
+/// `exec_byte_code` loads both into locals at `setup_frame` and restores them
+/// from the caller's `bc_frame` at `Breturn`.  This port re-derived them at
+/// every activation instead -- `executable_ops()` walks an `Option<Arc<..>>`
+/// and a `OnceLock`, `constants.as_slice()` matches on the storage kind --
+/// and an activation happens twice per call, once for the callee after
+/// `Bcall` and once for the caller after `Breturn`.
+///
+/// The view holds no Lisp value: two fat pointers into the immovable
+/// `ByteCodeFunction` the frame's `InterpreterFunction` already points at, so
+/// its liveness argument is exactly that handle's.
+#[derive(Clone, Copy)]
+struct ActiveCodeView {
+    ops: std::ptr::NonNull<[Op]>,
+}
+
+impl ActiveCodeView {
+    /// The empty view a never-filled call-cache slot carries; never read,
+    /// because a slot only answers after `replace` overwrites it.
+    #[doc(hidden)]
+    pub const EMPTY: Self = Self {
+        ops: unsafe {
+            std::ptr::NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(
+                std::ptr::NonNull::<Op>::dangling().as_ptr(),
+                0,
+            ))
+        },
+    };
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn of(func: &ByteCodeFunction) -> Self {
+        debug_assert!(
+            !func.is_pdump_stub(),
+            "a dump stub has no instruction stream; materialize the function first"
+        );
+        Self {
+            ops: std::ptr::NonNull::from(func.executable_ops()),
+        }
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn ops(&self) -> &[Op] {
+        // SAFETY: minted from the frame's own function, which outlives the
+        // frame (see `InterpreterFunction::code`); a function's executable
+        // ops never move while a frame runs it.
+        unsafe { self.ops.as_ref() }
+    }
+}
+
+/// All mutable Tier-0 state required to suspend and later resume one frame.
+///
+/// GNU stores the equivalent fields in `struct bc_frame` plus the register
+/// locals saved by `Bcall`. Keeping them in one Rust value makes a recursive
+/// interpreter entry unrepresentable on the iterative path: callers are moved
+/// onto the driver stack and can only be resumed through `Breturn` handling.
+#[derive(Clone, Copy)]
+struct InterpreterFrame {
+    function: InterpreterFunction,
+    /// GNU's `bytestr_data`/`vectorp` pair for this frame.
+    code: ActiveCodeView,
+    frame_base: usize,
+    /// The cumulative bytecode-stack position this frame's charge reached
+    /// (GNU `bc->fp` / `frame_base + max_stack` in `setup_frame`,
+    /// src/bytecode.c:509-514) is packed in `caller_return` (bits 32..55),
+    /// so the frame stays one 64-byte cache line; the pop derives the
+    /// caller's position by subtracting this frame's own cost, and the
+    /// release is one store.
+    #[cfg(feature = "jit")]
+    resume: InterpreterResumePoint,
+    #[cfg(not(feature = "jit"))]
+    pc: usize,
+    cleanup: InterpreterFrameCleanup,
+    /// Where this frame's caller resumes when it returns (GNU `bc_frame`'s
+    /// `saved_top`). A placeholder in the entry frame, which has no caller
+    /// inside the driver and is never popped.
+    caller_return: InterpreterCallerReturn,
+    #[cfg(debug_assertions)]
+    entry_lexenv: Value,
+}
+
+/// The caller continuation an iterative callee frame carries for the frame
+/// below it: the caller-stack slot that receives the return value, plus the
+/// one bit of the callee's [`BytecodeBacktraceFrame`] token that the frame
+/// does not already record.
+///
+/// GNU's `Breturn` finds the caller's `saved_top` in the returning
+/// `bc_frame` itself. This driver used to keep continuations in a `Vec`
+/// parallel to the frames, which put a second capacity check, length update
+/// and base-pointer load on every Bcall and every Breturn. Folding the
+/// continuation into the frame makes a call one push and a return one pop.
+///
+/// The value slot is the consumed function operand, `args_start - 1`: GNU's
+/// `Breturn` stores the result exactly where `Bcall` found the function. The
+/// token's base needs no storage because a callee frame's
+/// `cleanup.specpdl_base` is the specpdl length right after its backtrace
+/// push, i.e. `base + 1` ([`BytecodeBacktraceFrame::park_in_frame`] checks
+/// that at every call in debug builds). Only the out-of-line-arguments bit is
+/// left, and a `bc_buf` index never uses usize's high bit (`Vec` allocations
+/// are bounded by `isize::MAX` bytes), so it lives there.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct InterpreterCallerReturn(usize);
+
+impl InterpreterCallerReturn {
+    #[doc(hidden)]
+    pub const OWNED_BACKTRACE_ARGS_FLAG: usize = 1usize << (usize::BITS - 1);
+    /// Shift of the saved bytecode-stack budget this word also carries: the
+    /// remaining budget the callee frame found when it was charged
+    /// (GNU `BC_STACK_SIZE` is 4 MiB, so 24 bits suffice). Restoring it on
+    /// return is one store -- the LIFO release.
+    #[doc(hidden)]
+    pub const POSITION_SHIFT: u32 = 32;
+    #[doc(hidden)]
+    pub const POSITION_BITS: u32 = 24;
+    #[doc(hidden)]
+    pub const POSITION_MASK: usize = ((1usize << Self::POSITION_BITS) - 1) << Self::POSITION_SHIFT;
+    /// The position's domain, before the shift.
+    #[doc(hidden)]
+    pub const POSITION_LIMIT_MASK: usize = (1usize << Self::POSITION_BITS) - 1;
+    /// The low bits: the consumed call operand's `bc_buf` index.
+    #[doc(hidden)]
+    pub const VALUE_SLOT_MASK: usize = (1usize << Self::POSITION_SHIFT) - 1;
+
+    /// A dummy word with no caller and no position: the entry frame of a
+    /// unit-test fixture, and the placeholder `new` builds.  The driver's
+    /// entry frame uses [`Self::entry_at`] instead so its position is read.
+    #[doc(hidden)]
+    pub const ENTRY: Self = Self(0);
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn new(value_slot: ConsumedCallOperandRootSlot, owns_backtrace_args: bool) -> Self {
+        Self::with_position(value_slot, owns_backtrace_args, 0)
+    }
+
+    /// [`Self::new`] plus this frame's bytecode-stack position (GNU
+    /// `bc->fp`, src/bytecode.c:509-516); see [`Self::bytecode_position`].
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn with_position(
+        value_slot: ConsumedCallOperandRootSlot,
+        owns_backtrace_args: bool,
+        bytecode_position: usize,
+    ) -> Self {
+        debug_assert_eq!(
+            value_slot.0 & !Self::VALUE_SLOT_MASK,
+            0,
+            "a bc_buf index must fit the continuation's low 32 bits"
+        );
+        debug_assert_eq!(
+            bytecode_position & !Self::POSITION_LIMIT_MASK,
+            0,
+            "the bytecode-stack frame position must fit its 24 bits"
+        );
+        Self(
+            value_slot.0
+                | (bytecode_position << Self::POSITION_SHIFT)
+                | (usize::from(owns_backtrace_args) * Self::OWNED_BACKTRACE_ARGS_FLAG),
+        )
+    }
+
+    /// The driver's entry frame: no caller inside the driver, but its
+    /// bytecode-stack position is the one `execute_from_stack_args` charged
+    /// (or the resume path charged).
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn entry_at(bytecode_position: usize) -> Self {
+        debug_assert_eq!(
+            bytecode_position & !Self::POSITION_LIMIT_MASK,
+            0,
+            "the bytecode-stack frame position must fit its 24 bits"
+        );
+        Self(bytecode_position << Self::POSITION_SHIFT)
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn stack_after_call(self) -> usize {
+        self.0 & Self::VALUE_SLOT_MASK
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn owns_backtrace_args(self) -> bool {
+        self.0 & Self::OWNED_BACKTRACE_ARGS_FLAG != 0
+    }
+
+    /// This frame's bytecode-stack position.  The pop derives its caller's
+    /// position by subtracting this frame's own cost (the declared stack
+    /// depth is immutable in the frame's function object), so the release
+    /// needs no separate saved word.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn bytecode_position(self) -> usize {
+        (self.0 & Self::POSITION_MASK) >> Self::POSITION_SHIFT
+    }
+}
+
+impl InterpreterFrame {
+    /// The frame's stack ceiling.  Derived rather than stored: every
+    /// constructor already proved `frame_base + max_stack` does not overflow
+    /// when it reserved the capacity.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn frame_limit(&self) -> usize {
+        self.frame_base + self.function.code().max_stack.get()
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn pc(&self) -> usize {
+        #[cfg(feature = "jit")]
+        {
+            self.resume.pc()
+        }
+        #[cfg(not(feature = "jit"))]
+        {
+            self.pc
+        }
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn set_pc(&mut self, pc: usize) {
+        #[cfg(feature = "jit")]
+        {
+            self.resume = InterpreterResumePoint::new(pc, self.resume.osr_tried());
+        }
+        #[cfg(not(feature = "jit"))]
+        {
+            self.pc = pc;
+        }
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn save_execution_state(&mut self, pc: usize, osr_tried: bool) {
+        #[cfg(feature = "jit")]
+        {
+            self.resume = InterpreterResumePoint::new(pc, osr_tried);
+        }
+        #[cfg(not(feature = "jit"))]
+        {
+            let _ = osr_tried;
+            self.pc = pc;
+        }
+    }
+}
+
+/// A callee frame built by `install_iterative_interpreter_frame`: the only
+/// kind `InterpreterCallerStack::enter_callee` accepts, so every frame above
+/// the entry carries a real [`InterpreterCallerReturn`] and a parked
+/// backtrace token.
+#[repr(transparent)]
+struct InstalledCalleeFrame(InterpreterFrame);
+
+/// Variable-sized state for the active frame at the matching driver depth.
+///
+/// Keeping this in a parallel stack lets suspended frames remain compact:
+/// moving an `InterpreterFrame` at every Bcall/Breturn no longer copies the
+/// inline storage of two `SmallVec`s. The auxiliary state stays at a stable
+/// logical depth until that frame completes, like GNU's separate handler and
+/// specpdl stacks.
+#[derive(Debug)]
+struct InterpreterFrameAux {
+    handlers: HandlerStack,
+    bind_stack: BindStack,
+}
+
+impl InterpreterFrameAux {
+    #[doc(hidden)]
+    pub fn new(handlers: HandlerStack, bind_stack: BindStack) -> Self {
+        Self {
+            handlers,
+            bind_stack,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn empty() -> Self {
+        Self::new(HandlerStack::new(), BindStack::new())
+    }
+
+    #[doc(hidden)]
+    pub fn is_empty(&self) -> bool {
+        self.handlers.is_empty() && self.bind_stack.is_empty()
+    }
+}
+
+/// Logical caller depth in the iterative interpreter driver.
+///
+/// A dedicated type prevents sparse auxiliary state from being restored with
+/// an unrelated bytecode-buffer or specpdl index.  Depth zero denotes the
+/// entry frame; a callee's current depth is the number of suspended callers.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct InterpreterDriverDepth(usize);
+
+impl InterpreterDriverDepth {
+    #[cfg(test)]
+    #[doc(hidden)]
+    pub const ROOT: Self = Self(0);
+
+    #[doc(hidden)]
+    pub fn from_suspended_callers(callers: usize) -> Self {
+        Self(callers)
+    }
+}
+
+#[derive(Debug)]
+struct SuspendedInterpreterFrameAux {
+    depth: InterpreterDriverDepth,
+    state: InterpreterFrameAux,
+}
+
+/// Variable-sized handler/bind state for the current driver frame.
+///
+/// GNU keeps handler/spec state outside `bc_frame`; ordinary calls therefore
+/// do not copy an empty record.  Mirror that shape with one current state and
+/// a sparse stack containing only suspended callers whose state is nonempty.
+/// The common Bcall/Breturn path changes only `current`'s empty state and never
+/// pushes the 96-byte pair of inline `SmallVec`s.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InterpreterFrameAuxOccupancy {
+    KnownEmpty,
+    MayContainState,
+}
+
+/// Its unique auxiliary allocations are retired out of line on unwinding.
+/// `ManuallyDrop` suppresses field drop glue after that one destructor call;
+/// the consuming pool-return path transfers both fields before retiring only
+/// the current state, as it did before the explicit drop boundary.
+#[derive(Debug)]
+struct InterpreterFrameAuxStack {
+    current: std::mem::ManuallyDrop<InterpreterFrameAux>,
+    current_occupancy: InterpreterFrameAuxOccupancy,
+    suspended: std::mem::ManuallyDrop<Vec<SuspendedInterpreterFrameAux>>,
+    // The marks describe this executing thread's specpdl/handler frontiers.
+    // Moving their owner to another thread would not transfer those frontiers.
+    _owner: std::marker::PhantomData<*mut ()>,
+}
+
+static_assertions::assert_not_impl_any!(InterpreterFrameAuxStack: Send, Sync, Clone);
+// A future owned handler payload must revisit the destructor's no-user-Drop
+// premise instead of silently introducing a callback or panic during teardown.
+static_assertions::const_assert!(!std::mem::needs_drop::<Handler>());
+static_assertions::assert_eq_size!(
+    std::mem::ManuallyDrop<InterpreterFrameAux>,
+    InterpreterFrameAux
+);
+static_assertions::assert_eq_size!(
+    std::mem::ManuallyDrop<Vec<SuspendedInterpreterFrameAux>>,
+    Vec<SuspendedInterpreterFrameAux>
+);
+static_assertions::const_assert_eq!(
+    std::mem::align_of::<std::mem::ManuallyDrop<InterpreterFrameAux>>(),
+    std::mem::align_of::<InterpreterFrameAux>()
+);
+static_assertions::const_assert_eq!(
+    std::mem::align_of::<std::mem::ManuallyDrop<Vec<SuspendedInterpreterFrameAux>>>(),
+    std::mem::align_of::<Vec<SuspendedInterpreterFrameAux>>()
+);
+static_assertions::const_assert_eq!(std::mem::size_of::<std::marker::PhantomData<*mut ()>>(), 0);
+
+impl Drop for InterpreterFrameAuxStack {
+    // Keep both SmallVecs and the sparse Vec's destruction behind this one
+    // boundary even if run_loop becomes its only caller after fat LTO.
+    #[inline(never)]
+    fn drop(&mut self) {
+        // SAFETY: these private fields stay initialized until this destructor
+        // runs. Only into_suspended takes them, and it suppresses this Drop by
+        // consuming the entire owner through ManuallyDrop. Each field is thus
+        // destroyed exactly once. Their elements are handler markers/binding
+        // depths, with no user destructor, Lisp callback, panic or blocking
+        // teardown. The wrappers prevent a subsequent implicit field drop.
+        unsafe {
+            std::mem::ManuallyDrop::drop(&mut self.current);
+            std::mem::ManuallyDrop::drop(&mut self.suspended);
+        }
+    }
+}
+
+impl InterpreterFrameAuxStack {
+    #[cfg(test)]
+    #[doc(hidden)]
+    pub fn new(handlers: HandlerStack, bind_stack: BindStack) -> Self {
+        Self::with_suspended(handlers, bind_stack, Vec::new())
+    }
+    #[doc(hidden)]
+    pub fn into_suspended(self) -> Vec<SuspendedInterpreterFrameAux> {
+        let mut owner = std::mem::ManuallyDrop::new(self);
+        // SAFETY: consuming self provides sole ownership of both initialized
+        // fields. Take each once, without an intervening call or allocation;
+        // the outer ManuallyDrop prevents the retired owner's destructor from
+        // reading them again. The extracted current state is retired normally
+        // and the extracted Vec becomes the caller's pool-owned allocation.
+        let (current, suspended) = unsafe {
+            (
+                std::mem::ManuallyDrop::take(&mut owner.current),
+                std::mem::ManuallyDrop::take(&mut owner.suspended),
+            )
+        };
+        // run_loop has just called take_entry, which installed fresh empty
+        // current stacks. Keep that retirement visible to the optimizer rather
+        // than adding a routine out-of-line destructor call on pool return.
+        drop(current);
+        suspended
+    }
+    /// Like the test-only `new` with pooled (emptied) storage for the
+    /// suspended frames.
+    #[doc(hidden)]
+    pub fn with_suspended(
+        handlers: HandlerStack,
+        bind_stack: BindStack,
+        mut suspended: Vec<SuspendedInterpreterFrameAux>,
+    ) -> Self {
+        suspended.clear();
+        let current = InterpreterFrameAux::new(handlers, bind_stack);
+        let current_occupancy = if current.is_empty() {
+            InterpreterFrameAuxOccupancy::KnownEmpty
+        } else {
+            InterpreterFrameAuxOccupancy::MayContainState
+        };
+        Self {
+            current: std::mem::ManuallyDrop::new(current),
+            current_occupancy,
+            suspended: std::mem::ManuallyDrop::new(suspended),
+            _owner: std::marker::PhantomData,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn current_mut(&mut self) -> &mut InterpreterFrameAux {
+        // A mutable borrow can make either auxiliary stack nonempty.  Record
+        // that possibility before lending it out; paths that subsequently
+        // observe both stacks empty refine the state back to KnownEmpty.
+        self.current_occupancy = InterpreterFrameAuxOccupancy::MayContainState;
+        &mut self.current
+    }
+
+    #[doc(hidden)]
+    pub fn suspend_current(&mut self, depth: InterpreterDriverDepth) {
+        if self.current_occupancy == InterpreterFrameAuxOccupancy::KnownEmpty {
+            return;
+        }
+        if self.current.is_empty() {
+            self.current_occupancy = InterpreterFrameAuxOccupancy::KnownEmpty;
+            return;
+        }
+        self.suspended.push(SuspendedInterpreterFrameAux {
+            depth,
+            state: std::mem::replace(&mut *self.current, InterpreterFrameAux::empty()),
+        });
+        self.current_occupancy = InterpreterFrameAuxOccupancy::KnownEmpty;
+    }
+
+    #[doc(hidden)]
+    pub fn restore_current(&mut self, depth: InterpreterDriverDepth) {
+        if self
+            .suspended
+            .last()
+            .is_some_and(|suspended| suspended.depth == depth)
+        {
+            *self.current = self
+                .suspended
+                .pop()
+                .expect("matching sparse auxiliary frame must exist")
+                .state;
+            self.current_occupancy = InterpreterFrameAuxOccupancy::MayContainState;
+        } else {
+            debug_assert!(
+                self.suspended
+                    .last()
+                    .is_none_or(|suspended| suspended.depth < depth),
+                "sparse auxiliary frames must remain ordered by driver depth"
+            );
+            // The ordinary Breturn path has neither current nor suspended
+            // auxiliary state.  Keep that already-empty state in place: in
+            // addition to avoiding two SmallVec resets on every return, this
+            // preserves any reusable spilled storage left by an earlier
+            // handler or dynamic binding in the same driver frame.
+            if self.current_occupancy == InterpreterFrameAuxOccupancy::MayContainState {
+                if !self.current.is_empty() {
+                    *self.current = InterpreterFrameAux::empty();
+                }
+                self.current_occupancy = InterpreterFrameAuxOccupancy::KnownEmpty;
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn take_entry(&mut self) -> (HandlerStack, BindStack) {
+        debug_assert!(self.suspended.is_empty());
+        let entry = std::mem::replace(&mut *self.current, InterpreterFrameAux::empty());
+        self.current_occupancy = InterpreterFrameAuxOccupancy::KnownEmpty;
+        (entry.handlers, entry.bind_stack)
+    }
+
+    #[cfg(test)]
+    #[doc(hidden)]
+    pub fn materialized_suspended_len(&self) -> usize {
+        self.suspended.len()
+    }
+}
+
+/// A bytecode callee proven eligible for GNU's iterative `setup_frame` path.
+///
+/// `value` is the exact GC-visible Lisp identity installed in the consumed call
+/// operand; `function` is the matching immutable code address already checked
+/// by Bcall dispatch.
+/// Keeping them inseparable prevents child-frame construction from decoding the
+/// tagged value a second time or accidentally pairing code with another value.
+#[derive(Clone, Copy)]
+struct PreparedInterpreterCallee {
+    value: Value,
+    function: InterpreterFunction,
+    code: ActiveCodeView,
+}
+
+impl PreparedInterpreterCallee {
+    #[doc(hidden)]
+    pub fn new(value: Value, code: &ByteCodeFunction, view: ActiveCodeView) -> Self {
+        Self {
+            value,
+            function: InterpreterFunction::new(code),
+            code: view,
+        }
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn code(&self) -> &ByteCodeFunction {
+        self.function.code()
+    }
+}
+
+/// The caller stack slot consumed by one `Op::Call` as its function
+/// designator.
+///
+/// `dispatch_interpreter_stack_call` first records GNU's user-visible
+/// backtrace function, then an iterative entry replaces this dead operand with
+/// the exact resolved bytecode object. The ordinary GC scan of `bc_buf` thereby
+/// keeps the executing function alive even if Lisp redefines its symbol while
+/// it is running. The private constructor prevents an argument slot from being
+/// mistaken for the root slot.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct ConsumedCallOperandRootSlot(usize);
+
+impl ConsumedCallOperandRootSlot {
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn from_args_start(args_start: usize) -> Self {
+        Self(
+            args_start
+                .checked_sub(1)
+                .expect("an iterative bytecode call must have a function operand"),
+        )
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn args_start(self) -> usize {
+        self.0 + 1
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn install_exact_callee(self, stack: &mut [Value], callee: Value) {
+        stack[self.0] = callee;
+    }
+}
+
+/// Bytes the debug-only `entry_lexenv` invariant field adds to every frame.
+const INTERPRETER_FRAME_DEBUG_BYTES: usize = if cfg!(debug_assertions) {
+    std::mem::size_of::<Value>()
+} else {
+    0
+};
+
+// These values are written on every iterative Bcall and read back on every
+// Breturn. Keep accidental enum/Option padding from silently turning frame
+// transitions into bulk memory traffic again. A release frame, caller
+// continuation included, is exactly one 64-byte cache line; the debug-only
+// lexenv invariant field comes on top of that.
+const _: () = {
+    assert!(std::mem::size_of::<InterpreterFunction>() == std::mem::size_of::<Value>());
+    assert!(std::mem::size_of::<PreparedInterpreterCallee>() == 4 * std::mem::size_of::<Value>());
+    assert!(std::mem::size_of::<InterpreterCallerReturn>() == std::mem::size_of::<usize>());
+    assert!(std::mem::size_of::<InterpreterFrame>() <= 64 + INTERPRETER_FRAME_DEBUG_BYTES);
+};
+
+/// What a completed callee frame hands its caller: the stack slot its value
+/// lands in, and the backtrace token its `Bcall` opened. Built only by
+/// [`InterpreterCallerStack::leave_callee`] from the popped frame, and
+/// consumed on the spot; nothing stores one.
+struct BytecodeCallContinuation {
+    stack_after_call: usize,
+    backtrace: BytecodeBacktraceFrame,
+}
+
+/// The interpreter's frame stack. **The ACTIVE frame is the last element** of
+/// `frames`; everything below it is a suspended caller, and `frames[0]` is the
+/// entry frame.
+///
+/// The active frame used to be a local in `run_loop`, with ONE slot reused for
+/// every callee. That is why entering a call had to copy the caller out (48
+/// bytes) and returning had to copy it back: the slot the caller lived in was
+/// about to be overwritten. `perf annotate` on `bytecode-call-loop` put
+/// **18.82% of the entire dispatch loop** on that single `ptr::write`.
+///
+/// Giving every frame its own slot removes both copies. A call writes the
+/// callee's frame once, built from values already in registers; a return is a
+/// pop. GNU gets the same property for free by recursing on the C stack
+/// (`exec_byte_code` calling itself) -- at the cost of overflowing that stack
+/// on deep Lisp recursion, which is exactly what this iterative driver exists
+/// to prevent. This keeps the safety and drops the copies.
+///
+/// Every frame above the entry is an [`InstalledCalleeFrame`] and carries its
+/// caller's continuation ([`InterpreterCallerReturn`]), the way GNU's returning
+/// `bc_frame` carries `saved_top`, so a call is exactly one push and a return
+/// one pop. The continuations used to sit in a parallel `Vec`, one shorter, so
+/// that no frame had to hold a placeholder `BytecodeBacktraceFrame`; the frame
+/// now holds no token at all, only the bit its `specpdl_base` does not already
+/// say, and `leave_callee` -- which never pops the entry frame -- is the only
+/// place that bit becomes a token again.
+///
+/// No `&mut` into `frames` may be held across a push -- a reallocation moves
+/// every slot. The driver re-derives the active frame at the head of each
+/// `'frame` iteration, which is exactly where a push has just happened.
+struct InterpreterCallerStack {
+    frames: Vec<InterpreterFrame>,
+}
+
+/// Reusable backing stores for the interpreter's per-entry stacks: the
+/// caller frames (each carrying its caller continuation) and the suspended
+/// aux frames. `run_loop` used to allocate the frame stack fresh on EVERY
+/// nested interpreter entry (`Vec::with_capacity(8)` ≈ 9,100 malloc/free
+/// pairs per org font-lock op, together with the continuation stack that
+/// has since been folded into it) and grow the aux stack from empty (≈2,500
+/// reallocations); a pooled pair is taken on entry and handed back emptied.
+///
+/// Each pool belongs to one Context and is mutated only through its exclusive
+/// borrow. Backing stores never move between concurrent Lisp mutators; the
+/// process-wide return-order knob shares only an immutable scalar policy.
+#[derive(Default)]
+pub(crate) struct InterpreterStackPool {
+    free: Vec<InterpreterStacks>,
+}
+static_assertions::assert_not_impl_any!(InterpreterStackPool: Send, Sync, Clone);
+
+#[derive(Default)]
+struct InterpreterStacks {
+    frames: Vec<InterpreterFrame>,
+    suspended: Vec<SuspendedInterpreterFrameAux>,
+}
+
+fn parse_vm_stack_return_knob(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "on" | "true" | "yes"
+        )
+    })
+}
+
+/// An immutable process-wide policy, safely published to all mutators by
+/// OnceLock. No Lisp state or Context-owned storage is retained here.
+#[inline(always)]
+fn vm_stack_return_after_push_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = VM_STACK_RETURN_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return enabled;
+    }
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(read_vm_stack_return_knob)
+}
+
+#[cold]
+#[inline(never)]
+fn read_vm_stack_return_knob() -> bool {
+    parse_vm_stack_return_knob(std::env::var("NEOVM_VM_STACK_RETURN").ok().as_deref())
+}
+
+#[cfg(test)]
+thread_local! {
+    // Test-only scalar policy override; never contains mutator-owned state.
+    static VM_STACK_RETURN_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+impl InterpreterStackPool {
+    /// Nested interpreter entries beyond this many keep allocating (bounded
+    /// retention; the org op nests fewer than 20 deep).
+    #[doc(hidden)]
+    pub const MAX_FREE: usize = 64;
+
+    #[doc(hidden)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[doc(hidden)]
+    pub fn take(&mut self) -> InterpreterStacks {
+        self.free.pop().unwrap_or_default()
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn give_back(&mut self, mut stacks: InterpreterStacks) {
+        if vm_stack_return_after_push_enabled() {
+            self.give_back_after_push(stacks);
+            return;
+        }
+        stacks.frames.clear();
+        stacks.suspended.clear();
+        if self.free.len() < Self::MAX_FREE {
+            self.free.push(stacks);
+        }
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn give_back_after_push(&mut self, mut stacks: InterpreterStacks) {
+        if self.free.len() < Self::MAX_FREE {
+            // Copy the untouched headers first. Clearing the source lengths
+            // before Vec::push makes its wide header reload depend on partial
+            // stores. Clearing the destination needs no subsequent header copy.
+            // Neither operation can invoke Lisp or reach a GC safe point.
+            self.free.push(stacks);
+            let returned = self.free.last_mut().expect("just returned stack storage");
+            returned.frames.clear();
+            returned.suspended.clear();
+        } else {
+            // Keep the original clear/drop order when retention is full.
+            stacks.frames.clear();
+            stacks.suspended.clear();
+        }
+    }
+}
+
+impl InterpreterCallerStack {
+    /// Build a caller stack holding only `entry`, on pooled (emptied) storage.
+    #[doc(hidden)]
+    pub fn with_storage(mut frames: Vec<InterpreterFrame>, entry: InterpreterFrame) -> Self {
+        frames.clear();
+        frames.push(entry);
+        Self { frames }
+    }
+    #[doc(hidden)]
+    pub fn into_storage(self) -> Vec<InterpreterFrame> {
+        self.frames
+    }
+
+    /// The frame currently executing.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn active(&self) -> &InterpreterFrame {
+        let last = self.frames.len() - 1;
+        // SAFETY: constructed with one frame; `leave_callee` refuses to pop the
+        // last one, so the stack is never empty.
+        unsafe { self.frames.get_unchecked(last) }
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn active_mut(&mut self) -> &mut InterpreterFrame {
+        let last = self.frames.len() - 1;
+        // SAFETY: as `active`.
+        unsafe { self.frames.get_unchecked_mut(last) }
+    }
+
+    /// How many callers are suspended beneath the active frame.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn suspended_len(&self) -> usize {
+        self.frames.len() - 1
+    }
+
+    /// Whether the active frame is the outermost one.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn has_no_suspended_callers(&self) -> bool {
+        self.frames.len() <= 1
+    }
+
+    /// Suspend the active frame and make `callee` active.
+    ///
+    /// `callee` arrives BY VALUE, built from registers, and already carries
+    /// the suspended frame's continuation, so this is one write of a frame
+    /// rather than a copy of one already in memory -- and the only push a
+    /// call makes here.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn enter_callee(&mut self, callee: InstalledCalleeFrame) {
+        self.frames.push(callee.0);
+    }
+
+    /// Discard the active frame and resume its caller, returning the
+    /// continuation the discarded frame carried. `None` when the active frame
+    /// is the outermost one, which is the driver's exit condition.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn leave_callee(&mut self) -> Option<BytecodeCallContinuation> {
+        if self.has_no_suspended_callers() {
+            return None;
+        }
+        // SAFETY: at least two frames are live, so `pop` yields the active one.
+        let callee = unsafe { self.frames.pop().unwrap_unchecked() };
+        // Every frame above the entry arrived through `enter_callee`, so it is
+        // an `InstalledCalleeFrame`: its `specpdl_base` sits one above the
+        // backtrace entry its Bcall pushed, and its caller-return word holds
+        // the bit that token's `park_in_frame` returned.
+        let caller_return = callee.caller_return;
+        Some(BytecodeCallContinuation {
+            stack_after_call: caller_return.stack_after_call(),
+            // SAFETY: as above, and the frame was just popped, so this is the
+            // one reclaim of its parked token.
+            backtrace: unsafe {
+                BytecodeBacktraceFrame::reclaim_from_frame(
+                    callee.cleanup.specpdl_base,
+                    caller_return.owns_backtrace_args(),
+                )
+            },
+        })
+    }
+}
+
+enum InterpreterStackCall {
+    Enter {
+        callee: PreparedInterpreterCallee,
+        root_slot: ConsumedCallOperandRootSlot,
+        nargs: usize,
+        backtrace: BytecodeBacktraceFrame,
+    },
+    Complete(EvalResult),
+}
+
+enum InterpreterFrameCompletion {
+    Resume,
+    Exit(EvalResult),
+}
+
+/// What the dispatch loop must do after the nonlocal-flow path has run.
+///
+/// `resume_flow!` cannot simply call a function: it has to `continue`, to
+/// `continue 'frame`, or to return. Naming the three outcomes lets the work
+/// live in one out-of-line body while the loop keeps only the three-way jump.
+enum ResumeFlowOutcome {
+    /// A VM handler in this frame caught it; reacquire the cursor and resume
+    /// opcode dispatch.
+    ResumeOp,
+    /// The frame chain unwound to a suspended caller; restart the frame loop.
+    ResumeFrame,
+    /// Nothing in this driver handles it.
+    Exit(EvalResult),
+}
+
+/// Result of GNU's ordinary `Breturn` transition.
+///
+/// A successful bytecode return is a tagged value, not a general Lisp control
+/// transfer. Keeping that distinction in the type prevents the common path
+/// from constructing and copying `Result<Value, Flow>` merely to discover that
+/// no unwind is required. Only frames with outstanding dynamic state are sent
+/// to the generic cleanup machinery.
+enum InterpreterValueCompletion {
+    Resume,
+    Exit(Value),
+    NeedsSlowCleanup(Value),
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<InterpreterValueCompletion>() <= 16);
+};
+
+impl ResolvedByteCodeCallee {
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn from_live_function_cell(value: Value) -> Option<Self> {
+        (value.veclike_type() == Some(VecLikeType::ByteCode)).then_some(Self(value))
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn from_direct_value(value: Value) -> Self {
+        debug_assert_eq!(value.veclike_type(), Some(VecLikeType::ByteCode));
+        Self(value)
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn value(self) -> Value {
+        self.0
+    }
+
+    /// Project the immutable code address carried by this proof token.
+    ///
+    /// The constructors prove TYPE only; the projection goes through the
+    /// `get_bytecode_data` chokepoint, which is where lazy pdump stubs
+    /// materialize — a token may be minted from a cache replay long before
+    /// its function is first run, so the proof of materialization belongs at
+    /// the projection, not the mint. Bytecode arena objects are immovable,
+    /// and the live function cell or direct caller-stack value keeps the
+    /// object rooted while this borrow is used.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn code(&self) -> &ByteCodeFunction {
+        // Type proven at mint; the chokepoint-resident projection carries the
+        // (future) stub-materialization check without re-classifying.
+        self.0.bytecode_data_typechecked_by_caller()
+    }
+}
+
+const _: () =
+    assert!(std::mem::size_of::<ResolvedByteCodeCallee>() == std::mem::size_of::<Value>());
+
+impl PreparedInterpreterCall {
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn new(callee: ResolvedByteCodeCallee) -> Self {
+        Self {
+            code: ActiveCodeView::of(callee.code()),
+            callee,
+        }
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn callee(self) -> ResolvedByteCodeCallee {
+        self.callee
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn code_view(self) -> ActiveCodeView {
+        self.code
+    }
+}
+
+const _: () =
+    assert!(std::mem::size_of::<PreparedInterpreterCall>() == 3 * std::mem::size_of::<Value>());
+
+impl ResolvedBuiltinCallee {
+    #[inline]
+    #[doc(hidden)]
+    pub fn from_static_symbol(sym_id: SymId) -> Option<Self> {
+        lookup_global_subr_entry(sym_id)
+            .is_some_and(|entry| entry.dispatch_kind == SubrDispatchKind::Builtin)
+            .then_some(Self(Value::from_sym_id(sym_id)))
+    }
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn from_subr_value(value: Value) -> Option<Self> {
+        if value.veclike_type() != Some(VecLikeType::Subr) {
+            return None;
+        }
+        let ptr = value.as_veclike_ptr()? as *const SubrObj;
+        let subr = unsafe { &*ptr };
+        (subr.metadata().dispatch_kind() == SubrDispatchKind::Builtin && subr.function().is_some())
+            .then_some(Self(value))
+    }
+    /// What a call needs: symbol, function pointer, arity -- read off the
+    /// `SubrObj` for a subr object (the common case: function cells hold
+    /// them), or from the static registry for a bare static symbol.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn dispatch_parts(self) -> (SymId, Option<SubrFn>, u16, Option<u16>) {
+        if let Some(sym_id) = self.0.as_bare_symbol_id() {
+            let entry = lookup_global_subr_entry(sym_id)
+                .expect("resolved static builtin must retain its registered entry");
+            debug_assert_eq!(entry.dispatch_kind, SubrDispatchKind::Builtin);
+            (sym_id, entry.function, entry.min_args, entry.max_args)
+        } else {
+            let ptr = self
+                .0
+                .as_veclike_ptr()
+                .expect("resolved builtin object must remain a subr object")
+                as *const SubrObj;
+            // SAFETY: `from_subr_value` checked the tag; the function cell (or
+            // the caller's operand stack) keeps the object alive across the call.
+            let subr = unsafe { &*ptr };
+            debug_assert_eq!(subr.metadata().dispatch_kind(), SubrDispatchKind::Builtin);
+            (
+                subr.metadata().symbol_id(),
+                subr.function(),
+                subr.metadata().min_args(),
+                subr.metadata().max_args(),
+            )
+        }
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn wrong_arity_value(self) -> Value {
+        if let Some(sym_id) = self.0.as_bare_symbol_id() {
+            <Value as SubrValueExt>::subr_from_sym_id(sym_id)
+        } else {
+            self.0
+        }
+    }
+}
+const _: () = assert!(std::mem::size_of::<ResolvedBuiltinCallee>() == std::mem::size_of::<Value>());
+
+/// Debug check for env-less bytecode frames: after the frame body runs,
+/// `ctx.lexenv` must be the entry lexenv, possibly EXTENDED by value-less
+/// `(defvar x)` markers consed on by the tree interpreter (sf_defvar reached
+/// through opcodes that eval forms). Those markers legitimately persist past
+/// the frame boundary (GNU behavior: the symbol stays special for the rest of
+/// the enclosing scope), so the invariant is tail-reachability, not equality.
+#[cfg(debug_assertions)]
+fn lexenv_tail_reachable(current: Value, entry: Value) -> bool {
+    let mut cursor = current;
+    // Bounded walk: defvar markers within one frame are few; a long walk
+    // means the invariant is broken anyway.
+    for _ in 0..10_000 {
+        if cursor.bits() == entry.bits() {
+            return true;
+        }
+        if !cursor.is_cons() {
+            return false;
+        }
+        cursor = cursor.cons_cdr();
+    }
+    false
+}
+
+#[inline(always)]
+fn fixnum_tagged_i64(value: Value) -> i64 {
+    debug_assert!(value.is_fixnum());
+    // GNU bytecode.c compares XFIXNUM values for fixnum comparison opcodes.
+    // Neomacs fixnums are `(n << 2) | 2`, so the signed tagged bits preserve
+    // the same total order without materializing the untagged integer.
+    value.bits() as i64
+}
+
+#[inline(always)]
+fn fixnum_lt(left: Value, right: Value) -> bool {
+    fixnum_tagged_i64(left) < fixnum_tagged_i64(right)
+}
+
+#[inline(always)]
+fn fixnum_gt(left: Value, right: Value) -> bool {
+    fixnum_tagged_i64(left) > fixnum_tagged_i64(right)
+}
+
+#[inline(always)]
+fn fixnum_le(left: Value, right: Value) -> bool {
+    fixnum_tagged_i64(left) <= fixnum_tagged_i64(right)
+}
+
+#[inline(always)]
+fn fixnum_ge(left: Value, right: Value) -> bool {
+    fixnum_tagged_i64(left) >= fixnum_tagged_i64(right)
+}
+
+#[inline]
+fn plus_sym_id() -> SymId {
+    static PLUS: OnceLock<SymId> = OnceLock::new();
+    *PLUS.get_or_init(|| intern("+"))
+}
+
+#[inline]
+fn logand_sym_id() -> SymId {
+    static LOGAND: OnceLock<SymId> = OnceLock::new();
+    *LOGAND.get_or_init(|| intern("logand"))
+}
+
+#[inline]
+fn logior_sym_id() -> SymId {
+    static LOGIOR: OnceLock<SymId> = OnceLock::new();
+    *LOGIOR.get_or_init(|| intern("logior"))
+}
+
+#[inline]
+fn logxor_sym_id() -> SymId {
+    static LOGXOR: OnceLock<SymId> = OnceLock::new();
+    *LOGXOR.get_or_init(|| intern("logxor"))
+}
+
+/// A tiny direct-mapped cache for symbol function cells proven to contain
+/// bytecode. It lives only for one [`Vm`] invocation: it is neither a Lisp/GC
+/// root nor persisted in pdump state.
+///
+/// A cached callee remains rooted by the same live function cell that supplied
+/// it. Every function-cell mutation advances `Obarray::function_epoch`; an
+/// epoch mismatch makes the old bits unreachable before they can be used.
+/// `u64::MAX` is reserved by the epoch implementation, so it is an
+/// unambiguous empty-entry marker without `Option` padding.
+/// Direct-mapped by symbol id. An org font-lock pass calls ~75 distinct
+/// builtins per operation, so the 8 slots this replaced collided constantly;
+/// 4096 makes a hot working set of ~100 symbols effectively collision-free.
+/// The cache lives in the `Context` (one per evaluator, long-lived), not in
+/// the `Vm`, which is constructed per bytecode entry and used to start every
+/// call cold.
+const SYMBOL_BYTECODE_CALL_CACHE_CAPACITY: usize = 4096;
+const EMPTY_FUNCTION_EPOCH: u64 = u64::MAX;
+
+#[derive(Clone, Copy)]
+enum CachedStackCallee {
+    Empty,
+    ByteCode(Value),
+    Builtin(ResolvedBuiltinCallee),
+    BuiltinLeaf(ResolvedBuiltinCallee, crate::emacs_core::subr::leaf::LeafId),
+}
+#[derive(Clone, Copy)]
+struct SymbolByteCodeCallCacheEntry {
+    function_epoch: u64,
+    symbol: SymId,
+    callee: CachedStackCallee,
+}
+impl SymbolByteCodeCallCacheEntry {
+    #[doc(hidden)]
+    pub const EMPTY: Self = Self {
+        function_epoch: EMPTY_FUNCTION_EPOCH,
+        symbol: neovm_value::intern::NIL_SYM_ID,
+        callee: CachedStackCallee::Empty,
+    };
+}
+/// Per-`Context` cache of what a symbol's function cell resolves to for a
+/// stack call, tagged with the function epoch so any `fset` (or a change of
+/// `compiler_function_overrides`, which bumps the same epoch) invalidates it.
+pub(crate) struct SymbolByteCodeCallCache {
+    entries: Box<[SymbolByteCodeCallCacheEntry; SYMBOL_BYTECODE_CALL_CACHE_CAPACITY]>,
+}
+
+/// The most recently proven symbol-bound Tier-0 call.
+///
+/// Real bytecode is strongly monomorphic at an individual call site.  This
+/// one-entry cache sits in front of the wider symbol cache so the ordinary
+/// repeated call can compare the raw tagged designator before decoding its
+/// kind or hashing its `SymId`.  `function_epoch` invalidates every function
+/// cell mutation, while `nargs` keeps the `setup_frame` proof exact.
+#[derive(Clone, Copy)]
+struct RecentInterpreterCall {
+    function_epoch: u64,
+    designator: Value,
+    call: PreparedInterpreterCall,
+    nargs: u16,
+}
+
+impl RecentInterpreterCall {
+    #[doc(hidden)]
+    pub const EMPTY: Self = Self {
+        function_epoch: EMPTY_FUNCTION_EPOCH,
+        designator: Value::NIL,
+        call: PreparedInterpreterCall {
+            callee: ResolvedByteCodeCallee(Value::NIL),
+            code: ActiveCodeView::EMPTY,
+        },
+        nargs: 0,
+    };
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn get(
+        self,
+        designator: Value,
+        nargs: usize,
+        function_epoch: u64,
+    ) -> Option<PreparedInterpreterCall> {
+        (self.function_epoch == function_epoch
+            && self.designator.bits() == designator.bits()
+            && usize::from(self.nargs) == nargs)
+            .then_some(self.call)
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn replace(
+        &mut self,
+        designator: Value,
+        nargs: usize,
+        function_epoch: u64,
+        call: PreparedInterpreterCall,
+    ) {
+        let Ok(nargs) = u16::try_from(nargs) else {
+            return;
+        };
+        *self = Self {
+            function_epoch,
+            designator,
+            call,
+            nargs,
+        };
+    }
+}
+
+impl SymbolByteCodeCallCache {
+    #[doc(hidden)]
+    pub fn new() -> Self {
+        Self {
+            entries: Box::new(
+                [SymbolByteCodeCallCacheEntry::EMPTY; SYMBOL_BYTECODE_CALL_CACHE_CAPACITY],
+            ),
+        }
+    }
+    #[inline(always)]
+    #[doc(hidden)]
+    pub const fn index(symbol: SymId) -> usize {
+        symbol.to_raw() as usize & (SYMBOL_BYTECODE_CALL_CACHE_CAPACITY - 1)
+    }
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn get(&self, symbol: SymId, function_epoch: u64) -> Option<ResolvedStackCallTarget> {
+        let entry = &self.entries[Self::index(symbol)];
+        if entry.function_epoch != function_epoch || entry.symbol != symbol {
+            return None;
+        }
+        match entry.callee {
+            CachedStackCallee::ByteCode(value) => Some(ResolvedStackCallTarget::ByteCode {
+                callee: ResolvedByteCodeCallee(value),
+            }),
+            CachedStackCallee::Builtin(callee) => Some(ResolvedStackCallTarget::Builtin { callee }),
+            CachedStackCallee::BuiltinLeaf(callee, leaf) => {
+                Some(ResolvedStackCallTarget::BuiltinLeaf { callee, leaf })
+            }
+            CachedStackCallee::Empty => None,
+        }
+    }
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn insert_bytecode(
+        &mut self,
+        symbol: SymId,
+        function_epoch: u64,
+        callee: ResolvedByteCodeCallee,
+    ) {
+        self.store(
+            symbol,
+            function_epoch,
+            CachedStackCallee::ByteCode(callee.0),
+        );
+    }
+    /// Cache a builtin callee and answer the target it resolves to: with
+    /// `NEOVM_VM_LEAF`, a builtin with a Bcall leaf resolves to its leaf.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn insert_builtin(
+        &mut self,
+        symbol: SymId,
+        function_epoch: u64,
+        callee: ResolvedBuiltinCallee,
+    ) -> ResolvedStackCallTarget {
+        match vm_leaf::bcall_leaf_of(callee) {
+            Some(leaf) => {
+                self.store(
+                    symbol,
+                    function_epoch,
+                    CachedStackCallee::BuiltinLeaf(callee, leaf),
+                );
+                ResolvedStackCallTarget::BuiltinLeaf { callee, leaf }
+            }
+            None => {
+                self.store(symbol, function_epoch, CachedStackCallee::Builtin(callee));
+                ResolvedStackCallTarget::Builtin { callee }
+            }
+        }
+    }
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn store(&mut self, symbol: SymId, function_epoch: u64, callee: CachedStackCallee) {
+        self.entries[Self::index(symbol)] = SymbolByteCodeCallCacheEntry {
+            function_epoch,
+            symbol,
+            callee,
+        };
+    }
+}
+
+const _: () = {
+    assert!(SYMBOL_BYTECODE_CALL_CACHE_CAPACITY.is_power_of_two());
+    // epoch + symbol + a one-word callee behind a tag: four words.
+    assert!(std::mem::size_of::<SymbolByteCodeCallCacheEntry>() <= 4 * std::mem::size_of::<u64>());
+    assert!(std::mem::size_of::<RecentInterpreterCall>() <= 8 * std::mem::size_of::<u64>());
+};
+
+/// Process-selected execution policy for bytecode calls in this VM.
+///
+/// `NEOVM_JIT=0` means Tier 0 is the only reachable tier.  Encoding that once
+/// when the VM is constructed lets GNU's Bcall-shaped hot path skip both call-
+/// site feedback and the tier dispatcher; an interpreter-only run cannot
+/// accidentally pay for adaptive-tier state through a forgotten call site.
+#[cfg(feature = "jit")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BytecodeTierPolicy {
+    InterpreterOnly,
+    Adaptive,
+    /// [`Self::Adaptive`], and `Op::Call` records the targets of the
+    /// body's non-constant call sites (`NEOVM_JIT_FEEDBACK`, P2.1 C3):
+    /// folding the knob into the policy keeps the off arm the one
+    /// predictable field compare it always was.
+    AdaptiveRecording,
+}
+
+#[cfg(feature = "jit")]
+impl BytecodeTierPolicy {
+    #[doc(hidden)]
+    pub fn for_process() -> Self {
+        if !crate::emacs_core::jit::jit_runtime_enabled() {
+            Self::InterpreterOnly
+        } else if crate::emacs_core::jit::call_feedback_collection_enabled() {
+            Self::AdaptiveRecording
+        } else {
+            Self::Adaptive
+        }
+    }
+
+    /// The process policy under a test's per-thread feedback override.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn with_test_feedback_override(self) -> Self {
+        match (
+            self,
+            crate::emacs_core::jit::feedback::feedback_mode_test_override(),
+        ) {
+            (Self::InterpreterOnly, _) | (_, None) => self,
+            (_, Some(mode)) if mode.records() => Self::AdaptiveRecording,
+            (_, Some(_)) => Self::Adaptive,
+        }
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn records_call_feedback(self) -> bool {
+        matches!(self, Self::AdaptiveRecording)
+    }
+}
+
+/// The floor-adjusted depth check rejected a call. This scalar decision carries
+/// neither Lisp values nor permission to use a context or collect its roots.
+#[must_use]
+#[derive(Debug, thiserror::Error)]
+enum BytecodeDepthOverflow {
+    #[error("Lisp nesting exceeds ‘max-lisp-eval-depth’")]
+    Confirmed,
+}
+
+impl BytecodeDepthOverflow {
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn into_flow(self) -> Flow {
+        match self {
+            Self::Confirmed => signal(
+                LispCondition::Error,
+                vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
+            ),
+        }
+    }
+}
+
+/// The bytecode VM execution engine.
+///
+/// Operates on a Context's obarray and dynamic binding stack.
+pub struct Vm<'a> {
+    ctx: &'a mut crate::emacs_core::eval::Context,
+    /// Pointer-free policy fact; access remains bound by the original ctx borrow.
+    sole_owner: crate::emacs_core::eval::world::SoleOwnerVm,
+    recent_interpreter_call: RecentInterpreterCall,
+    #[cfg(feature = "jit")]
+    bytecode_tier_policy: BytecodeTierPolicy,
+    /// Isolation knobs, read once per VM (see `jit::jit_bcall_tier_skipped` /
+    /// `jit::jit_bcall_cache_forced`); a field load on the hot path, never an
+    /// env read.
+    #[cfg(feature = "jit")]
+    bcall_tier_skipped: bool,
+    #[cfg(feature = "jit")]
+    bcall_cache_forced: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FrameArgumentCopy {
+    None,
+    One,
+    Scalar,
+    Bulk,
+}
+
+impl FrameArgumentCopy {
+    /// GNU's bytecode `setup_frame` pushes arguments one word at a time.  That
+    /// wins for ordinary Lisp arities because a libc `memmove` dispatch costs
+    /// more than a handful of already-capacity-checked stores.  Retain the
+    /// bulk path for unusually wide generated functions.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub const fn for_count(count: usize) -> Self {
+        const SCALAR_COPY_MAX: usize = 8;
+        match count {
+            0 => Self::None,
+            1 => Self::One,
+            2..=SCALAR_COPY_MAX => Self::Scalar,
+            _ => Self::Bulk,
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FRAME_ARGUMENT_COPY_COUNTS: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+fn reset_frame_argument_copy_counts() {
+    FRAME_ARGUMENT_COPY_COUNTS.set((0, 0));
+}
+
+#[cfg(test)]
+fn frame_argument_copy_counts() -> (usize, usize) {
+    FRAME_ARGUMENT_COPY_COUNTS.get()
+}
+
+#[inline(always)]
+fn copy_frame_arguments(buffer: &mut Vec<Value>, args_start: usize, copied: usize) {
+    let strategy = FrameArgumentCopy::for_count(copied);
+    #[cfg(test)]
+    FRAME_ARGUMENT_COPY_COUNTS.with(|counts| {
+        let (scalar, bulk) = counts.get();
+        counts.set(match strategy {
+            FrameArgumentCopy::None => (scalar, bulk),
+            FrameArgumentCopy::One => (scalar + 1, bulk),
+            FrameArgumentCopy::Scalar => (scalar + 1, bulk),
+            FrameArgumentCopy::Bulk => (scalar, bulk + 1),
+        });
+    });
+    match strategy {
+        FrameArgumentCopy::None => {}
+        FrameArgumentCopy::One => {
+            let value = buffer[args_start];
+            buffer.push(value);
+        }
+        FrameArgumentCopy::Scalar => {
+            for offset in 0..copied {
+                let value = buffer[args_start + offset];
+                buffer.push(value);
+            }
+        }
+        FrameArgumentCopy::Bulk => {
+            buffer.extend_from_within(args_start..args_start + copied);
+        }
+    }
+}
+
+// Match the evaluator's coarse stack-growth policy so deeply recursive
+// bytecode/macroexpansion paths don't exhaust the native thread stack before
+// `max-lisp-eval-depth` handling can fire.
+pub(crate) const VM_STACK_RED_ZONE: usize = 128 * 1024;
+pub(crate) const VM_STACK_SEGMENT: usize = 2 * 1024 * 1024;
+pub(crate) const VM_STACK_GROWTH_PROBE_START_DEPTH: usize = 16;
+pub(crate) const VM_STACK_GROWTH_PROBE_INTERVAL: usize = 16;
+
+/// GNU's bytecode stack (`BC_STACK_SIZE`, src/bytecode.c:337): 512K
+/// Lisp_Objects, 4 MiB on 64-bit.  Byte-compiled frames are charged against
+/// it in every tier; overflow raises setup_frame's `Bytecode stack overflow`
+/// (src/bytecode.c:514-515).
+pub(crate) const BC_STACK_SIZE: usize = 512 * 1024 * std::mem::size_of::<Value>();
+
+/// `struct bc_frame` header (src/bytecode.c:366-378): saved_fp, saved_top,
+/// saved_pc and fun, four pointers before the frame's `next_stack` data.
+pub(crate) const BC_FRAME_HEADER_BYTES: usize = 4 * std::mem::size_of::<usize>();
+
+/// GNU's bytecode-stack state before any frame is entered.  The dummy bottom
+/// header `init_bc_thread` parks at the base (src/bytecode.c:382-385) and is
+/// folded into [`BC_STACK_POSITION_LIMIT`], so the first frame starts at
+/// position 0.
+pub(crate) const BC_STACK_POSITION_INITIAL: usize = 0;
+
+/// The largest cumulative frame cost an installed frame may reach.  GNU's
+/// setup_frame compares `(char *)fp->next_stack > bc->stack_end`
+/// (src/bytecode.c:514-515): the next frame header's END must fit the 4 MiB
+/// stack.  With the dummy bottom header and each frame's cost folded into
+/// the position, that is `position + header <= BC_STACK_SIZE`.
+pub(crate) const BC_STACK_POSITION_LIMIT: usize = BC_STACK_SIZE - BC_FRAME_HEADER_BYTES;
+
+// Compile-time width contract for the continuation word's packed position
+// and for the 64-bit word its shift assumes.  These are type-level
+// guarantees, not debug-build masks: a configuration where the GNU stack
+// limit no longer fits the 24 packed bits, where the word is not 64 bits,
+// or where the packed field would overlap the owned-args flag must fail to
+// compile.
+const _: () = {
+    assert!(
+        BC_STACK_POSITION_LIMIT <= InterpreterCallerReturn::POSITION_LIMIT_MASK,
+        "the bytecode-stack frame position must fit its 24 packed bits"
+    );
+    assert!(
+        usize::BITS == 64,
+        "the continuation word packs the bytecode position above bit 32"
+    );
+    assert!(
+        InterpreterCallerReturn::POSITION_SHIFT + InterpreterCallerReturn::POSITION_BITS
+            < usize::BITS,
+        "the packed position must not overlap the owned-args flag"
+    );
+};
+
+/// The shim finish's "this entry never charged" marker.  A real saved
+/// position is always `<= BC_STACK_POSITION_LIMIT`, so this is unambiguous;
+/// position 0 is a real saved position (the first frame charged from an
+/// empty chain).
+pub(crate) const BC_STACK_POSITION_UNCHARGED: usize = usize::MAX;
+
+/// The bytes one byte-compiled frame occupies: the header plus the
+/// function's data stack (`CLOSURE_STACK_DEPTH` words). Saturating, because
+/// `max_stack` comes from the closure's slot 3 and a hostile value must not
+/// wrap the cost to something a frame could fit into.
+#[inline(always)]
+pub(crate) fn bytecode_frame_bytes(max_stack: usize) -> usize {
+    BC_FRAME_HEADER_BYTES.saturating_add(max_stack.saturating_mul(std::mem::size_of::<Value>()))
+}
+
+/// GNU `setup_frame` (src/bytecode.c:510-515) refuses a declared depth that
+/// does not fit the bytecode stack from an empty chain. Inlining that callee
+/// would run its body with no charge. A frame that fits at position 0 can
+/// still overflow once the caller has a position; this predicate does not
+/// see that position.
+#[inline(always)]
+pub(crate) fn declared_frame_fits(max_stack: usize) -> bool {
+    bytecode_frame_bytes(max_stack) <= BC_STACK_POSITION_LIMIT
+}
+
+/// Charge one byte-compiled frame of a callee declaring `max_stack` against
+/// GNU's bytecode stack, held as the absolute POSITION the frame chain has
+/// reached (`Context::bytecode_stack_position`).  GNU's check is one pointer
+/// add plus one compare; the position form makes that check the same shape:
+/// `position + frame_bytes <= BC_STACK_POSITION_LIMIT`.  `Some(saved)` is
+/// the caller's position the frame must restore when it returns or unwinds
+/// ([`release_bytecode_frame`], a plain store); `None` when the frame does
+/// not fit, and the caller takes its reference path, which raises GNU's
+/// `Bytecode stack overflow`.  Every tier's byte-compiled entry calls this
+/// same rule over the function object's declared depth, so the depth at
+/// which the budget ends is tier-independent.
+#[inline(always)]
+pub(crate) fn charge_bytecode_frame(
+    ctx: &mut crate::emacs_core::eval::Context,
+    max_stack: usize,
+) -> Option<usize> {
+    let saved = ctx.bytecode_stack_position;
+    let position = charge_frame_position(saved, max_stack)?;
+    ctx.bytecode_stack_position = position;
+    Some(saved)
+}
+
+/// Charge a frame whose byte cost was already computed by
+/// [`bytecode_frame_bytes`]. The accept/reject result matches
+/// [`charge_bytecode_frame`] when `frame_bytes` is that function of the
+/// same `max_stack`. Stamped spec sites call this. The interpreter
+/// entries keep their d119 bodies and do not: one shared helper made
+/// LLVM merge the overflow check and the limit check.
+#[inline(always)]
+pub(crate) fn charge_bytecode_frame_bytes(
+    ctx: &mut crate::emacs_core::eval::Context,
+    frame_bytes: usize,
+) -> Option<usize> {
+    let saved = ctx.bytecode_stack_position;
+    let position = charge_frame_of_bytes(saved, frame_bytes)?;
+    ctx.bytecode_stack_position = position;
+    Some(saved)
+}
+
+/// GNU `setup_frame`'s one pointer add plus one compare
+/// (src/bytecode.c:509-515), without touching Context: `Some(next)` when the
+/// callee frame fits, `None` when it does not.  The interpreter driver
+/// supplies its frame-local position here, so the hot Bcall check needs no
+/// load from Context; the caller publishes the result with the frame push
+/// (the GNU `bc->fp = fp` store).
+#[inline(always)]
+pub(crate) fn charge_frame_position(caller_position: usize, max_stack: usize) -> Option<usize> {
+    let position = caller_position.checked_add(bytecode_frame_bytes(max_stack))?;
+    if position > BC_STACK_POSITION_LIMIT {
+        return None;
+    }
+    Some(position)
+}
+
+/// Stamped-spec form of [`charge_frame_position`]: the byte cost is
+/// already known. Interpreter sites keep the d119 body above and do
+/// not call this.
+#[inline(always)]
+pub(crate) fn charge_frame_of_bytes(caller_position: usize, frame_bytes: usize) -> Option<usize> {
+    let position = caller_position.checked_add(frame_bytes)?;
+    if position > BC_STACK_POSITION_LIMIT {
+        return None;
+    }
+    Some(position)
+}
+
+#[cfg(test)]
+mod charge_frame_bytes_test {
+    use super::{
+        BC_STACK_POSITION_LIMIT, bytecode_frame_bytes, charge_frame_of_bytes, charge_frame_position,
+    };
+
+    /// A cached byte count must accept and reject the same positions as
+    /// charging `max_stack` directly, including a saturating hostile depth.
+    #[test]
+    fn cached_bytes_match_the_max_stack_charge() {
+        let depths = [0usize, 1, 8, 64, 10_000, usize::MAX / 2, usize::MAX];
+        let positions = [
+            0usize,
+            1,
+            32,
+            BC_STACK_POSITION_LIMIT - 1,
+            BC_STACK_POSITION_LIMIT,
+        ];
+        for max_stack in depths {
+            let bytes = bytecode_frame_bytes(max_stack);
+            for position in positions {
+                assert_eq!(
+                    charge_frame_position(position, max_stack),
+                    charge_frame_of_bytes(position, bytes),
+                    "max_stack {max_stack} position {position}"
+                );
+            }
+        }
+    }
+}
+
+/// Release a charge taken by [`charge_bytecode_frame`]: restore the position
+/// the caller had before the frame was charged.  One store; the GNU frame
+/// pop (`bc->fp = fp->saved_fp`, src/bytecode.c:892-900) is the same update.
+#[inline(always)]
+pub(crate) fn release_bytecode_frame(
+    ctx: &mut crate::emacs_core::eval::Context,
+    saved_position: usize,
+) {
+    ctx.bytecode_stack_position = saved_position;
+}
+
+impl<'a> crate::emacs_core::hook_runtime::HookRuntime for Vm<'a> {
+    fn hook_context(&self) -> &crate::emacs_core::eval::Context {
+        self.ctx
+    }
+
+    fn call_hook_callable(
+        &mut self,
+        function: Value,
+        args: &[Value],
+        authorization: &crate::emacs_core::hook_runtime::HookWalkAuthorization<'_>,
+    ) -> EvalResult {
+        let _ = authorization;
+        self.call_function_with_roots(function, args)
+    }
+
+    fn report_safe_hook_error(
+        &mut self,
+        hook_sym: SymId,
+        function: Value,
+        signal: &neovm_value::error::SignalData,
+    ) -> EvalResult {
+        crate::emacs_core::hook_runtime::HookRuntime::report_safe_hook_error(
+            &mut *self.ctx,
+            hook_sym,
+            function,
+            signal,
+        )
+    }
+
+    fn remove_hook_function_after_error(&mut self, hook_sym: SymId, function: Value) {
+        crate::emacs_core::hook_runtime::HookRuntime::remove_hook_function_after_error(
+            &mut *self.ctx,
+            hook_sym,
+            function,
+        );
+    }
+
+    fn with_hook_root_scope<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, Flow>,
+    ) -> Result<T, Flow> {
+        self.with_dynamic_vm_roots(|vm| f(vm))
+    }
+
+    fn push_hook_root(&mut self, value: Value) {
+        self.push_dynamic_vm_root(value);
+    }
+}
+
+/// Cached symbol ids for the arithmetic and comparison builtins the opcode
+/// fast paths dispatch to. Fixed names, resolved once: the by-name path was a
+/// global-interner lock and a string hash per arithmetic operation, and the
+/// opcodes now hand `call_function_from_stack_args` a subr built from these.
+static ADD1_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '1+'
+static DIVIDE_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '/'
+static GE_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '>='
+static GT_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '>'
+static LE_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '<='
+static LT_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '<'
+static MAX_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'max'
+static MIN_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'min'
+static MINUS_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '-'
+static MODULO_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '%'
+static NUMEQ_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '='
+static APPLY_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'apply'
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// `apply` calls `Vm::call_apply_native` ran natively.
+    pub(crate) static APPLY_NATIVE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Whether the last callee frame `call_apply_native` recorded read its
+    /// arguments through a pointer (`BacktraceNative`) -- which must never
+    /// name its Rust-local spread buffer.
+    pub(crate) static APPLY_CALLEE_FRAME_BORROWS: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Copied read observer for the re-homed eval test (C4/N2: the thread-local
+/// counter stays private and only the value copies out).
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn apply_native_calls_for_test() -> usize {
+    APPLY_NATIVE_CALLS.with(|calls| calls.get())
+}
+
+/// Where a native callee's backtrace frame finds its arguments
+/// ([`Vm::run_leaf_native_to_native`]).
+#[cfg(feature = "jit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CalleeFrameArgs {
+    /// The words are the JIT caller's call-args slot, live for the whole
+    /// call and until the caller leaf exits: the frame may record a pointer
+    /// to them (`BacktraceNative`, GNU's `record_in_backtrace` shape).
+    CallerSlot,
+    /// The words are a Rust local of the pusher (`call_apply_native`'s
+    /// spread), which a contained panic unwinding through the pusher frees
+    /// while the frame survives as residue: the frame records a copy.
+    Local,
+}
+
+/// Whether a genuine symbol call may bypass resolution and run builtin `id`.
+/// Compiler overrides, redefinition and advice must still invalidate that call
+/// fast path, as GNU's Bcall/Ffuncall does. Primitive opcodes never use this
+/// predicate: GNU's dedicated bytecode cases call their primitives directly.
+pub(crate) fn named_builtin_fast_path_allowed_in(
+    ctx: &crate::emacs_core::eval::Context,
+    id: SymId,
+) -> bool {
+    if ctx.compiler_function_overrides_active() {
+        return false;
+    }
+    match ctx.obarray.symbol_function_id(id) {
+        Some(val) => match val.kind() {
+            ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr) => {
+                val.as_subr_id() == Some(id)
+            }
+            ValueKind::Nil => true,
+            _ => false,
+        },
+        None => true,
+    }
+}
+static PLUS_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '+'
+static SUB1_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '1-'
+static TIMES_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '*'
+
+/// The three process-wide, env-derived settings every `Vm` copies in, read as
+/// ONE cached unit.
+///
+/// Each used to be its own `OnceLock`, so every `Vm::from_context` paid three
+/// initialized-flag branches and three acquire fences — and the JIT's generic
+/// call shim builds a `Vm` per call, which put those reads on the
+/// native->native seam. They all derive from environment variables read at
+/// process start and none can change afterwards, so one cache serves all three
+/// and a racing double read resolves to the same value.
+#[cfg(feature = "jit")]
+#[derive(Clone, Copy)]
+struct VmProcessKnobs {
+    tier_policy: BytecodeTierPolicy,
+    bcall_tier_skipped: bool,
+    bcall_cache_forced: bool,
+}
+
+#[cfg(feature = "jit")]
+impl VmProcessKnobs {
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn get() -> Self {
+        static KNOBS: std::sync::OnceLock<VmProcessKnobs> = std::sync::OnceLock::new();
+        *KNOBS.get_or_init(|| Self {
+            tier_policy: BytecodeTierPolicy::for_process(),
+            bcall_tier_skipped: crate::emacs_core::jit::jit_bcall_tier_skipped(),
+            bcall_cache_forced: crate::emacs_core::jit::jit_bcall_cache_forced(),
+        })
+    }
+}
+
+impl<'a> Vm<'a> {
+    #[doc(hidden)]
+    pub fn from_context(ctx: &'a mut crate::emacs_core::eval::Context) -> Self {
+        #[cfg(feature = "jit")]
+        let knobs = VmProcessKnobs::get();
+        #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+        let knobs = VmProcessKnobs {
+            tier_policy: if crate::emacs_core::jit::jit_forced_off_for_test() {
+                BytecodeTierPolicy::InterpreterOnly
+            } else {
+                knobs.tier_policy.with_test_feedback_override()
+            },
+            ..knobs
+        };
+        let sole_owner = ctx.obarray.sole_owner_registration().into_vm();
+        Self {
+            ctx,
+            sole_owner,
+            recent_interpreter_call: RecentInterpreterCall::EMPTY,
+            #[cfg(feature = "jit")]
+            bytecode_tier_policy: knobs.tier_policy,
+            #[cfg(feature = "jit")]
+            bcall_tier_skipped: knobs.bcall_tier_skipped,
+            #[cfg(feature = "jit")]
+            bcall_cache_forced: knobs.bcall_cache_forced,
+        }
+    }
+
+    #[cfg(all(test, feature = "jit"))]
+    #[doc(hidden)]
+    pub fn force_interpreter_only_for_test(&mut self) {
+        self.bytecode_tier_policy = BytecodeTierPolicy::InterpreterOnly;
+    }
+
+    /// Truncate the bytecode operand stack to `len` — used by the JIT call shim
+    /// to remove the arguments it pushed onto `bc_buf` for the fast call path,
+    /// on every exit (success or signal), keeping the push/truncate symmetric.
+    #[cfg(feature = "jit")]
+    #[doc(hidden)]
+    pub fn bc_buf_truncate(&mut self, len: usize) {
+        self.ctx.bc_buf.truncate(len);
+    }
+
+    /// Set the current depth and max_depth (inherited from the Context).
+    pub fn set_depth(&mut self, depth: usize, max_depth: usize) {
+        self.ctx.depth = depth;
+        self.ctx.max_depth = max_depth;
+    }
+
+    /// Get the current depth (to sync back to the Context).
+    pub fn get_depth(&self) -> usize {
+        self.ctx.depth
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn with_dynamic_vm_roots<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let scope = self.ctx.save_vm_roots();
+        let result = f(self);
+        self.ctx.restore_vm_roots(scope);
+        result
+    }
+
+    #[doc(hidden)]
+    pub fn with_bytecode_call_depth<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, Flow>,
+    ) -> Result<T, Flow> {
+        if let Err(flow) = self.enter_published_bytecode_call_depth() {
+            return Err(Self::reject_bytecode_call(f, flow));
+        }
+        let result = f(self);
+        self.leave_bytecode_call_depth();
+        result
+    }
+
+    /// Drop the uncalled closure after rejected-depth callbacks have finished.
+    /// Keep its owned argument cleanup out of the interpreter's normal paths;
+    /// successful calls retain the original closure and depth-check code.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn reject_bytecode_call<T>(
+        f: impl FnOnce(&mut Self) -> Result<T, Flow>,
+        flow: Flow,
+    ) -> Flow {
+        drop(f);
+        flow
+    }
+
+    /// Check already-counted depth with the caller's operands published.
+    /// Keep rejected-call dispatch and depth retirement inside this cold
+    /// boundary; floor-raised success remains counted for the normal exit.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn bytecode_depth_exceeded_published(&mut self) -> Result<(), Flow> {
+        match self.check_bytecode_call_depth() {
+            Ok(()) => Ok(()),
+            Err(overflow) => Err(self.ctx.finish_lisp_depth_overflow(overflow.into_flow())),
+        }
+    }
+
+    /// Finish a cached driver's confirmed depth rejection with its cursor live.
+    /// Consume publication before callback Lisp, dispatch at counted depth,
+    /// and retire the rejected call exactly once. Accepted floor raises keep
+    /// the original cursor in the driver and never cross this boundary.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn finish_live_bytecode_depth_overflow(
+        &mut self,
+        cursor: RunLoopCursor,
+        overflow: BytecodeDepthOverflow,
+    ) -> (Flow, PublishedSolePhase) {
+        let published = cursor.publish(self);
+        let flow = self.ctx.finish_lisp_depth_overflow(overflow.into_flow());
+        (flow, published)
+    }
+
+    /// Enter a bytecode call whose caller has already published its operands.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn enter_published_bytecode_call_depth(&mut self) -> Result<(), Flow> {
+        self.ctx.depth += 1;
+        if self.ctx.depth > self.ctx.max_depth {
+            // Cold: floor raising, error construction, dispatch and rejected
+            // depth retirement stay outside the shallow call's live ranges.
+            self.bytecode_depth_exceeded_published()?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn leave_bytecode_call_depth(&mut self) {
+        debug_assert!(self.ctx.depth > 0);
+        self.ctx.depth -= 1;
+    }
+
+    /// Cold arm of [`Vm::with_bytecode_call_depth`]: GNU raises the effective
+    /// floor to 100 before signaling, so a pathologically small
+    /// max-lisp-eval-depth still leaves room to run the error handler.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn bytecode_depth_exceeded(&mut self) -> Result<(), Flow> {
+        self.check_bytecode_call_depth()
+            .map_err(BytecodeDepthOverflow::into_flow)
+    }
+
+    /// The cached driver keeps its cursor live through this scalar check.
+    /// Allocate the signal only after confirmed rejection publishes that cursor.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn check_live_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
+        self.check_bytecode_call_depth()
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn check_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
+        if self.ctx.max_depth < 100 {
+            self.ctx.max_depth = 100;
+        }
+        if self.ctx.depth > self.ctx.max_depth {
+            // GNU raises a `max-lisp-eval-depth` below 100 before signalling
+            // (`src/eval.c:2604-2608`) and writes the `DEFVAR_INT` cell, so
+            // Lisp observes 100 after the failed nesting attempt. The cached
+            // `max_depth` above is clamped to 100 on every sync and cannot
+            // answer whether the variable is still lower, so the helper reads
+            // the binding itself.
+            self.ctx.raise_lisp_eval_depth_floor();
+            return Err(BytecodeDepthOverflow::Confirmed);
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn with_vm_root_scope<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let scope = self.ctx.save_vm_roots();
+        let result = f(self);
+        self.ctx.restore_vm_roots(scope);
+        result
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn push_dynamic_vm_root(&mut self, value: Value) {
+        self.ctx.push_vm_frame_root(value);
+    }
+
+    /// Bunbind's tail (GNU bytecode.c:843-851): unwind to the frame-owned
+    /// mark `BindStack::consume` selected. Bunbind0 unwinds nothing, and a
+    /// count the frame does not own signals Invalid byte-code instead of
+    /// unwinding the caller's bindings.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn unbind_frame_target(
+        &mut self,
+        target: Result<Option<frame_bindings::FrameUnbindTarget>, frame_bindings::FrameUnbindError>,
+    ) -> EvalResult {
+        match target {
+            Ok(Some(target)) => self
+                .ctx
+                .unbind_to_with_result(target.depth(), Ok(Value::NIL)),
+            Ok(None) => Ok(Value::NIL),
+            Err(_) => Err(invalid_bytecode_flow()),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn cleanup_bytecode_frame(
+        &mut self,
+        result: EvalResult,
+        condition_stack_base: usize,
+        specpdl_base: usize,
+        frame_base: usize,
+    ) -> EvalResult {
+        self.cleanup_bytecode_frame_with_root::<ContextBytecodeFrameRoot>(
+            result,
+            condition_stack_base,
+            specpdl_base,
+            frame_base,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn cleanup_iterative_bytecode_frame(
+        &mut self,
+        result: EvalResult,
+        condition_stack_base: usize,
+        specpdl_base: usize,
+        frame_base: usize,
+    ) -> EvalResult {
+        self.cleanup_bytecode_frame_with_root::<ConsumedCallOperandFrameRoot>(
+            result,
+            condition_stack_base,
+            specpdl_base,
+            frame_base,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn cleanup_bytecode_frame_with_root<Root: BytecodeFrameRootStorage>(
+        &mut self,
+        result: EvalResult,
+        condition_stack_base: usize,
+        specpdl_base: usize,
+        frame_base: usize,
+    ) -> EvalResult {
+        #[cfg(test)]
+        GENERIC_BYTECODE_CLEANUP_COUNT.with(|count| count.set(count.get() + 1));
+
+        // GNU bytecode.c keeps a bytecode return value in `TOP` while unwinding
+        // back to the caller. Neomacs uses recursive Rust frames, so the result
+        // must be rooted only while this frame runs an operation that can GC.
+        //
+        // Dropping this frame's condition handlers is one such teardown step but
+        // cannot GC: truncate_condition_stack is a plain Vec truncate over
+        // ConditionFrame (no Drop), so run it unconditionally first, outside any
+        // root scope.
+        self.ctx.truncate_condition_stack(condition_stack_base);
+        // unbind_to (unwind-protect bodies / binding restores) is then the ONLY
+        // remaining step that can GC; bc_buf.truncate and release of either
+        // root-storage kind merely drop Copy stack slots and hit no safe point.
+        // When the frame left no
+        // dynamic binds (the common lexical case — args and locals live on the
+        // operand stack, not specpdl; a backtrace frame from the caller sits
+        // below this frame's specpdl_base), unbind_to would only re-run its
+        // fixed profiler_poll / quit-flag preamble over an empty span, nothing
+        // can GC, and rooting the result is pure overhead. The result is
+        // returned un-rooted in both paths (the caller re-roots it), so skipping
+        // the root keeps the same post-return contract.
+        if self.ctx.specpdl.len() == specpdl_base {
+            self.ctx.bc_buf.truncate(frame_base);
+            Root::release(self.ctx);
+            return result;
+        }
+        // Closure fast path: an env=Some frame's sole outstanding entry is
+        // its own prologue LexicalEnv save. Popping it is unbind_to's exact
+        // restore — a pure `ctx.lexenv = old` assignment (no GC, no watchers,
+        // no allocation; see the SpecBinding::LexicalEnv arm of
+        // unbind_to_result) — so the result needs no rooting here either.
+        // Every closure call (mapcar lambdas and friends) returns through
+        // this instead of the save-roots/unbind/restore machinery.
+        if self.ctx.specpdl.len() == specpdl_base + 1
+            && matches!(
+                self.ctx.specpdl.last(),
+                Some(crate::emacs_core::eval::SpecBinding::LexicalEnv { .. })
+            )
+        {
+            if let Some(crate::emacs_core::eval::SpecBinding::LexicalEnv { old_lexenv }) =
+                self.ctx.specpdl.pop()
+            {
+                self.ctx.lexenv = old_lexenv;
+            }
+            self.ctx.bc_buf.truncate(frame_base);
+            Root::release(self.ctx);
+            return result;
+        }
+        let result = self.ctx.unbind_to_with_result(specpdl_base, result);
+        self.ctx.bc_buf.truncate(frame_base);
+        Root::release(self.ctx);
+        result
+    }
+
+    #[doc(hidden)]
+    pub fn with_frame_roots<T>(
+        &mut self,
+        _func: &ByteCodeFunction,
+        extra: &[Value],
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        self.with_dynamic_vm_roots(|vm| {
+            // The active bytecode frame already roots its constants for the
+            // whole invocation; only transient values removed from bc_buf need
+            // an explicit root while a nested call can GC.
+            for value in extra.iter().copied() {
+                vm.ctx.push_vm_frame_root(value);
+            }
+            f(vm)
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn with_frame_arg_roots<A, T>(
+        &mut self,
+        func: &ByteCodeFunction,
+        args: A,
+        f: impl FnOnce(&mut Self, A) -> T,
+    ) -> T
+    where
+        A: AsRef<[Value]>,
+    {
+        self.with_frame_roots(func, &[], |vm| {
+            for value in args.as_ref().iter().copied() {
+                vm.ctx.push_vm_frame_root(value);
+            }
+            f(vm, args)
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn with_frame_call_roots<A, T>(
+        &mut self,
+        func: &ByteCodeFunction,
+        function: Value,
+        args: A,
+        f: impl FnOnce(&mut Self, A) -> T,
+    ) -> T
+    where
+        A: AsRef<[Value]>,
+    {
+        self.with_frame_roots(func, &[], |vm| {
+            vm.ctx.push_vm_frame_root(function);
+            for value in args.as_ref().iter().copied() {
+                vm.ctx.push_vm_frame_root(value);
+            }
+            f(vm, args)
+        })
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[doc(hidden)]
+    pub fn with_macro_expansion_scope(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> EvalResult,
+    ) -> EvalResult {
+        let state = self.ctx.begin_macro_expansion_scope()?;
+        let result = f(self);
+        self.ctx.finish_macro_expansion_scope(state, result)
+    }
+
+    #[doc(hidden)]
+    pub fn collect_flow_roots(flow: &Flow, out: &mut Vec<Value>) {
+        match flow.kind() {
+            FlowRef::Signal(sig) => {
+                out.push(Value::from_sym_id(sig.symbol));
+                out.extend(sig.data.iter().copied());
+                if let Some(raw) = sig.raw_data {
+                    out.push(raw);
+                }
+            }
+            FlowRef::Throw(thrown) => {
+                out.push(thrown.tag);
+                out.push(thrown.value);
+            }
+            FlowRef::ThreadBlocked(blocked) => {
+                out.push(blocked.blocker);
+                out.push(blocked.remaining_forms);
+            }
+            // Carries only an exit code and a restart flag: no Lisp values to
+            // keep alive.
+            FlowRef::Shutdown(_) => {}
+        }
+    }
+
+    /// Execute a bytecode function with given arguments.
+    #[doc(hidden)]
+    pub fn execute(&mut self, func: &ByteCodeFunction, args: Vec<Value>) -> EvalResult {
+        // Suite chunks are often hand-assembled and passed here directly,
+        // bypassing `Value::make_bytecode`'s test-only sealing; normalize a
+        // clone so they may enter the unchecked-fetch driver. Production
+        // sealing remains exclusive to the decode installers.
+        #[cfg(test)]
+        if !func.executes_sealed_ops() {
+            let mut sealed = func.clone();
+            sealed.seal_hand_assembled_ops_for_test();
+            return self.execute_with_func_value(&sealed, args, Value::NIL);
+        }
+        self.execute_with_func_value(func, args, Value::NIL)
+    }
+
+    /// Execute a bytecode function, passing through the original function
+    /// value for use in `wrong-number-of-arguments` error reporting.
+    ///
+    /// Owned-args wrapper over [`Vm::execute_from_stack_args`]: pushes the
+    /// args onto the GC-traced `bc_buf` tail (rooting them for the whole
+    /// call) and truncates back on every exit, preserving the JIT call
+    /// shim's push/truncate symmetry. The hot bytecode→bytecode path skips
+    /// this wrapper entirely — its args already live on `bc_buf`.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn execute_with_func_value(
+        &mut self,
+        func: &ByteCodeFunction,
+        args: impl Into<LispArgVec>,
+        func_value: Value,
+    ) -> EvalResult {
+        let args = args.into();
+        let args_start = self.ctx.bc_buf.len();
+        self.ctx.bc_buf.extend_from_slice(&args);
+        let result = self.execute_from_stack_args(func, args_start, args.len(), func_value);
+        self.ctx.bc_buf.truncate(args_start);
+        result
+    }
+
+    /// Execute a bytecode function whose arguments live on `bc_buf` at
+    /// `[args_start, args_start + nargs)` — the hot entry for
+    /// bytecode→bytecode calls (the caller's `Op::Call` already left the
+    /// args there; no `LispArgVec`, no per-arg rooting).
+    ///
+    /// Root the executing function across nested calls that can GC. A heap
+    /// func_value is the frame-held function object (GNU fp->fun,
+    /// bytecode.c setup_frame): run_frame's own BcFrame { base, fun } push
+    /// — visited by trace_roots — is the sole root, transitively marking
+    /// the constants vector (the GC traces ByteCodeObj.data.constants, and
+    /// post-publish bytecode is immutable). Every caller derives `func` by
+    /// dereferencing this same ByteCode object, so no separate per-call
+    /// root scope is needed at all.
+    ///
+    /// WINDOW INVARIANT (load-bearing): nothing between this function's
+    /// entry and run_frame's bc_frames.push may allocate a Lisp object or
+    /// hit a GC safe point — today that window is only the stacker probe
+    /// (native mmap, not Lisp alloc) and run_frame's two len reads. The
+    /// debug assertion below enforces it.
+    ///
+    /// Only the direct/manual path (func_value == NIL/non-heap, e.g.
+    /// `execute()`) holds nothing else alive, so it keeps a vm-root scope
+    /// rooting the parameter child, original arglist and constants
+    /// individually (trace_roots skips non-heap BcFrame.fun).
+    #[doc(hidden)]
+    pub fn execute_from_stack_args(
+        &mut self,
+        func: &ByteCodeFunction,
+        args_start: usize,
+        nargs: usize,
+        func_value: Value,
+    ) -> EvalResult {
+        // GNU's bytecode-stack accounting (src/bytecode.c:337 BC_STACK_SIZE,
+        // setup_frame :496-516): every byte-compiled frame costs the
+        // bc_frame header plus the function's declared data stack, and the
+        // budget is the frame POSITION the chain reaches.  Charge on entry
+        // with the one rule every tier uses ([`charge_bytecode_frame`]), and
+        // restore the caller's position on every exit (normal return,
+        // signal, throw); a contained panic restores it from the
+        // module-boundary snapshot.
+        let Some(saved_position) = charge_bytecode_frame(self.ctx, func.max_stack.get()) else {
+            return Err(self.bytecode_stack_overflow());
+        };
+        // Flattened native-stack probe: the common shallow call pays two
+        // integer compares straight through to the body — no FnOnce
+        // combinator whose two consumption sites (fast path + the stacker
+        // closure) forced a memory-materialized closure environment on
+        // every call. Only every 16th depth level from 16 up takes the cold
+        // stacker path (INTERVAL is a power of two — the is_multiple_of
+        // folds to a mask).
+        let depth = self.ctx.depth;
+        let result = if depth >= VM_STACK_GROWTH_PROBE_START_DEPTH
+            && depth.is_multiple_of(VM_STACK_GROWTH_PROBE_INTERVAL)
+        {
+            self.execute_from_stack_args_grown(func, args_start, nargs, func_value)
+        } else {
+            self.execute_from_stack_args_body(func, args_start, nargs, func_value)
+        };
+        self.ctx.bytecode_stack_position = saved_position;
+        result
+    }
+
+    /// GNU `setup_frame`'s bytecode-stack overflow (src/bytecode.c:514-515):
+    /// the frame being installed does not fit `BC_STACK_SIZE`.  GNU checks
+    /// before installing the frame; the caller's depth protocol already
+    /// counted the rejected call.
+    #[cold]
+    #[inline(never)]
+    fn bytecode_stack_overflow(&mut self) -> Flow {
+        signal("error", vec![Value::string("Bytecode stack overflow")])
+    }
+
+    /// The one cold handler of a rejected iterative Bcall frame: the drive
+    /// arms call it when [`charge_bytecode_frame`] reports the frame does not
+    /// fit, so their hot bodies carry only the subtraction and its branch.
+    /// The rejected frame was never installed: pop the backtrace token the
+    /// caller recorded (GNU records the callee before `setup_frame` checks,
+    /// bytecode.c:792-796 then :496-516), release the call depth, and let the
+    /// signal flow through the caller's nonlocal machinery.
+    #[cold]
+    #[inline(never)]
+    fn reject_bytecode_frame_for_budget(&mut self, backtrace: BytecodeBacktraceFrame) -> Flow {
+        let result = Err(signal(
+            "error",
+            vec![Value::string("Bytecode stack overflow")],
+        ));
+        let result = self.ctx.dispatch_signal_result_if_needed(result);
+        let result = self
+            .ctx
+            .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result);
+        self.leave_bytecode_call_depth();
+        debug_assert!(result.is_err());
+        match result {
+            Err(flow) => flow,
+            Ok(_) => unreachable!("a bytecode-stack overflow cannot complete"),
+        }
+    }
+
+    /// Cold stacker arm of [`Vm::execute_from_stack_args`]: grow the native
+    /// stack segment if the red zone is near, then run the body inside it.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn execute_from_stack_args_grown(
+        &mut self,
+        func: &ByteCodeFunction,
+        args_start: usize,
+        nargs: usize,
+        func_value: Value,
+    ) -> EvalResult {
+        crate::emacs_core::eval::native_stack::maybe_grow_tracking_jit_limit(
+            self,
+            |vm| vm.ctx.jit_stack_limit_mut(),
+            |vm| vm.ctx.native_stack_probe_mut(),
+            VM_STACK_RED_ZONE,
+            VM_STACK_SEGMENT,
+            |vm| vm.execute_from_stack_args_body(func, args_start, nargs, func_value),
+        )
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn execute_from_stack_args_body(
+        &mut self,
+        func: &ByteCodeFunction,
+        args_start: usize,
+        nargs: usize,
+        func_value: Value,
+    ) -> EvalResult {
+        #[cfg(debug_assertions)]
+        let gc_cycles_at_entry = crate::emacs_core::gc_stats::snapshot().collections;
+        if func_value.is_heap_object() {
+            #[cfg(debug_assertions)]
+            debug_assert_eq!(
+                crate::emacs_core::gc_stats::snapshot().collections,
+                gc_cycles_at_entry,
+                "GC ran between execute_from_stack_args entry and run_frame \
+                 — the BcFrame.fun rooting window invariant is broken"
+            );
+            self.run_frame(func, args_start, nargs, func_value)
+        } else {
+            self.with_dynamic_vm_roots(|vm| {
+                // Manual chunks have no heap function owner. Keep both
+                // parameter fields alive after the invocation cursor ends:
+                // safe Rust callers may assign arglist independently.
+                vm.push_dynamic_vm_root(func.arglist);
+                if let Some(child) = func.params.heap_child() {
+                    vm.push_dynamic_vm_root(child);
+                }
+                for value in func.constants.iter().copied() {
+                    vm.push_dynamic_vm_root(value);
+                }
+                vm.run_frame(func, args_start, nargs, func_value)
+            })
+        }
+    }
+
+    /// Resume a bytecode frame MID-FUNCTION after a precise JIT deopt: a
+    /// native guard failed at `start_pc` with the live operand stack `stack`,
+    /// `handlers_active` condition frames registered by this frame still on
+    /// `ctx.condition_stack`, and `bind_entries` (pre-push specpdl depths,
+    /// drained from the JIT bind-stack segment) as the frame's outstanding
+    /// dynamic binds. Ownership of those binds/handlers transfers here: the
+    /// native caller performed NO frame unwind, and this frame's cleanup uses
+    /// the native frame's entry bases (`specpdl_base`/`condition_stack_base`)
+    /// so every exit unwinds exactly like the original frame would have.
+    ///
+    /// lexenv note: deliberately NOT the run_frame LexicalEnv prologue — the
+    /// native frame never switched lexenv, and the only compilable op that
+    /// reads it (UnwindProtectPop) uses the identical `ctx.lexenv` expression
+    /// in its shim and interpreter arm, so resumed ops behave exactly as the
+    /// remaining native ops would have.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)] // a forwarder: no Rust frame of its own per resumed deopt
+    #[doc(hidden)]
+    pub fn run_resumed_frame(
+        &mut self,
+        func: &ByteCodeFunction,
+        func_value: Value,
+        start_pc: usize,
+        stack: &[Value],
+        handlers_active: usize,
+        bind_entries: &[usize],
+        specpdl_base: usize,
+        condition_stack_base: usize,
+    ) -> EvalResult {
+        self.run_resumed_frame_latched(
+            func,
+            func_value,
+            start_pc,
+            stack,
+            handlers_active,
+            bind_entries,
+            specpdl_base,
+            condition_stack_base,
+            false,
+        )
+    }
+
+    /// [`Self::run_resumed_frame`], with the resumed frame's OSR latch set
+    /// to OSR_TRIED. A frame resumed from an OSR run's precise deopt starts
+    /// latched: its loop just deopted out of native code, and another
+    /// transfer would nest one more resumed frame on the Rust stack for
+    /// every retry (one per 256 iterations of a loop that keeps failing the
+    /// same guard).
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub fn run_resumed_frame_latched(
+        &mut self,
+        func: &ByteCodeFunction,
+        func_value: Value,
+        start_pc: usize,
+        stack: &[Value],
+        handlers_active: usize,
+        bind_entries: &[usize],
+        specpdl_base: usize,
+        condition_stack_base: usize,
+        osr_tried: bool,
+    ) -> EvalResult {
+        let frame_base = self.ctx.bc_buf.len();
+        // Native (JIT) catch/condition-case handlers transferred from the deopted
+        // frame recorded their `stack_len` frame-RELATIVE (a native frame keeps no
+        // operands on bc_buf). The operands are about to be seeded at
+        // bc_buf[frame_base..], so rebase those handlers to ABSOLUTE bc_buf
+        // positions — otherwise a throw/signal caught by one would truncate bc_buf
+        // to the relative length and collapse the caller's operand stack.
+        self.ctx
+            .rebase_resumed_vm_handler_stack_lens(handlers_active, frame_base);
+        self.ctx.bc_frames.push(crate::emacs_core::eval::BcFrame {
+            base: frame_base,
+            fun: func_value,
+        });
+        let frame_limit = match frame_base.checked_add(func.max_stack.get()) {
+            Some(limit) => limit,
+            None => {
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::Overflow.into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            }
+        };
+        if self.ctx.bc_buf.capacity() < frame_limit {
+            if let Err(error) = self
+                .ctx
+                .bc_buf
+                .try_reserve_exact(frame_limit - self.ctx.bc_buf.len())
+            {
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::from(error).into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            }
+        }
+        // Seed the operand stack with the native frame's live values (traced
+        // from here on; the caller performed no allocation since reading them
+        // out of the spill buffer).
+        self.ctx.bc_buf.extend_from_slice(stack);
+        let mut pc = start_pc;
+        let mut handlers = HandlerStack::new();
+        for _ in 0..handlers_active {
+            handlers.push(Handler::Condition);
+        }
+        let mut bind_stack: BindStack = bind_entries.iter().copied().collect();
+        let result = self.run_loop(
+            func,
+            frame_base,
+            &mut pc,
+            &mut handlers,
+            &mut bind_stack,
+            osr_tried,
+        );
+        self.cleanup_bytecode_frame(result, condition_stack_base, specpdl_base, frame_base)
+    }
+
+    /// Run a bytecode frame whose arguments live on the GC-traced `bc_buf`
+    /// at `[args_start, args_start + nargs)` — the GNU `exec_byte_code`
+    /// argument model. The caller's slots are never aliased or mutated: the
+    /// frame starts at `bc_buf.len()` and the args are copied ONCE into
+    /// fresh callee slots (GNU setup_frame's `PUSH (*args++)` loop,
+    /// bytecode.c:542-549), so a zero-copy backtrace span over the caller's
+    /// slots (`BacktraceArgs::EvaluatedBcStack`) stay valid and unmutated
+    /// for the whole call — exactly GNU's `record_in_backtrace` pointer into
+    /// the intact caller stack. Every exit truncates back to the frame base,
+    /// leaving the caller's args for the CALLER to pop.
+    #[doc(hidden)]
+    pub fn run_frame(
+        &mut self,
+        func: &ByteCodeFunction,
+        args_start: usize,
+        nargs: usize,
+        func_value: Value,
+    ) -> EvalResult {
+        let condition_stack_base = self.ctx.condition_stack_len();
+        let frame_base = self.ctx.bc_buf.len();
+        debug_assert!(
+            args_start + nargs <= frame_base,
+            "caller args must live at or below the new frame base"
+        );
+        self.ctx.bc_frames.push(crate::emacs_core::eval::BcFrame {
+            base: frame_base,
+            fun: func_value,
+        });
+        let mut pc: usize = 0;
+        let mut handlers = HandlerStack::new();
+        let specpdl_base = self.ctx.specpdl.len();
+        let mut bind_stack = BindStack::new();
+
+        use super::FunctionParams;
+        let params_on_stack = match &func.params {
+            FunctionParams::Stack(_) => true,
+            FunctionParams::Dynamic(_) => false,
+            FunctionParams::Named(_) => {
+                func.lexical
+                    || func.env.is_some()
+                    || matches!(func.arglist.kind(), ValueKind::Fixnum(_))
+            }
+        };
+        let shape = match &func.params {
+            // GNU checks the exact signed descriptor before converting its
+            // nonrest bound into any host stack/allocation count.
+            FunctionParams::Stack(template) => match template.call_shape(nargs) {
+                Ok(shape) => Some(shape),
+                Err(error) => {
+                    return self.cleanup_bytecode_frame(
+                        Err(stack_call_shape_flow(*template, nargs, error)),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+            },
+            FunctionParams::Dynamic(params) => {
+                if let Err(flow) =
+                    self.bind_dynamic_bytecode_formals(*params, args_start, nargs, func_value)
+                {
+                    return self.cleanup_bytecode_frame(
+                        Err(flow),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+                None
+            }
+            FunctionParams::Named(_) => {
+                let Some(shape) = func.params.stack_shape() else {
+                    return self.cleanup_bytecode_frame(
+                        Err(invalid_bytecode_flow()),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                };
+                if !(shape.required() <= nargs
+                    && (shape.rest().is_present() || nargs <= shape.nonrest()))
+                {
+                    let arity = Value::cons(
+                        Value::fixnum(shape.required() as i64),
+                        Value::fixnum(shape.nonrest() as i64),
+                    );
+                    return self.cleanup_bytecode_frame(
+                        Err(signal(
+                            LispCondition::WrongNumberOfArguments,
+                            vec![arity, Value::fixnum(nargs as i64)],
+                        )),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+                Some(shape)
+            }
+        };
+        let n_required = shape.map_or(0, |shape| shape.required());
+        let nonrest = shape.map_or(0, |shape| shape.nonrest());
+        let n_optional = nonrest.saturating_sub(n_required);
+        let has_rest = shape.is_some_and(|shape| shape.rest().is_present());
+
+        let frame_limit = match frame_base.checked_add(func.max_stack.get()) {
+            Some(limit) => limit,
+            None => {
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::Overflow.into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            }
+        };
+        if self.ctx.bc_buf.capacity() < frame_limit {
+            if let Err(error) = self
+                .ctx
+                .bc_buf
+                .try_reserve_exact(frame_limit - self.ctx.bc_buf.len())
+            {
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::from(error).into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            }
+        }
+
+        // GNU's bytecode stores lexical params at known stack positions; the
+        // byte-compiler emits `byte-stack-ref` for every lexical reference,
+        // so the param names are NOT looked up at runtime and don't need any
+        // environment entry.  Dynamic params, on the other hand, are
+        // referenced via `byte-varref` and must be specbound on the
+        // function's specpdl span.  This split mirrors `byte-compile-bind`
+        // in bytecomp.el and matches GNU's `funcall_lambda` (eval.c) ->
+        // `exec_byte_code` (bytecode.c).  Building an intermediate
+        // OrderedRuntimeBindingMap of params per call (which the previous
+        // code did even for the lexical case) is dead work that dominated
+        // debug-build batch-byte-compile runtime.
+        let has_named_params = nonrest > 0 || has_rest;
+        if params_on_stack {
+            // Lexical bytecode follows GNU bytecode.c: exec_byte_code receives
+            // the encoded arg template and pushes incoming arguments into the
+            // bytecode frame before executing the first instruction. The seed
+            // slots (nonrest params + optional rest list) must fit the frame:
+            // the same bound the old per-push checks enforced, folded into one
+            // comparison (the error path truncates any partial seed anyway).
+            let seed_slots = shape.and_then(|shape| shape.entry_depth().ok());
+            if seed_slots.is_none_or(|slots| slots > func.max_stack.get()) {
+                self.ctx.bc_buf.truncate(frame_base);
+                self.ctx.bc_frames.pop();
+                return Err(invalid_bytecode_flow());
+            }
+            let copied = nargs.min(nonrest);
+            for i in 0..copied {
+                let v = self.ctx.bc_buf[args_start + i];
+                if v.is_string() {
+                    let ptr = v.as_string_ptr().unwrap();
+                    let hdr = unsafe { &(*ptr).header };
+                    if !matches!(
+                        hdr.kind,
+                        neovm_value::tagged::header::HeapObjectKind::String
+                    ) {
+                        panic!(
+                            "RUN_FRAME ARG BUG: arg[{}] = {:#x} (ptr {:?}, kind={:?}) is corrupt string. \
+                             nargs={}, func has {} required, {} optional, rest={}",
+                            i,
+                            v.bits(),
+                            ptr,
+                            hdr.kind,
+                            nargs,
+                            n_required,
+                            n_optional,
+                            has_rest,
+                        );
+                    }
+                }
+            }
+            // The one arg copy of the call protocol (GNU setup_frame's PUSH
+            // loop): caller slots -> fresh callee slots, then nil-pad the
+            // missing optionals.
+            copy_frame_arguments(&mut self.ctx.bc_buf, args_start, copied);
+            for _ in copied..nonrest {
+                self.ctx.bc_buf.push(Value::NIL);
+            }
+
+            if has_rest {
+                // The rest args are read from the GC-traced caller slots,
+                // which stay live through the cons allocations.
+                let rest_list = if nargs > nonrest {
+                    self.ctx
+                        .tagged_heap
+                        .list_from_slice(&self.ctx.bc_buf[args_start + nonrest..args_start + nargs])
+                } else {
+                    Value::NIL
+                };
+                self.ctx.bc_buf.push(rest_list);
+            }
+        }
+
+        if has_named_params {
+            if params_on_stack {
+                // Lexical bytecode functions: params live on bc_buf at the
+                // bottom of the frame.  Install the captured closure env (if
+                // any) and run; the body's stack-ref opcodes find the params
+                // via frame_base.
+                //
+                // The lexenv save/restore (specpdl LexicalEnv entry, popped by
+                // cleanup's unbind_to) happens ONLY when this frame actually
+                // switches the environment (func.env = Some). An env-less
+                // function runs in the caller's lexenv untouched: GNU pushes
+                // no specpdl entry for any bytecode frame (bytecode.c
+                // setup_frame / Breturn are specpdl-free), and the old
+                // unconditional no-op save/restore forced every lexical frame
+                // return down cleanup_bytecode_frame's slow path.
+                use crate::emacs_core::eval::SpecBinding;
+                #[cfg(debug_assertions)]
+                let entry_lexenv = self.ctx.lexenv;
+                if let Some(env) = func.env {
+                    // Push BEFORE assigning: the entry keeps the caller's
+                    // lexenv alist GC-traced while ctx.lexenv points at the
+                    // closure env.
+                    let old_lexenv = self.ctx.lexenv;
+                    self.ctx
+                        .push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
+                    self.ctx.lexenv = env;
+                }
+                let result = self.run_loop(
+                    func,
+                    frame_base,
+                    &mut pc,
+                    &mut handlers,
+                    &mut bind_stack,
+                    false,
+                );
+                #[cfg(debug_assertions)]
+                if func.env.is_none() {
+                    debug_assert!(
+                        lexenv_tail_reachable(self.ctx.lexenv, entry_lexenv),
+                        "env-less bytecode frame changed ctx.lexenv beyond defvar markers"
+                    );
+                }
+                return self.cleanup_bytecode_frame(
+                    result,
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            }
+
+            // Dynamic bytecode functions: each param needs a specbind so
+            // that varref opcodes inside the body can find it via the
+            // obarray.  GNU eval.c:funcall_lambda then calls exec_byte_code
+            // with zero bytecode arguments, so dynamic params must not occupy
+            // bytecode stack slots. The caller's arg span stays live on
+            // bc_buf through every specbind (variable watchers can run
+            // arbitrary Lisp that captures backtraces reading it).
+            let FunctionParams::Named(named_params) = &func.params else {
+                return self.cleanup_bytecode_frame(
+                    Err(invalid_bytecode_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            };
+            let mut arg_idx = 0;
+            for param in &named_params.required {
+                let val = if arg_idx < nargs {
+                    self.ctx.bc_buf[args_start + arg_idx]
+                } else {
+                    Value::NIL
+                };
+                if let Err(flow) = self.ctx.try_specbind(*param, val) {
+                    return self.cleanup_bytecode_frame(
+                        Err(flow),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+                arg_idx += 1;
+            }
+            for param in &named_params.optional {
+                let val = if arg_idx < nargs {
+                    self.ctx.bc_buf[args_start + arg_idx]
+                } else {
+                    Value::NIL
+                };
+                if let Err(flow) = self.ctx.try_specbind(*param, val) {
+                    return self.cleanup_bytecode_frame(
+                        Err(flow),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+                arg_idx += 1;
+            }
+            if let Some(rest_name) = named_params.rest {
+                let rest_list = if arg_idx < nargs {
+                    self.ctx
+                        .tagged_heap
+                        .list_from_slice(&self.ctx.bc_buf[args_start + arg_idx..args_start + nargs])
+                } else {
+                    Value::NIL
+                };
+                if let Err(flow) = self.ctx.try_specbind(rest_name, rest_list) {
+                    return self.cleanup_bytecode_frame(
+                        Err(flow),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+            }
+            let result = self.run_loop(
+                func,
+                frame_base,
+                &mut pc,
+                &mut handlers,
+                &mut bind_stack,
+                false,
+            );
+            return self.cleanup_bytecode_frame(
+                result,
+                condition_stack_base,
+                specpdl_base,
+                frame_base,
+            );
+        }
+
+        // No params: install the captured closure env (if any), then run.
+        // Same discipline as the params_on_stack branch above: the specpdl
+        // LexicalEnv save/restore exists only for frames that switch the
+        // environment; env-less frames (whether or not func.lexical) leave
+        // the caller's lexenv untouched and exit via cleanup's fast path,
+        // matching GNU's specpdl-free bytecode frames.
+        #[cfg(debug_assertions)]
+        let entry_lexenv = self.ctx.lexenv;
+        {
+            use crate::emacs_core::eval::SpecBinding;
+            if let Some(env) = func.env {
+                // Push BEFORE assigning (see the params_on_stack branch).
+                let old_lexenv = self.ctx.lexenv;
+                self.ctx
+                    .push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
+                self.ctx.lexenv = env;
+            }
+        }
+
+        let result = self.run_loop(
+            func,
+            frame_base,
+            &mut pc,
+            &mut handlers,
+            &mut bind_stack,
+            false,
+        );
+        #[cfg(debug_assertions)]
+        if func.env.is_none() {
+            debug_assert!(
+                lexenv_tail_reachable(self.ctx.lexenv, entry_lexenv),
+                "env-less bytecode frame changed ctx.lexenv beyond defvar markers"
+            );
+        }
+        self.cleanup_bytecode_frame(result, condition_stack_base, specpdl_base, frame_base)
+    }
+
+    /// GNU eval.c:funcall_lambda validates each formal when it is reached,
+    /// including after watcher callbacks mutate the remaining argument list.
+    /// The invocation cursor and caller args stay rooted through every bind.
+    /// The cursor's two live cells sit in scratch slots at the frame base:
+    /// `bc_buf` is traced, a nested call pushes its own frame above them,
+    /// and each step overwrites the pair in place.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn bind_dynamic_bytecode_formals(
+        &mut self,
+        params: super::DynamicArglist,
+        args_start: usize,
+        nargs: usize,
+        func_value: Value,
+    ) -> Result<(), Flow> {
+        let cursor = params.invocation();
+        let roots_at = self.ctx.bc_buf.len();
+        debug_assert!(args_start + nargs <= roots_at);
+        self.ctx.bc_buf.extend_from_slice(&cursor.roots());
+        let bound =
+            self.bind_dynamic_formals_rooted(cursor, roots_at, args_start, nargs, func_value);
+        self.ctx.bc_buf.truncate(roots_at);
+        bound
+    }
+
+    #[doc(hidden)]
+    pub fn bind_dynamic_formals_rooted(
+        &mut self,
+        mut cursor: super::function_slots::FormalCursor,
+        roots_at: usize,
+        args_start: usize,
+        nargs: usize,
+        func_value: Value,
+    ) -> Result<(), Flow> {
+        use super::function_slots::{FormalBinding, FormalStep};
+        let mut arg_index = 0;
+        loop {
+            self.ctx.bc_buf[roots_at..roots_at + 2].copy_from_slice(&cursor.roots());
+            if cursor.has_next_cell() {
+                // GNU eval.c:3397 polls before each cell, including
+                // markers; callbacks/quit handling may run Lisp here.
+                self.ctx.maybe_quit()?;
+            }
+            let step = cursor
+                .next_step()
+                .map_err(|_| signal(LispCondition::InvalidFunction, vec![func_value]))?;
+            let binding = match step {
+                FormalStep::End => break,
+                FormalStep::Marker => continue,
+                FormalStep::Binding(binding) => binding,
+            };
+            let (symbol, value) = match binding {
+                FormalBinding::Required(symbol) => {
+                    if arg_index >= nargs {
+                        return Err(signal(
+                            LispCondition::WrongNumberOfArguments,
+                            vec![func_value, Value::fixnum(nargs as i64)],
+                        ));
+                    }
+                    let value = self.ctx.bc_buf[args_start + arg_index];
+                    arg_index += 1;
+                    (symbol, value)
+                }
+                FormalBinding::Optional(symbol) => {
+                    let value = if arg_index < nargs {
+                        let value = self.ctx.bc_buf[args_start + arg_index];
+                        arg_index += 1;
+                        value
+                    } else {
+                        Value::NIL
+                    };
+                    (symbol, value)
+                }
+                FormalBinding::Rest(symbol) => {
+                    let value = self.ctx.tagged_heap.list_from_slice(
+                        &self.ctx.bc_buf[args_start + arg_index..args_start + nargs],
+                    );
+                    arg_index = nargs;
+                    (symbol, value)
+                }
+            };
+            self.ctx.try_specbind(symbol, value)?;
+            cursor
+                .finish_binding()
+                .map_err(|_| signal(LispCondition::InvalidFunction, vec![func_value]))?;
+        }
+        if arg_index < nargs {
+            return Err(signal(
+                LispCondition::WrongNumberOfArguments,
+                vec![func_value, Value::fixnum(nargs as i64)],
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether this frame can use the first iterative `setup_frame` slice.
+    ///
+    /// The slice deliberately starts with GNU's common encoded-argument,
+    /// env-less bytecode shape.  Dynamic parameter binding, captured lexical
+    /// environments and `&rest` construction still use the established
+    /// recursive path until their unwind transitions are represented in the
+    /// frame state as well.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn can_enter_interpreter_frame_iteratively(
+        &self,
+        func: &ByteCodeFunction,
+        nargs: usize,
+    ) -> bool {
+        if let Some(admitted) = func.lazy_iterative_admission(nargs) {
+            return admitted;
+        }
+        Self::can_enter_eager_interpreter_frame_iteratively(func, nargs)
+    }
+
+    /// Preserve the eager classifier's exact gates behind a tail-callable
+    /// fallback, keeping its decode/verification frame off cached GNU hits.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn can_enter_eager_interpreter_frame_iteratively(
+        func: &ByteCodeFunction,
+        nargs: usize,
+    ) -> bool {
+        let Some(shape) = func.params.stack_shape() else {
+            return false;
+        };
+        let required = shape.required();
+        let nonrest = shape.nonrest();
+        let has_named_params = nonrest > 0;
+        let params_on_stack = match &func.params {
+            super::FunctionParams::Stack(_) => true,
+            super::FunctionParams::Dynamic(_) => false,
+            super::FunctionParams::Named(_) => {
+                func.lexical || matches!(func.arglist.kind(), ValueKind::Fixnum(_))
+            }
+        };
+
+        func.env.is_none()
+            && !shape.rest().is_present()
+            && (!has_named_params || params_on_stack)
+            && required <= nargs
+            && nargs <= nonrest
+            && nonrest <= func.max_stack.get()
+            // The in-place installer grows the operand stack infallibly, as
+            // it always has; deeper frames take `run_frame`, whose fallible
+            // reservation reports failure as a Lisp error.
+            && func.max_stack <= super::StackDepth::ITERATIVE_FRAME_LIMIT
+            // Sealed-dispatch safety gate for iterative callees, the twin of
+            // the entry gate in `run_loop`: only `seal_ops`-normalized code
+            // may enter the unchecked-fetch driver. Evaluated at (cacheable)
+            // classification time, never on the per-call hot path.
+            && func.executes_sealed_ops()
+            // The VERIFIED driver instance additionally relies on the callee's
+            // operand-stack proof, and the call-target cache is shared between
+            // both instances, so admission requires the proof universally. A
+            // refused callee (e.g. Switch-bearing) still runs — through the
+            // generic call path into its own checked driver.
+            && func.executes_verified_ops()
+    }
+
+    /// Install one already-validated env-less interpreter frame in place.
+    ///
+    /// No Lisp allocation or GC safe point occurs here. The exact callee value
+    /// replaces the consumed function-designator operand before any bytecode
+    /// executes. That caller slot remains in GC-traced `bc_buf` through child
+    /// cleanup, so redefining a symbol cannot collect its executing old value.
+    ///
+    /// `current` must already be suspended on the caller stack; its fields are
+    /// overwritten directly, exactly as GNU's `setup_frame` writes the child
+    /// `bc_frame` in place instead of materializing it elsewhere first.
+    // inline(always): called from both run_interpreter_driver
+    // monomorphizations; without the hint LLVM outlines one shared copy and
+    // every Bcall pays a call/ret + register marshalling (measured +58
+    // Ir/call when the driver split landed).
+    #[inline(always)]
+    /// Set up the callee's operand frame and RETURN its interpreter frame; the
+    /// caller pushes it onto the frame stack.
+    ///
+    /// `backtrace` is the token the caller's Bcall opened for this call. It is
+    /// parked in the returned frame together with the caller's resume slot
+    /// (the consumed operand `root_slot`) and `bc_position`, the frame's own
+    /// bytecode-stack position; `Breturn` derives the caller's position by
+    /// subtracting the frame's immutable cost and restores it with one
+    /// store.
+    #[doc(hidden)]
+    pub fn install_iterative_interpreter_frame(
+        &mut self,
+        cursor: &mut StackCursor,
+        callee: PreparedInterpreterCallee,
+        root_slot: ConsumedCallOperandRootSlot,
+        nargs: usize,
+        backtrace: BytecodeBacktraceFrame,
+        bc_position: usize,
+    ) -> InstalledCalleeFrame {
+        // Every stack mutation below goes through the LIVE cursor (GNU's
+        // setup_frame works on its register `top` the same way); the context
+        // is only consulted for capacity and, on the cold growth branch,
+        // synchronized around the reallocation.
+        // SAFETY: the root slot indexes a consumed caller operand strictly
+        // below the live length.
+        root_slot.install_exact_callee(
+            unsafe { std::slice::from_raw_parts_mut(cursor.base, cursor.len) },
+            callee.value,
+        );
+        let args_start = root_slot.args_start();
+        let func = callee.code();
+        debug_assert!(self.can_enter_interpreter_frame_iteratively(func, nargs));
+        let condition_stack_base = self.ctx.condition_stack_len();
+        let specpdl_base = self.ctx.specpdl.len();
+        let frame_base = cursor.len;
+        debug_assert!(args_start + nargs <= frame_base);
+        let frame_limit = frame_base
+            .checked_add(func.max_stack.get())
+            .expect("iterative frame limit prevalidated");
+
+        #[cfg(test)]
+        observe_iterative_context_bc_frames_len(self.ctx.bc_frames.len());
+        if self.ctx.bc_buf.capacity() < frame_limit {
+            // Cold growth: sync the live length, let the Vec reallocate,
+            // rearm the base pointer. The admission gate bounds the depth by
+            // `StackDepth::ITERATIVE_FRAME_LIMIT`, so this reservation is an
+            // ordinary allocation, not a Lisp-controlled size.
+            // SAFETY: same initialization argument as `StackCursor::publish`.
+            unsafe { self.ctx.bc_buf.set_len(cursor.len) };
+            self.ctx.bc_buf.reserve_exact(frame_limit - cursor.len);
+            cursor.base = self.ctx.bc_buf.as_mut_ptr();
+        }
+
+        let nonrest = func
+            .params
+            .stack_shape()
+            .expect("iterative parameter shape prevalidated")
+            .nonrest();
+        // GNU setup_frame's PUSH loop on the live cursor: copy the incoming
+        // arguments into the fresh frame, then nil-fill missing optionals.
+        // SAFETY: capacity >= frame_limit >= frame_base + nonrest
+        // (`can_enter` proved `nonrest <= max_stack`), the source span
+        // [args_start, args_start + nargs) sits at or below frame_base so the
+        // regions are disjoint, and every written slot lands below the new
+        // length.
+        unsafe {
+            // Word-at-a-time for ordinary arities (GNU setup_frame's PUSH
+            // loop): a libc memcpy dispatch costs more than a handful of
+            // already-capacity-checked stores. Bulk path only for unusually
+            // wide generated functions, mirroring FrameArgumentCopy.
+            match FrameArgumentCopy::for_count(nargs) {
+                FrameArgumentCopy::None => {}
+                FrameArgumentCopy::One => {
+                    *cursor.base.add(cursor.len) = *cursor.base.add(args_start);
+                    cursor.len += 1;
+                }
+                FrameArgumentCopy::Scalar => {
+                    for offset in 0..nargs {
+                        *cursor.base.add(cursor.len) = *cursor.base.add(args_start + offset);
+                        cursor.len += 1;
+                    }
+                }
+                FrameArgumentCopy::Bulk => {
+                    std::ptr::copy_nonoverlapping(
+                        cursor.base.add(args_start),
+                        cursor.base.add(cursor.len),
+                        nargs,
+                    );
+                    cursor.len += nargs;
+                }
+            }
+            for _ in nargs..nonrest {
+                *cursor.base.add(cursor.len) = Value::NIL;
+                cursor.len += 1;
+            }
+        }
+
+        // The Bcall's backtrace entry is the last specpdl push before
+        // `specpdl_base` was read above, so the frame's base already says
+        // where that entry sits; the token leaves behind only its
+        // out-of-line-arguments bit.
+        let owns_backtrace_args = backtrace.park_in_frame(specpdl_base);
+
+        // Built and RETURNED rather than written through a `&mut` into the
+        // frame stack: every value here was just computed and is already in a
+        // register, and handing the frame back by value lets the caller move it
+        // into its own fresh slot. The old shape wrote into the caller's slot,
+        // which is why entering a call first had to copy the caller out of it.
+        // GNU `setup_frame` publishes the new frame pointer (`bc->fp = fp`,
+        // src/bytecode.c:516) as part of the push.  The Context mirror is
+        // that publish: a native frame that re-enters bytecode (a subr, a
+        // JIT leaf, a signal handler) reads it.  No boundary runs between
+        // this store and the caller's `enter_callee`, so "mirror == active
+        // frame position" holds at every boundary.
+        self.ctx.bytecode_stack_position = bc_position;
+        InstalledCalleeFrame(InterpreterFrame {
+            function: callee.function,
+            code: callee.code,
+            frame_base,
+            #[cfg(feature = "jit")]
+            resume: InterpreterResumePoint::new(0, false),
+            #[cfg(not(feature = "jit"))]
+            pc: 0,
+            cleanup: InterpreterFrameCleanup {
+                condition_stack_base,
+                specpdl_base,
+            },
+            caller_return: InterpreterCallerReturn::with_position(
+                root_slot,
+                owns_backtrace_args,
+                bc_position,
+            ),
+            #[cfg(debug_assertions)]
+            entry_lexenv: self.ctx.lexenv,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn finish_interpreter_frame(
+        &mut self,
+        frame: &InterpreterFrame,
+        is_entry: bool,
+        result: EvalResult,
+    ) -> EvalResult {
+        if is_entry {
+            return result;
+        }
+        let cleanup = frame.cleanup;
+        // Release this frame's charge by restoring the bytecode-stack frame
+        // position its caller had: the frame's own packed position minus its
+        // own immutable frame cost, one store, and a LIFO restore cannot
+        // drift.  The entry frame's charge belongs to the caller that
+        // entered the driver through execute_from_stack_args.
+        let own_position = frame.caller_return.bytecode_position();
+        let frame_cost = bytecode_frame_bytes(frame.function.code().max_stack.get());
+        debug_assert!(own_position >= frame_cost);
+        release_bytecode_frame(self.ctx, own_position - frame_cost);
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            lexenv_tail_reachable(self.ctx.lexenv, frame.entry_lexenv),
+            "env-less iterative bytecode frame changed ctx.lexenv beyond defvar markers"
+        );
+        self.cleanup_iterative_bytecode_frame(
+            result,
+            cleanup.condition_stack_base,
+            cleanup.specpdl_base,
+            frame.frame_base,
+        )
+    }
+
+    /// Finish the current frame and either restore its caller or leave the
+    /// interpreter driver.  A nonlocal exit is offered to each suspended
+    /// caller in turn, exactly as recursive Rust returns used to do, but the
+    /// unwind is represented as data rather than host-stack control flow.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn complete_interpreter_frame_chain(
+        &mut self,
+        callers: &mut InterpreterCallerStack,
+        aux_stack: &mut InterpreterFrameAuxStack,
+        mut result: EvalResult,
+    ) -> InterpreterFrameCompletion {
+        loop {
+            let outermost = callers.has_no_suspended_callers();
+            result = self.finish_interpreter_frame(callers.active_mut(), outermost, result);
+
+            let Some(continuation) = callers.leave_callee() else {
+                return InterpreterFrameCompletion::Exit(result);
+            };
+
+            self.leave_bytecode_call_depth();
+            // `dispatch_interpreter_stack_call` created this frame directly
+            // from `bc_buf`, and `finish_interpreter_frame` has already
+            // unwound the callee to the depth immediately above it.  Unlike a
+            // generic funcall backtrace, this representation never owns an
+            // out-of-line `backtrace_args_stack` slot, so GNU's Breturn fast
+            // path is exactly a specpdl pointer decrement.  Keeping the fast
+            // pop behind the typed iterative continuation prevents the
+            // generic release/unbind machinery from becoming a per-call tax.
+            match self
+                .ctx
+                .pop_fast_bytecode_backtrace_frame(continuation.backtrace)
+            {
+                crate::emacs_core::eval::FastBytecodePop::Popped => {}
+                // GNU `Breturn`'s `val = call_debugger (list2 (Qexit, val))`
+                // (`src/bytecode.c:825-828`): the exit debugger's return value
+                // REPLACES this call's, so it has to be spent here where the
+                // result is still in hand.  `backtrace-debug` can raise the
+                // flag on this frame from inside the call that is returning.
+                crate::emacs_core::eval::FastBytecodePop::OwesDebugOnExit(frame) => {
+                    result = self
+                        .ctx
+                        .pop_bytecode_backtrace_token_with_result(frame, result);
+                }
+            }
+            aux_stack.restore_current(InterpreterDriverDepth::from_suspended_callers(
+                callers.suspended_len(),
+            ));
+
+            match result {
+                Ok(value) => {
+                    self.ctx.bc_buf.truncate(continuation.stack_after_call);
+                    let current = callers.active_mut();
+                    debug_assert!(self.ctx.bc_buf.len() < current.frame_limit());
+                    self.ctx.bc_buf.push(value);
+                    return InterpreterFrameCompletion::Resume;
+                }
+                Err(flow) => {
+                    let (func, mut resume_pc) = {
+                        let current = callers.active();
+                        (current.function.code(), current.pc())
+                    };
+                    let aux = aux_stack.current_mut();
+                    let resume = self.resume_nonlocal(
+                        func,
+                        &mut resume_pc,
+                        &mut aux.handlers,
+                        &mut aux.bind_stack,
+                        flow,
+                    );
+                    callers.active_mut().set_pc(resume_pc);
+                    match resume {
+                        Ok(()) => return InterpreterFrameCompletion::Resume,
+                        Err(flow) => result = Err(flow),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Perform the common GNU `Breturn` transition without packaging the value
+    /// as an `EvalResult` or entering generic unwind machinery.
+    ///
+    /// Env-less iterative frames normally leave no specpdl entries. A frame
+    /// that does have outstanding dynamic state is classified explicitly and
+    /// handed back to `complete_interpreter_frame_chain`; this fast path never
+    /// approximates or skips an unwind.
+    #[inline(always)]
+    /// The cursor stays LIVE through this fast path (GNU keeps `top` in a
+    /// register across `Breturn`): every stack mutation goes through it, the
+    /// context sees nothing, and only the `Exit`/`NeedsSlowCleanup` outcomes
+    /// require the caller to publish before leaving the driver's register
+    /// state. Nothing here allocates or reaches a GC safe point.
+    #[doc(hidden)]
+    pub fn complete_interpreter_frame_value(
+        &mut self,
+        cursor: &mut StackCursor,
+        callers: &mut InterpreterCallerStack,
+        aux_stack: &mut InterpreterFrameAuxStack,
+        value: Value,
+    ) -> InterpreterValueCompletion {
+        if callers.has_no_suspended_callers() {
+            return InterpreterValueCompletion::Exit(value);
+        }
+
+        // Read everything needed from the ACTIVE frame before popping it: after
+        // `leave_callee` the top of the stack is the caller, not this frame.
+        // The release below re-reads the CALLER's own position from its frame
+        // after the pop, so nothing here needs this frame's cost.
+        let (cleanup, frame_base) = {
+            let current = callers.active();
+            (current.cleanup, current.frame_base)
+        };
+        #[cfg(debug_assertions)]
+        let entry_lexenv = callers.active().entry_lexenv;
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            lexenv_tail_reachable(self.ctx.lexenv, entry_lexenv),
+            "env-less iterative bytecode frame changed ctx.lexenv beyond defvar markers"
+        );
+
+        // ConditionFrame has no Drop and truncation cannot run Lisp or GC.
+        // Do it before classifying the specpdl state so the slow fallback has
+        // exactly the same observable unwind state as the generic path.
+        self.ctx
+            .truncate_condition_stack(cleanup.condition_stack_base);
+        // GNU `Breturn` tests `backtrace_debug_on_exit` BEFORE its
+        // `specpdl_ptr--` (`src/bytecode.c:825-828`) because the debugger's
+        // return value replaces the call's.  This return has no way to carry a
+        // replaced value or a nonlocal exit, so a flagged frame is part of the
+        // ineligibility test rather than something the pop discovers: the
+        // frame this return pops is the one immediately below the callee's
+        // base, which the line above just proved is the specpdl top.
+        // Only a callee frame reaches this point (the entry frame returned
+        // `Exit` above), and a callee frame's base sits exactly one above the
+        // backtrace entry its Bcall pushed -- the invariant its parked token
+        // already relies on -- so the subtraction cannot underflow.
+        let returning_frame = cleanup.specpdl_base - 1;
+        if self.ctx.specpdl.len() != cleanup.specpdl_base
+            || self
+                .ctx
+                .backtrace_frame_wants_debug_on_exit(returning_frame)
+        {
+            return InterpreterValueCompletion::NeedsSlowCleanup(value);
+        }
+
+        cursor.truncate(frame_base);
+
+        // SAFETY: the empty caller stack returned `Exit` above, and no code
+        // between that proof and this pop can mutate `callers`.  GNU's
+        // `Breturn` likewise restores its already-proven saved frame directly.
+        // SAFETY-equivalent by construction now: `leave_callee` returns `None`
+        // only when there is no suspended caller, which the guard above already
+        // rejected. The old unchecked pop existed because the caller frame had
+        // to be COPIED back into `current`; there is nothing to copy any more.
+        let continuation = callers
+            .leave_callee()
+            .expect("a suspended caller was proven above");
+        // Release the callee's charge on the fast Breturn path: restore the
+        // mirror to the caller's position, which the caller's own frame packs.
+        // Reading it after the pop replaces the per-return derivation from
+        // this frame's cost (a max_stack load, shift, add and subtract); no
+        // Lisp or GC runs between the pop and this store. The slow path
+        // releases in finish_interpreter_frame before its cleanup can run
+        // Lisp.
+        release_bytecode_frame(self.ctx, callers.active().caller_return.bytecode_position());
+        self.leave_bytecode_call_depth();
+        // The eligibility gate above asked `backtrace_debug_on_exit` about
+        // exactly this index, so the checking pop would ask a second time on
+        // the interpreter's hottest return.
+        self.ctx
+            .pop_fast_bytecode_backtrace_frame_unchecked(continuation.backtrace);
+        aux_stack.restore_current(InterpreterDriverDepth::from_suspended_callers(
+            callers.suspended_len(),
+        ));
+        // GNU Breturn value delivery on the live cursor: the result lands in
+        // the consumed function-operand slot, everything above is discarded.
+        // SAFETY: `stack_after_call = args_start - 1 < frame_base`, and the
+        // truncate above set the cursor exactly to that frame_base.
+        let after = continuation.stack_after_call;
+        debug_assert!(after < cursor.len);
+        unsafe {
+            *cursor.base.add(after) = value;
+        }
+        cursor.len = after + 1;
+        debug_assert!(cursor.len <= callers.active().frame_limit());
+        InterpreterValueCompletion::Resume
+    }
+
+    /// Resolve and dispatch one `Op::Call` after the depth guard has entered.
+    ///
+    /// `Enter` deliberately leaves the backtrace frame open; the iterative
+    /// driver closes it when the callee returns.  Every other target completes
+    /// synchronously and preserves the existing call protocol.
+    // inline(always): same both-instantiations story as
+    // install_iterative_interpreter_frame (measured +60 Ir/call outlined).
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn dispatch_interpreter_stack_call(
+        &mut self,
+        func_val: Value,
+        args_start: usize,
+        nargs: usize,
+        target: ResolvedStackCallTarget,
+    ) -> InterpreterStackCall {
+        match target {
+            ResolvedStackCallTarget::Interpreter { call } => {
+                let view = call.code_view();
+                let callee = call.callee();
+                let func = callee.code();
+                let callee = callee.value();
+                let backtrace = self
+                    .ctx
+                    .push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
+                InterpreterStackCall::Enter {
+                    callee: PreparedInterpreterCallee::new(callee, func, view),
+                    root_slot: ConsumedCallOperandRootSlot::from_args_start(args_start),
+                    nargs,
+                    backtrace,
+                }
+            }
+            ResolvedStackCallTarget::ByteCode { callee } => {
+                let func = callee.code();
+                let callee = callee.value();
+                let backtrace = self
+                    .ctx
+                    .push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
+                match self.dispatch_bytecode_tier(func, args_start, nargs, callee) {
+                    BytecodeStackCallDispatch::Interpret
+                        if self.can_enter_interpreter_frame_iteratively(func, nargs) =>
+                    {
+                        InterpreterStackCall::Enter {
+                            callee: PreparedInterpreterCallee::new(
+                                callee,
+                                func,
+                                ActiveCodeView::of(func),
+                            ),
+                            root_slot: ConsumedCallOperandRootSlot::from_args_start(args_start),
+                            nargs,
+                            backtrace,
+                        }
+                    }
+                    BytecodeStackCallDispatch::Interpret => {
+                        let result = self.execute_from_stack_args(func, args_start, nargs, callee);
+                        let result = self.ctx.dispatch_signal_result_if_needed(result);
+                        InterpreterStackCall::Complete(
+                            self.ctx
+                                .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result),
+                        )
+                    }
+                    BytecodeStackCallDispatch::Complete(result) => {
+                        let result = self.ctx.dispatch_signal_result_if_needed(result);
+                        InterpreterStackCall::Complete(
+                            self.ctx
+                                .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result),
+                        )
+                    }
+                }
+            }
+            ResolvedStackCallTarget::Builtin { callee } => {
+                InterpreterStackCall::Complete(Self::call_resolved_builtin_from_stack_args(
+                    self.ctx, func_val, args_start, nargs, callee,
+                ))
+            }
+            ResolvedStackCallTarget::BuiltinLeaf { callee, leaf } => {
+                InterpreterStackCall::Complete(Self::call_builtin_leaf_from_stack_args(
+                    self.ctx, func_val, args_start, nargs, callee, leaf,
+                ))
+            }
+            ResolvedStackCallTarget::Generic => {
+                let bt_base = self.ctx.specpdl.len();
+                let backtrace = self
+                    .ctx
+                    .push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
+                let root = CallableRoot::Witnessed(RootedCallable::from_backtrace(
+                    &*self.ctx, bt_base, func_val,
+                ));
+                let result =
+                    self.call_function_untraced_from_stack(root, func_val, args_start, nargs);
+                let result = self.ctx.dispatch_signal_result_if_needed(result);
+                InterpreterStackCall::Complete(
+                    self.ctx
+                        .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result),
+                )
+            }
+        }
+    }
+
+    /// Consult adaptive tiers only when this VM can reach one.
+    ///
+    /// The policy branch is deliberately here, before the out-of-line Context
+    /// dispatcher: an interpreter-only process performs neither a function
+    /// call nor a per-function atomic heat/feedback operation on Bcall.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn dispatch_bytecode_tier(
+        &mut self,
+        func: &ByteCodeFunction,
+        args_start: usize,
+        nargs: usize,
+        callee: Value,
+    ) -> BytecodeStackCallDispatch {
+        #[cfg(feature = "jit")]
+        if self.bytecode_tier_policy == BytecodeTierPolicy::InterpreterOnly
+            || self.bcall_tier_skipped
+        {
+            return BytecodeStackCallDispatch::Interpret;
+        }
+
+        self.ctx
+            .dispatch_bytecode_call_from_stack(func, args_start, nargs, callee)
+    }
+
+    /// OSR at a hot back-edge of the frame at `frame_base`: transfer the rest
+    /// of the call into native code entered at the loop header `target`, the
+    /// frame's published operand stack and current auxiliary bindings as its
+    /// entry state. Out of line: the driver expands its branch macro at several
+    /// sites, and this cold path inlined at each of them cost the hot loop
+    /// its register allocation.
+    ///
+    /// A precise deopt means a guard failed after the native loop had run
+    /// iterations -- buffer edits, variable stores, calls -- so the frame's
+    /// pre-transfer stack is stale and interpreting on from it would run those
+    /// iterations again. OSR captures the operand stack, binding stack and pc
+    /// of this frame: both stacks are installed in place, and the driver
+    /// continues at the pc on the Rust stack it already uses. The suspended
+    /// interpreter frame retains final cleanup ownership. State it could
+    /// not adopt (unreachable with the current eligibility gate) finishes the
+    /// function in a resumed frame instead -- latched against another
+    /// transfer, on a guarded stack.
+    #[cfg(feature = "jit")]
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn osr_transfer(
+        &mut self,
+        func: &ByteCodeFunction,
+        frame_base: usize,
+        target: usize,
+        aux_stack: &mut InterpreterFrameAuxStack,
+    ) -> OsrOutcome {
+        use crate::emacs_core::jit::cache::OsrProbe;
+        use crate::emacs_core::jit::compile::{DeoptResume, NativeRun, stash_pending_flow};
+        // The OSR leaf is compiling in the background (`jit::bg`): interpret
+        // on, and look again at the next hot wrap; no snapshot, no latch.
+        if crate::emacs_core::jit::cache::osr_compile_in_flight(func, target) {
+            return OsrOutcome::Interpret {
+                pc: target,
+                retry: OsrRetry::Allowed,
+            };
+        }
+        // Publishing the active cursor makes the buffer's end authoritative.
+        // Derive its depth and borrow the bindings here, keeping both out of
+        // the branch macro's hot register allocation.
+        let snapshot: Vec<Value> = self.ctx.bc_buf[frame_base..].to_vec();
+        let bind_stack = &mut aux_stack.current_mut().bind_stack;
+        let entry_spec_depth = self.ctx.specpdl.len();
+        let ctx_ptr: *mut crate::emacs_core::eval::Context = &mut *self.ctx;
+        // SAFETY: `ctx_ptr` is this live `Context`; the probe runs in this
+        // thread under the dormant-Context contract.
+        let resume = match unsafe {
+            crate::emacs_core::jit::cache::try_run_osr_probe(
+                ctx_ptr,
+                func,
+                target,
+                &snapshot,
+                bind_stack.as_slice(),
+            )
+        } {
+            OsrProbe::Ran(NativeRun::Ok(bits)) => {
+                return OsrOutcome::Returned(unsafe {
+                    /* SAFETY: bytecode word */
+                    Value::from_bits(bits)
+                });
+            }
+            OsrProbe::Ran(NativeRun::Signal) => return OsrOutcome::Exited,
+            OsrProbe::Ran(NativeRun::DeoptAt(resume)) => resume,
+            OsrProbe::Ran(NativeRun::Deopt) | OsrProbe::NoTransfer => {
+                return OsrOutcome::Interpret {
+                    pc: target,
+                    retry: OsrRetry::Latch,
+                };
+            }
+            // The compile just went to the background: as above.
+            OsrProbe::Pending => {
+                return OsrOutcome::Interpret {
+                    pc: target,
+                    retry: OsrRetry::Allowed,
+                };
+            }
+        };
+        let DeoptResume {
+            pc,
+            stack,
+            handlers,
+            binds,
+            spec_base,
+            cond_base,
+            inlined,
+            ..
+        } = *resume;
+        if handlers == 0
+            && spec_base == entry_spec_depth
+            && cond_base == self.ctx.condition_stack_len()
+            && stack.len() <= func.max_stack.get()
+        {
+            bind_stack.clear();
+            bind_stack.extend_from_slice(&binds);
+            if let Some(inlined) = inlined {
+                let result = self.ctx.grow_eval_stack(|ctx| {
+                    if let Some(hof) = &inlined.hof {
+                        // Mapping owns its active root frame and backtrace.
+                        // The physical interpreter retains its own frame;
+                        // root its evolved pre-call stack before Tier-0 runs
+                        // the current callback and completes the mapping.
+                        ctx.bc_buf.truncate(frame_base);
+                        ctx.bc_buf.extend_from_slice(&stack);
+                        let callback = inlined.frames.first().expect("validated HOF callback");
+                        let value = crate::emacs_core::jit::compile::hof_runtime::resume_mapping(
+                            ctx, hof, callback, cond_base,
+                        )?;
+                        ctx.bc_buf.truncate(frame_base + stack.len() - 3);
+                        ctx.bc_buf.push(value);
+                        return Ok(pc + 1);
+                    }
+                    let frames: Vec<_> = inlined
+                        .frames
+                        .iter()
+                        .map(|frame| InlinedChainFrame {
+                            frame: ChainFrame {
+                                function: frame.function,
+                                pc: frame.pc,
+                                stack: &frame.stack,
+                                handlers: 0,
+                                binds: &frame.binds,
+                            },
+                            link: frame.link,
+                            backtrace: frame.backtrace,
+                        })
+                        .collect();
+                    Vm::from_context(ctx).run_resumed_chain_in_place(
+                        func,
+                        ChainFrame {
+                            function: Value::NIL,
+                            pc,
+                            stack: &stack,
+                            handlers,
+                            binds: &binds,
+                        },
+                        &frames,
+                        frame_base,
+                        spec_base,
+                        cond_base,
+                    )
+                });
+                return match result {
+                    Ok(pc) => OsrOutcome::Interpret {
+                        pc,
+                        retry: if crate::emacs_core::jit::cache::osr_entry_cached(func, target) {
+                            OsrRetry::Latch
+                        } else {
+                            OsrRetry::Allowed
+                        },
+                    },
+                    Err(flow) => {
+                        stash_pending_flow(flow);
+                        OsrOutcome::Exited
+                    }
+                };
+            }
+            self.ctx.bc_buf.truncate(frame_base);
+            self.ctx.bc_buf.extend_from_slice(&stack);
+            // The frame owns its evolved state again, so a later transfer is
+            // the same operation as a first one; allowed only when the deopt
+            // retired the OSR leaf it ran.
+            let retry = if crate::emacs_core::jit::cache::osr_entry_cached(func, target) {
+                OsrRetry::Latch
+            } else {
+                OsrRetry::Allowed
+            };
+            return OsrOutcome::Interpret { pc, retry };
+        }
+        match self.ctx.grow_eval_stack(|ctx| {
+            if let Some(inlined) = inlined {
+                if let Some(hof) = &inlined.hof {
+                    let callback = inlined.frames.first().expect("validated HOF callback");
+                    let value = crate::emacs_core::jit::compile::hof_runtime::resume_mapping(
+                        ctx, hof, callback, cond_base,
+                    )?;
+                    let mut physical_stack = stack;
+                    physical_stack.truncate(physical_stack.len() - 3);
+                    physical_stack.push(value);
+                    return Vm::from_context(ctx).run_resumed_frame_latched(
+                        func,
+                        Value::NIL,
+                        pc + 1,
+                        &physical_stack,
+                        handlers,
+                        &binds,
+                        spec_base,
+                        cond_base,
+                        true,
+                    );
+                }
+                let frames: Vec<_> = inlined
+                    .frames
+                    .iter()
+                    .map(|frame| InlinedChainFrame {
+                        frame: ChainFrame {
+                            function: frame.function,
+                            pc: frame.pc,
+                            stack: &frame.stack,
+                            handlers: 0,
+                            binds: &frame.binds,
+                        },
+                        link: frame.link,
+                        backtrace: frame.backtrace,
+                    })
+                    .collect();
+                return Vm::from_context(ctx).run_resumed_chain(
+                    func,
+                    ChainFrame {
+                        function: Value::NIL,
+                        pc,
+                        stack: &stack,
+                        handlers,
+                        binds: &binds,
+                    },
+                    &frames,
+                    spec_base,
+                    cond_base,
+                );
+            }
+            Vm::from_context(ctx).run_resumed_frame_latched(
+                func,
+                Value::NIL,
+                pc,
+                &stack,
+                handlers,
+                &binds,
+                spec_base,
+                cond_base,
+                true,
+            )
+        }) {
+            Ok(value) => OsrOutcome::Returned(value),
+            Err(flow) => {
+                stash_pending_flow(flow);
+                OsrOutcome::Exited
+            }
+        }
+    }
+
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn run_loop(
+        &mut self,
+        entry_func: &ByteCodeFunction,
+        frame_base: usize,
+        pc: &mut usize,
+        handlers: &mut HandlerStack,
+        bind_stack: &mut BindStack,
+        #[cfg_attr(not(feature = "jit"), allow(unused_variables))] entry_osr_tried: bool,
+    ) -> EvalResult {
+        #[cfg(test)]
+        let _run_loop_depth = RunLoopDepthGuard::enter();
+        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("the bytecode interpreter");
+        // Sealed-dispatch safety gate. The driver fetches instructions without
+        // a per-op bound check, which is sound only for `seal_ops`-normalized
+        // code (trailing `Return`, in-bounds branch targets, in-range
+        // constant indices). The `ops_sealed` marker is set exclusively by
+        // the decode installers, so a hand-assembled chunk is rejected here,
+        // once per driver entry, before any unchecked fetch — inferring
+        // sealedness from the instructions themselves would trust exactly the
+        // data the seal exists to prove.
+        if !entry_func.executes_sealed_ops() {
+            return Err(invalid_bytecode_flow());
+        }
+
+        let entry_frame = InterpreterFrame {
+            function: InterpreterFunction::new(entry_func),
+            code: ActiveCodeView::of(entry_func),
+            frame_base,
+            #[cfg(feature = "jit")]
+            resume: InterpreterResumePoint::new(*pc, entry_osr_tried),
+            #[cfg(not(feature = "jit"))]
+            pc: *pc,
+            cleanup: InterpreterFrameCleanup {
+                condition_stack_base: 0,
+                specpdl_base: 0,
+            },
+            caller_return: InterpreterCallerReturn::entry_at(self.ctx.bytecode_stack_position),
+            #[cfg(debug_assertions)]
+            entry_lexenv: Value::NIL,
+        };
+        // Most bytecode bodies make no nested bytecode call, so begin without
+        // allocating. The first iterative Bcall grows this once and thereafter
+        // gets Vec's single-representation push/pop path; SmallVec's repeated
+        // inline-vs-spilled branch was measurable on every Bcall/Breturn.
+        let stacks = self.ctx.interpreter_stacks.take();
+        let mut callers = InterpreterCallerStack::with_storage(stacks.frames, entry_frame);
+        // GNU bytecode.c keeps one unsigned quit counter for the whole
+        // exec_byte_code driver. setup_frame/Breturn do not save or reset it.
+        let mut quitcounter = 1;
+        let mut aux_stack = InterpreterFrameAuxStack::with_suspended(
+            std::mem::take(handlers),
+            std::mem::take(bind_stack),
+            stacks.suspended,
+        );
+
+        // One driver source, two monomorphizations: the VERIFIED instance
+        // drops the per-push capacity guard on the strength of the decode-time
+        // `verify_stack_effects` proof; everything else runs the checked
+        // instance with today's exact behavior. Chosen once per driver entry.
+        let result = if entry_func.executes_verified_ops() {
+            self.run_interpreter_driver::<true>(&mut callers, &mut aux_stack, &mut quitcounter)
+        } else {
+            self.run_interpreter_driver::<false>(&mut callers, &mut aux_stack, &mut quitcounter)
+        };
+        *pc = callers.active().pc();
+        let (entry_handlers, entry_bind_stack) = aux_stack.take_entry();
+        *handlers = entry_handlers;
+        *bind_stack = entry_bind_stack;
+        self.ctx.interpreter_stacks.give_back(InterpreterStacks {
+            frames: callers.into_storage(),
+            suspended: aux_stack.into_suspended(),
+        });
+        result
+    }
+
+    /// Run every eligible Tier-0 bytecode frame in one GNU-shaped dispatcher.
+    ///
+    /// `Bcall` installs a child and `Breturn` restores its caller inside the
+    /// same driver.  Frame transitions therefore cannot accidentally grow the
+    /// Rust call stack or package the hot path in a general control-flow enum.
+    /// The `'frame` loop is the typed equivalent of GNU bytecode.c's
+    /// `setup_frame`/`Breturn` jumps; the inner loop remains opcode dispatch.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn run_interpreter_driver<const VERIFIED: bool>(
+        &mut self,
+        callers: &mut InterpreterCallerStack,
+        aux_stack: &mut InterpreterFrameAuxStack,
+        driver_quitcounter: &mut u8,
+    ) -> EvalResult {
+        let phase = self.sole_owner.driver();
+        // Capture guards are synchronous and private: callbacks finish their
+        // nested scopes before this driver resumes. A reentrant driver checks
+        // its own enclosing scope, so this local policy is valid for this call.
+        let observe_collections = neovm_value::tagged::collection_reads::reads_need_observation();
+        // A6, extended across frames: base+len of the operand stack live in
+        // registers for the whole DRIVER, not just one frame (GNU keeps
+        // top/pc in locals across setup_frame/Breturn, bytecode.c). Escapes
+        // publish and reacquire; the iterative Bcall/Breturn transitions keep
+        // the cursor live.
+        let (mut cursor, mut phase) = RunLoopCursor::acquire(self, phase).into_parts();
+        let mut published;
+        macro_rules! publish_phase {
+            () => {
+                published = RunLoopCursor {
+                    operands: cursor,
+                    phase,
+                }
+                .publish(self)
+            };
+        }
+        macro_rules! rejoin_phase {
+            () => {
+                (cursor, phase) = published.rejoin(self).into_parts()
+            };
+        }
+        'frame: loop {
+            // Unpack the ACTIVE frame into locals and let the borrow end: the
+            // body pushes and pops `callers`, so nothing may hold a reference
+            // into it across those. This is also where a `continue 'frame`
+            // lands, which is exactly where a push has just happened.
+            // Copy the frame's `InterpreterFunction` handle out rather than the
+            // `&ByteCodeFunction` it yields: the reference would keep `callers`
+            // immutably borrowed for the whole loop body, and the cold
+            // nonlocal-flow path needs `&mut callers`. The handle is a
+            // `NonNull` and is `Copy`, so `func` below borrows this local.
+            let (function, frame_base, code, bc_position) = {
+                let current = callers.active();
+                (
+                    current.function,
+                    current.frame_base,
+                    current.code,
+                    current.caller_return.bytecode_position(),
+                )
+            };
+            // The frame's position is the GNU `bc->fp` of this frame.  The
+            // Context mirror was published when the frame was pushed; the
+            // debug invariant below is the boundary contract (subr/GC/signal/
+            // thread/deopt code reads the mirror, never the local).
+            debug_assert_eq!(
+                self.ctx.bytecode_stack_position, bc_position,
+                "bytecode-stack mirror out of step with the active frame"
+            );
+            let func = function.code();
+            // GNU reloads `bytestr_data` and `vectorp` from the frame at
+            // `Breturn` rather than re-deriving them; the frame carries the
+            // same pair, resolved when it was built.
+            let ops = code.ops();
+            // The constant pool stays a per-activation derivation: it is one
+            // match on the storage kind, where the instruction stream costs a
+            // lazy-decode probe.
+            let constants: &[Value] = func.constants.as_slice();
+            let frame_limit = frame_base + func.max_stack.get();
+            let ops_len = ops.len();
+            let ops_ptr = ops.as_ptr();
+            let mut pc_local = callers.active().pc();
+            // F-I2 must visit every original instruction, including handlers
+            // ordinarily combined by the straight-line dispatch shortcuts.
+            #[cfg(any(test, feature = "test-support"))]
+            let allow_skip_ops = !resumed_chain_probe::armed();
+            #[cfg(not(any(test, feature = "test-support")))]
+            let allow_skip_ops = true;
+            let mut quitcounter = *driver_quitcounter;
+            // OSR (on-stack replacement): once a hot loop is detected at a backward
+            // branch, transfer the rest of this interpreted call into native code at
+            // the loop header. `osr_tried` latches so a loop that can't/didn't OSR is
+            // probed only once per frame. The opt-in/kill-switch gates are evaluated
+            // at the USE site (inside the 1-in-256 back-edge wrap), NOT here: this
+            // runs on every interpreted call, and hoisting two `OnceLock` reads onto
+            // that path cost +1.8% on byte-compile even with the JIT disabled
+            // (measured; the tax persisted under `NEOVM_JIT=0`, which is what pinned
+            // it to the interpreter path rather than to compile-time analysis).
+            #[cfg(feature = "jit")]
+            let mut osr_tried = callers.active().resume.osr_tried();
+            #[cfg(not(feature = "jit"))]
+            let osr_tried = false;
+
+            macro_rules! stk {
+                () => {
+                    cursor
+                };
+            }
+
+            // Operands the active frame owns.  GNU's BYTE_CODE_SAFE checks
+            // underflow against the frame's `stack_base`, never against the
+            // buffer: whatever lies beneath the frame (a bytecode caller's
+            // operands, or the arguments the interpreter parks on the same
+            // stack) is not this frame's to read or pop.  The base is an
+            // argument because the cursor outlives iterative frame changes.
+            macro_rules! depth {
+                ($frame_base:expr) => {
+                    cursor.len - $frame_base
+                };
+            }
+
+            // TWO MEASURED DEAD ENDS (2026-09-11). Read both before shrinking
+            // this further.
+            //
+            // 1. Collapsing the 253 emitted copies of this dispatch into one
+            //    point (`break 'ops flow` out of a value-returning labelled
+            //    loop) shrinks `run_loop` a further 20.3%, to 97,756 bytes --
+            //    and is SLOWER: rust-lsp-typing +1.37% cycles, magit +1.49%,
+            //    with instructions up 1.0009-1.0012x from spilling the flow.
+            // 2. Folding `ResumeOp` into `ResumeFrame` to drop one arm from
+            //    each site, plus moving the invalid-bytecode trace's argument
+            //    setup out of line, removes 525 bytes -- and cost
+            //    rust-lsp-typing +5.5% CYCLES at 1.0011x the instructions,
+            //    while org-editing did not move at all.
+            //
+            // That second one is the cautionary tale: a 0.4% SHRINK bought a
+            // 5.5% slowdown on one scenario and nothing on another. Below some
+            // size, changes here are not optimisations but a lottery on code
+            // layout, and a result that does not reproduce across scenarios is
+            // layout noise. What did work was bulk: moving `resume_flow!`'s
+            // body out removed 25,395 bytes at once and won consistently
+            // (-2.4% / -1.6% / -0.4% cycles on three scenarios). Judge changes
+            // here in CYCLES, on more than one scenario, and do not trust a
+            // small win.
+            //
+            // Resume nonlocal flow at the innermost VM handler, or propagate out
+            // of run_loop. The cursor must be PUBLISHED before this runs:
+            // resume_nonlocal truncates bc_buf to the handler's stack height and
+            // can run unwind-protect cleanup forms (arbitrary Lisp / GC).
+            macro_rules! resume_flow {
+                ($flow:expr) => {{
+                    match self.resume_flow_out_of_line(
+                        &mut pc_local,
+                        osr_tried,
+                        quitcounter,
+                        driver_quitcounter,
+                        aux_stack,
+                        callers,
+                        $flow,
+                    ) {
+                        ResumeFlowOutcome::ResumeOp => {
+                            rejoin_phase!();
+                            continue;
+                        }
+                        ResumeFlowOutcome::ResumeFrame => {
+                            rejoin_phase!();
+                            continue 'frame;
+                        }
+                        ResumeFlowOutcome::Exit(result) => {
+                            published.finish();
+                            return result;
+                        }
+                    }
+                }};
+            }
+
+            macro_rules! complete_value {
+                ($value:expr) => {{
+                    let value = $value;
+                    *driver_quitcounter = quitcounter;
+                    // The fast Breturn keeps the cursor live; only leaving the
+                    // driver (Exit) or entering the generic unwind machinery
+                    // (chain) publishes, and a chain Resume reacquires.
+                    //
+                    // The returning frame's resume point is saved only on the
+                    // two outcomes that can still read it, and both leave it
+                    // the active frame (`complete_interpreter_frame_value`
+                    // decides them before `leave_callee`).  `Resume` pops the
+                    // frame at once, so a store there was dead: GNU's
+                    // `Breturn` never writes the returning `bc_frame`'s pc.
+                    match self.complete_interpreter_frame_value(
+                        &mut cursor,
+                        callers,
+                        aux_stack,
+                        value,
+                    ) {
+                        InterpreterValueCompletion::Resume => continue 'frame,
+                        InterpreterValueCompletion::Exit(value) => {
+                            // The entry frame: `run_loop` hands its pc back.
+                            callers
+                                .active_mut()
+                                .save_execution_state(pc_local, osr_tried);
+                            publish_phase!();
+                            published.finish();
+                            return Ok(value);
+                        }
+                        InterpreterValueCompletion::NeedsSlowCleanup(value) => {
+                            callers
+                                .active_mut()
+                                .save_execution_state(pc_local, osr_tried);
+                            publish_phase!();
+                            match self.complete_interpreter_frame_chain(
+                                callers,
+                                aux_stack,
+                                Ok(value),
+                            ) {
+                                InterpreterFrameCompletion::Resume => {
+                                    rejoin_phase!();
+                                    continue 'frame;
+                                }
+                                InterpreterFrameCompletion::Exit(result) => {
+                                    published.finish();
+                                    return result;
+                                }
+                            }
+                        }
+                    }
+                }};
+            }
+
+            macro_rules! return_value {
+                ($value:expr) => {{
+                    let value = $value;
+                    complete_value!(value)
+                }};
+            }
+
+            macro_rules! ensure_stack_push_capacity {
+                () => {{
+                    debug_assert!(
+                        !VERIFIED || cursor.len < frame_limit,
+                        "verified bytecode exceeded its proven max_stack"
+                    );
+                    if !VERIFIED && cursor.len >= frame_limit {
+                        let invalid_pc = pc_local.saturating_sub(1);
+                        let stack_len = cursor.len;
+                        publish_phase!();
+                        trace_invalid_bytecode_site(
+                            func,
+                            "push-frame-limit",
+                            invalid_pc,
+                            frame_base,
+                            frame_limit,
+                            stack_len,
+                            ops.get(invalid_pc),
+                        );
+                        resume_flow!(invalid_bytecode_flow())
+                    }
+                }};
+            }
+
+            macro_rules! stk_push {
+            ($val:expr) => {{
+                let v = $val;
+                #[cfg(debug_assertions)]
+                if v.is_string() {
+                    let ptr = v.as_string_ptr().unwrap();
+                    let hdr =
+                        unsafe { &(*(ptr as *const neovm_value::tagged::header::StringObj)).header };
+                    if !matches!(hdr.kind, neovm_value::tagged::header::HeapObjectKind::String) {
+                        panic!(
+                            "BC_BUF PUSH BUG: pushing corrupt string {:#x} (ptr {:?}, kind={:?}) \
+                             at pc={}, op={:?}, bc_buf.len()={}, frame_base={}",
+                            v.bits(),
+                            ptr,
+                            hdr.kind,
+                            pc_local.saturating_sub(1),
+                            ops.get(pc_local.saturating_sub(1)),
+                            cursor.len,
+                            frame_base,
+                        );
+                    }
+                }
+                ensure_stack_push_capacity!();
+                // SAFETY: len < frame_limit <= bc_buf capacity (run_frame
+                // reserved frame_limit up front).
+                unsafe { cursor.push_unchecked(v) };
+            }};
+        }
+
+            macro_rules! vm_try {
+                ($expr:expr) => {{
+                    publish_phase!();
+                    let result = $expr;
+                    rejoin_phase!();
+                    match result {
+                        Ok(value) => value,
+                        Err(flow) => {
+                            publish_phase!();
+                            resume_flow!(flow)
+                        }
+                    }
+                }};
+            }
+
+            // For NON-ESCAPING fallible helpers only (no bc_buf access, no GC
+            // safe point, no Lisp): evaluates $expr with the cursor live so it
+            // may read operands straight off the stack slice; publishes only on
+            // the error path (resume_flow requires it).
+            // GNU's Bcall runs maybe_quit unconditionally; its fast path is
+            // loads-only, so evaluate that condition with the cursor LIVE and
+            // pay the publish/reacquire pair only when the poll actually has
+            // work (quit pending, profiler tick, throw-on-input armed).
+            macro_rules! poll_quit {
+                ($position:expr) => {{
+                    // A quit poll can run Lisp (timers, process filters,
+                    // profiler) that re-enters bytecode through the mirror;
+                    // the active frame's position must be the mirror here.
+                    debug_assert_eq!(
+                        self.ctx.bytecode_stack_position, $position,
+                        "bytecode-stack mirror out of step at a quit boundary"
+                    );
+                    if !self.ctx.maybe_quit_hot_ok() {
+                        publish_phase!();
+                        match self.ctx.maybe_quit() {
+                            Ok(()) => {
+                                rejoin_phase!();
+                            }
+                            Err(flow) => resume_flow!(flow),
+                        }
+                    }
+                }};
+            }
+
+            macro_rules! vm_try_pure {
+                ($expr:expr) => {{
+                    match $expr {
+                        Ok(value) => value,
+                        Err(flow) => {
+                            publish_phase!();
+                            resume_flow!(flow)
+                        }
+                    }
+                }};
+            }
+
+            macro_rules! branch_to {
+                ($target:expr) => {{
+                    let target = $target;
+                    let backward = target < pc_local;
+                    // Set first: an OSR attempt below may move it again (a
+                    // precise deopt resumes at the deopt pc).
+                    pc_local = target;
+                    if backward {
+                        quitcounter = quitcounter.wrapping_add(1);
+                        if quitcounter == 0 {
+                            quitcounter = 1;
+                            // Loop-work heat (jit): 256 backward branches ≈ one call
+                            // toward tier-up, so a hot INNER LOOP in a rarely-called
+                            // body still goes native on its next entry. Piggybacks on
+                            // the existing per-wrap cold path; no per-iteration cost.
+                            #[cfg(feature = "jit")]
+                            func.jit_runtime().note_loop_work();
+                            // A GC/quit safepoint can run Lisp (and thus
+                            // re-enter bytecode through the mirror).
+                            debug_assert_eq!(
+                                self.ctx.bytecode_stack_position, bc_position,
+                                "bytecode-stack mirror out of step at a GC/quit safepoint"
+                            );
+                            vm_try!(self.ctx.bytecode_branch_maybe_gc_and_quit());
+                            // OSR: the loop is hot and this is a backward branch (its
+                            // target is the loop header). If the function is OSR-eligible
+                            // and the live operand stack matches the header's entry depth,
+                            // transfer into native code and finish there. `Ok` = the
+                            // function completed (its result); `Signal` propagates; a
+                            // precise deopt resumes the rest of the function from the
+                            // native frame's captured state; a plain deopt (no side
+                            // effect before its guard) or a non-transfer falls back to
+                            // interpreting from here.
+                            // Gates ordered cheapest-first: a local bool, then the
+                            // knob (`NEOVM_JIT_OSR`, default on), then the kill
+                            // switch, then the heat load.
+                            #[cfg(feature = "jit")]
+                            if !osr_tried
+                                && crate::emacs_core::jit::jit_osr_on()
+                                && crate::emacs_core::jit::jit_runtime_enabled()
+                                && func.jit_runtime().is_hot()
+                            {
+                                publish_phase!();
+                                match self.osr_transfer(func, frame_base, target, aux_stack) {
+                                    OsrOutcome::Interpret { pc, retry } => {
+                                        // Not transferred, a plain deopt, or a precise
+                                        // deopt installed in place: this frame's state
+                                        // is current. Interpret on from `pc`; retry
+                                        // only after an invalidation.
+                                        osr_tried = retry == OsrRetry::Latch;
+                                        rejoin_phase!();
+                                        pc_local = pc;
+                                    }
+                                    OsrOutcome::Returned(value) => {
+                                        // Cold OSR exit: the native run left the
+                                        // context authoritative; rearm the cursor
+                                        // for the shared completion path.
+                                        rejoin_phase!();
+                                        complete_value!(value);
+                                    }
+                                    OsrOutcome::Exited => {
+                                        let flow =
+                                            crate::emacs_core::jit::compile::take_pending_flow()
+                                                .expect("an OSR exit stashes its flow");
+                                        resume_flow!(flow)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }};
+            }
+
+            macro_rules! invalid_bytecode {
+                ($reason:expr) => {{
+                    let invalid_pc = pc_local.saturating_sub(1);
+                    let stack_len = cursor.len;
+                    publish_phase!();
+                    trace_invalid_bytecode_site(
+                        func,
+                        $reason,
+                        invalid_pc,
+                        frame_base,
+                        frame_limit,
+                        stack_len,
+                        ops.get(invalid_pc),
+                    );
+                    resume_flow!(invalid_bytecode_flow())
+                }};
+            }
+
+            debug_assert!(
+                matches!(ops.last(), Some(Op::Return)),
+                "unchecked dispatch requires seal_ops-normalized bytecode"
+            );
+            loop {
+                // SAFETY: GNU's FETCH is `*pc++` with no bound check; the
+                // decode-time `seal_ops` invariant makes the same fetch sound
+                // here. `pc_local` starts and resumes at a saved value
+                // `< ops.len()`, every branch target is `< ops.len()`, and the
+                // final instruction is a `Return` that never falls through, so
+                // `pc_local` can never reach `ops.len()`. The entry gate in
+                // `run_loop` and the iterative-callee gate in
+                // `can_enter_interpreter_frame_iteratively` reject unsealed
+                // hand-assembled chunks before dispatch.
+                // Test builds only: the chain-resume falsifier's per-op probe
+                // (`tests/resumed_chain_probe.rs`), which may take this
+                // driver's frames over and finish them as a resumed chain.
+                #[cfg(any(test, feature = "test-support"))]
+                if resumed_chain_probe::armed() {
+                    publish_phase!();
+                    callers
+                        .active_mut()
+                        .save_execution_state(pc_local, osr_tried);
+                    if let Some(result) = self.resumed_chain_probe(callers, aux_stack) {
+                        return result;
+                    }
+                    rejoin_phase!();
+                }
+                let op = unsafe { &*ops_ptr.add(pc_local) };
+                pc_local += 1;
+                #[cfg(test)]
+                OPCODE_DISPATCH_COUNT.with(|count| count.set(count.get() + 1));
+                #[cfg(feature = "vm-profile")]
+                vm_profile::bump(op);
+
+                match op {
+                    // -- Constants and stack --
+                    Op::Constant(idx) => {
+                        // SAFETY: seal_ops proved every surviving `Constant`
+                        // index in range at decode time (out-of-range ones
+                        // became `TrapOutOfRangeConstant`); the published
+                        // constant pool never shrinks. GNU's Bconstant is the
+                        // same unchecked vector read.
+                        let value = unsafe { *constants.get_unchecked(*idx as usize) };
+                        stk_push!(value);
+
+                        // GNU's threaded interpreter executes Bconstant and
+                        // Bstack_ref as two straight-line handlers with no
+                        // intervening safe point.  Decode keeps one Op per GNU
+                        // bytecode so every original instruction remains a
+                        // valid branch target; when control reaches the pair
+                        // through its first instruction, execute the second
+                        // handler here and skip only its dispatch.  A branch
+                        // directly to the StackRef still uses the ordinary arm
+                        // below.  Advance pc before validation, matching GNU's
+                        // FETCH-before-handler error position.
+                        // SAFETY: seal_ops — a non-Return op is never last,
+                        // so `pc_local` is in bounds after the increment.
+                        let next = unsafe { &*ops_ptr.add(pc_local) };
+                        if allow_skip_ops && let Op::StackRef(n) = next {
+                            pc_local += 1;
+                            #[cfg(feature = "vm-profile")]
+                            vm_profile::bump(next);
+
+                            let offset = 1 + *n as usize;
+                            let len = stk!().len();
+                            if offset <= depth!(frame_base) {
+                                let value = unsafe { *stk!().get_unchecked(len - offset) };
+                                stk_push!(value);
+                            } else {
+                                invalid_bytecode!("stack-ref-out-of-range");
+                            }
+                        }
+                    }
+                    Op::TrapOutOfRangeConstant(_) => {
+                        invalid_bytecode!("constant-index-out-of-range");
+                    }
+                    Op::Nil => stk_push!(Value::NIL),
+                    Op::True => stk_push!(Value::T),
+                    Op::Pop => {
+                        debug_assert!(
+                            !VERIFIED || depth!(frame_base) > 0,
+                            "verified bytecode underflowed its proven stack depth"
+                        );
+                        if !VERIFIED && depth!(frame_base) == 0 {
+                            invalid_bytecode!("pop-empty-stack");
+                        }
+                        stk!().pop();
+                    }
+                    Op::Dup => {
+                        if allow_skip_ops && pc_local + 2 < ops_len {
+                            let next0 = unsafe { &*ops_ptr.add(pc_local) };
+                            let next1 = unsafe { &*ops_ptr.add(pc_local + 1) };
+                            let next2 = unsafe { &*ops_ptr.add(pc_local + 2) };
+                            if let (Op::StackRef(stack_ref), Op::Lss, Op::GotoIfNil(target)) =
+                                (next0, next1, next2)
+                            {
+                                let len = cursor.len;
+                                if depth!(frame_base) == 0 {
+                                    invalid_bytecode!("dup-lss-gotoifnil-empty-stack");
+                                }
+                                debug_assert!(
+                                    !VERIFIED || len < frame_limit,
+                                    "verified bytecode exceeded its proven max_stack"
+                                );
+                                if !VERIFIED && len >= frame_limit {
+                                    invalid_bytecode!("dup-lss-gotoifnil-stack-at-frame-limit");
+                                }
+
+                                let top = unsafe { *cursor.get_unchecked(len - 1) };
+                                let after_dup_len = len + 1;
+                                let offset = 1 + *stack_ref as usize;
+
+                                debug_assert!(
+                                    !VERIFIED || after_dup_len < frame_limit,
+                                    "verified bytecode exceeded its proven max_stack"
+                                );
+                                if offset > after_dup_len
+                                    || (!VERIFIED && after_dup_len >= frame_limit)
+                                {
+                                    // SAFETY: len < frame_limit checked above.
+                                    unsafe { cursor.push_unchecked(top) };
+                                    pc_local += 1;
+                                    invalid_bytecode!("dup-lss-gotoifnil-stackref-out-of-range");
+                                }
+
+                                let ref_index = after_dup_len - offset;
+                                let ref_value = if ref_index == len {
+                                    top
+                                } else {
+                                    unsafe { *cursor.get_unchecked(ref_index) }
+                                };
+
+                                if top.is_fixnum() && ref_value.is_fixnum() {
+                                    pc_local += 3;
+                                    if !fixnum_lt(top, ref_value) {
+                                        branch_to!(*target as usize);
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+
+                        if depth!(frame_base) > 0 {
+                            let top = unsafe { *stk!().get_unchecked(stk!().len() - 1) };
+                            stk_push!(top);
+                        } else {
+                            invalid_bytecode!("dup-empty-stack");
+                        }
+                    }
+                    Op::StackRef(n) => {
+                        let offset = 1 + *n as usize;
+                        let len = stk!().len();
+                        debug_assert!(
+                            !VERIFIED || offset <= depth!(frame_base),
+                            "verified bytecode underflowed its proven stack depth"
+                        );
+                        if VERIFIED || offset <= depth!(frame_base) {
+                            // Valid bytecode references an existing stack slot.
+                            // Keep the hot path to one explicit check and avoid
+                            // the slice indexer's second bounds check.
+                            let val = unsafe { *stk!().get_unchecked(len - offset) };
+
+                            // GNU's Bstack_ref handlers perform PUSH + NEXT,
+                            // and an adjacent Breturn immediately reads TOP;
+                            // neither handler introduces a safe point.  Keep
+                            // Return independently addressable, but when
+                            // execution arrives through StackRef, return the
+                            // selected value without a temporary push or a
+                            // second Rust dispatch.  Validate the skipped push
+                            // first so malformed max-stack metadata retains
+                            // Neomacs's existing error behavior and site.
+                            // SAFETY: seal_ops — a non-Return op is never
+                            // last, so `pc_local` is in bounds here.
+                            let next = unsafe { &*ops_ptr.add(pc_local) };
+                            if allow_skip_ops && matches!(next, Op::Return) {
+                                ensure_stack_push_capacity!();
+                                pc_local += 1;
+                                #[cfg(feature = "vm-profile")]
+                                vm_profile::bump(next);
+                                return_value!(val);
+                            }
+                            stk_push!(val);
+                        } else {
+                            invalid_bytecode!("stack-ref-out-of-range");
+                        }
+                    }
+                    Op::StackSet(n) => {
+                        let len = stk!().len();
+                        debug_assert!(
+                            !VERIFIED || depth!(frame_base) > *n as usize,
+                            "verified bytecode underflowed its proven stack depth"
+                        );
+                        if !VERIFIED && depth!(frame_base) == 0 {
+                            invalid_bytecode!("stack-set-empty-stack");
+                        }
+                        let n = *n as usize;
+                        if n == 0 {
+                            stk!().pop();
+                            continue;
+                        }
+                        if VERIFIED || n < depth!(frame_base) {
+                            let val = unsafe { *cursor.get_unchecked(len - 1) };
+                            let idx = len - 1 - n;
+                            unsafe { *cursor.get_unchecked_mut(idx) = val };
+                            cursor.len = len - 1;
+                        } else {
+                            invalid_bytecode!("stack-set-out-of-range");
+                        }
+                    }
+                    Op::DiscardN(raw) => {
+                        let preserve_tos = (raw & 0x80) != 0;
+                        let n = (raw & 0x7F) as usize;
+                        if n == 0 {
+                            continue;
+                        }
+                        let len = stk!().len();
+                        if n > depth!(frame_base) {
+                            invalid_bytecode!("discard-n-out-of-range");
+                        }
+                        if preserve_tos {
+                            if n >= depth!(frame_base) {
+                                invalid_bytecode!("discard-n-preserve-tos-out-of-range");
+                            }
+                            let top = unsafe { *cursor.get_unchecked(len - 1) };
+                            let target = len - 1 - n;
+                            unsafe { *cursor.get_unchecked_mut(target) = top };
+                        }
+                        cursor.len = len - n;
+                    }
+
+                    // -- Variable access --
+                    Op::VarRef(idx) => {
+                        let name_id = sym_id_at(constants, *idx);
+                        // Task-4 profiling: class + per-symbol VarRef breakdown
+                        // (the BLV-fraction counter the T1 report flagged missing).
+                        #[cfg(feature = "vm-profile")]
+                        {
+                            let (class, via_alias) = self.vm_profile_classify_varref(name_id);
+                            vm_profile::bump_varref(name_id, class, via_alias);
+                        }
+                        let val = vm_try!(self.fast_path_var_ref(name_id));
+                        stk_push!(val);
+                    }
+                    Op::VarSet(idx) => {
+                        let name_id = sym_id_at(constants, *idx);
+                        let val = stk!().pop().unwrap_or(Value::NIL);
+                        // A plain cell is one store that cannot reach a safe
+                        // point, so it needs none of the frame rooting below;
+                        // nor does a cached buffer-local or forwarded store.
+                        if !self.ctx.try_set_plain_variable(name_id, val)
+                            && !self.ctx.try_set_var_cached(name_id, val)
+                        {
+                            let extra = [val];
+                            vm_try!(self.with_frame_roots(func, &extra, |vm| {
+                                vm.assign_var_id(name_id, val)
+                            },));
+                        }
+                    }
+                    Op::VarBind(idx) => {
+                        // GNU bytecode.c Bvarbind: `specbind (vectorp[arg], POP);`
+                        // — always a dynamic binding, no lexical fallback. The
+                        // byte-compiler (bytecomp.el byte-compile-bind) emits
+                        // `byte-varbind` ONLY for variables that
+                        // `cconv--not-lexical-var-p` reports as dynamic — i.e.
+                        // members of `byte-compile-bound-variables`, populated
+                        // from the file's top-level `(defvar VAR)` declarations
+                        // among other sources. Lexical `let` bindings never get
+                        // a varbind opcode at all; they live on the value stack
+                        // and are tracked via `byte-compile--lexical-environment`.
+                        //
+                        // Therefore the VM must NOT second-guess the byte-compiler
+                        // by inspecting `is_special_id` / `lexenv_declares_special`
+                        // at runtime. Doing so misroutes file-local-only dynamic
+                        // declarations (e.g. `(defvar cconv-freevars-alist)` in
+                        // cconv.el — declared special locally but not globally) to
+                        // the lexenv, where they are invisible to other functions
+                        // called from the let body and surface as `void-variable`.
+                        let name_id = sym_id_at(constants, *idx);
+                        let val = stk!().pop().unwrap_or(Value::NIL);
+                        let bind_depth = self.ctx.specpdl.len();
+                        // vm_try publishes the stack because specbind can run
+                        // variable watchers (arbitrary Lisp).
+                        vm_try!(self.ctx.try_specbind(name_id, val));
+                        aux_stack.current_mut().bind_stack.push(bind_depth);
+                    }
+                    Op::Unbind(n) => {
+                        let target = aux_stack
+                            .current_mut()
+                            .bind_stack
+                            .consume(*n as usize, self.ctx.specpdl.len());
+                        // Cleanup watcher/unwind-protect exits, and a count the
+                        // frame does not own, supersede normal bytecode
+                        // execution and re-enter the VM's nonlocal dispatcher
+                        // through the one published-cursor path.
+                        let _ = vm_try!(self.unbind_frame_target(target));
+                    }
+
+                    // -- Function calls --
+                    Op::Call(n) => {
+                        let n = *n as usize;
+                        let len = stk!().len();
+                        debug_assert!(
+                            !VERIFIED || depth!(frame_base) > n,
+                            "verified bytecode called with no function operand"
+                        );
+                        // `Op::Call(n)` requires n+1 operands (the callee plus
+                        // its arguments), which the verifier proved for this
+                        // body -- so the saturating arithmetic, the `> 0` test
+                        // and the indexer's bounds check are all dead here.
+                        // GNU does the same three steps unguarded
+                        // (`src/bytecode.c`: DISCARD then `call_fun = TOP`).
+                        let (args_start, stack_after_call, func_val) = if VERIFIED {
+                            let args_start = len - n;
+                            // SAFETY: the proof above gives args_start >= 1 and
+                            // args_start - 1 < len.
+                            let func_val = unsafe { *stk!().get_unchecked(args_start - 1) };
+                            (args_start, args_start - 1, func_val)
+                        } else {
+                            let args_start = len.saturating_sub(n);
+                            let func_val = if args_start > 0 {
+                                stk!()[args_start - 1]
+                            } else {
+                                Value::NIL
+                            };
+                            (args_start, args_start.saturating_sub(1), func_val)
+                        };
+                        // P2.1 C3/C4: record the call's target -- the callee of a
+                        // non-constant site, the function of an `apply`, the
+                        // callback of a mapping builtin -- into the source's
+                        // call-site table (`jit::feedback`). The call-site index
+                        // is `pc_local - 1` (pc was advanced past Call above).
+                        // GC-safe: the table holds symbol ids and source
+                        // identities, never a Value. Off unless
+                        // `NEOVM_JIT_FEEDBACK` records (one field compare).
+                        #[cfg(feature = "jit")]
+                        if self.bytecode_tier_policy.records_call_feedback() {
+                            let arg0 = if n > 0 {
+                                stk!()[args_start]
+                            } else {
+                                Value::NIL
+                            };
+                            func.jit_runtime().record_call_target(
+                                pc_local - 1,
+                                func,
+                                func_val,
+                                arg0,
+                            );
+                        }
+                        // Round-2 profiling: attribute this Op::Call to its callee
+                        // symbol (the find_spec_sites entry population). Resolve a
+                        // subr-object callee to its SymId so both `(f x)` (symbol
+                        // callee) and a spilled subr value count the same builtin.
+                        // Task-4 profiling: also record the resolution kind
+                        // (closure-vs-builtin split) and the callee under its call
+                        // site — the execution-weighted per-site polymorphism table.
+                        #[cfg(feature = "vm-profile")]
+                        {
+                            if let Some(id) = match func_val.kind() {
+                                ValueKind::Symbol(id) => Some(id),
+                                _ => func_val.as_subr_id(),
+                            } {
+                                vm_profile::bump_entry(id, vm_profile::ENTRY_CALL);
+                            }
+                            let (site_key, kind) = self.vm_profile_classify_call(func_val);
+                            vm_profile::bump_call_site(
+                                func as *const ByteCodeFunction as usize,
+                                (pc_local - 1) as u32,
+                                site_key,
+                                kind,
+                            );
+                        }
+                        // GNU `bytecode.c:Bcall` polls `maybe_quit` before
+                        // entering the callee. This is observable when bytecode
+                        // sets `quit-flag` immediately before a call: the callee
+                        // must not run.
+                        poll_quit!(bc_position);
+                        // GNU `bytecode.c:795-799`: Bcall records its frame and
+                        // then tests `debug_on_next_call`.  Only `Bcall` does --
+                        // the inline opcodes (`Op::CallBuiltin`/
+                        // `Op::CallBuiltinSym`, GNU `bytecode.c:1412-1545`) are
+                        // deliberately not gated, so the arm cannot live in the
+                        // shared `call_function`.  This peek cannot arm
+                        // anything (it is a bare `bool`); it only steers the
+                        // call off the zero-copy fast paths onto the owned
+                        // route below, which takes the arm properly.
+                        let debug_armed = self.ctx.obarray.debug_on_next_call_armed_fast();
+                        let target = self.resolve_interpreter_stack_call_target(func_val, n);
+
+                        if !debug_armed
+                            && let ResolvedStackCallTarget::Interpreter { call } = target
+                        {
+                            // Iterative Bcall keeps the cursor LIVE across
+                            // the whole transition (GNU keeps `top` in a
+                            // register through setup_frame): no publish, no
+                            // reacquire, nothing here reaches a GC safe
+                            // point. The classify gate already proved the
+                            // callee sealed and stack-verified.
+                            self.ctx.depth += 1;
+                            if self.ctx.depth > self.ctx.max_depth {
+                                if let Err(overflow) = self.check_live_bytecode_call_depth() {
+                                    let (flow, retired) = self.finish_live_bytecode_depth_overflow(
+                                        RunLoopCursor {
+                                            operands: cursor,
+                                            phase,
+                                        },
+                                        overflow,
+                                    );
+                                    published = retired;
+                                    resume_flow!(flow);
+                                }
+                            }
+                            let prepared = call.callee();
+                            let callee_code = prepared.code();
+                            let callee_value = prepared.value();
+                            // The cache entry already holds the callee's
+                            // ops and constant pool; the frame takes them
+                            // rather than re-deriving them here.
+                            let callee_view = call.code_view();
+                            #[cfg(debug_assertions)]
+                            cursor.debug_sync_len(self.ctx);
+                            // The compact span always fits: nargs comes
+                            // from Op::Call(u16) and the operand index is
+                            // far below the span's start bound, so the
+                            // oversized fallback (which would read the
+                            // stale context stack) is unreachable here.
+                            let backtrace = self
+                                .ctx
+                                .push_backtrace_frame_from_bc_stack(func_val, args_start, n);
+                            // GNU records the callee (bytecode.c:792-796) and
+                            // then setup_frame (:496-516) checks the bytecode
+                            // stack; the rejected frame is not installed. The
+                            // cold handler is shared by every tier and lives
+                            // out of line, so this arm stays small.
+                            let Some(bc_position_after) =
+                                charge_frame_position(bc_position, callee_code.max_stack.get())
+                            else {
+                                let flow = self.reject_bytecode_frame_for_budget(backtrace);
+                                publish_phase!();
+                                resume_flow!(flow)
+                            };
+                            callers
+                                .active_mut()
+                                .save_execution_state(pc_local, osr_tried);
+                            *driver_quitcounter = quitcounter;
+                            let caller_depth = InterpreterDriverDepth::from_suspended_callers(
+                                callers.suspended_len(),
+                            );
+                            aux_stack.suspend_current(caller_depth);
+                            // The callee frame carries this call's whole
+                            // continuation: the consumed function operand,
+                            // which is `stack_after_call`, and the backtrace
+                            // token. One push, like GNU's `bc_frame`.
+                            let root_slot =
+                                ConsumedCallOperandRootSlot::from_args_start(args_start);
+                            debug_assert_eq!(root_slot.0, stack_after_call);
+                            let callee_frame = self.install_iterative_interpreter_frame(
+                                &mut cursor,
+                                PreparedInterpreterCallee::new(
+                                    callee_value,
+                                    callee_code,
+                                    callee_view,
+                                ),
+                                root_slot,
+                                n,
+                                backtrace,
+                                bc_position_after,
+                            );
+                            callers.enter_callee(callee_frame);
+                            continue 'frame;
+                        }
+                        // A non-iterative call (subr, JIT leaf, tier
+                        // dispatcher) can re-enter bytecode through the
+                        // mirror.
+                        debug_assert_eq!(
+                            self.ctx.bytecode_stack_position, bc_position,
+                            "bytecode-stack mirror out of step at a call boundary"
+                        );
+                        let result = if debug_armed {
+                            let args: LispArgVec = stk!()[args_start..].iter().copied().collect();
+                            vm_try!(self.with_bytecode_call_depth(|vm| {
+                                vm.call_function_debugged(func_val, args)
+                            }))
+                        } else {
+                            publish_phase!();
+                            if let Err(flow) = self.enter_published_bytecode_call_depth() {
+                                resume_flow!(flow)
+                            }
+                            match self
+                                .dispatch_interpreter_stack_call(func_val, args_start, n, target)
+                            {
+                                InterpreterStackCall::Enter {
+                                    callee,
+                                    root_slot,
+                                    nargs,
+                                    backtrace,
+                                } => {
+                                    // GNU records the callee (bytecode.c:792-796)
+                                    // and then setup_frame (:496-516) checks the
+                                    // bytecode stack; the rejected frame is not
+                                    // installed.  The cursor is still published,
+                                    // so the overflow resumes through the normal
+                                    // nonlocal-flow machinery.
+                                    let Some(bc_position_after) = charge_frame_position(
+                                        bc_position,
+                                        callee.code().max_stack.get(),
+                                    ) else {
+                                        let flow = self.reject_bytecode_frame_for_budget(backtrace);
+                                        resume_flow!(flow)
+                                    };
+                                    // Uncached ByteCode targets route through
+                                    // the tier dispatcher (heat/feedback) and
+                                    // may still enter iteratively; the cursor
+                                    // was published for that escape, so rearm
+                                    // it and take the same live-cursor
+                                    // installation as the cached fast path.
+                                    rejoin_phase!();
+                                    callers
+                                        .active_mut()
+                                        .save_execution_state(pc_local, osr_tried);
+                                    *driver_quitcounter = quitcounter;
+                                    let caller_depth =
+                                        InterpreterDriverDepth::from_suspended_callers(
+                                            callers.suspended_len(),
+                                        );
+                                    aux_stack.suspend_current(caller_depth);
+                                    debug_assert_eq!(root_slot.0, stack_after_call);
+                                    let callee_frame = self.install_iterative_interpreter_frame(
+                                        &mut cursor,
+                                        callee,
+                                        root_slot,
+                                        nargs,
+                                        backtrace,
+                                        bc_position_after,
+                                    );
+                                    callers.enter_callee(callee_frame);
+                                    continue 'frame;
+                                }
+                                InterpreterStackCall::Complete(result) => {
+                                    self.leave_bytecode_call_depth();
+                                    match result {
+                                        Ok(value) => {
+                                            rejoin_phase!();
+                                            value
+                                        }
+                                        Err(flow) => resume_flow!(flow),
+                                    }
+                                }
+                            }
+                        };
+                        stk!().truncate(stack_after_call);
+                        stk_push!(result);
+                    }
+                    Op::Apply(n) => {
+                        let n = *n as usize;
+                        poll_quit!(bc_position);
+                        if n == 0 {
+                            let stack_after_call = stk!().len().saturating_sub(1);
+                            let func_val = stk!().last().copied().unwrap_or(Value::NIL);
+                            let result = vm_try!(self.call_function(func_val, LispArgVec::new()));
+                            stk!().truncate(stack_after_call);
+                            stk_push!(result);
+                        } else {
+                            let args_start = stk!().len().saturating_sub(n);
+                            let stack_after_call = args_start.saturating_sub(1);
+                            let func_val = if args_start > 0 {
+                                stk!()[args_start - 1]
+                            } else {
+                                Value::NIL
+                            };
+                            let result =
+                                vm_try!(self.apply_arguments_from_stack(func_val, args_start, n,));
+                            stk!().truncate(stack_after_call);
+                            stk_push!(result);
+                        }
+                    }
+
+                    // -- Control flow --
+                    // Backward branches mirror GNU `bytecode.c:op_branch`: an
+                    // unsigned byte `quitcounter` is incremented only for backward
+                    // jumps, and `maybe_gc(); maybe_quit();` runs when it wraps.
+                    Op::Goto(addr) => {
+                        branch_to!(*addr as usize);
+                    }
+                    Op::GotoIfNil(addr) => {
+                        let len = cursor.len;
+                        debug_assert!(
+                            !VERIFIED || depth!(frame_base) > 0,
+                            "verified bytecode underflowed its proven stack depth"
+                        );
+                        if !VERIFIED && depth!(frame_base) == 0 {
+                            invalid_bytecode!("goto-if-nil-empty-stack");
+                        }
+                        let val = unsafe { *cursor.get_unchecked(len - 1) };
+                        cursor.len = len - 1;
+                        if val.is_nil() {
+                            branch_to!(*addr as usize);
+                        }
+                    }
+                    Op::GotoIfNotNil(addr) => {
+                        let len = cursor.len;
+                        debug_assert!(
+                            !VERIFIED || depth!(frame_base) > 0,
+                            "verified bytecode underflowed its proven stack depth"
+                        );
+                        if !VERIFIED && depth!(frame_base) == 0 {
+                            invalid_bytecode!("goto-if-not-nil-empty-stack");
+                        }
+                        let val = unsafe { *cursor.get_unchecked(len - 1) };
+                        cursor.len = len - 1;
+                        if val.is_truthy() {
+                            branch_to!(*addr as usize);
+                        }
+                    }
+                    Op::GotoIfNilElsePop(addr) => {
+                        let len = cursor.len;
+                        debug_assert!(
+                            !VERIFIED || depth!(frame_base) > 0,
+                            "verified bytecode underflowed its proven stack depth"
+                        );
+                        if !VERIFIED && depth!(frame_base) == 0 {
+                            invalid_bytecode!("goto-if-nil-else-pop-empty-stack");
+                        }
+                        if unsafe { cursor.get_unchecked(len - 1) }.is_nil() {
+                            branch_to!(*addr as usize);
+                        } else {
+                            cursor.len = len - 1;
+                        }
+                    }
+                    Op::GotoIfNotNilElsePop(addr) => {
+                        let len = cursor.len;
+                        debug_assert!(
+                            !VERIFIED || depth!(frame_base) > 0,
+                            "verified bytecode underflowed its proven stack depth"
+                        );
+                        if !VERIFIED && depth!(frame_base) == 0 {
+                            invalid_bytecode!("goto-if-not-nil-else-pop-empty-stack");
+                        }
+                        if unsafe { cursor.get_unchecked(len - 1) }.is_truthy() {
+                            branch_to!(*addr as usize);
+                        } else {
+                            cursor.len = len - 1;
+                        }
+                    }
+                    Op::Switch => {
+                        let jump_table = stk!().pop().unwrap_or(Value::NIL);
+                        let dispatch = stk!().pop().unwrap_or(Value::NIL);
+
+                        if !matches!(
+                            jump_table.kind(),
+                            ValueKind::Veclike(VecLikeType::HashTable)
+                        ) {
+                            publish_phase!();
+                            resume_flow!(signal(
+                                LispCondition::WrongTypeArgument,
+                                vec![Value::symbol("hash-table-p"), jump_table],
+                            ))
+                        }
+
+                        let ht = jump_table.as_hash_table().unwrap();
+                        let target =
+                            vm_switch_target(ht, dispatch, self.ctx.symbols_with_pos_enabled);
+
+                        if let Some(target_val) = target {
+                            match target_val.kind() {
+                                ValueKind::Fixnum(addr) => {
+                                    pc_local = vm_try!(resolve_switch_target(func, addr));
+                                }
+                                _ => {
+                                    vm_try!(Err(signal(
+                                        LispCondition::WrongTypeArgument,
+                                        vec![Value::symbol("integerp"), target_val],
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                    Op::Return => {
+                        let result = stk!().pop().unwrap_or(Value::NIL);
+                        return_value!(result);
+                    }
+                    Op::SaveCurrentBuffer => {
+                        if let Some(buffer_id) = self
+                            .ctx
+                            .edit
+                            .buffers
+                            .current_buffer()
+                            .map(|buffer| buffer.id())
+                        {
+                            aux_stack
+                                .current_mut()
+                                .bind_stack
+                                .push(self.ctx.specpdl.len());
+                            self.ctx
+                                .specpdl
+                                .push(SpecBinding::SaveCurrentBuffer { buffer_id });
+                        }
+                    }
+                    Op::SaveExcursion => {
+                        if let Some(count) = self.ctx.record_save_excursion() {
+                            aux_stack.current_mut().bind_stack.push(count);
+                        }
+                    }
+                    Op::SaveRestriction => {
+                        if let Some(saved) = self.ctx.edit.buffers.save_current_restriction_state()
+                        {
+                            aux_stack
+                                .current_mut()
+                                .bind_stack
+                                .push(self.ctx.specpdl.len());
+                            self.ctx.specpdl.push(SpecBinding::save_restriction(saved));
+                        }
+                    }
+
+                    Op::SaveWindowExcursion => {
+                        // GNU bytecode.c Bsave_window_excursion (opcode 139):
+                        // Pop body form list, evaluate with Fprogn inside
+                        // a real window-configuration save/restore.
+                        //
+                        // GNU `src/bytecode.c:945-952`:
+                        //
+                        //   record_unwind_protect (restore_window_configuration,
+                        //                          Fcurrent_window_configuration (Qnil));
+                        //   TOP = Fprogn (TOP);
+                        //   unbind_to (count1, TOP);
+                        //
+                        // `save-some-buffers`, `map-y-or-n-p`, and other
+                        // byte-compiled Lisp still rely on this obsolete opcode.
+                        // Evaluating the body without restoring the window
+                        // configuration leaves minibuffer/window state corrupted.
+                        let body = stk!().pop().unwrap_or(Value::NIL);
+                        let progn_form = Value::cons(Value::symbol("progn"), body);
+                        let saved = vm_try!(
+                            crate::emacs_core::builtins::SavedWindowConfiguration::capture(
+                                self.ctx,
+                                Value::NIL,
+                            )
+                        );
+                        // GNU records the restore on the specpdl before evaluating
+                        // the body.  Use the same typed native-unwind action as the
+                        // minibuffer lifecycle, so a new Rust `?`/flow path cannot
+                        // bypass restoration.
+                        publish_phase!();
+                        let root_scope = self.ctx.save_vm_roots();
+                        self.push_dynamic_vm_root(progn_form);
+                        let body_result = self.ctx.with_unwind_scope(|ctx| {
+                        ctx.record_native_unwind(
+                            crate::emacs_core::eval::NativeUnwindAction::RestoreWindowConfiguration {
+                                configuration: saved,
+                                options: crate::emacs_core::builtins::WindowConfigurationRestoreOptions::default(),
+                            },
+                        );
+                        ctx.eval_sub(progn_form)
+                    });
+                        self.ctx.restore_vm_roots(root_scope);
+                        rejoin_phase!();
+
+                        match body_result {
+                            Ok(result) => {
+                                stk_push!(result);
+                            }
+                            Err(flow) => {
+                                publish_phase!();
+                                resume_flow!(flow)
+                            }
+                        }
+                    }
+
+                    // -- Arithmetic --
+                    // Inline fixnum fast paths match GNU Emacs bytecode.c design:
+                    // the bytecode opcode IS the contract — no override check needed.
+                    Op::Add => {
+                        let fallback = {
+                            let len = cursor.len;
+                            if depth!(frame_base) < 2 {
+                                invalid_bytecode!("add-stack-underflow");
+                            }
+                            let b = unsafe { *cursor.get_unchecked(len - 1) };
+                            let a = unsafe { *cursor.get_unchecked(len - 2) };
+                            if (((a.bits() ^ FIXNUM_CHECK_VALUE) | (b.bits() ^ FIXNUM_CHECK_VALUE))
+                                & FIXNUM_CHECK_MASK)
+                                == 0
+                            {
+                                // T(n) = 4*n+2. T(b)-2 is representable for every
+                                // fixnum; the checked final tagged result fits i64 iff
+                                // the Lisp sum/difference fits the fixnum payload.
+                                let rhs_payload = fixnum_tagged_i64(b) - FIXNUM_CHECK_VALUE as i64;
+                                if let Some(encoded) = fixnum_tagged_i64(a).checked_add(rhs_payload)
+                                {
+                                    unsafe {
+                                        *cursor.get_unchecked_mut(len - 2) = unsafe {
+                                            /* SAFETY: bytecode word */
+                                            Value::from_bits(encoded as usize)
+                                        };
+                                    }
+                                    cursor.len = len - 1;
+                                    None
+                                } else {
+                                    // LEAVE both operands on the stack. `vm_try!`
+                                    // publishes the cursor before the call, so
+                                    // they stay rooted on `bc_buf` for its whole
+                                    // duration -- no copy into a `LispArgVec`, no
+                                    // root frame, no per-argument root push. This
+                                    // is GNU's `Bplus` slow arm, which is
+                                    // `Fplus (2, &TOP)`: a pointer INTO the live
+                                    // stack. Popping first (as this did) put the
+                                    // operands above the published length, which
+                                    // is precisely what forced the copy and the
+                                    // explicit rooting.
+                                    Some(len - 2)
+                                }
+                            } else {
+                                Some(len - 2)
+                            }
+                        };
+                        if let Some(args_start) = fallback {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Add,
+                                args_start,
+                                2
+                            ));
+                            cursor.len = args_start;
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Sub => {
+                        let len = stk!().len();
+                        let b = stk!()[len - 1];
+                        let a = stk!()[len - 2];
+                        if (((a.bits() ^ FIXNUM_CHECK_VALUE) | (b.bits() ^ FIXNUM_CHECK_VALUE))
+                            & FIXNUM_CHECK_MASK)
+                            == 0
+                        {
+                            // T(n) = 4*n+2. T(b)-2 is representable for every
+                            // fixnum; the checked final tagged result fits i64 iff
+                            // the Lisp sum/difference fits the fixnum payload.
+                            let rhs_payload = fixnum_tagged_i64(b) - FIXNUM_CHECK_VALUE as i64;
+                            if let Some(encoded) = fixnum_tagged_i64(a).checked_sub(rhs_payload) {
+                                stk!()[len - 2] = unsafe {
+                                    /* SAFETY: bytecode word */
+                                    Value::from_bits(encoded as usize)
+                                };
+                                stk!().pop();
+                            } else {
+                                let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                    func,
+                                    pc_local - 1,
+                                    ArithGenericKind::Sub,
+                                    len - 2,
+                                    2
+                                ));
+                                stk!().truncate(len - 2);
+                                stk_push!(result);
+                            }
+                        } else {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Sub,
+                                len - 2,
+                                2
+                            ));
+                            stk!().truncate(len - 2);
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Mul => {
+                        let len = stk!().len();
+                        let b = stk!()[len - 1];
+                        let a = stk!()[len - 2];
+                        if a.is_fixnum() && b.is_fixnum() {
+                            let av = a.xfixnum();
+                            let bv = b.xfixnum();
+                            if let Some(res) = av.checked_mul(bv) {
+                                if (Value::MOST_NEGATIVE_FIXNUM..=Value::MOST_POSITIVE_FIXNUM)
+                                    .contains(&res)
+                                {
+                                    stk!()[len - 2] = Value::fixnum(res);
+                                    stk!().pop();
+                                } else {
+                                    let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                        func,
+                                        pc_local - 1,
+                                        ArithGenericKind::Mul,
+                                        len - 2,
+                                        2
+                                    ));
+                                    stk!().truncate(len - 2);
+                                    stk_push!(result);
+                                }
+                            } else {
+                                let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                    func,
+                                    pc_local - 1,
+                                    ArithGenericKind::Mul,
+                                    len - 2,
+                                    2
+                                ));
+                                stk!().truncate(len - 2);
+                                stk_push!(result);
+                            }
+                        } else {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Mul,
+                                len - 2,
+                                2
+                            ));
+                            stk!().truncate(len - 2);
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Div => {
+                        let len = stk!().len();
+                        let b = stk!()[len - 1];
+                        let a = stk!()[len - 2];
+                        if let (Some(av), Some(bv)) = (a.as_fixnum_value(), b.as_fixnum_value()) {
+                            if let Some(res) = av.checked_div(bv) {
+                                stk!()[len - 2] = Value::from_fixnum(res);
+                                stk!().pop();
+                            } else {
+                                let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                    func,
+                                    pc_local - 1,
+                                    ArithGenericKind::Div,
+                                    len - 2,
+                                    2
+                                ));
+                                stk!().truncate(len - 2);
+                                stk_push!(result);
+                            }
+                        } else {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Div,
+                                len - 2,
+                                2
+                            ));
+                            stk!().truncate(len - 2);
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Rem => {
+                        let len = stk!().len();
+                        let b = stk!()[len - 1];
+                        let a = stk!()[len - 2];
+                        if a.is_fixnum() && b.is_fixnum() {
+                            let av = a.xfixnum();
+                            let bv = b.xfixnum();
+                            if bv != 0 {
+                                stk!()[len - 2] = Value::fixnum(av % bv);
+                                stk!().pop();
+                            } else {
+                                let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                    func,
+                                    pc_local - 1,
+                                    ArithGenericKind::Rem,
+                                    len - 2,
+                                    2
+                                ));
+                                stk!().truncate(len - 2);
+                                stk_push!(result);
+                            }
+                        } else {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Rem,
+                                len - 2,
+                                2
+                            ));
+                            stk!().truncate(len - 2);
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Add1 => {
+                        let fallback = {
+                            let len = cursor.len;
+                            if depth!(frame_base) == 0 {
+                                invalid_bytecode!("add1-empty-stack");
+                            }
+                            let top = unsafe { *cursor.get_unchecked(len - 1) };
+                            if top.is_fixnum() {
+                                // A unit payload step changes the tagged word by four; signed
+                                // overflow is exactly the Lisp fixnum boundary.
+                                if let Some(encoded) =
+                                    fixnum_tagged_i64(top).checked_add(1_i64 << FIXNUM_SHIFT)
+                                {
+                                    unsafe {
+                                        *cursor.get_unchecked_mut(len - 1) = unsafe {
+                                            /* SAFETY: bytecode word */
+                                            Value::from_bits(encoded as usize)
+                                        };
+                                    }
+                                    None
+                                } else {
+                                    // Operand stays on the stack; see Op::Add.
+                                    Some(len - 1)
+                                }
+                            } else {
+                                Some(len - 1)
+                            }
+                        };
+                        if let Some(args_start) = fallback {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Add1,
+                                args_start,
+                                1
+                            ));
+                            cursor.len = args_start;
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Sub1 => {
+                        let top = *stk!().last().unwrap();
+                        if top.is_fixnum() {
+                            // A unit payload step changes the tagged word by four; signed
+                            // overflow is exactly the Lisp fixnum boundary.
+                            if let Some(encoded) =
+                                fixnum_tagged_i64(top).checked_sub(1_i64 << FIXNUM_SHIFT)
+                            {
+                                *stk!().last_mut().unwrap() = unsafe {
+                                    /* SAFETY: bytecode word */
+                                    Value::from_bits(encoded as usize)
+                                };
+                            } else {
+                                let args_start = stk!().len() - 1;
+                                let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                    func,
+                                    pc_local - 1,
+                                    ArithGenericKind::Sub1,
+                                    args_start,
+                                    1
+                                ));
+                                stk!().truncate(args_start);
+                                stk_push!(result);
+                            }
+                        } else {
+                            let args_start = stk!().len() - 1;
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Sub1,
+                                args_start,
+                                1
+                            ));
+                            stk!().truncate(args_start);
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Negate => {
+                        let top = *stk!().last().unwrap();
+                        if top.is_fixnum() {
+                            let n = top.xfixnum();
+                            if n != Value::MOST_NEGATIVE_FIXNUM {
+                                *stk!().last_mut().unwrap() = Value::fixnum(-n);
+                            } else {
+                                let args_start = stk!().len() - 1;
+                                let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                    func,
+                                    pc_local - 1,
+                                    ArithGenericKind::Negate,
+                                    args_start,
+                                    1
+                                ));
+                                stk!().truncate(args_start);
+                                stk_push!(result);
+                            }
+                        } else {
+                            let args_start = stk!().len() - 1;
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Negate,
+                                args_start,
+                                1
+                            ));
+                            stk!().truncate(args_start);
+                            stk_push!(result);
+                        }
+                    }
+
+                    // -- Comparison --
+                    // Inline fixnum fast paths match GNU Emacs bytecode.c.
+                    Op::Eqlsign => {
+                        let len = stk!().len();
+                        let b = stk!()[len - 1];
+                        let a = stk!()[len - 2];
+                        if (((a.bits() ^ FIXNUM_CHECK_VALUE) | (b.bits() ^ FIXNUM_CHECK_VALUE))
+                            & FIXNUM_CHECK_MASK)
+                            == 0
+                        {
+                            stk!()[len - 2] = if a.bits() == b.bits() {
+                                Value::T
+                            } else {
+                                Value::NIL
+                            };
+                            stk!().pop();
+                        } else {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::NumEq,
+                                len - 2,
+                                2
+                            ));
+                            stk!().truncate(len - 2);
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Gtr => {
+                        let len = stk!().len();
+                        let b = stk!()[len - 1];
+                        let a = stk!()[len - 2];
+                        if (((a.bits() ^ FIXNUM_CHECK_VALUE) | (b.bits() ^ FIXNUM_CHECK_VALUE))
+                            & FIXNUM_CHECK_MASK)
+                            == 0
+                        {
+                            stk!()[len - 2] = if fixnum_gt(a, b) {
+                                Value::T
+                            } else {
+                                Value::NIL
+                            };
+                            stk!().pop();
+                        } else {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Gt,
+                                len - 2,
+                                2
+                            ));
+                            stk!().truncate(len - 2);
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Lss => {
+                        let fallback = {
+                            let len = cursor.len;
+                            if depth!(frame_base) < 2 {
+                                invalid_bytecode!("lss-stack-underflow");
+                            }
+                            let b = unsafe { *cursor.get_unchecked(len - 1) };
+                            let a = unsafe { *cursor.get_unchecked(len - 2) };
+                            if (((a.bits() ^ FIXNUM_CHECK_VALUE) | (b.bits() ^ FIXNUM_CHECK_VALUE))
+                                & FIXNUM_CHECK_MASK)
+                                == 0
+                            {
+                                unsafe {
+                                    *cursor.get_unchecked_mut(len - 2) = if fixnum_lt(a, b) {
+                                        Value::T
+                                    } else {
+                                        Value::NIL
+                                    };
+                                }
+                                cursor.len = len - 1;
+                                None
+                            } else {
+                                // Operands stay on the stack; see Op::Add.
+                                Some(len - 2)
+                            }
+                        };
+                        if let Some(args_start) = fallback {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Lt,
+                                args_start,
+                                2
+                            ));
+                            cursor.len = args_start;
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Leq => {
+                        let len = stk!().len();
+                        let b = stk!()[len - 1];
+                        let a = stk!()[len - 2];
+                        if (((a.bits() ^ FIXNUM_CHECK_VALUE) | (b.bits() ^ FIXNUM_CHECK_VALUE))
+                            & FIXNUM_CHECK_MASK)
+                            == 0
+                        {
+                            stk!()[len - 2] = if fixnum_le(a, b) {
+                                Value::T
+                            } else {
+                                Value::NIL
+                            };
+                            stk!().pop();
+                        } else {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Le,
+                                len - 2,
+                                2
+                            ));
+                            stk!().truncate(len - 2);
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Geq => {
+                        let len = stk!().len();
+                        let b = stk!()[len - 1];
+                        let a = stk!()[len - 2];
+                        if (((a.bits() ^ FIXNUM_CHECK_VALUE) | (b.bits() ^ FIXNUM_CHECK_VALUE))
+                            & FIXNUM_CHECK_MASK)
+                            == 0
+                        {
+                            stk!()[len - 2] = if fixnum_ge(a, b) {
+                                Value::T
+                            } else {
+                                Value::NIL
+                            };
+                            stk!().pop();
+                        } else {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Ge,
+                                len - 2,
+                                2
+                            ));
+                            stk!().truncate(len - 2);
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Max => {
+                        let len = stk!().len();
+                        let b = stk!()[len - 1];
+                        let a = stk!()[len - 2];
+                        if a.is_fixnum() && b.is_fixnum() {
+                            stk!()[len - 2] = if fixnum_ge(a, b) { a } else { b };
+                            stk!().pop();
+                        } else {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Max,
+                                len - 2,
+                                2
+                            ));
+                            stk!().truncate(len - 2);
+                            stk_push!(result);
+                        }
+                    }
+                    Op::Min => {
+                        let len = stk!().len();
+                        let b = stk!()[len - 1];
+                        let a = stk!()[len - 2];
+                        if a.is_fixnum() && b.is_fixnum() {
+                            stk!()[len - 2] = if fixnum_le(a, b) { a } else { b };
+                            stk!().pop();
+                        } else {
+                            let result = vm_try!(self.call_arith_builtin_from_stack_args(
+                                func,
+                                pc_local - 1,
+                                ArithGenericKind::Min,
+                                len - 2,
+                                2
+                            ));
+                            stk!().truncate(len - 2);
+                            stk_push!(result);
+                        }
+                    }
+
+                    // -- List operations --
+                    // Inline car/cdr/car-safe/cdr-safe match GNU Emacs exactly:
+                    // direct cons field access, nil passthrough, error on wrong type.
+                    Op::Car => {
+                        let top = if VERIFIED {
+                            debug_assert!(depth!(frame_base) > 0);
+                            let index = cursor.len - 1;
+                            // SAFETY: decode.rs:455-474 unary rule (1, 0) and
+                            // its :544 depth gate prove this frame owns index.
+                            unsafe { cursor.get_unchecked_mut(index) }
+                        } else {
+                            stk!().last_mut().unwrap()
+                        };
+                        if !observe_collections && top.is_cons() {
+                            *top = top.cons_car_unobserved();
+                            continue;
+                        }
+                        if top.is_cons() {
+                            *top = if observe_collections {
+                                Self::cons_car_observed(*top)
+                            } else {
+                                top.cons_car_unobserved()
+                            };
+                        } else if !top.is_nil() {
+                            let val = *top;
+                            stk!().pop();
+                            vm_try!(Err(signal(
+                                LispCondition::WrongTypeArgument,
+                                vec![Value::symbol("listp"), val]
+                            )));
+                        }
+                        // nil → nil: no change needed
+                    }
+                    Op::Cdr => {
+                        let top = if VERIFIED {
+                            debug_assert!(depth!(frame_base) > 0);
+                            let index = cursor.len - 1;
+                            // SAFETY: decode.rs:455-474 unary rule (1, 0) and
+                            // its :544 depth gate prove this frame owns index.
+                            unsafe { cursor.get_unchecked_mut(index) }
+                        } else {
+                            stk!().last_mut().unwrap()
+                        };
+                        if !observe_collections && top.is_cons() {
+                            *top = top.cons_cdr_unobserved();
+                            continue;
+                        }
+                        if top.is_cons() {
+                            *top = if observe_collections {
+                                Self::cons_cdr_observed(*top)
+                            } else {
+                                top.cons_cdr_unobserved()
+                            };
+                        } else if !top.is_nil() {
+                            let val = *top;
+                            stk!().pop();
+                            vm_try!(Err(signal(
+                                LispCondition::WrongTypeArgument,
+                                vec![Value::symbol("listp"), val]
+                            )));
+                        }
+                    }
+                    Op::CarSafe => {
+                        let top = stk!().last_mut().unwrap();
+                        *top = if top.is_cons() {
+                            if observe_collections {
+                                Self::cons_car_observed(*top)
+                            } else {
+                                top.cons_car_unobserved()
+                            }
+                        } else {
+                            Value::NIL
+                        };
+                    }
+                    Op::CdrSafe => {
+                        let top = stk!().last_mut().unwrap();
+                        *top = if top.is_cons() {
+                            if observe_collections {
+                                Self::cons_cdr_observed(*top)
+                            } else {
+                                top.cons_cdr_unobserved()
+                            }
+                        } else {
+                            Value::NIL
+                        };
+                    }
+                    Op::Cons => {
+                        let len = stk!().len();
+                        let cdr_val = stk!()[len - 1];
+                        let car_val = stk!()[len - 2];
+                        // The Context owns the heap: allocate through it
+                        // directly instead of Value::cons's thread-local
+                        // heap lookup (a TLS access per cons on the hottest
+                        // allocation opcode).
+                        stk!()[len - 2] = self.ctx.tagged_heap.alloc_cons(car_val, cdr_val);
+                        stk!().pop();
+                    }
+                    Op::List(n) => {
+                        let n = *n as usize;
+                        let start = stk!().len().saturating_sub(n);
+                        // GNU bytecode.c:BlistN keeps operands on the bytecode
+                        // stack and calls Flist(n, &TOP).  Keep the same stack
+                        // rooting discipline here and build from the live slice.
+                        let result = self.ctx.tagged_heap.list_from_slice(&stk!()[start..]);
+                        stk!().truncate(start);
+                        stk_push!(result);
+                    }
+                    Op::Length => {
+                        let len = stk!().len();
+                        let val = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_length_1(&mut *self.ctx, val));
+                        stk!()[len - 1] = result;
+                    }
+                    Op::Nth => {
+                        let len = stk!().len();
+                        let n = stk!()[len - 2];
+                        let list = stk!()[len - 1];
+                        let result = vm_try_pure!(builtins::bytecode_nth_values(n, list));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::Nthcdr => {
+                        let len = stk!().len();
+                        let n = stk!()[len - 2];
+                        let list = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_nthcdr_2(&mut *self.ctx, n, list));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::Elt => {
+                        let len = stk!().len();
+                        let seq = stk!()[len - 2];
+                        let idx = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_elt_2(&mut *self.ctx, seq, idx));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::Setcar => {
+                        let len = stk!().len();
+                        let cell = stk!()[len - 2];
+                        let newcar = stk!()[len - 1];
+                        let result =
+                            vm_try!(builtins::builtin_setcar_2(&mut *self.ctx, cell, newcar));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::Setcdr => {
+                        let len = stk!().len();
+                        let cell = stk!()[len - 2];
+                        let newcdr = stk!()[len - 1];
+                        let result =
+                            vm_try!(builtins::builtin_setcdr_2(&mut *self.ctx, cell, newcdr));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::Nconc => {
+                        let start = stk!().len().saturating_sub(2);
+                        let result =
+                            vm_try_pure!(builtins::builtin_nconc_slice_values(&stk!()[start..]));
+                        stk!().truncate(start);
+                        stk_push!(result);
+                    }
+                    Op::Nreverse => {
+                        let len = stk!().len();
+                        let value = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_nreverse_1(&mut *self.ctx, value));
+                        stk!()[len - 1] = result;
+                    }
+                    Op::Member => {
+                        let len = stk!().len();
+                        let elt = stk!()[len - 2];
+                        let list = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_member_2(&mut *self.ctx, elt, list));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::Memq => {
+                        let len = stk!().len();
+                        let elt = stk!()[len - 2];
+                        let list = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_memq_2(&mut *self.ctx, elt, list));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::Assq => {
+                        let len = stk!().len();
+                        let key = stk!()[len - 2];
+                        let alist = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_assq_2(&mut *self.ctx, key, alist));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+
+                    // -- Type predicates --
+                    // -- Type predicates --
+                    // Pure inline tag checks, zero function calls. Matches GNU exactly.
+                    Op::Symbolp => {
+                        let top = stk!().last_mut().unwrap();
+                        let is_sym = top.is_symbol(self.ctx.symbol_mode());
+                        *top = if is_sym { Value::T } else { Value::NIL };
+                    }
+                    Op::Consp => {
+                        let top = stk!().last_mut().unwrap();
+                        *top = if top.is_cons() { Value::T } else { Value::NIL };
+                    }
+                    Op::Stringp => {
+                        let top = stk!().last_mut().unwrap();
+                        *top = if top.is_string() {
+                            Value::T
+                        } else {
+                            Value::NIL
+                        };
+                    }
+                    Op::Listp => {
+                        let top = stk!().last_mut().unwrap();
+                        *top = if top.is_cons() || top.is_nil() {
+                            Value::T
+                        } else {
+                            Value::NIL
+                        };
+                    }
+                    Op::Integerp => {
+                        let top = stk!().last_mut().unwrap();
+                        *top = if top.is_integer() {
+                            Value::T
+                        } else {
+                            Value::NIL
+                        };
+                    }
+                    Op::Numberp => {
+                        let top = stk!().last_mut().unwrap();
+                        *top = if top.is_number() {
+                            Value::T
+                        } else {
+                            Value::NIL
+                        };
+                    }
+                    Op::Null | Op::Not => {
+                        let top = stk!().last_mut().unwrap();
+                        *top = if top.is_nil() { Value::T } else { Value::NIL };
+                    }
+                    Op::Eq => {
+                        let len = stk!().len();
+                        let b = stk!()[len - 1];
+                        let a = stk!()[len - 2];
+                        let result = if a.bits() == b.bits() {
+                            true
+                        } else if self.ctx.symbols_with_pos_enabled {
+                            neovm_value::value::eq_value_swp(&a, &b, true)
+                        } else {
+                            false
+                        };
+                        stk!()[len - 2] = if result { Value::T } else { Value::NIL };
+                        stk!().pop();
+                    }
+                    Op::Equal => {
+                        let len = stk!().len();
+                        let a = stk!()[len - 2];
+                        let b = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_equal_2(&mut *self.ctx, a, b));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+
+                    // -- String operations --
+                    Op::Concat(n) => {
+                        let n = *n as usize;
+                        let start = stk!().len().saturating_sub(n);
+                        // GNU bytecode.c:BconcatN passes the stack slice directly
+                        // to Fconcat instead of materializing an argument vector.
+                        let result = vm_try_pure!(builtins::builtin_concat_slice(&stk!()[start..]));
+                        stk!().truncate(start);
+                        stk_push!(result);
+                    }
+                    Op::Substring => {
+                        let start = stk!().len().saturating_sub(3);
+                        let result =
+                            vm_try_pure!(builtins::builtin_substring_slice(&stk!()[start..]));
+                        stk!().truncate(start);
+                        stk_push!(result);
+                    }
+                    Op::StringEqual => {
+                        let len = stk!().len();
+                        let a = stk!()[len - 2];
+                        let b = stk!()[len - 1];
+                        let result =
+                            vm_try!(builtins::builtin_string_equal_2(&mut *self.ctx, a, b));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::StringLessp => {
+                        let len = stk!().len();
+                        let a = stk!()[len - 2];
+                        let b = stk!()[len - 1];
+                        let result =
+                            vm_try!(builtins::builtin_string_lessp_2(&mut *self.ctx, a, b));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+
+                    // -- Vector operations --
+                    Op::Aref => {
+                        let len = stk!().len();
+                        let array = stk!()[len - 2];
+                        let index = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_aref_values_in_vm_context_slot(
+                            &self.ctx, array, index
+                        ));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::Aset => {
+                        // GNU bytecode.c:Baset runs Faset directly, regardless
+                        // of advice or the symbol's function cell. The primitive
+                        // may allocate or signal, but cannot run Lisp or collect.
+                        let start = stk!().len().saturating_sub(3);
+                        let result = vm_try_pure!(builtins::builtin_aset_args_in_vm_context_slot(
+                            &self.ctx,
+                            &stk!()[start..]
+                        ));
+                        stk!().truncate(start);
+                        stk_push!(result);
+                    }
+
+                    // -- Symbol operations --
+                    Op::SymbolValue => {
+                        let len = stk!().len();
+                        let sym = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_symbol_value_1(&mut *self.ctx, sym));
+                        stk!()[len - 1] = result;
+                    }
+                    Op::SymbolFunction => {
+                        let len = stk!().len();
+                        let sym = stk!()[len - 1];
+                        let result =
+                            vm_try!(builtins::builtin_symbol_function_1(&mut *self.ctx, sym));
+                        stk!()[len - 1] = result;
+                    }
+                    Op::Set => {
+                        let len = stk!().len();
+                        let sym = stk!()[len - 2];
+                        let val = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_set_2(&mut *self.ctx, sym, val));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::Fset => {
+                        let len = stk!().len();
+                        let sym = stk!()[len - 2];
+                        let val = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_fset_2(&mut *self.ctx, sym, val));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::Get => {
+                        let len = stk!().len();
+                        let sym = stk!()[len - 2];
+                        let prop = stk!()[len - 1];
+                        let result = vm_try!(builtins::builtin_get_2(&mut *self.ctx, sym, prop));
+                        stk!()[len - 2] = result;
+                        stk!().pop();
+                    }
+                    Op::Put => {
+                        let len = stk!().len();
+                        let sym = stk!()[len - 3];
+                        let prop = stk!()[len - 2];
+                        let val = stk!()[len - 1];
+                        let result =
+                            vm_try!(builtins::builtin_put_3(&mut *self.ctx, sym, prop, val));
+                        stk!().truncate(len - 3);
+                        stk_push!(result);
+                    }
+
+                    // -- Error handling --
+                    Op::PushConditionCase(target) => {
+                        let stack_len = stk!().len();
+                        let spec_depth = self.ctx.specpdl.len();
+                        let bsl = aux_stack.current_mut().bind_stack.len();
+                        let resume_id = self.ctx.allocate_resume_id();
+                        aux_stack.current_mut().handlers.push(Handler::Condition);
+                        self.ctx
+                            .push_condition_frame(ConditionFrame::ConditionCase {
+                                conditions: Value::symbol("error"),
+                                resume: ResumeTarget::VmConditionCase {
+                                    resume_id,
+                                    target: *target,
+                                    stack_len,
+                                    spec_depth,
+                                    bind_stack_len: bsl,
+                                },
+                            });
+                    }
+                    Op::PushConditionCaseRaw(target) => {
+                        // GNU bytecode consumes the handler pattern operand from TOS.
+                        let conditions = stk!().pop().unwrap_or(Value::NIL);
+                        let stack_len = stk!().len();
+                        let spec_depth = self.ctx.specpdl.len();
+                        let bsl = aux_stack.current_mut().bind_stack.len();
+                        let resume_id = self.ctx.allocate_resume_id();
+                        aux_stack.current_mut().handlers.push(Handler::Condition);
+                        self.ctx
+                            .push_condition_frame(ConditionFrame::ConditionCase {
+                                conditions,
+                                resume: ResumeTarget::VmConditionCase {
+                                    resume_id,
+                                    target: *target,
+                                    stack_len,
+                                    spec_depth,
+                                    bind_stack_len: bsl,
+                                },
+                            });
+                    }
+                    Op::PushCatch(target) => {
+                        let tag = stk!().pop().unwrap_or(Value::NIL);
+                        let stack_len = stk!().len();
+                        let spec_depth = self.ctx.specpdl.len();
+                        let bsl = aux_stack.current_mut().bind_stack.len();
+                        let resume_id = self.ctx.allocate_resume_id();
+                        aux_stack.current_mut().handlers.push(Handler::Condition);
+                        self.ctx.push_condition_frame(ConditionFrame::Catch {
+                            tag,
+                            resume: ResumeTarget::VmCatch {
+                                resume_id,
+                                target: *target,
+                                stack_len,
+                                spec_depth,
+                                bind_stack_len: bsl,
+                            },
+                        });
+                    }
+                    Op::PopHandler => {
+                        if aux_stack.current_mut().handlers.pop().is_some() {
+                            self.ctx.pop_condition_frame();
+                        }
+                    }
+                    Op::UnwindProtectPop => {
+                        let cleanup = stk!().pop().unwrap_or(Value::NIL);
+                        aux_stack
+                            .current_mut()
+                            .bind_stack
+                            .push(self.ctx.specpdl.len());
+                        let lexenv = self.ctx.lexenv;
+                        self.ctx.push_specpdl_with(|| SpecBinding::UnwindProtect {
+                            forms: cleanup,
+                            lexenv,
+                        });
+                    }
+                    Op::Throw => {
+                        let val = stk!().pop().unwrap_or(Value::NIL);
+                        let tag = stk!().pop().unwrap_or(Value::NIL);
+                        publish_phase!();
+                        resume_flow!(Flow::throw_with_symbols(tag, val, self.ctx.symbol_mode()))
+                    }
+
+                    // -- Closure --
+                    Op::MakeClosure(idx) => {
+                        let val = constants[*idx as usize];
+                        if let Some(bc_data) = val.get_bytecode_data() {
+                            let mut closure = bc_data.clone();
+                            closure.env = Some(self.ctx.lexenv);
+                            stk_push!(Value::make_bytecode(closure));
+                        } else {
+                            stk_push!(val);
+                        }
+                    }
+
+                    // -- Builtin escape hatch --
+                    Op::CallBuiltin(name_idx, n) => {
+                        let name_id = sym_id_at(constants, *name_idx);
+                        #[cfg(feature = "vm-profile")]
+                        vm_profile::bump_entry(name_id, vm_profile::ENTRY_CALLBUILTIN);
+                        let n = *n as usize;
+                        let args_start = stk!().len().saturating_sub(n);
+                        // This is the internal representation of a primitive
+                        // opcode, never a Bcall specialization. GNU calls the
+                        // primitive directly; genuine calls remain Op::Call.
+                        let result = vm_try!(
+                            self.dispatch_vm_builtin_by_id_from_stack(func, name_id, args_start, n)
+                        );
+                        stk!().truncate(args_start);
+                        stk_push!(result);
+                        poll_quit!(bc_position);
+                    }
+                    // Mirrors GNU bytecode.c inline dispatch of opcodes
+                    // 0140-0177 etc. — the symbol name is encoded in the
+                    // op, no constants-pool lookup.
+                    Op::CallBuiltinSym(sym, n) => {
+                        #[cfg(feature = "vm-profile")]
+                        vm_profile::bump_entry(*sym, vm_profile::ENTRY_CALLBUILTINSYM);
+                        let n = *n as usize;
+                        let args_start = stk!().len().saturating_sub(n);
+                        // GNU runs the inline opcodes as dedicated cases; the
+                        // registration-time kind picks the matching shape here
+                        // (pure buffer reads without a call, fixed-arity subrs
+                        // straight off the stack) and leaves the rest to the
+                        // generic by-symbol dispatch.
+                        use crate::emacs_core::eval::InlineSubrKind;
+                        let inline = crate::emacs_core::eval::inline_subr(*sym);
+                        let result = match inline.kind {
+                            InlineSubrKind::Point => vm_try!(self.op_point()),
+                            InlineSubrKind::PointMin => vm_try!(self.op_point_min()),
+                            InlineSubrKind::PointMax => vm_try!(self.op_point_max()),
+                            InlineSubrKind::CurrentBuffer => vm_try!(self.op_current_buffer()),
+                            InlineSubrKind::Direct => vm_try!(Self::call_fixed_builtin_direct(
+                                self.ctx,
+                                inline.function,
+                                *sym,
+                                args_start,
+                                n,
+                            )),
+                            InlineSubrKind::Generic => {
+                                vm_try!(self.dispatch_call_builtin_sym(func, *sym, args_start, n))
+                            }
+                        };
+                        stk!().truncate(args_start);
+                        stk_push!(result);
+                        poll_quit!(bc_position);
+                    }
+                }
+            }
+
+            // No fall-off tail: `seal_ops` guarantees the dispatch loop above
+            // only exits through an explicit control transfer (Return, error
+            // flow, or frame transition).
+        }
+    }
+
+    // -- Helper methods --
+
+    #[doc(hidden)]
+    pub fn builtin_name_id(name: &str) -> SymId {
+        lookup_interned(name).unwrap_or_else(|| intern(name))
+    }
+
+    #[doc(hidden)]
+    pub fn apply_builtin_id() -> SymId {
+        Self::cached_builtin_id("apply", &APPLY_ID)
+    }
+
+    /// GNU bytecode `Bvarref` by SymId.
+    ///
+    /// GNU `src/bytecode.c` reads bytecode variables with `Fsymbol_value`;
+    /// it does not consult the interpreter lexical environment.  Lexical
+    /// bytecode variables are compiled as stack/closure accesses instead.
+    /// Fast path for variable reads matching GNU bytecode.c:626-647
+    /// Bvarref: if the symbol is a plain global with a bound value,
+    /// read the value cell directly without full symbolic resolution.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn fast_path_var_ref(&mut self, name_id: SymId) -> EvalResult {
+        let ob = &self.ctx.obarray;
+        let sym = ob.get_by_id(name_id).ok_or_else(|| {
+            signal(
+                LispCondition::VoidVariable,
+                vec![Value::from_sym_id(name_id)],
+            )
+        })?;
+        if let Some(val) = sym.plain_value() {
+            if !val.is_unbound() {
+                // GNU installs `buffer-undo-list` as a DEFVAR_PER_BUFFER
+                // forwarder. Neomacs keeps its value in SharedUndoState so
+                // indirect buffers share one history, but classifies that
+                // one dedicated local by symbol identity. Ordinary nil-valued
+                // globals stay on this direct PLAINVAL path instead of all
+                // paying a generic buffer-local probe.
+                if !val.is_nil() {
+                    return Ok(val);
+                }
+                if let Some(dedicated) =
+                    neovm_edit::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id)
+                    && let Some(buf) = self.ctx.edit.buffers.current_buffer()
+                {
+                    return Ok(dedicated.read(buf));
+                }
+                return Ok(val);
+            }
+        }
+        // A forwarder whose storage IS the descriptor needs no buffer context,
+        // so the read is one indirection instead of `lookup_var_id`'s
+        // resolve-alias + gather-buffer-slots-and-defaults path.  This is the
+        // hot half of GNU's `Bvarref` for every `DEFVAR_INT`, `DEFVAR_BOOL`,
+        // `DEFVAR_LISP` and `DEFVAR_KBOARD` variable.  `LispFwd::load` answers
+        // `None` for exactly the one variant that does need the context
+        // (`BufferObj`), and the slow path's own non-`BufferObj` arm ends at
+        // the same call, so the two cannot drift.
+        if let Some(fwd) = sym.forwarded_descriptor()
+            && let Some(value) = fwd.load()
+        {
+            return Ok(value);
+        }
+        self.lookup_var_id(name_id)
+    }
+
+    // Keep alias/local cache probes out of the common plain/forwarded reader.
+    // Inlining all four representations expands that reader's dispatch and
+    // adds work even when these shortcuts cannot apply.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn lookup_var_id(&mut self, name_id: SymId) -> EvalResult {
+        use neovm_value::symbol::SymbolRedirect;
+        let ob = &self.ctx.obarray;
+        if let Some(sym) = ob.get_by_id(name_id) {
+            match sym.redirect() {
+                SymbolRedirect::Varalias => {
+                    // Preserve original-name buffer identities and re-read the
+                    // current target; chains, cycles and void cells fall through.
+                    if neovm_edit::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id)
+                        .is_none()
+                        && neovm_edit::buffer::buffer::lookup_buffer_slot_by_sym_id(name_id)
+                            .is_none()
+                    {
+                        if let Some(target) = sym.alias_target()
+                            && neovm_edit::buffer::buffer::DedicatedBufferLocal::from_sym_id(target)
+                                .is_none()
+                            && let Some(value) =
+                                ob.get_by_id(target).and_then(|target| target.plain_value())
+                            && !value.is_unbound()
+                        {
+                            return Ok(value);
+                        }
+                    }
+                }
+                SymbolRedirect::Localized => {
+                    // Reuse the existing buffer-id/epoch cache before constructing
+                    // a buffer Value or gathering general forwarding inputs.
+                    if let Some(buf) = self.ctx.edit.buffers.current_buffer()
+                        && let Some(value) = ob.read_localized_symbol_for_buffer(
+                            name_id,
+                            sym,
+                            buf.id(),
+                            buf.local_var_alist_value(),
+                        )
+                    {
+                        return if value.is_unbound() {
+                            Err(signal(
+                                LispCondition::VoidVariable,
+                                vec![Value::from_sym_id(name_id)],
+                            ))
+                        } else {
+                            Ok(value)
+                        };
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let resolved = crate::emacs_core::builtins::symbols::resolve_variable_alias_id_in_obarray(
+            &self.ctx.obarray,
+            name_id,
+        )?;
+
+        // Phase 9 of the symbol-redirect refactor: if the symbol's
+        // redirect tag is LOCALIZED or FORWARDED, the new redirect
+        // machinery is the source of truth. Route the read through
+        // `find_symbol_value_in_buffer` which will swap the BLV
+        // cache for LOCALIZED and read the slot for FORWARDED.
+        //
+        // For PLAINVAL / VARALIAS, fall through to the PLAINVAL fast path
+        // via `find_symbol_value`. With Phase B complete, every LOCALIZED
+        // symbol is handled by the redirect dispatch above.
+        let redirect = self.ctx.obarray.get_by_id(resolved).map(|s| s.redirect());
+        if matches!(
+            redirect,
+            Some(SymbolRedirect::Localized | SymbolRedirect::Forwarded)
+        ) {
+            let (cur_val, alist, slots_ptr, buf_id, local_flags) =
+                match self.ctx.edit.buffers.current_buffer() {
+                    Some(buf) => (
+                        Value::make_buffer(buf.id()),
+                        buf.local_var_alist_value(),
+                        Some(&buf.slots()[..] as *const [Value]),
+                        Some(buf.id()),
+                        buf.local_flags(),
+                    ),
+                    None => (Value::NIL, Value::NIL, None, None, 0u64),
+                };
+            let defaults_ptr: *const [Value] =
+                &self.ctx.edit.buffers.buffer_defaults[..] as *const [Value];
+            // Safety: the slots and defaults pointers are valid for
+            // the duration of this call because we hold `&mut self.ctx`,
+            // the buffer and BufferManager live inside `self.ctx`, and
+            // `find_symbol_value_in_buffer` does not mutate the
+            // buffer manager. The raw pointer dance is only needed
+            // because `find_symbol_value_in_buffer` also needs
+            // `&mut self.ctx.obarray` for the BLV swap-in, and the
+            // borrow checker can't express "hold slices of two
+            // fields while mutating a third" across the method call.
+            let slots_opt: Option<&[Value]> = slots_ptr.map(|p| unsafe { &*p });
+            let defaults_opt: Option<&[Value]> = Some(unsafe { &*defaults_ptr });
+            if let Some(val) = self.ctx.obarray.find_symbol_value_in_buffer(
+                resolved,
+                buf_id,
+                cur_val,
+                alist,
+                slots_opt,
+                local_flags,
+                defaults_opt,
+            ) {
+                // `Qunbound` from the BLV cache / alist walk marks a
+                // void LOCALIZED binding for this buffer — signal
+                // `void-variable` instead of returning the sentinel
+                // to the caller. Mirrors GNU `Fsymbol_value` which
+                // signals when `find_symbol_value` returns
+                // `Qunbound`. A thread projection reads UNBOUND here too;
+                // its canonical value answers on this branch.
+                if val.is_unbound() {
+                    return self.ctx.projected_value_or_void(name_id, resolved);
+                }
+                return Ok(val);
+            }
+        }
+
+        // For variables like `buffer-undo-list` that are not slot-backed
+        // but have per-buffer state (SharedUndoState), the obarray
+        // default is nil while the buffer-local value is the live
+        // undo list.  Check buffer-local before falling through to
+        // the obarray default so the byte-compiled code sees the
+        // correct per-buffer value.
+        // Global (Plainval) specials are never in any `local_var_alist`, so skip
+        // the per-buffer scan for them (slot/undo names still resolve inside the
+        // gated call). See `Obarray::is_localized`.
+        let name_localized = self.ctx.obarray.is_localized(name_id);
+        if let Some(buf) = self.ctx.edit.buffers.current_buffer()
+            && let Some(val) = buf.get_buffer_local_by_sym_id_gated(name_id, name_localized)
+            && !val.is_nil()
+        {
+            return Ok(val);
+        }
+
+        // GNU `bytecode.c:Bvarref` falls back to `Fsymbol_value`.
+        if let Some(val) = self
+            .ctx
+            .visible_runtime_variable_value_by_id_resolved(resolved)
+        {
+            return Ok(val);
+        }
+
+        // Retry buffer-local for nil-valued defaults (e.g. unset
+        // `buffer-undo-list` on a clean buffer).
+        if let Some(buf) = self.ctx.edit.buffers.current_buffer()
+            && let Some(val) = buf.get_buffer_local_by_sym_id_gated(name_id, name_localized)
+        {
+            return Ok(val);
+        }
+
+        Err(signal(
+            LispCondition::VoidVariable,
+            vec![Value::from_sym_id(name_id)],
+        ))
+    }
+
+    /// GNU bytecode `Bvarset` by SymId.
+    ///
+    /// Like `Bvarref`, bytecode assignment is dynamic.  Lexical bytecode
+    /// locals are stack slots, not `varset` targets.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn assign_var_id(&mut self, name_id: SymId, value: Value) -> Result<(), Flow> {
+        // The general `Bvarset`. Both callers (the `Op::VarSet` arm and the JIT
+        // `varset` shim) have already offered the write to
+        // `Context::try_set_plain_variable` — the one-store path for a plain
+        // cell — before paying their rooting, so it is not repeated here.
+        debug_assert!(
+            !self.ctx.obarray.is_plain_value_cell_id(name_id)
+                || self.ctx.runtime_binding_has_projection(name_id),
+            "a plain unprojected cell must have taken the fast path"
+        );
+        let resolved = crate::emacs_core::builtins::symbols::resolve_variable_alias_id_in_obarray(
+            &self.ctx.obarray,
+            name_id,
+        )?;
+
+        // GNU `set_internal`'s `SYMBOL_NOWRITE` arm (`src/data.c:1687-1697`):
+        // a keyword re-assigned its own value is a silent no-op, not a signal.
+        use neovm_value::symbol::ConstantWrite;
+        match self.ctx.obarray.classify_constant_write(resolved, value) {
+            ConstantWrite::Writable => {}
+            ConstantWrite::KeywordSelfAssign => return Ok(()),
+            ConstantWrite::Refused => {
+                return Err(signal(
+                    LispCondition::SettingConstant,
+                    vec![Value::from_sym_id(name_id)],
+                ));
+            }
+        }
+
+        // Phase 9b of the symbol-redirect refactor: for LOCALIZED
+        // symbols, route the write through
+        // Obarray::set_internal_localized which updates the BLV
+        // cache and (for auto-create `Set` writes with
+        // `local_if_set`) extends the current buffer's
+        // local_var_alist. The legacy set_runtime_binding_in_state
+        // path below stays populated as a fallback until Phase 10
+        // deletes it.
+        use neovm_value::symbol::{SetInternalBind, SymbolRedirect};
+        // GNU's bytecode `Bvarset` is `Fset` (`src/bytecode.c`), so it lands in
+        // the same `set_internal` -> `store_symval_forwarding` the tree-walk
+        // interpreter uses. Run the forward type's rule here, once, before any
+        // of the storage fast paths below -- each of which writes a different
+        // cell and would otherwise have to remember the rule itself.
+        let value = crate::emacs_core::eval::check_forwarded_store(
+            &self.ctx.obarray,
+            &self.ctx.edit.buffers,
+            &self.ctx.specpdl,
+            resolved,
+            value,
+        )?
+        .value();
+        let redirect = self.ctx.obarray.get_by_id(resolved).map(|s| s.redirect());
+        // Phase 10B: FORWARDED writes go to the buffer slot the
+        // descriptor points at. Mirrors GNU
+        // `store_symval_forwarding` for the BUFFER_OBJFWD arm
+        // (`data.c:1374-1471`).
+        //
+        // Phase 10D: for conditional slots (`local_flags_idx >= 0`),
+        // also set the per-buffer local-flags bit so subsequent reads
+        // route to `slots[off]` rather than `buffer_defaults`. This
+        // mirrors GNU `set_internal` SYMBOL_FORWARDED arm at
+        // `data.c:1774-1786` which calls `SET_PER_BUFFER_VALUE_P`.
+        if matches!(redirect, Some(SymbolRedirect::Forwarded))
+            && let Some(buf_id) = self.ctx.edit.buffers.current_buffer_id()
+        {
+            let buf_fwd = self
+                .ctx
+                .obarray
+                .get_by_id(resolved)
+                .and_then(|s| s.forwarded_descriptor())
+                .and_then(|fwd| fwd.as_buffer_obj_fwd());
+            {
+                if let Some(buf_fwd) = buf_fwd {
+                    let Some(slot) = buf_fwd.buffer_slot() else {
+                        // Only a thread projection's header has no slot.
+                        return self.assign_projected_var_id(name_id, resolved, value);
+                    };
+                    let offset = slot.index();
+                    let flags_idx = buf_fwd.local_flags_idx;
+                    let slot_exists = self
+                        .ctx
+                        .edit
+                        .buffers
+                        .get(buf_id)
+                        .is_some_and(|buf| offset < buf.slots().len());
+                    if slot_exists {
+                        crate::emacs_core::eval::validate_buffer_slot_write(
+                            buf_fwd.predicate,
+                            value,
+                        )?;
+                        let where_value = Value::make_buffer(buf_id);
+                        self.run_variable_watchers_by_id_with_where(
+                            resolved,
+                            &value,
+                            &Value::NIL,
+                            "set",
+                            &where_value,
+                        )?;
+                        if let Some(buf) = self.ctx.edit.buffers.get_mut(buf_id) {
+                            buf.slots_mut()[offset] = value;
+                            if flags_idx >= 0 {
+                                buf.set_slot_local_flag(slot, true);
+                            }
+                        }
+                        self.ctx
+                            .publish_runtime_binding_write_by_resolved_id(resolved, value);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        if matches!(redirect, Some(SymbolRedirect::Localized))
+            && let Some(first_buf_id) = self.ctx.edit.buffers.current_buffer_id()
+        {
+            if self.ctx.watchers.has_watchers(resolved) {
+                let where_value = self.ctx.variable_watcher_where_for_set_by_id(resolved);
+                self.run_variable_watchers_by_id_with_where(
+                    resolved,
+                    &value,
+                    &Value::NIL,
+                    "set",
+                    &where_value,
+                )?;
+            }
+            // GNU `set_internal' reads the current buffer AFTER notifying the
+            // watchers, which may have switched it.  Extract buffer state
+            // before the obarray borrow.
+            let buf_id = self
+                .ctx
+                .edit
+                .buffers
+                .current_buffer_id()
+                .unwrap_or(first_buf_id);
+            let (cur_val, alist) = match self.ctx.edit.buffers.get(buf_id) {
+                Some(buf) => (Value::make_buffer(buf.id()), buf.local_var_alist_value()),
+                None => (Value::NIL, Value::NIL),
+            };
+            // GNU `eval.c:3559-3577 (let_shadows_buffer_binding_p)`
+            // only treats SPECPDL_LET_DEFAULT for the current buffer
+            // as shadowing. SPECPDL_LET_LOCAL is explicitly excluded
+            // by bug#62419.  Asked lazily, after the watchers, as GNU
+            // `set_internal' does.
+            let (specpdl, buffers) = (&self.ctx.specpdl, &self.ctx.edit.buffers);
+            let new_alist = self.ctx.obarray.set_internal_localized_with(
+                resolved,
+                value,
+                cur_val,
+                alist,
+                SetInternalBind::Set,
+                || {
+                    crate::emacs_core::eval::let_shadows_buffer_binding_p_in_state(
+                        specpdl, buffers, resolved,
+                    )
+                },
+            );
+            // Store back the (possibly extended) alist.
+            if let Some(buf) = self.ctx.edit.buffers.get_mut(buf_id) {
+                buf.replace_local_var_alist(new_alist);
+            }
+            self.ctx
+                .publish_runtime_binding_write_by_resolved_id(resolved, value);
+            return Ok(());
+        }
+
+        // Legacy path: set_runtime_binding_in_state routes to
+        // either BufferLocals or the obarray value cell. Phase 10
+        // deletes this call once every LOCALIZED symbol is
+        // exclusively served by the new BLV path above.
+        let where_value = self.ctx.variable_watcher_where_for_set_by_id(resolved);
+        self.run_variable_watchers_by_id_with_where(
+            resolved,
+            &value,
+            &Value::NIL,
+            "set",
+            &where_value,
+        )?;
+        crate::emacs_core::eval::set_runtime_binding_in_state(&mut *self.ctx, resolved, value)?;
+        self.ctx
+            .publish_runtime_binding_write_by_resolved_id(resolved, value);
+        Ok(())
+    }
+
+    /// `Bvarset` of a thread-projected variable: GNU's `set_internal`
+    /// (`src/data.c:1678-1831`) through the evaluator's `setq` path, where
+    /// this owner's binding takes the write first. Watchers run on the
+    /// projected cell.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn assign_projected_var_id(
+        &mut self,
+        name_id: SymId,
+        _resolved: SymId,
+        value: Value,
+    ) -> Result<(), Flow> {
+        self.ctx.assign_setq_dynamic_by_id(name_id, value).map(drop)
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[doc(hidden)]
+    pub fn lookup_var(&mut self, name: &str) -> EvalResult {
+        if name.starts_with(':') {
+            return Ok(Value::keyword(name));
+        }
+
+        let name_id = intern(name);
+        // Match GNU eval_sub: lexical environment lookup happens before
+        // alias resolution fallback.
+        if let Some(val) = self.ctx.lexenv_lookup_cached_in(self.ctx.lexenv, name_id) {
+            return Ok(val);
+        }
+        let resolved = crate::emacs_core::builtins::symbols::resolve_variable_alias_id_in_obarray(
+            &self.ctx.obarray,
+            name_id,
+        )?;
+        if resolved != name_id
+            && let Some(val) = self.ctx.lexenv_lookup_cached_in(self.ctx.lexenv, resolved)
+        {
+            return Ok(val);
+        }
+
+        // specbind writes directly to obarray, so dynamic stack lookup is
+        // no longer needed — fall through to obarray lookup.
+
+        // GNU `bytecode.c:Bvarref` falls back to `Fsymbol_value`,
+        // not the raw symbol cell. Use the shared runtime reader so
+        // bytecode observes the same forwarded/localized semantics as
+        // tree-walk eval.
+        if let Some(val) = self
+            .ctx
+            .visible_runtime_variable_value_by_id_resolved(resolved)
+        {
+            return Ok(val);
+        }
+
+        Err(signal(
+            LispCondition::VoidVariable,
+            vec![Value::symbol(name)],
+        ))
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[doc(hidden)]
+    pub fn assign_var(&mut self, name: &str, value: Value) -> Result<(), Flow> {
+        let name_id = intern(name);
+        let resolved = crate::emacs_core::builtins::symbols::resolve_variable_alias_id_in_obarray(
+            &self.ctx.obarray,
+            name_id,
+        )?;
+        if let Some(cell_id) = self.ctx.lexenv_assq_cached_in(self.ctx.lexenv, name_id) {
+            lexenv_set(cell_id, value);
+            return Ok(());
+        }
+        if resolved != name_id
+            && let Some(cell_id) = self.ctx.lexenv_assq_cached_in(self.ctx.lexenv, resolved)
+        {
+            lexenv_set(cell_id, value);
+            return Ok(());
+        }
+
+        // specbind writes directly to obarray, so dynamic stack mutation
+        // is no longer needed — fall through to obarray write.
+
+        // GNU `set_internal`'s `SYMBOL_NOWRITE` arm (`src/data.c:1687-1697`).
+        use neovm_value::symbol::ConstantWrite;
+        match self.ctx.obarray.classify_constant_write(resolved, value) {
+            ConstantWrite::Writable => {}
+            ConstantWrite::KeywordSelfAssign => return Ok(()),
+            ConstantWrite::Refused => {
+                return Err(signal(
+                    LispCondition::SettingConstant,
+                    vec![Value::symbol(name)],
+                ));
+            }
+        }
+
+        let where_value = self.ctx.variable_watcher_where_for_set_by_id(resolved);
+        self.run_variable_watchers_by_id_with_where(
+            resolved,
+            &value,
+            &Value::NIL,
+            "set",
+            &where_value,
+        )?;
+        crate::emacs_core::eval::set_runtime_binding_in_state(&mut *self.ctx, resolved, value)?;
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn run_variable_watchers_by_id(
+        &mut self,
+        sym_id: SymId,
+        new_value: &Value,
+        old_value: &Value,
+        operation: &str,
+    ) -> Result<(), Flow> {
+        self.run_variable_watchers_by_id_with_where(
+            sym_id,
+            new_value,
+            old_value,
+            operation,
+            &Value::NIL,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn run_variable_watchers_by_id_with_where(
+        &mut self,
+        sym_id: SymId,
+        new_value: &Value,
+        old_value: &Value,
+        operation: &str,
+        where_value: &Value,
+    ) -> Result<(), Flow> {
+        if !self.ctx.watchers.has_watchers(sym_id) {
+            return Ok(());
+        }
+        if self.ctx.active_variable_watchers.contains(&sym_id) {
+            return Ok(());
+        }
+        let calls =
+            self.ctx
+                .watchers
+                .notify_watchers(sym_id, new_value, old_value, operation, where_value);
+        self.ctx.active_variable_watchers.insert(sym_id);
+        for (callback, args) in calls {
+            if let Err(err) = self.call_function_with_roots(callback, &args) {
+                self.ctx.active_variable_watchers.remove(&sym_id);
+                return Err(err);
+            }
+        }
+        self.ctx.active_variable_watchers.remove(&sym_id);
+        Ok(())
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[doc(hidden)]
+    pub fn run_variable_watchers(
+        &mut self,
+        name: &str,
+        new_value: &Value,
+        old_value: &Value,
+        operation: &str,
+    ) -> Result<(), Flow> {
+        self.run_variable_watchers_by_id(intern(name), new_value, old_value, operation)
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[doc(hidden)]
+    pub fn run_variable_watchers_with_where(
+        &mut self,
+        name: &str,
+        new_value: &Value,
+        old_value: &Value,
+        operation: &str,
+        where_value: &Value,
+    ) -> Result<(), Flow> {
+        self.run_variable_watchers_by_id_with_where(
+            intern(name),
+            new_value,
+            old_value,
+            operation,
+            where_value,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn call_function_with_roots(&mut self, function: Value, args: &[Value]) -> EvalResult {
+        self.call_function(function, args.iter().copied().collect::<LispArgVec>())
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn call_function1(&mut self, function: Value, arg: Value) -> EvalResult {
+        let mut args = LispArgVec::new();
+        args.push(arg);
+        self.call_function(function, args)
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn call_function2(&mut self, function: Value, arg0: Value, arg1: Value) -> EvalResult {
+        let mut args = LispArgVec::new();
+        args.push(arg0);
+        args.push(arg1);
+        self.call_function(function, args)
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[doc(hidden)]
+    pub fn ensure_selected_frame_id(&mut self) -> FrameId {
+        crate::emacs_core::eval::display_query_hooks::ensure_selected_frame_id(
+            &mut self.ctx.frames,
+            &mut self.ctx.edit.buffers,
+        )
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[doc(hidden)]
+    pub fn resolve_frame_id(
+        &mut self,
+        arg: Option<&Value>,
+        predicate: &str,
+    ) -> Result<FrameId, Flow> {
+        let Some(val) = arg else {
+            return Ok(self.ensure_selected_frame_id());
+        };
+        match val.kind() {
+            ValueKind::Nil => Ok(self.ensure_selected_frame_id()),
+            // No `Fixnum` arm -- an integer is not a frame; see
+            // `frame::builtin_framep`.
+            ValueKind::Veclike(VecLikeType::Frame) => {
+                let id = val.as_frame_id().unwrap();
+                let fid = FrameId(id);
+                if self.ctx.frames.get(fid).is_some() {
+                    Ok(fid)
+                } else {
+                    Err(signal(
+                        LispCondition::WrongTypeArgument,
+                        vec![Value::symbol(predicate), *val],
+                    ))
+                }
+            }
+            _ => Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol(predicate), *val],
+            )),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn builtin_call_last_kbd_macro_shared(&mut self, args: &[Value]) -> EvalResult {
+        crate::emacs_core::eval::kmacro_hooks::call_last_kbd_macro(&mut *self.ctx, args.to_vec())
+    }
+
+    #[doc(hidden)]
+    pub fn builtin_execute_kbd_macro_shared(&mut self, args: &[Value]) -> EvalResult {
+        crate::emacs_core::eval::kmacro_hooks::execute_kbd_macro(&mut *self.ctx, args.to_vec())
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[doc(hidden)]
+    pub fn case_fold_search_enabled(&mut self) -> bool {
+        self.lookup_var("case-fold-search")
+            .map(|value| !value.is_nil())
+            .unwrap_or(true)
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[doc(hidden)]
+    pub fn visible_variable_value_or_nil(&self, name: &str) -> Value {
+        let name_id = intern(name);
+        if let Some(value) = self.ctx.lexenv_lookup_cached_in(self.ctx.lexenv, name_id) {
+            return value;
+        }
+        // specbind writes directly to obarray, so no dynamic stack lookup needed.
+        if let Some(buffer) = self.ctx.edit.buffers.current_buffer()
+            && let Some(binding) = buffer.get_buffer_local_binding(name)
+        {
+            return binding.as_value().unwrap_or(Value::NIL);
+        }
+        if let Some(value) = self.ctx.builtin_var_value_by_name(name) {
+            return value;
+        }
+        if name == "nil" {
+            return Value::NIL;
+        }
+        if name == "t" {
+            return Value::T;
+        }
+        Value::NIL
+    }
+
+    /// GNU `bytecode.c:795-799`: a `Bcall` that found `debug_on_next_call` set
+    /// records its backtrace frame and enters the ENTRY debugger before it
+    /// dispatches; the frame it recorded is also flagged `debug_on_exit`, so
+    /// the pop below re-enters the debugger on the way out.
+    ///
+    /// Deliberately not folded into [`Vm::call_function`]: that helper also
+    /// serves `Op::CallBuiltin` and `Op::Apply`, which correspond to GNU's
+    /// inline opcodes and to `Fapply`'s own dispatch -- neither of which GNU
+    /// arms at the bytecode level.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn call_function_debugged(&mut self, func_val: Value, args: LispArgVec) -> EvalResult {
+        let bt_count = self.ctx.specpdl.len();
+        self.ctx.push_backtrace_frame(func_val, &args);
+        let entered = match self
+            .ctx
+            .take_debug_on_call_arm(crate::emacs_core::debug_on_call::DebugOnCallCode::Funcall)
+        {
+            Some(arm) => self.ctx.do_debug_on_call(arm),
+            None => Ok(()),
+        };
+        let result = match entered {
+            Err(flow) => Err(flow),
+            Ok(()) => self.call_function_untraced_owned(func_val, args),
+        };
+        let result = self.ctx.dispatch_signal_result_if_needed(result);
+        self.ctx
+            .pop_bytecode_backtrace_frame_with_result(bt_count, result)
+    }
+
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn call_function(&mut self, func_val: Value, args: impl Into<LispArgVec>) -> EvalResult {
+        let args = args.into();
+        let bt_count = self.ctx.specpdl.len();
+        self.ctx.push_backtrace_frame(func_val, &args);
+        let result = self.call_function_untraced_owned(func_val, args);
+        let result = self.ctx.dispatch_signal_result_if_needed(result);
+        // Same GNU Bcall/Breturn single-entry pop as
+        // call_function_from_stack_args; falls back inside on imbalance.
+        self.ctx
+            .pop_bytecode_backtrace_frame_with_result(bt_count, result)
+    }
+
+    /// Read a (dynamic/global) variable for JIT code with the interpreter's
+    /// `Op::VarRef` semantics — delegates to the same `fast_path_var_ref`
+    /// (Plainval fast path, buffer-locals, redirects; signals `void-variable`).
+    #[cfg(feature = "jit")]
+    #[doc(hidden)]
+    pub fn varref_for_jit(&mut self, name_id: SymId) -> EvalResult {
+        self.fast_path_var_ref(name_id)
+    }
+
+    /// Assign a (dynamic/global) variable for JIT code with the interpreter's
+    /// `Op::VarSet` semantics — delegates to the same `assign_var_id` (may run
+    /// variable watchers, i.e. arbitrary lisp; may signal).
+    #[cfg(feature = "jit")]
+    #[doc(hidden)]
+    pub fn varset_for_jit(&mut self, name_id: SymId, value: Value) -> Result<(), Flow> {
+        self.assign_var_id(name_id, value)
+    }
+
+    /// `Op::CallBuiltin` for JIT code: direct primitive dispatch and a quit
+    /// poll. Symbol calls use `call_for_jit` and
+    /// retain function-cell/override resolution.
+    #[doc(hidden)]
+    pub fn callbuiltin_for_jit(&mut self, name_id: SymId, args: LispArgVec) -> EvalResult {
+        self.callbuiltinsym_for_jit(name_id, args)
+    }
+
+    /// `Op::CallBuiltinSym` for JIT code — ALWAYS the direct named dispatch,
+    /// never the function cell (GNU parity: bytecode-inlined primitives
+    /// bypass advice; see the interpreter arm's comment), plus the trailing
+    /// quit poll.
+    #[doc(hidden)]
+    pub fn callbuiltinsym_for_jit(&mut self, sym: SymId, args: LispArgVec) -> EvalResult {
+        let result = self.dispatch_vm_builtin_id(sym, args)?;
+        self.ctx.maybe_quit()?;
+        Ok(result)
+    }
+
+    /// Spread an `Op::Apply` suffix after its caller publishes the cursor.
+    /// Explicit arguments stay below the trailing list slot. The callee's
+    /// operand stays below `args_start`; the expanded arguments remain rooted
+    /// on `bc_buf` through the same generic stack-call protocol.
+    /// The synchronous call uses only this VM's owning mutator context.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn apply_arguments_from_stack(
+        &mut self,
+        func_val: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        // The opcode calls this helper only for a positive operand count.
+        // Preserve list_to_vec's Floyd check and empty fallback for dotted or
+        // circular lists; this boundary does not change Lisp behavior.
+        let last = self.ctx.bc_buf[args_start + nargs - 1];
+        let spread = list_to_vec(&last).unwrap_or_default();
+        self.ctx.bc_buf.truncate(args_start + nargs - 1);
+        self.ctx.bc_buf.reserve(spread.len());
+        self.ctx.bc_buf.extend_from_slice(&spread);
+        let total = nargs - 1 + spread.len();
+        // No added bytecode-call depth guard or direct-builtin fast path.
+        self.call_function_from_stack_args(func_val, args_start, total, false)
+    }
+
+    /// One bytecode-level `apply` with the interpreter's `Op::Apply` semantics:
+    /// spread the last argument as a list and use the plain traced
+    /// `call_function` path (`Op::Apply` has no
+    /// nesting-depth guard — mirror that exactly). Used by the JIT apply shim;
+    /// keep in sync with the `Op::Apply` arm of `run_loop`. The caller polls
+    /// `maybe_quit` first and roots `func_val` + `raw_args` (the spread values
+    /// stay reachable through the rooted list).
+    #[doc(hidden)]
+    pub fn apply_for_jit(&mut self, func_val: Value, mut raw_args: LispArgVec) -> EvalResult {
+        if raw_args.is_empty() {
+            return self.call_function(func_val, LispArgVec::new());
+        }
+        // Spread the last argument.
+        if let Some(last) = raw_args.pop() {
+            let spread = list_to_vec(&last).unwrap_or_default();
+            raw_args.extend(spread);
+        }
+        self.call_function(func_val, raw_args)
+    }
+
+    /// One bytecode-level function call with the interpreter's `Op::Call`
+    /// semantics: the Lisp nesting-depth guard and traced `call_function`
+    /// path. Used by the JIT call shim (`jit::compile::neovm_jit_call`) so
+    /// compiled code re-enters the runtime through exactly the interpreter's
+    /// call path — keep in sync with the `Op::Call` arm of `run_loop`, which
+    /// keeps arguments rooted on the operand stack.
+    ///
+    /// The `nargs` arguments are ALREADY on `bc_buf` at `args_start` — the JIT
+    /// shim pushed them straight from its native call-args slot, skipping a
+    /// `LispArgVec` round-trip + per-arg scratch rooting (`bc_buf` is
+    /// GC-traced, so the args are rooted across the call). The caller
+    /// truncates `bc_buf` back to `args_start` afterwards. The subr fast path
+    /// reads the args in place; only the non-subr fallback materializes a
+    /// `LispArgVec` (for the traced `call_function`).
+    ///
+    /// The caller polls `maybe_quit` first (GNU `bytecode.c:Bcall` order).
+    #[cfg(feature = "jit")]
+    #[doc(hidden)]
+    pub fn call_for_jit_stack(
+        &mut self,
+        func_val: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        // GNU `bytecode.c:795-799`.  This is the JIT's lowering of `Bcall`, so
+        // it carries the arm just as the interpreter's `Op::Call` arm does.
+        if self.ctx.debug_on_next_call_is_armed() {
+            let args: LispArgVec = self.ctx.bc_buf[args_start..args_start + nargs]
+                .iter()
+                .copied()
+                .collect();
+            return self.with_bytecode_call_depth(|vm| vm.call_function_debugged(func_val, args));
+        }
+        // One resolution: the direct-builtin variant of the stack call covers
+        // the builtin probe (same resolved callee, same dispatcher) and the
+        // bytecode arm (backtrace span + one run_frame copy, as the
+        // interpreter's Op::Call), so the generic seam no longer resolves
+        // twice and pays an extra layer per call (17K generic calls per org
+        // font-lock op).
+        let result = self.with_bytecode_call_depth(|vm| {
+            vm.call_function_from_stack_args(func_val, args_start, nargs, true)
+        })?;
+        Ok(result)
+    }
+
+    /// Armed speculated direct-SUBR call for the JIT subr spec shim
+    /// (`jit::compile::neovm_jit_call_subr_spec`): the shim VALIDATED that
+    /// `sym_id`'s function cell still holds `subr_value` (per-site epoch check
+    /// against `function_epoch`, re-validated on epoch moves) and that no
+    /// compiler function overrides are active — so the symbol resolution that
+    /// `resolve_stack_call_target` would perform is provably redundant and is
+    /// skipped. Everything ELSE mirrors [`call_for_jit_stack`] on a symbol
+    /// callee resolving to a builtin subr, clause by clause:
+    ///
+    /// * the recursion-depth guard (`with_bytecode_call_depth`) — one
+    ///   increment per call, `max-lisp-eval-depth` signals identically;
+    /// * the backtrace frame records the SYMBOL (what the generic path's
+    ///   `func_val` is at an `Op::Call` on a constant symbol), args read from
+    ///   the GC-traced `bc_buf` in place;
+    /// * the `SubrEntry` is read FRESH from the subr object on EVERY call —
+    ///   `update_static_subr_object_entry` rewrites entries IN PLACE keeping
+    ///   the value bits identical, so the fn pointer / arity / dispatch kind
+    ///   may all have changed since compile time while the armed check still
+    ///   passes. A rewritten entry that stopped being a plain builtin falls
+    ///   back to the traced `call_function` on the SYMBOL — the exact spot
+    ///   `resolve_stack_call_target` would classify as generic;
+    /// * the arity signal (`wrong-number-of-arguments`) is checked against
+    ///   that fresh entry INSIDE the backtrace frame, with the subr object as
+    ///   payload (resolved subr-object parity);
+    /// * dispatch through the stack-args dispatcher (A0..A8 nil-padding;
+    ///   `Many`/`ManySlice` get the exact-length args, so even an in-place
+    ///   rewrite to a variadic entry stays correct);
+    /// * the debugger dispatch (`dispatch_signal_result_if_needed`) + frame
+    ///   pop with result.
+    ///
+    /// NOT replicated here: the `+`/`logand`/`logior`/
+    /// `logxor` fixnum fast-value paths (all `Many`, never speculated — and
+    /// they are pure result-equal shortcuts anyway).
+    #[cfg(feature = "jit")]
+    #[doc(hidden)]
+    pub fn call_spec_subr_stack(
+        &mut self,
+        sym_id: SymId,
+        subr_value: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        self.call_spec_subr_stack_with_frame(
+            sym_id,
+            subr_value,
+            Value::from_sym_id(sym_id),
+            args_start,
+            nargs,
+        )
+    }
+
+    /// [`call_spec_subr_stack`](Self::call_spec_subr_stack) with an explicit
+    /// backtrace-frame function value. The JIT's speculation shims record the
+    /// SYMBOL (what their call site named); the interpreter's
+    /// `CallBuiltin`/`CallBuiltinSym` route records the SUBR object, exactly
+    /// what its former `funcall_general(subr, args)` route recorded — so
+    /// `mapbacktrace` sees `#<subr insert>` identically compiled vs interp
+    /// (`jit_cbsym_spec_insert_backtrace_shows_subr_frame_like_interp`).
+    #[doc(hidden)]
+    pub fn call_spec_subr_stack_with_frame(
+        &mut self,
+        sym_id: SymId,
+        subr_value: Value,
+        frame_func: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        // GNU `bytecode.c:795-799`: the speculated subr call is still a
+        // `Bcall`, so it carries the arm like every other lowering of one.
+        if self.ctx.debug_on_next_call_is_armed() {
+            let func_val = Value::from_sym_id(sym_id);
+            let args: LispArgVec = self.ctx.bc_buf[args_start..args_start + nargs]
+                .iter()
+                .copied()
+                .collect();
+            return self.with_bytecode_call_depth(|vm| vm.call_function_debugged(func_val, args));
+        }
+        self.with_bytecode_call_depth(|vm| {
+            let func_val = frame_func;
+            let entry = subr_call_entry_from_value(subr_value)
+                .map(|(_, entry)| entry)
+                .filter(|entry| entry.dispatch_kind == SubrDispatchKind::Builtin);
+            let Some(entry) = entry else {
+                // The in-place-rewritten entry is no longer a plain builtin:
+                // mirror call_for_jit_stack's non-subr arm — full traced call
+                // on the SYMBOL.
+                let args: LispArgVec = vm.ctx.bc_buf[args_start..args_start + nargs]
+                    .iter()
+                    .copied()
+                    .collect();
+                return vm.call_function(func_val, args);
+            };
+            let backtrace = vm
+                .ctx
+                .push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
+            let result = if nargs < entry.min_args as usize
+                || entry.max_args.is_some_and(|max| nargs > max as usize)
+            {
+                Err(signal(
+                    LispCondition::WrongNumberOfArguments,
+                    vec![subr_value, Value::fixnum(nargs as i64)],
+                ))
+            } else {
+                match entry.function {
+                    Some(function) => Vm::dispatch_builtin_subr_from_stack_args_unchecked(
+                        vm.ctx, function, args_start, nargs,
+                    ),
+                    None => Err(signal(LispCondition::VoidFunction, vec![func_val])),
+                }
+            };
+            vm.ctx.finish_traced_builtin_call(backtrace, result)
+        })
+    }
+
+    /// V3 + native-to-native speculated direct call: the caller's spec site is
+    /// armed, so `callee` is the compile-time bytecode object the symbol
+    /// `called` (a symbol `Value`) still names, and `args_ptr` addresses
+    /// `nargs` pre-marshaled argument words (the caller's native call-args
+    /// slot). The callee's backtrace frame records `called`, as GNU's
+    /// `Bcall` does. Resolve and cache the callee's compiled leaf in
+    /// `leaf_slot`, then run it DIRECTLY under the recursion-depth guard —
+    /// skipping the `funcall_general` dispatch and the compiled-cache hash
+    /// lookup that `call_for_jit_stack` would pay.
+    ///
+    /// When the callee is a pure pass-through for this argument count (simple
+    /// fixed arity, no `&optional` nil-pad / `&rest` list), the args go
+    /// STRAIGHT to the callee's native entry — no `LispArgVec`, no per-arg
+    /// scratch rooting, no re-marshal (the per-call cost that dominates
+    /// call-heavy compiled code). Otherwise the args are marshaled and rooted
+    /// (still skipping dispatch + hash lookup). Returns `None` when the callee
+    /// can't be fast-pathed (body `NotCompilable`, or an arity mismatch the
+    /// strict path must signal), leaving the shim to fall back to
+    /// `call_for_jit_stack`.
+    ///
+    /// The recursion-depth guard is applied exactly as `call_for_jit_stack` applies
+    /// it (one increment per call) so deeply recursive compiled functions
+    /// signal `max-lisp-eval-depth` instead of overflowing the native stack.
+    /// The cached leaf handle is sound because the per-thread `COMPILED` cache
+    /// never evicts. The native pass-through needs no arg rooting: the caller's
+    /// `maybe_quit` already returned Ok (which does not collect) and nothing
+    /// allocates on a lisp heap before the callee's entry reads its args.
+    ///
+    /// SAFETY: `args_ptr` addresses `nargs` valid tagged words (the caller's
+    /// call-args slot, populated immediately before the spec shim was called).
+    ///
+    /// Only ever called from the JIT spec shim (`jit::compile`, itself
+    /// `#[cfg(feature = "jit")]`) and references `jit::compile`/`jit::cache`
+    /// types, so it must be gated too — otherwise the no-jit production build
+    /// (workspace `neovm-core` is `default-features = false`) fails to compile.
+    #[cfg(feature = "jit")]
+    /// Takes the CONTEXT, not a `Vm`: this is the JIT shim's per-call fast
+    /// path, and `Vm::from_context` eagerly zero-fills its call caches — a
+    /// measured ~22 Ir/call tax the armed path must not pay. Only the cold
+    /// defensive deopt fallback below builds a `Vm`.
+    #[doc(hidden)]
+    pub fn call_armed_callee_native(
+        ctx: &mut crate::emacs_core::eval::Context,
+        called: Value,
+        callee: Value,
+        slot: &crate::emacs_core::jit::compile::SpecSlot,
+        args_ptr: *const i64,
+        nargs: usize,
+    ) -> Option<crate::emacs_core::jit::cache::NativeCallOutcome> {
+        // GNU `bytecode.c:798`: a `Bcall` with `debug_on_next_call` set must
+        // record a frame and enter the entry debugger.  This native-to-native
+        // fast path has no way to run Lisp mid-call, so it deopts exactly the
+        // way a wrong arg count does -- `None` sends the call to the strict
+        // `call_for_jit_stack` path, which arms it.  Cold: the
+        // flag is down in every non-debugging process.
+        if ctx.debug_on_next_call_is_armed() {
+            return None;
+        }
+        let mut ptr = slot.leaf_ptr();
+        let bc = if ptr.is_null() {
+            let bc = callee.get_bytecode_data()?;
+            let ctx_ptr = core::ptr::from_mut(&mut *ctx);
+            // SAFETY: ctx_ptr comes from this live owner-thread Context. The
+            // mutable borrow stays dormant until cache resolution completes.
+            match unsafe { crate::emacs_core::jit::cache::resolve_spec_call_leaf(ctx_ptr, bc) }? {
+                crate::emacs_core::jit::cache::SpecCallLeaf::Armable(ready) => ptr = ready,
+                crate::emacs_core::jit::cache::SpecCallLeaf::RetainedUpgrade(leaf) => {
+                    return Self::run_retained_upgrade_from_spec(
+                        ctx, called, callee, bc, &leaf, args_ptr, nargs,
+                    );
+                }
+            }
+            // Arm the shim's fast-path key with the leaf: this site's
+            // argument count is fixed, so how the leaf takes the call is
+            // decided here, once -- as laid out, or normalized into a frame
+            // buffer of the leaf's arity: missing `&optional` slots
+            // nil-filled, a `&rest` tail consed into its last slot.
+            // SAFETY: `ptr` names a cache-held leaf (see below).
+            let leaf = unsafe { &*ptr };
+            // The arity bound is the frame buffer's: an exact-arity call
+            // passes its slot through at any width.
+            let passthrough = leaf.is_pure_passthrough(nargs);
+            let direct = if leaf.accepts(nargs)
+                && (passthrough
+                    || leaf.arity <= crate::emacs_core::jit::compile::FAST_PATH_MAX_ARITY)
+            {
+                bc.jit_constant_base()
+            } else {
+                core::ptr::null()
+            };
+            slot.arm_leaf(
+                ptr,
+                direct,
+                !passthrough,
+                !leaf.direct_call_eligible(),
+                leaf.entry_shape == crate::emacs_core::jit::compile::EntryShape::RawRegister,
+            );
+            // A compiled site may then call the leaf itself (S2.1b): its
+            // register entry, armed last, for an exact-arity call of a
+            // frameless body the shim would enter raw (the key's flags
+            // clear). Knob-gated; nothing reads it but a direct site.
+            if crate::emacs_core::jit::compile::jit_direct_call_on() {
+                crate::emacs_core::jit::compile::arm_direct_entry_if_eligible(slot, leaf, nargs);
+            }
+            bc
+        } else {
+            // A cached leaf is the proof that `get_bytecode_data` once ran
+            // on these bits (it is resolved from the instruction stream that
+            // call returned, materializing a mapped stub in place, once, for
+            // good), and the epoch proof above says `callee` -- the site's
+            // baked `expected` bits -- is what the binding holds now, so the
+            // object is alive. That it is bytecode and filled rests on the
+            // heap, not on identity: bytecode lives in a typed arena whose
+            // recycled slots only ever hold a whole `ByteCodeFunction`, and
+            // mapped stubs are never freed. (Identity is NOT proved -- see
+            // the re-validate arm's bits compare in `neovm_jit_call_spec`;
+            // this read is the same the old type-checked one made.) The
+            // type check and stub probe were six instructions per armed call.
+            // SAFETY: as argued.
+            unsafe { callee.bytecode_data_materialized_by_caller() }
+        };
+        // SAFETY: `ptr` names a cache-held leaf, valid here because the tagged-heap
+        // identity is STABLE during native execution (the only thing that drops
+        // cache leaves is `cache::clear()` on a heap-identity change, and the heap
+        // is only swapped by top-level entry points, never nested inside a running
+        // native leaf — so no `clear()` fires while this spec-slot pointer is live
+        // on the native stack). See `resolve_compiled_leaf_ptr` for the full
+        // invariant. (NOT "the cache never evicts" — it can; audit #1.)
+        let leaf = unsafe { &*ptr };
+        // Test/debug-build evidence that the fast path actually fires (vs silently
+        // falling back to call_for_jit_stack on every call). Counted here rather
+        // than in the shared runner below so it stays a count of SPECULATED
+        // calls, not of every native-to-native call.
+        #[cfg(any(test, debug_assertions))]
+        if leaf.accepts(nargs) {
+            crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+        Self::run_leaf_native_to_native(
+            ctx,
+            called,
+            callee,
+            bc,
+            leaf,
+            args_ptr,
+            nargs,
+            CalleeFrameArgs::CallerSlot,
+        )
+    }
+
+    /// Pending upgrades retain executable T1 without publishing it into the
+    /// spec slot. Keep this rare route out of the ordinary arming path; the
+    /// owning handle survives any replacement during the activation.
+    #[cfg(feature = "jit")]
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn run_retained_upgrade_from_spec(
+        ctx: &mut crate::emacs_core::eval::Context,
+        called: Value,
+        callee: Value,
+        bc: &ByteCodeFunction,
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+        args_ptr: *const i64,
+        nargs: usize,
+    ) -> Option<crate::emacs_core::jit::cache::NativeCallOutcome> {
+        #[cfg(any(test, debug_assertions))]
+        if leaf.accepts(nargs) {
+            crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+        Self::run_leaf_native_to_native(
+            ctx,
+            called,
+            callee,
+            bc,
+            leaf,
+            args_ptr,
+            nargs,
+            CalleeFrameArgs::CallerSlot,
+        )
+    }
+
+    /// Native-to-native call of a callee that is ALREADY a bytecode value —
+    /// no symbol, so nothing to speculate on and nothing to re-validate.
+    ///
+    /// This is the shape the byte compiler produces for every function that is
+    /// named only lexically: `cl-flet`/`cl-labels` locals, `lambda` literals
+    /// passed to `mapcar`/`sort`, a closure held in a variable. The compiler
+    /// puts the bytecode object straight into the constants vector and emits
+    /// `Bcall` on it, so the callee is a *compile-time literal* — more
+    /// statically known than a symbol, which still needs an obarray epoch
+    /// check. Yet [`find_spec_sites`](crate::emacs_core::jit::compile) tags
+    /// only SYMBOL constants, so before this entry every such call took the
+    /// fully generic shim: six frames, two argument copies and two scratch-root
+    /// scopes to reach a leaf that
+    /// [`call_armed_callee_native`](Self::call_armed_callee_native) reaches in
+    /// one.
+    ///
+    /// The leaf comes from the callee function's OWN armed slot
+    /// (`cache::armed_leaf_for_stack_call`) rather than a per-call-site cache:
+    /// that is the same epoch-checked, heat-advancing probe the tier
+    /// dispatcher uses, so re-tiering and slot retirement keep working, and a
+    /// callee that has not tiered up yet simply returns `None` and warms up
+    /// through the generic path.
+    ///
+    /// `None` = not fast-pathable (debugger armed, not bytecode, no armed
+    /// leaf, wrong arity); the caller must take the strict path.
+    ///
+    /// SAFETY: `args_ptr` addresses `nargs` valid tagged words (the caller's
+    /// native call-args slot), valid for the whole call.
+    #[cfg(feature = "jit")]
+    #[doc(hidden)]
+    pub fn call_armed_bytecode_value_native(
+        ctx: &mut crate::emacs_core::eval::Context,
+        callee: Value,
+        args_ptr: *const i64,
+        nargs: usize,
+    ) -> Option<crate::emacs_core::jit::cache::NativeCallOutcome> {
+        // GNU `bytecode.c:798`, as in `call_armed_callee_native`: an armed
+        // `debug_on_next_call` must enter the entry debugger, which this path
+        // cannot do mid-call, so it deopts to the strict path.
+        if ctx.debug_on_next_call_is_armed() {
+            return None;
+        }
+        let bc = callee.get_bytecode_data()?;
+        let ptr = crate::emacs_core::jit::cache::armed_leaf_for_native_call(bc, nargs)?;
+        // SAFETY: `armed_leaf_for_native_call` returns a leaf armed under the
+        // current `leaf_slot_epoch` — see its own contract.
+        let leaf = unsafe { &*ptr };
+        Self::run_leaf_native_to_native(
+            ctx,
+            callee,
+            callee,
+            bc,
+            leaf,
+            args_ptr,
+            nargs,
+            CalleeFrameArgs::CallerSlot,
+        )
+    }
+
+    /// `(apply F ARG... LIST)` from compiled code where F is a bytecode object
+    /// with an armed leaf, entered without leaving native code: the builtin
+    /// call, `Fapply`'s spread into a vector, `funcall`'s dispatch and the
+    /// callee's argument normalization were four layers and ~1,000
+    /// instructions per call, and every `cl-generic` dispatcher applies its
+    /// method (600 per elb-eieio repeat). Same frames as that path: `apply`'s,
+    /// then the callee's with the spread arguments, one level of depth.
+    ///
+    /// `None` = take the builtin path: `apply` redefined or advised, compiler
+    /// overrides active, the debugger armed, F not an armed bytecode leaf
+    /// (a symbol, an interpreted closure, a subr), a LIST that is dotted,
+    /// circular or longer than the spread buffer, or an arity the leaf
+    /// rejects — each of which the builtin handles (and signals) as before.
+    ///
+    /// SAFETY: `args_ptr` addresses `nargs >= 2` valid tagged words, the
+    /// caller's native call-args slot, valid for the whole call.
+    #[cfg(feature = "jit")]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn call_apply_native(
+        ctx: &mut crate::emacs_core::eval::Context,
+        apply: Value,
+        args_ptr: *const i64,
+        nargs: usize,
+    ) -> Option<crate::emacs_core::jit::cache::NativeCallOutcome> {
+        use crate::emacs_core::jit::cache::NativeCallOutcome;
+        debug_assert!(nargs >= 2);
+        let epoch = {
+            // One canonical pair projection serves this pure admission phase;
+            // it ends before any callee or allocation-capable path is entered.
+            let projection = ctx.dispatch_projection();
+            if projection.debug_on_next_call_armed_fast() {
+                return None;
+            }
+            projection.function_epoch()
+        };
+        if ctx.apply_fast_path_epoch.get() != epoch {
+            if !named_builtin_fast_path_allowed_in(ctx, Self::apply_builtin_id()) {
+                return None;
+            }
+            ctx.apply_fast_path_epoch.set(epoch);
+        }
+        // SAFETY: the caller's `nargs` words.
+        let arg = |i: usize| unsafe {
+            /* SAFETY: bytecode word */
+            Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+        };
+        let function = arg(0);
+        let bc = function.get_bytecode_data()?;
+        // The spread: the leading arguments, then LIST's elements. Nothing
+        // that can collect runs until the callee's backtrace frame records
+        // this buffer (which then roots its values for the call); the
+        // elements are also reachable from LIST, itself in `apply`'s frame.
+        // A plain array and a count: `SmallVec`'s inline/spilled test on
+        // every push was a sixth of this function.
+        const SPREAD_MAX: usize = 64;
+        if nargs - 2 > SPREAD_MAX {
+            return None;
+        }
+        let mut spread = [std::mem::MaybeUninit::<i64>::uninit(); SPREAD_MAX];
+        let mut count = 0;
+        for i in 1..nargs - 1 {
+            spread[count].write(arg(i).bits() as i64);
+            count += 1;
+        }
+        let mut tail = arg(nargs - 1);
+        while tail.is_cons() {
+            if count == SPREAD_MAX {
+                return None;
+            }
+            spread[count].write(tail.cons_car().bits() as i64);
+            count += 1;
+            tail = tail.cons_cdr();
+        }
+        if !tail.is_nil() {
+            return None;
+        }
+        // The first `count` words are written; the leaf and the callee's
+        // backtrace frame read only those.
+        let spread_ptr = spread.as_ptr().cast::<i64>();
+        let ptr = crate::emacs_core::jit::cache::armed_leaf_for_native_call(bc, count)?;
+        // SAFETY: armed under the current `leaf_slot_epoch` (its contract).
+        let leaf = unsafe { &*ptr };
+        if !leaf.accepts(count) {
+            return None;
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        APPLY_NATIVE_CALLS.with(|calls| calls.set(calls.get() + 1));
+        let bt_count = ctx.specpdl.len();
+        // SAFETY: `args_ptr` addresses `nargs` valid words for the whole call.
+        unsafe {
+            ctx.push_backtrace_frame_from_native_args(apply, args_ptr, nargs);
+        }
+        // The spread is this frame's local: the callee's frame records a copy
+        // of it, so a contained panic that unwinds through here cannot leave
+        // a frame reading a freed buffer.
+        let outcome = Self::run_leaf_native_to_native(
+            ctx,
+            function,
+            function,
+            bc,
+            leaf,
+            spread_ptr,
+            count,
+            CalleeFrameArgs::Local,
+        )
+        .expect("an accepted arity runs");
+        if ctx.pop_native_backtrace_frame(bt_count) {
+            return Some(outcome);
+        }
+        let res = match outcome {
+            NativeCallOutcome::Value(v) => Ok(v),
+            NativeCallOutcome::FlowStashed => {
+                Err(crate::emacs_core::jit::compile::take_pending_flow()
+                    .expect("FlowStashed implies a pending flow"))
+            }
+            NativeCallOutcome::Fallback => unreachable!("Fallback resolved inside the run"),
+        };
+        Some(NativeCallOutcome::from_result(
+            ctx.pop_bytecode_backtrace_frame_with_result(bt_count, res),
+        ))
+    }
+
+    /// Run `leaf` for `callee` with `args_ptr` as the argument words, without
+    /// leaving native code — the shared tail of both native-to-native entries
+    /// ([`call_armed_callee_native`](Self::call_armed_callee_native) for a
+    /// speculated symbol site, [`call_armed_bytecode_value_native`](Self::call_armed_bytecode_value_native)
+    /// for a callee that is already a bytecode VALUE). The two differ only in
+    /// how they find the leaf; everything a call must still do — arity signal
+    /// deferral, backtrace frame, depth guard, the pass-through/marshal split
+    /// and the frame pop — is here, once.
+    ///
+    /// `None` means the call cannot be fast-pathed and the caller must take
+    /// the strict path (which signals `wrong-number-of-arguments` exactly as
+    /// the interpreter would).
+    ///
+    /// `frame_function` is what the callee's backtrace frame records: GNU's
+    /// `Bcall` records the value it called (`record_in_backtrace (call_fun =
+    /// TOP)`, src/bytecode.c:792-796) -- the SYMBOL for a named call, the
+    /// object itself for a call of a value. The object of a named call is
+    /// kept alive by the symbol's function cell, and past a redefinition by
+    /// the frame (`jit::cache::pin_redefined_function`).
+    ///
+    /// SAFETY: `args_ptr` addresses `nargs` valid tagged words that stay valid
+    /// for the whole call (the caller's own native call-args slot).
+    ///
+    /// `#[inline(always)]` is load-bearing, not a hint. Extracting this body
+    /// out of `call_armed_callee_native` as a plain `fn` cost the speculated
+    /// path a call frame and its cross-inlining — `neovm_jit_call_spec` went
+    /// from 154 Ir/call to 84 + 104 — and `listlen-tc` (100M speculated
+    /// self-recursive calls) regressed 10.8% in instructions, `fibn` 9.0%.
+    /// Plain `#[inline]` was DECLINED at this size: the frame was still there
+    /// in the callgrind profile and the regression was unchanged to three
+    /// digits. Both entries are single-caller shims for their own C-ABI shim,
+    /// so forcing it restores the one-frame shape each had.
+    #[cfg(feature = "jit")]
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn run_leaf_native_to_native(
+        ctx: &mut crate::emacs_core::eval::Context,
+        frame_function: Value,
+        callee: Value,
+        bc: &ByteCodeFunction,
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+        args_ptr: *const i64,
+        nargs: usize,
+        frame_args: CalleeFrameArgs,
+    ) -> Option<crate::emacs_core::jit::cache::NativeCallOutcome> {
+        // An exact fixed-arity match is accepted by construction (required
+        // <= arity == nargs), so the common case answers with one compare;
+        // only a short or long call pays the full lambda-list check. Wrong
+        // arg count: defer to the strict path, which signals
+        // wrong-number-of-arguments exactly as the interpreter would.
+        let pure = leaf.is_pure_passthrough(nargs);
+        if !pure && !leaf.accepts(nargs) {
+            return None;
+        }
+        // BACKTRACE PARITY (cc-mode clean-build fix): the interpreter call path
+        // pushes a backtrace frame for the callee (call_function_from_stack_args);
+        // this native-to-native fast path must too, or `backtrace-frame` walks a
+        // stack missing this activation — cc-bytecomp-compiling-or-loading then
+        // fails to detect the compiling file and raises "c-lang-defconst can only
+        // be used in a file". Args are read from the caller's call-args slot:
+        // arity 1 and 2 are stored inline in the entry, 3+ as a pointer into
+        // that slot plus a count (GNU's shape) — no copy either way.
+        let bt_count = ctx.specpdl.len();
+        // SAFETY: args_ptr addresses `nargs` valid tagged words (the caller's
+        // call-args slot), same contract the native run below relies on. This
+        // push also keeps `callee` alive for the whole native run: the frame
+        // traces a called object, and a called symbol's frame pins what its
+        // function cell held once that is redefined.
+        // `frame_args` is a literal at each call site, so this folds to one arm
+        // per instantiation (the hot `CallerSlot` one is unchanged).
+        match frame_args {
+            CalleeFrameArgs::CallerSlot => unsafe {
+                ctx.push_backtrace_frame_from_native_args(frame_function, args_ptr, nargs);
+            },
+            CalleeFrameArgs::Local => {
+                // SAFETY: as above; `Value` is `#[repr(transparent)]` over the
+                // word. The frame copies the words (`Backtrace1`/`Backtrace2`,
+                // or the owned side stack).
+                let args = unsafe { core::slice::from_raw_parts(args_ptr as *const Value, nargs) };
+                ctx.push_backtrace_frame(frame_function, args);
+                #[cfg(test)]
+                APPLY_CALLEE_FRAME_BORROWS.with(|c| {
+                    c.set(Some(matches!(
+                        ctx.specpdl.last(),
+                        Some(crate::emacs_core::eval::SpecBinding::BacktraceNative { .. })
+                    )))
+                });
+            }
+        }
+        // Inline `with_bytecode_call_depth` at the ctx level (GNU's Bcall
+        // depth protocol, floor-raise included) — the Vm wrapper exists only
+        // for its caches, which this path deliberately avoids constructing.
+        ctx.depth += 1;
+        if ctx.depth > ctx.max_depth {
+            if ctx.max_depth < 100 {
+                ctx.max_depth = 100;
+            }
+            // GNU raises a `max-lisp-eval-depth` below 100 before it
+            // re-checks (`src/eval.c:2604-2608`) and writes the DEFVAR_INT
+            // cell, so the raised value stays visible through the binding.
+            ctx.raise_lisp_eval_depth_floor();
+            if ctx.depth > ctx.max_depth {
+                // GNU checks depth before recording the rejected callee's
+                // frame (bytecode.c:779-795). Only the calling frame is live
+                // when the signal hook runs.
+                let flow = ctx
+                    .pop_bytecode_backtrace_frame_with_result(
+                        bt_count,
+                        Err(signal(
+                            "error",
+                            vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
+                        )),
+                    )
+                    .expect_err("a rejected callee has no cleanup or result");
+                let flow = ctx.finish_lisp_depth_overflow(flow);
+                return Some(
+                    crate::emacs_core::jit::cache::NativeCallOutcome::from_result(Err(flow)),
+                );
+            }
+        }
+        use crate::emacs_core::jit::cache::NativeCallOutcome;
+        /// Normalize the caller's call-args slot into the leaf's ABI and run
+        /// it — the callee has `&optional` slots to nil-pad or a `&rest` tail
+        /// to cons, so it is not a pure pass-through.
+        ///
+        /// `#[inline(never)]`: this is a real path (org takes it 210K times
+        /// per edit iteration), but the PURE path above is the one that must
+        /// stay small. `run_leaf_native_to_native` is `#[inline(always)]` into
+        /// both call shims, so folding this body in with it cost `flet` 2.3%
+        /// and `listlen-tc` 0.3% — benchmarks that never take this branch at
+        /// all.
+        #[inline(never)]
+        fn marshal_and_run(
+            ctx_ptr: *mut crate::emacs_core::eval::Context,
+            bc: &ByteCodeFunction,
+            callee: Value,
+            leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+            args_ptr: *const i64,
+            nargs: usize,
+        ) -> crate::emacs_core::jit::cache::NativeCallOutcome {
+            use crate::emacs_core::jit::cache::NativeCallOutcome;
+            /// Leaf ABIs up to this many slots are marshaled on the stack.
+            const STACK_SLOTS: usize = 16;
+            let nonrest = leaf.arity - usize::from(leaf.has_rest);
+            let nil = Value::NIL.bits() as i64;
+            let mut stack_buf = [nil; STACK_SLOTS];
+            let mut heap_buf = Vec::new();
+            let slots: &mut [i64] = if leaf.arity <= STACK_SLOTS {
+                &mut stack_buf[..leaf.arity]
+            } else {
+                heap_buf.resize(leaf.arity, nil);
+                &mut heap_buf
+            };
+            // The given arguments, then nil for each missing `&optional`
+            // (the buffer's fill).
+            let fixed = nargs.min(nonrest);
+            // SAFETY: args_ptr addresses `nargs` valid words, fixed <= nargs,
+            // and `slots` holds at least `nonrest` words.
+            unsafe { std::ptr::copy_nonoverlapping(args_ptr, slots.as_mut_ptr(), fixed) };
+            if leaf.has_rest {
+                // Consed back to front straight from the caller's slot. No
+                // root scope: `alloc_cons` cannot collect, and the callee's
+                // backtrace frame, pushed before this runs, roots the
+                // arguments (the scope and a `LispArgVec` copy of the tail
+                // were most of this function's ~240 instructions).
+                // SAFETY: the seam-provided dormant Context.
+                // SAFETY (owner chain): (c) fails: this WorldView<TaggedHeap> field loan is last used
+                // by alloc_cons in the rest-building loop. Only copied rest bits reach slots
+                // afterward; neither the raw native call nor fallback below reuses this field owner.
+                let heap = unsafe { &mut (*ctx_ptr).tagged_heap };
+                let mut rest = Value::NIL;
+                for i in (nonrest..nargs).rev() {
+                    // SAFETY: args_ptr addresses `nargs` valid words.
+                    let arg = unsafe {
+                        /* SAFETY: bytecode word */
+                        Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+                    };
+                    rest = heap.alloc_cons(arg, rest);
+                }
+                slots[nonrest] = rest.bits() as i64;
+            }
+            match crate::emacs_core::jit::cache::run_resolved_leaf_native(
+                ctx_ptr,
+                bc,
+                callee,
+                leaf,
+                slots.as_ptr(),
+            ) {
+                NativeCallOutcome::Fallback => {
+                    Vm::interp_fallback_native(ctx_ptr, bc, callee, args_ptr, nargs)
+                }
+                o => o,
+            }
+        }
+        let outcome = {
+            let ctx_ptr = core::ptr::from_mut(&mut *ctx);
+            if pure {
+                // NATIVE-TO-NATIVE: pass the caller's call-args slot straight
+                // through (no LispArgVec, no rooting, no re-marshal) — and a
+                // register-sized outcome back (no Result<_, Flow> sret moves;
+                // a signalling Flow stays in the pending slot).
+                match crate::emacs_core::jit::cache::run_resolved_leaf_native(
+                    ctx_ptr, bc, callee, leaf, args_ptr,
+                ) {
+                    NativeCallOutcome::Fallback => {
+                        Vm::interp_fallback_native(ctx_ptr, bc, callee, args_ptr, nargs)
+                    }
+                    o => o,
+                }
+            } else {
+                marshal_and_run(ctx_ptr, bc, callee, leaf, args_ptr, nargs)
+            }
+        };
+        ctx.depth -= 1;
+        // A contained panic (its marker still set, see `direct_call_cold`):
+        // this frame's own entry goes if it is still on top; the rest of
+        // the residue and the marker are the caller leaf's healing exit's,
+        // which the general unwinder below would pre-empt by folding the
+        // marker into a signal.
+        if crate::emacs_core::jit::compile::shim_panic_pending() {
+            // Its reads of the caller's slot go too: the slot dies when the
+            // caller leaf exits, before the deferred unwind retires the frame.
+            // SAFETY: `args_ptr` is still live here (this function's contract).
+            unsafe { ctx.pop_or_detach_native_frame(bt_count, args_ptr) };
+            return Some(outcome);
+        }
+        // Pop the callee's backtrace frame (balanced single-entry pop; falls back
+        // to the general unwinder if a nested imbalance occurred). The fast pop
+        // never touches the outcome — the general path's by-value Result
+        // round-trip was a measured per-call tax on the native->native
+        // transition.
+        if ctx.pop_native_backtrace_frame(bt_count) {
+            return Some(outcome);
+        }
+        // Imbalanced (rare): materialize the EvalResult the general unwinder
+        // needs, then re-compact.
+        let res = match outcome {
+            NativeCallOutcome::Value(v) => Ok(v),
+            NativeCallOutcome::FlowStashed => {
+                Err(crate::emacs_core::jit::compile::take_pending_flow()
+                    .expect("FlowStashed implies a pending flow"))
+            }
+            // Both Fallback sources were resolved through interp_fallback above.
+            NativeCallOutcome::Fallback => unreachable!("Fallback resolved before the pop"),
+        };
+        Some(NativeCallOutcome::from_result(
+            ctx.pop_bytecode_backtrace_frame_with_result(bt_count, res),
+        ))
+    }
+
+    /// Defensive interpreter rerun of a native callee whose run asked for
+    /// it (a rerun-from-start deopt): the caller's call-args slot becomes
+    /// the interpreter frame's arguments. Cold, and a plain fn rather than a
+    /// closure -- the closure's environment setup was a measured per-call
+    /// cost on the hot path that never takes this branch.
+    #[cfg(feature = "jit")]
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn interp_fallback_native(
+        ctx_ptr: *mut crate::emacs_core::eval::Context,
+        bc: &ByteCodeFunction,
+        callee: Value,
+        args_ptr: *const i64,
+        nargs: usize,
+    ) -> crate::emacs_core::jit::cache::NativeCallOutcome {
+        let mut args = Vec::with_capacity(nargs);
+        for i in 0..nargs {
+            // SAFETY: args_ptr addresses `nargs` valid words.
+            args.push(unsafe {
+                /* SAFETY: bytecode word */
+                Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+            });
+        }
+        // SAFETY: the seam-provided dormant Context.
+        // SAFETY (owner chain): (b) fails: ctx_ptr is never used again after this formation. Vm stores
+        // the current typed &mut Context (not a raw pointer), and only that Vm owner is used for
+        // execution; no older ctx_ptr is captured or forwarded across it.
+        let mut vm = Vm::from_context(unsafe { &mut *ctx_ptr });
+        crate::emacs_core::jit::cache::NativeCallOutcome::from_result(
+            vm.execute_with_func_value(bc, args, callee),
+        )
+    }
+
+    /// The bytecode arm of [`Self::call_function_from_stack_args`]: run the
+    /// resolved bytecode object `callee` on the argument span, under a
+    /// backtrace frame recording `frame_function` -- what the call named,
+    /// the symbol of a named call (GNU `Bcall`'s `call_fun`).
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn call_bytecode_from_stack_args(
+        &mut self,
+        frame_function: Value,
+        callee: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        let backtrace =
+            self.ctx
+                .push_backtrace_frame_from_bc_stack(frame_function, args_start, nargs);
+        let bc_data = callee
+            .get_bytecode_data()
+            .expect("resolved bytecode target must remain bytecode");
+        let result = self
+            .ctx
+            .execute_bytecode_call_from_stack(bc_data, args_start, nargs, callee);
+        let result = self.ctx.dispatch_signal_result_if_needed(result);
+        self.ctx
+            .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result)
+    }
+
+    /// [`Self::call_for_jit_stack`] of a speculated call whose callee is
+    /// already resolved: the spec shim's armed site proves (the function
+    /// epoch) that the symbol `called` names the bytecode object `callee`,
+    /// so `callee` runs with no second resolution of the symbol, under a
+    /// frame recording `called`, as GNU's `Bcall` records `call_fun`
+    /// (src/bytecode.c:792-796). The rest is `call_for_jit_stack`'s
+    /// protocol: the entry debugger on `called`, one depth level.
+    #[cfg(feature = "jit")]
+    #[doc(hidden)]
+    pub fn call_resolved_bytecode_for_jit_stack(
+        &mut self,
+        called: Value,
+        callee: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        debug_assert!(callee.is_bytecode(), "a resolved spec callee is bytecode");
+        if self.ctx.debug_on_next_call_is_armed() {
+            let args: LispArgVec = self.ctx.bc_buf[args_start..args_start + nargs]
+                .iter()
+                .copied()
+                .collect();
+            return self.with_bytecode_call_depth(|vm| vm.call_function_debugged(called, args));
+        }
+        self.with_bytecode_call_depth(|vm| {
+            vm.call_bytecode_from_stack_args(called, callee, args_start, nargs)
+        })
+    }
+
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn call_function_from_stack_args(
+        &mut self,
+        func_val: Value,
+        args_start: usize,
+        nargs: usize,
+        allow_direct_builtin_subr: bool,
+    ) -> EvalResult {
+        if allow_direct_builtin_subr {
+            match self.resolve_stack_call_target(func_val) {
+                ResolvedStackCallTarget::Builtin { callee } => {
+                    return Self::call_resolved_builtin_from_stack_args(
+                        self.ctx, func_val, args_start, nargs, callee,
+                    );
+                }
+                ResolvedStackCallTarget::BuiltinLeaf { callee, leaf } => {
+                    return Self::call_builtin_leaf_from_stack_args(
+                        self.ctx, func_val, args_start, nargs, callee, leaf,
+                    );
+                }
+                ResolvedStackCallTarget::ByteCode { callee } => {
+                    return self.call_bytecode_from_stack_args(
+                        func_val,
+                        callee.value(),
+                        args_start,
+                        nargs,
+                    );
+                }
+                ResolvedStackCallTarget::Interpreter { .. } => {
+                    unreachable!(
+                        "the generic stack-call resolver cannot manufacture an iterative plan"
+                    )
+                }
+                ResolvedStackCallTarget::Generic => {}
+            }
+        }
+        // Zero-copy call protocol (GNU Bcall): the args stay in the caller's
+        // bc_buf slots for the whole call — the backtrace entry records the
+        // span (GNU record_in_backtrace stores a pointer into the same
+        // slots), run_frame copies them ONCE into fresh callee slots (GNU
+        // setup_frame's PUSH loop), and the caller pops them only after the
+        // call returns. No LispArgVec, no per-arg rooting: bc_buf is
+        // GC-traced.
+        let bt_base = self.ctx.specpdl.len();
+        let backtrace = self
+            .ctx
+            .push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
+        let root = CallableRoot::Witnessed(RootedCallable::from_backtrace(
+            &*self.ctx, bt_base, func_val,
+        ));
+        let result = self.call_function_untraced_from_stack(root, func_val, args_start, nargs);
+        let result = self.ctx.dispatch_signal_result_if_needed(result);
+        // GNU Bcall/Breturn exit: pop this call's own backtrace entry with a
+        // single-entry pop (specpdl_ptr-- shape); imbalanced/debug-on-exit
+        // cases fall back to the general unwinder inside.
+        self.ctx
+            .pop_bytecode_backtrace_token_with_result(backtrace, result)
+    }
+
+    /// Stack-args twin of [`Vm::call_function_untraced_owned`]: dispatch a
+    /// callee whose args live on `bc_buf` at `[args_start, args_start +
+    /// nargs)`. Bytecode callees run straight from the span through the
+    /// tier-up seam; everything else (subrs, lambdas, aliases) materializes
+    /// one `LispArgVec` and takes the generic owned path — those calls
+    /// either already went through `call_resolved_builtin_from_stack_args`
+    /// or are cold.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn call_function_untraced_from_stack(
+        &mut self,
+        root: CallableRoot<'_>,
+        func_val: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        match func_val.kind() {
+            ValueKind::Veclike(VecLikeType::ByteCode) => {
+                let bc_data = func_val.get_bytecode_data().unwrap();
+                self.ctx
+                    .execute_bytecode_call_from_stack(bc_data, args_start, nargs, func_val)
+            }
+            // Symbol-with-bytecode-cell fast path: same resolution discipline
+            // as the owned twin (cell re-read live every call; compiler
+            // overrides bail to generic).
+            ValueKind::Symbol(sym_id) if !self.ctx.compiler_function_overrides_active() => {
+                match self.ctx.obarray.symbol_function_id(sym_id) {
+                    Some(cell)
+                        if matches!(cell.kind(), ValueKind::Veclike(VecLikeType::ByteCode)) =>
+                    {
+                        let bc_data = cell.get_bytecode_data().unwrap();
+                        self.ctx
+                            .execute_bytecode_call_from_stack(bc_data, args_start, nargs, cell)
+                    }
+                    _ => {
+                        let args = LispArgVec::from_slice(
+                            &self.ctx.bc_buf[args_start..args_start + nargs],
+                        );
+                        self.ctx.funcall_general_with_root(root, func_val, args)
+                    }
+                }
+            }
+            _ => {
+                let args = LispArgVec::from_slice(&self.ctx.bc_buf[args_start..args_start + nargs]);
+                self.ctx.funcall_general_with_root(root, func_val, args)
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn call_function_untraced_owned(
+        &mut self,
+        func_val: Value,
+        args: LispArgVec,
+    ) -> EvalResult {
+        match func_val.kind() {
+            // Fast path: bytecoded calls dispatch through the shared JIT
+            // tier-up seam (Context::execute_bytecode_call) — matching GNU's
+            // CLOSUREP → goto setup_frame shape when the plan says interpret,
+            // and running native code once the callee is hot. Routing the
+            // VM's own call path through the seam is what lets functions
+            // called ONLY from compiled code tier up at all.
+            ValueKind::Veclike(VecLikeType::ByteCode) => {
+                let bc_data = func_val.get_bytecode_data().unwrap();
+                self.ctx.execute_bytecode_call(bc_data, args, func_val)
+            }
+            // A symbol whose live function cell is *directly* a byte-compiled
+            // function: resolve the cell once and dispatch straight to the
+            // bytecode entry, skipping funcall_general → apply_symbol_callable's
+            // second resolution (an FxHashMap probe) and re-dispatch. The
+            // byte-compiler calls its byte-compiled cconv/macroexp/bytecomp
+            // helpers constantly, so this slice is hot. Only the clean
+            // direct-bytecode case is taken; aliases, autoloads, advice wrappers,
+            // interpreted closures, macros and special forms have non-bytecode
+            // cells and fall through to the full generic dispatch unchanged. The
+            // cell is re-read live every call so redefinition is honored; the
+            // compiler-override guard mirrors resolve_stack_call_target. Both this
+            // and funcall_general converge on execute_bytecode_call, so behavior
+            // is identical minus the redundant resolution.
+            ValueKind::Symbol(sym_id) if !self.ctx.compiler_function_overrides_active() => {
+                match self.ctx.obarray.symbol_function_id(sym_id) {
+                    Some(cell)
+                        if matches!(cell.kind(), ValueKind::Veclike(VecLikeType::ByteCode)) =>
+                    {
+                        let bc_data = cell.get_bytecode_data().unwrap();
+                        self.ctx.execute_bytecode_call(bc_data, args, cell)
+                    }
+                    _ => self.ctx.funcall_general_untraced(func_val, args),
+                }
+            }
+            // Everything else: shared dispatch via funcall_general on Context.
+            // Matches GNU Emacs where exec_byte_code delegates to funcall_general.
+            _ => self.ctx.funcall_general_untraced(func_val, args),
+        }
+    }
+
+    /// JIT generic-call fast path: a SYMBOL callee that resolves to a plain
+    /// builtin dispatches at the Context level — no Vm construction (the
+    /// per-shim `Vm::from_context` zero-fills the call caches, so nothing is
+    /// gained by them here) and no scratch roots (an interned symbol callee
+    /// is obarray-rooted; the arguments are staged on the GC-traced bc_buf).
+    /// Returns `None` for anything else — non-symbol callees, bytecode/
+    /// lambda/alias/advice cells and compiler overrides — the caller then
+    /// takes the full Vm path.
+    /// Mirrors the spec shim's stage-2 ctx-level dispatch precedent.
+    #[doc(hidden)]
+    pub fn call_builtin_symbol_for_jit(
+        ctx: &mut crate::emacs_core::eval::Context,
+        func_val: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> Option<EvalResult> {
+        let sym_id = func_val.as_bare_symbol_id()?;
+        if ctx.compiler_function_overrides_active() {
+            return None;
+        }
+        let cell = ctx.obarray.symbol_function_id(sym_id);
+        let callee = match cell {
+            Some(value) => {
+                if !matches!(
+                    value.kind(),
+                    ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr)
+                ) {
+                    return None;
+                }
+                ResolvedBuiltinCallee::from_subr_value(value)?
+            }
+            None => ResolvedBuiltinCallee::from_static_symbol(sym_id)?,
+        };
+        // Inline ctx-level bytecode-call depth protocol (GNU's Bcall depth,
+        // floor-raise included) — the spec shim's stage-2 shape.
+        ctx.depth += 1;
+        if ctx.depth > ctx.max_depth {
+            if ctx.max_depth < 100 {
+                ctx.max_depth = 100;
+            }
+            // GNU raises a `max-lisp-eval-depth` below 100 before it
+            // re-checks (`src/eval.c:2604-2608`) and writes the DEFVAR_INT
+            // cell, so the raised value stays visible through the binding.
+            ctx.raise_lisp_eval_depth_floor();
+            if ctx.depth > ctx.max_depth {
+                return Some(Err(ctx.finish_lisp_depth_overflow(signal(
+                    "error",
+                    vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
+                ))));
+            }
+        }
+        let result =
+            Self::call_resolved_builtin_from_stack_args(ctx, func_val, args_start, nargs, callee);
+        ctx.depth -= 1;
+        Some(result)
+    }
+
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn call_resolved_builtin_from_stack_args(
+        ctx: &mut crate::emacs_core::eval::Context,
+        func_val: Value,
+        args_start: usize,
+        nargs: usize,
+        callee: ResolvedBuiltinCallee,
+    ) -> EvalResult {
+        let (sym_id, function, min_args, max_args) = callee.dispatch_parts();
+        let backtrace = ctx.push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
+        let result =
+            if nargs < min_args as usize || max_args.is_some_and(|max| nargs > max as usize) {
+                Err(signal(
+                    LispCondition::WrongNumberOfArguments,
+                    vec![callee.wrong_arity_value(), Value::fixnum(nargs as i64)],
+                ))
+            } else {
+                // The fixnum fast paths exist only for `+`/`logand`/`logior`/`logxor`,
+                // all registered as slice builtins; skip the four symbol compares for
+                // every fixed-arity call.
+                if matches!(function, Some(SubrFn::ManySlice(_)))
+                    && let Some(value) = Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
+                        ctx, sym_id, args_start, nargs,
+                    )
+                {
+                    return match ctx.pop_fast_bytecode_backtrace_frame(backtrace) {
+                        crate::emacs_core::eval::FastBytecodePop::Popped => Ok(value),
+                        // GNU's exit debugger replaces the value it is shown
+                        // (`src/bytecode.c:825-828`).
+                        crate::emacs_core::eval::FastBytecodePop::OwesDebugOnExit(frame) => {
+                            ctx.pop_bytecode_backtrace_token_with_result(frame, Ok(value))
+                        }
+                    };
+                }
+                match function {
+                    Some(function) => Self::dispatch_builtin_subr_from_stack_args_unchecked(
+                        ctx, function, args_start, nargs,
+                    ),
+                    None => Err(signal(
+                        LispCondition::VoidFunction,
+                        vec![Value::from_sym_id(sym_id)],
+                    )),
+                }
+            };
+        ctx.finish_traced_builtin_call(backtrace, result)
+    }
+
+    /// GNU's arithmetic-opcode arm: `Bplus` is `TOP = Fplus (2, &TOP)` — the
+    /// subr is called DIRECTLY, with no `record_in_backtrace`. Recording a
+    /// frame belongs to `Bcall` alone, so in GNU `+` never appears in a
+    /// backtrace raised inside an arithmetic opcode: `(+ x y)` on a symbol
+    /// reports `probe-fn(sym sym)`, not `#<subr +>(sym sym)`.
+    ///
+    /// Routing these opcodes through `call_function_from_stack_args` gave all
+    /// twenty-two of them a backtrace frame GNU does not have — checked
+    /// against the pinned GNU for `+ - * / < 1+ max` — and charged every
+    /// arithmetic operation a specpdl push and pop for it.
+    ///
+    /// Everything else matches the traced twin: the same resolved callee, the
+    /// same arity signal, the same `ManySlice` fixnum fast values, the same
+    /// signal dispatch on the way out.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn call_arith_builtin_from_stack_args(
+        &mut self,
+        func: &ByteCodeFunction,
+        pc: usize,
+        kind: ArithGenericKind,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        debug_assert_eq!(
+            nargs,
+            kind.arity(),
+            "{kind:?} takes {} operands",
+            kind.arity()
+        );
+        // Every one of the arithmetic opcodes' slow arms funnels through here,
+        // and they reach it only when the operands were NOT both fixnums — so
+        // recording the observed types costs the fixnum fast path nothing at
+        // all, and `FixnumOnly` (the zero slot) already means what the
+        // lowering assumes.
+        #[cfg(feature = "jit")]
+        {
+            // Feedback is an input to COMPILATION, so collect it only until a
+            // compile has read it. That is not a micro-optimization: on a body
+            // whose arithmetic is ALL non-fixnum this "slow" arm is the only
+            // arm, so `pidigits` was paying the recording on every arithmetic
+            // operation it performs — 1.4% of the row.
+            let rt = func.jit_runtime();
+            if rt.wants_numeric_feedback() {
+                // The one classification the deopt reoptimizer shares
+                // (`NumericFeedback::of_operands`).
+                let seen = crate::emacs_core::jit::NumericFeedback::of_operands(
+                    &self.ctx.bc_buf[args_start..args_start + nargs],
+                );
+                // `FixnumOnly` is the slot's zero state: nothing to record.
+                if seen != crate::emacs_core::jit::NumericFeedback::FixnumOnly {
+                    rt.record_numeric(pc, func.executable_ops().len(), seen);
+                }
+            }
+        }
+        // Value first: rebuilding `Ok(v)` from the value moves one word, where
+        // passing the whole result through moved 16 bytes over the callee's
+        // narrow tag and value stores.
+        match Self::call_arith_builtin_on_context(self.ctx, kind, args_start, nargs) {
+            Some(Ok(value)) => Ok(value),
+            Some(Err(flow)) => Err(flow),
+            // These are static subrs, so this is unreachable in practice; take
+            // the traced path rather than invent a dispatch for it.
+            None => self.call_function_from_stack_args(
+                <Value as SubrValueExt>::subr_from_sym_id(kind.builtin_id()),
+                args_start,
+                nargs,
+                true,
+            ),
+        }
+    }
+
+    /// The all-integer answer of an arithmetic opcode's slow arm, if it has
+    /// one: two fixnum-or-bignum operands of `+ - *` or a comparison, or one
+    /// of `1+`/`1-` (GNU's `Bplus` calls `Fplus (2, &TOP)` directly, and
+    /// `arith_driver` goes straight to `bignum_arith_driver`). The value
+    /// comes back in a register: no `bc_buf` staging, no subr resolution, no
+    /// dispatch layers, no `EvalResult` in memory. `None` for everything else
+    /// (a marker, a float, a non-number, any other opcode), which takes the
+    /// full builtin. Never signals, never runs Lisp, never reaches a safe
+    /// point, so the operands need no rooting.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn arith_integer_fast(kind: ArithGenericKind, args: &[Value]) -> Option<Value> {
+        let value = match (kind.integer_op()?, args) {
+            (IntegerOp::Binary(op), &[a, b]) => {
+                crate::emacs_core::builtins::integer_binary_fast(op, a, b)
+            }
+            (IntegerOp::Unary(op), &[a]) => crate::emacs_core::builtins::integer_unary_fast(op, a),
+            _ => None,
+        };
+        #[cfg(test)]
+        if value.is_some() {
+            ARITH_INTEGER_FAST_COUNT.with(|count| count.set(count.get() + 1));
+        }
+        value
+    }
+
+    /// The arithmetic opcodes' slow arm after feedback recording: the direct
+    /// all-integer answer ([`Self::arith_integer_fast`]), else the static
+    /// subr for `kind` ([`Self::call_arith_builtin_slow_on_context`]). Shared
+    /// with the JIT's generic arithmetic fallback (`neovm_jit_arith_generic`,
+    /// which tries the integer answer before staging its operands), so
+    /// compiled code reaches exactly what the interpreter does. `None` only
+    /// if the subr does not resolve.
+    #[inline]
+    #[doc(hidden)]
+    pub fn call_arith_builtin_on_context(
+        ctx: &mut crate::emacs_core::eval::Context,
+        kind: ArithGenericKind,
+        args_start: usize,
+        nargs: usize,
+    ) -> Option<EvalResult> {
+        if let Some(value) =
+            Self::arith_integer_fast(kind, &ctx.bc_buf[args_start..args_start + nargs])
+        {
+            return Some(Ok(value));
+        }
+        Self::call_arith_builtin_slow_on_context(ctx, kind, args_start, nargs)
+    }
+
+    /// The full builtin for `kind` on the `nargs` operands at
+    /// `ctx.bc_buf[args_start..]`: the static subr, no backtrace frame, then
+    /// the debugger check on a signal. `None` only if the subr does not
+    /// resolve.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn call_arith_builtin_slow_on_context(
+        ctx: &mut crate::emacs_core::eval::Context,
+        kind: ArithGenericKind,
+        args_start: usize,
+        nargs: usize,
+    ) -> Option<EvalResult> {
+        let func_val = <Value as SubrValueExt>::subr_from_sym_id(kind.builtin_id());
+        let callee = ResolvedBuiltinCallee::from_subr_value(func_val)?;
+        let (sym_id, function, min_args, max_args) = callee.dispatch_parts();
+        if nargs < min_args as usize || max_args.is_some_and(|max| nargs > max as usize) {
+            return Some(ctx.dispatch_signal_flow_cold(signal(
+                LispCondition::WrongNumberOfArguments,
+                vec![callee.wrong_arity_value(), Value::fixnum(nargs as i64)],
+            )));
+        }
+        if matches!(function, Some(SubrFn::ManySlice(_)))
+            && let Some(value) = Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
+                ctx, sym_id, args_start, nargs,
+            )
+        {
+            return Some(Ok(value));
+        }
+        let Some(function) = function else {
+            return Some(Self::arith_void_function_cold(ctx, sym_id));
+        };
+        // Value first: the success result is rebuilt from the value alone
+        // (a tag store and a value store, no wide copy of the builtin's
+        // result); a signal goes to the cold hook dispatch.
+        Some(
+            match Self::dispatch_builtin_subr_from_stack_args_unchecked(
+                ctx, function, args_start, nargs,
+            ) {
+                Ok(value) => Ok(value),
+                Err(flow) => ctx.dispatch_signal_flow_cold(flow),
+            },
+        )
+    }
+
+    /// [`Self::call_arith_builtin_on_context`] on a static subr with no Rust
+    /// entry: `void-function`, through the signal hook as every signal from
+    /// that arm.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn arith_void_function_cold(
+        ctx: &mut crate::emacs_core::eval::Context,
+        sym_id: SymId,
+    ) -> EvalResult {
+        ctx.dispatch_signal_flow_cold(signal(
+            LispCondition::VoidFunction,
+            vec![Value::from_sym_id(sym_id)],
+        ))
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn try_dispatch_builtin_subr_fast_value_from_stack_args(
+        ctx: &crate::emacs_core::eval::Context,
+        sym_id: SymId,
+        args_start: usize,
+        nargs: usize,
+    ) -> Option<Value> {
+        if sym_id == plus_sym_id() {
+            return Self::try_fast_fixnum_add_value_from_stack_args(ctx, args_start, nargs);
+        }
+        if sym_id == logand_sym_id() {
+            return Self::try_fast_fixnum_logand_value_from_stack_args(ctx, args_start, nargs);
+        }
+        if sym_id == logior_sym_id() {
+            return Self::try_fast_fixnum_logior_value_from_stack_args(ctx, args_start, nargs);
+        }
+        if sym_id == logxor_sym_id() {
+            return Self::try_fast_fixnum_logxor_value_from_stack_args(ctx, args_start, nargs);
+        }
+        None
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn try_fast_fixnum_add_value_from_stack_args(
+        ctx: &crate::emacs_core::eval::Context,
+        args_start: usize,
+        nargs: usize,
+    ) -> Option<Value> {
+        let args = &ctx.bc_buf;
+        match nargs {
+            0 => return Some(Value::fixnum(0)),
+            1 => {
+                let a = unsafe { args.get_unchecked(args_start) }.as_fixnum()?;
+                return Some(Value::make_int(a));
+            }
+            2 => {
+                let a = unsafe { args.get_unchecked(args_start) }.as_fixnum()?;
+                let b = unsafe { args.get_unchecked(args_start + 1) }.as_fixnum()?;
+                return Some(Value::make_int(a.checked_add(b)?));
+            }
+            3 => {
+                let a = unsafe { args.get_unchecked(args_start) }.as_fixnum()?;
+                let b = unsafe { args.get_unchecked(args_start + 1) }.as_fixnum()?;
+                let c = unsafe { args.get_unchecked(args_start + 2) }.as_fixnum()?;
+                let sum = a.checked_add(b)?;
+                return Some(Value::make_int(sum.checked_add(c)?));
+            }
+            4 => {
+                let a = unsafe { args.get_unchecked(args_start) }.as_fixnum()?;
+                let b = unsafe { args.get_unchecked(args_start + 1) }.as_fixnum()?;
+                let c = unsafe { args.get_unchecked(args_start + 2) }.as_fixnum()?;
+                let d = unsafe { args.get_unchecked(args_start + 3) }.as_fixnum()?;
+                let sum = a.checked_add(b)?;
+                let sum = sum.checked_add(c)?;
+                return Some(Value::make_int(sum.checked_add(d)?));
+            }
+            _ => {}
+        }
+        let mut acc = 0i64;
+        for idx in 0..nargs {
+            let next = unsafe { args.get_unchecked(args_start + idx) }.as_fixnum()?;
+            acc = acc.checked_add(next)?;
+        }
+        Some(Value::make_int(acc))
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn try_fast_fixnum_logand_value_from_stack_args(
+        ctx: &crate::emacs_core::eval::Context,
+        args_start: usize,
+        nargs: usize,
+    ) -> Option<Value> {
+        let args = &ctx.bc_buf;
+        let mut acc = if nargs == 0 {
+            -1
+        } else {
+            unsafe { args.get_unchecked(args_start) }.as_fixnum()?
+        };
+        for idx in 1..nargs {
+            let next = unsafe { args.get_unchecked(args_start + idx) }.as_fixnum()?;
+            acc &= next;
+        }
+        Some(Value::make_int(acc))
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn try_fast_fixnum_logior_value_from_stack_args(
+        ctx: &crate::emacs_core::eval::Context,
+        args_start: usize,
+        nargs: usize,
+    ) -> Option<Value> {
+        let args = &ctx.bc_buf;
+        let mut acc = if nargs == 0 {
+            0
+        } else {
+            unsafe { args.get_unchecked(args_start) }.as_fixnum()?
+        };
+        for idx in 1..nargs {
+            let next = unsafe { args.get_unchecked(args_start + idx) }.as_fixnum()?;
+            acc |= next;
+        }
+        Some(Value::make_int(acc))
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn try_fast_fixnum_logxor_value_from_stack_args(
+        ctx: &crate::emacs_core::eval::Context,
+        args_start: usize,
+        nargs: usize,
+    ) -> Option<Value> {
+        let args = &ctx.bc_buf;
+        let mut acc = if nargs == 0 {
+            0
+        } else {
+            unsafe { args.get_unchecked(args_start) }.as_fixnum()?
+        };
+        for idx in 1..nargs {
+            let next = unsafe { args.get_unchecked(args_start + idx) }.as_fixnum()?;
+            acc ^= next;
+        }
+        Some(Value::make_int(acc))
+    }
+
+    /// Call `func` on the `nargs` operands at `ctx.bc_buf[args_start..]`,
+    /// padding a fixed-arity subr's missing optionals with nil. Every arm's
+    /// call is in tail position, so its `EvalResult` is written straight into
+    /// this function's return slot: the vestigial `Option` this returned
+    /// (every arm was `Some`) made the arms meet before the `Some` and copy
+    /// the builtin's result 16 bytes wide right after its narrow tag and
+    /// value stores, a store-forwarding stall per builtin call.
+    #[doc(hidden)]
+    pub fn dispatch_builtin_subr_from_stack_args_unchecked(
+        ctx: &mut crate::emacs_core::eval::Context,
+        func: SubrFn,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        let args = &ctx.bc_buf;
+        macro_rules! stack_arg {
+            ($idx:expr) => {{
+                let idx = $idx;
+                if idx < nargs {
+                    unsafe { *args.get_unchecked(args_start + idx) }
+                } else {
+                    Value::NIL
+                }
+            }};
+        }
+        match func {
+            SubrFn::A0(func) => func(ctx),
+            SubrFn::A1(func) => {
+                let arg0 = stack_arg!(0);
+                func(ctx, arg0)
+            }
+            SubrFn::A2(func) => {
+                let arg0 = stack_arg!(0);
+                let arg1 = stack_arg!(1);
+                func(ctx, arg0, arg1)
+            }
+            SubrFn::A3(func) => {
+                let arg0 = stack_arg!(0);
+                let arg1 = stack_arg!(1);
+                let arg2 = stack_arg!(2);
+                func(ctx, arg0, arg1, arg2)
+            }
+            SubrFn::A4(func) => {
+                let arg0 = stack_arg!(0);
+                let arg1 = stack_arg!(1);
+                let arg2 = stack_arg!(2);
+                let arg3 = stack_arg!(3);
+                func(ctx, arg0, arg1, arg2, arg3)
+            }
+            SubrFn::A5(func) => {
+                let arg0 = stack_arg!(0);
+                let arg1 = stack_arg!(1);
+                let arg2 = stack_arg!(2);
+                let arg3 = stack_arg!(3);
+                let arg4 = stack_arg!(4);
+                func(ctx, arg0, arg1, arg2, arg3, arg4)
+            }
+            SubrFn::A6(func) => {
+                let arg0 = stack_arg!(0);
+                let arg1 = stack_arg!(1);
+                let arg2 = stack_arg!(2);
+                let arg3 = stack_arg!(3);
+                let arg4 = stack_arg!(4);
+                let arg5 = stack_arg!(5);
+                func(ctx, arg0, arg1, arg2, arg3, arg4, arg5)
+            }
+            SubrFn::A7(func) => {
+                let arg0 = stack_arg!(0);
+                let arg1 = stack_arg!(1);
+                let arg2 = stack_arg!(2);
+                let arg3 = stack_arg!(3);
+                let arg4 = stack_arg!(4);
+                let arg5 = stack_arg!(5);
+                let arg6 = stack_arg!(6);
+                func(ctx, arg0, arg1, arg2, arg3, arg4, arg5, arg6)
+            }
+            SubrFn::A8(func) => {
+                let arg0 = stack_arg!(0);
+                let arg1 = stack_arg!(1);
+                let arg2 = stack_arg!(2);
+                let arg3 = stack_arg!(3);
+                let arg4 = stack_arg!(4);
+                let arg5 = stack_arg!(5);
+                let arg6 = stack_arg!(6);
+                let arg7 = stack_arg!(7);
+                func(ctx, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+            }
+            SubrFn::Many(func) => {
+                let args = args[args_start..args_start + nargs].to_vec();
+                func(ctx, args)
+            }
+            SubrFn::ManyNoContext(func) => {
+                let args = args[args_start..args_start + nargs].to_vec();
+                func(args)
+            }
+            SubrFn::ManySlice(func) => {
+                Self::call_many_slice_subr_from_stack_args(ctx, func, args_start, nargs)
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn call_many_slice_subr_from_stack_args(
+        ctx: &mut crate::emacs_core::eval::Context,
+        func: crate::emacs_core::eval::subr_abi::SubrFnManySlice,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        let args = &ctx.bc_buf;
+        match nargs {
+            0 => func(ctx, &[]),
+            1 => {
+                let arg0 = args[args_start];
+                func(ctx, &[arg0])
+            }
+            2 => {
+                let arg0 = args[args_start];
+                let arg1 = args[args_start + 1];
+                func(ctx, &[arg0, arg1])
+            }
+            3 => {
+                let arg0 = args[args_start];
+                let arg1 = args[args_start + 1];
+                let arg2 = args[args_start + 2];
+                func(ctx, &[arg0, arg1, arg2])
+            }
+            4 => {
+                let arg0 = args[args_start];
+                let arg1 = args[args_start + 1];
+                let arg2 = args[args_start + 2];
+                let arg3 = args[args_start + 3];
+                func(ctx, &[arg0, arg1, arg2, arg3])
+            }
+            5 => {
+                let arg0 = args[args_start];
+                let arg1 = args[args_start + 1];
+                let arg2 = args[args_start + 2];
+                let arg3 = args[args_start + 3];
+                let arg4 = args[args_start + 4];
+                func(ctx, &[arg0, arg1, arg2, arg3, arg4])
+            }
+            6 => {
+                let arg0 = args[args_start];
+                let arg1 = args[args_start + 1];
+                let arg2 = args[args_start + 2];
+                let arg3 = args[args_start + 3];
+                let arg4 = args[args_start + 4];
+                let arg5 = args[args_start + 5];
+                func(ctx, &[arg0, arg1, arg2, arg3, arg4, arg5])
+            }
+            7 => {
+                let arg0 = args[args_start];
+                let arg1 = args[args_start + 1];
+                let arg2 = args[args_start + 2];
+                let arg3 = args[args_start + 3];
+                let arg4 = args[args_start + 4];
+                let arg5 = args[args_start + 5];
+                let arg6 = args[args_start + 6];
+                func(ctx, &[arg0, arg1, arg2, arg3, arg4, arg5, arg6])
+            }
+            8 => {
+                let arg0 = args[args_start];
+                let arg1 = args[args_start + 1];
+                let arg2 = args[args_start + 2];
+                let arg3 = args[args_start + 3];
+                let arg4 = args[args_start + 4];
+                let arg5 = args[args_start + 5];
+                let arg6 = args[args_start + 6];
+                let arg7 = args[args_start + 7];
+                func(ctx, &[arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7])
+            }
+            _ => {
+                let args = LispArgVec::from_slice(&args[args_start..args_start + nargs]);
+                func(ctx, &args)
+            }
+        }
+    }
+
+    /// Resolve one ordinary bytecode `Call` and, when possible, prove that it
+    /// can enter the current interpreter driver without repeating tier or
+    /// `setup_frame` classification in dispatch.
+    ///
+    /// Uses the current owner's main access path. The receiver remains the
+    /// original synchronous VM; no detached World projection is retained.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn resolve_interpreter_stack_call_target(
+        &mut self,
+        func_val: Value,
+        nargs: usize,
+    ) -> ResolvedStackCallTarget {
+        let function_epoch = self.ctx.obarray.function_epoch();
+        // No `compiler-function-overrides` test in front of the probe: an
+        // entry is written only while the overrides are inactive, and every
+        // change of that flag bumps the function epoch
+        // (`sync_cached_runtime_binding_by_id`), so an entry whose epoch still
+        // matches was proven under the current, inactive state.  The symbol
+        // cache's hit path in `resolve_stack_call_target` rests on the same
+        // argument.
+        if let Some(call) = self
+            .recent_interpreter_call
+            .get(func_val, nargs, function_epoch)
+        {
+            return ResolvedStackCallTarget::Interpreter { call };
+        }
+
+        let compiler_overrides_active = self.ctx.compiler_function_overrides_active();
+        let target = self.resolve_stack_call_target(func_val);
+        let ResolvedStackCallTarget::ByteCode { callee } = target else {
+            return target;
+        };
+        if !self.uses_interpreter_only_tier()
+            || !self.can_enter_interpreter_frame_iteratively(callee.code(), nargs)
+        {
+            return target;
+        }
+
+        let call = PreparedInterpreterCall::new(callee);
+        if !compiler_overrides_active && func_val.as_bare_symbol_id().is_some() {
+            self.recent_interpreter_call
+                .replace(func_val, nargs, function_epoch, call);
+        }
+        ResolvedStackCallTarget::Interpreter { call }
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn uses_interpreter_only_tier(&self) -> bool {
+        #[cfg(feature = "jit")]
+        {
+            self.bytecode_tier_policy == BytecodeTierPolicy::InterpreterOnly
+                || self.bcall_cache_forced
+        }
+        #[cfg(not(feature = "jit"))]
+        {
+            true
+        }
+    }
+
+    /// MEASURED DEAD END (2026-09-11): splitting this into an
+    /// `#[inline(always)]` cache probe plus an out-of-line miss half does
+    /// remove the frame -- the probe drops from 39 to 22 Ir over 55,851 calls
+    /// per org-editing operation, worth -0.95M/op there. It is still a net
+    /// loss, because `run_loop` is front-end bound: rust-lsp-typing came back
+    /// at 1.0009x the INSTRUCTIONS and 1.0712x the CYCLES, and 1.0702x the
+    /// per-edit CPU time. Same work, 7% slower, from one more inlined body in
+    /// the dispatch loop.
+    ///
+    /// The corollary is the useful part: the way to close the 2.43x gap against
+    /// GNU's `exec_byte_code` is not to inline more into this loop. Measure
+    /// cycles, not just instructions, for anything that changes its size.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn resolve_stack_call_target(&mut self, func_val: Value) -> ResolvedStackCallTarget {
+        match func_val.kind() {
+            ValueKind::Veclike(VecLikeType::ByteCode) => ResolvedStackCallTarget::ByteCode {
+                callee: ResolvedByteCodeCallee::from_direct_value(func_val),
+            },
+            ValueKind::Symbol(sym_id) => {
+                let function_epoch = self.ctx.obarray.function_epoch();
+                if let Some(target) = self
+                    .ctx
+                    .symbol_bytecode_call_cache
+                    .get(sym_id, function_epoch)
+                {
+                    return target;
+                }
+                // A change of `compiler_function_overrides` bumps the function
+                // epoch, so nothing cached under the previous state can hit
+                // above; only the miss path needs the check.
+                if self.ctx.compiler_function_overrides_active() {
+                    return ResolvedStackCallTarget::Generic;
+                }
+                match self.ctx.obarray.symbol_function_id(sym_id) {
+                    Some(value) => {
+                        let Some(callee) = ResolvedByteCodeCallee::from_live_function_cell(value)
+                        else {
+                            return if matches!(
+                                value.kind(),
+                                ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr)
+                            ) {
+                                match ResolvedBuiltinCallee::from_subr_value(value) {
+                                    Some(callee) => self
+                                        .ctx
+                                        .symbol_bytecode_call_cache
+                                        .insert_builtin(sym_id, function_epoch, callee),
+                                    None => ResolvedStackCallTarget::Generic,
+                                }
+                            } else {
+                                ResolvedStackCallTarget::Generic
+                            };
+                        };
+                        self.ctx.symbol_bytecode_call_cache.insert_bytecode(
+                            sym_id,
+                            function_epoch,
+                            callee,
+                        );
+                        ResolvedStackCallTarget::ByteCode { callee }
+                    }
+                    // GNU bytecode.c:Bcall resolves a symbol's live function
+                    // cell and calls SUBRP function cells directly. Use the
+                    // same resolved subr object here instead of consulting the
+                    // static table again on the hot path.
+                    None => match ResolvedBuiltinCallee::from_static_symbol(sym_id) {
+                        Some(callee) => self.ctx.symbol_bytecode_call_cache.insert_builtin(
+                            sym_id,
+                            function_epoch,
+                            callee,
+                        ),
+                        None => ResolvedStackCallTarget::Generic,
+                    },
+                }
+            }
+            ValueKind::Veclike(VecLikeType::Subr) | ValueKind::Subr(_) => {
+                ResolvedBuiltinCallee::from_subr_value(func_val)
+                    .map_or(ResolvedStackCallTarget::Generic, |callee| {
+                        ResolvedStackCallTarget::Builtin { callee }
+                    })
+            }
+            _ => ResolvedStackCallTarget::Generic,
+        }
+    }
+
+    /// vm-profile only: classify how THIS `Op::Call` callee resolves on the
+    /// current dispatch path, without perturbing it — a read-only peek that
+    /// mirrors `resolve_stack_call_target` + `call_function_untraced_owned`'s
+    /// kind tests. Returns (per-site callee key, CK_* class). Classified
+    /// BEFORE the call so the pre-call state is what is counted.
+    #[cfg(feature = "vm-profile")]
+    #[doc(hidden)]
+    pub fn vm_profile_classify_call(&self, func_val: Value) -> (u64, u8) {
+        use vm_profile::*;
+        match func_val.kind() {
+            ValueKind::Veclike(VecLikeType::ByteCode) => (SITE_KEY_CLOSURE_VAL, CK_CLOSURE_VAL),
+            ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr) => {
+                (SITE_KEY_SUBR_VAL, CK_SUBR_VAL)
+            }
+            ValueKind::Symbol(sym_id) => {
+                let key = site_key_for_symbol(sym_id);
+                if self.ctx.compiler_function_overrides_active() {
+                    return (key, CK_OTHER_SYM);
+                }
+                let global_subr = || {
+                    if lookup_global_subr_entry(sym_id).is_some() {
+                        CK_BUILTIN_SYM
+                    } else {
+                        CK_OTHER_SYM
+                    }
+                };
+                let kind = match self.ctx.obarray.symbol_function_id(sym_id) {
+                    Some(cell)
+                        if matches!(
+                            cell.kind(),
+                            ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr)
+                        ) =>
+                    {
+                        CK_BUILTIN_SYM
+                    }
+                    Some(cell)
+                        if matches!(cell.kind(), ValueKind::Veclike(VecLikeType::ByteCode)) =>
+                    {
+                        CK_CLOSURE_SYM
+                    }
+                    Some(cell) if cell.is_nil() => global_subr(),
+                    None => global_subr(),
+                    _ => CK_OTHER_SYM,
+                };
+                (key, kind)
+            }
+            _ => (SITE_KEY_OTHER_VAL, CK_OTHER_VAL),
+        }
+    }
+
+    /// vm-profile only: classify which branch of `fast_path_var_ref`/
+    /// `lookup_var_id` this `Op::VarRef` read takes (read-only mirror of those
+    /// branches). Returns (VR_* class, resolution-crossed-an-alias).
+    #[cfg(feature = "vm-profile")]
+    #[doc(hidden)]
+    pub fn vm_profile_classify_varref(&self, name_id: SymId) -> (u8, bool) {
+        use neovm_value::symbol::SymbolRedirect;
+        use vm_profile::*;
+        let ob = &self.ctx.obarray;
+        let Some(sym) = ob.get_by_id(name_id) else {
+            return (VR_SLOW_OTHER, false);
+        };
+        if let Some(val) = sym.plain_value() {
+            if !val.is_unbound() {
+                if !val.is_nil() {
+                    return (VR_PLAIN, false);
+                }
+                if let Some(dedicated) =
+                    neovm_edit::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id)
+                    && let Some(buf) = self.ctx.edit.buffers.current_buffer()
+                    && !dedicated.read(buf).is_nil()
+                {
+                    return (VR_PLAIN_NIL_BLV, false);
+                }
+                return (VR_PLAIN_NIL, false);
+            }
+        }
+        let resolved =
+            match crate::emacs_core::builtins::symbols::resolve_variable_alias_id_in_obarray(
+                ob, name_id,
+            ) {
+                Ok(id) => id,
+                Err(_) => return (VR_SLOW_OTHER, false),
+            };
+        let via_alias = resolved != name_id;
+        let class = match ob.get_by_id(resolved).map(|s| s.redirect()) {
+            Some(SymbolRedirect::Localized) => VR_LOCALIZED,
+            Some(SymbolRedirect::Forwarded) => VR_FORWARDED,
+            _ => VR_SLOW_OTHER,
+        };
+        (class, via_alias)
+    }
+
+    /// The whole body of `resume_flow!`, out of line.
+    ///
+    /// Every dispatch site that can signal expanded this inline. Twelve sites
+    /// at ~2,900 bytes each made it 34,875 of `run_loop`'s 148,064 bytes -- for
+    /// a path worth ~0.4K Ir per org-editing operation. GNU's entire
+    /// `exec_byte_code` is 17,530 bytes (and GCC splits a `.cold` part out of
+    /// even that), and this loop is front-end bound: one extra inlined body in
+    /// it measured 7.1% more CYCLES at 1.0009x the instructions. So the bytes
+    /// are the cost here, not the branch.
+    ///
+    /// `resume_nonlocal` ignores its `_func` argument, so the frame's code is
+    /// re-derived from `callers` rather than threaded in -- passing it would
+    /// hold `callers` borrowed across the `&mut` uses below.
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)] // one per loop local the cold path touches
+    #[doc(hidden)]
+    pub fn resume_flow_out_of_line(
+        &mut self,
+        pc_local: &mut usize,
+        osr_tried: bool,
+        quitcounter: u8,
+        driver_quitcounter: &mut u8,
+        aux_stack: &mut InterpreterFrameAuxStack,
+        callers: &mut InterpreterCallerStack,
+        flow: Flow,
+    ) -> ResumeFlowOutcome {
+        // All successful dispatch stays in run_loop unchanged. The operands of
+        // failed pure/builtin opcodes remain on bc_buf; car/cdr popped their
+        // operand, whose identity is retained by the wrong-type signal itself.
+        let func = callers.active().function.code();
+        let flow = match func.executable_ops().get(pc_local.saturating_sub(1)) {
+            Some(op @ (Op::Car | Op::Cdr)) => {
+                if let FlowRef::Signal(sig) = flow.kind()
+                    && let Some(value) = sig.data.get(1).copied()
+                {
+                    let inline = match op {
+                        Op::Car => InlineErrorOp::Car,
+                        _ => InlineErrorOp::Cdr,
+                    };
+                    flow.with_bytecode_error_backtrace(inline, &[value])
+                } else {
+                    flow
+                }
+            }
+            Some(op @ (Op::Nth | Op::Elt | Op::Setcar | Op::Setcdr | Op::Aref)) => {
+                let inline = match op {
+                    Op::Nth => InlineErrorOp::Nth,
+                    Op::Elt => InlineErrorOp::Elt,
+                    Op::Setcar => InlineErrorOp::Setcar,
+                    Op::Setcdr => InlineErrorOp::Setcdr,
+                    _ => InlineErrorOp::Aref,
+                };
+                let len = self.ctx.bc_buf.len();
+                flow.with_bytecode_error_backtrace(
+                    inline,
+                    &self.ctx.bc_buf[len.saturating_sub(2)..],
+                )
+            }
+            Some(Op::Aset) => {
+                let len = self.ctx.bc_buf.len();
+                flow.with_bytecode_error_backtrace(
+                    InlineErrorOp::Aset,
+                    &self.ctx.bc_buf[len.saturating_sub(3)..],
+                )
+            }
+            _ => flow,
+        };
+        let resume = {
+            let func = callers.active().function.code();
+            let aux = aux_stack.current_mut();
+            self.resume_nonlocal(func, pc_local, &mut aux.handlers, &mut aux.bind_stack, flow)
+        };
+        match resume {
+            Ok(()) => ResumeFlowOutcome::ResumeOp,
+            Err(flow) => {
+                callers
+                    .active_mut()
+                    .save_execution_state(*pc_local, osr_tried);
+                *driver_quitcounter = quitcounter;
+                match self.complete_interpreter_frame_chain(callers, aux_stack, Err(flow)) {
+                    InterpreterFrameCompletion::Resume => ResumeFlowOutcome::ResumeFrame,
+                    InterpreterFrameCompletion::Exit(result) => ResumeFlowOutcome::Exit(result),
+                }
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn resume_nonlocal(
+        &mut self,
+        _func: &ByteCodeFunction,
+        pc: &mut usize,
+        handlers: &mut HandlerStack,
+        bind_stack: &mut BindStack,
+        flow: Flow,
+    ) -> Result<(), Flow> {
+        let flow = flow.into_kind();
+        match flow {
+            // Neither is resumable inside the VM: a blocked thread and a
+            // shutdown both unwind past every handler this frame owns.
+            FlowKind::ThreadBlocked(_) | FlowKind::Shutdown(_) => Err(Flow::from_kind(flow)),
+            FlowKind::Throw(thrown) => {
+                let (tag, value) = (thrown.tag, thrown.value);
+                let selected_resume = self
+                    .ctx
+                    .matching_catch_resume_with_symbols(&tag, thrown.symbol_mode());
+                if let Some(ResumeTarget::VmCatch {
+                    target,
+                    stack_len,
+                    spec_depth,
+                    bind_stack_len,
+                    ..
+                }) = unwind_handlers_to_selected_resume(
+                    handlers,
+                    &mut self.ctx.condition_stack,
+                    selected_resume.as_ref(),
+                ) {
+                    let root_scope = self.ctx.save_vm_roots();
+                    self.ctx.push_vm_frame_root(tag);
+                    self.ctx.push_vm_frame_root(value);
+                    let unwind = self.ctx.unbind_to_with_result(spec_depth, Ok(Value::NIL));
+                    bind_stack.truncate(bind_stack_len);
+                    if let Err(flow) = unwind {
+                        self.ctx.restore_vm_roots(root_scope);
+                        return self.resume_nonlocal(_func, pc, handlers, bind_stack, flow);
+                    }
+                    self.ctx.bc_buf.truncate(stack_len);
+                    self.ctx.bc_buf.push(value);
+                    self.ctx.restore_vm_roots(root_scope);
+                    *pc = target as usize;
+                    return Ok(());
+                }
+
+                if selected_resume.is_some() {
+                    // Preserve the already selected equality policy and its owned roots.
+                    return Err(Flow::from_kind(FlowKind::Throw(thrown)));
+                }
+                tracing::debug!(
+                    target: "neomacs::throw_on_input",
+                    ?tag,
+                    ?value,
+                    condition_stack_len = self.ctx.condition_stack.len(),
+                    handler_stack_len = handlers.len(),
+                    "vm resume_nonlocal: no matching catch for throw"
+                );
+                Err(signal(LispCondition::NoCatch, vec![tag, value]))
+            }
+            FlowKind::Signal(sig) => {
+                // dispatch_signal_if_needed may call signal hooks and
+                // handler-bind handlers via eval.apply(), which can trigger
+                // GC.  We must root the current frame so values survive
+                // collection.
+                let mut sig_extra = Vec::new();
+                Self::collect_flow_roots(&Flow::signal_boxed(sig.clone()), &mut sig_extra);
+                let sig = match self.with_frame_roots(_func, &sig_extra, |vm| {
+                    vm.ctx.dispatch_signal_if_needed(sig)
+                }) {
+                    Ok(sig) => sig,
+                    Err(flow) => {
+                        return self.resume_nonlocal(_func, pc, handlers, bind_stack, flow);
+                    }
+                };
+                if let Some(ResumeTarget::VmConditionCase {
+                    target,
+                    stack_len,
+                    spec_depth,
+                    bind_stack_len,
+                    ..
+                }) = unwind_handlers_to_selected_resume(
+                    handlers,
+                    &mut self.ctx.condition_stack,
+                    sig.selected_resume().as_ref(),
+                ) {
+                    let root_scope = self.ctx.save_vm_roots();
+                    self.ctx.push_vm_frame_root(Value::from_sym_id(sig.symbol));
+                    for value in sig.data.iter().copied() {
+                        self.ctx.push_vm_frame_root(value);
+                    }
+                    if let Some(raw_data) = sig.raw_data {
+                        self.ctx.push_vm_frame_root(raw_data);
+                    }
+                    let unwind = self.ctx.unbind_to_with_result(spec_depth, Ok(Value::NIL));
+                    bind_stack.truncate(bind_stack_len);
+                    if let Err(flow) = unwind {
+                        self.ctx.restore_vm_roots(root_scope);
+                        return self.resume_nonlocal(_func, pc, handlers, bind_stack, flow);
+                    }
+                    self.ctx.bc_buf.truncate(stack_len);
+                    self.ctx.bc_buf.push(make_signal_binding_value(&sig));
+                    self.ctx.restore_vm_roots(root_scope);
+                    *pc = target as usize;
+                    return Ok(());
+                }
+                Err(Flow::signal_boxed(sig))
+            }
+        }
+    }
+
+    /// `dispatch_vm_builtin` keyed by SYMBOL ID.
+    ///
+    /// The by-name sibling ends in `builtin_name_id(name)`, which is
+    /// `lookup_interned(name).unwrap_or_else(|| intern(name))` -- so calling it
+    /// with `resolve_sym(id)` is a complete `SymId -> &str -> SymId` round trip
+    /// through the global interner, per call, for an id the caller already
+    /// holds. `neovm_jit_named_builtin` did exactly that: 241,116 of
+    /// `dhrystone`'s `lookup_interned` calls came through here.
+    ///
+    /// Only the thirteen VM-special builtins need the name, because only they
+    /// are matched as strings; everything else goes straight to
+    /// `funcall_general`, which is what the by-name path would have reached
+    /// anyway.
+    #[doc(hidden)]
+    pub fn dispatch_vm_builtin_id(&mut self, id: SymId, args: impl Into<LispArgVec>) -> EvalResult {
+        if Self::vm_special_builtin_ids().contains(&id) {
+            return self.dispatch_vm_builtin(resolve_sym(id), args);
+        }
+        self.ctx
+            .funcall_general(<Value as SubrValueExt>::subr_from_sym_id(id), args.into())
+    }
+
+    #[doc(hidden)]
+    pub fn dispatch_vm_builtin(&mut self, name: &str, args: impl Into<LispArgVec>) -> EvalResult {
+        self.dispatch_vm_builtin_unrooted(name, args.into())
+    }
+
+    /// The builtins `dispatch_vm_builtin_unrooted` special-cases by NAME (VM-
+    /// level implementations that need `&mut Vm`); everything else is an
+    /// ordinary subr. Keyed by `SymId` so the hot dispatch below never resolves
+    /// the symbol to a string.
+    /// One `OnceLock` per FIXED builtin name, so a hot path never re-resolves
+    /// a name known at compile time. Mirrors `cached_symbol_id!` in
+    /// `runtime/eval`, which is not in scope here.
+    #[doc(hidden)]
+    pub fn cached_builtin_id(
+        name: &'static str,
+        cell: &'static std::sync::OnceLock<SymId>,
+    ) -> SymId {
+        *cell.get_or_init(|| intern(name))
+    }
+
+    #[doc(hidden)]
+    pub fn vm_special_builtin_ids() -> &'static [SymId; 13] {
+        static IDS: std::sync::OnceLock<[SymId; 13]> = std::sync::OnceLock::new();
+        IDS.get_or_init(|| crate::emacs_core::eval::VM_SPECIAL_BUILTIN_NAMES.map(intern))
+    }
+
+    /// Primitive opcode dispatch with operands still on the bytecode stack.
+    /// Unlike the Bcall specialization helper, this never arms a debugger call
+    /// or resolves the primitive's symbol through its function cell. GNU's
+    /// dedicated cases call C primitives directly even after advice or fset.
+    /// Keep its registry and rooted fallback outside the opcode dispatcher:
+    /// inlining them spills the unrelated hot Bcall frame-transition locals.
+    /// Primitive opcodes can be frequent, so this boundary is not cold.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn dispatch_vm_builtin_by_id_from_stack(
+        &mut self,
+        func: &ByteCodeFunction,
+        sym: SymId,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        if let Some(function) = Self::inline_builtin_function(sym) {
+            return self.call_inline_builtin(function, args_start, nargs);
+        }
+        let args: LispArgVec = self.ctx.bc_buf[args_start..args_start + nargs]
+            .iter()
+            .copied()
+            .collect();
+        self.with_frame_arg_roots(func, args, |vm, args| vm.dispatch_vm_builtin_id(sym, args))
+    }
+
+    /// Dispatch to builtin functions from the VM.
+    /// Dispatch an `Op::CallBuiltinSym` from the operand stack. Kept out of
+    /// `run_loop`'s body so the giant dispatch match stays small: a registered
+    /// builtin takes GNU's inline-opcode path (direct primitive call, no
+    /// backtrace frame, no arity check); everything else keeps the framed
+    /// [`Self::dispatch_vm_builtin_by_id_from_stack`] path.
+    /// Arguments live in `ctx.bc_buf[args_start..]`;
+    /// the caller truncates and pushes the result.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn dispatch_call_builtin_sym(
+        &mut self,
+        func: &ByteCodeFunction,
+        sym: SymId,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        // GNU-parity: opcodes 0140-0177 (decode.rs) dispatch *directly* to
+        // their C implementations (bytecode.c:1412-1545), bypassing the
+        // symbol's function cell and advice table. `(advice-add 'point ...)`
+        // deliberately does not fire when bytecode calls `(point)` via Bpoint;
+        // routing these through the function cell would make neomacs MORE
+        // advisable than GNU, breaking parity.
+        if let Some(function) = Self::inline_builtin_function(sym) {
+            return self.call_inline_builtin(function, args_start, nargs);
+        }
+        self.dispatch_vm_builtin_by_id_from_stack(func, sym, args_start, nargs)
+    }
+
+    /// The Rust primitive a GNU inline opcode calls directly (bytecode.c
+    /// `Bpoint`..`Bwiden`, `Bset_marker`..`Bdowncase`): the symbol's registered
+    /// builtin entry. `None` for the VM-owned specials, which need `self`, and
+    /// for anything not registered as a plain builtin; those keep the framed
+    /// path of [`Self::dispatch_vm_builtin_by_id_from_stack`].
+    #[inline]
+    #[doc(hidden)]
+    pub fn inline_builtin_function(sym: SymId) -> Option<SubrFn> {
+        crate::emacs_core::eval::inline_subr_function(sym)
+    }
+
+    /// Called only for an admitted cons when this driver's mutator observes
+    /// collection reads. Capture guards finish before a synchronous callback
+    /// returns; another mutator owns its own capture scopes.
+    /// Keep observation work outside the unobserved opcode's direct tail.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn cons_car_observed(value: Value) -> Value {
+        value.cons_car()
+    }
+
+    /// Same capture and cons-admission contract as [`Self::cons_car_observed`].
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn cons_cdr_observed(value: Value) -> Value {
+        value.cons_cdr()
+    }
+
+    /// GNU inline-opcode semantics: call the primitive on the operand-stack
+    /// arguments with no backtrace frame, no arity check and no eval-depth
+    /// accounting, then route a signal through the condition handlers exactly
+    /// as the framed path does.
+    /// GNU `Bpoint`: `make_fixnum (PT)` with no call at all.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn op_point(&mut self) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        match self.ctx.edit.buffers.current_buffer() {
+            Some(buf) => Ok(Value::from_fixnum(buf.point_position().into())),
+            None => Err(signal("error", vec![Value::string("No current buffer")])),
+        }
+    }
+    /// GNU `Bpoint_min`.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn op_point_min(&mut self) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        match self.ctx.edit.buffers.current_buffer() {
+            Some(buf) => Ok(Value::from_fixnum(buf.point_min_position().into())),
+            None => Err(signal("error", vec![Value::string("No current buffer")])),
+        }
+    }
+    /// GNU `Bpoint_max`.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn op_point_max(&mut self) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        match self.ctx.edit.buffers.current_buffer() {
+            Some(buf) => Ok(Value::from_fixnum(buf.point_max_position().into())),
+            None => Err(signal("error", vec![Value::string("No current buffer")])),
+        }
+    }
+    /// GNU `Bcurrent_buffer`.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn op_current_buffer(&mut self) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        Ok(match self.ctx.edit.buffers.current_buffer() {
+            Some(buf) => Value::make_buffer(buf.id()),
+            None => Value::NIL,
+        })
+    }
+    /// A fixed-arity subr of at most three arguments, called with its
+    /// operands read straight off the stack (absent optionals are nil, as
+    /// GNU `funcall_subr` fills them) — no by-symbol dispatch layers.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn call_fixed_builtin_direct(
+        ctx: &mut crate::emacs_core::eval::Context,
+        function: Option<SubrFn>,
+        sym: SymId,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        let arg = |i: usize| {
+            if i < nargs {
+                ctx.bc_buf[args_start + i]
+            } else {
+                Value::NIL
+            }
+        };
+        let (a0, a1, a2) = (arg(0), arg(1), arg(2));
+        let result = match function {
+            Some(SubrFn::A0(f)) => f(ctx),
+            Some(SubrFn::A1(f)) => f(ctx, a0),
+            Some(SubrFn::A2(f)) => f(ctx, a0, a1),
+            Some(SubrFn::A3(f)) => f(ctx, a0, a1, a2),
+            _ => Err(signal(
+                LispCondition::VoidFunction,
+                vec![Value::from_sym_id(sym)],
+            )),
+        };
+        match result {
+            Ok(value) => Ok(value),
+            Err(flow) => ctx.dispatch_signal_result_if_needed(Err(flow)),
+        }
+    }
+    #[doc(hidden)]
+    pub fn call_inline_builtin_from_stack(
+        ctx: &mut crate::emacs_core::eval::Context,
+        function: SubrFn,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        #[cfg(test)]
+        INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
+        // Value first (see `dispatch_builtin_subr_from_stack_args_unchecked`).
+        match Self::dispatch_builtin_subr_from_stack_args_unchecked(
+            ctx, function, args_start, nargs,
+        ) {
+            Ok(value) => Ok(value),
+            Err(flow) => ctx.dispatch_signal_flow_cold(flow),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn call_inline_builtin(
+        &mut self,
+        function: SubrFn,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        Self::call_inline_builtin_from_stack(self.ctx, function, args_start, nargs)
+    }
+
+    #[doc(hidden)]
+    pub fn dispatch_vm_builtin_unrooted(&mut self, name: &str, args: LispArgVec) -> EvalResult {
+        // VM-internal bytecode operations that are not real Elisp builtins.
+        match name {
+            "call-interactively" => return self.builtin_call_interactively_shared(&args),
+            "start-kbd-macro" => {
+                return crate::emacs_core::eval::kmacro_hooks::start_kbd_macro(
+                    &mut *self.ctx,
+                    args.into_vec(),
+                );
+            }
+            "end-kbd-macro" => {
+                return crate::emacs_core::eval::kmacro_hooks::end_kbd_macro(
+                    &mut *self.ctx,
+                    args.into_vec(),
+                );
+            }
+            "call-last-kbd-macro" => return self.builtin_call_last_kbd_macro_shared(&args),
+            "execute-kbd-macro" => return self.builtin_execute_kbd_macro_shared(&args),
+            "garbage-collect" => return self.builtin_garbage_collect_shared(&args),
+            "mapatoms" => return self.builtin_mapatoms_shared(&args),
+            "maphash" => return self.builtin_maphash_shared(&args),
+            "store-kbd-macro-event" => {
+                return crate::emacs_core::eval::kmacro_hooks::store_kbd_macro_event(
+                    &mut *self.ctx,
+                    args.into_vec(),
+                );
+            }
+            "cancel-kbd-macro-events" => {
+                return crate::emacs_core::builtins::builtin_cancel_kbd_macro_events(
+                    &mut *self.ctx,
+                    args.into_vec(),
+                );
+            }
+            "%%defvar" => {
+                if args.len() >= 2 {
+                    let sym_name = args[1].as_bare_symbol_name().unwrap_or("nil").to_string();
+                    if !self.ctx.variables().boundp_by_name(&sym_name) {
+                        self.ctx.store_variable_by_name(&sym_name, args[0]);
+                    }
+                    self.ctx.obarray.make_special(&sym_name);
+                    return Ok(Value::symbol(sym_name));
+                }
+                return Ok(Value::NIL);
+            }
+            "%%defconst" => {
+                if args.len() >= 2 {
+                    let sym = args[1];
+                    let sym_id = sym.as_bare_symbol_id().unwrap_or_else(|| intern("nil"));
+                    crate::emacs_core::data::set_default_internal(
+                        &mut *self.ctx,
+                        Value::from_sym_id(sym_id),
+                        args[0],
+                        neovm_value::symbol::SetInternalBind::Set,
+                    )?;
+                    self.ctx.obarray.make_special_id(sym_id);
+                    self.ctx.obarray.put_property_id(
+                        sym_id,
+                        intern("risky-local-variable"),
+                        Value::T,
+                    )?;
+                    return Ok(Value::from_sym_id(sym_id));
+                }
+                return Ok(Value::NIL);
+            }
+            "%%unimplemented-elc-bytecode" => {
+                return Err(signal(
+                    "error",
+                    vec![Value::string(
+                        "Compiled .elc bytecode execution is not implemented yet",
+                    )],
+                ));
+            }
+            _ => {}
+        }
+
+        // All real builtins go through funcall_general → dispatch_subr.
+        // This matches GNU Emacs where the bytecode VM delegates to
+        // funcall_general for everything except bytecoded closures.
+        self.ctx.funcall_general(
+            <Value as SubrValueExt>::subr_from_sym_id(Self::builtin_name_id(name)),
+            args,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn builtin_call_interactively_shared(&mut self, args: &[Value]) -> EvalResult {
+        crate::emacs_core::eval::interactive_registry::validate_call_interactively_args(args)?;
+        let command_identity =
+            crate::emacs_core::eval::call_interactively::CallInteractivelyCommandIdentity::capture(
+                self.ctx,
+            );
+        self.with_vm_root_scope(|vm| {
+            for value in args.iter().copied() {
+                vm.push_dynamic_vm_root(value);
+            }
+            for value in command_identity.values() {
+                vm.push_dynamic_vm_root(value);
+            }
+            let interactive_form = vm.call_function_with_roots(
+                crate::emacs_core::eval::interactive_registry::InteractiveFormSymbol::value(),
+                &[args[0]],
+            )?;
+            vm.push_dynamic_vm_root(interactive_form);
+            let mut plan =
+                crate::emacs_core::eval::call_interactively::plan_call_interactively_after_interactive_form_in_state(
+                    &vm.ctx.obarray,
+                    vm.ctx.read_command_keys(),
+                    args,
+                    interactive_form,
+                    command_identity,
+                    vm.ctx.symbol_mode(),
+                )?;
+            for value in plan.gc_roots() {
+                vm.push_dynamic_vm_root(value);
+            }
+            let (_function, call_args) =
+                crate::emacs_core::eval::call_interactively::resolve_call_interactively_target_and_args(
+                    vm.ctx,
+                    &mut plan,
+                )?;
+            for value in call_args.iter().copied() {
+                vm.push_dynamic_vm_root(value);
+            }
+            let invocation = plan.restore_for_invocation(vm.ctx);
+            let funcall_args = invocation.into_funcall_args(call_args);
+            vm.call_function_with_roots(Value::symbol("funcall-interactively"), &funcall_args)
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn builtin_garbage_collect_shared(&mut self, args: &[Value]) -> EvalResult {
+        builtins::expect_args("garbage-collect", args, 0)?;
+        if self.ctx.gc_inhibit_depth > 0 && neovm_value::hashtab::hash_test_parity_enabled() {
+            return Ok(Value::NIL);
+        }
+        self.ctx.gc_collect_exact();
+        crate::emacs_core::builtins_extra::builtin_garbage_collect_stats()
+    }
+
+    #[doc(hidden)]
+    pub fn builtin_mapatoms_shared(&mut self, args: &[Value]) -> EvalResult {
+        let (func, symbols) = crate::emacs_core::builtins::symbols::collect_mapatoms_symbols(
+            self.ctx,
+            args.to_vec(),
+        )?;
+        self.with_dynamic_vm_roots(|vm| {
+            vm.push_dynamic_vm_root(func);
+            // `symbols` contains immediate IDs backed by the append-only
+            // global symbol registry, not GC-managed heap pointers.
+            for sym in symbols {
+                vm.call_function1(func, sym)?;
+            }
+            Ok(Value::NIL)
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn builtin_maphash_shared(&mut self, args: &[Value]) -> EvalResult {
+        let (func, table) = neovm_value::hashtab::validate_maphash_args(args)?;
+        let callee = crate::emacs_core::builtins::maphash::MaphashCallee::resolve(func);
+        self.with_dynamic_vm_roots(|vm| {
+            vm.push_dynamic_vm_root(func);
+            vm.push_dynamic_vm_root(table);
+            let mut slot = 0_usize;
+            loop {
+                let Some((key, value)) = neovm_value::hashtab::maphash_entry_at_slot(table, slot)
+                else {
+                    if slot >= neovm_value::hashtab::maphash_slot_len(table) {
+                        break;
+                    }
+                    slot += 1;
+                    continue;
+                };
+                vm.push_dynamic_vm_root(key);
+                vm.push_dynamic_vm_root(value);
+                match callee {
+                    crate::emacs_core::builtins::maphash::MaphashCallee::Generic(function) => {
+                        vm.call_function2(function, key, value)?;
+                    }
+                    #[cfg(feature = "jit")]
+                    crate::emacs_core::builtins::maphash::MaphashCallee::ByteCode(function) => {
+                        vm.call_maphash_bytecode::<true>(function, key, value)?;
+                    }
+                    #[cfg(feature = "jit")]
+                    crate::emacs_core::builtins::maphash::MaphashCallee::UnobservedByteCode(
+                        function,
+                    ) => {
+                        vm.call_maphash_bytecode::<false>(function, key, value)?;
+                    }
+                }
+                slot += 1;
+            }
+            Ok(Value::NIL)
+        })
+    }
+
+    /// Keep the VM callback's existing backtrace and signal/pop protocol,
+    /// while handing an armed bytecode leaf two rooted local argument words.
+    /// Each activation is owned by this VM's mutator and publishes no cache.
+    #[cfg(feature = "jit")]
+    #[inline]
+    #[doc(hidden)]
+    pub fn call_maphash_bytecode<const OBSERVED: bool>(
+        &mut self,
+        function: Value,
+        key: Value,
+        value: Value,
+    ) -> EvalResult {
+        let bt_count = self.ctx.specpdl.len();
+        let args = [key, value];
+        self.ctx.push_backtrace_frame(function, &args);
+        let bc_data = if OBSERVED {
+            function.get_bytecode_data()
+        } else {
+            debug_assert!(!neovm_value::tagged::collection_reads::is_active());
+            function.get_bytecode_data_unobserved()
+        }
+        .expect("a selected bytecode callback");
+        let result = self.ctx.execute_bytecode_call_2(bc_data, &args, function);
+        let result = self.ctx.dispatch_signal_result_if_needed(result);
+        self.ctx
+            .pop_bytecode_backtrace_frame_with_result(bt_count, result)
+    }
+}
+
+impl<'a> crate::emacs_core::builtins::symbols::MacroexpandRuntime for Vm<'a> {
+    fn symbol_mode(&self) -> neovm_value::tagged::SymbolMode {
+        self.ctx.symbol_mode()
+    }
+    fn symbol_function_by_id(&self, symbol: SymId) -> Option<Value> {
+        crate::emacs_core::builtins::symbols::symbol_function_cell_in_obarray(
+            &self.ctx.obarray,
+            symbol,
+        )
+    }
+
+    fn autoload_do_load_macro(&mut self, autoload: Value, head: Value) -> Result<(), Flow> {
+        let args = vec![autoload, head, Value::symbol("macro")];
+        let _ = self.with_vm_root_scope(|vm| {
+            for value in args.iter().copied() {
+                vm.push_dynamic_vm_root(value);
+            }
+            crate::emacs_core::autoload::builtin_autoload_do_load_in_vm_runtime(vm.ctx, &args)
+        })?;
+        Ok(())
+    }
+
+    fn apply_macro_function(
+        &mut self,
+        form: Value,
+        function: Value,
+        args: Vec<Value>,
+        environment: Option<Value>,
+    ) -> Result<Value, Flow> {
+        let expand_start = std::time::Instant::now();
+        self.with_dynamic_vm_roots(move |vm| {
+            vm.push_dynamic_vm_root(form);
+            vm.push_dynamic_vm_root(function);
+            if let Some(environment) = environment {
+                vm.push_dynamic_vm_root(environment);
+            }
+            for value in args.iter().copied() {
+                vm.push_dynamic_vm_root(value);
+            }
+            // GNU `Fmacroexpand` applies macro expanders directly.  Only the
+            // ordinary `eval_sub` macro-call path specbinds
+            // `lexical-binding`; byte-compiled bytecomp/macroexp code depends
+            // on the caller's visible dynamic value while compiling source.
+            let expanded = vm.call_function(function, args)?;
+            vm.ctx
+                .note_runtime_macro_expansion(form, expand_start.elapsed());
+            Ok(expanded)
+        })
+    }
+}
+
+impl crate::emacs_core::builtins::higher_order::SortRoots for Vm<'_> {
+    type RootScope = crate::emacs_core::builtins::higher_order::SortRootScope;
+    type RootSlot = crate::emacs_core::builtins::higher_order::SortRootSlot;
+    type RootBatch = Vec<Self::RootSlot>;
+
+    fn set_sort_slot(&mut self, slot: &Self::RootSlot, value: Value) {
+        crate::emacs_core::builtins::higher_order::SortRoots::set_sort_slot(self.ctx, slot, value);
+    }
+
+    fn save_sort_roots(&self) -> Self::RootScope {
+        crate::emacs_core::builtins::higher_order::SortRoots::save_sort_roots(self.ctx)
+    }
+
+    fn restore_sort_roots(&mut self, scope: Self::RootScope) {
+        crate::emacs_core::builtins::higher_order::SortRoots::restore_sort_roots(self.ctx, scope);
+    }
+
+    fn root_sort_slot(&mut self, value: Value) -> Self::RootSlot {
+        crate::emacs_core::builtins::higher_order::SortRoots::root_sort_slot(self.ctx, value)
+    }
+
+    fn clear_sort_slot(&mut self, slot: &Self::RootSlot) {
+        crate::emacs_core::builtins::higher_order::SortRoots::clear_sort_slot(self.ctx, slot);
+    }
+
+    #[inline]
+    fn root_sort_batch(&mut self, values: impl Iterator<Item = Value>) -> Self::RootBatch {
+        crate::emacs_core::builtins::higher_order::SortRoots::root_sort_batch(self.ctx, values)
+    }
+
+    #[inline]
+    fn clear_sort_batch(&mut self, batch: &Self::RootBatch, range: std::ops::Range<usize>) {
+        crate::emacs_core::builtins::higher_order::SortRoots::clear_sort_batch(
+            self.ctx, batch, range,
+        )
+    }
+
+    fn root_sort_value(&mut self, value: Value) {
+        self.push_dynamic_vm_root(value);
+    }
+}
+
+impl crate::emacs_core::builtins::higher_order::SortRuntime for Vm<'_> {
+    fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow> {
+        self.with_vm_root_scope(|vm| {
+            vm.push_dynamic_vm_root(arg);
+            vm.call_function1(function, arg)
+        })
+    }
+
+    fn call_sort_function2(
+        &mut self,
+        function: Value,
+        arg0: Value,
+        arg1: Value,
+    ) -> Result<Value, Flow> {
+        self.with_vm_root_scope(|vm| {
+            vm.push_dynamic_vm_root(arg0);
+            vm.push_dynamic_vm_root(arg1);
+            vm.call_function2(function, arg0, arg1)
+        })
+    }
+
+    fn compare_sort_keys(
+        &mut self,
+        left: &Value,
+        right: &Value,
+    ) -> Result<std::cmp::Ordering, Flow> {
+        crate::emacs_core::builtins::symbols::compare_value_lt(self.ctx, left, right)
+    }
+}
+
+// -- Arithmetic helpers --
+
+pub(crate) fn condition_frame_resume(frame: ConditionFrame) -> ResumeTarget {
+    match frame {
+        ConditionFrame::Catch { resume, .. } | ConditionFrame::ConditionCase { resume, .. } => {
+            resume
+        }
+        ConditionFrame::HandlerBind { .. } | ConditionFrame::SkipConditions { .. } => {
+            unreachable!("VM handler stack only mirrors catch/condition-case frames")
+        }
+    }
+}
+
+fn unwind_handlers_to_selected_resume(
+    handlers: &mut HandlerStack,
+    condition_stack: &mut Vec<ConditionFrame>,
+    selected_resume: Option<&ResumeTarget>,
+) -> Option<ResumeTarget> {
+    while let Some(handler) = handlers.pop() {
+        match handler {
+            Handler::Condition => {
+                let resume = condition_frame_resume(
+                    condition_stack
+                        .pop()
+                        .expect("handler stack and condition stack diverged"),
+                );
+                if selected_resume.is_some_and(|selected| &resume == selected) {
+                    return Some(resume);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `Op::Switch`'s lookup: the jump table answers through its switch plan
+/// (see `LispHashTable::switch_target`; `neovm_jit_switch` is the same lookup
+/// compiled). Out of line so `run_loop` keeps one call here instead of the
+/// inlined plan and lookup paths.
+#[inline(never)]
+fn vm_switch_target(ht: &LispHashTable, dispatch: Value, swp: bool) -> Option<Value> {
+    ht.switch_target(dispatch, swp)
+}
+
+#[inline(never)]
+fn resolve_switch_target(func: &ByteCodeFunction, raw_addr: i64) -> Result<usize, Flow> {
+    // Keep proof handling behind this existing two-argument boundary: a
+    // live depth argument in the Switch arm spills the ops base in fat LTO.
+    if let Some(target) = func.verified_switch_pc(raw_addr) {
+        return target.ok_or_else(invalid_bytecode_flow);
+    }
+
+    let raw_addr = usize::try_from(raw_addr).map_err(|_| {
+        signal(
+            "error",
+            vec![Value::string(format!(
+                "invalid GNU switch target byte offset {}",
+                raw_addr
+            ))],
+        )
+    })?;
+
+    if let Some(offset_map) = func.executable_gnu_byte_offset_map() {
+        offset_map
+            .binary_search_by_key(&raw_addr, |entry| entry.byte_offset)
+            .map(|index| offset_map[index].instruction_index)
+            .map_err(|_| {
+                signal(
+                    "error",
+                    vec![Value::string(format!(
+                        "invalid GNU switch target byte offset {}",
+                        raw_addr
+                    ))],
+                )
+            })
+    } else {
+        Ok(raw_addr)
+    }
+}
+
+/// Extract a `SymId` from a bytecode constants vector entry without
+/// going through the global string interner.
+///
+/// `Op::VarRef` / `Op::VarSet` / `Op::VarBind` all reference variables
+/// by index into the function's constants table.  Each constant is
+/// already a `Value::Symbol(SymId)`, so we can extract the SymId via a
+/// pure tag inspection.  Going through `as_bare_symbol_name() -> &str ->
+/// intern() -> SymId` instead would acquire the global interner
+/// `RwLock` twice per opcode, which dominated debug-build runtime when
+/// the byte-compiler iterated over hot loops.
+///
+/// When `read-positioning-symbols` wraps constants as symbol-with-pos,
+/// we transparently unwrap to the bare symbol SymId.
+fn sym_id_at(constants: &[Value], idx: u16) -> SymId {
+    constants
+        .get(idx as usize)
+        .and_then(|v| {
+            v.as_bare_symbol_id().or_else(|| {
+                v.as_symbol_with_pos_sym()
+                    .and_then(|sym| sym.as_bare_symbol_id())
+            })
+        })
+        .unwrap_or_else(|| intern("nil"))
+}
+#[path = "vm_leaf.rs"]
+mod vm_leaf;
+
+// No producer until the JIT reads deopt chains back (P2.3 commit 4); the
+// F-I2 tests drive it from the running interpreter meanwhile.
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "resumed_chain.rs"]
+mod resumed_chain;
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(crate) use resumed_chain::{ChainBacktrace, ChainFrame, ChainLink, InlinedChainFrame};
+
+#[cfg(all(test, not(feature = "test-support")))]
+#[path = "tests/resumed_chain_probe.rs"]
+pub(crate) mod resumed_chain_probe;
+#[cfg(feature = "test-support")]
+#[path = "tests/resumed_chain_probe.rs"]
+pub mod resumed_chain_probe;
+#[cfg(feature = "jit")]
+pub(crate) use vm_leaf::render_vm_leaf_stats;
+
+#[cfg(test)]
+#[path = "tests/vm_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "tests/builtin_result_return_test.rs"]
+mod builtin_result_return_tests;
+
+#[cfg(test)]
+#[path = "tests/arith_integer_fast_path_test.rs"]
+mod arith_integer_fast_path_tests;
+
+#[cfg(test)]
+#[path = "tests/collection_capture_test.rs"]
+mod collection_capture_tests;
+
+#[cfg(test)]
+#[path = "tests/stack_pool_test.rs"]
+mod stack_pool_tests;
+
+#[cfg(test)]
+#[path = "tests/frame_bind_stack.rs"]
+mod frame_bind_stack_tests;
+
+#[cfg(test)]
+#[path = "tests/world_bases_test.rs"]
+mod world_bases_tests;
+
+#[cfg(test)]
+#[path = "tests/world_bases_admission_test.rs"]
+mod world_bases_admission_tests;
+
+#[cfg(test)]
+#[path = "tests/world_bases_call_reader_test.rs"]
+mod world_bases_call_reader_tests;
+
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "tests/p3sym_function_boundary_test.rs"]
+mod p3sym_function_boundary_tests;
+
+impl ArithGenericKind {
+    /// The builtin this kind's slow arm calls: the SAME cached symbol ids the
+    /// interpreter always used (`Negate` is `-` with one operand).
+    #[doc(hidden)]
+    pub fn builtin_id(self) -> SymId {
+        match self {
+            Self::Add => Vm::cached_builtin_id("+", &PLUS_ID),
+            Self::Sub | Self::Negate => Vm::cached_builtin_id("-", &MINUS_ID),
+            Self::Mul => Vm::cached_builtin_id("*", &TIMES_ID),
+            Self::Div => Vm::cached_builtin_id("/", &DIVIDE_ID),
+            Self::Rem => Vm::cached_builtin_id("%", &MODULO_ID),
+            Self::Max => Vm::cached_builtin_id("max", &MAX_ID),
+            Self::Min => Vm::cached_builtin_id("min", &MIN_ID),
+            Self::NumEq => Vm::cached_builtin_id("=", &NUMEQ_ID),
+            Self::Lt => Vm::cached_builtin_id("<", &LT_ID),
+            Self::Gt => Vm::cached_builtin_id(">", &GT_ID),
+            Self::Le => Vm::cached_builtin_id("<=", &LE_ID),
+            Self::Ge => Vm::cached_builtin_id(">=", &GE_ID),
+            Self::Add1 => Vm::cached_builtin_id("1+", &ADD1_ID),
+            Self::Sub1 => Vm::cached_builtin_id("1-", &SUB1_ID),
+        }
+    }
+}
+
+impl crate::emacs_core::eval::Context {
+    /// The JIT's armed builtin call (`neovm_jit_call_subr_spec`) without a
+    /// `Vm`: `subr_value` is the subr object the site was armed for, the args
+    /// sit on `bc_buf[args_start..args_start + nargs]`. Same observable steps
+    /// as [`Vm::call_spec_subr_stack`] — eval-depth accounting, a backtrace
+    /// frame over the stack span, the arity check, the builtin dispatch, the
+    /// signal hook, the fast pop — in one frame. The rare shapes (debugger
+    /// armed, a callee that is not a builtin subr) take the `Vm` path.
+    #[cfg(feature = "jit")]
+    #[doc(hidden)]
+    pub fn call_spec_subr_from_bc_stack(
+        &mut self,
+        sym_id: SymId,
+        subr_value: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        let entry = subr_call_entry_from_value(subr_value)
+            .map(|(_, entry)| entry)
+            .filter(|entry| entry.dispatch_kind == SubrDispatchKind::Builtin);
+        let (Some(entry), false) = (entry, self.debug_on_next_call_is_armed()) else {
+            return Vm::from_context(self)
+                .call_spec_subr_stack(sym_id, subr_value, args_start, nargs);
+        };
+        self.depth += 1;
+        if self.depth > self.max_depth
+            && let Err(flow) = Vm::from_context(self).bytecode_depth_exceeded()
+        {
+            return Err(self.finish_lisp_depth_overflow(flow));
+        }
+        let func_val = Value::from_sym_id(sym_id);
+        let backtrace = self.push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
+        let result = if nargs < entry.min_args as usize
+            || entry.max_args.is_some_and(|max| nargs > max as usize)
+        {
+            Err(signal(
+                LispCondition::WrongNumberOfArguments,
+                vec![subr_value, Value::fixnum(nargs as i64)],
+            ))
+        } else {
+            match entry.function {
+                Some(function) => Vm::dispatch_builtin_subr_from_stack_args_unchecked(
+                    self, function, args_start, nargs,
+                ),
+                None => Err(signal(LispCondition::VoidFunction, vec![func_val])),
+            }
+        };
+        let result = self.finish_traced_builtin_call(backtrace, result);
+        debug_assert!(self.depth > 0);
+        self.depth -= 1;
+        result
+    }
+}
+#[cfg(test)]
+#[path = "tests/manual_parameter_roots.rs"]
+mod manual_parameter_roots_tests;
+
+#[cfg(test)]
+#[path = "tests/sole_owner_cursor_test.rs"]
+mod sole_owner_cursor_tests;
+
+#[cfg(test)]
+#[path = "tests/aux_stack_drop_test.rs"]
+mod aux_stack_drop_tests;
+
+#[cfg(test)]
+#[path = "tests/arithmetic_shape_boundary_test.rs"]
+mod arithmetic_shape_boundary_tests;
+
+#[cfg(test)]
+#[path = "tests/cons_tagged_displacement_test.rs"]
+mod cons_tagged_displacement_tests;

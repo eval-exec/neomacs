@@ -1,17 +1,10 @@
-warning: variable does not need to be mutable
- --> tests/thread_safety_ui/obarray_writer_raw_blv.rs:4:9
-  |
-4 |     let mut writer = context.obarray_mut();
-  |         ----^^^^^^
-  |         |
-  |         help: remove this `mut`
-  |
-  = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
-
-error[E0596]: cannot borrow data in dereference of `ObarrayWriteAccess<'_>` as mutable
- --> tests/thread_safety_ui/obarray_writer_raw_blv.rs:5:22
+error[E0624]: method `blv_mut` is private
+ --> tests/thread_safety_ui/obarray_writer_raw_blv.rs:5:29
   |
 5 |     let _localized = writer.blv_mut(id);
-  |                      ^^^^^^ cannot borrow as mutable
+  |                             ^^^^^^^ private method
   |
-  = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `ObarrayWriteAccess<'_>`
+ ::: $WORKSPACE/crates/neovm-value/src/symbol/mod.rs
+  |
+  |     pub(crate) fn blv_mut(&mut self, id: SymId) -> Option<&mut LispBufferLocalValue> {
+  |     -------------------------------------------------------------------------------- private method defined here

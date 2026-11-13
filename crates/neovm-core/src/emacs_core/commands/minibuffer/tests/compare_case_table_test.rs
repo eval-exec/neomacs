@@ -1,13 +1,14 @@
 //! Completion primitives call GNU compare-strings with current buffer casing.
 
 use super::super::*;
-use crate::emacs_core::{casetab, chartable, eval::Context};
+use crate::emacs_core::{chartable, eval::Context};
 use crate::heap_types::LispString;
 
 fn context_with_mappings(mappings: &[(u32, u32)]) -> Context {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
-    let standard = casetab::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
+    let mut ctx = crate::test_utils::new_context();
+    let standard =
+        crate::emacs_core::casetab_entries::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
     let table = chartable::copy_char_table(standard).unwrap();
     let up = chartable::copy_char_table(table.as_char_table_obj().unwrap().extras.as_slice()[0])
         .unwrap();
@@ -15,7 +16,7 @@ fn context_with_mappings(mappings: &[(u32, u32)]) -> Context {
         chartable::ct_set_single(&up, code as i64, Value::fixnum(mapped as i64));
     }
     table.with_char_table_mut(|obj| obj.set_extra(0, up));
-    casetab::builtin_set_case_table(&mut ctx, vec![table]).unwrap();
+    crate::emacs_core::casetab_entries::builtin_set_case_table(&mut ctx, vec![table]).unwrap();
     ctx
 }
 
@@ -45,8 +46,11 @@ fn completion_compare_case_table_custom_equality() {
 #[test]
 fn completion_compare_case_table_unibyte_buffer() {
     let mut ctx = context_with_mappings(&[(0xe9, 0xc9)]);
-    let id = ctx.buffers.current_buffer_id().unwrap();
-    ctx.buffers.set_buffer_multibyte_flag(id, false).unwrap();
+    let id = ctx.edit.buffers.current_buffer_id().unwrap();
+    ctx.edit
+        .buffers
+        .set_buffer_multibyte_flag(id, false)
+        .unwrap();
     let string = LispString::from_utf8("é");
     let prefix = CompletionPrefix::from_lisp_string(&string);
     let completion = CompletionText::LispObject(Value::string("É"));
@@ -77,7 +81,8 @@ fn completion_compare_case_table_state_is_resolved_for_each_comparison() {
     assert!(
         completion_equals_with_parity(&mut ctx, &string, &prefix, &completion, true, true).unwrap()
     );
-    let current = casetab::builtin_current_case_table(&mut ctx, vec![]).unwrap();
+    let current =
+        crate::emacs_core::casetab_entries::builtin_current_case_table(&mut ctx, vec![]).unwrap();
     let up = current.as_char_table_obj().unwrap().extras.as_slice()[0];
     chartable::ct_set_single(&up, b'a' as i64, Value::fixnum(b'A' as i64));
     assert!(

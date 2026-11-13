@@ -4,7 +4,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 8 |     ThreadTransfer::<Mutator<'static>>::transfer(mutator);
   |                                         ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<Mutator<'static>>` due to unsatisfied trait bounds
   |
- ::: src/tagged/gc/mutator_registration/token.rs
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
   |
   | pub struct Mutator<'era> {
   | ------------------------ doesn't satisfy `Mutator<'static>: Send`

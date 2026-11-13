@@ -42,6 +42,16 @@ fn open_shared_dired(gnu: &mut TuiSession, neo: &mut TuiSession, dir: &std::path
     };
     gnu.read_until(Duration::from_secs(10), ready);
     neo.read_until(Duration::from_secs(20), ready);
+    // read_until is silent on timeout. Sending the next key into a listing
+    // that never rendered makes the following steps act on whatever buffer
+    // is on screen instead, and the failure then surfaces as an unrelated
+    // screen difference many keys later. Fail here, where the barrier is.
+    assert!(
+        ready(&gnu.text_grid()) && ready(&neo.text_grid()),
+        "the dired listing did not render in both editors\nGNU:\n{}\nNEO:\n{}",
+        gnu.text_grid().join("\n"),
+        neo.text_grid().join("\n")
+    );
     read_both(gnu, neo, Duration::from_secs(1));
 }
 
@@ -65,6 +75,14 @@ fn dired_goto_file(gnu: &mut TuiSession, neo: &mut TuiSession, file: &std::path:
     };
     gnu.read_until(Duration::from_secs(6), ready);
     neo.read_until(Duration::from_secs(8), ready);
+    // Same silent-timeout guard as open_shared_dired: the next RET decides
+    // which buffer is visited, so the goto must have completed first.
+    assert!(
+        ready(&gnu.text_grid()) && ready(&neo.text_grid()),
+        "dired-goto-file did not leave the minibuffer in both editors\nGNU:\n{}\nNEO:\n{}",
+        gnu.text_grid().join("\n"),
+        neo.text_grid().join("\n")
+    );
     read_both(gnu, neo, Duration::from_secs(1));
 }
 

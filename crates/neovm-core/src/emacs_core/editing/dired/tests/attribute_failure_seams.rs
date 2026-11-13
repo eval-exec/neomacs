@@ -8,8 +8,8 @@ fn vanished_entries_do_not_consume_count_and_the_scan_stops_after_the_next_accep
     std::fs::write(dir.path().join("live"), b"").unwrap();
     std::fs::write(dir.path().join("extra"), b"").unwrap();
     let path = LispString::from_unibyte(dir.path().to_str().unwrap().as_bytes().to_vec());
-    let mut ctx = Context::new();
-    let time = LispTimeOutput::from_context(&ctx).unwrap();
+    let mut ctx = crate::test_utils::new_context();
+    let time = crate::emacs_core::timefns::lisp_time_output_from_context(&ctx).unwrap();
     let syntax =
         crate::emacs_core::builtins::search::FastStringMatchSyntax::for_current_buffer(&ctx);
     let args = vec![
@@ -56,8 +56,8 @@ fn vanished_entries_do_not_consume_count_and_the_scan_stops_after_the_next_accep
 #[test]
 fn metadata_errors_preserve_gnu_error_categories_and_entry_name() {
     crate::test_utils::init_test_tracing();
-    let ctx = Context::new();
-    let time = LispTimeOutput::from_context(&ctx).unwrap();
+    let ctx = crate::test_utils::new_context();
+    let time = crate::emacs_core::timefns::lisp_time_output_from_context(&ctx).unwrap();
     let path = LispString::from_unibyte(b"/not-accessed/entry".to_vec());
     let name = LispString::from_unibyte(b"entry".to_vec());
     for errno in [libc::ENOENT, libc::ENOTDIR] {

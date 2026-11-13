@@ -599,6 +599,11 @@ pub struct FrameParams {
     pub right_divider_width: i32,
     /// Bottom window divider width in pixels (0 = disabled)
     pub bottom_divider_width: i32,
+    /// Whether this frame owns a separate minibuffer leaf after its root.
+    /// GNU `root_window->next` controls a bottommost leaf's divider even
+    /// when that sibling currently has zero height. Borrowed minibuffers do
+    /// not count, and a minibuffer-only root is not its own sibling.
+    pub has_minibuffer_sibling: bool,
     /// Window-divider face foreground color (sRGB pixel)
     pub divider_fg: u32,
     /// Window-divider-first-pixel face foreground color (sRGB pixel)

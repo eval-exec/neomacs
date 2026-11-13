@@ -4,7 +4,7 @@ use crate::display_row::face_state::DisplayRowExtendFace;
 #[cfg(test)]
 use crate::display_row::geometry::DisplayRowGeometryState;
 use crate::display_row::geometry::{DisplayRowMarker, DisplayRowStartMarker};
-use crate::display_source::DisplaySourceTextPosition;
+use crate::display_source::{DisplaySourceResumeCursor, DisplaySourceTextPosition};
 use crate::neovm_bridge::{LayoutBufferView, RustBufferAccess};
 use crate::types::LineWrapMode;
 use neomacs_display_protocol::types::Color;
@@ -13,10 +13,9 @@ use neovm_core::window::DisplayRowSnapshot;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct WordWrapBreakCandidate {
-    /// Typed window-slice position.  Keeping the relative byte index paired
-    /// with its absolute character position prevents a wrap checkpoint from
-    /// accidentally storing a buffer-absolute byte offset.
-    source_position: DisplaySourceTextPosition,
+    /// Typed window-slice position and insertion phase. Glyph state may retain
+    /// an overlay string even when its buffer anchor is the resume position.
+    source_cursor: DisplaySourceResumeCursor,
     display_point_count: usize,
     row_first_display_pos: Option<LispCharPos1>,
     row_last_display_pos: Option<LispCharPos1>,
@@ -500,7 +499,9 @@ impl WordWrapBreakCandidate {
         glyph_checkpoint: DisplayRowGlyphCheckpoint,
     ) {
         self.record_at(
-            DisplaySourceTextPosition::new(byte_idx, charpos),
+            DisplaySourceResumeCursor::AfterOverlayStrings(DisplaySourceTextPosition::new(
+                byte_idx, charpos,
+            )),
             display_point_count,
             row_display_positions,
             glyph_checkpoint,
@@ -511,14 +512,14 @@ impl WordWrapBreakCandidate {
 
     pub(crate) fn record_at(
         &mut self,
-        source_position: DisplaySourceTextPosition,
+        source_cursor: DisplaySourceResumeCursor,
         display_point_count: usize,
         row_display_positions: (Option<LispCharPos1>, Option<LispCharPos1>),
         glyph_checkpoint: DisplayRowGlyphCheckpoint,
         row_position: DisplayRowPosition,
         row_extend: Option<DisplayRowExtendFace>,
     ) {
-        self.source_position = source_position;
+        self.source_cursor = source_cursor;
         self.display_point_count = display_point_count;
         self.row_first_display_pos = row_display_positions.0;
         self.row_last_display_pos = row_display_positions.1;
@@ -538,16 +539,20 @@ impl WordWrapBreakCandidate {
 
     #[cfg(test)]
     pub(crate) fn byte_idx(&self) -> usize {
-        self.source_position.byte_idx()
+        self.source_cursor.position().byte_idx()
     }
 
     #[cfg(test)]
     pub(crate) fn charpos(&self) -> i64 {
-        self.source_position.charpos()
+        self.source_cursor.position().charpos()
     }
 
     pub(crate) fn source_position(self) -> DisplaySourceTextPosition {
-        self.source_position
+        self.source_cursor.position()
+    }
+
+    pub(crate) fn source_cursor(self) -> DisplaySourceResumeCursor {
+        self.source_cursor
     }
 
     pub(crate) fn display_point_count(&self) -> usize {
@@ -799,7 +804,9 @@ impl WordWrapRenderState {
     ) {
         self.record_candidate_at(
             ch,
-            DisplaySourceTextPosition::new(byte_idx, charpos),
+            DisplaySourceResumeCursor::AfterOverlayStrings(DisplaySourceTextPosition::new(
+                byte_idx, charpos,
+            )),
             display_point_count,
             row_display_positions,
             glyph_checkpoint,
@@ -812,7 +819,7 @@ impl WordWrapRenderState {
     pub(crate) fn record_candidate_at(
         &mut self,
         ch: char,
-        source_position: DisplaySourceTextPosition,
+        source_cursor: DisplaySourceResumeCursor,
         display_point_count: usize,
         row_display_positions: (Option<LispCharPos1>, Option<LispCharPos1>),
         glyph_checkpoint: DisplayRowGlyphCheckpoint,
@@ -821,7 +828,7 @@ impl WordWrapRenderState {
     ) {
         if self.can_record_candidate(ch) {
             self.candidate.record_at(
-                source_position,
+                source_cursor,
                 display_point_count,
                 row_display_positions,
                 glyph_checkpoint,

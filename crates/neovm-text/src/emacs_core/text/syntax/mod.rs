@@ -1,0 +1,8384 @@
+//! Syntax table system for the Elisp VM.
+//!
+//! Implements Emacs-compatible syntax tables with character classification,
+//! motion functions (forward/backward word, sexp scanning), and the
+//! `string-to-syntax` descriptor parser.
+
+use neovm_value::emacs_char::EmacsChar;
+use neovm_value::error::LispCondition;
+use neovm_value::symbol::CanonicalAccess;
+use std::cell::{Cell, RefCell};
+use std::ops::Deref;
+
+use strum::{EnumString, IntoStaticStr};
+
+use self::forwarded_var::GnuForwardedVariable;
+use super::text_host::TextHost;
+// The variable view is EditHost::Vars; its read methods live on
+// EditVariableRead, so method resolution on the projection needs it in scope.
+use neovm_edit::buffer::{
+    Buffer, BufferManager, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, LispCharPos1,
+    TextPropertyTable,
+};
+use neovm_edit::emacs_core::edit_host::EditVariableRead;
+use neovm_edit::emacs_core::textprop::CharPropertyResolver;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::heap_types::{GnuStringCharPos, LispString, StringCharacterCountKind};
+use neovm_value::value::{Value, ValueKind, list_to_vec};
+
+mod declared_string;
+pub(crate) mod forwarded_var;
+#[doc(hidden)]
+pub mod parse_cache;
+#[cfg(not(any(test, feature = "test-support")))]
+mod parse_loop;
+#[cfg(any(test, feature = "test-support"))]
+pub mod parse_loop;
+#[cfg(not(any(test, feature = "test-support")))]
+mod pps_propertize;
+#[cfg(any(test, feature = "test-support"))]
+pub mod pps_propertize;
+use parse_loop::{Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_parse_loop};
+
+/// The `syntax-table` property symbol, interned once.
+///
+/// GNU refers to this as the static `Qsyntax_table`. neomacs was rebuilding it
+/// with `Value::symbol("syntax-table")` at every use, which hashes a 12-byte
+/// name and walks the obarray -- on paths that run per property run, and in one
+/// case per character. `intern` shows at 2.31% of an org editing profile, where
+/// fontification creates many short property runs and so refills the run cache
+/// constantly.
+///
+/// Caches the `SymId` rather than the `Value`, matching `cached_symbol_id!` in
+/// eval.rs: an id is a plain index, so it cannot be invalidated by GC the way a
+/// cached pointer could.
+#[inline(always)]
+fn syntax_table_prop_symbol() -> Value {
+    use std::sync::OnceLock;
+    static SYMBOL: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
+    let id = if let Some(id) = SYMBOL.get() {
+        *id
+    } else {
+        *SYMBOL.get_or_init(|| neovm_value::intern::intern("syntax-table"))
+    };
+    Value::symbol(id)
+}
+
+#[inline]
+fn buffer_byte_to_char_pos(buf: &Buffer, byte_pos: EmacsBytePos) -> usize {
+    buf.emacs_byte_pos_to_char_pos_clamped(byte_pos).get()
+}
+
+#[inline]
+#[doc(hidden)]
+pub fn buffer_char_to_emacs_byte_pos(buf: &Buffer, char_pos: CharPos0) -> EmacsBytePos {
+    buf.char_pos_to_emacs_byte_pos_clamped(char_pos)
+}
+
+#[inline]
+fn offset_char_pos(base: CharPos0, idx: usize) -> CharPos0 {
+    base.add_len(CharLen::new(idx))
+}
+
+#[inline]
+fn char_pos_to_lisp_i64(char_pos: usize) -> i64 {
+    CharPos0::new(char_pos).to_lisp().as_i64()
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+#[derive(Clone, Copy)]
+struct BufferSyntaxChar {
+    ch: char,
+    start: EmacsBytePos,
+    end: EmacsBytePos,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy)]
+pub struct BufferSyntaxChar {
+    pub(crate) ch: char,
+    pub(crate) start: EmacsBytePos,
+    pub(crate) end: EmacsBytePos,
+}
+
+#[inline]
+fn buffer_syntax_char_after(buf: &Buffer, byte_pos: EmacsBytePos) -> Option<BufferSyntaxChar> {
+    let ch = buf.char_after_emacs_byte_pos(byte_pos)?;
+    let len = buf
+        .char_after_emacs_byte_len(byte_pos)
+        .map(|len| len.max(EmacsByteLen::new(1)))
+        .unwrap_or_else(|| EmacsByteLen::new(ch.len_utf8().max(1)));
+    Some(BufferSyntaxChar {
+        ch,
+        start: byte_pos,
+        end: byte_pos.add_len(len),
+    })
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[inline]
+fn buffer_syntax_char_before(buf: &Buffer, byte_pos: EmacsBytePos) -> Option<BufferSyntaxChar> {
+    // A byte below 0x80 is a whole character in a multibyte buffer (every
+    // byte of every other character, raw bytes included, is 0x80 or above)
+    // and in a unibyte one, so the character before is that byte. The
+    // general path below reaches the same answer with two backward steps
+    // (each re-reading the byte through the text backend) and a decode:
+    // ~200 instructions per character of a backward comment walk.
+    if byte_pos > EmacsBytePos::ZERO && byte_pos <= buf.total_emacs_byte_end_pos() {
+        let start = EmacsBytePos::new(byte_pos.get() - 1);
+        if let Some(byte) = buf.emacs_byte_at_pos(start)
+            && byte < 0x80
+        {
+            return Some(BufferSyntaxChar {
+                ch: byte as char,
+                start,
+                end: byte_pos,
+            });
+        }
+    }
+    let ch = buf.char_before_emacs_byte_pos(byte_pos)?;
+    let len = buf
+        .char_before_emacs_byte_len(byte_pos)
+        .map(|len| len.max(EmacsByteLen::new(1)))
+        .unwrap_or_else(|| EmacsByteLen::new(ch.len_utf8().max(1)));
+    Some(BufferSyntaxChar {
+        ch,
+        start: byte_pos.saturating_sub_len(len),
+        end: byte_pos,
+    })
+}
+
+#[inline]
+#[doc(hidden)]
+pub fn buffer_byte_to_lisp_pos(buf: &Buffer, byte_pos: EmacsBytePos) -> i64 {
+    buf.emacs_byte_pos_to_char_pos_clamped(byte_pos)
+        .to_lisp()
+        .as_i64()
+}
+
+#[inline]
+fn buffer_byte_char_delta(buf: &Buffer, from: usize, to: usize) -> i64 {
+    buffer_byte_to_char_pos(buf, EmacsBytePos::new(to)) as i64
+        - buffer_byte_to_char_pos(buf, EmacsBytePos::new(from)) as i64
+}
+
+thread_local! {
+    static STANDARD_SYNTAX_TABLE_OBJECT: RefCell<Option<Value>> = const { RefCell::new(None) };
+    static SYNTAX_CODE_OBJECTS: RefCell<Option<Value>> = const { RefCell::new(None) };
+    static STANDARD_SYNTAX_TABLE_HEAP: Cell<usize> = const { Cell::new(0) };
+    static SYNTAX_CODE_OBJECTS_HEAP: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Clear cached thread-local syntax table (must be called when heap changes).
+pub fn reset_syntax_thread_locals() {
+    STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = None);
+    SYNTAX_CODE_OBJECTS.with(|slot| *slot.borrow_mut() = None);
+    let heap_identity = neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
+    STANDARD_SYNTAX_TABLE_HEAP.with(|owner| owner.set(heap_identity));
+    SYNTAX_CODE_OBJECTS_HEAP.with(|owner| owner.set(heap_identity));
+}
+
+/// Restore the canonical standard syntax-table object for the current thread.
+///
+/// GNU Emacs keeps the standard syntax table as a single canonical Lisp object.
+/// NeoVM exposes it through a thread-local cache because `standard-syntax-table`
+/// is currently a no-evaluator builtin; callers that reconstruct or move an
+/// `Context` between threads must restore that identity explicitly.
+#[doc(hidden)]
+pub fn restore_standard_syntax_table_object(table: Value) {
+    STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = Some(table));
+    STANDARD_SYNTAX_TABLE_HEAP.with(|owner| {
+        owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+    });
+}
+
+/// Restore GNU's canonical vector of bare syntax descriptor objects.
+#[doc(hidden)]
+pub fn restore_syntax_code_objects(objects: Value) {
+    SYNTAX_CODE_OBJECTS.with(|slot| *slot.borrow_mut() = Some(objects));
+    SYNTAX_CODE_OBJECTS_HEAP.with(|owner| {
+        owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+    });
+}
+
+/// Snapshot GNU's canonical vector of bare syntax descriptor objects.
+#[doc(hidden)]
+pub fn snapshot_syntax_code_objects() -> Option<Value> {
+    SYNTAX_CODE_OBJECTS.with(|slot| *slot.borrow())
+}
+
+/// Collect GC roots from the cached syntax table.
+pub fn collect_syntax_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
+    if STANDARD_SYNTAX_TABLE_HEAP.with(Cell::get) == heap_identity {
+        STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| {
+            if let Some(value) = *slot.borrow() {
+                roots.push(value);
+            }
+        });
+    }
+    if SYNTAX_CODE_OBJECTS_HEAP.with(Cell::get) == heap_identity {
+        SYNTAX_CODE_OBJECTS.with(|slot| {
+            if let Some(value) = *slot.borrow() {
+                roots.push(value);
+            }
+        });
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+enum SyntaxPurposeSymbol {
+    SyntaxTable,
+}
+
+impl SyntaxPurposeSymbol {
+    fn from_lisp_value(value: &Value) -> Option<Self> {
+        value.as_bare_symbol_name()?.parse().ok()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn name(self) -> &'static str {
+        self.into()
+    }
+}
+
+/// GNU syntax switches backed by predeclared C variables.  The closed domain
+/// gives each hot lookup one stable symbol identity; Lisp-visible evaluation
+/// remains responsible for signaling if some unrelated variable is unbound.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+enum SyntaxStateVariable {
+    CommentEndCanBeEscaped,
+    ParseSexpIgnoreComments,
+    ParseSexpLookupProperties,
+}
+
+impl SyntaxStateVariable {
+    #[inline(always)]
+    fn symbol_id(self) -> neovm_value::intern::SymId {
+        use std::sync::OnceLock;
+
+        static COMMENT_END_CAN_BE_ESCAPED: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
+        static PARSE_SEXP_IGNORE_COMMENTS: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
+        static PARSE_SEXP_LOOKUP_PROPERTIES: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
+        let name: &'static str = self.into();
+        match self {
+            Self::CommentEndCanBeEscaped => {
+                *COMMENT_END_CAN_BE_ESCAPED.get_or_init(|| neovm_value::intern::intern(name))
+            }
+            Self::ParseSexpIgnoreComments => {
+                *PARSE_SEXP_IGNORE_COMMENTS.get_or_init(|| neovm_value::intern::intern(name))
+            }
+            Self::ParseSexpLookupProperties => {
+                *PARSE_SEXP_LOOKUP_PROPERTIES.get_or_init(|| neovm_value::intern::intern(name))
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn enabled<H: TextHost>(self, ctx: &H) -> bool {
+        // GNU reads these C globals, which set_buffer_internal_2 swaps to the
+        // current buffer's forwarded locals; the typed read also answers a
+        // dynamic `let` binding. Never the buffer-blind `variables().value`.
+        match self {
+            Self::CommentEndCanBeEscaped => GnuForwardedVariable::CommentEndCanBeEscaped
+                .forwarded()
+                .is_truthy(ctx),
+            Self::ParseSexpIgnoreComments => GnuForwardedVariable::ParseSexpIgnoreComments
+                .forwarded()
+                .is_truthy(ctx),
+            Self::ParseSexpLookupProperties => GnuForwardedVariable::ParseSexpLookupProperties
+                .forwarded()
+                .is_truthy(ctx),
+        }
+    }
+}
+
+/// GNU's buffer-local `comment-end-can-be-escaped` policy.
+///
+/// Naming both states avoids threading a Boolean whose meaning reverses at
+/// call sites: scanners ask whether a quoted ender terminates, rather than
+/// remembering what `true` meant in Lisp.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[doc(hidden)]
+pub enum CommentEndEscapePolicy {
+    /// GNU's default: quoting cannot suppress a comment end marker.
+    #[default]
+    EnderAlwaysTerminates,
+    /// A quote/escape character makes the following end marker ordinary text.
+    EscapeQuotesEnder,
+}
+
+/// Which GNU entry point initiated a backward comment scan.
+///
+/// `Fforward_comment` lets `comment-end-can-be-escaped` suppress the ender
+/// that triggered the scan.  `scan_lists` does not: once sexp motion has
+/// classified an ender, it always asks `back_comment` to match it.  Keeping
+/// that caller distinction typed prevents one shared scanner from quietly
+/// changing either public operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BackwardCommentEntryPolicy {
+    ForwardComment,
+    SexpMotion,
+}
+
+impl BackwardCommentEntryPolicy {
+    fn escaped_ender_is_suppressed(
+        self,
+        escape_policy: CommentEndEscapePolicy,
+        quoted: bool,
+    ) -> bool {
+        self == Self::ForwardComment && escape_policy.quoted_ender_is_escaped(quoted)
+    }
+
+    fn accepts_two_char_ender_with_quoted_first(self, first_is_quoted: bool) -> bool {
+        self == Self::SexpMotion || !first_is_quoted
+    }
+}
+
+impl CommentEndEscapePolicy {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn for_context<H: TextHost>(ctx: &H) -> Self {
+        if SyntaxStateVariable::CommentEndCanBeEscaped.enabled(ctx) {
+            Self::EscapeQuotesEnder
+        } else {
+            Self::EnderAlwaysTerminates
+        }
+    }
+
+    fn quoted_ender_is_escaped(self, quoted: bool) -> bool {
+        quoted && self == Self::EscapeQuotesEnder
+    }
+}
+
+/// Lisp-visible policy captured once before an evaluator-owned sexp scan.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct SexpScanPolicy {
+    ignore_comments: bool,
+    pub(crate) comment_end_escape: CommentEndEscapePolicy,
+}
+
+impl SexpScanPolicy {
+    #[doc(hidden)]
+    pub fn for_context<H: TextHost>(ctx: &H) -> Self {
+        Self {
+            ignore_comments: SyntaxStateVariable::ParseSexpIgnoreComments.enabled(ctx),
+            comment_end_escape: CommentEndEscapePolicy::for_context(ctx),
+        }
+    }
+}
+
+// Phase 10D holdout 3: the per-buffer syntax table char-table now lives in
+// `Buffer::slots[BUFFER_SLOT_SYNTAX_TABLE.index()]`, mirroring GNU's
+// `BVAR(buf, syntax_table)` storage. Reads go through `slots[offset]`,
+// writes go through `slots[offset]` plus `set_slot_local_flag` (matching
+// `Fset_syntax_table`'s `SET_PER_BUFFER_VALUE_P`). The slot itself is
+// non-Lisp-visible (`install_as_forwarder: false`), so the symbol
+// `syntax-table` continues to signal void-variable as in GNU.
+
+/// Pre-populate GNU Emacs syntax variables that are defined from C.
+pub fn init_syntax_vars(obarray: &mut neovm_value::symbol::Obarray) {
+    obarray.define_int_variable("syntax-propertize--done", -1);
+    obarray.seed_value(
+        "find-word-boundary-function-table",
+        super::chartable::make_char_table_value(Value::NIL, Value::NIL),
+    );
+    obarray.seed_value("forward-comment-function", Value::NIL);
+
+    for name in &[
+        "parse-sexp-ignore-comments",
+        "parse-sexp-lookup-properties",
+        "words-include-escapes",
+        "multibyte-syntax-as-symbol",
+        "open-paren-in-column-0-is-defun-start",
+        "find-word-boundary-function-table",
+        "comment-end-can-be-escaped",
+        "forward-comment-function",
+    ] {
+        obarray.make_special(name);
+    }
+
+    // Mirrors GNU `Fmake_variable_buffer_local` (`data.c:2142-2207`):
+    // flip the redirect tag to LOCALIZED, allocate a BLV, set
+    // local_if_set = 1. The legacy `obarray.make_buffer_local`
+    // helper used to be called here too but it overwrites the
+    // freshly-set LOCALIZED redirect back to PLAINVAL and
+    // orphans the BLV.
+    for name in ["syntax-propertize--done", "comment-end-can-be-escaped"] {
+        let id = neovm_value::intern::intern(name);
+        let default = obarray
+            .canonical_find_value(CanonicalAccess::BOOTSTRAP, id)
+            .unwrap_or(neovm_value::value::Value::NIL);
+        obarray.make_symbol_localized(id, default);
+        obarray.set_blv_local_if_set(id, true);
+    }
+}
+
+// ===========================================================================
+// Syntax classes
+// ===========================================================================
+
+pub(crate) use neovm_edit::buffer::syntax_class::SYNTAX_CLASS_COUNT;
+pub use neovm_edit::buffer::syntax_class::SyntaxClass;
+
+/// Install the buffer substrate's syntax queries (stage-3 C7).  Idempotent;
+/// called at evaluator construction and image restore.  The table carries
+/// only value/edit types and the implementations stay here, where the live
+/// syntax char-table lives; there is no dynamic dispatch and no new TLS.
+#[doc(hidden)]
+pub fn install_substrate_seams() {
+    static INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if INSTALLED.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    neovm_edit::buffer::syntax_class::install(neovm_edit::buffer::syntax_class::SyntaxSeams::new(
+        |buf| buf.syntax_chartable(),
+        |table, code| syntax_class_at_char_code(&table, code),
+    ));
+    INSTALLED.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// Return the GNU standard syntax-table class for an Emacs character
+/// code, mirroring GNU `src/syntax.c:init_syntax_once`.
+pub(crate) fn standard_syntax_class_for_code(code: u32) -> SyntaxClass {
+    match code {
+        0x00..=0x08 | 0x0b | 0x0e..=0x1f | 0x7f => SyntaxClass::Punctuation,
+        0x09 | 0x0a | 0x0c | 0x0d | 0x20 => SyntaxClass::Whitespace,
+        0x30..=0x39 | 0x41..=0x5a | 0x61..=0x7a | 0x24 | 0x25 => SyntaxClass::Word,
+        0x28 | 0x5b | 0x7b => SyntaxClass::Open,
+        0x29 | 0x5d | 0x7d => SyntaxClass::Close,
+        0x22 => SyntaxClass::StringDelim,
+        0x5c => SyntaxClass::Escape,
+        0x26 | 0x2a | 0x2b | 0x2d | 0x2f | 0x3c | 0x3d | 0x3e | 0x5f | 0x7c => SyntaxClass::Symbol,
+        0x21 | 0x23 | 0x27 | 0x2c | 0x2e | 0x3a | 0x3b | 0x3f | 0x40 | 0x5e | 0x60 | 0x7e => {
+            SyntaxClass::Punctuation
+        }
+        0x80..=0x3F_FFFF => SyntaxClass::Word,
+        _ => SyntaxClass::Whitespace,
+    }
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[inline]
+pub(crate) fn standard_syntax_class_for_char(ch: char) -> SyntaxClass {
+    standard_syntax_class_for_code(ch as u32)
+}
+
+// ===========================================================================
+// Syntax flags
+// ===========================================================================
+
+/// Flags for comment style and prefix behavior, mirroring Emacs syntax flags.
+///
+/// Uses a raw `u8` bitmask to avoid external dependencies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SyntaxFlags(u8);
+
+impl SyntaxFlags {
+    /// '1' — first char of a two-char comment start sequence
+    pub const COMMENT_START_FIRST: SyntaxFlags = SyntaxFlags(0b0000_0001);
+    /// '2' — second char of a two-char comment start sequence
+    pub const COMMENT_START_SECOND: SyntaxFlags = SyntaxFlags(0b0000_0010);
+    /// '3' — first char of a two-char comment end sequence
+    pub const COMMENT_END_FIRST: SyntaxFlags = SyntaxFlags(0b0000_0100);
+    /// '4' — second char of a two-char comment end sequence
+    pub const COMMENT_END_SECOND: SyntaxFlags = SyntaxFlags(0b0000_1000);
+    /// 'p' — prefix character (e.g., quote, backquote)
+    pub const PREFIX: SyntaxFlags = SyntaxFlags(0b0001_0000);
+    /// 'b' — belongs to alternative "b" comment style
+    pub const COMMENT_STYLE_B: SyntaxFlags = SyntaxFlags(0b0010_0000);
+    /// 'n' — nestable comment
+    pub const COMMENT_NESTABLE: SyntaxFlags = SyntaxFlags(0b0100_0000);
+    /// 'c' — belongs to alternative "c" comment style
+    pub const COMMENT_STYLE_C: SyntaxFlags = SyntaxFlags(0b1000_0000);
+
+    /// Construct from raw bits.
+    pub const fn new(bits: u8) -> Self {
+        SyntaxFlags(bits)
+    }
+
+    /// Empty flags (no bits set).
+    pub const fn empty() -> Self {
+        SyntaxFlags(0)
+    }
+
+    /// Whether no flags are set.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Whether `self` contains all the bits of `other`.
+    pub const fn contains(self, other: SyntaxFlags) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    /// Return the raw bits.
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+}
+
+impl std::ops::BitOr for SyntaxFlags {
+    type Output = SyntaxFlags;
+    fn bitor(self, rhs: SyntaxFlags) -> SyntaxFlags {
+        SyntaxFlags(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for SyntaxFlags {
+    fn bitor_assign(&mut self, rhs: SyntaxFlags) {
+        self.0 |= rhs.0;
+    }
+}
+
+// ===========================================================================
+// SyntaxEntry
+// ===========================================================================
+
+/// A single entry in a syntax table: the class, an optional matching
+/// character (for parens/string delimiters), and comment/prefix flags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SyntaxEntry {
+    pub class: SyntaxClass,
+    pub matching_char: Option<char>,
+    pub flags: SyntaxFlags,
+}
+
+impl SyntaxEntry {
+    /// Create a simple entry with no matching char or flags.
+    pub fn simple(class: SyntaxClass) -> Self {
+        Self {
+            class,
+            matching_char: None,
+            flags: SyntaxFlags::empty(),
+        }
+    }
+
+    /// Create an entry with a matching character (for open/close parens).
+    pub fn with_match(class: SyntaxClass, matching: char) -> Self {
+        Self {
+            class,
+            matching_char: Some(matching),
+            flags: SyntaxFlags::empty(),
+        }
+    }
+}
+
+// ===========================================================================
+// string-to-syntax parser
+// ===========================================================================
+
+/// Parse an Emacs syntax descriptor string (e.g., `" "`, `"w"`, `"()"`,
+/// `". 12"`) into a `SyntaxEntry`.
+pub fn string_to_syntax(s: &str) -> Result<SyntaxEntry, String> {
+    let chars: Vec<char> = s.chars().collect();
+    let descriptor = chars.first().copied().unwrap_or('\0');
+    let class = SyntaxClass::from_char(descriptor)
+        .ok_or_else(|| format!("Invalid syntax description letter: {descriptor}"))?;
+
+    let matching_char = if chars.len() > 1 && chars[1] != ' ' {
+        Some(chars[1])
+    } else {
+        None
+    };
+
+    let mut flags = SyntaxFlags::empty();
+    // Flags start at position 2 (after class + matching char).
+    let flag_start = if chars.len() > 1 { 2 } else { 1 };
+    for &ch in chars.get(flag_start..).unwrap_or(&[]) {
+        match ch {
+            '1' => flags |= SyntaxFlags::COMMENT_START_FIRST,
+            '2' => flags |= SyntaxFlags::COMMENT_START_SECOND,
+            '3' => flags |= SyntaxFlags::COMMENT_END_FIRST,
+            '4' => flags |= SyntaxFlags::COMMENT_END_SECOND,
+            'p' => flags |= SyntaxFlags::PREFIX,
+            'b' => flags |= SyntaxFlags::COMMENT_STYLE_B,
+            'n' => flags |= SyntaxFlags::COMMENT_NESTABLE,
+            'c' => flags |= SyntaxFlags::COMMENT_STYLE_C,
+            ' ' => {} // whitespace in flag area is ignored
+            _ => {}   // Emacs silently ignores unknown flags
+        }
+    }
+
+    Ok(SyntaxEntry {
+        class,
+        matching_char,
+        flags,
+    })
+}
+
+fn syntax_runtime_string(value: &Value) -> Result<String, Flow> {
+    value
+        .as_lisp_string()
+        .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes()))
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), *value],
+            )
+        })
+}
+
+/// Whether a semantic [`SyntaxEntry`] may reuse GNU's canonical bare syntax
+/// object or must be materialized as a fresh Lisp cons.
+///
+/// Lisp can observe this choice with `eq`, so object identity is distinct from
+/// the entry's syntax semantics.  GNU normally reuses `Vsyntax_code_object`
+/// for bare syntax codes, but deliberately allocates fresh objects for the
+/// standard table's string-quote and escape entries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+enum LispSyntaxObjectReuse {
+    CanonicalBare,
+    Fresh,
+}
+
+/// Convert a semantic syntax entry into its Lisp representation:
+/// `(CODE . MATCHING-CHAR-OR-NIL)`.
+///
+/// The CODE is computed as: `(class_code) | (flags << 16)`.  Keeping object
+/// reuse as a typed input prevents callers that construct identity-sensitive
+/// tables from accidentally conflating semantic equality with Lisp identity.
+fn materialize_syntax_entry(entry: &SyntaxEntry, object_reuse: LispSyntaxObjectReuse) -> Value {
+    let code = entry.class.code() | ((entry.flags.bits() as i64) << 16);
+    if object_reuse == LispSyntaxObjectReuse::CanonicalBare
+        && entry.matching_char.is_none()
+        && (0..SYNTAX_CLASS_COUNT as i64).contains(&code)
+        && let Some(cached) = syntax_code_object(code as usize)
+    {
+        return cached;
+    }
+    let matching = match entry.matching_char {
+        Some(ch) => Value::fixnum(ch as i64),
+        None => Value::NIL,
+    };
+    Value::cons(Value::fixnum(code), matching)
+}
+
+/// Convert a `SyntaxEntry` using GNU's ordinary `string-to-syntax` policy:
+/// reuse the canonical object for a bare, unflagged syntax code.
+pub fn syntax_entry_to_value(entry: &SyntaxEntry) -> Value {
+    materialize_syntax_entry(entry, LispSyntaxObjectReuse::CanonicalBare)
+}
+
+fn make_syntax_code_objects() -> Value {
+    SYNTAX_CODE_OBJECTS_HEAP.with(|owner| {
+        owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+    });
+    Value::vector(
+        (0..SYNTAX_CLASS_COUNT)
+            .map(|code| Value::cons(Value::fixnum(code as i64), Value::NIL))
+            .collect(),
+    )
+}
+
+#[doc(hidden)]
+pub fn ensure_syntax_code_objects() -> Value {
+    SYNTAX_CODE_OBJECTS.with(|slot| {
+        if let Some(objects) = *slot.borrow() {
+            return objects;
+        }
+        let objects = make_syntax_code_objects();
+        *slot.borrow_mut() = Some(objects);
+        objects
+    })
+}
+
+fn syntax_code_object(code: usize) -> Option<Value> {
+    if code >= SYNTAX_CLASS_COUNT {
+        return None;
+    }
+    ensure_syntax_code_objects()
+        .as_vector_data()
+        .and_then(|values| values.get(code).copied())
+}
+
+// ===========================================================================
+// SyntaxTable
+// ===========================================================================
+
+/// Global syntax-table content-mutation epoch.
+///
+/// The neomacs analog of GNU `search.c:clear_regexp_cache`, which
+/// `Fmodify_syntax_entry` calls to drop every compiled-regexp cache entry
+/// keyed by a syntax table ("It's tempting to compare with the
+/// syntax-table we've actually changed, but it's not sufficient because
+/// char-table inheritance means that modifying one syntax-table can
+/// change others at the same time", search.c:160-170).  Instead of
+/// clearing, neomacs's regexp caches key table-dependent entries by
+/// `(table identity, epoch)`; bumping the epoch on any syntax-table
+/// content mutation makes every such entry unreachable, which is the
+/// same conservative invalidation.
+///
+/// Process-global on purpose: caches are thread-local, so a bump from
+/// another thread can only over-invalidate, never serve a stale entry.
+///
+/// ★ DO NOT key a general syntax-value cache on this epoch. ★
+///
+/// It is bumped from the `modify-syntax-entry` chokepoints ONLY
+/// (`SyntaxTable::modify_syntax_entry` and `modify_syntax_entry_in_buffers`).
+/// A syntax table is an ordinary char-table, so Lisp can mutate one straight
+/// through `aset`, `set-char-table-range`, or `set-char-table-parent` without
+/// ever reaching those, and the epoch will NOT move. That is deliberate and
+/// GNU-faithful -- GNU calls `clear_regexp_cache` from `Fmodify_syntax_entry`
+/// alone, so its regexp cache has exactly the same blind spot -- and it is
+/// sound for the one contract above, where a missed invalidation costs a stale
+/// COMPILED REGEXP.
+///
+/// It is NOT sound for a cache of syntax classes or entries, where the same
+/// miss serves a WRONG SYNTAX CLASS and silently misparses the buffer. The
+/// ASCII memo on `SyntaxPropRange` avoids this by living for a single scan --
+/// the table-immutability window the property-run cache already assumes --
+/// rather than trusting this epoch across calls. Anything longer-lived needs
+/// its own invalidation, or these bump sites need widening first.
+static SYNTAX_TABLE_MUTATION_EPOCH: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Current syntax-table mutation epoch (see
+/// [`SYNTAX_TABLE_MUTATION_EPOCH`]).
+pub(crate) fn syntax_table_mutation_epoch() -> u64 {
+    SYNTAX_TABLE_MUTATION_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Record a syntax-table content mutation (GNU `clear_regexp_cache`
+/// analog).  Called from the `modify-syntax-entry` chokepoints.
+pub(crate) fn note_syntax_table_mutation() {
+    SYNTAX_TABLE_MUTATION_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// An Emacs-style syntax table mapping characters to syntax entries.
+///
+/// Characters not explicitly set fall back to a parent table (if present)
+/// or to the built-in standard defaults.
+/// A Lisp-level syntax table: a thin wrapper around the chartable `Value`
+/// stored in `buffer->syntax_table` / `buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()]`.
+///
+/// Mirrors GNU Emacs design: the chartable IS the runtime form. All
+/// queries go through `CHAR_TABLE_REF(table, c)` (→ our
+/// `syntax_{class,entry}_at_char`) on demand; no eagerly-compiled HashMap
+/// shadow form is maintained.
+///
+/// The inner `Value` is `Value::NIL` in two situations:
+/// (1) a freshly-constructed `SyntaxTable::new_standard()` before the
+///     standard chartable is materialized by the evaluator, and
+/// (2) pdump's placeholder before `sync_current_buffer_syntax_table_state`
+///     re-attaches the live chartable from the buffer slot.
+/// In both cases `char_syntax()` falls back to GNU's default (Word for
+/// >= U+0080, Whitespace for < U+0080), matching `SYNTAX_ENTRY`'s nil
+/// > handling.
+#[derive(Clone, Copy, Debug)]
+pub struct SyntaxTable {
+    pub(crate) chartable: Value,
+}
+
+impl SyntaxTable {
+    // -- Construction --------------------------------------------------------
+
+    /// Return a `SyntaxTable` backed by the standard chartable Value.
+    /// Materializes the chartable on first call via
+    /// `ensure_standard_syntax_table_object()` — the same one installed
+    /// on new buffers by `current_buffer_syntax_table_object_in_buffers`.
+    pub fn new_standard() -> Self {
+        match ensure_standard_syntax_table_object() {
+            Ok(table) => Self { chartable: table },
+            // If we can't build the chartable (no thread-local state),
+            // return a nil-backed placeholder — callers fall back to
+            // GNU defaults via `char_syntax` / `get_entry`.
+            Err(_) => Self {
+                chartable: Value::NIL,
+            },
+        }
+    }
+
+    /// Same as `new_standard` — GNU's `make-syntax-table` with nil parent
+    /// creates a fresh, empty chartable whose parent is the standard
+    /// table. The distinction is handled at the chartable level by
+    /// `builtin_make_syntax_table`.
+    pub fn make_syntax_table() -> Self {
+        Self::new_standard()
+    }
+
+    /// Build a `SyntaxTable` that reads directly from `buf`'s
+    /// syntax-table slot. Mirrors GNU `BVAR (buf, syntax_table)`.
+    /// Falls back to a nil-backed placeholder (GNU defaults) if the
+    /// slot hasn't been seeded yet.
+    pub fn for_buffer(buf: &neovm_edit::buffer::buffer::Buffer) -> Self {
+        Self {
+            chartable: buf.syntax_chartable(),
+        }
+    }
+
+    /// Install an isolated copy of the standard chartable on `buf` so
+    /// subsequent `modify_syntax_entry` calls don't leak into the
+    /// shared standard. Returns the new `SyntaxTable`. Mirrors the
+    /// GNU idiom `(set-syntax-table (copy-syntax-table))`.
+    pub fn isolate_for_buffer(buf: &mut neovm_edit::buffer::buffer::Buffer) -> Self {
+        use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
+        let slot = buf.slots()[BUFFER_SLOT_SYNTAX_TABLE.index()];
+        let source = if slot.is_nil() {
+            ensure_standard_syntax_table_object().unwrap_or(Value::NIL)
+        } else {
+            slot
+        };
+        let own = if source.is_nil() {
+            Value::NIL
+        } else {
+            builtin_copy_syntax_table(vec![source]).unwrap_or(source)
+        };
+        buf.slots_mut()[BUFFER_SLOT_SYNTAX_TABLE.index()] = own;
+        Self { chartable: own }
+    }
+
+    /// Deep-copy the backing chartable, matching GNU `copy-syntax-table`
+    /// (`syntax.c:265-282`). The copy is independent: mutations to
+    /// either table do not affect the other.
+    pub fn copy_syntax_table(&self) -> Self {
+        if self.chartable.is_nil() {
+            return *self;
+        }
+        match builtin_copy_syntax_table(vec![self.chartable]) {
+            Ok(copy) => Self { chartable: copy },
+            Err(_) => *self,
+        }
+    }
+
+    /// Return the chartable Value backing this table (may be `NIL` for
+    /// a placeholder table — see type-level docs).
+    pub(crate) fn chartable(&self) -> Value {
+        self.chartable
+    }
+
+    // -- Queries -------------------------------------------------------------
+
+    /// Return the syntax entry for `ch`, matching GNU
+    /// `SYNTAX_ENTRY(c)`. Falls back to the standard chartable when
+    /// the wrapper is nil-backed (handled by `syntax_entry_at_char`).
+    #[inline(always)]
+    pub fn get_entry(&self, ch: char) -> Option<SyntaxEntry> {
+        self.get_entry_code(ch as u32)
+    }
+
+    /// Return the syntax entry for an Emacs character code.  GNU Emacs
+    /// syntax tables are indexed by `CHAR_VALID_P` integer codes
+    /// (`0..=MAX_CHAR`), not by Unicode scalar values; keep this path
+    /// available for callers such as `char-syntax`.
+    #[inline(always)]
+    pub fn get_entry_code(&self, code: u32) -> Option<SyntaxEntry> {
+        syntax_entry_at_char_code(&self.chartable, code)
+    }
+
+    /// Return the syntax class for `ch` — GNU `SYNTAX(c)`.
+    pub fn char_syntax(&self, ch: char) -> SyntaxClass {
+        self.char_syntax_code(ch as u32)
+    }
+
+    /// Capture the owning evaluator's policy for a temporary table read.
+    pub(crate) fn char_syntax_with_symbols(
+        &self,
+        ch: char,
+        mode: neovm_value::tagged::SymbolMode,
+    ) -> SyntaxClass {
+        if mode == neovm_value::tagged::SymbolMode::Bare {
+            return self.char_syntax(ch);
+        }
+        syntax_entry_at_char_code_with_symbols(&self.chartable, ch as u32, mode).map_or_else(
+            || {
+                if ch as u32 >= 0x80 {
+                    SyntaxClass::Word
+                } else {
+                    SyntaxClass::Whitespace
+                }
+            },
+            |entry| entry.class,
+        )
+    }
+
+    /// Return the syntax class for an Emacs character code — GNU
+    /// `SYNTAX(c)`.
+    pub fn char_syntax_code(&self, code: u32) -> SyntaxClass {
+        syntax_class_at_char_code(&self.chartable, code)
+    }
+
+    // -- Mutation -------------------------------------------------------------
+
+    /// Install `entry` for `ch` in the backing chartable. No-op when
+    /// the table is a `NIL` placeholder — the evaluator's
+    /// `modify-syntax-entry` builtin routes through the chartable
+    /// directly for that case.
+    pub fn modify_syntax_entry(&mut self, ch: char, entry: SyntaxEntry) {
+        if self.chartable.is_nil() {
+            return;
+        }
+        let _ = super::chartable::builtin_set_char_table_range(
+            vec![
+                self.chartable,
+                Value::fixnum(ch as i64),
+                syntax_entry_to_value(&entry),
+            ],
+            None,
+        );
+        note_syntax_table_mutation();
+    }
+}
+
+impl Default for SyntaxTable {
+    fn default() -> Self {
+        Self::new_standard()
+    }
+}
+
+// ===========================================================================
+// Motion functions (operate on a Buffer + SyntaxTable)
+// ===========================================================================
+
+/// Move forward over `count` words.  Returns the resulting Emacs byte position.
+///
+/// A "word" is a maximal run of characters with syntax class `Word`.
+/// Between words, non-word characters are skipped.
+pub fn forward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
+    forward_word_with_options(
+        buf,
+        table,
+        count,
+        SyntaxProperties::Ignore,
+        Default::default(),
+    )
+    .0
+}
+
+fn syntax_char_from_code(code: u32) -> char {
+    neovm_value::emacs_char::character_code_to_rust_char(code as i64).unwrap_or('\u{FFFD}')
+}
+
+/// On-demand syntax-char accessor over a buffer.
+///
+/// Replaces decoding the whole (accessible) buffer into a `Vec<char>` on every
+/// syntax call -- which was O(buffer) per call and O(n^2) across a font-lock
+/// pass.  Reading a char on demand is now cheap because byte<->char conversion
+/// is cached (`gap_buffer`).  `char_at(idx)` returns the syntax char at logical
+/// char position `base_char + idx`, so each caller keeps its existing
+/// (range-relative or absolute) index convention; the base absorbs the
+/// difference.
+struct BufferChars<'a> {
+    buf: &'a Buffer,
+    base_char: CharPos0,
+    multibyte: bool,
+    /// Byte cursor for sequential reads: `(char_idx, emacs_byte_pos of that
+    /// char, byte width of that char)`.  Lets a forward scan advance
+    /// `byte += width` with ONE decode per char -- like GNU `syntax.c`
+    /// `FETCH_CHAR`, which walks byte positions directly -- instead of a
+    /// char->byte conversion per char.  Random access falls back to the
+    /// (cached) conversion, so this only ever helps.
+    cursor: Option<(usize, EmacsBytePos, EmacsByteLen)>,
+    /// Borrow-free storage window: `(logical_start, base_ptr, len)` for the
+    /// contiguous physical segment (gap half) last read from. Every
+    /// `char_at` used to re-enter the text storage -- a RefCell borrow, a
+    /// backend dispatch, and a gap-half recomputation PER CHARACTER; GNU's
+    /// scanners read through a raw `BYTE_POS_ADDR` pointer instead
+    /// (syntax.c FETCH_CHAR_AS_MULTIBYTE).
+    ///
+    /// SOUNDNESS: the pointer is valid until the next text mutation. A
+    /// `BufferChars` lives inside one syntax scan that holds `&Buffer`
+    /// throughout and runs no Lisp; its property/table arms only READ. The
+    /// window therefore never outlives the text layout it points into.
+    window: Option<(usize, *const u8, usize)>,
+}
+
+impl<'a> BufferChars<'a> {
+    fn new(buf: &'a Buffer, base_char: CharPos0) -> Self {
+        Self {
+            buf,
+            base_char,
+            multibyte: buf.get_multibyte(),
+            cursor: None,
+            window: None,
+        }
+    }
+
+    /// Decode the char code at `byte_pos` through the cached storage
+    /// window, refreshing the window when the position leaves it.
+    #[inline]
+    fn code_at_byte(&mut self, byte_pos: EmacsBytePos) -> u32 {
+        let pos = byte_pos.get();
+        let window = match self.window {
+            Some(w @ (start, _, len)) if pos >= start && pos < start + len => w,
+            _ => match self.buf.contiguous_window_at(pos) {
+                Some(w) => {
+                    self.window = Some(w);
+                    w
+                }
+                // Chunked backend (or out of range): per-call accessor.
+                None => return self.buf.char_code_at_emacs_byte_pos(byte_pos).unwrap_or(0),
+            },
+        };
+        let (start, base, len) = window;
+        // SAFETY: pos is inside [start, start+len) per the check above, and
+        // the window invariant (struct doc) guarantees base..base+len is the
+        // live physical segment for those logical bytes.
+        let slice =
+            unsafe { std::slice::from_raw_parts(base.add(pos - start), len - (pos - start)) };
+        let code = if !self.multibyte || slice[0] < 0x80 {
+            slice[0] as u32
+        } else {
+            neovm_value::emacs_char::string_char(slice).0.code()
+        };
+        debug_assert_eq!(
+            Some(code),
+            self.buf.char_code_at_emacs_byte_pos(byte_pos),
+            "window decode diverged from the storage accessor at byte {pos}"
+        );
+        code
+    }
+
+    /// Hot path only: a sequential (or repeated) read whose byte lands in
+    /// the cached storage window on an ASCII byte — ~a dozen instructions,
+    /// small enough to inline into every scan loop (the full function
+    /// measured 686 bytes of code, which nothing inlines, leaving 10 percent
+    /// of the editing profile in call overhead). Everything else outlines.
+    #[inline(always)]
+    fn char_at(&mut self, idx: usize) -> char {
+        if let Some((c_idx, c_byte, c_width)) = self.cursor {
+            let byte_pos = if idx == c_idx {
+                c_byte
+            } else if idx == c_idx + 1 {
+                c_byte.add_len(c_width)
+            } else {
+                return self.char_at_outlined(idx);
+            };
+            if let Some((start, base, len)) = self.window {
+                let pos = byte_pos.get();
+                if pos >= start && pos < start + len {
+                    // SAFETY: pos is inside the window per the check; window
+                    // validity is the struct invariant (see `window`).
+                    let b = unsafe { *base.add(pos - start) };
+                    if b < 0x80 {
+                        self.cursor = Some((idx, byte_pos, EmacsByteLen::new(1)));
+                        return b as char;
+                    }
+                }
+            }
+        }
+        self.char_at_outlined(idx)
+    }
+
+    #[inline(never)]
+    fn char_at_outlined(&mut self, idx: usize) -> char {
+        // For a forward step (or re-read of the same char) advance the byte
+        // cursor directly; otherwise pay for one (cached) char->byte
+        // conversion.  GNU's syntax scanners never convert per char -- they
+        // carry the byte position and bump it by the char width.
+        let byte_pos = match self.cursor {
+            Some((c_idx, c_byte, _)) if idx == c_idx => c_byte,
+            Some((c_idx, c_byte, c_width)) if idx == c_idx + 1 => c_byte.add_len(c_width),
+            // Backward step (`char-before`-style peeks — the parser does
+            // these constantly): back over continuation bytes (at most 4 —
+            // the 5-byte internal encoding's worst case) instead of a full
+            // char->byte conversion per peek.
+            Some((c_idx, c_byte, _)) if idx + 1 == c_idx && c_byte.get() > 0 => {
+                let mut pos = c_byte.get() - 1;
+                if self.multibyte {
+                    let mut steps = 0;
+                    while pos > 0
+                        && steps < 4
+                        && self
+                            .buf
+                            .emacs_byte_at_pos(EmacsBytePos::new(pos))
+                            .is_some_and(|b| (b & 0xC0) == 0x80)
+                    {
+                        pos -= 1;
+                        steps += 1;
+                    }
+                }
+                EmacsBytePos::new(pos)
+            }
+            _ => buffer_char_to_emacs_byte_pos(self.buf, self.base_char.add_len(CharLen::new(idx))),
+        };
+        let code = self.code_at_byte(byte_pos);
+        // A unibyte buffer stores one byte per char; a multibyte buffer stores
+        // the char's internal multibyte length (raw bytes included -- see
+        // `emacs_char::char_bytes`).
+        //
+        // The `code < 0x80` arm is not redundant with `char_bytes`, which
+        // returns 1 for it anyway: the compiler lowers that function's
+        // comparison chain BRANCHLESSLY (cmov), so every character paid all of
+        // its bounds checks. Annotating this function showed the 5-byte-char
+        // bound alone at 9.31% of its samples and the raw-byte check at 4.52%,
+        // on a scan whose characters are overwhelmingly ASCII. Testing the
+        // dominant case first turns that into one predictable compare.
+        let width = if !self.multibyte || code < 0x80 {
+            1
+        } else {
+            neovm_value::emacs_char::char_bytes(code)
+        };
+        self.cursor = Some((idx, byte_pos, EmacsByteLen::new(width)));
+        syntax_char_from_code(code)
+    }
+}
+
+/// Word-motion cursor that preserves all Emacs character codes.
+///
+/// Unlike the Rust-char view used by existing parsers, this represents byte8
+/// and non-Unicode characters without collapsing either domain. Its borrowed
+/// storage window belongs to one mutator and is valid only during a scan with
+/// no Lisp callbacks or text mutation (GNU syntax.c:1459-1561).
+struct WordChars<'a> {
+    storage: BufferChars<'a>,
+}
+
+static_assertions::assert_not_impl_any!(WordChars<'static>: Send, Sync);
+
+impl std::fmt::Debug for WordChars<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WordChars")
+            .field("base_char", &self.storage.base_char)
+            .field("multibyte", &self.storage.multibyte)
+            .field("cursor", &self.storage.cursor)
+            .finish()
+    }
+}
+
+impl<'a> WordChars<'a> {
+    fn new(buf: &'a Buffer, base_char: CharPos0) -> Self {
+        Self {
+            storage: BufferChars::new(buf, base_char),
+        }
+    }
+
+    #[inline(always)]
+    fn at(&mut self, idx: usize) -> EmacsChar {
+        if let Some((c_idx, c_byte, c_width)) = self.storage.cursor {
+            let byte_pos = if idx == c_idx {
+                c_byte
+            } else if idx == c_idx + 1 {
+                c_byte.add_len(c_width)
+            } else {
+                return self.at_outlined(idx);
+            };
+            if let Some((start, base, len)) = self.storage.window {
+                let pos = byte_pos.get();
+                if pos >= start && pos < start + len {
+                    // SAFETY: the borrowed BufferChars window contains pos;
+                    // this scan holds the buffer and runs no Lisp callbacks.
+                    let byte = unsafe { *base.add(pos - start) };
+                    if byte < 0x80 {
+                        self.storage.cursor = Some((idx, byte_pos, EmacsByteLen::new(1)));
+                        return EmacsChar::from_unibyte_byte(byte);
+                    }
+                }
+            }
+        }
+        self.at_outlined(idx)
+    }
+
+    #[inline(never)]
+    fn at_outlined(&mut self, idx: usize) -> EmacsChar {
+        let storage = &mut self.storage;
+        // For a forward step (or re-read of the same char) advance the byte
+        // cursor directly; otherwise pay for one (cached) char->byte
+        // conversion.  GNU's syntax scanners never convert per char -- they
+        // carry the byte position and bump it by the char width.
+        let byte_pos = match storage.cursor {
+            Some((c_idx, c_byte, _)) if idx == c_idx => c_byte,
+            Some((c_idx, c_byte, c_width)) if idx == c_idx + 1 => c_byte.add_len(c_width),
+            // Backward step (`char-before`-style peeks — the parser does
+            // these constantly): back over continuation bytes (at most 4 —
+            // the 5-byte internal encoding's worst case) instead of a full
+            // char->byte conversion per peek.
+            Some((c_idx, c_byte, _)) if idx + 1 == c_idx && c_byte.get() > 0 => {
+                let mut pos = c_byte.get() - 1;
+                if storage.multibyte {
+                    let mut steps = 0;
+                    while pos > 0
+                        && steps < 4
+                        && storage
+                            .buf
+                            .emacs_byte_at_pos(EmacsBytePos::new(pos))
+                            .is_some_and(|b| (b & 0xC0) == 0x80)
+                    {
+                        pos -= 1;
+                        steps += 1;
+                    }
+                }
+                EmacsBytePos::new(pos)
+            }
+            _ => buffer_char_to_emacs_byte_pos(
+                storage.buf,
+                storage.base_char.add_len(CharLen::new(idx)),
+            ),
+        };
+        let code = storage.code_at_byte(byte_pos);
+        // A unibyte buffer stores one byte per char; a multibyte buffer stores
+        // the char's internal multibyte length (raw bytes included -- see
+        // `emacs_char::char_bytes`).
+        //
+        // The `code < 0x80` arm is not redundant with `char_bytes`, which
+        // returns 1 for it anyway: the compiler lowers that function's
+        // comparison chain BRANCHLESSLY (cmov), so every character paid all of
+        // its bounds checks. Annotating this function showed the 5-byte-char
+        // bound alone at 9.31% of its samples and the raw-byte check at 4.52%,
+        // on a scan whose characters are overwhelmingly ASCII. Testing the
+        // dominant case first turns that into one predictable compare.
+        let width = if !storage.multibyte || code < 0x80 {
+            1
+        } else {
+            neovm_value::emacs_char::char_bytes(code)
+        };
+        storage.cursor = Some((idx, byte_pos, EmacsByteLen::new(width)));
+        if storage.multibyte {
+            // Internal buffer bytes decode to the validated Emacs code domain.
+            EmacsChar::from_code_unchecked(code)
+        } else {
+            // GNU FETCH_CHAR_AS_MULTIBYTE (buffer.h:1391): high bytes are
+            // byte8 characters, not Unicode Latin-1 scalars.
+            EmacsChar::from_unibyte_byte(code as u8)
+        }
+    }
+}
+
+/// Forward-only character cursor for `parse-partial-sexp`.
+///
+/// Unlike [`BufferChars`], this cursor does not preserve a logical index or a
+/// random-access fallback.  `byte_pos` always names the next unconsumed
+/// character, so the parser's dominant operation needs only the storage-window
+/// bounds and one byte-position increment.
+///
+/// The raw window remains valid because `parse-partial-sexp` does not invoke
+/// Lisp or otherwise mutate buffer text while this cursor is alive.  A failed
+/// window refresh invalidates it before the fallback buffer lookup.
+///
+/// Its outlined decoder deliberately remains separate from [`BufferChars`]'s
+/// equivalent.  Sharing that machinery would couple this flat hot cursor back
+/// to the general cursor's `Option`-encoded window and random-access state,
+/// whose removal is the measured optimization.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+struct ParseBufferChars<'a> {
+    buf: &'a Buffer,
+    byte_pos: EmacsBytePos,
+    multibyte: bool,
+    window_start: usize,
+    window_base: *const u8,
+    window_len: usize,
+}
+
+impl<'a> ParseBufferChars<'a> {
+    fn new(buf: &'a Buffer, start: CharPos0) -> Self {
+        Self::at_emacs_byte(buf, buffer_char_to_emacs_byte_pos(buf, start))
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// A cursor at a known Emacs byte position (a resumed scan's loop top),
+    /// skipping the char->byte conversion.
+    fn at_emacs_byte(buf: &'a Buffer, byte_pos: EmacsBytePos) -> Self {
+        let (window_start, window_base, window_len) = buf
+            .contiguous_window_at(byte_pos.get())
+            .unwrap_or((0, std::ptr::null(), 0));
+        Self {
+            buf,
+            byte_pos,
+            multibyte: buf.get_multibyte(),
+            window_start,
+            window_base,
+            window_len,
+        }
+    }
+
+    /// Decode and consume the next character.  ASCII in the current storage
+    /// window is the parser's overwhelmingly dominant path.
+    #[inline(always)]
+    fn next(&mut self) -> char {
+        let pos = self.byte_pos.get();
+        let offset = pos.wrapping_sub(self.window_start);
+        if offset < self.window_len {
+            // SAFETY: `offset < window_len`, and the cursor invariant above
+            // keeps the storage window valid for the duration of the scan.
+            let byte = unsafe { *self.window_base.add(offset) };
+            if byte < 0x80 {
+                self.byte_pos = EmacsBytePos::new(pos + 1);
+                return byte as char;
+            }
+        }
+        let (ch, width) = self.decode_current_outlined();
+        self.byte_pos = self.byte_pos.add_len(EmacsByteLen::new(width));
+        ch
+    }
+
+    /// Decode the next character without consuming it.  Used only to classify
+    /// the second half of a possible two-character comment marker.
+    #[inline(always)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn peek(&mut self) -> char {
+        let pos = self.byte_pos.get();
+        let offset = pos.wrapping_sub(self.window_start);
+        if offset < self.window_len {
+            // SAFETY: same window invariant as [`Self::next`].
+            let byte = unsafe { *self.window_base.add(offset) };
+            if byte < 0x80 {
+                return byte as char;
+            }
+        }
+        self.decode_current_outlined().0
+    }
+
+    /// Consume one character whose logical index has already been advanced by
+    /// a parser transition (a quote body or an atomic two-character marker).
+    #[inline(always)]
+    fn skip(&mut self) {
+        let _ = self.next();
+    }
+
+    /// Refresh the physical window if needed and decode the current character.
+    /// Multibyte and chunk-boundary work stays off the ASCII loop.
+    #[inline(never)]
+    fn decode_current_outlined(&mut self) -> (char, usize) {
+        let pos = self.byte_pos.get();
+        let window = match self.buf.contiguous_window_at(pos) {
+            Some(window) => {
+                (self.window_start, self.window_base, self.window_len) = window;
+                Some(window)
+            }
+            None => {
+                self.window_len = 0;
+                None
+            }
+        };
+        let code = if let Some((start, base, len)) = window {
+            let offset = pos - start;
+            // SAFETY: `contiguous_window_at(pos)` returned a segment containing
+            // `pos`, and the cursor invariant above keeps that segment valid.
+            let slice = unsafe { std::slice::from_raw_parts(base.add(offset), len - offset) };
+            if !self.multibyte || slice[0] < 0x80 {
+                slice[0] as u32
+            } else {
+                neovm_value::emacs_char::string_char(slice).0.code()
+            }
+        } else {
+            self.buf
+                .char_code_at_emacs_byte_pos(self.byte_pos)
+                .unwrap_or(0)
+        };
+        let width = if !self.multibyte || code < 0x80 {
+            1
+        } else {
+            neovm_value::emacs_char::char_bytes(code)
+        };
+        (syntax_char_from_code(code), width)
+    }
+}
+
+#[doc(hidden)]
+pub fn forward_word_with_options(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    count: i64,
+    props: SyntaxProperties<'_>,
+    boundaries: super::regex_emacs::WordBoundaryLookup,
+) -> (EmacsBytePos, bool) {
+    // Per-scan syntax-table property cache (GNU gl_state); one
+    // interval lookup per property RUN instead of per character.
+    let prop_cache = SyntaxPropRange::new(props);
+    let prop_cache = &prop_cache;
+    let category_table = super::category::active_category_table_for_buffer(Some(buf)).ok();
+    let boundary_syntax = super::regex_emacs::BufferSyntaxLookup {
+        syntax_table: *table,
+        category_table,
+        word_boundary: boundaries,
+    };
+
+    if count < 0 {
+        return backward_word_with_options(buf, table, -count, props, boundaries);
+    }
+
+    let accessible_bytes = buf.accessible_emacs_byte_region();
+    let accessible_chars = buf.accessible_char_region();
+    let mut chars = WordChars::new(buf, accessible_chars.start());
+    let accessible_char_start = accessible_chars.start().get();
+    let accessible_len = accessible_chars.len().get();
+    let mut idx = buffer_byte_to_char_pos(buf, accessible_bytes.clamp(buf.point_emacs_byte_pos()))
+        .saturating_sub(accessible_char_start);
+
+    for _ in 0..count {
+        // Skip non-word characters
+        while idx < accessible_len
+            && !matches!(
+                word_syntax_entry_for_abs_char(
+                    buf,
+                    table,
+                    chars.at(idx),
+                    accessible_char_start + idx,
+                    prop_cache
+                )
+                .class,
+                SyntaxClass::Word
+            )
+        {
+            idx += 1;
+        }
+        if idx == accessible_len {
+            let abs_char = offset_char_pos(accessible_chars.start(), idx);
+            return (buffer_char_to_emacs_byte_pos(buf, abs_char), false);
+        }
+        // Skip word characters
+        let mut adjacent = None;
+        while idx < accessible_len {
+            let ch = chars.at(idx);
+            if !matches!(
+                word_syntax_entry_for_abs_char(
+                    buf,
+                    table,
+                    ch,
+                    accessible_char_start + idx,
+                    prop_cache,
+                )
+                .class,
+                SyntaxClass::Word
+            ) {
+                break;
+            }
+            if let Some(adjacent) = adjacent
+                && boundaries.boundary_between_emacs_characters(adjacent, ch, &boundary_syntax)
+            {
+                break;
+            }
+            adjacent = Some(ch);
+            idx += 1;
+        }
+    }
+
+    // Convert char index back to byte position (absolute).
+    let abs_char = offset_char_pos(accessible_chars.start(), idx);
+    (buffer_char_to_emacs_byte_pos(buf, abs_char), true)
+}
+
+/// Move backward over `count` words.  Returns the resulting Emacs byte position.
+pub fn backward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
+    backward_word_with_options(
+        buf,
+        table,
+        count,
+        SyntaxProperties::Ignore,
+        Default::default(),
+    )
+    .0
+}
+
+/// Whether `find-word-boundary-function-table` has any binding (i.e. some mode
+/// like subword/superword installed boundary functions). When empty (the
+/// common case) word motion uses the plain syntax scan unchanged.
+#[doc(hidden)]
+pub fn word_boundary_table_active(table: &Value, mode: neovm_value::tagged::SymbolMode) -> bool {
+    if !super::chartable::is_char_table(table) {
+        return false;
+    }
+    // Probe a few representative word constituents; subword/superword install
+    // the boundary function across word characters.
+    // A point lookup, as GNU `scan_words' does with `CHAR_TABLE_REF': the
+    // range variant widened the answer across the whole (usually empty)
+    // table, ~6K instructions a probe on every word motion.
+    [b'a' as i64, b'A' as i64, b'0' as i64, b'_' as i64]
+        .into_iter()
+        .any(|ch| !super::chartable::ct_ref_with_symbols(table, ch, mode).is_nil())
+}
+
+/// Move over `count` words honoring `find-word-boundary-function-table`
+/// (GNU `scan_words`, syntax.c): after locating the character that begins (or,
+/// going backward, ends) the next word, if that character has a bound boundary
+/// function call it with (pos, limit) and jump to the returned boundary;
+/// otherwise fall back to a one-word syntax scan. Returns the destination byte
+/// position and whether all `count` motions completed.
+/// `honor` rather than a snapshot: the boundary callback below is arbitrary
+/// Lisp, so each probe takes its own [`SyntaxProperties::for_scan`] snapshot,
+/// just as it already builds its own property-run cache.
+#[doc(hidden)]
+pub fn word_motion_with_table<H: TextHost>(
+    eval: &mut H,
+    count: i64,
+    honor: bool,
+    wbtable: Value,
+) -> (EmacsBytePos, bool) {
+    let symbol_mode = eval.symbol_mode();
+    let forward = count > 0;
+    let n = count.unsigned_abs();
+    let mut completed = true;
+    let current_id = match eval.buffers().current_buffer_id() {
+        Some(id) => id,
+        None => return (EmacsBytePos::new(0), false),
+    };
+
+    for _ in 0..n {
+        // Locate the boundary character and its 1-based char position, plus the
+        // accessible-region limit, all from the current point.  Keep the
+        // syntax-property cache inside this mutation-free probe: the boundary
+        // callback below is arbitrary Lisp and may edit the buffer.
+        let probe = {
+            let props = SyntaxProperties::for_scan_with_symbols(
+                honor,
+                eval.variables(),
+                eval.buffers(),
+                eval.symbol_mode(),
+            );
+            let prop_cache = SyntaxPropRange::new(props);
+            let prop_cache = &prop_cache;
+            let buf = match eval.buffers().get(current_id) {
+                Some(b) => b,
+                None => return (EmacsBytePos::new(0), false),
+            };
+            let table = SyntaxTable::for_buffer(buf);
+            let acc_chars = buf.accessible_char_region();
+            let acc_start = acc_chars.start().get();
+            let acc_len = acc_chars.len().get();
+            let mut chars = WordChars::new(buf, acc_chars.start());
+            let point_char = buffer_byte_to_char_pos(buf, buf.point_emacs_byte_pos());
+            let mut idx = point_char.saturating_sub(acc_start);
+            let mut is_word = |i: usize| {
+                matches!(
+                    word_syntax_entry_for_abs_char(
+                        buf,
+                        &table,
+                        chars.at(i),
+                        acc_start + i,
+                        prop_cache
+                    )
+                    .class,
+                    SyntaxClass::Word
+                )
+            };
+            if forward {
+                while idx < acc_len && !is_word(idx) {
+                    idx += 1;
+                }
+                if idx >= acc_len {
+                    None
+                } else {
+                    // ch0 begins a word; its 1-based char position.
+                    let ch0 = chars.at(idx);
+                    let pos1 = (acc_start + idx + 1) as i64;
+                    let limit1 = (acc_start + acc_len + 1) as i64; // ZV (1-based)
+                    Some((ch0, pos1, limit1))
+                }
+            } else {
+                while idx > 0 && !is_word(idx - 1) {
+                    idx -= 1;
+                }
+                if idx == 0 {
+                    None
+                } else {
+                    // ch1 ends a word; GNU passes its 1-based position.
+                    let ch1 = chars.at(idx - 1);
+                    let pos1 = (acc_start + idx) as i64;
+                    let limit1 = (acc_start + 1) as i64; // BEGV (1-based)
+                    Some((ch1, pos1, limit1))
+                }
+            }
+        };
+
+        let Some((ch, pos1, limit1)) = probe else {
+            // GNU Fforward_word: when scan_words finds no further word, point
+            // still moves to the accessible limit (ZV forward, BEGV backward)
+            // and the motion reports incomplete. Leaving point in place
+            // instead turns the ubiquitous
+            // (while (< (point) (point-max)) (forward-word)) idiom into an
+            // infinite loop whenever trailing non-word text remains.
+            if let Some(buf) = eval.buffers().get(current_id) {
+                let region = buf.accessible_emacs_byte_region();
+                let limit = if forward {
+                    region.range().end()
+                } else {
+                    region.range().start()
+                };
+                let _ = eval
+                    .buffers_mut()
+                    .goto_buffer_emacs_byte_pos(current_id, limit);
+            }
+            completed = false;
+            break;
+        };
+
+        // Look the character up in the boundary-function table.
+        let func = super::chartable::char_table_ref_and_range_with_symbols(
+            &wbtable,
+            i64::from(ch.code()),
+            eval.symbol_mode(),
+        )
+        .map(|(v, _, _)| v)
+        .unwrap_or(Value::NIL);
+        let mut handled = false;
+        let callable = match func.as_symbol_id(symbol_mode) {
+            Some(id) => eval.variables().obarray().fboundp_id(id),
+            None => eval.subr_is_callable_function_value(&func),
+        };
+        if callable
+            && let Ok(result) =
+                eval.funcall_general(func, &[Value::fixnum(pos1), Value::fixnum(limit1)])
+            && let ValueKind::Fixnum(new_pos1) = result.kind()
+        {
+            let valid = if forward {
+                new_pos1 > pos1 && new_pos1 <= limit1
+            } else {
+                new_pos1 < pos1 && new_pos1 >= limit1
+            };
+            if valid {
+                let zero_based = (new_pos1 - 1).max(0) as usize;
+                let byte = {
+                    let buf = eval.buffers().get(current_id).expect("buffer");
+                    buffer_char_to_emacs_byte_pos(buf, CharPos0::new(zero_based))
+                };
+                let _ = eval
+                    .buffers_mut()
+                    .goto_buffer_emacs_byte_pos(current_id, byte);
+                handled = true;
+            }
+        }
+
+        if !handled {
+            // Plain syntax scan of a single word from the current point.
+            let (byte, ok) = {
+                let props = SyntaxProperties::for_scan_with_symbols(
+                    honor,
+                    eval.variables(),
+                    eval.buffers(),
+                    eval.symbol_mode(),
+                );
+                let buf = eval.buffers().get(current_id).expect("buffer");
+                let table = SyntaxTable::for_buffer(buf);
+                forward_word_with_options(
+                    buf,
+                    &table,
+                    if forward { 1 } else { -1 },
+                    props,
+                    super::regex_emacs::current_word_boundary_lookup(eval),
+                )
+            };
+            let _ = eval
+                .buffers_mut()
+                .goto_buffer_emacs_byte_pos(current_id, byte);
+            if !ok {
+                completed = false;
+                break;
+            }
+        }
+    }
+
+    let byte = eval
+        .buffers()
+        .get(current_id)
+        .map(|b| b.point_emacs_byte_pos())
+        .unwrap_or(EmacsBytePos::new(0));
+    (byte, completed)
+}
+
+/// Compute where `forward-word`/`backward-word` over `count` words would land,
+/// honoring `find-word-boundary-function-table`, WITHOUT moving point. Used by
+/// the word-casing commands that operate on the [point, destination] region.
+#[doc(hidden)]
+pub fn forward_word_destination<H: TextHost>(
+    eval: &mut H,
+    count: i64,
+    honor: bool,
+) -> EmacsBytePos {
+    let wbtable = GnuForwardedVariable::FindWordBoundaryFunctionTable
+        .forwarded()
+        .visible_value(eval)
+        .unwrap_or(Value::NIL);
+    if word_boundary_table_active(&wbtable, eval.symbol_mode()) {
+        let current_id = eval.buffers().current_buffer_id();
+        let saved =
+            current_id.and_then(|id| eval.buffers().get(id).map(|b| b.point_emacs_byte_pos()));
+        let (dest, _) = word_motion_with_table(eval, count, honor, wbtable);
+        // word_motion_with_table moves point as it scans; restore it.
+        if let (Some(id), Some(saved)) = (current_id, saved) {
+            let _ = eval.buffers_mut().goto_buffer_emacs_byte_pos(id, saved);
+        }
+        dest
+    } else {
+        let buf = match eval.buffers().current_buffer() {
+            Some(b) => b,
+            None => return EmacsBytePos::new(0),
+        };
+        let props = SyntaxProperties::for_scan_with_symbols(
+            honor,
+            eval.variables(),
+            eval.buffers(),
+            eval.symbol_mode(),
+        );
+        let table = SyntaxTable::for_buffer(buf);
+        forward_word_with_options(
+            buf,
+            &table,
+            count,
+            props,
+            super::regex_emacs::current_word_boundary_lookup(eval),
+        )
+        .0
+    }
+}
+
+fn backward_word_with_options(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    count: i64,
+    props: SyntaxProperties<'_>,
+    boundaries: super::regex_emacs::WordBoundaryLookup,
+) -> (EmacsBytePos, bool) {
+    // Per-scan syntax-table property cache (GNU gl_state); one
+    // interval lookup per property RUN instead of per character.
+    let prop_cache = SyntaxPropRange::new(props);
+    let prop_cache = &prop_cache;
+    let category_table = super::category::active_category_table_for_buffer(Some(buf)).ok();
+    let boundary_syntax = super::regex_emacs::BufferSyntaxLookup {
+        syntax_table: *table,
+        category_table,
+        word_boundary: boundaries,
+    };
+
+    if count < 0 {
+        return forward_word_with_options(buf, table, -count, props, boundaries);
+    }
+
+    let accessible_bytes = buf.accessible_emacs_byte_region();
+    let accessible_chars = buf.accessible_char_region();
+    let mut chars = WordChars::new(buf, accessible_chars.start());
+    let accessible_char_start = accessible_chars.start().get();
+    let mut idx = buffer_byte_to_char_pos(buf, accessible_bytes.clamp(buf.point_emacs_byte_pos()))
+        .saturating_sub(accessible_char_start);
+
+    for _ in 0..count {
+        // Skip non-word characters backward
+        while idx > 0
+            && !matches!(
+                word_syntax_entry_for_abs_char(
+                    buf,
+                    table,
+                    chars.at(idx - 1),
+                    accessible_char_start + idx - 1,
+                    prop_cache
+                )
+                .class,
+                SyntaxClass::Word
+            )
+        {
+            idx -= 1;
+        }
+        if idx == 0 {
+            let abs_char = offset_char_pos(accessible_chars.start(), idx);
+            return (buffer_char_to_emacs_byte_pos(buf, abs_char), false);
+        }
+        // Skip word characters backward
+        let mut adjacent = None;
+        while idx > 0 {
+            let ch = chars.at(idx - 1);
+            if !matches!(
+                word_syntax_entry_for_abs_char(
+                    buf,
+                    table,
+                    ch,
+                    accessible_char_start + idx - 1,
+                    prop_cache,
+                )
+                .class,
+                SyntaxClass::Word
+            ) {
+                break;
+            }
+            if let Some(adjacent) = adjacent
+                && boundaries.boundary_between_emacs_characters(ch, adjacent, &boundary_syntax)
+            {
+                break;
+            }
+            adjacent = Some(ch);
+            idx -= 1;
+        }
+    }
+
+    let abs_char = offset_char_pos(accessible_chars.start(), idx);
+    (buffer_char_to_emacs_byte_pos(buf, abs_char), true)
+}
+
+/// Skip forward over characters whose syntax class matches any character in
+/// `syntax_chars` (each character in the string names a syntax class,
+/// e.g., `"w_"` matches Word and Symbol).  Returns the resulting byte position.
+pub fn skip_syntax_forward(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    syntax_chars: &str,
+    limit: Option<usize>,
+) -> usize {
+    skip_syntax_forward_with_options(
+        buf,
+        table,
+        SkipSyntaxClasses::parse_str(syntax_chars),
+        limit,
+        SyntaxProperties::Ignore,
+    )
+}
+
+fn skip_syntax_forward_with_options(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    classes: SkipSyntaxClasses,
+    limit: Option<usize>,
+    props: SyntaxProperties<'_>,
+) -> usize {
+    // Per-scan syntax-table property cache (GNU gl_state); one
+    // interval lookup per property RUN instead of per character.
+    let prop_cache = SyntaxPropRange::new(props);
+    let prop_cache = &prop_cache;
+
+    let accessible_bytes = buf.accessible_emacs_byte_region();
+    let accessible_chars = buf.accessible_char_region();
+    let mut chars = BufferChars::new(buf, accessible_chars.start());
+    let accessible_char_start = accessible_chars.start().get();
+    let accessible_len = accessible_chars.len().get();
+    let mut idx = buffer_byte_to_char_pos(buf, accessible_bytes.clamp(buf.point_emacs_byte_pos()))
+        .saturating_sub(accessible_char_start);
+
+    let char_limit = limit
+        .map(|lim| {
+            let lim_clamped = accessible_bytes.clamp(EmacsBytePos::new(lim));
+            buffer_byte_to_char_pos(buf, lim_clamped) - accessible_char_start
+        })
+        .unwrap_or(accessible_len);
+
+    while idx < char_limit {
+        let syn = effective_syntax_entry_for_abs_char(
+            buf,
+            table,
+            chars.char_at(idx),
+            accessible_char_start + idx,
+            prop_cache,
+        )
+        .class;
+        if !classes.skips(syn) {
+            break;
+        }
+        idx += 1;
+    }
+
+    let abs_char = offset_char_pos(accessible_chars.start(), idx);
+    buffer_char_to_emacs_byte_pos(buf, abs_char).get()
+}
+
+/// Skip backward over characters whose syntax class matches any character in
+/// `syntax_chars`.  Returns the resulting byte position.
+pub fn skip_syntax_backward(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    syntax_chars: &str,
+    limit: Option<usize>,
+) -> usize {
+    skip_syntax_backward_with_options(
+        buf,
+        table,
+        SkipSyntaxClasses::parse_str(syntax_chars),
+        limit,
+        SyntaxProperties::Ignore,
+    )
+}
+
+fn skip_syntax_backward_with_options(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    classes: SkipSyntaxClasses,
+    limit: Option<usize>,
+    props: SyntaxProperties<'_>,
+) -> usize {
+    // Per-scan syntax-table property cache (GNU gl_state); one
+    // interval lookup per property RUN instead of per character.
+    let prop_cache = SyntaxPropRange::new(props);
+    let prop_cache = &prop_cache;
+
+    let accessible_bytes = buf.accessible_emacs_byte_region();
+    let accessible_chars = buf.accessible_char_region();
+    let mut chars = BufferChars::new(buf, accessible_chars.start());
+    let accessible_char_start = accessible_chars.start().get();
+    let mut idx = buffer_byte_to_char_pos(buf, accessible_bytes.clamp(buf.point_emacs_byte_pos()))
+        .saturating_sub(accessible_char_start);
+
+    let char_limit = limit
+        .map(|lim| {
+            let lim_clamped = accessible_bytes.clamp(EmacsBytePos::new(lim));
+            buffer_byte_to_char_pos(buf, lim_clamped) - accessible_char_start
+        })
+        .unwrap_or(0);
+
+    while idx > char_limit {
+        let syn = effective_syntax_entry_for_abs_char(
+            buf,
+            table,
+            chars.char_at(idx - 1),
+            accessible_char_start + idx - 1,
+            prop_cache,
+        )
+        .class;
+        if !classes.skips(syn) {
+            break;
+        }
+        idx -= 1;
+    }
+
+    let abs_char = offset_char_pos(accessible_chars.start(), idx);
+    buffer_char_to_emacs_byte_pos(buf, abs_char).get()
+}
+
+fn parse_skip_syntax_classes(syntax_chars: &str) -> (Vec<SyntaxClass>, bool) {
+    let mut chars = syntax_chars.chars();
+    let negate = matches!(chars.clone().next(), Some('^'));
+    if negate {
+        chars.next();
+    }
+    (chars.filter_map(SyntaxClass::from_char).collect(), negate)
+}
+
+/// The syntax classes a `skip-syntax-forward`/`-backward` call skips: GNU
+/// `skip_syntaxes`' fastmap, one bit per class, with its leading-`^`
+/// negation folded into the test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SkipSyntaxClasses {
+    bits: u32,
+    negate: bool,
+}
+
+impl SkipSyntaxClasses {
+    fn from_classes(classes: impl IntoIterator<Item = SyntaxClass>, negate: bool) -> Self {
+        let bits = classes
+            .into_iter()
+            .fold(0u32, |bits, class| bits | (1u32 << u8::from(class)));
+        Self { bits, negate }
+    }
+
+    /// Parse a decoded class string (the general path, and Rust callers).
+    fn parse_str(syntax_chars: &str) -> Self {
+        let (classes, negate) = parse_skip_syntax_classes(syntax_chars);
+        Self::from_classes(classes, negate)
+    }
+
+    /// GNU `skip_syntaxes`: the string's internal bytes, `^` first to
+    /// negate, each byte through `syntax_spec_code` -- no decoding and no
+    /// allocation. A non-ASCII character's bytes are all >= 0x80 and name no
+    /// class, exactly as its decoded character does not.
+    fn parse_spec_bytes(bytes: &[u8]) -> Self {
+        let (negate, spec) = match bytes.split_first() {
+            Some((b'^', rest)) => (true, rest),
+            _ => (false, bytes),
+        };
+        Self::from_classes(
+            spec.iter()
+                .filter_map(|&byte| SyntaxClass::from_syntax_spec_byte(byte)),
+            negate,
+        )
+    }
+
+    /// Whether a character of syntax CLASS is skipped.
+    #[inline(always)]
+    fn skips(self, class: SyntaxClass) -> bool {
+        ((self.bits >> u8::from(class)) & 1 != 0) != self.negate
+    }
+}
+
+/// Scan for balanced expressions (sexps).
+///
+/// Starting from byte position `from`, scan `count` sexps forward (positive
+/// count) or backward (negative count).  Returns the byte position after the
+/// last sexp, or an error if unbalanced.
+pub fn scan_sexps(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    from: usize,
+    count: i64,
+) -> Result<usize, String> {
+    match scan_sexps_with_options(
+        buf,
+        table,
+        from,
+        count,
+        SyntaxProperties::Ignore,
+        SexpScanPolicy::default(),
+    )
+    .map_err(|err| err.message)?
+    {
+        Some(pos) => Ok(pos),
+        None if count < 0 => Ok(buf.accessible_emacs_byte_region().start().get()),
+        None => Ok(buf.accessible_emacs_byte_region().end().get()),
+    }
+}
+
+fn scan_sexps_with_options(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    from: usize,
+    count: i64,
+    props: SyntaxProperties<'_>,
+    policy: SexpScanPolicy,
+) -> Result<Option<usize>, ScanListError> {
+    // Per-scan syntax-table property cache (GNU gl_state); one
+    // interval lookup per property RUN instead of per character.
+    let prop_cache = SyntaxPropRange::new(props);
+    let prop_cache = &prop_cache;
+
+    if count == 0 {
+        return Ok(Some(from));
+    }
+
+    let mut chars = BufferChars::new(buf, CharPos0::ZERO);
+    let accessible_chars = buf.accessible_char_region();
+    let start_bound = accessible_chars.start().get();
+    let stop_bound = accessible_chars.end().get();
+
+    // Convert byte position to char index.
+    let mut idx =
+        buffer_byte_to_char_pos(buf, EmacsBytePos::new(from)).clamp(start_bound, stop_bound);
+
+    if count > 0 {
+        for _ in 0..count {
+            let skipped = skip_sexp_ignored_forward(
+                buf, &mut chars, idx, stop_bound, table, policy, prop_cache,
+            );
+            idx = skipped.position();
+            if matches!(skipped, IgnoredSkip::UnterminatedComment(_)) {
+                continue;
+            }
+            if idx >= stop_bound {
+                return Ok(None);
+            }
+            idx = scan_sexp_forward(buf, &mut chars, stop_bound, idx, table, policy, prop_cache)?;
+        }
+    } else {
+        for _ in 0..(-count) {
+            idx = skip_sexp_ignored_backward(
+                buf,
+                &mut chars,
+                idx,
+                start_bound,
+                table,
+                policy,
+                prop_cache,
+            );
+            if idx <= start_bound {
+                return Ok(None);
+            }
+            idx = scan_sexp_backward(buf, &mut chars, idx, start_bound, table, policy, prop_cache)?;
+        }
+    }
+
+    Ok(Some(
+        buffer_char_to_emacs_byte_pos(buf, CharPos0::ZERO.add_len(CharLen::new(idx))).get(),
+    ))
+}
+
+/// Which of GNU's two `scan_lists` loops is asking.
+///
+/// The two loops classify comment syntax DIFFERENTLY, and the difference is
+/// not a symmetry -- which is exactly why sharing one predicate between them
+/// behind a `bool` produced a silently wrong `backward-sexp`. Making the
+/// direction part of the question means a new caller has to state which loop
+/// it is, and a new direction has to decide the rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScanDirection {
+    /// GNU's `while (count > 0)` loop.
+    Forward,
+    /// GNU's `while (count < 0)` loop.
+    Backward,
+}
+
+impl ScanDirection {
+    /// Whether a comment-START character (`;` in Lisp, syntax class `<`) is
+    /// stepped over rather than taken as the edge of a sexp.
+    ///
+    /// FORWARD, GNU reads `case Scomment: if (!parse_sexp_ignore_comments)
+    /// break;` -- reaching that case at all means comments are NOT being
+    /// ignored, because when they are the body was already consumed by
+    /// `forw_comment`. So the char is stepped over only in the not-ignoring
+    /// case.
+    ///
+    /// BACKWARD, GNU has NO `case Scomment` whatsoever: it falls to
+    /// `default:` -- "Ignore whitespace, punctuation, quote, endcomment" --
+    /// and is stepped over unconditionally. That is deliberate, not an
+    /// omission: going backward a comment is entered through its END
+    /// (`Sendcomment` -> `back_comment`), so meeting a bare `;` means point
+    /// was already inside the comment body, where the `;` is ordinary text.
+    const fn steps_over_comment_start(self, ignore_comments: bool) -> bool {
+        match self {
+            Self::Forward => !ignore_comments,
+            Self::Backward => true,
+        }
+    }
+}
+
+fn is_sexp_ignored_syntax(
+    class: SyntaxClass,
+    ignore_comments: bool,
+    direction: ScanDirection,
+) -> bool {
+    match class {
+        SyntaxClass::Whitespace
+        | SyntaxClass::EndComment
+        | SyntaxClass::Punctuation
+        | SyntaxClass::Quote => true,
+        SyntaxClass::Comment => direction.steps_over_comment_start(ignore_comments),
+        _ => false,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommentSkip {
+    Complete(usize),
+    Unterminated(usize),
+}
+
+impl CommentSkip {
+    fn next(self) -> usize {
+        match self {
+            CommentSkip::Complete(next) | CommentSkip::Unterminated(next) => next,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IgnoredSkip {
+    At(usize),
+    UnterminatedComment(usize),
+}
+
+impl IgnoredSkip {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn position(self) -> usize {
+        match self {
+            IgnoredSkip::At(pos) | IgnoredSkip::UnterminatedComment(pos) => pos,
+        }
+    }
+}
+
+fn maybe_skip_comment_forward(
+    buf: &Buffer,
+    idx: usize,
+    props: SyntaxProperties<'_>,
+    class: SyntaxClass,
+    flags: SyntaxFlags,
+    escape_policy: CommentEndEscapePolicy,
+) -> Option<CommentSkip> {
+    if !(class == SyntaxClass::Comment
+        || class == SyntaxClass::CommentFence
+        || flags.contains(SyntaxFlags::COMMENT_START_FIRST))
+    {
+        return None;
+    }
+
+    let start_byte = buffer_char_to_emacs_byte_pos(buf, CharPos0::new(idx));
+    let mut scanner = ForwardCommentCursor {
+        buffer: buf,
+        point: start_byte,
+    };
+    let complete = forward_comment_forward(
+        &mut scanner,
+        1,
+        &SyntaxPropByteRun::new(props),
+        escape_policy,
+    );
+    let next = buffer_byte_to_char_pos(buf, scanner.point_emacs_byte_pos());
+    if next <= idx {
+        None
+    } else if complete {
+        Some(CommentSkip::Complete(next))
+    } else {
+        Some(CommentSkip::Unterminated(next))
+    }
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+fn maybe_skip_comment_backward(
+    buf: &Buffer,
+    idx: usize,
+    props: SyntaxProperties<'_>,
+    class: SyntaxClass,
+    flags: SyntaxFlags,
+    escape_policy: CommentEndEscapePolicy,
+) -> Option<usize> {
+    if !(class == SyntaxClass::EndComment
+        || class == SyntaxClass::CommentFence
+        || flags.contains(SyntaxFlags::COMMENT_END_SECOND))
+    {
+        return None;
+    }
+
+    let start_byte = buffer_char_to_emacs_byte_pos(buf, CharPos0::new(idx));
+    let mut scanner = ForwardCommentCursor {
+        buffer: buf,
+        point: start_byte,
+    };
+    if forward_comment_backward(
+        &mut scanner,
+        1,
+        &SyntaxPropByteRun::new(props),
+        escape_policy,
+        BackwardCommentEntryPolicy::SexpMotion,
+    ) {
+        let next = buffer_byte_to_char_pos(buf, scanner.point_emacs_byte_pos());
+        (next < idx).then_some(next)
+    } else {
+        None
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // scanner bounds and syntax policies remain explicit
+fn skip_sexp_ignored_forward(
+    buf: &Buffer,
+    chars: &mut BufferChars,
+    mut idx: usize,
+    stop: usize,
+    table: &SyntaxTable,
+    policy: SexpScanPolicy,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> IgnoredSkip {
+    let mut skipped_unterminated_comment = false;
+    while idx < stop {
+        let c = chars.char_at(idx);
+        let entry = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache);
+        let class = entry.class;
+        if policy.ignore_comments
+            && let Some(skip) = maybe_skip_comment_forward(
+                buf,
+                idx,
+                prop_cache.props(),
+                class,
+                entry.flags,
+                policy.comment_end_escape,
+            )
+        {
+            skipped_unterminated_comment |= matches!(skip, CommentSkip::Unterminated(_));
+            idx = skip.next();
+            continue;
+        }
+        if is_sexp_ignored_syntax(class, policy.ignore_comments, ScanDirection::Forward) {
+            idx += 1;
+            continue;
+        }
+        break;
+    }
+    if skipped_unterminated_comment {
+        IgnoredSkip::UnterminatedComment(idx)
+    } else {
+        IgnoredSkip::At(idx)
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // scanner bounds and syntax policies remain explicit
+fn skip_sexp_ignored_backward(
+    buf: &Buffer,
+    chars: &mut BufferChars,
+    mut idx: usize,
+    start: usize,
+    table: &SyntaxTable,
+    policy: SexpScanPolicy,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> usize {
+    while idx > start {
+        let prev = idx - 1;
+        let c = chars.char_at(prev);
+        let entry = effective_syntax_entry_for_abs_char(buf, table, c, prev, prop_cache);
+        let class = entry.class;
+        if policy.ignore_comments
+            && let Some(next) = maybe_skip_comment_backward(
+                buf,
+                idx,
+                prop_cache.props(),
+                class,
+                entry.flags,
+                policy.comment_end_escape,
+            )
+        {
+            idx = next;
+            continue;
+        }
+        if is_sexp_ignored_syntax(class, policy.ignore_comments, ScanDirection::Backward) {
+            idx -= 1;
+            continue;
+        }
+        break;
+    }
+    idx
+}
+
+#[allow(clippy::too_many_arguments)] // scanner state mirrors GNU syntax traversal
+fn skip_string_forward(
+    buf: &Buffer,
+    chars: &mut BufferChars,
+    mut idx: usize,
+    stop: usize,
+    table: &SyntaxTable,
+    delimiter: char,
+    delimiter_class: SyntaxClass,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> Result<usize, String> {
+    while idx < stop {
+        let c = chars.char_at(idx);
+        let class = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache).class;
+        if class == delimiter_class
+            && (delimiter_class == SyntaxClass::StringFence || c == delimiter)
+        {
+            return Ok(idx + 1);
+        }
+        if matches!(class, SyntaxClass::Escape | SyntaxClass::CharQuote) {
+            idx += 1;
+        }
+        idx += 1;
+    }
+
+    Err("Scan error: unbalanced parentheses".to_string())
+}
+
+#[allow(clippy::too_many_arguments)] // scanner state mirrors GNU syntax traversal
+fn skip_string_backward(
+    buf: &Buffer,
+    chars: &mut BufferChars,
+    mut idx: usize,
+    stop: usize,
+    table: &SyntaxTable,
+    delimiter: char,
+    delimiter_class: SyntaxClass,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> Result<usize, String> {
+    while idx > stop {
+        idx -= 1;
+        // GNU `scan_lists' (Sstring, backward): a quoted character never
+        // closes the string, however it is classed.
+        if char_quoted_at(buf, chars, idx, stop, table, prop_cache) {
+            continue;
+        }
+        let c = chars.char_at(idx);
+        let class = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache).class;
+        if class == delimiter_class
+            && (delimiter_class == SyntaxClass::StringFence || c == delimiter)
+        {
+            return Ok(idx);
+        }
+    }
+
+    Err("Scan error: unbalanced parentheses".to_string())
+}
+
+fn scan_lists_with_options(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    from: usize,
+    count: i64,
+    initial_depth: i64,
+    props: SyntaxProperties<'_>,
+    policy: SexpScanPolicy,
+) -> Result<Option<usize>, ScanListError> {
+    // Per-scan syntax-table property cache (GNU gl_state); one
+    // interval lookup per property RUN instead of per character.
+    let prop_cache = SyntaxPropRange::new(props);
+    let prop_cache = &prop_cache;
+
+    let mut chars = BufferChars::new(buf, CharPos0::ZERO);
+    let mut idx = from;
+    let accessible_chars = buf.accessible_char_region();
+    let start = accessible_chars.start().get();
+    let stop = accessible_chars.end().get();
+    let mut depth = initial_depth;
+    let min_depth = if depth > 0 { 0 } else { depth };
+    let mut last_good = from;
+
+    if count > 0 {
+        let mut remaining = count;
+        while remaining > 0 {
+            let mut found = false;
+            while idx < stop {
+                let ch = chars.char_at(idx);
+                let entry = effective_syntax_entry_for_abs_char(buf, table, ch, idx, prop_cache);
+                let class = entry.class;
+                if depth == min_depth {
+                    last_good = idx;
+                }
+                if policy.ignore_comments
+                    && let Some(skip) = maybe_skip_comment_forward(
+                        buf,
+                        idx,
+                        prop_cache.props(),
+                        class,
+                        entry.flags,
+                        policy.comment_end_escape,
+                    )
+                {
+                    idx = skip.next();
+                    if matches!(skip, CommentSkip::Unterminated(_)) && depth == 0 {
+                        found = true;
+                        break;
+                    }
+                    continue;
+                }
+                idx += 1;
+
+                match class {
+                    SyntaxClass::Open => {
+                        depth += 1;
+                        if depth == 0 {
+                            found = true;
+                            break;
+                        }
+                    }
+                    SyntaxClass::Close => {
+                        depth -= 1;
+                        if depth == 0 {
+                            found = true;
+                            break;
+                        }
+                        if depth < min_depth {
+                            return Err(ScanListError::containing_ends_prematurely(last_good, idx));
+                        }
+                    }
+                    SyntaxClass::StringDelim | SyntaxClass::StringFence => {
+                        idx = skip_string_forward(
+                            buf, &mut chars, idx, stop, table, ch, class, prop_cache,
+                        )
+                        .map_err(|_| ScanListError::unbalanced(last_good, stop))?;
+                    }
+                    SyntaxClass::Escape | SyntaxClass::CharQuote => {
+                        if idx >= stop {
+                            return Err(ScanListError::unbalanced(last_good, stop));
+                        }
+                        idx += 1;
+                    }
+                    _ => {}
+                }
+            }
+
+            if depth != 0 {
+                return Err(ScanListError::unbalanced(last_good, idx));
+            }
+            if !found {
+                return Ok(None);
+            }
+            remaining -= 1;
+        }
+        Ok(Some(idx))
+    } else if count < 0 {
+        let mut remaining = count;
+        while remaining < 0 {
+            let mut found = false;
+            while idx > start {
+                idx -= 1;
+                let ch = chars.char_at(idx);
+                let entry = effective_syntax_entry_for_abs_char(buf, table, ch, idx, prop_cache);
+                let class = entry.class;
+                if depth == min_depth {
+                    last_good = idx;
+                }
+                if policy.ignore_comments
+                    && let Some(next) = maybe_skip_comment_backward(
+                        buf,
+                        idx + 1,
+                        props,
+                        class,
+                        entry.flags,
+                        policy.comment_end_escape,
+                    )
+                {
+                    idx = next;
+                    continue;
+                }
+                // GNU `scan_lists' (backward): quoting turns anything but a
+                // comment-ender into a word character, escape included.
+                let class = if class != SyntaxClass::EndComment
+                    && char_quoted_at(buf, &mut chars, idx, start, table, prop_cache)
+                {
+                    idx -= 1;
+                    SyntaxClass::Word
+                } else {
+                    class
+                };
+
+                match class {
+                    SyntaxClass::Close => {
+                        depth += 1;
+                        if depth == 0 {
+                            found = true;
+                            break;
+                        }
+                    }
+                    SyntaxClass::Open => {
+                        depth -= 1;
+                        if depth == 0 {
+                            found = true;
+                            break;
+                        }
+                        if depth < min_depth {
+                            return Err(ScanListError::containing_ends_prematurely(last_good, idx));
+                        }
+                    }
+                    SyntaxClass::StringDelim | SyntaxClass::StringFence => {
+                        idx = skip_string_backward(
+                            buf, &mut chars, idx, start, table, ch, class, prop_cache,
+                        )
+                        .map_err(|_| ScanListError::unbalanced(last_good, start))?;
+                    }
+                    _ => {}
+                }
+            }
+
+            if depth != 0 {
+                return Err(ScanListError::unbalanced(last_good, idx));
+            }
+            if !found {
+                return Ok(None);
+            }
+            remaining += 1;
+        }
+        Ok(Some(idx))
+    } else {
+        Ok(Some(idx))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScanListError {
+    message: String,
+    last_good: usize,
+    at: usize,
+}
+
+impl ScanListError {
+    fn new(message: impl Into<String>, last_good: usize, at: usize) -> Self {
+        Self {
+            message: message.into(),
+            last_good,
+            at,
+        }
+    }
+
+    fn unbalanced(last_good: usize, at: usize) -> Self {
+        Self::new("Unbalanced parentheses", last_good, at)
+    }
+
+    fn containing_ends_prematurely(last_good: usize, at: usize) -> Self {
+        Self::new("Containing expression ends prematurely", last_good, at)
+    }
+
+    fn signal_data(&self) -> Vec<Value> {
+        vec![
+            Value::string(&self.message),
+            Value::fixnum(char_pos_to_lisp_i64(self.last_good)),
+            Value::fixnum(char_pos_to_lisp_i64(self.at)),
+        ]
+    }
+}
+
+/// Returns true if the character at char index `idx` is quoted, i.e. it is
+/// preceded by an odd number of escape/char-quote characters.  Mirrors GNU
+/// `char_quoted` in syntax.c.
+fn char_quoted_at(
+    buf: &Buffer,
+    chars: &mut BufferChars,
+    idx: usize,
+    start_bound: usize,
+    table: &SyntaxTable,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> bool {
+    let mut pos = idx;
+    let mut quoted = false;
+    while pos > start_bound {
+        pos -= 1;
+        let c = chars.char_at(pos);
+        let class = effective_syntax_entry_for_abs_char(buf, table, c, pos, prop_cache).class;
+        if !matches!(class, SyntaxClass::Escape | SyntaxClass::CharQuote) {
+            break;
+        }
+        quoted = !quoted;
+    }
+    quoted
+}
+
+/// Scan one sexp forward from char index `start`.
+#[allow(clippy::too_many_arguments)] // scanner state mirrors GNU syntax traversal
+fn scan_sexp_forward(
+    buf: &Buffer,
+    chars: &mut BufferChars,
+    len: usize,
+    start: usize,
+    table: &SyntaxTable,
+    policy: SexpScanPolicy,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> Result<usize, ScanListError> {
+    let skipped = skip_sexp_ignored_forward(buf, chars, start, len, table, policy, prop_cache);
+    let mut idx = skipped.position();
+
+    if matches!(skipped, IgnoredSkip::UnterminatedComment(_)) {
+        return Ok(idx);
+    }
+
+    if idx >= len {
+        return Err(ScanListError::unbalanced(start, idx));
+    }
+
+    let ch = chars.char_at(idx);
+    let syn_entry = effective_syntax_entry_for_abs_char(buf, table, ch, idx, prop_cache);
+    let syn = syn_entry.class;
+
+    match syn {
+        SyntaxClass::Open => {
+            // Find matching close, respecting nesting.
+            let mut depth = 1i32;
+            idx += 1;
+            while idx < len && depth > 0 {
+                let c = chars.char_at(idx);
+                let entry = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache);
+                let s = entry.class;
+                if policy.ignore_comments
+                    && let Some(skip) = maybe_skip_comment_forward(
+                        buf,
+                        idx,
+                        prop_cache.props(),
+                        s,
+                        entry.flags,
+                        policy.comment_end_escape,
+                    )
+                {
+                    idx = skip.next();
+                    continue;
+                }
+                match s {
+                    SyntaxClass::Open => {
+                        depth += 1;
+                    }
+                    SyntaxClass::Close => {
+                        depth -= 1;
+                    }
+                    SyntaxClass::StringDelim | SyntaxClass::StringFence => {
+                        // Skip over string contents
+                        let delim_class = s;
+                        idx += 1;
+                        while idx < len {
+                            let sc = effective_syntax_entry_for_abs_char(
+                                buf,
+                                table,
+                                chars.char_at(idx),
+                                idx,
+                                prop_cache,
+                            )
+                            .class;
+                            if sc == delim_class
+                                && (s == SyntaxClass::StringFence || chars.char_at(idx) == c)
+                            {
+                                break;
+                            }
+                            if matches!(sc, SyntaxClass::Escape | SyntaxClass::CharQuote) {
+                                idx += 1; // skip escaped char
+                            }
+                            idx += 1;
+                        }
+                        // idx now points at closing delim (or past end)
+                    }
+                    SyntaxClass::Escape => {
+                        idx += 1; // skip next char
+                    }
+                    _ => {}
+                }
+                idx += 1;
+            }
+            if depth != 0 {
+                return Err(ScanListError::unbalanced(start, idx));
+            }
+            Ok(idx)
+        }
+        SyntaxClass::Close => Err(ScanListError::containing_ends_prematurely(start, idx + 1)),
+        SyntaxClass::StringDelim | SyntaxClass::StringFence => {
+            // Scan to matching string delimiter.
+            // StringFence always pairs with itself (like `"` but independent).
+            let delim_class = syn;
+            idx += 1;
+            while idx < len {
+                let c = chars.char_at(idx);
+                let s = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache).class;
+                if s == delim_class && (syn == SyntaxClass::StringFence || c == ch) {
+                    break;
+                }
+                if matches!(s, SyntaxClass::Escape | SyntaxClass::CharQuote) {
+                    idx += 1; // skip escaped char
+                }
+                idx += 1;
+            }
+            if idx >= len {
+                return Err(ScanListError::unbalanced(start, idx));
+            }
+            Ok(idx + 1) // past closing delim
+        }
+        SyntaxClass::Word | SyntaxClass::Symbol | SyntaxClass::Escape | SyntaxClass::CharQuote => {
+            // Scan over a symbol/word sexp.  An escape/char-quote at the start
+            // (e.g. `\(`, or `\` joining the next char into the word) consumes
+            // the following character and continues into the symbol body, just
+            // like GNU's scan_lists Sescape/Scharquote fallthrough.
+            if matches!(syn, SyntaxClass::Escape | SyntaxClass::CharQuote) {
+                // The escape itself is at `idx`; advance past it.
+                idx += 1;
+                if idx >= len {
+                    // Trailing escape with no char to quote: unbalanced.
+                    return Err(ScanListError::unbalanced(start, idx));
+                }
+                // Consume the quoted character.
+                idx += 1;
+            }
+            // Continue absorbing the rest of the word/symbol, honoring escapes.
+            while idx < len {
+                let c = chars.char_at(idx);
+                let s = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache).class;
+                match s {
+                    SyntaxClass::Escape | SyntaxClass::CharQuote => {
+                        // Skip the escape char, then the quoted char below.
+                        idx += 1;
+                        if idx >= len {
+                            return Err(ScanListError::unbalanced(start, idx));
+                        }
+                    }
+                    SyntaxClass::Word | SyntaxClass::Symbol | SyntaxClass::Quote => {}
+                    _ => break,
+                }
+                idx += 1;
+            }
+            Ok(idx)
+        }
+        SyntaxClass::Math => {
+            // Scan to matching math delimiter.
+            let delim = ch;
+            idx += 1;
+            while idx < len && chars.char_at(idx) != delim {
+                idx += 1;
+            }
+            if idx >= len {
+                return Err(ScanListError::unbalanced(start, idx));
+            }
+            Ok(idx + 1)
+        }
+        _ => {
+            // Single punctuation or other character is its own sexp.
+            Ok(idx + 1)
+        }
+    }
+}
+
+/// Scan one sexp backward from char index `start`.
+#[allow(clippy::too_many_arguments)] // scanner state mirrors GNU syntax traversal
+fn scan_sexp_backward(
+    buf: &Buffer,
+    chars: &mut BufferChars,
+    start: usize,
+    start_bound: usize,
+    table: &SyntaxTable,
+    policy: SexpScanPolicy,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> Result<usize, ScanListError> {
+    let mut idx =
+        skip_sexp_ignored_backward(buf, chars, start, start_bound, table, policy, prop_cache);
+
+    if idx == start_bound {
+        return Err(ScanListError::unbalanced(idx, start));
+    }
+
+    idx -= 1; // move to the character we're examining
+    // GNU `scan_lists' error data is (LAST_GOOD FROM): LAST_GOOD is the last
+    // character examined at the starting depth -- the one that begins this
+    // sexp -- and FROM where the scan stopped.
+    let sexp_char = idx;
+    let ch = chars.char_at(idx);
+    let syn_entry = effective_syntax_entry_for_abs_char(buf, table, ch, idx, prop_cache);
+    let mut syn = syn_entry.class;
+
+    // Quoting turns anything except a comment-ender into a word character.
+    // Mirrors GNU scan_lists: if the char we landed on is quoted (preceded by
+    // an escape), step back past the escape and treat the pair as a word.
+    if syn != SyntaxClass::EndComment
+        && char_quoted_at(buf, chars, idx, start_bound, table, prop_cache)
+    {
+        idx -= 1;
+        syn = SyntaxClass::Word;
+    }
+
+    match syn {
+        SyntaxClass::Close => {
+            // Find matching open, respecting nesting.
+            let mut depth = 1i32;
+            while idx > start_bound && depth > 0 {
+                idx -= 1;
+                let c = chars.char_at(idx);
+                let entry = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache);
+                let s = entry.class;
+                if policy.ignore_comments
+                    && let Some(next) = maybe_skip_comment_backward(
+                        buf,
+                        idx + 1,
+                        prop_cache.props(),
+                        s,
+                        entry.flags,
+                        policy.comment_end_escape,
+                    )
+                {
+                    idx = next;
+                    continue;
+                }
+                // Quoting turns anything but a comment-ender into a word
+                // character: step over the escape, leave the depth alone.
+                if s != SyntaxClass::EndComment
+                    && char_quoted_at(buf, chars, idx, start_bound, table, prop_cache)
+                {
+                    idx -= 1;
+                    continue;
+                }
+                match s {
+                    SyntaxClass::Close => {
+                        depth += 1;
+                    }
+                    SyntaxClass::Open => {
+                        depth -= 1;
+                    }
+                    SyntaxClass::StringDelim | SyntaxClass::StringFence => {
+                        // Skip over string contents backward
+                        let delim_class = s;
+                        if idx > start_bound {
+                            idx -= 1;
+                            while idx > start_bound {
+                                let sc = effective_syntax_entry_for_abs_char(
+                                    buf,
+                                    table,
+                                    chars.char_at(idx),
+                                    idx,
+                                    prop_cache,
+                                )
+                                .class;
+                                if sc == delim_class
+                                    && (s == SyntaxClass::StringFence || chars.char_at(idx) == c)
+                                    && !char_quoted_at(
+                                        buf,
+                                        chars,
+                                        idx,
+                                        start_bound,
+                                        table,
+                                        prop_cache,
+                                    )
+                                {
+                                    break;
+                                }
+                                idx -= 1;
+                            }
+                            // idx now points at the opening delim
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if depth != 0 {
+                return Err(ScanListError::unbalanced(sexp_char, idx));
+            }
+            Ok(idx)
+        }
+        // GNU: the open paren drops below the starting depth while it is
+        // itself the last character examined at that depth.
+        SyntaxClass::Open => Err(ScanListError::containing_ends_prematurely(
+            sexp_char, sexp_char,
+        )),
+        SyntaxClass::StringDelim | SyntaxClass::StringFence => {
+            // Scan backward to matching string delimiter.
+            let delim_class = syn;
+            if idx == start_bound {
+                return Err(ScanListError::unbalanced(sexp_char, idx));
+            }
+            idx -= 1;
+            while idx > start_bound {
+                let c = chars.char_at(idx);
+                let s = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache).class;
+                if s == delim_class
+                    && (syn == SyntaxClass::StringFence || c == ch)
+                    && !char_quoted_at(buf, chars, idx, start_bound, table, prop_cache)
+                {
+                    break;
+                }
+                idx -= 1;
+            }
+            let c = chars.char_at(idx);
+            let s = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache).class;
+            if !(s == delim_class && (syn == SyntaxClass::StringFence || c == ch)) {
+                return Err(ScanListError::unbalanced(sexp_char, idx));
+            }
+            Ok(idx)
+        }
+        SyntaxClass::Word | SyntaxClass::Symbol | SyntaxClass::Escape | SyntaxClass::CharQuote => {
+            // Scan backward over a word/symbol sexp, honoring escapes/char-quotes
+            // that join the following char into the symbol.  Mirrors GNU
+            // scan_lists' backward Sword/Ssymbol/Sescape/Scharquote loop.
+            while idx > start_bound {
+                let prev = idx - 1;
+                let c1 = chars.char_at(prev);
+                let c1_class =
+                    effective_syntax_entry_for_abs_char(buf, table, c1, prev, prop_cache).class;
+                // Don't allow a comment-end to be quoted.
+                if c1_class == SyntaxClass::EndComment {
+                    break;
+                }
+                let quoted = char_quoted_at(buf, chars, prev, start_bound, table, prop_cache);
+                if quoted {
+                    // The previous char is escaped: step back past it now, so the
+                    // following `idx -= 1` lands on the escape character.
+                    idx -= 1;
+                } else if !matches!(
+                    c1_class,
+                    SyntaxClass::Word | SyntaxClass::Symbol | SyntaxClass::Quote
+                ) {
+                    break;
+                }
+                idx -= 1;
+            }
+            Ok(idx)
+        }
+        SyntaxClass::Math => {
+            let delim = ch;
+            if idx == start_bound {
+                return Err(ScanListError::unbalanced(sexp_char, idx));
+            }
+            idx -= 1;
+            while idx > start_bound && chars.char_at(idx) != delim {
+                idx -= 1;
+            }
+            if chars.char_at(idx) != delim {
+                return Err(ScanListError::unbalanced(sexp_char, idx));
+            }
+            Ok(idx)
+        }
+        _ => {
+            // Single char sexp.
+            Ok(idx)
+        }
+    }
+}
+
+// ===========================================================================
+// Builtin functions (pure — no evaluator needed)
+// ===========================================================================
+
+/// `(string-to-syntax S)` — parse a syntax descriptor string.
+#[doc(hidden)]
+pub fn builtin_string_to_syntax(args: Vec<Value>) -> EvalResult {
+    if args.len() != 1 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("string-to-syntax"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    let s = syntax_runtime_string(&args[0])?;
+    let entry = string_to_syntax(&s).map_err(|msg| signal("error", vec![Value::string(&msg)]))?;
+    if matches!(entry.class, SyntaxClass::InheritStd) {
+        return Ok(Value::NIL);
+    }
+    Ok(syntax_entry_to_value(&entry))
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// `(make-syntax-table &optional PARENT)` — create a new syntax table.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_make_syntax_table(args: Vec<Value>) -> EvalResult {
+    if args.len() > 1 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("make-syntax-table"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let table = super::chartable::make_char_table_value(Value::symbol("syntax-table"), Value::NIL);
+    let parent = if args.is_empty() || args[0].is_nil() {
+        ensure_standard_syntax_table_object()?
+    } else {
+        args[0]
+    };
+    if !parent.is_nil() {
+        super::chartable::builtin_set_char_table_parent(vec![table, parent])?;
+    }
+    Ok(table)
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// `(copy-syntax-table &optional TABLE)` — return a fresh copy of TABLE.
+pub(crate) fn builtin_copy_syntax_table(args: Vec<Value>) -> EvalResult {
+    builtin_copy_syntax_table_with_symbols(args, neovm_value::tagged::SymbolMode::Bare)
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+fn ensure_standard_syntax_table_object() -> EvalResult {
+    STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| {
+        if let Some(table) = slot.borrow().as_ref() {
+            return Ok(*table);
+        }
+        let whitespace = syntax_entry_to_value(&SyntaxEntry::simple(SyntaxClass::Whitespace));
+        let punctuation = syntax_entry_to_value(&SyntaxEntry::simple(SyntaxClass::Punctuation));
+        let word = syntax_entry_to_value(&SyntaxEntry::simple(SyntaxClass::Word));
+        let table =
+            super::chartable::make_char_table_value(Value::symbol("syntax-table"), whitespace);
+
+        for cp in 0..=(' ' as i64 - 1) {
+            super::chartable::builtin_set_char_table_range(
+                vec![table, Value::fixnum(cp), punctuation],
+                None,
+            )?;
+        }
+        super::chartable::builtin_set_char_table_range(
+            vec![table, Value::fixnum(0x7f), punctuation],
+            None,
+        )?;
+
+        // Standard ASCII defaults — matches GNU `Fset_standard_syntax_table`
+        // in `syntax.c:3476-3557`. Word: letters, digits, $ %;
+        // Open/Close: paren/bracket/brace pairs with matching chars;
+        // StringDelim: "; Escape: \; Symbol: _ - + * / & | < > =;
+        // Punctuation: . , ; : ? ! # @ ~ ^ ' `.
+        let set_with_reuse =
+            |ch: char, e: SyntaxEntry, object_reuse: LispSyntaxObjectReuse| -> Result<(), Flow> {
+                super::chartable::builtin_set_char_table_range(
+                    vec![
+                        table,
+                        Value::fixnum(ch as i64),
+                        materialize_syntax_entry(&e, object_reuse),
+                    ],
+                    None,
+                )
+                .map(|_| ())
+            };
+        use LispSyntaxObjectReuse::{CanonicalBare, Fresh};
+        let set = |ch, entry| set_with_reuse(ch, entry, CanonicalBare);
+        let set_fresh = |ch, entry| set_with_reuse(ch, entry, Fresh);
+        for ch in [' ', '\t', '\n', '\r', '\u{000c}'] {
+            set(ch, SyntaxEntry::simple(SyntaxClass::Whitespace))?;
+        }
+        for ch in 'a'..='z' {
+            set(ch, SyntaxEntry::simple(SyntaxClass::Word))?;
+        }
+        for ch in 'A'..='Z' {
+            set(ch, SyntaxEntry::simple(SyntaxClass::Word))?;
+        }
+        for ch in '0'..='9' {
+            set(ch, SyntaxEntry::simple(SyntaxClass::Word))?;
+        }
+        set('$', SyntaxEntry::simple(SyntaxClass::Word))?;
+        set('%', SyntaxEntry::simple(SyntaxClass::Word))?;
+        set('(', SyntaxEntry::with_match(SyntaxClass::Open, ')'))?;
+        set(')', SyntaxEntry::with_match(SyntaxClass::Close, '('))?;
+        set('[', SyntaxEntry::with_match(SyntaxClass::Open, ']'))?;
+        set(']', SyntaxEntry::with_match(SyntaxClass::Close, '['))?;
+        set('{', SyntaxEntry::with_match(SyntaxClass::Open, '}'))?;
+        set('}', SyntaxEntry::with_match(SyntaxClass::Close, '{'))?;
+        // GNU `init_syntax_once` bypasses `Vsyntax_code_object` for these
+        // standard-table entries even though their bare forms are otherwise
+        // canonicalizable.  Preserve that observable object ownership.
+        set_fresh('"', SyntaxEntry::simple(SyntaxClass::StringDelim))?;
+        set_fresh('\\', SyntaxEntry::simple(SyntaxClass::Escape))?;
+        for ch in ['_', '-', '+', '*', '/', '&', '|', '<', '>', '='] {
+            set(ch, SyntaxEntry::simple(SyntaxClass::Symbol))?;
+        }
+        for ch in ['.', ',', ';', ':', '?', '!', '#', '@', '~', '^', '\'', '`'] {
+            set(ch, SyntaxEntry::simple(SyntaxClass::Punctuation))?;
+        }
+        super::chartable::builtin_set_char_table_range(
+            vec![
+                table,
+                Value::cons(Value::fixnum(0x80), Value::fixnum(0x3F_FFFF)),
+                word,
+            ],
+            None,
+        )?;
+        *slot.borrow_mut() = Some(table);
+        STANDARD_SYNTAX_TABLE_HEAP.with(|owner| {
+            owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+        });
+        Ok(table)
+    })
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+fn current_buffer_syntax_table_object_in_buffers(
+    buffers: &mut BufferManager,
+) -> Result<Value, Flow> {
+    current_buffer_syntax_table_object_in_buffers_with_symbols(
+        buffers,
+        neovm_value::tagged::SymbolMode::Bare,
+    )
+}
+
+#[doc(hidden)]
+pub fn sync_current_buffer_syntax_table_state<H: TextHost>(ctx: &mut H) -> Result<(), Flow> {
+    let mode = ctx.symbol_mode();
+    // Just ensure the slot is seeded with the standard chartable if
+    // it was left `Value::NIL`. No compilation, no cache rebuild —
+    // motion/parse code reads `buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()]`
+    // directly via `SyntaxTable::for_buffer`. Matches GNU
+    // `set_buffer_internal`.
+    let _ = current_buffer_syntax_table_object_in_buffers_with_symbols(ctx.buffers_mut(), mode)?;
+    Ok(())
+}
+
+fn set_current_buffer_syntax_table_object_in_buffers(
+    buffers: &mut BufferManager,
+    table: Value,
+) -> Result<(), Flow> {
+    use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
+    let current_id = buffers
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let buf = buffers
+        .get_mut(current_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    // Mirrors GNU `Fset_syntax_table` (`syntax.c:1030-1042`):
+    //     bset_syntax_table (current_buffer, table);
+    //     SET_PER_BUFFER_VALUE_P (current_buffer,
+    //                             PER_BUFFER_VAR_IDX (syntax_table), 1);
+    buf.slots_mut()[BUFFER_SLOT_SYNTAX_TABLE.index()] = table;
+    buf.set_slot_local_flag(BUFFER_SLOT_SYNTAX_TABLE, true);
+    Ok(())
+}
+
+/// Read the `SyntaxEntry` for character `c` from the chartable `table`.
+///
+/// Mirrors GNU Emacs `SYNTAX_ENTRY(c)` in `src/syntax.h`:
+///
+/// ```c
+/// #define SYNTAX_ENTRY(c) \
+///   char_table_ref (BVAR (current_buffer, syntax_table), c)
+/// ```
+///
+/// When `table` is `Value::NIL` (an un-seeded buffer slot or a
+/// placeholder wrapper), falls back to the evaluator's
+/// standard-syntax-table chartable. This mirrors GNU `reset_buffer`,
+/// which copies `Vstandard_syntax_table` into every fresh
+/// `buffer->syntax_table` — so from the reader's point of view a
+/// "never-set" slot always behaves like the standard.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn syntax_entry_at_char(table: &Value, c: char) -> Option<SyntaxEntry> {
+    syntax_entry_at_char_code(table, c as u32)
+}
+
+/// Number of syntax tables whose decoded flat ASCII classifiers a thread keeps
+/// resident. One slot thrashed whenever a scan alternated between two tables —
+/// elb-smie runs a fifth of its `parse-partial-sexp` calls under a
+/// `with-syntax-table` CPP table, refilling all 128 entries on every switch.
+const SYNTAX_FLAT_ASCII_SLOTS: usize = 4;
+
+/// A tiny per-thread LRU of decoded flat ASCII classifiers.
+///
+/// Every slot is keyed on the backing char-table's value bits (identity) and
+/// the global char-table write tick, the same key the single-slot caches used:
+/// any char-table write or allocation bumps the tick, so a table whose address
+/// was reused can never be served from a stale slot. `order` lists the occupied
+/// slots most-recently-used first; hits and inserts only move those indices, so
+/// an eviction never copies a decoded array.
+struct FlatAsciiCache<E: Copy> {
+    tick: u64,
+    len: usize,
+    order: [usize; SYNTAX_FLAT_ASCII_SLOTS],
+    bits: [usize; SYNTAX_FLAT_ASCII_SLOTS],
+    entries: [[E; 128]; SYNTAX_FLAT_ASCII_SLOTS],
+}
+
+impl<E: Copy> FlatAsciiCache<E> {
+    const fn new(empty: E) -> Self {
+        Self {
+            tick: 0,
+            len: 0,
+            order: [0; SYNTAX_FLAT_ASCII_SLOTS],
+            bits: [0; SYNTAX_FLAT_ASCII_SLOTS],
+            entries: [[empty; 128]; SYNTAX_FLAT_ASCII_SLOTS],
+        }
+    }
+
+    /// Drop every entry when the global write tick moved: the tick is part of
+    /// the key, so entries minted under an older tick can never be valid again.
+    #[inline]
+    fn invalidate_stale(&mut self, tick: u64) {
+        if self.len != 0 && self.tick != tick {
+            self.len = 0;
+        }
+        self.tick = tick;
+    }
+
+    /// Move position `pos` of the LRU order to the front.
+    #[inline]
+    fn promote(&mut self, pos: usize) {
+        if pos == 0 {
+            return;
+        }
+        let slot = self.order[pos];
+        self.order.copy_within(0..pos, 1);
+        self.order[0] = slot;
+    }
+
+    /// Return the slot holding `bits` for `tick`, promoting it to the front.
+    #[inline]
+    fn lookup(&mut self, bits: usize, tick: u64) -> Option<usize> {
+        self.invalidate_stale(tick);
+        for pos in 0..self.len {
+            if self.bits[self.order[pos]] == bits {
+                self.promote(pos);
+                return Some(self.order[0]);
+            }
+        }
+        None
+    }
+
+    /// Store `entries` for `bits` at `tick`, evicting the least recently used
+    /// slot when full, and return the slot.
+    #[inline]
+    fn insert(&mut self, bits: usize, tick: u64, entries: [E; 128]) -> usize {
+        self.invalidate_stale(tick);
+        let (slot, pos) = if self.len < SYNTAX_FLAT_ASCII_SLOTS {
+            let slot = self.len;
+            self.len += 1;
+            self.order[slot] = slot;
+            (slot, slot)
+        } else {
+            (
+                self.order[SYNTAX_FLAT_ASCII_SLOTS - 1],
+                SYNTAX_FLAT_ASCII_SLOTS - 1,
+            )
+        };
+        self.bits[slot] = bits;
+        self.entries[slot] = entries;
+        self.promote(pos);
+        slot
+    }
+}
+
+thread_local! {
+    /// Per-syntax-table flat ASCII parser classifiers, keyed on (table
+    /// identity, global char-table write tick). GNU's SYNTAX(c) is 2-3 loads
+    /// because the char-table's ascii subtable IS the flat array; this port's
+    /// parse previously rebuilt a per-CALL memo, so font-lock's thousands of
+    /// short `parse-partial-sexp` deltas re-derived every ASCII entry through
+    /// the layered ct_lookup chain (~917K lookups / full fontify). The tick
+    /// makes any char-table write anywhere invalidate the cache (see
+    /// `char_table_write_tick`); the LRU keeps the handful of tables a scan
+    /// alternates between resident instead of refilling on every switch.
+    ///
+    /// The decoded arrays live behind a fixed-size TLS handle and are boxed on
+    /// first use: a multi-slot cache inline in TLS would grow every thread's
+    /// TLS block, and every TLS byte shifts %fs offsets across the binary.
+    static SYNTAX_FLAT_ASCII_CACHE:
+        std::cell::RefCell<Option<Box<FlatAsciiCache<ParseSyntaxEntry>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+/// The parser never consults a syntax entry's matching character.  Keeping its
+/// flat ASCII classifier to exactly the two fields the transition loop reads
+/// avoids copying and retaining a 1 KiB `[SyntaxEntry; 128]` in the parser's
+/// already-large stack frame.
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct ParseSyntaxEntry {
+    class: SyntaxClass,
+    flags: SyntaxFlags,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// The parser never consults a syntax entry's matching character.  Keeping its
+/// flat ASCII classifier to exactly the two fields the transition loop reads
+/// avoids copying and retaining a 1 KiB `[SyntaxEntry; 128]` in the parser's
+/// already-large stack frame.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct ParseSyntaxEntry {
+    pub(crate) class: SyntaxClass,
+    flags: SyntaxFlags,
+}
+
+impl ParseSyntaxEntry {
+    const WHITESPACE: Self = Self {
+        class: SyntaxClass::Whitespace,
+        flags: SyntaxFlags::empty(),
+    };
+}
+
+const _: () = assert!(std::mem::size_of::<ParseSyntaxEntry>() == 2);
+
+/// The 128 decoded ASCII entries of `table`, produced by one pass over the
+/// effective char-table's ASCII slots (GNU `CHAR_TABLE_REF_ASCII`,
+/// lisp.h:2133-2146) instead of one generic `ct_lookup` per character.
+///
+/// The raw values are exactly what `ct_lookup` resolves for each ASCII code,
+/// so every decoded entry is unchanged.  Falls back to the per-character
+/// path when the backing value is not a char-table.
+fn flat_ascii_syntax_entries(table: &SyntaxTable) -> [SyntaxEntry; 128] {
+    let effective = if table.chartable.is_nil() {
+        ensure_standard_syntax_table_object().unwrap_or(Value::NIL)
+    } else {
+        table.chartable
+    };
+    let mut raw = [Value::NIL; 128];
+    if effective.is_nil() || !super::chartable::ct_ascii_raw_values(&effective, &mut raw) {
+        return std::array::from_fn(|cp| syntax_entry_from_table(table, cp as u8 as char));
+    }
+    std::array::from_fn(|cp| {
+        record_syntax_table_decode();
+        syntax_entry_from_chartable_entry(&raw[cp])
+            .unwrap_or_else(|| SyntaxEntry::simple(table.char_syntax(cp as u8 as char)))
+    })
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+fn flat_ascii_entries_for_table(table: &SyntaxTable) -> [ParseSyntaxEntry; 128] {
+    let bits = table.chartable.bits();
+    let tick = crate::emacs_core::chartable::char_table_write_tick();
+    let cached = SYNTAX_FLAT_ASCII_CACHE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let cache =
+            slot.get_or_insert_with(|| Box::new(FlatAsciiCache::new(ParseSyntaxEntry::WHITESPACE)));
+        let hit = cache.lookup(bits, tick);
+        hit.map(|hit| cache.entries[hit])
+    });
+    if let Some(entries) = cached {
+        return entries;
+    }
+    let decoded = flat_ascii_syntax_entries(table);
+    let entries = std::array::from_fn(|cp| ParseSyntaxEntry {
+        class: decoded[cp].class,
+        flags: decoded[cp].flags,
+    });
+    // The fill may have materialized the standard table (a char-table
+    // allocation, hence a tick bump); key the entry on the tick it is valid at.
+    let tick = crate::emacs_core::chartable::char_table_write_tick();
+    SYNTAX_FLAT_ASCII_CACHE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let cache =
+            slot.get_or_insert_with(|| Box::new(FlatAsciiCache::new(ParseSyntaxEntry::WHITESPACE)));
+        let hit = cache.insert(bits, tick, entries);
+        cache.entries[hit]
+    })
+}
+
+thread_local! {
+    /// Persistent flat ASCII classifier for the regex/`char-syntax` path,
+    /// storing the FULL [`SyntaxEntry`] (the parser's `SYNTAX_FLAT_ASCII_*`
+    /// keeps only class+flags and cannot serve `matching_char`). Keyed the same
+    /// way — `(chartable bits, char_table_write_tick)` — so any char-table
+    /// write invalidates it. This is what stops `re-search-forward`'s per-call
+    /// `SyntaxPropByteRun` from re-decoding every ASCII char through
+    /// `ct_lookup` on each of the thousands of calls font-lock makes.
+    /// Boxed for the same fixed-size TLS reason as `SYNTAX_FLAT_ASCII_CACHE`.
+    static SYNTAX_FLAT_ASCII_ENTRY_CACHE:
+        std::cell::RefCell<Option<Box<FlatAsciiCache<SyntaxEntry>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+const SYNTAX_ENTRY_WHITESPACE: SyntaxEntry = SyntaxEntry {
+    class: SyntaxClass::Whitespace,
+    matching_char: None,
+    flags: SyntaxFlags::empty(),
+};
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// The syntax entry for ASCII `cp` under `table`, served from a thread-local
+/// flat classifier that survives across match calls (the per-`SyntaxPropByteRun`
+/// memo does not). On a cache miss the whole 0..128 range is filled once via
+/// `syntax_entry_from_table`; subsequent lookups — this call and every later
+/// one until a char-table write bumps the tick — are a single array index.
+fn flat_ascii_syntax_entry(table: &SyntaxTable, cp: u8) -> SyntaxEntry {
+    debug_assert!(cp < 128);
+    let bits = table.chartable.bits();
+    let tick = crate::emacs_core::chartable::char_table_write_tick();
+    let cached = SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let cache =
+            slot.get_or_insert_with(|| Box::new(FlatAsciiCache::new(SYNTAX_ENTRY_WHITESPACE)));
+        let hit = cache.lookup(bits, tick);
+        hit.map(|hit| cache.entries[hit][cp as usize])
+    });
+    match cached {
+        Some(entry) => entry,
+        None => refill_flat_ascii_syntax_entry_cache(table, bits, cp),
+    }
+}
+
+// Keep a cache fill's array construction and error cleanup off cached reads.
+#[cold]
+#[inline(never)]
+fn refill_flat_ascii_syntax_entry_cache(table: &SyntaxTable, bits: usize, cp: u8) -> SyntaxEntry {
+    let entries = flat_ascii_syntax_entries(table);
+    // The fill may have materialized the standard table (a char-table
+    // allocation, hence a tick bump); key the entry on the tick it is valid at.
+    let tick = crate::emacs_core::chartable::char_table_write_tick();
+    SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let cache =
+            slot.get_or_insert_with(|| Box::new(FlatAsciiCache::new(SYNTAX_ENTRY_WHITESPACE)));
+        let hit = cache.insert(bits, tick, entries);
+        cache.entries[hit][cp as usize]
+    })
+}
+
+// Keep cold standard-table initialization from outlining this scalar lookup
+// in regexp and ASCII classification loops.
+#[inline(always)]
+pub(crate) fn syntax_entry_at_char_code(table: &Value, code: u32) -> Option<SyntaxEntry> {
+    let effective = if table.is_nil() {
+        ensure_standard_syntax_table_object().unwrap_or(Value::NIL)
+    } else {
+        *table
+    };
+    if effective.is_nil() {
+        return None;
+    }
+    let entry = match super::chartable::ct_lookup(&effective, code as i64) {
+        Ok(entry) => entry,
+        result @ Err(_) => {
+            discard_syntax_lookup_error(result);
+            return None;
+        }
+    };
+    syntax_entry_from_chartable_entry(&entry)
+}
+
+// Discarded errors still release their root pins immediately. Keep their
+// destruction out of the per-character successful lookup path.
+#[cold]
+#[inline(never)]
+fn discard_syntax_lookup_error(result: EvalResult) {
+    drop(result);
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// Return the `SyntaxClass` for `c` under `table`, mirroring GNU
+/// `SYNTAX(c)` in `src/syntax.h`. Uses the same fallback as
+/// `SyntaxTable::char_syntax` on the old compiled form: codepoints
+/// >= 0x80 default to Word; below 0x80 default to Whitespace.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn syntax_class_at_char(table: &Value, c: char) -> SyntaxClass {
+    syntax_class_at_char_code(table, c as u32)
+}
+
+pub(crate) fn syntax_class_at_char_code(table: &Value, code: u32) -> SyntaxClass {
+    match syntax_entry_at_char_code(table, code) {
+        Some(entry) => entry.class,
+        None => {
+            if code >= 0x80 {
+                SyntaxClass::Word
+            } else {
+                SyntaxClass::Whitespace
+            }
+        }
+    }
+}
+
+fn syntax_entry_from_chartable_entry(entry: &Value) -> Option<SyntaxEntry> {
+    match entry.kind() {
+        ValueKind::Nil => None,
+        ValueKind::Cons => {
+            let pair_car = entry.cons_car();
+            let pair_cdr = entry.cons_cdr();
+            let code = match pair_car.kind() {
+                ValueKind::Fixnum(code) => code,
+                _ => return None,
+            };
+            let class = SyntaxClass::from_code(code)?;
+            let matching_char = match pair_cdr.kind() {
+                ValueKind::Fixnum(n) => char::from_u32(n as u32),
+                ValueKind::Nil => None,
+                _ => None,
+            };
+            Some(SyntaxEntry {
+                class,
+                matching_char,
+                flags: SyntaxFlags::new(((code >> 16) & 0xFF) as u8),
+            })
+        }
+        ValueKind::Fixnum(code) => Some(SyntaxEntry {
+            class: SyntaxClass::from_code(code)?,
+            matching_char: None,
+            flags: SyntaxFlags::new(((code >> 16) & 0xFF) as u8),
+        }),
+        _ => None,
+    }
+}
+
+fn syntax_entry_from_syntax_property(prop: Value, ch: char) -> Option<SyntaxEntry> {
+    if builtin_syntax_table_p(vec![prop]).ok()?.is_truthy() {
+        let raw =
+            super::chartable::builtin_char_table_range(vec![prop, Value::fixnum(ch as i64)], None)
+                .ok()?;
+        syntax_entry_from_chartable_entry(&raw)
+    } else {
+        syntax_entry_from_chartable_entry(&prop)
+    }
+}
+
+// Count of syntax entries actually DECODED from the char-table, so a test can
+// assert the ASCII memo holds: a scan over N ASCII characters must decode a
+// bounded number of entries, not one per character stepped.
+//
+// Counts every decode, not just memo misses -- counting misses alone would
+// read zero both when the memo works perfectly and when it never materializes.
+// Mirrors the position-conversion scan counter in `emacs_char`.
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static SYNTAX_TABLE_DECODES: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn record_syntax_table_decode() {
+    SYNTAX_TABLE_DECODES.with(|n| n.set(n.get() + 1));
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+fn record_syntax_table_decode() {}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn reset_syntax_table_decodes_for_test() {
+    SYNTAX_TABLE_DECODES.with(|n| n.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn syntax_table_decodes_for_test() -> usize {
+    SYNTAX_TABLE_DECODES.with(Cell::get)
+}
+
+/// Where a scan gets each character's `syntax-table` property, or that it gets
+/// none at all -- GNU `SETUP_SYNTAX_TABLE`'s `parse_sexp_lookup_properties`
+/// test, carrying the resolver instead of a bare flag.
+///
+/// A scanner that honours properties can only do so through the resolver the
+/// property builtins use, so "honours properties but reads them raw" -- the
+/// state in which `forward-sexp` and `syntax-after` disagreed about a
+/// `category`-supplied syntax -- is not a value this type can hold.
+/// [`Self::for_scan`] is the one place the Lisp flag becomes a resolver.
+#[derive(Clone, Copy)]
+#[doc(hidden)]
+pub enum SyntaxProperties<'a> {
+    /// `parse-sexp-lookup-properties` is nil: buffer table syntax only.
+    Ignore,
+    /// Resolve `syntax-table` per character exactly as `get-char-property`
+    /// does, through GNU `textget`'s category/alias/default fallbacks.
+    Honor(CharPropertyResolver<'a>),
+    PositionedIgnore,
+    PositionedHonor(CharPropertyResolver<'a>),
+}
+
+impl<'a> SyntaxProperties<'a> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Snapshot the property source for one scan. `honor` is the value of
+    /// `parse-sexp-lookup-properties`, read (and any `syntax-propertize` run)
+    /// by the caller before this point, since Lisp must not run afterwards.
+    pub(crate) fn for_scan<V: EditVariableRead<'a>>(
+        honor: bool,
+        vars: V,
+        buffers: &BufferManager,
+    ) -> Self {
+        if honor {
+            Self::Honor(CharPropertyResolver::snapshot(
+                vars,
+                buffers,
+                syntax_table_prop_symbol(),
+            ))
+        } else {
+            Self::Ignore
+        }
+    }
+
+    /// The resolved `syntax-table` property at a buffer byte, with no run
+    /// cache. The byte-addressed scanners (regexp matching, `forward-comment`,
+    /// `backward-prefix-chars`) go through [`SyntaxPropByteRun`] and the
+    /// char-addressed ones through [`SyntaxPropRange`], both of which cache
+    /// this resolution; the uncached form is the reference the byte-run
+    /// cache is checked against.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn syntax_table_prop_at_emacs_byte(
+        self,
+        buf: &Buffer,
+        byte_pos: EmacsBytePos,
+    ) -> Option<Value> {
+        let (Self::Honor(resolver) | Self::PositionedHonor(resolver)) = self else {
+            return None;
+        };
+        resolver.resolve_interval_plist(buf.interval_plist_at_emacs_byte_pos(byte_pos)?)
+    }
+}
+
+/// The `[start, end)` run and its resolved value, in whatever coordinate the
+/// scan addresses text by.
+///
+/// Held as separate `Cell`s rather than one `RefCell<Option<..>>`: this is read
+/// PER CHARACTER, and a `RefCell` charged a borrow-flag load, increment and
+/// decrement on top of the comparison. `Value` and `Option<Value>` are `Copy`,
+/// so plain `Cell`s make an in-run read two integer compares and one load --
+/// GNU's inlined `charpos >= gl_state.e_property` test (`syntax.h`).
+///
+/// `start == end == 0` is the natural empty state (no position satisfies
+/// `start <= pos && pos < end`), so no reserved sentinel is needed.
+#[derive(Default)]
+struct PropRunCells {
+    start: Cell<usize>,
+    end: Cell<usize>,
+    value: Cell<Option<Value>>,
+}
+
+impl PropRunCells {
+    /// A run covering every position, for a scan that ignores properties: its
+    /// per-character path then answers from the same range check a honouring
+    /// scan uses, with no test of the property source at all.
+    fn covering_everything() -> Self {
+        Self {
+            start: Cell::new(0),
+            end: Cell::new(usize::MAX),
+            value: Cell::new(None),
+        }
+    }
+
+    #[inline]
+    fn get(&self, pos: usize) -> Option<Option<Value>> {
+        (pos >= self.start.get() && pos < self.end.get()).then(|| self.value.get())
+    }
+
+    fn set(&self, start: usize, end: usize, value: Option<Value>) {
+        self.start.set(start);
+        self.end.set(end);
+        self.value.set(value);
+    }
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+/// Per-scan `syntax-table` property cache for the scanners that address text by
+/// EMACS BYTE position: the regexp matcher, `forward-comment`, and
+/// `backward-prefix-chars`.
+///
+/// GNU's `gl_state` serves these scanners too -- `RE_SETUP_SYNTAX_TABLE_FOR_OBJECT`
+/// (src/syntax.c:277) arms the same machinery the sexp scanner uses -- so until
+/// this existed they were the only scanners doing a fresh interval lookup, and a
+/// byte->char conversion, for every character examined. Caching the run in BYTE
+/// coordinates is what removes the conversion: the byte<->char mapping is
+/// monotonic, so an interval's char run `[s, e)` is exactly the byte run
+/// `[byte(s), byte(e))`, and a hit becomes the same two integer compares the
+/// char-addressed cache does.
+///
+/// Same single-scan lifetime, and so the same invariant: no Lisp runs during a
+/// scan, so neither the intervals nor the resolver's snapshot can move under it.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct SyntaxPropByteRun<'a> {
+    run: PropRunCells,
+    /// Lazily-filled ASCII syntax-entry memo, same contract as
+    /// [`SyntaxPropRange::ascii`]: the byte-addressed scanners (regexp
+    /// syntax classes, `forward-comment`) previously paid the full
+    /// chartable walk for EVERY character examined.
+    ascii: [Cell<Option<SyntaxEntry>>; 128],
+    ascii_table: Cell<usize>,
+    props: SyntaxProperties<'a>,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// Per-scan `syntax-table` property cache for the scanners that address text by
+/// EMACS BYTE position: the regexp matcher, `forward-comment`, and
+/// `backward-prefix-chars`.
+///
+/// GNU's `gl_state` serves these scanners too -- `RE_SETUP_SYNTAX_TABLE_FOR_OBJECT`
+/// (src/syntax.c:277) arms the same machinery the sexp scanner uses -- so until
+/// this existed they were the only scanners doing a fresh interval lookup, and a
+/// byte->char conversion, for every character examined. Caching the run in BYTE
+/// coordinates is what removes the conversion: the byte<->char mapping is
+/// monotonic, so an interval's char run `[s, e)` is exactly the byte run
+/// `[byte(s), byte(e))`, and a hit becomes the same two integer compares the
+/// char-addressed cache does.
+///
+/// Same single-scan lifetime, and so the same invariant: no Lisp runs during a
+/// scan, so neither the intervals nor the resolver's snapshot can move under it.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub struct SyntaxPropByteRun<'a> {
+    run: PropRunCells,
+    /// Lazily-filled ASCII syntax-entry memo, same contract as
+    /// [`SyntaxPropRange::ascii`]: the byte-addressed scanners (regexp
+    /// syntax classes, `forward-comment`) previously paid the full
+    /// chartable walk for EVERY character examined.
+    pub(crate) ascii: [Cell<Option<SyntaxEntry>>; 128],
+    ascii_table: Cell<usize>,
+    props: SyntaxProperties<'a>,
+}
+
+impl<'a> SyntaxPropByteRun<'a> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn new(props: SyntaxProperties<'a>) -> Self {
+        let run = match props {
+            SyntaxProperties::Ignore | SyntaxProperties::PositionedIgnore => {
+                PropRunCells::covering_everything()
+            }
+            SyntaxProperties::Honor(_) | SyntaxProperties::PositionedHonor(_) => {
+                PropRunCells::default()
+            }
+        };
+        Self {
+            run,
+            ascii: std::array::from_fn(|_| Cell::new(None)),
+            ascii_table: Cell::new(0),
+            props,
+        }
+    }
+
+    /// The property source this cache reads from, for scanners that have to
+    /// hand it on to a char-addressed parse (see `back_comment_reparse`).
+    fn props(&self) -> SyntaxProperties<'a> {
+        self.props
+    }
+
+    /// Whether this scan honours `syntax-table` properties
+    /// (`parse-sexp-lookup-properties`), so a character's syntax can depend on
+    /// its position.
+    pub(crate) fn honors_properties(&self) -> bool {
+        matches!(
+            self.props,
+            SyntaxProperties::Honor(_) | SyntaxProperties::PositionedHonor(_)
+        )
+    }
+
+    /// The end (Emacs byte) of the stretch from `byte_pos` that carries no
+    /// `syntax-table` property, or `byte_pos` itself when one applies there:
+    /// the run a regexp syntax read at `byte_pos` would load, so a caller can
+    /// classify the stretch by the table alone (the existence DFA).
+    /// `usize::MAX` for a scan that ignores properties.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn property_free_until(&self, buf: &Buffer, byte_pos: EmacsBytePos) -> usize {
+        match self.syntax_table_prop_at_emacs_byte(buf, byte_pos) {
+            Some(_) => byte_pos.get(),
+            // The lookup leaves the run containing `byte_pos` cached.
+            None => self.run.end.get(),
+        }
+    }
+
+    /// See [`SyntaxPropRange::ascii_entry`] — identical memo, byte-side.
+    #[inline]
+    fn ascii_entry(&self, table: &SyntaxTable, ch: char) -> Option<SyntaxEntry> {
+        let cp = ch as u32;
+        if cp >= 128 {
+            return None;
+        }
+        let id = table.chartable.bits();
+        if self.ascii_table.get() != id {
+            for slot in &self.ascii {
+                slot.set(None);
+            }
+            self.ascii_table.set(id);
+        }
+        let slot = &self.ascii[cp as usize];
+        if let Some(entry) = slot.get() {
+            return Some(entry);
+        }
+        let entry = flat_ascii_syntax_entry(table, cp as u8);
+        slot.set(Some(entry));
+        Some(entry)
+    }
+
+    /// The resolved `syntax-table` property at an Emacs byte position, served
+    /// from the cached run when possible.
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn syntax_table_prop_at_emacs_byte(
+        &self,
+        buf: &Buffer,
+        byte_pos: EmacsBytePos,
+    ) -> Option<Value> {
+        if let Some(value) = self.run.get(byte_pos.get()) {
+            return value;
+        }
+        let (SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver)) =
+            self.props
+        else {
+            // Unreachable: an ignoring cache covers every position.
+            return None;
+        };
+        self.refill_run(buf, byte_pos, resolver)
+    }
+
+    /// Locate the interval containing `byte_pos`, resolve its property once,
+    /// and cache both with the run converted to byte coordinates.
+    ///
+    /// Outlined so the per-character check above stays inlinable into the
+    /// scan loops.
+    #[inline(never)]
+    fn refill_run(
+        &self,
+        buf: &Buffer,
+        byte_pos: EmacsBytePos,
+        resolver: CharPropertyResolver<'_>,
+    ) -> Option<Value> {
+        // The re-homed byte-run test asserts this counter, so it must move
+        // in the test-support build too.
+        #[cfg(any(test, feature = "test-support"))]
+        SYNTAX_BYTE_RUN_REFILLS.with(|c| c.set(c.get() + 1));
+        // Byte-run memo: a hit answers with zero conversions and no interval
+        // lookup. Only sound when the resolver's coalescing preconditions
+        // hold (no aliases / no default fallback) — the same guard the
+        // char-side coalescing uses.
+        let coalesce = resolver.supports_presence_coalescing();
+        if coalesce && let Some((start, end, value)) = buf.syntax_byte_run_memo_lookup(byte_pos) {
+            self.run.set(start as usize, end as usize, value);
+            return value;
+        }
+        let char_pos = buf.emacs_byte_pos_to_char_pos_clamped(byte_pos);
+        let (plist, start, _end) = buf.interval_plist_run_at_char_pos(char_pos);
+        let value = plist.and_then(|plist| resolver.resolve_interval_plist(plist));
+        // See `coalesced_syntax_run_end`: extend over face-only splits.
+        let end = coalesced_syntax_run_end(buf, char_pos, &resolver);
+        let end_byte = buffer_char_to_emacs_byte_pos(buf, end).get();
+        // The run starts where the interval does, as the char-addressed twin's
+        // does. Starting it at the position that missed made every step of a
+        // BACKWARD walk (`forward-comment` with a negative count, `char_quoted`,
+        // regexp look-behind) miss again: elb-smie refilled 6M times.
+        let start_byte = if start < char_pos {
+            buffer_char_to_emacs_byte_pos(buf, start).get()
+        } else {
+            byte_pos.get()
+        };
+        self.run.set(start_byte, end_byte, value);
+        if coalesce {
+            buf.syntax_byte_run_memo_store(start_byte as u64, end_byte as u64, value);
+        }
+        value
+    }
+}
+
+/// The string a regexp match reads `syntax-table` properties from: GNU's
+/// `gl_state.object` when that object is a string.
+///
+/// The matcher addresses a string by byte offset from its first byte, the
+/// intervals address it by character, so the string itself is needed for the
+/// conversion GNU does with `string_byte_to_char`
+/// (`RE_SYNTAX_TABLE_BYTE_TO_CHAR`, src/syntax.h).
+#[derive(Clone, Copy)]
+struct StringPropSource<'a> {
+    resolver: CharPropertyResolver<'a>,
+    string: &'a LispString,
+    intervals: &'a TextPropertyTable,
+}
+
+/// String regexp syntax positions must retain the exact heap identity/payload.
+/// A heap binding can only be built by checking its borrowed Value. Owned
+/// strings serve the existing Rust-only matcher domain. Threading: neither
+/// binding may leave its current mutator, including when it is immutable.
+#[derive(Clone, Copy, Debug)]
+#[doc(hidden)]
+pub struct StringSyntaxPositionSource<'a> {
+    kind: StringSyntaxPositionSourceKind<'a>,
+    _mutator: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum StringSyntaxPositionSourceKind<'a> {
+    Heap {
+        value: Value,
+        string: &'a LispString,
+    },
+    Owned(&'a LispString),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[doc(hidden)]
+pub enum StringSyntaxPositionSourceError {
+    #[error("String regexp syntax source is not a Lisp string")]
+    NotString,
+}
+static_assertions::assert_impl_all!(StringSyntaxPositionSourceError: Send, Sync);
+
+impl<'a> TryFrom<&'a Value> for StringSyntaxPositionSource<'a> {
+    type Error = StringSyntaxPositionSourceError;
+
+    fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
+        let string = value
+            .as_lisp_string()
+            .ok_or(StringSyntaxPositionSourceError::NotString)?;
+        Ok(Self {
+            kind: StringSyntaxPositionSourceKind::Heap {
+                value: *value,
+                string,
+            },
+            _mutator: std::marker::PhantomData,
+        })
+    }
+}
+
+impl<'a> StringSyntaxPositionSource<'a> {
+    #[doc(hidden)]
+    pub const fn owned(string: &'a LispString) -> Self {
+        Self {
+            kind: StringSyntaxPositionSourceKind::Owned(string),
+            _mutator: std::marker::PhantomData,
+        }
+    }
+
+    #[doc(hidden)]
+    pub const fn string(self) -> &'a LispString {
+        match self.kind {
+            StringSyntaxPositionSourceKind::Heap { string, .. } => string,
+            StringSyntaxPositionSourceKind::Owned(string) => string,
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn byte_to_gnu_char_pos(self, byte_pos: usize) -> GnuStringCharPos {
+        match self.kind {
+            StringSyntaxPositionSourceKind::Heap { value, string } => {
+                neovm_value::string_pos_cache::string_byte_to_gnu_char(value, string, byte_pos)
+            }
+            StringSyntaxPositionSourceKind::Owned(string) => string.byte_to_gnu_char_pos(byte_pos),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum StringSyntaxPositionMode<'a> {
+    Computed,
+    Supplied(Box<declared_string::DeclaredStringSyntaxState<'a>>),
+}
+
+/// Relative logical cursor update, matching GNU syntax.h:175-197.
+/// Threading: plain invocation-local query metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StringSyntaxPositionUpdate {
+    Both,
+    Forward,
+    Backward,
+}
+static_assertions::assert_impl_all!(StringSyntaxPositionUpdate: Send, Sync, Copy);
+
+/// GNU `interval_of` rejects a character coordinate outside [0, SCHARS]
+/// before it consults intervals (textprop.c:523-550). No unsigned/clamped
+/// lookup may replace this diagnostic. Threading: immutable numeric data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[doc(hidden)]
+pub enum StringSyntaxPositionError {
+    #[error("String syntax property position is outside declared bounds: {position:?}")]
+    OutOfRange { position: GnuStringCharPos },
+    #[error("Error in syntax_table logic for to-the-end intervals")]
+    ToEndIntervals,
+    #[error("Error in syntax_table logic for intervals <-")]
+    ForwardIntervals,
+    #[error("Error in syntax_table logic for intervals ->")]
+    BackwardIntervals,
+}
+
+impl StringSyntaxPositionError {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn position(self) -> Option<GnuStringCharPos> {
+        match self {
+            Self::OutOfRange { position } => Some(position),
+            Self::ToEndIntervals | Self::ForwardIntervals | Self::BackwardIntervals => None,
+        }
+    }
+}
+
+static_assertions::assert_impl_all!(StringSyntaxPositionError: Send, Sync, Copy);
+
+/// Per-match `syntax-table` property cache for a regexp over a STRING object.
+///
+/// GNU arms the same `gl_state` for a string as for a buffer
+/// (`RE_SETUP_SYNTAX_TABLE_FOR_OBJECT`, src/syntax.c:277), so `string-match`
+/// over a propertized string sees each character's own syntax. This is the
+/// string half of [`SyntaxPropByteRun`]: the same [`PropRunCells`] run check
+/// per character, and the same [`SyntaxProperties`] vocabulary at the seam, over
+/// the string's own intervals instead of a buffer's.
+///
+/// Computed-count strings retain the existing byte-run/no-property fast path.
+/// A supplied nonidentity count requires GNU's signed logical run instead,
+/// including its first lookup and later interval errors when no tree exists.
+/// Ignoring syntax properties skips both lookup modes, as GNU does.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct StringSyntaxPropByteRun<'a> {
+    run: PropRunCells,
+    source: Option<StringPropSource<'a>>,
+    position_mode: StringSyntaxPositionMode<'a>,
+    // The regex syntax callback is currently infallible. Retain its FIRST
+    // diagnostic until the frontend rejects the match before publishing it.
+    position_error: Cell<Option<StringSyntaxPositionError>>,
+    // This per-search interior-mutable cache belongs to one mutator invocation.
+    // No TLS is added; neither migration nor shared concurrent mutation is valid.
+    _mutator: std::marker::PhantomData<*mut ()>,
+}
+
+impl std::fmt::Debug for StringSyntaxPropByteRun<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StringSyntaxPropByteRun")
+            .field("run_start", &self.run.start.get())
+            .field("run_end", &self.run.end.get())
+            .field("position_mode", &self.position_mode)
+            .field("position_error", &self.position_error.get())
+            .finish()
+    }
+}
+
+impl<'a> StringSyntaxPropByteRun<'a> {
+    /// Legacy Rust-owned lookup used by coordinate-contract tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn new(
+        props: SyntaxProperties<'a>,
+        string: &'a LispString,
+        intervals: Option<&'a TextPropertyTable>,
+    ) -> Self {
+        Self::for_source(props, StringSyntaxPositionSource::owned(string), intervals)
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Heap syntax reads use their object identity/cache before checking GNU's
+    /// logical run. A supplied count is a proof distinction, never a recount.
+    pub(crate) fn for_source(
+        props: SyntaxProperties<'a>,
+        position_source: StringSyntaxPositionSource<'a>,
+        intervals: Option<&'a TextPropertyTable>,
+    ) -> Self {
+        let string = position_source.string();
+        let position_mode = match string.character_count_kind() {
+            StringCharacterCountKind::Computed => StringSyntaxPositionMode::Computed,
+            StringCharacterCountKind::Supplied => match props {
+                SyntaxProperties::Ignore | SyntaxProperties::PositionedIgnore => {
+                    StringSyntaxPositionMode::Computed
+                }
+                SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver) => {
+                    if string.is_multibyte() && string.schars() != string.sbytes() {
+                        StringSyntaxPositionMode::Supplied(Box::new(
+                            declared_string::DeclaredStringSyntaxState::new(
+                                position_source,
+                                resolver,
+                                intervals,
+                            ),
+                        ))
+                    } else {
+                        StringSyntaxPositionMode::Computed
+                    }
+                }
+            },
+        };
+        let source = match (props, intervals) {
+            (
+                SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver),
+                Some(intervals),
+            ) => Some(StringPropSource {
+                resolver,
+                string,
+                intervals,
+            }),
+            _ => None,
+        };
+        let run = if source.is_some() {
+            PropRunCells::default()
+        } else {
+            PropRunCells::covering_everything()
+        };
+        Self {
+            run,
+            source,
+            position_mode,
+            position_error: Cell::new(None),
+            _mutator: std::marker::PhantomData,
+        }
+    }
+
+    /// Select the boundary plan once at regexp invocation entry.
+    #[inline]
+    pub(crate) fn boundary_syntax_mode(
+        &self,
+    ) -> crate::emacs_core::regex_emacs::BoundarySyntaxMode {
+        use crate::emacs_core::regex_emacs::BoundarySyntaxMode;
+        match &self.position_mode {
+            StringSyntaxPositionMode::Computed => BoundarySyntaxMode::Physical,
+            StringSyntaxPositionMode::Supplied(_) => BoundarySyntaxMode::Supplied,
+        }
+    }
+
+    /// Computed strings take their existing physical pair lookup directly;
+    /// only a typed supplied state enters the cold logical-coordinate worker.
+    #[inline]
+    pub(crate) fn boundary_syntax(
+        &self,
+        table: &SyntaxTable,
+        request: crate::emacs_core::regex_emacs::BoundarySyntaxRequest,
+        mode: neovm_value::tagged::SymbolMode,
+        physical: impl FnOnce() -> crate::emacs_core::regex_emacs::BoundarySyntaxClasses,
+    ) -> crate::emacs_core::regex_emacs::BoundarySyntaxClasses {
+        match &self.position_mode {
+            StringSyntaxPositionMode::Computed => physical(),
+            StringSyntaxPositionMode::Supplied(state) => {
+                supplied_boundary_syntax(table, request, state, &self.position_error, mode)
+            }
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// The matcher frontend must check this before exposing success/match data,
+    /// including when the matcher returns no match. GNU signals during lookup.
+    #[inline]
+    pub(crate) fn position_error(&self) -> Option<StringSyntaxPositionError> {
+        self.position_error.get()
+    }
+
+    /// The end (byte offset) of the stretch from `byte_pos` that carries no
+    /// `syntax-table` property, or `byte_pos` itself when one applies there
+    /// (see [`SyntaxPropByteRun::property_free_until`]).  `usize::MAX` for a
+    /// string with no properties to read.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn property_free_until(&self, byte_pos: usize) -> usize {
+        match &self.position_mode {
+            StringSyntaxPositionMode::Computed => {}
+            // A bulk/plain shortcut would skip signed coordinate/cache updates.
+            // This capability query itself is not a GNU syntax read.
+            StringSyntaxPositionMode::Supplied(_) => return byte_pos,
+        }
+        match self.syntax_table_prop_at_string_byte(byte_pos) {
+            Some(_) => byte_pos,
+            // The lookup leaves the run containing `byte_pos` cached.
+            None => self.run.end.get(),
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// The resolved `syntax-table` property at a byte offset into the string,
+    /// served from the cached run when possible.
+    #[inline]
+    fn syntax_table_prop_at_string_byte(&self, byte_pos: usize) -> Option<Value> {
+        match &self.position_mode {
+            StringSyntaxPositionMode::Computed => {}
+            StringSyntaxPositionMode::Supplied(state) => {
+                // GNU already signaled at the first failed lookup. Do not
+                // mutate its shared position cache during deferred unwinding.
+                if self.position_error.get().is_some() {
+                    return None;
+                }
+                return match state.lookup(byte_pos) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.position_error.set(Some(error));
+                        None
+                    }
+                };
+            }
+        }
+        if let Some(value) = self.run.get(byte_pos) {
+            return value;
+        }
+        let Some(source) = self.source else {
+            // Unreachable: a cache with no source covers every position.
+            return None;
+        };
+        self.refill_run(source, byte_pos)
+    }
+
+    /// Locate the interval containing `byte_pos`, resolve its property once, and
+    /// cache both with the run converted to byte coordinates.
+    ///
+    /// Outlined so the per-character check above stays inlinable into the match
+    /// loop.
+    #[inline(never)]
+    fn refill_run(&self, source: StringPropSource<'a>, byte_pos: usize) -> Option<Value> {
+        let position = source.string.byte_to_gnu_char_pos(byte_pos);
+        let char_pos = CharPos0::try_from(position)
+            .ok()
+            .filter(|position| position.get() <= source.string.schars());
+        let Some(char_pos) = char_pos else {
+            if self.position_error.get().is_none() {
+                self.position_error
+                    .set(Some(StringSyntaxPositionError::OutOfRange { position }));
+            }
+            // The frontend rejects this invocation before any match is published.
+            // Avoid repeating invalid interval lookups while the infallible
+            // bounded matcher returns control. This is never a valid result.
+            self.run.set(0, usize::MAX, None);
+            return None;
+        };
+        let (plist, start, end) = source
+            .intervals
+            .interval_plist_run_at_char_pos(char_pos, source.string.schars());
+        let value = plist.and_then(|plist| source.resolver.resolve_interval_plist(plist));
+        self.run.set(
+            source.string.char_to_byte_pos(start.get()),
+            source.string.char_to_byte_pos(end.get()),
+            value,
+        );
+        value
+    }
+}
+
+/// Syntax class seen by GNU's regexp `SYNTAX` macro at a byte offset into a
+/// searched STRING, the string counterpart of
+/// [`regexp_syntax_class_at_emacs_byte`].
+///
+/// `table` is the CURRENT BUFFER's syntax table: GNU's
+/// `RE_SETUP_SYNTAX_TABLE_FOR_OBJECT` calls `SETUP_BUFFER_SYNTAX_TABLE` for a
+/// string object too, so only the positional property comes from the string.
+pub(crate) fn regexp_syntax_class_at_string_byte(
+    table: &SyntaxTable,
+    ch: char,
+    byte_pos: usize,
+    prop_cache: &StringSyntaxPropByteRun<'_>,
+) -> SyntaxClass {
+    if let Some(prop) = prop_cache.syntax_table_prop_at_string_byte(byte_pos)
+        && let Some(entry) = syntax_entry_from_syntax_property(prop, ch)
+    {
+        return entry.class;
+    }
+    syntax_entry_from_table(table, ch).class
+}
+
+/// String-property syntax lookup retaining the full Emacs character domain.
+/// Unicode inputs keep the existing fast path; property tables index byte8
+/// and non-Unicode inputs by their original code (GNU syntax.h:98-103).
+pub(crate) fn regexp_syntax_class_for_emacs_char_at_string_byte(
+    table: &SyntaxTable,
+    ch: EmacsChar,
+    byte_pos: usize,
+    prop_cache: &StringSyntaxPropByteRun<'_>,
+    mode: neovm_value::tagged::SymbolMode,
+) -> SyntaxClass {
+    if let Some(ch) = ch.as_rust_char() {
+        return regexp_syntax_class_at_string_byte_with_symbols(
+            table, ch, byte_pos, prop_cache, mode,
+        );
+    }
+    if let Some(prop) = prop_cache.syntax_table_prop_at_string_byte(byte_pos)
+        && let Some(entry) = syntax_entry_from_emacs_syntax_property(prop, ch, mode)
+    {
+        return entry.class;
+    }
+    record_syntax_table_decode();
+    if mode == neovm_value::tagged::SymbolMode::Bare {
+        return table.char_syntax_code(ch.code());
+    }
+    syntax_entry_at_char_code_with_symbols(&table.chartable(), ch.code(), mode)
+        .map_or_else(|| table.char_syntax_code(ch.code()), |entry| entry.class)
+}
+
+fn syntax_entry_from_emacs_syntax_property(
+    prop: Value,
+    ch: EmacsChar,
+    mode: neovm_value::tagged::SymbolMode,
+) -> Option<SyntaxEntry> {
+    if builtin_syntax_table_p_with_symbols(vec![prop], mode)
+        .ok()?
+        .is_truthy()
+    {
+        syntax_entry_at_char_code_with_symbols(&prop, ch.code(), mode)
+    } else {
+        syntax_entry_from_chartable_entry(&prop)
+    }
+}
+
+/// GNU regex-emacs.c:4983-5165 converts CURRENT offset once; adjacent
+/// syntax reads adjust logical coordinates without touching the byte cache.
+/// Computed-count callers use their inherited physical lookup method.
+#[cold]
+#[inline(never)]
+fn supplied_boundary_syntax(
+    table: &SyntaxTable,
+    request: crate::emacs_core::regex_emacs::BoundarySyntaxRequest,
+    state: &declared_string::DeclaredStringSyntaxState<'_>,
+    position_error: &Cell<Option<StringSyntaxPositionError>>,
+    mode: neovm_value::tagged::SymbolMode,
+) -> crate::emacs_core::regex_emacs::BoundarySyntaxClasses {
+    use crate::emacs_core::regex_emacs::SyntaxAssertion;
+    let empty = request.with_classes(None, None);
+    if position_error.get().is_some() {
+        return empty;
+    }
+    // GNU beginning opcodes fail at physical end before requesting syntax;
+    // end opcodes fail at physical beginning likewise.
+    match request.kind() {
+        SyntaxAssertion::WordBeginning | SyntaxAssertion::SymbolBeginning
+            if request.current().is_none() =>
+        {
+            return empty;
+        }
+        SyntaxAssertion::WordEnd | SyntaxAssertion::SymbolEnd if request.previous().is_none() => {
+            return empty;
+        }
+        SyntaxAssertion::WordBoundary
+        | SyntaxAssertion::NotWordBoundary
+        | SyntaxAssertion::WordBeginning
+        | SyntaxAssertion::WordEnd
+        | SyntaxAssertion::SymbolBeginning
+        | SyntaxAssertion::SymbolEnd => {}
+    }
+    let current_position = state.character_position(request.current_byte().get());
+    // On initialized GNU source bytes this subtraction fits ptrdiff_t. A
+    // Rust-only position at i64::MIN lies outside GNU-defined arithmetic;
+    // decline that unsupported query without wrapping or scanning memory.
+    let Some(previous_position) = current_position
+        .get()
+        .checked_sub(1)
+        .map(GnuStringCharPos::new)
+    else {
+        return empty;
+    };
+    let classify = |ch: EmacsChar, position, update| {
+        if position_error.get().is_some() {
+            return None;
+        }
+        match state.lookup_character(position, update) {
+            Ok(property) => Some(
+                property
+                    .and_then(|prop| syntax_entry_from_emacs_syntax_property(prop, ch, mode))
+                    .unwrap_or_else(|| {
+                        record_syntax_table_decode();
+                        let entry = match mode {
+                            neovm_value::tagged::SymbolMode::Bare => {
+                                table.get_entry_code(ch.code())
+                            }
+                            neovm_value::tagged::SymbolMode::Positioned => {
+                                syntax_entry_at_char_code_with_symbols(
+                                    &table.chartable(),
+                                    ch.code(),
+                                    mode,
+                                )
+                            }
+                        };
+                        entry.unwrap_or_else(|| {
+                            SyntaxEntry::simple(table.char_syntax_code(ch.code()))
+                        })
+                    })
+                    .class,
+            ),
+            Err(error) => {
+                position_error.set(Some(error));
+                None
+            }
+        }
+    };
+    let previous = |update| {
+        request
+            .previous()
+            .and_then(|ch| classify(ch.character(), previous_position, update))
+    };
+    let current = |update| {
+        request
+            .current()
+            .and_then(|ch| classify(ch.character(), current_position, update))
+    };
+    let word = |class: Option<SyntaxClass>| class == Some(SyntaxClass::Word);
+    let symbol =
+        |class: Option<SyntaxClass>| matches!(class, Some(SyntaxClass::Word | SyntaxClass::Symbol));
+    let (before, after) = match request.kind() {
+        SyntaxAssertion::WordBoundary | SyntaxAssertion::NotWordBoundary => {
+            let before = previous(StringSyntaxPositionUpdate::Both);
+            let after = current(StringSyntaxPositionUpdate::Forward);
+            (before, after)
+        }
+        SyntaxAssertion::WordBeginning => {
+            let after = current(StringSyntaxPositionUpdate::Both);
+            let before = if word(after) {
+                previous(StringSyntaxPositionUpdate::Backward)
+            } else {
+                None
+            };
+            (before, after)
+        }
+        SyntaxAssertion::WordEnd => {
+            let before = previous(StringSyntaxPositionUpdate::Both);
+            let after = if word(before) {
+                current(StringSyntaxPositionUpdate::Forward)
+            } else {
+                None
+            };
+            (before, after)
+        }
+        SyntaxAssertion::SymbolBeginning => {
+            let after = current(StringSyntaxPositionUpdate::Both);
+            let before = if symbol(after) {
+                previous(StringSyntaxPositionUpdate::Backward)
+            } else {
+                None
+            };
+            (before, after)
+        }
+        SyntaxAssertion::SymbolEnd => {
+            let before = previous(StringSyntaxPositionUpdate::Both);
+            let after = if symbol(before) {
+                current(StringSyntaxPositionUpdate::Forward)
+            } else {
+                None
+            };
+            (before, after)
+        }
+    };
+    request.with_classes(before, after)
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+/// Per-scan cache of the `syntax-table` text-property run, mirroring GNU
+/// `syntax.c` `gl_state` (`b_property`/`e_property` plus the current value).
+/// A scan reads the property once per char, but it is almost always nil over
+/// long runs, so caching the `[start, end)` char range turns a per-char
+/// interval lookup (and its byte->char) into a plain range check, refetching
+/// only when the scan leaves the run.  Indexed by char position so a
+/// char-indexed scan needs no conversion at all on a hit.  Created fresh per
+/// scan, so it never observes a mid-scan property edit (syntax-propertize runs
+/// before the scan).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+struct SyntaxPropRange<'a> {
+    /// Run over which the `syntax-table` property is known constant, held as
+    /// separate `Cell`s rather than one `RefCell<Option<..>>`.
+    ///
+    /// This is consulted PER CHARACTER whenever `parse-sexp-lookup-properties`
+    /// is on, which elisp-mode sets, so it sits under
+    /// `effective_syntax_entry_for_abs_char` -- 11.11% of self time on a
+    /// per-keystroke profile. GNU's equivalent is two compares on globals,
+    /// inlined (`syntax.h`):
+    ///
+    ///     if (parse_sexp_lookup_properties && charpos >= gl_state.e_property)
+    ///       update_syntax_table_forward (charpos, gl_state.object);
+    ///
+    /// A `RefCell` cannot match that: every hit paid a borrow-flag load,
+    /// increment and decrement on top of the comparison. Plain `Cell`s make the
+    /// in-run case two integer compares plus one `Copy` load, with no borrow
+    /// bookkeeping -- `Value` and `Option<Value>` are both `Copy`.
+    ///
+    /// `run_start == run_end == 0` is the natural empty state (no `pos`
+    /// satisfies `start <= pos && pos < end`), so no reserved sentinel value is
+    /// needed. Mirrors GNU's `gl_state.b_property` / `e_property`.
+    run: PropRunCells,
+    /// Lazily-filled memo of the 128 ASCII syntax entries for the table this
+    /// scan runs under (GNU `SYNTAX_ENTRY` on the char-table's `ascii` slot,
+    /// minus the per-char cons decode).
+    ///
+    /// Filled ON MISS rather than precomputed: font-lock drives
+    /// `parse-partial-sexp`/`syntax-ppss` with many SHORT ranges, and eagerly
+    /// building all 128 entries charged 128 `ct_lookup`s to a scan that might
+    /// step over three characters. Per-char fill is strictly less work than the
+    /// uncached path for every scan length -- a scan touching k distinct ASCII
+    /// chars pays k decodes instead of one per character stepped.
+    ///
+    /// Lifetime is a single scan, which is exactly the table-immutability
+    /// invariant the property-run cache above already relies on, so no
+    /// mutation-epoch check is needed (and none would be sound: `aset` on a
+    /// syntax char-table bypasses `note_syntax_table_mutation`).
+    ///
+    /// Memo of the ASCII syntax entries, filled ON MISS.
+    ///
+    /// Lazy rather than precomputed: font-lock drives `parse-partial-sexp` /
+    /// `syntax-ppss` over many SHORT ranges, and eagerly building all 128
+    /// entries charged 128 `ct_lookup`s to a scan that might step over three
+    /// characters. Per-char fill is strictly less work at every scan length --
+    /// a scan touching k distinct ASCII chars pays k decodes, not one per
+    /// character stepped, and not 128 up front.
+    ///
+    /// Available to EVERY scanner, which is what the measurements favour even
+    /// though a font-lock profile puts `parse_state_from_range` at 6.01% of
+    /// self time and each other scanner near 0.1%. Three narrower variants
+    /// were built and measured against this one on the same corpus:
+    ///
+    /// | variant                                   | elisp edit |
+    /// |-------------------------------------------|-----------:|
+    /// | this one                                  |   -5.95%   |
+    /// | thread-local generation-stamped scratch   |   -4.96%   |
+    /// | boxed, after a 64-lookup threshold        |   -3.82%   |
+    /// | boxed, `parse_state_from_range` only      |   -3.08%   |
+    ///
+    /// The narrower ones gave up editing latency for nothing: all four showed
+    /// the same ~+0.35% on byte-compile despite differing structurally, and a
+    /// byte-compile profile contains none of this path (it is interpreter
+    /// bound, 27.5% VM run_loop), so that delta is build-to-build variation
+    /// rather than a memo cost. Do not "optimize" this into one of them
+    /// without re-measuring all four workloads.
+    ///
+    /// Lifetime is a single scan, which is exactly the table-immutability
+    /// invariant the property-run cache above already relies on, so no
+    /// mutation-epoch check is needed -- and none would be sound, since `aset`
+    /// on a syntax char-table bypasses `note_syntax_table_mutation`.
+    ascii: [Cell<Option<SyntaxEntry>>; 128],
+    /// Identity of the chartable `ascii` was filled against, so a cache reused
+    /// across tables cannot serve entries from the wrong one.
+    ascii_table: Cell<usize>,
+    /// Where the property comes from, so a cached run and the resolution that
+    /// produced it cannot come from different sources. Last so the run fields
+    /// above, which every scanned character reads, keep the front of the
+    /// struct.
+    props: SyntaxProperties<'a>,
+    /// The property values this scan read, for a scan the parse cache
+    /// records (its validation dictionary); `None` for every other scan.
+    /// Written once per property run, never per character.
+    descriptors: Option<RefCell<DescriptorLog>>,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// Per-scan cache of the `syntax-table` text-property run, mirroring GNU
+/// `syntax.c` `gl_state` (`b_property`/`e_property` plus the current value).
+/// A scan reads the property once per char, but it is almost always nil over
+/// long runs, so caching the `[start, end)` char range turns a per-char
+/// interval lookup (and its byte->char) into a plain range check, refetching
+/// only when the scan leaves the run.  Indexed by char position so a
+/// char-indexed scan needs no conversion at all on a hit.  Created fresh per
+/// scan, so it never observes a mid-scan property edit (syntax-propertize runs
+/// before the scan).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub struct SyntaxPropRange<'a> {
+    /// Run over which the `syntax-table` property is known constant, held as
+    /// separate `Cell`s rather than one `RefCell<Option<..>>`.
+    ///
+    /// This is consulted PER CHARACTER whenever `parse-sexp-lookup-properties`
+    /// is on, which elisp-mode sets, so it sits under
+    /// `effective_syntax_entry_for_abs_char` -- 11.11% of self time on a
+    /// per-keystroke profile. GNU's equivalent is two compares on globals,
+    /// inlined (`syntax.h`):
+    ///
+    ///     if (parse_sexp_lookup_properties && charpos >= gl_state.e_property)
+    ///       update_syntax_table_forward (charpos, gl_state.object);
+    ///
+    /// A `RefCell` cannot match that: every hit paid a borrow-flag load,
+    /// increment and decrement on top of the comparison. Plain `Cell`s make the
+    /// in-run case two integer compares plus one `Copy` load, with no borrow
+    /// bookkeeping -- `Value` and `Option<Value>` are both `Copy`.
+    ///
+    /// `run_start == run_end == 0` is the natural empty state (no `pos`
+    /// satisfies `start <= pos && pos < end`), so no reserved sentinel value is
+    /// needed. Mirrors GNU's `gl_state.b_property` / `e_property`.
+    run: PropRunCells,
+    /// Lazily-filled memo of the 128 ASCII syntax entries for the table this
+    /// scan runs under (GNU `SYNTAX_ENTRY` on the char-table's `ascii` slot,
+    /// minus the per-char cons decode).
+    ///
+    /// Filled ON MISS rather than precomputed: font-lock drives
+    /// `parse-partial-sexp`/`syntax-ppss` with many SHORT ranges, and eagerly
+    /// building all 128 entries charged 128 `ct_lookup`s to a scan that might
+    /// step over three characters. Per-char fill is strictly less work than the
+    /// uncached path for every scan length -- a scan touching k distinct ASCII
+    /// chars pays k decodes instead of one per character stepped.
+    ///
+    /// Lifetime is a single scan, which is exactly the table-immutability
+    /// invariant the property-run cache above already relies on, so no
+    /// mutation-epoch check is needed (and none would be sound: `aset` on a
+    /// syntax char-table bypasses `note_syntax_table_mutation`).
+    ///
+    /// Memo of the ASCII syntax entries, filled ON MISS.
+    ///
+    /// Lazy rather than precomputed: font-lock drives `parse-partial-sexp` /
+    /// `syntax-ppss` over many SHORT ranges, and eagerly building all 128
+    /// entries charged 128 `ct_lookup`s to a scan that might step over three
+    /// characters. Per-char fill is strictly less work at every scan length --
+    /// a scan touching k distinct ASCII chars pays k decodes, not one per
+    /// character stepped, and not 128 up front.
+    ///
+    /// Available to EVERY scanner, which is what the measurements favour even
+    /// though a font-lock profile puts `parse_state_from_range` at 6.01% of
+    /// self time and each other scanner near 0.1%. Three narrower variants
+    /// were built and measured against this one on the same corpus:
+    ///
+    /// | variant                                   | elisp edit |
+    /// |-------------------------------------------|-----------:|
+    /// | this one                                  |   -5.95%   |
+    /// | thread-local generation-stamped scratch   |   -4.96%   |
+    /// | boxed, after a 64-lookup threshold        |   -3.82%   |
+    /// | boxed, `parse_state_from_range` only      |   -3.08%   |
+    ///
+    /// The narrower ones gave up editing latency for nothing: all four showed
+    /// the same ~+0.35% on byte-compile despite differing structurally, and a
+    /// byte-compile profile contains none of this path (it is interpreter
+    /// bound, 27.5% VM run_loop), so that delta is build-to-build variation
+    /// rather than a memo cost. Do not "optimize" this into one of them
+    /// without re-measuring all four workloads.
+    ///
+    /// Lifetime is a single scan, which is exactly the table-immutability
+    /// invariant the property-run cache above already relies on, so no
+    /// mutation-epoch check is needed -- and none would be sound, since `aset`
+    /// on a syntax char-table bypasses `note_syntax_table_mutation`.
+    pub(crate) ascii: [Cell<Option<SyntaxEntry>>; 128],
+    /// Identity of the chartable `ascii` was filled against, so a cache reused
+    /// across tables cannot serve entries from the wrong one.
+    ascii_table: Cell<usize>,
+    /// Where the property comes from, so a cached run and the resolution that
+    /// produced it cannot come from different sources. Last so the run fields
+    /// above, which every scanned character reads, keep the front of the
+    /// struct.
+    props: SyntaxProperties<'a>,
+    /// The property values this scan read, for a scan the parse cache
+    /// records (its validation dictionary); `None` for every other scan.
+    /// Written once per property run, never per character.
+    descriptors: Option<RefCell<DescriptorLog>>,
+}
+
+/// The `syntax-table` property values a recording scan read: what a cached
+/// loop state depends on besides text, table and property positions.
+///
+/// A property value is a descriptor cons (or a syntax table) the scan decodes
+/// each time it reads it, so `(setcar DESCRIPTOR ...)` changes the scan
+/// without moving any tick. The parse cache keeps each cons's car and cdr as
+/// read and compares them before reusing a state that read it.
+#[derive(Debug, Default)]
+pub(super) struct DescriptorLog {
+    /// Distinct descriptor conses, each with the first position it was read
+    /// at.
+    pub(super) entries: Vec<(usize, Value)>,
+    /// The first position a value was read at that cannot be validated this
+    /// way: a syntax table (its entries are conses too), or a descriptor past
+    /// [`DESCRIPTOR_LOG_CAP`].
+    pub(super) unvalidatable_from: Option<usize>,
+}
+
+/// Distinct descriptors one run validates (elisp buffers have two to four:
+/// `string-to-syntax` results are constants of the propertize function).
+#[cfg(not(any(test, feature = "test-support")))]
+const DESCRIPTOR_LOG_CAP: usize = 32;
+#[cfg(any(test, feature = "test-support"))]
+pub const DESCRIPTOR_LOG_CAP: usize = 32;
+
+impl DescriptorLog {
+    fn note(&mut self, pos: usize, value: Value) {
+        if value.is_cons() {
+            if let Some(entry) = self
+                .entries
+                .iter_mut()
+                .find(|(_, seen)| seen.bits() == value.bits())
+            {
+                entry.0 = entry.0.min(pos);
+                return;
+            }
+            if self.entries.len() < DESCRIPTOR_LOG_CAP {
+                self.entries.push((pos, value));
+                return;
+            }
+        } else if !value.is_char_table() {
+            // Any other value decodes to nothing, or to an immutable code.
+            return;
+        }
+        self.unvalidatable_from = Some(self.unvalidatable_from.map_or(pos, |at| at.min(pos)));
+    }
+}
+
+impl<'a> SyntaxPropRange<'a> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn new(props: SyntaxProperties<'a>) -> Self {
+        let run = match props {
+            SyntaxProperties::Ignore | SyntaxProperties::PositionedIgnore => {
+                PropRunCells::covering_everything()
+            }
+            SyntaxProperties::Honor(_) | SyntaxProperties::PositionedHonor(_) => {
+                PropRunCells::default()
+            }
+        };
+        Self {
+            run,
+            ascii: std::array::from_fn(|_| Cell::new(None)),
+            ascii_table: Cell::new(0),
+            props,
+            descriptors: None,
+        }
+    }
+
+    /// A property cache that logs the values it reads ([`DescriptorLog`]).
+    fn recording(props: SyntaxProperties<'a>) -> Self {
+        Self {
+            descriptors: Some(RefCell::new(DescriptorLog::default())),
+            ..Self::new(props)
+        }
+    }
+
+    /// The values read so far (empty for a cache that does not record).
+    fn take_descriptor_log(&self) -> DescriptorLog {
+        self.descriptors
+            .as_ref()
+            .map(|log| std::mem::take(&mut *log.borrow_mut()))
+            .unwrap_or_default()
+    }
+
+    #[inline]
+    fn note_descriptor(&self, pos: usize, value: Option<Value>) {
+        if let Some(log) = &self.descriptors
+            && let Some(value) = value
+        {
+            log.borrow_mut().note(pos, value);
+        }
+    }
+
+    /// The property source this cache resolves through, for the byte-addressed
+    /// helpers a char-indexed scan calls into (comment skipping).
+    fn props(&self) -> SyntaxProperties<'a> {
+        self.props
+    }
+
+    /// The syntax entry for ASCII `ch` under `table`, served from the per-scan
+    /// memo. Returns `None` for non-ASCII, which the caller resolves directly.
+    #[inline]
+    fn ascii_entry(&self, table: &SyntaxTable, ch: char) -> Option<SyntaxEntry> {
+        let cp = ch as u32;
+        if cp >= 128 {
+            return None;
+        }
+
+        let id = table.chartable.bits();
+        if self.ascii_table.get() != id {
+            // First use, or a different table than the memo was filled
+            // against: drop what is there rather than serve a foreign entry.
+            for slot in &self.ascii {
+                slot.set(None);
+            }
+            self.ascii_table.set(id);
+        }
+
+        let slot = &self.ascii[cp as usize];
+        if let Some(entry) = slot.get() {
+            return Some(entry);
+        }
+        let entry = flat_ascii_syntax_entry(table, cp as u8);
+        slot.set(Some(entry));
+        Some(entry)
+    }
+
+    /// Reports how far the cached property-free run covers `pos`:
+    /// `Some(end)` means every position in `pos..end` carries no `syntax-table`
+    /// property.  Outside the cached run this returns `None`.
+    ///
+    /// A forward scan can then classify a whole run through the flat ASCII
+    /// table with one register compare per character instead of re-reading the
+    /// three run `Cell`s — interior mutability forces a reload after every
+    /// call, so the compiler cannot hoist them itself.  The caller must discard
+    /// the endpoint after anything that can refill the run (see
+    /// `parse_state_from_range_core`).
+    fn prop_free_run_end(&self, pos: usize) -> Option<usize> {
+        let end = self.run.end.get();
+        (pos >= self.run.start.get() && pos < end && self.run.value.get().is_none()).then_some(end)
+    }
+
+    /// The resolved `syntax-table` property at char position `pos`, served from
+    /// the cached run when possible.  In debug builds every cache hit is
+    /// validated against a fresh interval lookup, the same safety net the
+    /// byte<->char cache uses.
+    ///
+    /// The run is an interval, and a character's resolution depends only on its
+    /// interval's plist plus the snapshotted variables, so caching the RESOLVED
+    /// value over the run is exactly as sound as caching the raw one was -- and
+    /// keeps the category indirection off the per-character path.
+    #[inline]
+    fn syntax_table_prop_at_char(&self, buf: &Buffer, pos: usize) -> Option<Value> {
+        // In-run fast path: two integer compares, as in GNU's
+        // UPDATE_SYNTAX_TABLE_FORWARD -- and free of any test of `props`, which
+        // an ignoring scan folds into the range check by caching a run of
+        // `None` over the whole position space. Touching the resolver here
+        // instead measured +10.6% on a forward-sexp sweep.
+        if let Some(value) = self.run.get(pos) {
+            #[cfg(debug_assertions)]
+            if let SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver) =
+                self.props
+            {
+                let plist = buf.interval_plist_at_char_pos(offset_char_pos(CharPos0::ZERO, pos));
+                let fresh = plist.and_then(|plist| resolver.resolve_interval_plist(plist));
+                debug_assert!(
+                    value == fresh,
+                    "SyntaxPropRange stale syntax-table at char {pos} in [{}, {})",
+                    self.run.start.get(),
+                    self.run.end.get()
+                );
+            }
+            return value;
+        }
+        let (SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver)) =
+            self.props
+        else {
+            // Unreachable: an ignoring cache covers every position. Keep the
+            // total function rather than an unwrap.
+            return None;
+        };
+        self.refill_run(buf, pos, resolver)
+    }
+
+    /// Locate the run containing `pos`, resolve its property once, and cache
+    /// both.
+    ///
+    /// Outlined so the per-character fast path above stays small enough to
+    /// inline into the scan loop.
+    #[inline(never)]
+    fn refill_run(
+        &self,
+        buf: &Buffer,
+        pos: usize,
+        resolver: CharPropertyResolver<'_>,
+    ) -> Option<Value> {
+        // Cross-scan memo first: font-lock and indentation drive thousands of
+        // SHORT parses per command over the same region, and every scan's
+        // per-scan cache starts cold. A hit hands back the resolved run with
+        // no interval descent and no coalescing walk — the same amortization
+        // the byte-addressed refill already has. Guarded by the resolver's
+        // coalescing preconditions like the byte side.
+        let coalesce = resolver.supports_presence_coalescing();
+        if coalesce && let Some((start, end, value)) = buf.syntax_char_run_memo_lookup(pos) {
+            self.run.set(start as usize, end as usize, value);
+            self.note_descriptor(pos, value);
+            return value;
+        }
+        let char_pos = offset_char_pos(CharPos0::ZERO, pos);
+        let (plist, start, _end) = buf.interval_plist_run_at_char_pos(char_pos);
+        let value = plist.and_then(|plist| resolver.resolve_interval_plist(plist));
+        let end = coalesced_syntax_run_end(buf, char_pos, &resolver);
+        self.run.set(start.get(), end.get(), value);
+        if coalesce {
+            buf.syntax_char_run_memo_store(start.get() as u64, end.get() as u64, value);
+        }
+        self.note_descriptor(pos, value);
+        value
+    }
+}
+
+/// End of the run over which the resolved `syntax-table` property is provably
+/// constant from `char_pos`: walk interval boundaries comparing only the keys
+/// resolution reads (the property, `category`, and its aliases), bounded to a
+/// fixed lookahead. Font-lock splits buffers into dense `face`-only intervals,
+/// so the RESOLVED run is typically far longer than the raw interval — this
+/// turns a per-interval root descent into a per-lookahead cursor walk.
+fn coalesced_syntax_run_end(
+    buf: &Buffer,
+    char_pos: CharPos0,
+    resolver: &CharPropertyResolver<'_>,
+) -> CharPos0 {
+    const COALESCE_LOOKAHEAD_CHARS: usize = 4096;
+    let total = buf.accessible_char_region().end();
+    let cap = CharPos0::new(
+        char_pos
+            .get()
+            .saturating_add(COALESCE_LOOKAHEAD_CHARS)
+            .min(total.get()),
+    );
+    let end = if resolver.supports_presence_coalescing() {
+        // Common case: race through `face`-only intervals on the cached
+        // presence bit; prop-bearing intervals are never merged.
+        buf.syntax_prop_free_run_end_at_char_pos(char_pos, cap)
+    } else {
+        // Aliases widen the key set and `default-text-properties` makes a
+        // key-free interval resolve differently from a gap: fall back to the
+        // raw single-interval run.
+        let (_, _, end) = buf.interval_plist_run_at_char_pos(char_pos);
+        end
+    };
+    // Degenerate cap (scan sitting at the region end): keep the run non-empty
+    // so the per-char fast path cannot loop on refills.
+    if end <= char_pos {
+        CharPos0::new(char_pos.get() + 1)
+    } else {
+        end
+    }
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[inline(always)]
+fn syntax_entry_from_table(table: &SyntaxTable, ch: char) -> SyntaxEntry {
+    record_syntax_table_decode();
+    table
+        .get_entry(ch)
+        .unwrap_or_else(|| SyntaxEntry::simple(table.char_syntax(ch)))
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[inline]
+fn effective_syntax_entry_for_char_at_byte(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    ch: char,
+    byte_pos: EmacsBytePos,
+    prop_cache: &SyntaxPropByteRun<'_>,
+) -> SyntaxEntry {
+    if let Some(prop) = prop_cache.syntax_table_prop_at_emacs_byte(buf, byte_pos)
+        && let Some(entry) = syntax_entry_from_syntax_property_with_symbols(
+            prop,
+            ch,
+            prop_cache.props().symbol_mode(),
+        )
+    {
+        return entry;
+    }
+
+    // GNU CHAR_TABLE_REF_ASCII (lisp.h:2133-2146) reads stored ASCII,
+    // default and parent slots without testing purpose. Both symbol policies
+    // therefore share this memo after the positional property lookup above.
+    if let Some(entry) = prop_cache.ascii_entry(table, ch) {
+        return entry;
+    }
+
+    syntax_entry_from_table_with_symbols(table, ch, prop_cache.props().symbol_mode())
+}
+
+/// Syntax class seen by GNU's regexp `SYNTAX` macro at a buffer byte.
+///
+/// Regexp matching differs from plain `char-syntax`: when
+/// `parse-sexp-lookup-properties` is active it consults the positional
+/// `syntax-table` property before falling back to the buffer's table.
+pub(crate) fn regexp_syntax_class_at_emacs_byte(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    ch: char,
+    byte_pos: EmacsBytePos,
+    prop_cache: &SyntaxPropByteRun<'_>,
+) -> SyntaxClass {
+    effective_syntax_entry_for_char_at_byte(buf, table, ch, byte_pos, prop_cache).class
+}
+
+/// Buffer-property syntax lookup retaining the full Emacs character domain.
+pub(crate) fn regexp_syntax_class_for_emacs_char_at_buffer_byte(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    ch: EmacsChar,
+    byte_pos: EmacsBytePos,
+    prop_cache: &SyntaxPropByteRun<'_>,
+    mode: neovm_value::tagged::SymbolMode,
+) -> SyntaxClass {
+    if let Some(ch) = ch.as_rust_char() {
+        return regexp_syntax_class_at_emacs_byte_with_symbols(
+            buf, table, ch, byte_pos, prop_cache, mode,
+        );
+    }
+    if let Some(prop) = prop_cache.syntax_table_prop_at_emacs_byte(buf, byte_pos)
+        && let Some(entry) = syntax_entry_from_emacs_syntax_property(prop, ch, mode)
+    {
+        return entry.class;
+    }
+    record_syntax_table_decode();
+    if mode == neovm_value::tagged::SymbolMode::Bare {
+        return table.char_syntax_code(ch.code());
+    }
+    syntax_entry_at_char_code_with_symbols(&table.chartable(), ch.code(), mode)
+        .map_or_else(|| table.char_syntax_code(ch.code()), |entry| entry.class)
+}
+
+/// Word-only syntax lookup, keeping byte8 and non-Unicode keys intact.
+/// Unicode keys retain the existing property/ASCII memo path; the outlined
+/// domain-specific arm reads the same property snapshot by full Emacs code.
+#[inline]
+fn word_syntax_entry_for_abs_char(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    ch: EmacsChar,
+    abs_char: usize,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> SyntaxEntry {
+    if let Some(unicode) = ch.as_rust_char() {
+        return effective_syntax_entry_for_abs_char(buf, table, unicode, abs_char, prop_cache);
+    }
+    word_syntax_entry_for_non_unicode_char(buf, table, ch, abs_char, prop_cache)
+}
+
+#[inline(never)]
+fn word_syntax_entry_for_non_unicode_char(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    ch: EmacsChar,
+    abs_char: usize,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> SyntaxEntry {
+    if let Some(prop) = prop_cache.syntax_table_prop_at_char(buf, abs_char) {
+        let entry =
+            if builtin_syntax_table_p_with_symbols(vec![prop], prop_cache.props().symbol_mode())
+                .ok()
+                .is_some_and(|v| v.is_truthy())
+            {
+                syntax_entry_at_char_code_with_symbols(
+                    &prop,
+                    ch.code(),
+                    prop_cache.props().symbol_mode(),
+                )
+            } else {
+                syntax_entry_from_chartable_entry(&prop)
+            };
+        if let Some(entry) = entry {
+            return entry;
+        }
+    }
+    record_syntax_table_decode();
+    syntax_entry_at_char_code_with_symbols(
+        &table.chartable(),
+        ch.code(),
+        prop_cache.props().symbol_mode(),
+    )
+    .unwrap_or_else(|| {
+        // GNU syntax.h:117: an absent descriptor has Swhitespace syntax.
+        SyntaxEntry::simple(SyntaxClass::Whitespace)
+    })
+}
+
+/// The syntax entry governing the character at `abs_char`.
+///
+/// Reads the `syntax-table` property through a per-scan run cache (GNU
+/// `gl_state`), avoiding an interval lookup (and a char->byte->char round trip)
+/// on every char, and serves the table lookup itself from the same cache's
+/// lazily-filled ASCII memo.
+///
+/// Beats GNU on the dominant path: source text is overwhelmingly ASCII, so
+/// `ch < 128` costs one array index plus a `Copy` here -- strictly less work
+/// than GNU's per-char `CHAR_TABLE_REF_ASCII` + `XCAR` decode, and than
+/// neomacs's own ~5 type-tag derefs + cons decode. The memo caches the
+/// identical `syntax_entry_from_table` computation used for non-ASCII below, so
+/// it is behavior-preserving by construction.
+// Inlined into the parse/scan loops: this runs once per character
+// stepped (8.7M calls on a fontify pass) and the un-inlined five-arg
+// call cost more than the fast path it guards.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[inline]
+fn effective_syntax_entry_for_abs_char(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    ch: char,
+    abs_char: usize,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> SyntaxEntry {
+    if let Some(prop) = prop_cache.syntax_table_prop_at_char(buf, abs_char)
+        && let Some(entry) = syntax_entry_from_syntax_property_with_symbols(
+            prop,
+            ch,
+            prop_cache.props().symbol_mode(),
+        )
+    {
+        return entry;
+    }
+
+    // ASCII table reads are policy-independent, as on the byte path above.
+    if let Some(entry) = prop_cache.ascii_entry(table, ch) {
+        return entry;
+    }
+
+    if prop_cache.props().symbol_mode() == neovm_value::tagged::SymbolMode::Bare
+        && let Some(log) = &prop_cache.descriptors
+    {
+        return syntax_entry_from_table_logged(table, ch, abs_char, log);
+    }
+    syntax_entry_from_table_with_symbols(table, ch, prop_cache.props().symbol_mode())
+}
+
+/// [`syntax_entry_from_table`] for a scan the parse cache records: the
+/// descriptor cons the table holds for `ch` goes into the scan's
+/// [`DescriptorLog`] (ASCII entries come from the flat classifiers, which
+/// trust the table's write tick instead).
+#[inline(never)]
+fn syntax_entry_from_table_logged(
+    table: &SyntaxTable,
+    ch: char,
+    abs_char: usize,
+    log: &RefCell<DescriptorLog>,
+) -> SyntaxEntry {
+    record_syntax_table_decode();
+    let effective = if table.chartable.is_nil() {
+        ensure_standard_syntax_table_object().unwrap_or(Value::NIL)
+    } else {
+        table.chartable
+    };
+    let raw = if effective.is_nil() {
+        Value::NIL
+    } else {
+        super::chartable::ct_lookup(&effective, ch as i64).unwrap_or(Value::NIL)
+    };
+    if raw.is_cons() {
+        log.borrow_mut().note(abs_char, raw);
+    }
+    syntax_entry_from_chartable_entry(&raw)
+        .unwrap_or_else(|| SyntaxEntry::simple(table.char_syntax(ch)))
+}
+
+#[doc(hidden)]
+pub fn parse_sexp_lookup_properties_enabled<H: TextHost>(ctx: &H) -> bool {
+    SyntaxStateVariable::ParseSexpLookupProperties.enabled(ctx)
+}
+
+/// Interned-once ids for the propertize-for-scan gate — it runs before
+/// every syntax-dependent search/scan and re-hashed both names per call.
+#[inline(always)]
+fn internal_syntax_propertize_sym() -> neovm_value::intern::SymId {
+    static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
+    *SYMBOL.get_or_init(|| neovm_value::intern::intern("internal--syntax-propertize"))
+}
+
+/// `syntax-propertize--done` id, shared with the search prep's warm
+/// precheck.
+#[inline(always)]
+#[doc(hidden)]
+pub fn syntax_propertize_done_sym() -> neovm_value::intern::SymId {
+    static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
+    *SYMBOL.get_or_init(|| neovm_value::intern::intern("syntax-propertize--done"))
+}
+
+/// GNU `syntax-propertize--done` through the C-forwarded read: the current
+/// buffer's local value (GNU `Fmake_variable_buffer_local`, src/syntax.c:
+/// 3777) and the live dynamic binding. The scanner must never read the
+/// default here.
+#[inline(always)]
+pub(crate) fn syntax_propertize_done_value<H: TextHost>(eval: &H) -> Option<Value> {
+    GnuForwardedVariable::SyntaxPropertizeDone
+        .forwarded()
+        .visible_value(eval)
+}
+
+#[doc(hidden)]
+pub fn maybe_syntax_propertize_for_scan<H: TextHost>(
+    eval: &mut H,
+    target_char_pos: usize,
+) -> EvalResult {
+    maybe_syntax_propertize_for_scan_with_scope(eval, target_char_pos, || ())
+}
+
+/// Enter a caller's root scope only when propertization actually calls Lisp.
+/// Warm scans retain the usual single function/frontier check.
+#[doc(hidden)]
+pub fn maybe_syntax_propertize_for_scan_with_scope<H: TextHost, G>(
+    eval: &mut H,
+    target_char_pos: usize,
+    enter_scope: impl FnOnce() -> G,
+) -> EvalResult {
+    if !parse_sexp_lookup_properties_enabled(eval)
+        || eval
+            .variables()
+            .obarray()
+            .symbol_function_id(internal_syntax_propertize_sym())
+            .is_none()
+    {
+        return Ok(Value::NIL);
+    }
+
+    let done = syntax_propertize_done_value(eval).unwrap_or(Value::fixnum(-1));
+    if let ValueKind::Fixnum(done) = done.kind()
+        && done >= target_char_pos as i64
+    {
+        return Ok(Value::NIL);
+    }
+
+    let before_modiff = eval
+        .buffers()
+        .current_buffer()
+        .map(|buf| buf.chars_modified_tick())
+        .unwrap_or_default();
+    let _scope = enter_scope();
+    eval.apply(
+        Value::from_sym_id(internal_syntax_propertize_sym()),
+        &[Value::fixnum(target_char_pos as i64)],
+    )?;
+    let after_modiff = eval
+        .buffers()
+        .current_buffer()
+        .map(|buf| buf.chars_modified_tick())
+        .unwrap_or_default();
+    if after_modiff != before_modiff {
+        return Err(signal(
+            "error",
+            vec![Value::string(
+                "internal--syntax-propertize modified the buffer!",
+            )],
+        ));
+    }
+    Ok(Value::NIL)
+}
+
+/// Whether [`maybe_syntax_propertize_for_scan`] to `target_char_pos` would
+/// call Lisp, given that `parse-sexp-lookup-properties` is non-nil: when
+/// `internal--syntax-propertize` is defined and `syntax-propertize--done`
+/// does not already cover the target. A builtin that sees `false` may skip
+/// the call (and everything it would re-read after Lisp ran) with nothing
+/// observable changed.
+#[doc(hidden)]
+pub fn syntax_propertize_would_run<H: TextHost>(eval: &H, target_char_pos: usize) -> bool {
+    if eval
+        .variables()
+        .obarray()
+        .symbol_function_id(internal_syntax_propertize_sym())
+        .is_none()
+    {
+        return false;
+    }
+    !matches!(
+        syntax_propertize_done_value(eval).map(|done| done.kind()),
+        Some(ValueKind::Fixnum(done)) if done >= target_char_pos as i64
+    )
+}
+
+/// The (exclusive, 0-based) character position up to which syntax-table
+/// properties are known to be set -- GNU `gl_state.e_property` after
+/// `parse_sexp_propertize`, read back from `syntax-propertize--done` (a
+/// 1-based position: text before it is propertized).  Clamped to
+/// `[from + 1, end]` so a scan window always makes progress; when nothing
+/// tracks the frontier (no propertize function, unbound variable) the whole
+/// accessible range is usable.
+#[doc(hidden)]
+pub fn syntax_propertize_frontier_for_scan<H: TextHost>(
+    eval: &mut H,
+    from: usize,
+    end: usize,
+) -> usize {
+    let done = syntax_propertize_done_value(eval).unwrap_or(Value::NIL);
+    match done.kind() {
+        ValueKind::Fixnum(done) if done > 0 && (done as usize) <= end => {
+            (done as usize - 1).max(from.saturating_add(1)).min(end)
+        }
+        _ => end,
+    }
+}
+
+/// `(syntax-class-to-char CLASS)` — map syntax class code to descriptor char.
+#[doc(hidden)]
+pub fn builtin_syntax_class_to_char(args: Vec<Value>) -> EvalResult {
+    if args.len() != 1 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("syntax-class-to-char"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let class = match args[0].kind() {
+        ValueKind::Fixnum(n) => n,
+        _other => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("fixnump"), args[0]],
+            ));
+        }
+    };
+
+    let Some(class) = SyntaxClass::from_plain_code(class) else {
+        return Err(signal(
+            LispCondition::ArgsOutOfRange,
+            vec![Value::fixnum(15), Value::fixnum(class)],
+        ));
+    };
+
+    Ok(Value::char(class.to_char()))
+}
+
+/// `(matching-paren CHAR)` — return matching paren for bracket chars.
+///
+/// This is an evaluator-dependent version that uses the current buffer's
+/// syntax table, matching GNU `Fmatching_paren`: return a match only when the
+/// effective syntax class is open or close.
+#[doc(hidden)]
+pub fn builtin_matching_paren<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+    builtin_matching_paren_in_buffers(eval.buffers(), args)
+}
+
+pub(crate) fn builtin_matching_paren_in_buffers(
+    buffers: &BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    if args.len() != 1 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("matching-paren"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let ch = match args[0].kind() {
+        ValueKind::Fixnum(n) => char::from_u32(n as u32).ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("characterp"), args[0]],
+            )
+        })?,
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("characterp"), args[0]],
+            ));
+        }
+    };
+
+    if let Some(buf) = buffers.current_buffer() {
+        let entry = SyntaxTable::for_buffer(buf).get_entry(ch);
+        if let Some(e) = entry
+            && matches!(e.class, SyntaxClass::Open | SyntaxClass::Close)
+            && let Some(m) = e.matching_char
+        {
+            return Ok(Value::char(m));
+        }
+    }
+    Ok(Value::NIL)
+}
+
+/// `(standard-syntax-table)` — return the standard syntax table.
+#[doc(hidden)]
+pub fn builtin_standard_syntax_table(args: Vec<Value>) -> EvalResult {
+    if !args.is_empty() {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("standard-syntax-table"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    ensure_standard_syntax_table_object()
+}
+
+/// `(syntax-table-p OBJECT)` — return t if OBJECT is a syntax table.
+pub(crate) fn builtin_syntax_table_p(args: Vec<Value>) -> EvalResult {
+    builtin_syntax_table_p_with_symbols(args, neovm_value::tagged::SymbolMode::Bare)
+}
+
+/// `(syntax-table)` — return the current buffer syntax table.
+///
+/// Returns the buffer-local syntax-table object, defaulting to the standard
+/// syntax-table object.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+    neovm_value::error::expect_args("syntax-table", &args, 0)?;
+    builtin_syntax_table_0(eval)
+}
+/// `syntax-table` as registered: fixed arity 0, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_syntax_table_0<H: TextHost>(eval: &mut H) -> EvalResult {
+    let mode = eval.symbol_mode();
+    let args: [Value; 0] = [];
+    builtin_syntax_table_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
+}
+
+/// `(set-syntax-table TABLE)` — install TABLE for current buffer and return it.
+///
+/// NeoVM currently stores syntax behavior on `Buffer.syntax_table` internals;
+/// this installs the exposed syntax-table object for compatibility and returns it.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_set_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+    neovm_value::error::expect_args("set-syntax-table", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_set_syntax_table_1(eval, arg(0))
+}
+/// `set-syntax-table` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_set_syntax_table_1<H: TextHost>(eval: &mut H, table: Value) -> EvalResult {
+    let mode = eval.symbol_mode();
+    let args: [Value; 1] = [table];
+    builtin_set_syntax_table_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
+}
+
+// ===========================================================================
+// Builtin functions (evaluator-dependent — operate on current buffer)
+// ===========================================================================
+
+/// `(modify-syntax-entry CHAR NEWENTRY &optional SYNTAX-TABLE)`
+#[doc(hidden)]
+pub fn builtin_modify_syntax_entry<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+    let mode = eval.symbol_mode();
+    modify_syntax_entry_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
+}
+
+/// `(char-syntax CHAR)` — return the syntax class designator char.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_char_syntax<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+    neovm_value::error::expect_args("char-syntax", &args, 1)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_char_syntax_1(eval, arg(0))
+}
+/// `char-syntax` as registered: fixed arity 1, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_char_syntax_1<H: TextHost>(eval: &mut H, character: Value) -> EvalResult {
+    let args: [Value; 1] = [character];
+    builtin_char_syntax_in_buffers(eval.buffers(), &args)
+}
+
+pub(crate) fn builtin_char_syntax_in_buffers(
+    buffers: &BufferManager,
+    args: &[Value],
+) -> EvalResult {
+    if args.len() != 1 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("char-syntax"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    let code = match args[0].kind() {
+        ValueKind::Fixnum(c) if (0..=neovm_value::emacs_char::MAX_CHAR as i64).contains(&c) => {
+            c as u32
+        }
+        ValueKind::Fixnum(_) => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("characterp"), args[0]],
+            ));
+        }
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("characterp"), args[0]],
+            ));
+        }
+    };
+
+    let buf = buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    // GNU `Fchar_syntax` (syntax.c): in a unibyte buffer the character is mapped
+    // through `make_char_multibyte` before the syntax lookup. A byte 0x80-0xFF
+    // becomes its eight-bit character (word syntax); a code >= 0x100 maps past
+    // MAX_CHAR to an invalid character, whose syntax is the default whitespace.
+    let class = if !buf.get_multibyte() {
+        if code < 0x100 {
+            SyntaxTable::for_buffer(buf)
+                .char_syntax_code(neovm_value::emacs_char::unibyte_to_char(code as u8))
+        } else {
+            SyntaxClass::Whitespace
+        }
+    } else {
+        SyntaxTable::for_buffer(buf).char_syntax_code(code)
+    };
+    Ok(Value::char(class.to_char()))
+}
+
+/// Word-boundary predicate for the casing operations (capitalize /
+/// upcase-initials / *-word / *-region). GNU decides word constituency in
+/// `case_ch_is_word` (`src/casefiddle.c`) purely from the buffer syntax table:
+/// `SYNTAX(ch) == Sword`, or `== Ssymbol` when `case-symbols-as-words` is set.
+/// This is what lets a `set-case-syntax-pair` char (which installs *word*
+/// syntax via `modify-syntax-entry`) participate in a word -- Unicode
+/// letterness is irrelevant. Falls back to the standard syntax table when there
+/// is no current buffer (e.g. casing a plain string outside any buffer).
+#[doc(hidden)]
+pub fn casing_word_predicate<H: TextHost>(eval: &H) -> impl Fn(u32) -> bool + Copy + 'static {
+    let symbols_as_words = eval
+        .eval_symbol_by_id(neovm_value::intern::intern("case-symbols-as-words"))
+        .unwrap_or(Value::NIL)
+        .is_truthy();
+    let chartable = eval
+        .buffers()
+        .current_buffer()
+        .map(|buf| SyntaxTable::for_buffer(buf).chartable);
+    move |code: u32| {
+        let class = match chartable {
+            Some(table) => syntax_class_at_char_code(&table, code),
+            None => standard_syntax_class_for_code(code),
+        };
+        class == SyntaxClass::Word || (symbols_as_words && class == SyntaxClass::Symbol)
+    }
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// `(syntax-after POS)` — return syntax descriptor for char at POS.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_syntax_after<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+    let mode = eval.symbol_mode();
+    builtin_syntax_after_in_buffers_with_symbols(eval.variables(), eval.buffers(), args, mode)
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_syntax_after_in_buffers<'a, V: EditVariableRead<'a>>(
+    vars: V,
+    buffers: &BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_syntax_after_in_buffers_with_symbols(
+        vars,
+        buffers,
+        args,
+        neovm_value::tagged::SymbolMode::Bare,
+    )
+}
+
+pub(crate) fn builtin_syntax_after_in_buffers_with_symbols<'a, V: EditVariableRead<'a>>(
+    vars: V,
+    buffers: &BufferManager,
+    args: Vec<Value>,
+    mode: neovm_value::tagged::SymbolMode,
+) -> EvalResult {
+    if args.len() != 1 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("syntax-after"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let pos = match args[0].kind() {
+        ValueKind::Fixnum(n) => n,
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("number-or-marker-p"), args[0]],
+            ));
+        }
+    };
+    if pos <= 0 {
+        return Ok(Value::NIL);
+    }
+
+    let buf = buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+
+    let char_index = LispCharPos1::new(pos)
+        .to_char_pos()
+        .min(buf.total_char_end_pos());
+    let byte_index = buffer_char_to_emacs_byte_pos(buf, char_index);
+    let Some(unit) = buffer_syntax_char_after(buf, byte_index) else {
+        return Ok(Value::NIL);
+    };
+
+    let entry = effective_syntax_entry_for_char_at_byte(
+        buf,
+        &SyntaxTable::for_buffer(buf),
+        unit.ch,
+        byte_index,
+        &SyntaxPropByteRun::new(SyntaxProperties::for_scan_with_symbols(
+            true, vars, buffers, mode,
+        )),
+    );
+    Ok(syntax_entry_to_value(&entry))
+}
+
+#[doc(hidden)]
+pub fn expect_forward_comment_count(args: &[Value]) -> Result<i64, Flow> {
+    if args.len() != 1 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("forward-comment"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let count = match args[0].kind() {
+        ValueKind::Fixnum(n) => n,
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("integerp"), args[0]],
+            ));
+        }
+    };
+    Ok(count)
+}
+
+#[doc(hidden)]
+pub fn forward_comment_in_buffers(
+    buffers: &mut BufferManager,
+    count: i64,
+    props: SyntaxProperties<'_>,
+    escape_policy: CommentEndEscapePolicy,
+) -> EvalResult {
+    let current_id = buffers
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+
+    if count == 0 {
+        return Ok(Value::T);
+    }
+
+    let (ok, final_pos) = {
+        let buf = buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        forward_comment_scan_in_buffer(buf, count, props, escape_policy)
+    };
+    let _ = buffers.goto_buffer_emacs_byte_pos(current_id, final_pos);
+    Ok(if ok { Value::T } else { Value::NIL })
+}
+
+/// Run the comment scan without moving point; returns (all-skipped, stop pos).
+/// The cursor only ever advances toward the scan direction, so for forward
+/// scans the stop position is also the maximum position examined.
+#[doc(hidden)]
+pub fn forward_comment_scan_in_buffer(
+    buf: &Buffer,
+    count: i64,
+    props: SyntaxProperties<'_>,
+    escape_policy: CommentEndEscapePolicy,
+) -> (bool, EmacsBytePos) {
+    // One cache for the whole call: `forward-comment` examines every
+    // character it steps over, and until this existed each of those did a
+    // fresh interval lookup and a byte->char conversion.
+    let prop_cache = SyntaxPropByteRun::new(props);
+    let mut scanner = ForwardCommentCursor::new(buf);
+    let ok = if count > 0 {
+        forward_comment_forward(&mut scanner, count as u64, &prop_cache, escape_policy)
+    } else {
+        forward_comment_backward(
+            &mut scanner,
+            (-count) as u64,
+            &prop_cache,
+            escape_policy,
+            BackwardCommentEntryPolicy::ForwardComment,
+        )
+    };
+    (ok, scanner.point_emacs_byte_pos())
+}
+
+struct ForwardCommentCursor<'a> {
+    buffer: &'a Buffer,
+    point: EmacsBytePos,
+}
+
+impl<'a> ForwardCommentCursor<'a> {
+    fn new(buffer: &'a Buffer) -> Self {
+        Self {
+            buffer,
+            point: buffer.point_emacs_byte_pos(),
+        }
+    }
+
+    fn point_emacs_byte_pos(&self) -> EmacsBytePos {
+        self.point
+    }
+
+    fn goto_emacs_byte_pos(&mut self, point: EmacsBytePos) {
+        self.point = self.buffer.accessible_emacs_byte_region().clamp(point);
+    }
+}
+
+impl Deref for ForwardCommentCursor<'_> {
+    type Target = Buffer;
+
+    fn deref(&self) -> &Self::Target {
+        self.buffer
+    }
+}
+
+/// Skip whitespace and comments forward. Returns true if all `count`
+/// comments were skipped successfully.
+fn forward_comment_forward(
+    buf: &mut ForwardCommentCursor<'_>,
+    count: u64,
+    prop_cache: &SyntaxPropByteRun<'_>,
+    escape_policy: CommentEndEscapePolicy,
+) -> bool {
+    let mut remaining = count;
+    let max = buf.accessible_emacs_byte_region().end();
+
+    'comments: while remaining > 0 {
+        // GNU classifies one complete token before deciding whether it is
+        // ignorable whitespace, a comment opener, or a stopping character.
+        loop {
+            let pt = buf.point_emacs_byte_pos();
+            if pt >= max {
+                return false;
+            }
+            let Some(unit) = buffer_syntax_char_after(buf, pt) else {
+                return false;
+            };
+            let entry = effective_syntax_entry_for_char_at_byte(
+                buf,
+                &SyntaxTable::for_buffer(buf),
+                unit.ch,
+                pt,
+                prop_cache,
+            );
+            let class = entry.class;
+            let flags = entry.flags;
+
+            // GNU forms a two-character opener before dispatching on either
+            // character's base syntax.  The pair therefore overrides `<`,
+            // `!`, whitespace, newline end syntax, and every other base class.
+            if flags.contains(SyntaxFlags::COMMENT_START_FIRST) {
+                let next_pos = unit.end;
+                if next_pos < max
+                    && let Some(unit2) = buffer_syntax_char_after(buf, next_pos)
+                {
+                    let entry2 = effective_syntax_entry_for_char_at_byte(
+                        buf,
+                        &SyntaxTable::for_buffer(buf),
+                        unit2.ch,
+                        next_pos,
+                        prop_cache,
+                    );
+                    let capabilities = CommentMarkerCapabilities::between(flags, entry2.flags);
+                    if let Some(flavor) = capabilities.opener {
+                        buf.goto_emacs_byte_pos(unit2.end);
+                        if !scan_forward_comment_body(buf, flavor, prop_cache, escape_policy) {
+                            return false;
+                        }
+                        remaining -= 1;
+                        continue 'comments;
+                    }
+                }
+            }
+
+            if class == SyntaxClass::Whitespace
+                || (class == SyntaxClass::EndComment && unit.ch == '\n')
+            {
+                buf.goto_emacs_byte_pos(unit.end);
+                continue;
+            }
+
+            if class == SyntaxClass::Comment {
+                let flavor = CommentFlavor::single(flags);
+                buf.goto_emacs_byte_pos(unit.end);
+                if !scan_forward_comment_body(buf, flavor, prop_cache, escape_policy) {
+                    return false;
+                }
+                remaining -= 1;
+                continue 'comments;
+            }
+
+            if class == SyntaxClass::CommentFence {
+                buf.goto_emacs_byte_pos(unit.end);
+                if !scan_forward_comment_fence(buf, prop_cache, escape_policy) {
+                    return false;
+                }
+                remaining -= 1;
+                continue 'comments;
+            }
+
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Scan forward through comment body until matching comment end.
+/// Point should be positioned right after the comment start.
+/// Returns true if comment end was found.
+fn scan_forward_comment_body(
+    buf: &mut ForwardCommentCursor<'_>,
+    flavor: CommentFlavor,
+    prop_cache: &SyntaxPropByteRun<'_>,
+    escape_policy: CommentEndEscapePolicy,
+) -> bool {
+    let mut nesting = 1i32;
+    let max = buf.accessible_emacs_byte_region().end();
+
+    loop {
+        let pt = buf.point_emacs_byte_pos();
+        if pt >= max {
+            return false;
+        }
+        let Some(unit) = buffer_syntax_char_after(buf, pt) else {
+            return false;
+        };
+        let entry = effective_syntax_entry_for_char_at_byte(
+            buf,
+            &SyntaxTable::for_buffer(buf),
+            unit.ch,
+            pt,
+            prop_cache,
+        );
+        let class = entry.class;
+        let flags = entry.flags;
+
+        // GNU checks a complete single-character ender first.
+        if class == SyntaxClass::EndComment && CommentFlavor::single(flags) == flavor {
+            buf.goto_emacs_byte_pos(unit.end);
+            nesting -= 1;
+            if nesting <= 0 {
+                return true;
+            }
+            continue;
+        }
+
+        // A nested single-character opener is applied before the same
+        // character participates in a two-character marker.  This apparently
+        // odd ordering is observable for combined base-class/flag entries and
+        // is exactly GNU `forw_comment`'s order.
+        if flavor.nesting.is_nested()
+            && class == SyntaxClass::Comment
+            && CommentFlavor::single(flags) == flavor
+        {
+            nesting += 1;
+        }
+
+        // GNU applies the configurable escape skip after single-character
+        // delimiters, but before testing two-character enders/openers.
+        if escape_policy == CommentEndEscapePolicy::EscapeQuotesEnder
+            && matches!(class, SyntaxClass::Escape | SyntaxClass::CharQuote)
+        {
+            buf.goto_emacs_byte_pos(unit.end);
+            let pt2 = buf.point_emacs_byte_pos();
+            if pt2 >= max {
+                return false;
+            }
+            if let Some(unit2) = buffer_syntax_char_after(buf, pt2) {
+                buf.goto_emacs_byte_pos(unit2.end);
+            }
+            continue;
+        }
+
+        let mut pair: Option<(BufferSyntaxChar, CommentMarkerCapabilities)> = None;
+        if flags.contains(SyntaxFlags::COMMENT_END_FIRST)
+            || flags.contains(SyntaxFlags::COMMENT_START_FIRST)
+        {
+            let next_pos = unit.end;
+            if next_pos < max
+                && let Some(unit2) = buffer_syntax_char_after(buf, next_pos)
+            {
+                let entry2 = effective_syntax_entry_for_char_at_byte(
+                    buf,
+                    &SyntaxTable::for_buffer(buf),
+                    unit2.ch,
+                    next_pos,
+                    prop_cache,
+                );
+                pair = Some((
+                    unit2,
+                    CommentMarkerCapabilities::between(flags, entry2.flags),
+                ));
+            }
+        }
+
+        // Two-character enders precede two-character nested openers.  A
+        // single nested opener above has already affected `nesting`.
+        if flags.contains(SyntaxFlags::COMMENT_END_FIRST)
+            && let Some((unit2, capabilities)) = pair
+            && capabilities.ender == Some(flavor)
+        {
+            buf.goto_emacs_byte_pos(unit2.end);
+            nesting -= 1;
+            if nesting <= 0 {
+                return true;
+            }
+            continue;
+        }
+
+        // Two-character nested comment start.
+        if flavor.nesting.is_nested()
+            && flags.contains(SyntaxFlags::COMMENT_START_FIRST)
+            && let Some((unit2, capabilities)) = pair
+            && capabilities.opener == Some(flavor)
+        {
+            buf.goto_emacs_byte_pos(unit2.end);
+            nesting += 1;
+            continue;
+        }
+
+        buf.goto_emacs_byte_pos(unit.end);
+    }
+}
+
+/// Scan forward for matching comment fence character.
+fn scan_forward_comment_fence(
+    buf: &mut ForwardCommentCursor<'_>,
+    prop_cache: &SyntaxPropByteRun<'_>,
+    escape_policy: CommentEndEscapePolicy,
+) -> bool {
+    let max = buf.accessible_emacs_byte_region().end();
+    loop {
+        let pt = buf.point_emacs_byte_pos();
+        if pt >= max {
+            return false;
+        }
+        let Some(unit) = buffer_syntax_char_after(buf, pt) else {
+            return false;
+        };
+        let entry = effective_syntax_entry_for_char_at_byte(
+            buf,
+            &SyntaxTable::for_buffer(buf),
+            unit.ch,
+            pt,
+            prop_cache,
+        );
+        let class = entry.class;
+
+        if escape_policy == CommentEndEscapePolicy::EscapeQuotesEnder
+            && matches!(class, SyntaxClass::Escape | SyntaxClass::CharQuote)
+        {
+            buf.goto_emacs_byte_pos(unit.end);
+            let pt2 = buf.point_emacs_byte_pos();
+            if pt2 >= max {
+                return false;
+            }
+            if let Some(unit2) = buffer_syntax_char_after(buf, pt2) {
+                buf.goto_emacs_byte_pos(unit2.end);
+            }
+            continue;
+        }
+
+        buf.goto_emacs_byte_pos(unit.end);
+
+        if class == SyntaxClass::CommentFence {
+            return true;
+        }
+    }
+}
+
+/// Skip whitespace and comments backward. Returns true if all `count`
+/// comments were skipped successfully.
+fn forward_comment_backward(
+    buf: &mut ForwardCommentCursor<'_>,
+    count: u64,
+    prop_cache: &SyntaxPropByteRun<'_>,
+    escape_policy: CommentEndEscapePolicy,
+    entry_policy: BackwardCommentEntryPolicy,
+) -> bool {
+    let mut remaining = count;
+    let accessible = buf.accessible_emacs_byte_region();
+    let min = accessible.start();
+
+    // Outer loop: skip `remaining` comments backward.
+    while remaining > 0 {
+        // Inner loop: scan backward character-by-character to find one
+        // comment to skip.  This mirrors GNU Emacs's Fforward_comment
+        // backward logic: each iteration decrements point, inspects
+        // the character, and either (a) skips whitespace, (b) enters
+        // backward comment scanning, or (c) gives up on
+        // non-comment/non-whitespace.
+        loop {
+            let pt = buf.point_emacs_byte_pos();
+            if pt <= min {
+                return false;
+            }
+            let Some(unit) = buffer_syntax_char_before(buf, pt) else {
+                return false;
+            };
+            let ch_pos = unit.start;
+            let entry = effective_syntax_entry_for_char_at_byte(
+                buf,
+                &SyntaxTable::for_buffer(buf),
+                unit.ch,
+                ch_pos,
+                prop_cache,
+            );
+            let class = entry.class;
+            let flags = entry.flags;
+            // GNU computes this at the character initially encountered by
+            // the backward walk (the second character of a two-character
+            // ender).  Forming such an ender separately requires its first
+            // character to be unquoted; `comment-end-can-be-escaped` then
+            // decides whether this original quote suppresses the ender.
+            let ender_quoted = char_quoted_at_byte(buf, unit.start, min, prop_cache);
+
+            let mut code = class;
+            let mut comment_flavor = CommentFlavor::single(flags);
+            let mut marker_start = unit.start;
+
+            // Check for two-char comment end: current char has
+            // COMMENT_END_SECOND, prev char has COMMENT_END_FIRST.
+            if flags.contains(SyntaxFlags::COMMENT_END_SECOND) {
+                let prev_pos = unit.start;
+                if prev_pos > min
+                    && let Some(unit2) = buffer_syntax_char_before(buf, prev_pos)
+                {
+                    let ch2_pos = unit2.start;
+                    let entry2 = effective_syntax_entry_for_char_at_byte(
+                        buf,
+                        &SyntaxTable::for_buffer(buf),
+                        unit2.ch,
+                        ch2_pos,
+                        prop_cache,
+                    );
+                    let flags2 = entry2.flags;
+                    let capabilities = CommentMarkerCapabilities::between(flags2, flags);
+                    if let Some(flavor) = capabilities.ender
+                        && entry_policy.accepts_two_char_ender_with_quoted_first(
+                            char_quoted_at_byte(buf, unit2.start, min, prop_cache),
+                        )
+                    {
+                        code = SyntaxClass::EndComment;
+                        comment_flavor = flavor;
+                        marker_start = unit2.start;
+                        // Move past both chars of the two-char end.
+                        buf.goto_emacs_byte_pos(unit2.start);
+                    }
+                }
+            }
+
+            // Comment fence backward.
+            if code == SyntaxClass::CommentFence {
+                buf.goto_emacs_byte_pos(unit.start);
+                if !scan_backward_comment_fence(buf, prop_cache) {
+                    buf.goto_emacs_byte_pos(pt);
+                    return false;
+                }
+                // Successfully skipped one comment via fence.
+                break;
+            }
+
+            if code == SyntaxClass::EndComment {
+                if entry_policy.escaped_ender_is_suppressed(escape_policy, ender_quoted) {
+                    if unit.ch == '\n' {
+                        buf.goto_emacs_byte_pos(marker_start);
+                        continue;
+                    }
+                    buf.goto_emacs_byte_pos(pt);
+                    return false;
+                }
+                // If we didn't already move point for a two-char end,
+                // move past the single-char end now.
+                if buf.point_emacs_byte_pos() == pt {
+                    buf.goto_emacs_byte_pos(unit.start);
+                }
+                if scan_backward_comment_body(buf, comment_flavor, prop_cache, escape_policy) {
+                    // Successfully scanned back through the comment body.
+                    break;
+                }
+                // scan_backward_comment_body failed.
+                if unit.ch == '\n' {
+                    // GNU: "This end-of-line is not an end-of-comment.
+                    // Treat it like a whitespace."
+                    // Restore to just before the newline and continue
+                    // the inner loop.
+                    buf.goto_emacs_byte_pos(marker_start);
+                    continue;
+                }
+                // Non-newline EndComment that failed to find a matching
+                // comment start — failure.
+                // GNU's two-character path advances once to undo the extra
+                // delimiter decrement and once more at `leave`; both single-
+                // and two-character failures therefore restore original point.
+                buf.goto_emacs_byte_pos(pt);
+                return false;
+            }
+
+            if class == SyntaxClass::Whitespace && !ender_quoted {
+                buf.goto_emacs_byte_pos(unit.start);
+                continue;
+            }
+
+            // Not whitespace, not comment end — stop.
+            return false;
+        }
+        remaining -= 1;
+    }
+
+    true
+}
+
+/// The delimiter of a string the backward comment walk is currently inside.
+///
+/// GNU keeps this as a single `int` (`string_style`), overloading it with the
+/// `ST_STRING_STYLE` / `ST_COMMENT_STYLE` sentinels for the two fence classes;
+/// naming the three cases keeps the sentinels from having to be reserved out of
+/// the character range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackCommentStringStyle {
+    /// An ordinary string quote (`Sstring`), identified by its character:
+    /// two *different* quote characters cannot be told apart scanning backward.
+    Delim(char),
+    /// A generic string fence (`Sstring_fence`).
+    StringFence,
+    /// A generic comment fence (`Scomment_fence`), which GNU counts as a
+    /// string delimiter for parity purposes.
+    CommentFence,
+}
+
+/// GNU `char_quoted`, addressed by Emacs byte position: is the character
+/// starting at `pos` preceded by an odd number of escape / character-quote
+/// characters?
+fn char_quoted_at_byte(
+    buf: &Buffer,
+    pos: EmacsBytePos,
+    min: EmacsBytePos,
+    prop_cache: &SyntaxPropByteRun<'_>,
+) -> bool {
+    let table = SyntaxTable::for_buffer(buf);
+    let mut cursor = pos;
+    let mut quoted = false;
+    while cursor > min {
+        let Some(unit) = buffer_syntax_char_before(buf, cursor) else {
+            break;
+        };
+        let class =
+            effective_syntax_entry_for_char_at_byte(buf, &table, unit.ch, unit.start, prop_cache)
+                .class;
+        if !matches!(class, SyntaxClass::Escape | SyntaxClass::CharQuote) {
+            break;
+        }
+        quoted = !quoted;
+        cursor = unit.start;
+    }
+    quoted
+}
+
+/// The validity key of the buffer's safe-position index for this re-parse, or
+/// `None` when the index must not be used: a `syntax-table` property resolver
+/// with `char-property-alias-alist` aliases or a `default-text-properties`
+/// fallback depends on Lisp list structure no key observes.
+fn back_comment_safe_key(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    props: SyntaxProperties<'_>,
+    escape_policy: CommentEndEscapePolicy,
+) -> Option<neovm_edit::buffer::buffer_text::SyntaxSafeKey> {
+    // See parse_cache::parse_cache_mode: the bypass is a test-support switch.
+    #[cfg(any(test, feature = "test-support"))]
+    if BACK_COMMENT_SAFE_BYPASS.with(|b| b.get()) {
+        return None;
+    }
+    // The safe-position index does not key symbol policy; do not reuse it
+    // while positioned purposes can change char-table interpretation.
+    if props.symbol_mode() == neovm_value::tagged::SymbolMode::Positioned {
+        return None;
+    }
+    let honor_props = match props {
+        SyntaxProperties::Ignore | SyntaxProperties::PositionedIgnore => false,
+        SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver) => {
+            if !resolver.supports_presence_coalescing() {
+                return None;
+            }
+            true
+        }
+    };
+    let (content_epoch, syntax_prop_tick) = buf.syntax_content_key();
+    Some(neovm_edit::buffer::buffer_text::SyntaxSafeKey::new(
+        content_epoch,
+        syntax_prop_tick,
+        buf.accessible_char_region().start().get(),
+        table.chartable.bits(),
+        crate::emacs_core::chartable::char_table_write_tick(),
+        honor_props,
+        escape_policy == CommentEndEscapePolicy::EscapeQuotesEnder,
+    ))
+}
+
+/// Characters between recorded safe positions.
+fn back_comment_safe_chunk() -> usize {
+    // The override is test-support-visible; the re-homed safe-position tests
+    // set it, so the read must exist there too.
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        let over = BACK_COMMENT_SAFE_CHUNK_OVERRIDE.with(|c| c.get());
+        if over != 0 {
+            return over;
+        }
+    }
+    1024
+}
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// Test hooks: bypass the safe-position index entirely; override the
+    /// chunk; count re-parses that started after BEGV.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) static BACK_COMMENT_SAFE_BYPASS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) static BACK_COMMENT_SAFE_CHUNK_OVERRIDE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) static BACK_COMMENT_SAFE_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub static BACK_COMMENT_SAFE_REPARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// GNU `back_comment`'s `lossage` fallback: re-parse *forward* and take the
+/// comment start from the resulting parse state.
+///
+/// Backward scanning cannot resolve which of two readings of a mixed
+/// string/comment run is the real one -- GNU's own examples are `" { " a { " }`
+/// and `{ a (* " *)` -- so once the walk knows it is guessing it throws the
+/// guess away and parses forward from a position that is known not to be inside
+/// a string or a comment.
+///
+/// GNU picks that position with `find_defun_start`, which by default (with
+/// `comment-use-syntax-ppss` non-nil) asks `syntax-ppss` for the start of the
+/// construct containing `comment_end` -- itself a `parse-partial-sexp` from
+/// `BEGV`.  Parsing straight from `BEGV` reaches the same answer without a Lisp
+/// call and without GNU's retry loop, whose only purpose is to recover when the
+/// heuristic start point turns out to be inside another comment.  `BEGV` is
+/// always outside every string and comment, so one parse settles it.
+///
+/// Returns the comment's start position, or `None` when the forward parse says
+/// `comment_end` does not end a comment of this style after all.
+///
+/// With both native syntax-cache layers enabled, an already warm canonical
+/// run supplies its complete validated BEGV state strictly before `comment_end`.
+/// Queries beyond its frontier record only the necessary tail; cold queries
+/// keep the existing safe-position index. That index is also retained when
+/// either cache layer is off, so enabling canonical reuse adds no first cold
+/// recording scan. Category/alias/default resolvers instead use a plain BEGV
+/// scan while canonical reuse is enabled, because their Lisp dependencies have
+/// no stamp the legacy index can validate. Reaching GNU's Lisp `syntax-ppss`
+/// here remains separate work: the byte-addressed scanners carry no evaluator.
+fn back_comment_reparse(
+    buf: &ForwardCommentCursor<'_>,
+    comment_end: EmacsBytePos,
+    flavor: CommentFlavor,
+    prop_cache: &SyntaxPropByteRun<'_>,
+    escape_policy: CommentEndEscapePolicy,
+) -> Option<EmacsBytePos> {
+    let begv = buf.accessible_char_region().start();
+    let from = char_pos_to_lisp_i64(begv.get());
+    let to = buffer_byte_to_lisp_pos(buf, comment_end);
+    if to <= from {
+        return None;
+    }
+
+    let table = SyntaxTable::for_buffer(buf);
+    let props = prop_cache.props();
+    let state = if let Some(state) =
+        parse_cache::back_comment_canonical_state(buf, &table, to, props, escape_policy)
+    {
+        state
+    } else {
+        match back_comment_safe_key(buf, &table, props, escape_policy) {
+            Some(key) => {
+                let mut index = buf.take_syntax_safe_positions();
+                // The re-homed back-comment tests assert this counter.
+                #[cfg(any(test, feature = "test-support"))]
+                BACK_COMMENT_SAFE_REPARSES.with(|c| c.set(c.get() + 1));
+                if index.key() != Some(key) {
+                    index.points_mut().clear();
+                    index.set_key(Some(key));
+                }
+                // Restart from the last safe position before `to` (BEGV if none),
+                // and extend the index only when parsing past its end.
+                let to0 = (to - 1) as usize;
+                let i = index.points().partition_point(|&p| p < to0);
+                let start0 = if i == 0 {
+                    begv.get()
+                } else {
+                    index.points()[i - 1]
+                };
+                let chunk = back_comment_safe_chunk();
+                let next_target = if i == index.points().len() {
+                    start0.saturating_add(chunk)
+                } else {
+                    usize::MAX
+                };
+                let (_, to_char) = clamped_parse_range(buf, from, to);
+                let ScanEnd::Finished(ScanFinish { state, .. }) = run_parse_loop(
+                    buf,
+                    &table,
+                    Entry::Fresh {
+                        from_char: start0,
+                        state: PartialParseState::new(),
+                        from_oldstate: false,
+                    },
+                    to_char,
+                    None,
+                    false,
+                    CommentStopMode::None,
+                    props,
+                    escape_policy,
+                    &mut SafePositionRecorder {
+                        next_target,
+                        chunk,
+                        points: index.points_mut(),
+                    },
+                ) else {
+                    unreachable!("the safe-position recorder never pauses")
+                };
+                buf.put_syntax_safe_positions(index);
+                // The re-homed back-comment tests assert this counter.
+                #[cfg(any(test, feature = "test-support"))]
+                BACK_COMMENT_SAFE_STARTS
+                    .with(|c| c.set(c.get() + usize::from(start0 > begv.get())));
+                #[cfg(debug_assertions)]
+                {
+                    let (full, _) = parse_state_from_range_core(
+                        buf,
+                        &table,
+                        from,
+                        to,
+                        None,
+                        false,
+                        None,
+                        CommentStopMode::None,
+                        props,
+                        escape_policy,
+                    );
+                    debug_assert_eq!(
+                        (
+                            &state.in_comment,
+                            state.in_comment.map(|_| state.comment_or_string_start)
+                        ),
+                        (
+                            &full.in_comment,
+                            full.in_comment.map(|_| full.comment_or_string_start)
+                        ),
+                        "a parse from safe position {start0} must reach the comment state \
+                         the parse from BEGV reaches at {to}"
+                    );
+                }
+                state
+            }
+            None => {
+                parse_state_from_range_core(
+                    buf,
+                    &table,
+                    from,
+                    to,
+                    None,
+                    false,
+                    None,
+                    CommentStopMode::None,
+                    props,
+                    escape_policy,
+                )
+                .0
+            }
+        }
+    };
+
+    // GNU's acceptance test is `state.incomment == (comnested ? 1 : -1) &&
+    // state.comstyle == comstyle`: the parse has to end inside a comment of
+    // exactly this style, at exactly this nesting depth.
+    let ParseCommentState::Syntax {
+        depth,
+        flavor: parsed_flavor,
+    } = state.in_comment?
+    else {
+        return None;
+    };
+    if parsed_flavor != flavor || (flavor.nesting.is_nested() && depth != 1) {
+        return None;
+    }
+
+    let start = lisp_pos_to_byte(buf, LispCharPos1::new(state.comment_or_string_start?));
+    (start != comment_end).then_some(start)
+}
+
+/// Scan backward through comment body to find matching comment start.
+///
+/// This is GNU Emacs's `back_comment()`.  Point should be positioned right
+/// after the comment-end delimiter has been consumed (i.e. just before the
+/// comment body).
+///
+/// For **nested** comments the function returns as soon as the nesting
+/// count drops to zero.
+///
+/// For **non-nested** comments the function scans all the way backward,
+/// recording the *earliest* comment-starter of the matching style it
+/// finds.  A same-style comment-ender encountered during the scan means
+/// "anything before this belongs to a different comment" and stops the
+/// search.  At the end, point is set to the recorded position.
+///
+/// Scanning backward cannot tell whether a comment starter it walks over is
+/// real or merely sitting inside a string, so the walk also tracks
+/// string-quote parity.  A comment starter reached while inside a string --
+/// or after any other sign that the walk is guessing -- is *not* accepted;
+/// the whole question is handed to [`back_comment_reparse`] instead.
+///
+/// The walk keeps the syntax immediately to the right of the current
+/// character, just like GNU's `prev_syntax`.  That makes a two-character
+/// delimiter one classified token when its first character is reached: the
+/// first character is the quote-check position, both start/end capabilities
+/// remain available, and a base string/fence class cannot hide the marker.
+fn scan_backward_comment_body(
+    buf: &mut ForwardCommentCursor<'_>,
+    flavor: CommentFlavor,
+    prop_cache: &SyntaxPropByteRun<'_>,
+    escape_policy: CommentEndEscapePolicy,
+) -> bool {
+    let comment_end = buf.point_emacs_byte_pos();
+    let mut nesting = 1i32;
+    let min = buf.accessible_emacs_byte_region().start();
+
+    // For non-nested comments: record the earliest matching comment-start
+    // seen so far.
+    let mut comstart_pos: Option<EmacsBytePos> = None;
+
+    // GNU `string_style`: the string the walk is currently inside, presumed
+    // to be none at the point the walk starts.
+    let mut string_style: Option<BackCommentStringStyle> = None;
+    // GNU `string_lossage`: two different kinds of string delimiter were seen,
+    // which backward scanning cannot untangle.
+    let mut string_lossage = false;
+    // GNU `comment_lossage`: a comment-ender of *another* style was crossed, so
+    // a comment starter found further back may belong to that other comment.
+    let mut comment_lossage = false;
+    // GNU's `goto lossage`: the walk knows its answer would be a guess.
+    let mut lossage = false;
+    // GNU's `prev_syntax`: the character immediately to the right.  Keeping
+    // this observation across loop iterations is what lets classification
+    // happen at the first character of a two-character delimiter.
+    let mut syntax_to_right: Option<(BufferSyntaxChar, SyntaxEntry)> = None;
+
+    loop {
+        let pt = buf.point_emacs_byte_pos();
+        if pt <= min {
+            // Reached beginning of accessible region.
+            break;
+        }
+        let Some(unit) = buffer_syntax_char_before(buf, pt) else {
+            break;
+        };
+        let ch_pos = unit.start;
+        let entry = effective_syntax_entry_for_char_at_byte(
+            buf,
+            &SyntaxTable::for_buffer(buf),
+            unit.ch,
+            ch_pos,
+            prop_cache,
+        );
+        let class = entry.class;
+        let flags = entry.flags;
+        let right = syntax_to_right;
+        syntax_to_right = Some((unit, entry));
+
+        let marker = right
+            .filter(|(right_unit, _)| right_unit.start == unit.end)
+            .map(|(_, right_entry)| CommentMarkerCapabilities::between(flags, right_entry.flags))
+            .unwrap_or_default();
+        let matching_opener = marker.opener == Some(flavor);
+
+        // GNU punts overlapping two-character markers to its forward parser;
+        // a local backward choice is not trustworthy for `|*|`, `---`, etc.
+        let enters_overlap_check =
+            marker.ender.is_some() || matching_opener || class == SyntaxClass::Comment;
+        if enters_overlap_check
+            && unit.start > min
+            && let Some(left_unit) = buffer_syntax_char_before(buf, unit.start)
+        {
+            let left_entry = effective_syntax_entry_for_char_at_byte(
+                buf,
+                &SyntaxTable::for_buffer(buf),
+                left_unit.ch,
+                left_unit.start,
+                prop_cache,
+            );
+            let right_flags = right.map_or(SyntaxFlags::empty(), |(_, entry)| entry.flags);
+            let overlaps_ender =
+                (matching_opener || class == SyntaxClass::Comment || flavor.nesting.is_nested())
+                    && flags.contains(SyntaxFlags::COMMENT_END_SECOND)
+                    && left_entry.flags.contains(SyntaxFlags::COMMENT_END_FIRST);
+            let overlaps_opener = (marker.ender.is_some() || flavor.nesting.is_nested())
+                && flags.contains(SyntaxFlags::COMMENT_START_SECOND)
+                && CommentStyle::from_start_flags(flags, right_flags) == flavor.style
+                && left_entry.flags.contains(SyntaxFlags::COMMENT_START_FIRST);
+            if overlaps_ender || overlaps_opener {
+                lossage = true;
+                break;
+            }
+        }
+
+        // A token that can be both an opener and an ender is the nearest
+        // opener the first time GNU sees it; later occurrences are enders.
+        let marker_is_opener =
+            matching_opener && (marker.ender.is_none() || comstart_pos.is_none());
+        let effective_ender = (!marker_is_opener).then_some(marker.ender).flatten();
+
+        // GNU: "Ignore escaped characters, except comment-enders which cannot
+        // be escaped."  For a two-character marker this asks about its first
+        // character, after the complete token has been classified.
+        let quoted = char_quoted_at_byte(buf, unit.start, min, prop_cache);
+        let effective_is_ender = if marker_is_opener {
+            false
+        } else if effective_ender.is_some() {
+            true
+        } else {
+            class == SyntaxClass::EndComment
+        };
+        if quoted && (!effective_is_ender || escape_policy.quoted_ender_is_escaped(true)) {
+            buf.goto_emacs_byte_pos(unit.start);
+            continue;
+        }
+
+        if marker_is_opener {
+            if string_style.is_some() || comment_lossage || string_lossage {
+                lossage = true;
+                break;
+            }
+            let new_pos = unit.start;
+            if flavor.nesting.is_nested() {
+                buf.goto_emacs_byte_pos(new_pos);
+                nesting -= 1;
+                if nesting <= 0 {
+                    return true;
+                }
+            } else {
+                comstart_pos = Some(new_pos);
+                buf.goto_emacs_byte_pos(new_pos);
+            }
+            continue;
+        }
+
+        if let Some(ender_flavor) = effective_ender {
+            if ender_flavor == flavor {
+                if flavor.nesting.is_nested() {
+                    nesting += 1;
+                    buf.goto_emacs_byte_pos(unit.start);
+                    continue;
+                }
+                break;
+            }
+            if comstart_pos.is_some() || unit.ch != '\n' {
+                comment_lossage = true;
+            }
+            buf.goto_emacs_byte_pos(unit.start);
+            continue;
+        }
+
+        // ── Comment-end (same style) ──────────────────────────────
+        // For nested: increases nesting.
+        // For non-nested: means our comment can't extend past this,
+        //   so stop scanning.
+        if class == SyntaxClass::EndComment && CommentFlavor::single(flags) == flavor {
+            if flavor.nesting.is_nested() {
+                nesting += 1;
+                buf.goto_emacs_byte_pos(unit.start);
+                continue;
+            } else {
+                // Non-nested: this is a same-style comment ender.
+                // Anything before this can't be our comment start
+                // because it would match this ender instead.
+                break;
+            }
+        }
+
+        // GNU `case Sendcomment`, else branch: an ender of a *different* style.
+        // We are mixing comment styles, so any comment starter found further
+        // back might belong to that other comment rather than to ours.  GNU
+        // exempts a bare newline before the first comment starter, because
+        // otherwise every multi-line C comment would take the slow path.
+        if class == SyntaxClass::EndComment && (comstart_pos.is_some() || unit.ch != '\n') {
+            comment_lossage = true;
+        }
+
+        // ── String quotes and fences ─────────────────────────────
+        // GNU tracks the parity of string delimiters across the whole walk so
+        // that a comment starter *inside* a string is never mistaken for a real
+        // one.  Both fence classes count as delimiters here; a generic comment
+        // fence is opened and closed by `scan_backward_comment_fence`, never by
+        // this function, so it only contributes parity.
+        let quote_style = match class {
+            SyntaxClass::StringDelim => Some(BackCommentStringStyle::Delim(unit.ch)),
+            SyntaxClass::StringFence => Some(BackCommentStringStyle::StringFence),
+            SyntaxClass::CommentFence => Some(BackCommentStringStyle::CommentFence),
+            _ => None,
+        };
+        if let Some(quote_style) = quote_style {
+            match string_style {
+                // Entering a string, walking backward out of it.
+                None => string_style = Some(quote_style),
+                // Leaving it again.
+                Some(open) if open == quote_style => string_style = None,
+                // Two kinds of string delimiter: there is no way to grok this
+                // scanning backward.
+                Some(_) => string_lossage = true,
+            }
+            buf.goto_emacs_byte_pos(unit.start);
+            continue;
+        }
+
+        // ── Single-char comment start (class `<`) ────────────────
+        if class == SyntaxClass::Comment && CommentFlavor::single(flags) == flavor {
+            if string_style.is_some() || comment_lossage || string_lossage {
+                // GNU: "There are odd string quotes involved, so let's be
+                // careful.  Test case in Pascal: " { " a { " }"
+                lossage = true;
+                break;
+            }
+            let new_pos = unit.start;
+            if flavor.nesting.is_nested() {
+                buf.goto_emacs_byte_pos(new_pos);
+                nesting -= 1;
+                if nesting <= 0 {
+                    return true;
+                }
+                continue;
+            } else {
+                // Non-nested: record this as the best (earliest)
+                // comment-start candidate and keep scanning.
+                comstart_pos = Some(new_pos);
+                buf.goto_emacs_byte_pos(new_pos);
+                continue;
+            }
+        }
+
+        // Default: skip this character and continue scanning.
+        buf.goto_emacs_byte_pos(unit.start);
+    }
+
+    if lossage {
+        // The backward walk cannot be trusted; decide it going forwards.
+        if let Some(start) =
+            back_comment_reparse(buf, comment_end, flavor, prop_cache, escape_policy)
+        {
+            buf.goto_emacs_byte_pos(start);
+            return true;
+        }
+        buf.goto_emacs_byte_pos(comment_end);
+        return false;
+    }
+
+    // For non-nested comments, check if we recorded any comment-start.
+    if !flavor.nesting.is_nested()
+        && let Some(pos) = comstart_pos
+    {
+        buf.goto_emacs_byte_pos(pos);
+        return true;
+    }
+
+    false
+}
+
+/// Scan backward for matching comment fence character.
+fn scan_backward_comment_fence(
+    buf: &mut ForwardCommentCursor<'_>,
+    prop_cache: &SyntaxPropByteRun<'_>,
+) -> bool {
+    let min = buf.accessible_emacs_byte_region().start();
+    loop {
+        let pt = buf.point_emacs_byte_pos();
+        if pt <= min {
+            return false;
+        }
+        let Some(unit) = buffer_syntax_char_before(buf, pt) else {
+            return false;
+        };
+        let ch_pos = unit.start;
+        let entry = effective_syntax_entry_for_char_at_byte(
+            buf,
+            &SyntaxTable::for_buffer(buf),
+            unit.ch,
+            ch_pos,
+            prop_cache,
+        );
+        let class = entry.class;
+
+        buf.goto_emacs_byte_pos(unit.start);
+
+        if class == SyntaxClass::CommentFence
+            && !char_quoted_at_byte(buf, unit.start, min, prop_cache)
+        {
+            return true;
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn builtin_backward_prefix_chars_in_buffers(
+    buffers: &mut BufferManager,
+    args: &[Value],
+    props: SyntaxProperties<'_>,
+) -> EvalResult {
+    if !args.is_empty() {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("backward-prefix-chars"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let current_id = buffers
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let buf = buffers
+        .get(current_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+
+    let min = buf.accessible_emacs_byte_region().start();
+    let mut final_pos = buf.point_emacs_byte_pos();
+    let prop_cache = SyntaxPropByteRun::new(props);
+    loop {
+        let pt = final_pos;
+        if pt <= min {
+            break;
+        }
+        let Some(unit) = buffer_syntax_char_before(buf, pt) else {
+            break;
+        };
+        let ch_pos = unit.start;
+        let entry = effective_syntax_entry_for_char_at_byte(
+            buf,
+            &SyntaxTable::for_buffer(buf),
+            unit.ch,
+            ch_pos,
+            &prop_cache,
+        );
+        let is_prefix =
+            entry.class == SyntaxClass::Quote || entry.flags.contains(SyntaxFlags::PREFIX);
+        if !is_prefix {
+            break;
+        }
+        final_pos = unit.start;
+    }
+
+    let _ = buffers.goto_buffer_emacs_byte_pos(current_id, final_pos);
+
+    Ok(Value::NIL)
+}
+
+/// `(forward-sexp &optional COUNT)` — move point forward over COUNT balanced
+/// expressions.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+/// Scan over sexps with GNU's LAZY propertize target.
+///
+/// GNU asks `syntax-propertize` for `min (zv, charpos + 1)`, lets it pick its
+/// own chunk, scans to that frontier, and asks again only on crossing it
+/// (src/syntax.c:266 and `UPDATE_SYNTAX_TABLE_FORWARD`). Asking for the whole
+/// accessible tail instead re-propertized the rest of the buffer on EVERY
+/// motion: after an edit a fifth of the way into an 894KB elisp file,
+/// `forward-sexp` drove `syntax-propertize--done` to 894,490 where GNU left it
+/// at 180,925 -- 715,592 characters of redundant Lisp per motion.
+///
+/// A backward scan never examines text past its start, so it keeps the cheap
+/// target. `forward-comment` in this file already had this same whole-tail
+/// mistake fixed; this is that loop, shared.
+fn scan_sexps_lazily<H: TextHost>(
+    eval: &mut H,
+    from_byte: usize,
+    effective_count: i64,
+    honor: bool,
+) -> Result<Option<usize>, Flow> {
+    let run = |eval: &mut H| -> Result<Option<usize>, Flow> {
+        let props = SyntaxProperties::for_scan_with_symbols(
+            honor,
+            eval.variables(),
+            eval.buffers(),
+            eval.symbol_mode(),
+        );
+        let policy = SexpScanPolicy::for_context(eval);
+        let buf = eval
+            .buffers()
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let table = SyntaxTable::for_buffer(buf);
+        scan_sexps_with_options(buf, &table, from_byte, effective_count, props, policy)
+            .map_err(|err| signal(LispCondition::ScanError, err.signal_data()))
+    };
+
+    if !honor {
+        return run(eval);
+    }
+
+    let (from_char, end_char) = {
+        let buf = eval
+            .buffers()
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let region = buf.accessible_char_region();
+        (
+            buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(from_byte))
+                .get(),
+            region.end().get(),
+        )
+    };
+
+    if effective_count < 0 {
+        maybe_syntax_propertize_for_scan(eval, from_char.saturating_add(1))?;
+        return run(eval);
+    }
+
+    let mut target = from_char.saturating_add(1);
+    let mut last_window_end = 0usize;
+    loop {
+        maybe_syntax_propertize_for_scan(eval, target)?;
+        let mut window_end = syntax_propertize_frontier_for_scan(eval, from_char, end_char);
+        if window_end <= last_window_end {
+            // The frontier did not advance; take the rest as is rather than spin.
+            window_end = end_char;
+        }
+        last_window_end = window_end;
+        let found = run(eval)?;
+        // Accept only an answer inside propertized text: past the frontier the
+        // scan reads properties that have not been applied yet. A miss is
+        // re-run against the wider window for the same reason.
+        let settled = window_end >= end_char
+            || match found {
+                Some(byte) => {
+                    let char_pos = eval
+                        .buffers()
+                        .current_buffer()
+                        .map(|buf| {
+                            buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(byte))
+                                .get()
+                        })
+                        .unwrap_or(end_char);
+                    char_pos.saturating_add(1) <= window_end
+                }
+                None => false,
+            };
+        if settled {
+            return Ok(found);
+        }
+        target = window_end.saturating_add(2);
+    }
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_forward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+    let count = if args.is_empty() || args[0].is_nil() {
+        1i64
+    } else {
+        match args[0].kind() {
+            ValueKind::Fixnum(n) => n,
+            _other => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("integerp"), args[0]],
+                ));
+            }
+        }
+    };
+
+    let honor = parse_sexp_lookup_properties_enabled(eval);
+    let from = eval
+        .buffers()
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+        .point_emacs_byte_pos();
+    let found = scan_sexps_lazily(eval, from.get(), count, honor)?;
+    let buf = eval
+        .buffers()
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let new_pos = match found {
+        Some(pos) => EmacsBytePos::new(pos),
+        None if count < 0 => buf.accessible_emacs_byte_region().start(),
+        None => buf.accessible_emacs_byte_region().end(),
+    };
+
+    let current_id = eval
+        .buffers()
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let _ = eval
+        .buffers_mut()
+        .goto_buffer_emacs_byte_pos(current_id, new_pos);
+    Ok(Value::NIL)
+}
+
+/// `(backward-sexp &optional COUNT)` — move point backward over COUNT balanced
+/// expressions.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_backward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+    let count = if args.is_empty() || args[0].is_nil() {
+        1i64
+    } else {
+        match args[0].kind() {
+            ValueKind::Fixnum(n) => n,
+            _other => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("integerp"), args[0]],
+                ));
+            }
+        }
+    };
+
+    let honor = parse_sexp_lookup_properties_enabled(eval);
+    let from = eval
+        .buffers()
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+        .point_emacs_byte_pos();
+    // backward-sexp with positive count => scan_sexps with negative count
+    let found = scan_sexps_lazily(eval, from.get(), -count, honor)?;
+    let buf = eval
+        .buffers()
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let new_pos = match found {
+        Some(pos) => EmacsBytePos::new(pos),
+        None if count < 0 => buf.accessible_emacs_byte_region().end(),
+        None => buf.accessible_emacs_byte_region().start(),
+    };
+
+    let current_id = eval
+        .buffers()
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let _ = eval
+        .buffers_mut()
+        .goto_buffer_emacs_byte_pos(current_id, new_pos);
+    Ok(Value::NIL)
+}
+
+/// `(scan-lists FROM COUNT DEPTH)` — scan across balanced expressions.
+///
+/// This uses the same core scanner as `forward-sexp`/`backward-sexp`.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_scan_lists<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
+    neovm_value::error::expect_args("scan-lists", &args, 3)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_scan_lists_3(ctx, arg(0), arg(1), arg(2))
+}
+/// `scan-lists` as registered: fixed arity 3, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_scan_lists_3<H: TextHost>(
+    ctx: &mut H,
+    from: Value,
+    count: Value,
+    depth: Value,
+) -> EvalResult {
+    let args: [Value; 3] = [from, count, depth];
+    if args.len() != 3 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("scan-lists"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let from = match args[0].kind() {
+        ValueKind::Fixnum(n) => n,
+        _other => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("integer-or-marker-p"), args[0]],
+            ));
+        }
+    };
+    let count = match args[1].kind() {
+        ValueKind::Fixnum(n) => n,
+        _other => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("integerp"), args[1]],
+            ));
+        }
+    };
+    let depth = match args[2].kind() {
+        ValueKind::Fixnum(n) => n,
+        _other => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("integerp"), args[2]],
+            ));
+        }
+    };
+
+    let honor = parse_sexp_lookup_properties_enabled(ctx);
+
+    let (from_char, end_char) = {
+        let buf = ctx
+            .buffers()
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let accessible_chars = buf.accessible_char_region();
+        let point_min = accessible_chars.start_lisp().as_i64();
+        let point_max = accessible_chars.end_lisp().as_i64();
+        let clipped_from = from.clamp(point_min, point_max);
+        (
+            LispCharPos1::new(clipped_from).to_char_pos().get(),
+            accessible_chars.end().get(),
+        )
+    };
+
+    // Run the scan against whatever text is propertized now, recomputing the
+    // resolver inputs first: propertizing ran arbitrary Lisp.
+    let scan = |ctx: &mut H| {
+        let props = SyntaxProperties::for_scan_with_symbols(
+            honor,
+            ctx.variables(),
+            ctx.buffers(),
+            ctx.symbol_mode(),
+        );
+        let policy = SexpScanPolicy::for_context(ctx);
+        let buf = ctx
+            .buffers()
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let table = SyntaxTable::for_buffer(buf);
+        Ok(scan_lists_with_options(
+            buf, &table, from_char, count, depth, props, policy,
+        ))
+    };
+    let finish = |outcome: Result<Option<usize>, ScanListError>| match outcome {
+        Ok(Some(new_char)) => Ok(Value::fixnum(char_pos_to_lisp_i64(new_char))),
+        Ok(None) => Ok(Value::NIL),
+        Err(err) => Err(signal(LispCondition::ScanError, err.signal_data())),
+    };
+
+    if !honor {
+        return finish(scan(ctx)?);
+    }
+    if count < 0 {
+        // A backward scan never examines positions past FROM, so propertizing
+        // through FROM suffices -- GNU's `parse_sexp_propertize` is lazy and
+        // would stop there too.
+        maybe_syntax_propertize_for_scan(ctx, (from.max(1) as usize).saturating_add(1))?;
+        return finish(scan(ctx)?);
+    }
+
+    // Forward: GNU asks `syntax-propertize` for `min (zv, charpos + 1)` and
+    // lets it choose its own chunk, then scans to that frontier and asks
+    // again only on crossing it (src/syntax.c:266, and
+    // `UPDATE_SYNTAX_TABLE_FORWARD`). Asking for the whole accessible tail
+    // instead re-propertized the rest of the buffer on EVERY call: after an
+    // edit 1/5 into an 894KB elisp file, `forward-sexp` drove
+    // `syntax-propertize--done` to 894,490 where GNU left it at 180,925 --
+    // 715,592 characters of redundant Lisp per motion, 2,820us against GNU's
+    // 427us. `forward-comment` above already had this exact mistake fixed;
+    // this is the same loop.
+    let mut target = (from.max(1) as usize).saturating_add(1);
+    let mut last_window_end = 0usize;
+    loop {
+        maybe_syntax_propertize_for_scan(ctx, target)?;
+        let mut window_end = syntax_propertize_frontier_for_scan(ctx, from_char, end_char);
+        if window_end <= last_window_end {
+            // The frontier did not advance; scan the rest as is rather than
+            // spin (GNU: "internal--syntax-propertize did not move
+            // syntax-propertize--done").
+            window_end = end_char;
+        }
+        last_window_end = window_end;
+        let outcome = scan(ctx)?;
+        // Accept only an answer that lies inside propertized text: past the
+        // frontier the scan is reading properties that have not been applied
+        // yet. A miss or a scan error is re-run against the wider window for
+        // the same reason.
+        let settled = window_end >= end_char
+            || matches!(&outcome, Ok(Some(new_char)) if new_char.saturating_add(1) <= window_end);
+        if settled {
+            return finish(outcome);
+        }
+        target = window_end.saturating_add(2);
+    }
+}
+
+/// `(scan-sexps FROM COUNT)` — scan over COUNT sexps from FROM.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_scan_sexps<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
+    neovm_value::error::expect_args("scan-sexps", &args, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_scan_sexps_2(ctx, arg(0), arg(1))
+}
+/// `scan-sexps` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_scan_sexps_2<H: TextHost>(ctx: &mut H, from: Value, count: Value) -> EvalResult {
+    let args: [Value; 2] = [from, count];
+    if args.len() != 2 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("scan-sexps"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let from = match args[0].kind() {
+        ValueKind::Fixnum(n) => n,
+        _other => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("number-or-marker-p"), args[0]],
+            ));
+        }
+    };
+    let count = match args[1].kind() {
+        ValueKind::Fixnum(n) => n,
+        _other => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("integerp"), args[1]],
+            ));
+        }
+    };
+
+    let honor = parse_sexp_lookup_properties_enabled(ctx);
+
+    let from_byte = {
+        let buf = ctx
+            .buffers()
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let from_char = LispCharPos1::new(from)
+            .to_char_pos()
+            .min(buf.total_char_end_pos());
+        buffer_char_to_emacs_byte_pos(buf, from_char)
+    };
+
+    let found = scan_sexps_lazily(ctx, from_byte.get(), count, honor)?;
+    let buf = ctx
+        .buffers()
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    match found {
+        Some(new_byte) => Ok(Value::fixnum(buffer_byte_to_lisp_pos(
+            buf,
+            EmacsBytePos::new(new_byte),
+        ))),
+        None => Ok(Value::NIL),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParseStringState {
+    Delim(char),
+    Fence,
+}
+
+/// The syntax-table comment style identity carried by GNU's parse state.
+///
+/// The b/c delimiter flags form identities a (0), b (1), c (2), or bc (3);
+/// the separate n flag controls nesting.  Keep the identity as an opaque
+/// numeric value because `parse-partial-sexp` accepts an externally supplied
+/// old state and GNU preserves numeric style values.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CommentStyle(i64);
+
+impl CommentStyle {
+    const A: Self = Self(0);
+    const GENERIC_FENCE_SENTINEL: i64 = 257;
+
+    fn from_main_flags(flags: SyntaxFlags) -> Self {
+        Self(
+            i64::from(flags.contains(SyntaxFlags::COMMENT_STYLE_B))
+                | (i64::from(flags.contains(SyntaxFlags::COMMENT_STYLE_C)) << 1),
+        )
+    }
+
+    /// GNU uses the second character as the main character of a two-character
+    /// comment opener.  Style c, unlike style b, may be present on either.
+    fn from_start_flags(first: SyntaxFlags, second: SyntaxFlags) -> Self {
+        Self(
+            i64::from(second.contains(SyntaxFlags::COMMENT_STYLE_B))
+                | (i64::from(
+                    first.contains(SyntaxFlags::COMMENT_STYLE_C)
+                        || second.contains(SyntaxFlags::COMMENT_STYLE_C),
+                ) << 1),
+        )
+    }
+
+    /// GNU uses the first character as the main character of a two-character
+    /// comment ender.  Style c, unlike style b, may be present on either.
+    fn from_end_flags(first: SyntaxFlags, second: SyntaxFlags) -> Self {
+        Self(
+            i64::from(first.contains(SyntaxFlags::COMMENT_STYLE_B))
+                | (i64::from(
+                    first.contains(SyntaxFlags::COMMENT_STYLE_C)
+                        || second.contains(SyntaxFlags::COMMENT_STYLE_C),
+                ) << 1),
+        )
+    }
+
+    fn to_parse_state_value(self) -> Value {
+        if self == Self::A {
+            Value::NIL
+        } else {
+            Value::fixnum(self.0)
+        }
+    }
+}
+
+/// Whether a syntax-table comment delimiter participates in nesting.
+///
+/// GNU stores this as the `n` flag beside the style bits.  It is part of the
+/// delimiter identity, not an independent scanning option: a flat delimiter
+/// must never match a nested one merely because their b/c style agrees.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum CommentNesting {
+    #[default]
+    Flat,
+    Nested,
+}
+
+impl CommentNesting {
+    fn from_flags(first: SyntaxFlags, second: SyntaxFlags) -> Self {
+        if first.contains(SyntaxFlags::COMMENT_NESTABLE)
+            || second.contains(SyntaxFlags::COMMENT_NESTABLE)
+        {
+            Self::Nested
+        } else {
+            Self::Flat
+        }
+    }
+
+    fn is_nested(self) -> bool {
+        self == Self::Nested
+    }
+}
+
+/// Complete GNU comment-delimiter identity.
+///
+/// Keeping style and nestability together makes an incomplete comparison
+/// impossible at the comment scanner's matching boundary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CommentFlavor {
+    style: CommentStyle,
+    nesting: CommentNesting,
+}
+
+impl CommentFlavor {
+    fn single(flags: SyntaxFlags) -> Self {
+        Self {
+            style: CommentStyle::from_main_flags(flags),
+            nesting: CommentNesting::from_flags(flags, SyntaxFlags::empty()),
+        }
+    }
+
+    fn two_char_start(first: SyntaxFlags, second: SyntaxFlags) -> Self {
+        Self {
+            style: CommentStyle::from_start_flags(first, second),
+            nesting: CommentNesting::from_flags(first, second),
+        }
+    }
+
+    fn two_char_end(first: SyntaxFlags, second: SyntaxFlags) -> Self {
+        Self {
+            style: CommentStyle::from_end_flags(first, second),
+            nesting: CommentNesting::from_flags(first, second),
+        }
+    }
+}
+
+/// The two independent roles a two-character syntax token may have.
+///
+/// Some modes deliberately use the same token as both an opener and an
+/// ender.  Two `Option`s preserve that fact; an enum choosing only one role
+/// would throw information away before GNU's opener-precedence rule can run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CommentMarkerCapabilities {
+    opener: Option<CommentFlavor>,
+    ender: Option<CommentFlavor>,
+}
+
+impl CommentMarkerCapabilities {
+    fn between(first: SyntaxFlags, second: SyntaxFlags) -> Self {
+        Self {
+            opener: (first.contains(SyntaxFlags::COMMENT_START_FIRST)
+                && second.contains(SyntaxFlags::COMMENT_START_SECOND))
+            .then(|| CommentFlavor::two_char_start(first, second)),
+            ender: (first.contains(SyntaxFlags::COMMENT_END_FIRST)
+                && second.contains(SyntaxFlags::COMMENT_END_SECOND))
+            .then(|| CommentFlavor::two_char_end(first, second)),
+        }
+    }
+}
+
+/// The syntax immediately before a resumed `parse-partial-sexp` range.
+///
+/// GNU passes `state->prev_syntax` into `forw_comment`, allowing the first
+/// character of the resumed range to finish a two-character marker begun by
+/// the previous call.  Keeping this as a one-shot typed value prevents the
+/// main loop from accidentally replacing the boundary syntax before it has
+/// been consumed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+struct CommentResumeSyntax {
+    class: Option<SyntaxClass>,
+    flags: SyntaxFlags,
+}
+
+impl CommentResumeSyntax {
+    fn from_parse_state(raw: i64) -> Self {
+        Self {
+            class: SyntaxClass::from_code(raw & 0xff),
+            flags: SyntaxFlags::new(((raw >> 16) & 0xff) as u8),
+        }
+    }
+
+    fn marker_with(self, current: SyntaxFlags) -> CommentMarkerCapabilities {
+        CommentMarkerCapabilities::between(self.flags, current)
+    }
+
+    fn quotes_single_ender(self, policy: CommentEndEscapePolicy) -> bool {
+        policy == CommentEndEscapePolicy::EscapeQuotesEnder
+            && matches!(
+                self.class,
+                Some(SyntaxClass::Escape | SyntaxClass::CharQuote)
+            )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParseCommentState {
+    Syntax { depth: i64, flavor: CommentFlavor },
+    Fence,
+}
+
+impl ParseCommentState {
+    /// Decode GNU parse-state elements 4 (comment state) and 7 (style).
+    ///
+    /// GNU uses non-numeric element 7 values, including `syntax-table`, as
+    /// the generic comment-fence sentinel.  Keeping that representation at
+    /// this boundary prevents parser callers from confusing it with style a.
+    fn from_oldstate(comment: &Value, style: Option<&Value>) -> Option<Self> {
+        if comment.is_nil() {
+            return None;
+        }
+
+        let syntax_style = match style {
+            None => Some(CommentStyle::A),
+            Some(value) if value.is_nil() => Some(CommentStyle::A),
+            Some(value) => match value.as_fixnum() {
+                Some(style) if (0..CommentStyle::GENERIC_FENCE_SENTINEL).contains(&style) => {
+                    Some(CommentStyle(style))
+                }
+                _ => None,
+            },
+        };
+
+        let Some(style) = syntax_style else {
+            return Some(Self::Fence);
+        };
+
+        match comment.kind() {
+            ValueKind::Fixnum(depth) => Some(Self::Syntax {
+                depth,
+                flavor: CommentFlavor {
+                    style,
+                    nesting: CommentNesting::Nested,
+                },
+            }),
+            _ => Some(Self::Syntax {
+                depth: 1,
+                flavor: CommentFlavor {
+                    style,
+                    nesting: CommentNesting::Flat,
+                },
+            }),
+        }
+    }
+
+    /// Encode GNU parse-state elements 4 (comment state) and 7 (style).
+    fn to_parse_state_values(self) -> (Value, Value) {
+        match self {
+            Self::Syntax {
+                depth: comment_depth,
+                flavor:
+                    CommentFlavor {
+                        style,
+                        nesting: CommentNesting::Flat,
+                    },
+            } => {
+                debug_assert_eq!(comment_depth, 1);
+                (Value::T, style.to_parse_state_value())
+            }
+            Self::Syntax {
+                depth: comment_depth,
+                flavor:
+                    CommentFlavor {
+                        style,
+                        nesting: CommentNesting::Nested,
+                    },
+            } => (Value::fixnum(comment_depth), style.to_parse_state_value()),
+            Self::Fence => (Value::T, syntax_table_prop_symbol()),
+        }
+    }
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommentStopMode {
+    None,
+    Comment,
+    SyntaxTable,
+}
+
+/// GNU `Smax` (one past `Sstring_fence`); used as the "no significant syntax"
+/// sentinel for `prev_from_syntax` so element 10 of the parse state is nil.
+const PARSE_PREV_SYNTAX_SMAX: i64 = 16;
+
+/// GNU `SYNTAX_FLAGS_COMSTARTEND_FIRST`: bit 16 (comment-start-first) or bit 18
+/// (comment-end-first) of a `prev_from_syntax` integer.
+const PARSE_PREV_SYNTAX_COMSTARTEND_FIRST: i64 = 0x5_0000;
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// Build GNU's `SYNTAX_WITH_FLAGS` integer for element 10 of `parse-partial-sexp`:
+/// the low byte is the syntax class code and bits 16..=23 hold the flag byte
+/// (matching GNU `src/syntax.h`: comment-start-first at bit 16, etc.).
+fn parse_prev_syntax_int(class: SyntaxClass, flags: SyntaxFlags) -> i64 {
+    class.code() | ((flags.bits() as i64) << 16)
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PartialParseState {
+    depth: i64,
+    mindepth: i64,
+    levels: Vec<PartialParseLevel>,
+    in_string: Option<ParseStringState>,
+    in_comment: Option<ParseCommentState>,
+    comment_or_string_start: Option<i64>,
+    quoted: bool,
+    in_string_from_oldstate: bool,
+    /// GNU `prev_from_syntax`: the `SYNTAX_WITH_FLAGS` integer of the most
+    /// recently scanned position, or `PARSE_PREV_SYNTAX_SMAX` when that
+    /// position holds no significant two-char/quote syntax.
+    prev_syntax: i64,
+}
+
+/// What a comment-ender sequence did to the parse state.
+///
+/// GNU consumes a whole comment -- every nested level of it -- inside a single
+/// `forw_comment` call (`scan_sexps_forward`, src/syntax.c:3352), and only the
+/// code *after* that call clears `state->incomment` and honours `boundary_stop`
+/// (src/syntax.c:3370-3374).  An ender that merely pops a nesting level is
+/// therefore not a parse boundary at all.  Naming the two outcomes keeps that
+/// distinction from having to be re-derived at each ender branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommentEnderEffect {
+    /// A nested level closed; the comment is still open.
+    NestingLevelClosed,
+    /// The comment itself ended here.
+    CommentClosed,
+}
+
+/// Why `parse_state_from_range_core` stopped while a comment remained open.
+/// GNU applies `forw_comment`'s EOF publication rules only at the requested
+/// range boundary; COMMENTSTOP returns directly from comment entry instead.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ParseCommentExit {
+    #[default]
+    RangeBoundary,
+    StoppedAtEntry,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct PartialParseLevel {
+    last: Option<i64>,
+    prev: Option<i64>,
+}
+
+impl PartialParseState {
+    fn new() -> Self {
+        Self {
+            depth: 0,
+            mindepth: 0,
+            levels: vec![PartialParseLevel::default()],
+            in_string: None,
+            in_comment: None,
+            comment_or_string_start: None,
+            quoted: false,
+            in_string_from_oldstate: false,
+            prev_syntax: PARSE_PREV_SYNTAX_SMAX,
+        }
+    }
+
+    /// Apply one comment-ender sequence to a syntactic comment of `depth`.
+    ///
+    /// Mirrors GNU `forw_comment`'s nesting counter: an ender pops one level,
+    /// and the comment only ends -- clearing `state->incomment` and
+    /// `state->comstr_start` -- when the last level pops.  Note that GNU keeps
+    /// `comstr_start` at the OUTERMOST comment start throughout, which is what
+    /// element 8 of the parse state reports.
+    fn close_comment_level(&mut self, depth: i64, flavor: CommentFlavor) -> CommentEnderEffect {
+        let next_depth = depth - 1;
+        if next_depth <= 0 {
+            self.in_comment = None;
+            self.comment_or_string_start = None;
+            CommentEnderEffect::CommentClosed
+        } else {
+            self.in_comment = Some(ParseCommentState::Syntax {
+                depth: next_depth,
+                flavor,
+            });
+            CommentEnderEffect::NestingLevelClosed
+        }
+    }
+
+    /// Publish GNU `forw_comment`'s `last_syntax_ptr` result when the scan
+    /// reaches its boundary inside a comment.
+    ///
+    /// This is deliberately comment-specific: GNU preserves a trailing quote
+    /// (and marks the parse state quoted), every end-first marker, and a
+    /// start-first marker only while a nestable comment remains open.  Other
+    /// raw syntax has already been consumed and becomes `Smax`.
+    fn finalize_incomplete_comment_syntax(&mut self) {
+        let Some(comment) = self.in_comment else {
+            return;
+        };
+        let Some(class) = SyntaxClass::from_code(self.prev_syntax & 0xff) else {
+            self.prev_syntax = PARSE_PREV_SYNTAX_SMAX;
+            return;
+        };
+        let flags = SyntaxFlags::new(((self.prev_syntax >> 16) & 0xff) as u8);
+        let quote = matches!(class, SyntaxClass::Escape | SyntaxClass::CharQuote);
+        let nested = matches!(
+            comment,
+            ParseCommentState::Syntax { flavor, .. } if flavor.nesting.is_nested()
+        );
+        let preserve = quote
+            || flags.contains(SyntaxFlags::COMMENT_END_FIRST)
+            || (nested && flags.contains(SyntaxFlags::COMMENT_START_FIRST));
+
+        self.quoted |= quote;
+        if !preserve {
+            self.prev_syntax = PARSE_PREV_SYNTAX_SMAX;
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn from_oldstate(oldstate: Option<&Value>) -> Self {
+        let mut state = Self::new();
+        let Some(oldstate) = oldstate else {
+            return state;
+        };
+        let Some(items) = list_to_vec(oldstate) else {
+            return state;
+        };
+
+        state.depth = items.first().and_then(|v| v.as_fixnum()).unwrap_or(0);
+        // GNU `internalize_parse_state` ignores element 6 of OLDSTATE.
+        // `scan_sexps_forward` initializes `mindepth` from the incoming depth.
+        state.mindepth = state.depth;
+
+        if let Some(start) = items.get(8).and_then(|v| v.as_fixnum()) {
+            state.comment_or_string_start = Some(start);
+        }
+
+        if let Some(v) = items.get(5)
+            && v.is_t()
+        {
+            state.quoted = true;
+        }
+
+        if let Some(item) = items.get(3) {
+            state.in_string = match item.kind() {
+                ValueKind::Nil => None,
+                ValueKind::T => Some(ParseStringState::Fence),
+                ValueKind::Fixnum(n) => u32::try_from(n)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(ParseStringState::Delim),
+                _ => None,
+            };
+            state.in_string_from_oldstate = state.in_string.is_some();
+        }
+
+        if let Some(item) = items.get(4) {
+            state.in_comment = ParseCommentState::from_oldstate(item, items.get(7));
+        }
+
+        // GNU `internalize_parse_state`:
+        //   tem = Fcar (external);   /* element 8 */
+        //   state->comstr_start =
+        //     RANGED_FIXNUMP (...) ? XFIXNUM (tem) : -1;
+        // i.e. when element 8 is nil (or not a fixnum) the comment/string
+        // start is normalized to -1, not left unknown.  `scan_sexps_forward`
+        // only ever *reports* `comstr_start` while inside a string/comment
+        // (element 8 of the result is nil otherwise), so this -1 surfaces
+        // exactly when resuming from a from-state that is already inside a
+        // string (element 3) or comment (element 4) but gave no start.
+        if state.comment_or_string_start.is_none()
+            && (state.in_string.is_some() || state.in_comment.is_some())
+        {
+            state.comment_or_string_start = Some(-1);
+        }
+
+        if let Some(item) = items.get(9)
+            && let Some(stack_items) = list_to_vec(item)
+        {
+            state.levels.clear();
+            state.levels.push(PartialParseLevel::default());
+            for start in stack_items.into_iter().filter_map(|v| v.as_fixnum()) {
+                if let Some(level) = state.levels.last_mut() {
+                    level.last = Some(start);
+                }
+                state.levels.push(PartialParseLevel::default());
+            }
+        }
+
+        // GNU `internalize_parse_state`: element 10 seeds `prev_syntax`
+        // (defaulting to Smax when nil), so a continued parse can detect a
+        // pending escape/two-char construct that straddled the previous TO.
+        state.prev_syntax = match items.get(10).and_then(|v| v.as_fixnum()) {
+            Some(n) => n,
+            None => PARSE_PREV_SYNTAX_SMAX,
+        };
+
+        state
+    }
+
+    fn current_level_mut(&mut self) -> &mut PartialParseLevel {
+        self.levels
+            .last_mut()
+            .expect("partial parse state always has a current level")
+    }
+
+    fn finish_current_level_sexp(&mut self, start: i64) {
+        let level = self.current_level_mut();
+        level.last = Some(start);
+        level.prev = Some(start);
+    }
+
+    fn finish_string(&mut self) {
+        if !self.in_string_from_oldstate
+            && let Some(start) = self.comment_or_string_start
+        {
+            self.finish_current_level_sexp(start);
+        }
+        self.in_string = None;
+        self.in_string_from_oldstate = false;
+        self.comment_or_string_start = None;
+    }
+
+    fn open_level(&mut self, start: i64) {
+        if let Some(level) = self.levels.last_mut() {
+            level.last = Some(start);
+        }
+        self.depth += 1;
+        self.levels.push(PartialParseLevel::default());
+    }
+
+    fn close_level(&mut self) {
+        self.depth -= 1;
+        self.mindepth = self.mindepth.min(self.depth);
+        if self.levels.len() > 1 {
+            self.levels.pop();
+        }
+        if let Some(start) = self.current_level_mut().last {
+            self.current_level_mut().prev = Some(start);
+        }
+    }
+
+    fn containing_sexp_start(&self) -> Option<i64> {
+        self.levels
+            .len()
+            .checked_sub(2)
+            .and_then(|idx| self.levels.get(idx))
+            .and_then(|level| level.last)
+    }
+
+    fn current_level_completed_sexp_start(&self) -> Option<i64> {
+        self.levels.last().and_then(|level| level.prev)
+    }
+
+    fn level_start_positions(&self) -> Vec<i64> {
+        if self.levels.len() <= 1 {
+            return Vec::new();
+        }
+
+        self.levels
+            .iter()
+            .take(self.levels.len() - 1)
+            .filter_map(|level| level.last)
+            .collect()
+    }
+
+    /// GNU `scan_sexps_forward` `done`:
+    ///   state->prev_syntax =
+    ///     (SYNTAX_FLAGS_COMSTARTEND_FIRST (prev_from_syntax) || state->quoted)
+    ///       ? prev_from_syntax : Smax;
+    /// then element 10 is nil when the result is Smax, else the integer.
+    fn prev_syntax_element(&self) -> Value {
+        let effective =
+            if (self.prev_syntax & PARSE_PREV_SYNTAX_COMSTARTEND_FIRST) != 0 || self.quoted {
+                self.prev_syntax
+            } else {
+                PARSE_PREV_SYNTAX_SMAX
+            };
+        if effective == PARSE_PREV_SYNTAX_SMAX {
+            Value::NIL
+        } else {
+            Value::fixnum(effective)
+        }
+    }
+
+    fn into_value(self) -> Value {
+        let containing_sexp_start = self.containing_sexp_start();
+        let completed_sexp_start = self.current_level_completed_sexp_start();
+        let level_starts = self.level_start_positions();
+        let stack_value = if level_starts.is_empty() {
+            Value::NIL
+        } else {
+            Value::list(level_starts.into_iter().map(Value::fixnum).collect())
+        };
+
+        let string_value = match self.in_string {
+            Some(ParseStringState::Delim(term)) => Value::fixnum(term as i64),
+            Some(ParseStringState::Fence) => Value::T,
+            None => Value::NIL,
+        };
+
+        let (comment_value, comment_style_value) = match self.in_comment {
+            Some(comment_state) => comment_state.to_parse_state_values(),
+            None => (Value::NIL, Value::NIL),
+        };
+
+        let elements = [
+            Value::fixnum(self.depth),
+            containing_sexp_start.map_or(Value::NIL, Value::fixnum),
+            completed_sexp_start.map_or(Value::NIL, Value::fixnum),
+            string_value,
+            comment_value,
+            if self.quoted { Value::T } else { Value::NIL },
+            Value::fixnum(self.mindepth),
+            comment_style_value,
+            self.comment_or_string_start
+                .map_or(Value::NIL, Value::fixnum),
+            stack_value,
+            self.prev_syntax_element(),
+        ];
+        // U2.8: GNU `Flist` from the stack, not through a heap vector.
+        if neovm_value::builtin_frontend::builtin_frontend_on() {
+            Value::list_from_slice(&elements)
+        } else {
+            Value::list(elements.to_vec())
+        }
+    }
+}
+
+#[inline]
+fn syntax_class_and_flags(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    ch: char,
+    abs_char: usize,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> (SyntaxClass, SyntaxFlags) {
+    let entry = effective_syntax_entry_for_abs_char(buf, table, ch, abs_char, prop_cache);
+    (entry.class, entry.flags)
+}
+
+fn parse_commentstop_mode(arg: Option<&Value>) -> CommentStopMode {
+    match arg {
+        None => CommentStopMode::None,
+        Some(v) if v.is_nil() => CommentStopMode::None,
+        Some(v)
+            if SyntaxPurposeSymbol::from_lisp_value(v)
+                == Some(SyntaxPurposeSymbol::SyntaxTable) =>
+        {
+            CommentStopMode::SyntaxTable
+        }
+        Some(_) => CommentStopMode::Comment,
+    }
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[allow(clippy::too_many_arguments)] // parse-partial-sexp options map directly to GNU semantics
+fn parse_state_from_range_with_options(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    from: i64,
+    to: i64,
+    target_depth: Option<i64>,
+    stop_before: bool,
+    oldstate: Option<&Value>,
+    commentstop: CommentStopMode,
+    props: SyntaxProperties<'_>,
+    escape_policy: CommentEndEscapePolicy,
+) -> (Value, i64) {
+    let (state, stopped_at) = parse_state_from_range_core(
+        buf,
+        table,
+        from,
+        to,
+        target_depth,
+        stop_before,
+        oldstate,
+        commentstop,
+        props,
+        escape_policy,
+    );
+    (state.into_value(), stopped_at)
+}
+
+/// GNU `scan_sexps_forward`.  The parse state is returned unencoded so that
+/// in-tree callers -- `parse-partial-sexp` and `back_comment`'s forward
+/// re-parse -- can read it without going through the Lisp representation.
+#[allow(clippy::too_many_arguments)] // mirrors GNU `scan_sexps_forward`'s parameters
+#[inline(always)]
+fn parse_state_from_range_core(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    from: i64,
+    to: i64,
+    target_depth: Option<i64>,
+    stop_before: bool,
+    oldstate: Option<&Value>,
+    commentstop: CommentStopMode,
+    props: SyntaxProperties<'_>,
+    escape_policy: CommentEndEscapePolicy,
+) -> (PartialParseState, i64) {
+    let (from_char, to_char) = clamped_parse_range(buf, from, to);
+    match run_parse_loop(
+        buf,
+        table,
+        Entry::Fresh {
+            from_char,
+            state: PartialParseState::from_oldstate(oldstate),
+            from_oldstate: oldstate.is_some(),
+        },
+        to_char,
+        target_depth,
+        stop_before,
+        commentstop,
+        props,
+        escape_policy,
+        &mut Plain,
+    ) {
+        ScanEnd::Finished(finish) => (finish.state, finish.stop),
+        ScanEnd::Paused(_) => unreachable!("a plain scan never pauses"),
+    }
+}
+
+/// FROM and TO (Lisp positions) as absolute 0-based char positions clamped to
+/// the accessible region, as the scan loop takes them.
+#[inline]
+fn clamped_parse_range(buf: &Buffer, from: i64, to: i64) -> (usize, usize) {
+    let accessible_chars = buf.accessible_char_region();
+    let point_min = accessible_chars.start().get();
+    let point_max = accessible_chars.end().get();
+    let from_char = LispCharPos1::new(from)
+        .to_char_pos()
+        .get()
+        .clamp(point_min, point_max);
+    let to_char = LispCharPos1::new(to)
+        .to_char_pos()
+        .get()
+        .clamp(point_min, point_max);
+    (from_char, to_char)
+}
+
+/// `(parse-partial-sexp FROM TO &optional TARGETDEPTH STOPBEFORE STATE COMMENTSTOP)`
+/// Baseline parser-state implementation for structural Lisp motion/state queries.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_parse_partial_sexp<H: TextHost>(
+    eval: &mut H,
+    args: Vec<Value>,
+) -> EvalResult {
+    neovm_value::error::expect_args_range("parse-partial-sexp", &args, 2, 6)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_parse_partial_sexp_6(eval, arg(0), arg(1), arg(2), arg(3), arg(4), arg(5))
+}
+/// `parse-partial-sexp` as registered: fixed arity 6, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a6` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_parse_partial_sexp_6<H: TextHost>(
+    eval: &mut H,
+    from: Value,
+    to: Value,
+    targetdepth: Value,
+    stopbefore: Value,
+    oldstate: Value,
+    commentstop: Value,
+) -> EvalResult {
+    let args: [Value; 6] = [from, to, targetdepth, stopbefore, oldstate, commentstop];
+    if args.len() < 2 || args.len() > 6 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("parse-partial-sexp"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let from = neovm_edit::emacs_core::position::fix_position_eval(eval.buffers(), &args[0])?;
+    let to = neovm_edit::emacs_core::position::fix_position_eval(eval.buffers(), &args[1])?;
+
+    if to < from {
+        return Err(signal(
+            "error",
+            vec![Value::string("End position is smaller than start position")],
+        ));
+    }
+
+    let table = {
+        let buf = eval
+            .buffers()
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let accessible_chars = buf.accessible_char_region();
+        let point_min = accessible_chars.start_lisp().as_i64();
+        let point_max = accessible_chars.end_lisp().as_i64();
+        if from < point_min || from > point_max || to < point_min || to > point_max {
+            return Err(signal(
+                LispCondition::ArgsOutOfRange,
+                vec![Value::make_buffer(buf.id()), args[0], args[1]],
+            ));
+        }
+        SyntaxTable::for_buffer(buf)
+    };
+    let target_depth = match args.get(2) {
+        Some(v) if !v.is_nil() => match v.kind() {
+            ValueKind::Fixnum(n) => Some(n),
+            _ => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("integerp"), *v],
+                ));
+            }
+        },
+        _ => None,
+    };
+    let stop_before = args.get(3).is_some_and(|v| v.is_truthy());
+    let oldstate = args.get(4).filter(|v| !v.is_nil());
+    let commentstop = parse_commentstop_mode(args.get(5));
+    let honor = parse_sexp_lookup_properties_enabled(eval);
+    // GNU runs `syntax-propertize` from inside the scan when it enters text
+    // `syntax-propertize--done` does not cover (U0.7): only possible when
+    // properties are honoured and `done` lies at or before TO.
+    if honor && pps_propertize::may_propertize(eval, to) {
+        let (state, stop_pos) = pps_propertize::parse_partial_sexp_propertizing(
+            eval,
+            from,
+            to,
+            target_depth,
+            stop_before,
+            PartialParseState::from_oldstate(oldstate),
+            oldstate.is_some(),
+            commentstop,
+        )?;
+        let buf = eval
+            .buffers()
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let current_id = buf.id();
+        let stop_byte = lisp_pos_to_byte(buf, LispCharPos1::new(stop_pos));
+        let _ = eval
+            .buffers_mut()
+            .goto_buffer_emacs_byte_pos(current_id, stop_byte);
+        return Ok(state.into_value());
+    }
+    // Parse-span observability: one line per call when NEOMACS_SYNTAX_STATS_FILE
+    // names a path. The per-keystroke syntax cost is O(parsed span); this is
+    // the only way to see WHO parses from WHERE (syntax-ppss cache misses
+    // parse from far back; a healthy cache parses tiny spans).
+    // OnceLock, not a per-call env read: glibc getenv walks the environment
+    // linearly, and this runs on EVERY parse-partial-sexp — a fontification
+    // pass paid 185M Ir (58k calls) just asking for a debug knob.
+    static SYNTAX_STATS_FILE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    if let Some(stats_path) = SYNTAX_STATS_FILE
+        .get_or_init(|| std::env::var("NEOMACS_SYNTAX_STATS_FILE").ok())
+        .as_deref()
+        && !stats_path.is_empty()
+        && let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(stats_path)
+    {
+        use std::io::Write as _;
+        let _ = writeln!(f, "pps from={from} to={to} span={}", to - from);
+        // One-shot Lisp backtrace for the first far-position parse: names the
+        // machinery that drives whole-buffer reparse sweeps.
+        static FAR_PARSE_TRACED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if from > 100_000 && !FAR_PARSE_TRACED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let _ = writeln!(f, "FAR-PARSE BACKTRACE:\n{}", eval.lisp_backtrace(40));
+        }
+    }
+    // Re-acquire the buffer after the diagnostic block: that block takes the
+    // host mutably (`lisp_backtrace`) and cannot run while a `&Buffer`
+    // borrowed from `eval.buffers()` is live.
+    let buf = eval
+        .buffers()
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let props = SyntaxProperties::for_scan_with_symbols(
+        honor,
+        eval.variables(),
+        eval.buffers(),
+        eval.symbol_mode(),
+    );
+    let escape_policy = CommentEndEscapePolicy::for_context(eval);
+    let cache_mode = parse_cache::parse_cache_mode();
+    // Short misses use the same plain entry point as cache-off queries. Decide
+    // before entering the general cache machinery, whose recording and
+    // verification state is unnecessary when no run can share FROM. Bounds
+    // were validated above, so these are absolute character positions.
+    let short_miss = cache_mode != parse_cache::ParseCacheMode::Off
+        && parse_cache::short_query_without_run(
+            buf,
+            LispCharPos1::new(from).to_char_pos().get(),
+            LispCharPos1::new(to).to_char_pos().get(),
+        );
+    let (state, stop_pos) = if cache_mode == parse_cache::ParseCacheMode::Off || short_miss {
+        let answer = parse_state_from_range_with_options(
+            buf,
+            &table,
+            from,
+            to,
+            target_depth,
+            stop_before,
+            oldstate,
+            commentstop,
+            props,
+            escape_policy,
+        );
+        if short_miss {
+            parse_cache::note_short_query();
+        }
+        answer
+    } else {
+        let (state, stop) = parse_cache::parse_partial_sexp_cached(
+            buf,
+            &table,
+            from,
+            to,
+            target_depth,
+            stop_before,
+            oldstate,
+            commentstop,
+            props,
+            escape_policy,
+            cache_mode,
+        );
+        (state.into_value(), stop)
+    };
+    let current_id = buf.id();
+    let stop_byte = lisp_pos_to_byte(buf, LispCharPos1::new(stop_pos));
+    let _ = eval
+        .buffers_mut()
+        .goto_buffer_emacs_byte_pos(current_id, stop_byte);
+    Ok(state)
+}
+
+fn lisp_pos_to_byte(buf: &Buffer, pos: LispCharPos1) -> EmacsBytePos {
+    buf.lisp_pos_to_accessible_emacs_byte_pos(pos)
+}
+
+/// `(skip-syntax-forward SYNTAX &optional LIMIT)` — skip forward over chars
+/// matching the given syntax classes.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_skip_syntax_forward<H: TextHost>(
+    eval: &mut H,
+    args: Vec<Value>,
+) -> EvalResult {
+    neovm_value::error::expect_args_range("skip-syntax-forward", &args, 1, 2)?;
+    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
+    builtin_skip_syntax_forward_2(eval, arg(0), arg(1))
+}
+/// `skip-syntax-forward` as registered: fixed arity 2, called straight off the bytecode
+/// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// The `Vec` entry point above serves Rust callers.
+#[doc(hidden)]
+pub fn builtin_skip_syntax_forward_2<H: TextHost>(
+    eval: &mut H,
+    syntax: Value,
+    lim: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [syntax, lim];
+    let (syntax_chars, limit) = expect_skip_syntax_args("skip-syntax-forward", &args)?;
+    let honor = parse_sexp_lookup_properties_enabled(eval);
+
+    let (old_pt, limit_byte) = {
+        let buf = eval
+            .buffers()
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        (
+            buf.point_emacs_byte_pos(),
+            limit.map(|raw| lisp_pos_to_byte(buf, LispCharPos1::new(raw)).get()),
+        )
+    };
+
+    let new_pos = if honor {
+        // GNU's skip_syntax propertizes LAZILY as the scan advances
+        // (parse_sexp_propertize stops at charpos + 1). The Rust scanner
+        // cannot run re-entrant Lisp mid-scan, so scan in bounded windows:
+        // propertize one window ahead, scan within it, and continue only when
+        // the whole window was consumed. Propertizing to the (often ZV)
+        // limit up front made a no-op `(skip-syntax-forward " ")` after an
+        // edit re-propertize the entire buffer tail: O(buffer) per call.
+        const SYNTAX_PROPERTIZE_WINDOW_CHARS: usize = 500;
+        let current_id = eval
+            .buffers()
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let mut stop;
+        loop {
+            let (window_end_char, window_end_byte, final_limit_byte) = {
+                let buf = eval
+                    .buffers()
+                    .get(current_id)
+                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+                let from_char = buf.point_char_pos().get();
+                let accessible_end_char = buf.accessible_char_region().end().get();
+                let window_end_char =
+                    (from_char + SYNTAX_PROPERTIZE_WINDOW_CHARS).min(accessible_end_char);
+                let window_end_byte = buf
+                    .char_pos_to_emacs_byte_pos_clamped(neovm_edit::buffer::CharPos0::new(
+                        window_end_char,
+                    ))
+                    .get();
+                let final_limit_byte =
+                    limit_byte.unwrap_or_else(|| buf.accessible_emacs_byte_region().end().get());
+                (window_end_char, window_end_byte, final_limit_byte)
+            };
+            let window_end_byte = window_end_byte.min(final_limit_byte);
+            maybe_syntax_propertize_for_scan(eval, window_end_char.saturating_add(1))?;
+            // Re-snapshot per window: propertizing ran Lisp, which may have
+            // changed a category symbol's plist or the control variables.
+            let props = SyntaxProperties::for_scan_with_symbols(
+                honor,
+                eval.variables(),
+                eval.buffers(),
+                eval.symbol_mode(),
+            );
+            let buf = eval
+                .buffers()
+                .get(current_id)
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            let table = SyntaxTable::for_buffer(buf);
+            stop = skip_syntax_forward_with_options(
+                buf,
+                &table,
+                syntax_chars,
+                Some(window_end_byte),
+                props,
+            );
+            if stop < window_end_byte || window_end_byte >= final_limit_byte {
+                break;
+            }
+            // The scan consumed the whole window: advance and continue.
+            let _ = eval
+                .buffers_mut()
+                .goto_buffer_emacs_byte_pos(current_id, EmacsBytePos::new(window_end_byte));
+        }
+        stop
+    } else {
+        let buf = eval
+            .buffers()
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let table = SyntaxTable::for_buffer(buf);
+        skip_syntax_forward_with_options(
+            buf,
+            &table,
+            syntax_chars,
+            limit_byte,
+            SyntaxProperties::Ignore,
+        )
+    };
+    let new_pos = EmacsBytePos::new(new_pos);
+
+    let current_id = eval
+        .buffers()
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let _ = eval
+        .buffers_mut()
+        .goto_buffer_emacs_byte_pos(current_id, new_pos);
+
+    // Return number of characters skipped (Emacs convention).
+    let buf = eval
+        .buffers()
+        .get(current_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let chars_moved = if new_pos >= old_pt {
+        buffer_byte_char_delta(buf, old_pt.get(), new_pos.get())
+    } else {
+        buffer_byte_char_delta(buf, new_pos.get(), old_pt.get())
+    };
+    Ok(Value::fixnum(chars_moved))
+}
+
+/// `(skip-syntax-backward SYNTAX &optional LIMIT)` — skip backward over chars
+/// matching the given syntax classes.
+///
+/// Registered at fixed arity 2, called straight off the bytecode stack like
+/// GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+#[doc(hidden)]
+pub fn builtin_skip_syntax_backward_2<H: TextHost>(
+    eval: &mut H,
+    syntax: Value,
+    lim: Value,
+) -> EvalResult {
+    let args: [Value; 2] = [syntax, lim];
+    let (syntax_chars, limit) = expect_skip_syntax_args("skip-syntax-backward", &args)?;
+    let honor = parse_sexp_lookup_properties_enabled(eval);
+    if honor {
+        let target = eval
+            .buffers()
+            .current_buffer()
+            .map(|buf| buf.point_char_pos().get())
+            .unwrap_or(0);
+        if target > 0 {
+            maybe_syntax_propertize_for_scan(eval, target)?;
+        }
+    }
+
+    let props = SyntaxProperties::for_scan_with_symbols(
+        honor,
+        eval.variables(),
+        eval.buffers(),
+        eval.symbol_mode(),
+    );
+    let buf = eval
+        .buffers()
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let table = SyntaxTable::for_buffer(buf);
+    let limit = limit.map(|raw| lisp_pos_to_byte(buf, LispCharPos1::new(raw)).get());
+    let new_pos = skip_syntax_backward_with_options(buf, &table, syntax_chars, limit, props);
+
+    let old_pt = eval
+        .buffers()
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+        .point_emacs_byte_pos();
+    let new_pos = EmacsBytePos::new(new_pos);
+
+    let current_id = eval
+        .buffers()
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let _ = eval
+        .buffers_mut()
+        .goto_buffer_emacs_byte_pos(current_id, new_pos);
+
+    // Return negative number of characters skipped.
+    let buf = eval
+        .buffers()
+        .get(current_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let chars_moved = if old_pt >= new_pos {
+        -buffer_byte_char_delta(buf, new_pos.get(), old_pt.get())
+    } else {
+        buffer_byte_char_delta(buf, old_pt.get(), new_pos.get())
+    };
+    Ok(Value::fixnum(chars_moved))
+}
+
+fn expect_skip_syntax_args(
+    caller: &str,
+    args: &[Value],
+) -> Result<(SkipSyntaxClasses, Option<i64>), Flow> {
+    if !(1..=2).contains(&args.len()) {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![Value::symbol(caller), Value::fixnum(args.len() as i64)],
+        ));
+    }
+    // U2.8: parse the class string's bytes in place; with the knob off,
+    // decode it to UTF-8 first as before.
+    let syntax_chars = match args[0].as_lisp_string() {
+        Some(string) if neovm_value::builtin_frontend::builtin_frontend_on() => {
+            SkipSyntaxClasses::parse_spec_bytes(string.as_bytes())
+        }
+        _ => SkipSyntaxClasses::parse_str(&syntax_runtime_string(&args[0])?),
+    };
+    let limit = match args.get(1) {
+        None => None,
+        Some(value) if value.is_nil() => None,
+        Some(value) => match value.kind() {
+            ValueKind::Fixnum(n) => Some(n),
+            _ => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("integerp"), *value],
+                ));
+            }
+        },
+    };
+    Ok((syntax_chars, limit))
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// Test hook: byte-addressed `syntax-table` run refills.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) static SYNTAX_BYTE_RUN_REFILLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+#[path = "tests/flat_ascii_syntax_entry_cache_test.rs"]
+mod flat_ascii_syntax_entry_cache_tests;
+
+mod symbol_policy;
+#[doc(hidden)]
+pub use symbol_policy::*;
+
+/// Carrier park: drop the flat-ASCII syntax caches (the standard-table
+/// objects are reset by `reset_syntax_thread_locals`).
+#[doc(hidden)]
+pub fn reset_carrier_tls() {
+    SYNTAX_FLAT_ASCII_CACHE.with(|slot| *slot.borrow_mut() = None);
+    SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
+    neovm_value::tls_fingerprint::mix(h, STANDARD_SYNTAX_TABLE_HEAP.with(|slot| slot.get() as u64));
+    neovm_value::tls_fingerprint::mix(
+        h,
+        STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| slot.borrow().is_some() as u64),
+    );
+    neovm_value::tls_fingerprint::mix(
+        h,
+        SYNTAX_CODE_OBJECTS.with(|slot| slot.borrow().is_some() as u64),
+    );
+    neovm_value::tls_fingerprint::mix(h, SYNTAX_CODE_OBJECTS_HEAP.with(|slot| slot.get() as u64));
+    // A cleared cache is `None`, exactly like a fresh thread's, so a parked
+    // carrier's fingerprint matches.
+    neovm_value::tls_fingerprint::mix(
+        h,
+        SYNTAX_FLAT_ASCII_CACHE.with(|slot| {
+            let slot = slot.borrow();
+            let Some(cache) = slot.as_ref() else {
+                return 0;
+            };
+            let mut x = cache.len as u64;
+            for pos in 0..cache.len {
+                for (i, e) in cache.entries[cache.order[pos]].iter().enumerate() {
+                    x ^= ((e.class as u8 as u64) << (i % 8))
+                        ^ ((e.flags.bits() as u64) << (8 + i % 8));
+                }
+            }
+            x
+        }),
+    );
+    neovm_value::tls_fingerprint::mix(
+        h,
+        SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| {
+            let slot = slot.borrow();
+            let Some(cache) = slot.as_ref() else {
+                return 0;
+            };
+            let mut x = cache.len as u64;
+            for pos in 0..cache.len {
+                for (i, e) in cache.entries[cache.order[pos]].iter().enumerate() {
+                    x ^= ((e.class as u8 as u64) << (i % 8))
+                        ^ ((e.matching_char.map(|c| c as u64).unwrap_or(0)) << (8 + i % 8))
+                        ^ ((e.flags.bits() as u64) << (16 + i % 8));
+                }
+            }
+            x
+        }),
+    );
+}
+
+#[doc(hidden)]
+impl SexpScanPolicy {
+    #[doc(hidden)]
+    pub fn comment_end_escape(&self) -> CommentEndEscapePolicy {
+        self.comment_end_escape
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/skip_syntax_classes_test.rs"]
+mod skip_syntax_classes_tests;
+
+#[cfg(test)]
+#[path = "tests/syntax_test.rs"]
+mod tests;
+#[cfg(feature = "test-support")]
+pub use parse_cache::BufferSyntaxParseCache;
+
+/// VIS read rows (lead #1052): copy/reference getters for the syntax scan
+/// caches; the fields stay pub(crate) in this crate.
+#[cfg(any(test, feature = "test-support"))]
+impl BufferSyntaxChar {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn ch(&self) -> char {
+        self.ch
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn start(&self) -> EmacsBytePos {
+        self.start
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn end(&self) -> EmacsBytePos {
+        self.end
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ParseSyntaxEntry {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn class(&self) -> SyntaxClass {
+        self.class
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl<'a> SyntaxPropByteRun<'a> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn ascii(&self) -> [Option<SyntaxEntry>; 128] {
+        std::array::from_fn(|i| self.ascii[i].get())
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl<'a> SyntaxPropRange<'a> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn ascii(&self) -> [Option<SyntaxEntry>; 128] {
+        std::array::from_fn(|i| self.ascii[i].get())
+    }
+}

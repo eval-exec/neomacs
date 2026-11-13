@@ -18,7 +18,7 @@ fn gen0_compiled_face_plist_mutation_rebuilds_cached_realization() {
         std::env::remove_var("NEOVM_JIT_GEN0_COLLECTION_JOURNAL");
         std::env::set_var("NEOVM_GC_GENERATIONAL", "0");
     }
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     unsafe {
         if let Some(previous) = previous_generational {
             std::env::set_var("NEOVM_GC_GENERATIONAL", previous);

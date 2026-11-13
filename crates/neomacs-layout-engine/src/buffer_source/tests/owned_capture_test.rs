@@ -15,7 +15,7 @@ fn capture_with_properties(
     chars: usize,
     property_start: Option<usize>,
 ) -> Result<CapturedPhysicalLine, RowProgramError> {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager_mut().current_buffer_mut().unwrap();
     buffer.insert(text);
     if let Some(start) = property_start {

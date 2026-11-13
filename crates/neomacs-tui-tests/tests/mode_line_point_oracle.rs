@@ -81,12 +81,14 @@ fn run_point_probe(engine: ProbeEngine, program: PathBuf) -> String {
 
 #[test]
 fn point_percent_specs_follow_eval_moves_and_restrictions_like_gnu() {
-    let gnu_program = std::env::var_os("ORACLE_EMACS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("emacs"));
+    // The workspace's one resolver attests GNU, and the canonical-build
+    // probe refuses a same-version rebuild with a non-canonical Lisp tree.
+    // There is deliberately no `ORACLE_EMACS`/PATH fallback here.
+    let gnu_program = neomacs_tui_tests::gnu_oracle_program();
     let gnu = run_point_probe(ProbeEngine::Gnu, gnu_program);
     assert_eq!(gnu, GNU_VALUES, "live GNU point authority changed");
     let program = neomacs_tui_tests::neomacs_binary();
+    neomacs_tui_tests::assert_neomacs_dumped_runtime(&program);
     assert!(
         program.exists(),
         "Neomacs binary missing: {}",

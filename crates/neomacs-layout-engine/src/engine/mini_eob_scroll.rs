@@ -14,6 +14,9 @@ use crate::scroll_policy::ScrollPolicy;
 use crate::types::WindowParams;
 use neovm_core::buffer::{BufferId, CharPos0};
 use neovm_core::emacs_core::Context;
+use neovm_core::emacs_core::xdisp::XdispContextExt;
+use neovm_core::window::DisplayFrameManagerExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::window::{FrameId, WindowId};
 
 /// Acknowledged numeric program counter owned by the exclusive ledger.

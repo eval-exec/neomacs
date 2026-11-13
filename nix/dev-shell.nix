@@ -26,6 +26,8 @@ pkgs.mkShell {
   nativeBuildInputs = [
     rustToolchain
     pkgs.pkg-config
+    # fresh-build generates the shipped Info manuals and their directory.
+    pkgs.texinfo
     pkgs.llvmPackages.clang
     # Frozen wall clock for date/time-sensitive oracle tests.
     pkgs.libfaketime
@@ -39,6 +41,13 @@ pkgs.mkShell {
     pkgs.xdotool
     pkgs.grim
     pkgs.sway
+    # The native_scrolling 120 Hz suite calibrates a software Vulkan adapter
+    # with a glmark2 frame-cost probe under xvfb-run.  Both are test-harness
+    # prerequisites, not editor dependencies: the rich case refuses with its
+    # typed "uncalibrated scroll environment" precondition when they are
+    # missing (P2 baseline closure, native_scrolling rows).
+    pkgs.xvfb-run
+    pkgs.glmark2
   ];
 
   buildInputs =

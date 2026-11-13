@@ -2,6 +2,10 @@
 use super::*;
 use neomacs_display_protocol::input_progress::InputReceipt;
 use neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent;
+use neovm_core::emacs_core::neo::scroll::ScrollContextExt;
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::window::{FrameId, WindowId};
 
 impl LayoutEngine {

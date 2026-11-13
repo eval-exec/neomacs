@@ -2,8 +2,8 @@
 
 Animations run on the GPU render thread independently of Emacs redisplay. The centralized
 frame scheduler drives interactive animation up to the display rate while allowing ambient
-effects to declare a lower cadence; the cursor color cycle defaults to 24 Hz. Everything is
-configurable from Elisp — see [Configuration](#configuration).
+effects to declare a lower cadence; cursor color cycling defaults to 24 Hz when enabled.
+Everything is configurable from Elisp — see [Configuration](#configuration).
 
 ## Cursor
 

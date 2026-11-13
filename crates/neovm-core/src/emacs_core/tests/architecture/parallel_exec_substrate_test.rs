@@ -11,8 +11,10 @@ use crate::emacs_core::eval::parallel_exec::frames::{FrameKind, RootGroup};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use super::architecture_production_source_roots::production_dir_in;
+
 fn module_dir() -> PathBuf {
-    neomacs_infra::crate_root!().join("src/emacs_core/runtime/eval/parallel_exec")
+    production_dir_in("neovm-eval", "emacs_core/runtime/eval/parallel_exec")
 }
 
 fn source_files(directory: &Path, files: &mut Vec<PathBuf>) {

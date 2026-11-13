@@ -612,7 +612,12 @@ fn no_wait_region_does_not_block_on_a_large_input_to_a_nonreading_child() {
 }
 
 #[test]
-fn batch_error_shutdown_hooks_finish_once_and_preserve_fatal_status() {
+fn batch_error_reenters_kill_emacs_hook_and_exits_with_the_signal() {
+    // GNU Emacs 31.1 a360712c9d: emacs.c:441-466 terminate_due_to_signal
+    // calls Fkill_emacs(make_fixnum(sig), Qnil) for TERM, HUP, and INT.
+    // Only fatal_error_in_progress guards that call. emacs.c:3015-3021
+    // runs kill-emacs-hook again, and emacs.c:3082-3088 exits with sig.
+    // The hook therefore runs twice and the process status is the signal.
     for sig in [libc::SIGTERM, libc::SIGHUP] {
         let fixture = Fixture::new();
         let expr = format!(
@@ -631,7 +636,7 @@ fn batch_error_shutdown_hooks_finish_once_and_preserve_fatal_status() {
         let mut command = fixture.editor();
         command.args(["-Q", "--batch", "--eval", &expr]);
         let output = bounded(command, Duration::from_secs(60));
-        assert_eq!(output.status.code(), Some(255), "{output:?}");
+        assert_eq!(output.status.code(), Some(sig), "{output:?}");
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("batch-fatal-probe"),
             "{output:?}"
@@ -639,7 +644,7 @@ fn batch_error_shutdown_hooks_finish_once_and_preserve_fatal_status() {
         for marker in ["entered", "continued", "later"] {
             assert_eq!(
                 fs::read_to_string(fixture.path(marker)).unwrap(),
-                "1",
+                "2",
                 "{marker}, signal {sig}"
             );
         }
@@ -647,9 +652,15 @@ fn batch_error_shutdown_hooks_finish_once_and_preserve_fatal_status() {
 }
 
 #[test]
-fn signals_inside_explicit_exit_hooks_finish_once_and_preserve_original_request() {
+fn signals_inside_explicit_exit_reenter_the_hook_exit_with_the_signal_and_do_not_restart() {
+    // The same re-entry as the batch row. The inner Fkill_emacs is
+    // Fkill_emacs(make_fixnum(sig), Qnil) (emacs.c:460), so it exits
+    // with the signal (emacs.c:3082-3088) before an outer
+    // (kill-emacs nil t) can reach its restart exec (emacs.c:3063).
+    // Hook count is 2, the later hook runs, the child is reaped, and
+    // the socket is gone. Neither call form restarts.
     for sig in [libc::SIGTERM, libc::SIGHUP] {
-        for restart in [false, true] {
+        for restart_argument in [false, true] {
             let mut fixture = Fixture::new();
             fixture.foreground("hook-signal", &["-Q"]);
             let subprocess = PinnedProcess::new(fixture.eval("hook-signal",
@@ -662,10 +673,9 @@ fn signals_inside_explicit_exit_hooks_finish_once_and_preserve_original_request(
                  (setq daemon-old-state 'must-disappear)",
                 fixture.path("shutdown-hook"), sig, fixture.path("later-hook")
             ));
-            let pid = fixture.daemon.as_ref().unwrap().id();
             fixture.eval(
                 "hook-signal",
-                if restart {
+                if restart_argument {
                     "(kill-emacs nil t)"
                 } else {
                     "(kill-emacs)"
@@ -674,36 +684,15 @@ fn signals_inside_explicit_exit_hooks_finish_once_and_preserve_original_request(
             subprocess.assert_exited();
             assert_eq!(
                 fs::read_to_string(fixture.path("shutdown-hook")).unwrap(),
-                "1"
+                "2"
             );
             assert_eq!(
                 fs::read_to_string(fixture.path("later-hook")).unwrap(),
                 "later"
             );
-            if restart {
-                let deadline = Instant::now() + Duration::from_secs(60);
-                loop {
-                    let output = bounded(
-                        fixture.client(
-                            "hook-signal",
-                            "(list (emacs-pid) (boundp 'daemon-old-state))",
-                        ),
-                        Duration::from_secs(10),
-                    );
-                    if output.status.success() {
-                        assert_eq!(
-                            String::from_utf8_lossy(&output.stdout).trim(),
-                            format!("({pid} nil)")
-                        );
-                        break;
-                    }
-                    assert!(Instant::now() < deadline, "restart did not become ready");
-                }
-                fixture.eval("hook-signal", "(kill-emacs 8)");
-            }
             assert_eq!(
                 wait_child(fixture.daemon.as_mut().unwrap(), Duration::from_secs(5)).code(),
-                Some(if restart { 8 } else { 0 })
+                Some(sig)
             );
             assert!(!fixture.socket("hook-signal").exists());
         }
@@ -834,7 +823,12 @@ fn sigchld_retention_and_lost_authority_never_signal_an_auto_reaped_child() {
         .arg("-o")
         .arg(&shim)
         .arg("-ldl");
-    assert!(bounded(cc, Duration::from_secs(30)).status.success());
+    let compiled = bounded(cc, Duration::from_secs(30));
+    assert!(
+        compiled.status.success(),
+        "cc failed to build the sigchld shim: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
     for policy in ["ignored", "no-cldwait", "lost"] {
         for region in [false, true] {
             let mut fixture = Fixture::new();

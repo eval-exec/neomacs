@@ -1,6 +1,6 @@
 #[path = "../p15_threading_support/actual_payload.rs"]
 mod actual_payload;
-use actual_payload::{emacs_core, tagged, threading};
+use actual_payload::{emacs_core, tagged, threading, value};
 
 fn accept_thread(_: threading::ThreadId) {}
 fn accept_mutex(_: threading::MutexId) {}

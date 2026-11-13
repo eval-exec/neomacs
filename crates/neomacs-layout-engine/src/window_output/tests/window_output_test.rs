@@ -54,6 +54,7 @@ use neomacs_display_protocol::types::{Color, Rect};
 use neomacs_display_protocol::{Glyph, GlyphArea, GlyphProvenance, GlyphType};
 use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos, LispCharPos1};
 use neovm_core::emacs_core::Context;
+use neovm_core::window::DisplayFrameManagerExt;
 
 fn assert_char_glyph(glyph: &Glyph, ch: char, face_id: FaceId) {
     assert_eq!(glyph.glyph_type, GlyphType::Char { ch });
@@ -140,7 +141,7 @@ fn window_info(window_id: i64) -> WindowInfo {
 
 #[test]
 fn emit_text_span_advances_live_output_before_row_finish() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -191,7 +192,7 @@ fn emit_text_span_advances_live_output_before_row_finish() {
 
 #[test]
 fn speculative_output_emitter_keeps_live_window_state_unchanged() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -233,7 +234,7 @@ fn speculative_output_emitter_keeps_live_window_state_unchanged() {
 
 #[test]
 fn display_progress_sink_emits_buffer_slots_from_row_builder_progress() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -296,7 +297,7 @@ fn display_progress_sink_emits_buffer_slots_from_row_builder_progress() {
 
 #[test]
 fn text_source_slot_emission_accepts_rendered_row_slots() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -357,7 +358,7 @@ fn text_source_slot_emission_accepts_rendered_row_slots() {
 
 #[test]
 fn display_progress_sink_merges_contiguous_slots_for_same_buffer_position() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -400,7 +401,7 @@ fn display_progress_sink_merges_contiguous_slots_for_same_buffer_position() {
 
 #[test]
 fn display_progress_sink_advances_without_points_for_non_buffer_slots() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -456,7 +457,7 @@ fn display_progress_sink_advances_without_points_for_non_buffer_slots() {
 
 #[test]
 fn display_progress_sink_records_chrome_row_progress() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -500,7 +501,7 @@ fn display_progress_sink_records_chrome_row_progress() {
 
 #[test]
 fn text_matrix_row_output_begins_row() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -558,7 +559,7 @@ fn text_matrix_row_output_begins_row() {
 
 #[test]
 fn text_matrix_row_output_finishes_with_matrix_metrics() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -659,7 +660,7 @@ fn record_text_window_display_range_updates_matching_last_window_info() {
 
 #[test]
 fn text_window_redisplay_positions_use_last_row_with_buffer_position() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -764,7 +765,7 @@ fn close_text_window_output_closes_active_matrix_window() {
 
 #[test]
 fn publish_text_window_cursor_installs_selected_phys_cursor_without_window_cursor_item() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -849,7 +850,7 @@ fn publish_text_window_cursor_installs_selected_phys_cursor_without_window_curso
 
 #[test]
 fn publish_non_selected_cursor_resolves_one_gutter_aware_slot_for_every_artifact() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -932,7 +933,7 @@ fn publish_non_selected_cursor_resolves_one_gutter_aware_slot_for_every_artifact
 
 #[test]
 fn publish_selected_empty_gutter_cursor_preserves_layout_x_through_materialization() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1067,7 +1068,7 @@ fn finished_snapshot_publishes_selected_window_outer_body_and_cell_origin() {
     use neovm_core::window::PresentedWindowRegions;
     use neovm_core::window::geometry::CellOrigin;
 
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1136,7 +1137,7 @@ fn install_text_window_cursor_effects_records_window_effect_profile() {
 
 #[test]
 fn text_matrix_row_commands_begin_and_finish_output() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1208,7 +1209,7 @@ fn text_matrix_row_commands_begin_and_finish_output() {
 
 #[test]
 fn display_text_row_metrics_finish_and_end_closes_matrix_row() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1265,7 +1266,7 @@ fn display_text_row_metrics_finish_and_end_closes_matrix_row() {
 /// laid out below it in the frame shifts.
 #[test]
 fn finishing_a_pending_text_window_row_publishes_its_measured_row_metrics() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1326,7 +1327,7 @@ fn finishing_a_pending_text_window_row_publishes_its_measured_row_metrics() {
 
 #[test]
 fn install_text_window_output_installs_row_metrics() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1386,7 +1387,7 @@ fn install_text_window_output_installs_row_metrics() {
 
 #[test]
 fn install_text_window_body_output_records_redisplay_and_installs_rows() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1495,7 +1496,7 @@ fn mark_current_text_row_truncated_left_sets_current_row_flag() {
 
 #[test]
 fn text_matrix_row_transition_finishes_without_starting_past_max_rows() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1562,7 +1563,7 @@ fn text_matrix_row_transition_finishes_without_starting_past_max_rows() {
 
 #[test]
 fn text_matrix_row_transition_emits_finish_and_begin() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1650,7 +1651,7 @@ fn text_matrix_row_transition_emits_finish_and_begin() {
 /// where GNU 31.1 reads 108677, the next line's start.
 #[test]
 fn text_window_redisplay_positions_end_a_truncated_last_row_at_the_next_line() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()

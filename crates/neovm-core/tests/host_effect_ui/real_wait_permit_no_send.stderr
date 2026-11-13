@@ -1,3 +1,14 @@
+warning: unexpected `cfg` condition value: `test-support`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  |     #[cfg(any(test, feature = "test-support"))]
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `contract-fixtures`, `dbus-vendored`, `default`, `desktop-font-settings`, `display-stop-validate`, `fuzzing`, `gc-memory-telemetry`, `jit`, `perf-probes`, `redisplay-test-policy`, `sound`, `sqlite`, `vm-profile`, and `webview`
+  = help: consider adding `test-support` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `#[warn(unexpected_cfgs)]` on by default
+
 error[E0277]: `Rc<()>` cannot be sent between threads safely
  --> tests/host_effect_ui/real_wait_permit_no_send.rs:7:21
   |
@@ -8,10 +19,10 @@ error[E0277]: `Rc<()>` cannot be sent between threads safely
 note: required because it appears within the type `PhantomData<Rc<()>>`
  --> $RUST/core/src/marker.rs
 note: required because it appears within the type `RealWaitPermit`
- --> tests/host_effect_ui/support/../../../src/host_effect/wake/native_wait.rs
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake/native_wait.rs
   |
-  | pub(crate) struct RealWaitPermit {
-  |                   ^^^^^^^^^^^^^^
+  | pub struct RealWaitPermit {
+  |            ^^^^^^^^^^^^^^
 note: required by a bound in `requires_send`
  --> tests/host_effect_ui/real_wait_permit_no_send.rs:4:21
   |

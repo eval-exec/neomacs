@@ -1,11 +1,10 @@
-error[E0603]: module `wake` is private
- --> tests/host_effect_ui/wake_source_private.rs:4:30
+error[E0624]: associated function `paired` is private
+ --> tests/host_effect_ui/wake_source_private.rs:7:48
   |
-4 | use neovm_core::host_effect::wake::ControlWake;
-  |                              ^^^^ private module
+7 |     let _unpaired_public_source = ControlWake::paired();
+  |                                                ^^^^^^ private associated function
   |
-note: the module `wake` is defined here
- --> src/host_effect/mod.rs
+ ::: $WORKSPACE/crates/neovm-eval/src/host_effect/wake.rs
   |
-  | pub(crate) mod wake;
-  | ^^^^^^^^^^^^^^^^^^^
+  |     pub(crate) fn paired() -> (Arc<Self>, ControlNudgePublisher) {
+  |     ------------------------------------------------------------ private associated function defined here

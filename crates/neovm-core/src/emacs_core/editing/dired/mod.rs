@@ -14,6 +14,7 @@ use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args_range;
 use crate::heap_types::LispString;
+use neovm_edit::emacs_core::edit_host::EditHost;
 use std::collections::VecDeque;
 #[cfg(unix)]
 use std::ffi::CStr;
@@ -497,7 +498,7 @@ pub(crate) fn builtin_directory_files_and_attributes(
             expect_lisp_string("directory-files-and-attributes", &expanded_filename)?
         }
     };
-    let time_output = LispTimeOutput::from_context(eval)?;
+    let time_output = super::timefns::lisp_time_output_from_context(eval)?;
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     directory_files_and_attributes_with_dir(
         eval,
@@ -570,7 +571,7 @@ fn directory_files_and_attributes_from_reader(
                 let matched = syntax
                     .search(
                         ctx.variables(),
-                        &ctx.buffers,
+                        &ctx.edit.buffers,
                         pattern,
                         &name,
                         super::regex::SearchedString::Owned(name.clone()),
@@ -665,7 +666,7 @@ pub(crate) fn builtin_file_name_completion(eval: &mut Context, args: Vec<Value>)
         args.get(2).copied().unwrap_or(Value::NIL),
     ];
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
-    let plan = if super::minibuffer::completion_ignore_case(eval.variables(), &eval.buffers)
+    let plan = if super::minibuffer::completion_ignore_case(eval.variables(), &eval.edit.buffers)
         && super::fns::compare_strings_parity_enabled()
     {
         prepare_file_name_completion_with_case_table(eval, &args, syntax)?
@@ -707,8 +708,10 @@ pub(crate) fn builtin_file_name_all_completions(
     if file.as_bytes().contains(&b'/') {
         return Ok(Value::NIL);
     }
-    let ignore_case = super::minibuffer::completion_ignore_case(eval.variables(), &eval.buffers);
-    let regexps = super::minibuffer::completion_regexp_lisp_list(eval.variables(), &eval.buffers);
+    let ignore_case =
+        super::minibuffer::completion_ignore_case(eval.variables(), &eval.edit.buffers);
+    let regexps =
+        super::minibuffer::completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers);
     // GNU Emacs: file-name-all-completions does NOT filter by
     // completion-ignored-extensions (the "all_flag" path).
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
@@ -727,7 +730,7 @@ pub(crate) fn builtin_file_name_all_completions(
     let completions = filter_by_completion_regexps(
         syntax,
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         raw,
         &regexps,
         ignore_case,
@@ -932,8 +935,16 @@ fn prepare_file_name_completion_with_case_table(
         let raw = collect_file_name_completions_with_parity(ctx, &file, &directory, false, true)?;
         let extensions = get_ignored_extensions(ctx.variables());
         let raw = filter_ignored_extensions_with_case_table(ctx, &file, raw, &extensions)?;
-        let regexps = super::minibuffer::completion_regexp_lisp_list(ctx.variables(), &ctx.buffers);
-        filter_by_completion_regexps(syntax, ctx.variables(), &ctx.buffers, raw, &regexps, true)?
+        let regexps =
+            super::minibuffer::completion_regexp_lisp_list(ctx.variables(), &ctx.edit.buffers);
+        filter_by_completion_regexps(
+            syntax,
+            ctx.variables(),
+            &ctx.edit.buffers,
+            raw,
+            &regexps,
+            true,
+        )?
     };
     Ok(FileNameCompletionPlan {
         file,
@@ -1157,12 +1168,13 @@ pub(crate) fn prepare_file_name_completion_in_state(
     let directory = super::fileio::resolve_filename_lisp_in_state(
         ctx.variables(),
         &[],
-        &ctx.buffers,
+        &ctx.edit.buffers,
         &directory_arg,
     );
-    let ignore_case = super::minibuffer::completion_ignore_case(ctx.variables(), &ctx.buffers);
+    let ignore_case = super::minibuffer::completion_ignore_case(ctx.variables(), &ctx.edit.buffers);
     let ignored_extensions = get_ignored_extensions(ctx.variables());
-    let regexps = super::minibuffer::completion_regexp_lisp_list(ctx.variables(), &ctx.buffers);
+    let regexps =
+        super::minibuffer::completion_regexp_lisp_list(ctx.variables(), &ctx.edit.buffers);
     let completions = if file.as_bytes().contains(&b'/') {
         Vec::new()
     } else {
@@ -1180,7 +1192,7 @@ pub(crate) fn prepare_file_name_completion_in_state(
         filter_by_completion_regexps(
             syntax,
             ctx.variables(),
-            &ctx.buffers,
+            &ctx.edit.buffers,
             filtered,
             &regexps,
             ignore_case,
@@ -1204,22 +1216,23 @@ pub(crate) fn finish_file_name_completion_with_eval_predicate(
     ignore_case: bool,
 ) -> EvalResult {
     if ignore_case && super::fns::compare_strings_parity_enabled() {
-        let completions =
-            if let Some(predicate) = predicate.copied().filter(|value| !value.is_nil()) {
-                let use_absolute = predicate_uses_absolute_file_argument(&eval.obarray, &predicate);
-                filter_completions_by_callable_predicate(
-                    use_absolute,
-                    &directory,
-                    completions,
-                    |arg| {
-                        with_default_directory_binding(eval, &directory, |eval| {
-                            eval.apply(predicate, vec![arg])
-                        })
-                    },
-                )?
-            } else {
-                completions
-            };
+        let completions = if let Some(predicate) =
+            predicate.copied().filter(|value| !value.is_nil())
+        {
+            let use_absolute = predicate_uses_absolute_file_argument(&eval.obarray(), &predicate);
+            filter_completions_by_callable_predicate(
+                use_absolute,
+                &directory,
+                completions,
+                |arg| {
+                    with_default_directory_binding(eval, &directory, |eval| {
+                        eval.apply(predicate, vec![arg])
+                    })
+                },
+            )?
+        } else {
+            completions
+        };
         return resolve_file_name_completion_with_parity(eval, &file, completions, true);
     }
     let Some(predicate) = predicate.copied() else {
@@ -1237,7 +1250,7 @@ pub(crate) fn finish_file_name_completion_with_eval_predicate(
         ));
     }
 
-    let use_absolute_path = predicate_uses_absolute_file_argument(&eval.obarray, &predicate);
+    let use_absolute_path = predicate_uses_absolute_file_argument(&eval.obarray(), &predicate);
     let bound_directory = directory.clone();
     finish_file_name_completion_with_callable_predicate(
         use_absolute_path,
@@ -1422,7 +1435,7 @@ fn with_default_directory_binding(
     directory: &LispString,
     f: impl FnOnce(&mut Context) -> EvalResult,
 ) -> EvalResult {
-    let count = eval.specpdl.len();
+    let count = eval.specpdl().len();
     eval.try_specbind_or_unwind_to(
         count,
         intern("default-directory"),
@@ -1497,7 +1510,7 @@ pub(crate) fn builtin_file_attributes(eval: &mut Context, args: Vec<Value>) -> E
 
     // GNU Emacs: return string names unless ID-FORMAT is nil or 'integer.
     let id_format = FileIdFormat::from_id_format_arg(args.get(1));
-    let time_output = LispTimeOutput::from_context(eval)?;
+    let time_output = super::timefns::lisp_time_output_from_context(eval)?;
 
     Ok(
         build_file_attributes(&filename_lisp, id_format, time_output, &filename_lisp)?
@@ -1628,19 +1641,6 @@ fn read_colon_file_names(path: &str) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 /// Register the variables GNU's `syms_of_dired` (src/dired.c) installs in C.
-pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
-    // dired.c:1206 — DEFVAR_LISP (Vcompletion_ignored_extensions), then
-    // dired.c:1212 initializes it to nil. `lisp/bindings.el' supplies the real
-    // list at load time, so do not seed one here.
-    //
-    // DEFVAR_LISP is what makes the symbol special. Without it a `let' around
-    // `completion-ignored-extensions' in a lexical-binding file binds
-    // lexically, and callees like `completion-pcm--filename-try-filter' keep
-    // reading the global list — file-name completion then quietly ignores the
-    // caller's rebinding.
-    obarray.seed_value("completion-ignored-extensions", Value::NIL);
-    obarray.make_special("completion-ignored-extensions");
-}
 
 // ---------------------------------------------------------------------------
 // Tests

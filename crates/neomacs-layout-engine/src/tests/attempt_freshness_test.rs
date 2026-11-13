@@ -1,5 +1,6 @@
 use super::*;
 use neovm_core::emacs_core::Context;
+use neovm_core::window::DisplayFrameManagerExt;
 use std::borrow::Cow;
 
 #[test]
@@ -29,7 +30,7 @@ fn freshness_spans_default_on_and_preserve_explicit_capture_controls() {
 
 #[test]
 fn native_preparation_passes_complete_inputs_while_control_recaptures() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
@@ -56,7 +57,7 @@ fn native_preparation_passes_complete_inputs_while_control_recaptures() {
 fn native_window_end_publication_preserves_the_same_complete_token() {
     use neovm_core::buffer::{EmacsBytePos, LispCharPos1};
     use neovm_core::window::{MatrixRow0, WindowEndRecord};
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)

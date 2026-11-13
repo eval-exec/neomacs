@@ -1,0 +1,2194 @@
+use super::*;
+use crate::emacs_core::eval::AllocationFailureContextExt;
+use crate::emacs_core::eval::LispArgVec;
+#[doc(hidden)]
+pub use neovm_value::error::{
+    expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
+};
+use neovm_value::hashtab::hash_key_to_visible_value;
+use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
+use neovm_value::tagged::value::SymbolMode;
+use neovm_value::value::{HashProbe, HashTableMakeKeyword, ValueKind, VecLikeType};
+
+// ===========================================================================
+// Vector operations
+// ===========================================================================
+
+/// Checked backing extent for a Value vector. Nonempty storage has exactly
+/// the size and alignment of `elements` Values; empty storage never reaches
+/// the allocator. Only arithmetic metadata is retained, so this witness is
+/// Send + Sync and independent of any mutator or GC. It grants no permission
+/// to transfer the Lisp Values subsequently stored in the allocation.
+#[derive(Clone, Copy, Debug)]
+enum VectorElementLayout {
+    Empty,
+    Nonempty {
+        elements: std::num::NonZeroUsize,
+        layout: std::alloc::Layout,
+    },
+}
+
+static_assertions::assert_impl_all!(VectorElementLayout: Send, Sync);
+
+impl TryFrom<usize> for VectorElementLayout {
+    type Error = neovm_value::alloc::AllocationFailure;
+
+    #[inline]
+    fn try_from(elements: usize) -> Result<Self, Self::Error> {
+        let Some(elements) = std::num::NonZeroUsize::new(elements) else {
+            return Ok(Self::Empty);
+        };
+        let layout = std::alloc::Layout::array::<Value>(elements.get())?;
+        Ok(Self::Nonempty { elements, layout })
+    }
+}
+
+/// Allocate empty Value backing through Rust's global allocator. GNU
+/// alloc.c:3399-3400 rejects an unrepresentable extent; alloc.c:3353-3383 and
+/// 4142 deliver backing allocation failure through memory-signal-data.
+/// InvalidLayout and NullAllocation remain typed until the invoking mutator
+/// selects its live memory condition. No Lisp allocation or GC occurs here;
+/// Vec immediately owns the storage, while its existing resize initializes
+/// the Values and the existing Value::vector adoption registers the result.
+#[inline]
+#[deny(clippy::wildcard_enum_match_arm)]
+fn allocate_vector_elements(
+    extent: VectorElementLayout,
+) -> Result<Vec<Value>, neovm_value::alloc::AllocationFailure> {
+    match extent {
+        VectorElementLayout::Empty => Ok(Vec::new()),
+        VectorElementLayout::Nonempty { elements, layout } => {
+            // SAFETY: the private witness checked Layout::array::<Value> for
+            // this nonzero capacity, including Value alignment and isize size
+            // limits. alloc uses the Global allocator, and null is handled
+            // before the storage can be adopted or dereferenced.
+            let pointer = unsafe { std::alloc::alloc(layout) };
+            let pointer = std::ptr::NonNull::new(pointer)
+                .ok_or(neovm_value::alloc::AllocationFailure::NullAllocation)?
+                .cast::<Value>();
+            // SAFETY: this unique Global allocation exactly matches the
+            // Vec<Value> capacity's Layout::array::<Value>. Length zero exposes
+            // no uninitialized Values. Immediate adoption has no alias or
+            // intervening fallible step; ordinary Vec growth and Drop use the
+            // same global allocator and matching Value layout. Stored Values
+            // retain their existing invoking-mutator ownership contract.
+            Ok(unsafe { Vec::from_raw_parts(pointer.as_ptr(), 0, elements.get()) })
+        }
+    }
+}
+/// The owning symbol policy is consulted only by the char-table arm.
+/// Ordinary array access carries one pointer-sized source without reading it.
+#[derive(Clone, Copy)]
+pub(crate) enum ArraySymbolSource<'a> {
+    /// Test-only origin: the caller resolves symbols through the canonical
+    /// bare obarray policy (the product callers carry the Context).
+    #[cfg(any(test, feature = "test-support"))]
+    Bare,
+    Context(&'a super::eval::Context),
+}
+
+impl std::fmt::Debug for ArraySymbolSource<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Bare => "Bare",
+            Self::Context(_) => "Context",
+        })
+    }
+}
+
+/// A source is resolved only after the shared array dispatch selects a char table.
+/// Separate source types let the VM borrow its Context slot without loading it
+/// for vector, string, record or bool-vector operations.
+pub(crate) trait ArraySymbolPolicy {
+    fn mode(self) -> SymbolMode;
+
+    /// The shared dispatch has already checked the index and selected String.
+    /// Ordinary callers retain the existing validating string-write boundary.
+    fn replace_string(
+        self,
+        array: &Value,
+        index: &Value,
+        new_element: &Value,
+        _checked_index: i64,
+    ) -> Result<Value, Flow>
+    where
+        Self: Sized,
+    {
+        aset_string_replacement(array, index, new_element)
+    }
+}
+
+impl ArraySymbolPolicy for ArraySymbolSource<'_> {
+    fn mode(self) -> SymbolMode {
+        match self {
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Bare => SymbolMode::Bare,
+            Self::Context(context) => context.symbol_mode(),
+        }
+    }
+}
+
+const _: () = assert!(
+    std::mem::size_of::<ArraySymbolSource<'_>>() == std::mem::size_of::<&super::eval::Context>()
+);
+
+/// A shared borrow of the VM's owning Context slot. This carries no policy
+/// snapshot and cannot replace or mutably access the Context through the slot.
+/// The borrow ends when the synchronous array operation returns.
+struct VmArraySymbolSource<'slot, 'context>(&'slot &'context mut super::eval::Context);
+
+impl ArraySymbolPolicy for VmArraySymbolSource<'_, '_> {
+    fn mode(self) -> SymbolMode {
+        // Keep the slot address in the VM-only monomorph's argument list.
+        // ThinLTO otherwise promotes its Context load into every array opcode.
+        // Consume the slot opaquely only after dispatch selects a char table;
+        // ordinary array paths perform neither this barrier nor the load.
+        let context_slot = std::hint::black_box(self.0);
+        context_slot.symbol_mode()
+    }
+
+    // This specialization is reached only by run_loop's array source. Keep
+    // the string-write body visible there without changing global helpers.
+    #[inline(always)]
+    fn replace_string(
+        self,
+        array: &Value,
+        index: &Value,
+        new_element: &Value,
+        checked_index: i64,
+    ) -> Result<Value, Flow> {
+        aset_string_replacement_in_vm_string_arm(array, index, new_element, checked_index)
+    }
+}
+
+/// `(aref ARRAY INDEX)` on the shapes a loop indexes, answered without
+/// [`builtin_aref_values`]' `ValueKind` decode, its repeated pointer
+/// observations and its saved-register frame: a plain vector or record slot,
+/// or a character of a string whose characters are all one byte. `None` for
+/// everything else (and for every error), which `builtin_aref_values` then
+/// answers or signals exactly as before. Must agree with it wherever it
+/// answers.
+///
+/// Shared by the two `Baref` entries: run_loop's
+/// [`builtin_aref_values_in_vm_context_slot`] and the JIT's `neovm_jit_aref`.
+///
+/// It reads without the per-projection observation hook, and so makes no
+/// call at all (a hook that returns keeps a register frame on every path):
+/// a traversal this mutator observes ([`reads_need_observation`]) goes to
+/// the builtin, whose projections record every read; when none is observed,
+/// every hook would have been a no-op -- the same precondition run_loop's
+/// unobserved `Car`/`Cdr` rely on.
+///
+/// [`reads_need_observation`]: neovm_value::tagged::collection_reads::reads_need_observation
+#[inline(always)]
+pub(crate) fn aref_fast(array: Value, index: Value) -> Option<Value> {
+    use neovm_value::tagged::value::{TAG_MASK, TAG_STRING, TAG_VECLIKE};
+    let idx = usize::try_from(index.as_fixnum()?).ok()?;
+    if neovm_value::tagged::collection_reads::reads_need_observation() {
+        return None;
+    }
+    let bits = array.bits();
+    let object = bits & !TAG_MASK;
+    match bits & TAG_MASK {
+        TAG_VECLIKE => {
+            let header = object as *const neovm_value::tagged::header::VecLikeHeader;
+            // SAFETY: a live veclike header selects the concrete payload type.
+            // This read reaches no callback or GC safe point.
+            let items = match unsafe { (*header).type_tag } {
+                VecLikeType::Vector => unsafe {
+                    (*(header as *const neovm_value::tagged::header::VectorObj))
+                        .data
+                        .as_slice()
+                },
+                VecLikeType::Record => unsafe {
+                    (*(header as *const neovm_value::tagged::header::RecordObj))
+                        .data
+                        .as_slice()
+                },
+                _ => return None,
+            };
+            items.get(idx).copied()
+        }
+        TAG_STRING => {
+            // SAFETY: a live string object. A reclaimed one (null data) is
+            // left to the builtin, whose borrow reports the use-after-free.
+            let string =
+                unsafe { &(*(object as *const neovm_value::tagged::header::StringObj)).data };
+            // A byte is the character only where every character is one
+            // byte; a supplied GNU count never qualifies, and the builtin
+            // decodes it.
+            if string.is_reclaimed() || !string.has_one_byte_characters() {
+                return None;
+            }
+            string
+                .as_bytes()
+                .get(idx)
+                .map(|&byte| Value::fixnum(byte as i64))
+        }
+        _ => None,
+    }
+}
+
+/// Used only by run_loop: defer the VM Context-slot load to the char-table arm.
+///
+/// Out of line, with the same arguments run_loop has always passed, so the
+/// `Aref` arm's call sequence is unchanged; inside, the [`aref_fast`] shapes
+/// return without a frame and everything else tail-calls the builtin.
+#[inline(never)]
+pub(crate) fn builtin_aref_values_in_vm_context_slot(
+    context_slot: &&mut super::eval::Context,
+    array: Value,
+    index: Value,
+) -> EvalResult {
+    if let Some(value) = aref_fast(array, index) {
+        return Ok(value);
+    }
+    builtin_aref_values(VmArraySymbolSource(context_slot), array, index)
+}
+
+/// Used only by run_loop: the ordinary vector write does not read the slot.
+pub(crate) fn builtin_aset_args_in_vm_context_slot(
+    context_slot: &&mut super::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    builtin_aset_args(VmArraySymbolSource(context_slot), args)
+}
+
+pub(crate) fn builtin_make_vector(args: Vec<Value>) -> EvalResult {
+    make_vector(args).map_err(neovm_value::alloc::AllocationFailure::into_flow)
+}
+
+#[doc(hidden)]
+pub fn builtin_make_vector_in_context(
+    context: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    make_vector(args).map_err(|failure| failure.into_flow_in_context(context))
+}
+
+#[doc(hidden)]
+pub fn builtin_make_bool_vector_in_context(
+    context: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    neovm_value::boolvec::make_bool_vector(args)
+        .map_err(|failure| failure.into_flow_in_context(context))
+}
+
+fn make_vector(args: Vec<Value>) -> Result<Value, neovm_value::alloc::AllocationFailure> {
+    expect_args("make-vector", &args, 2)?;
+    let len = expect_wholenump(&args[0])? as usize;
+    // GNU alloc.c:3399-3400 rejects unrepresentable vector storage and
+    // lisp_malloc reports allocation failure as a Lisp condition.
+    let mut elements = allocate_vector_elements(VectorElementLayout::try_from(len)?)?;
+    elements.resize(len, args[1]);
+    Ok(Value::vector(elements))
+}
+
+#[doc(hidden)]
+pub fn builtin_vector_slice(_eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
+    Ok(Value::vector(args.to_vec()))
+}
+
+#[cfg(test)]
+pub(crate) fn builtin_aref(args: Vec<Value>) -> EvalResult {
+    expect_args("aref", &args, 2)?;
+    builtin_aref_values(ArraySymbolSource::Bare, args[0], args[1])
+}
+
+#[inline(always)]
+#[doc(hidden)]
+pub fn builtin_aref_2(eval: &mut super::eval::Context, array: Value, index: Value) -> EvalResult {
+    builtin_aref_values_in_state(eval, array, index)
+}
+
+pub(crate) fn builtin_aref_values_in_state(
+    eval: &super::eval::Context,
+    array: Value,
+    index: Value,
+) -> EvalResult {
+    builtin_aref_values(ArraySymbolSource::Context(eval), array, index)
+}
+
+#[inline(never)]
+pub(crate) fn builtin_aref_values(
+    symbols: impl ArraySymbolPolicy,
+    array: Value,
+    index: Value,
+) -> EvalResult {
+    let idx_fixnum = expect_fixnum(&index)?;
+    match array.kind() {
+        ValueKind::Veclike(VecLikeType::CharTable) => {
+            let ch = expect_char_table_index(&index)?;
+            super::chartable::ct_lookup_with_symbols(&array, ch, symbols.mode())
+        }
+        // A vector or record slot: no in-band tags (P3.2 L0.8), so slot 0
+        // is just slot 0, as in GNU `Faref`. A negative index wraps to a huge
+        // one and is out of range.
+        ValueKind::Veclike(VecLikeType::Vector | VecLikeType::Record) => {
+            let items = array
+                .as_vector_data()
+                .or_else(|| array.as_record_data())
+                .unwrap();
+            items
+                .get(idx_fixnum as usize)
+                .copied()
+                .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index]))
+        }
+        // GNU `Faref`: a bool-vector's bit as t/nil; a negative index wraps
+        // to a huge one and is out of range.
+        ValueKind::Veclike(VecLikeType::BoolVector) => {
+            super::boolvec::bool_vector_ref_value(&array, idx_fixnum as usize)
+                .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index]))
+        }
+        ValueKind::String => {
+            let idx = idx_fixnum as usize;
+            super::lisp_string_value_char_at(array, idx)
+                .map(|cp| Value::fixnum(cp as i64))
+                .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index]))
+        }
+        // In official Emacs, closures support aref for oclosure slot access.
+        // The closure vector layout is:
+        //   [0]=ARGS  [1]=BODY  [2]=ENV  [3]=nil  [4]=DOCSTRING  [5]=IFORM
+        ValueKind::Veclike(VecLikeType::Lambda) => {
+            let idx = idx_fixnum as usize;
+            let vec = lambda_to_closure_vector(&array);
+            vec.get(idx)
+                .cloned()
+                .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index]))
+        }
+        // ByteCode closures: [0]=ARGLIST [1]=CODE [2]=ENV/CONSTANTS [3]=DEPTH [4]=DOC
+        ValueKind::Veclike(VecLikeType::ByteCode) => {
+            // Negative indices wrap to huge `usize`s: out of range, as GNU.
+            bytecode_closure_slot(&array, idx_fixnum as usize)
+                .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index]))
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("arrayp"), array],
+        )),
+    }
+}
+
+// The `aset` errors, out of line so the hot decode carries no `vec!` and no
+// signal construction (a cold arm built inline keeps registers and blocks
+// inlining). Each builds exactly the payload its inline form used to.
+#[cold]
+#[inline(never)]
+fn aset_args_out_of_range(array: Value, index: Value) -> Flow {
+    signal(LispCondition::ArgsOutOfRange, vec![array, index])
+}
+
+#[cold]
+#[inline(never)]
+fn aset_not_a_character(new_element: Value) -> Flow {
+    signal(
+        LispCondition::WrongTypeArgument,
+        vec![Value::symbol("characterp"), new_element],
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn aset_not_an_array(array: Value) -> Flow {
+    signal(
+        LispCondition::WrongTypeArgument,
+        vec![Value::symbol("arrayp"), array],
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn aset_string_error(message: &'static str) -> Flow {
+    signal(LispCondition::Error, vec![Value::string(message)])
+}
+
+// One source for the complete string-write behavior. The ordinary public
+// boundary validates its inputs; run_loop's String arm has those validations
+// already. Only the VM-only expansion receives a site-specific inline hint.
+macro_rules! aset_string_write_body {
+    ($array:ident, $index:ident, $new_element:ident, $idx_fixnum:ident) => {{
+        let string = $array.as_lisp_string().expect("string");
+        // A negative index wraps to a huge one: out of range, one compare.
+        if $idx_fixnum as u64 >= string.schars() as u64 {
+            return Err(aset_args_out_of_range(*$array, *$index));
+        }
+        let idx = $idx_fixnum as usize;
+
+        // GNU `CHECK_CHARACTER`: a fixnum in 0..=MAX_CHAR. A non-fixnum and
+        // an out-of-range fixnum signal the same `characterp` error, so one
+        // tag test and one unsigned compare decide both.
+        let replacement_code = match $new_element.as_fixnum() {
+            Some(code) if code as u64 <= 0x3F_FFFF => code as u32,
+            _ => return Err(aset_not_a_character(*$new_element)),
+        };
+        if !string.is_multibyte() && replacement_code > 0xff {
+            return Err(aset_string_error(
+                "Attempt to store non-byte value into unibyte string",
+            ));
+        }
+        if string.is_multibyte() {
+            if replacement_code > 0x7f {
+                return Err(aset_string_error(
+                    "Attempt to store non-ASCII char into multibyte string",
+                ));
+            }
+            // GNU `Faset` locates the byte with `string_char_to_byte' (src/fns.c),
+            // which returns the index unchanged when `SCHARS == SBYTES' and
+            // otherwise scans from whichever END is nearer. `LispString` already
+            // implements both; the bare-slice converter can implement neither,
+            // because a `&[u8]` does not know SCHARS -- so reaching for it made
+            // this O(index).
+            let byte_pos = neovm_value::string_pos_cache::string_char_to_byte(*$array, string, idx);
+            let Some(&old_byte) = string.as_bytes().get(byte_pos) else {
+                return Err(aset_args_out_of_range(*$array, *$index));
+            };
+            if old_byte > 0x7f {
+                return Err(aset_string_error(
+                    "Attempt to replace non-ASCII char in multibyte string",
+                ));
+            }
+            $array.set_string_byte_same_char_count(byte_pos, replacement_code as u8);
+            return Ok(*$array);
+        }
+
+        // GNU's unibyte `Faset` is one bounds check plus `SSET`.  Rebuilding the
+        // complete string here made byte-at-a-time protocol transforms (for
+        // example WebSocket masking) quadratic in the frame size.
+        $array.set_string_byte_same_char_count(idx, replacement_code as u8);
+        Ok(*$array)
+    }};
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn aset_string_replacement(
+    array: &Value,
+    index: &Value,
+    new_element: &Value,
+) -> Result<Value, Flow> {
+    if !array.is_string() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), *array],
+        ));
+    };
+
+    let idx_fixnum = expect_fixnum(index)?;
+    aset_string_write_body!(array, index, new_element, idx_fixnum)
+}
+
+/// Used only by run_loop's String arm after CHECK_FIXNUM and array dispatch.
+/// The original index Value remains available for bounds-error payloads.
+#[inline(always)]
+fn aset_string_replacement_in_vm_string_arm(
+    array: &Value,
+    index: &Value,
+    new_element: &Value,
+    idx_fixnum: i64,
+) -> Result<Value, Flow> {
+    aset_string_write_body!(array, index, new_element, idx_fixnum)
+}
+
+/// `aset` for callers that own their argument vector (now only the unit
+/// tests).
+///
+/// Delegates to the slice form: nothing in the body needs ownership, and the
+/// VM's hot paths already hold their three arguments on the stack. Requiring a
+/// `Vec` there cost a `SmallVec` clone plus a heap allocation per `aset`
+/// (`dhrystone`: 370,708 clones and 305,131 `Vec::from_iter` calls).
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_aset(args: Vec<Value>) -> EvalResult {
+    builtin_aset_args(ArraySymbolSource::Bare, &args)
+}
+
+#[doc(hidden)]
+pub fn builtin_aset_args_in_state(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
+    builtin_aset_args_in_context(eval, args)
+}
+
+pub(crate) fn builtin_aset_args_in_context(
+    eval: &super::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    builtin_aset_args(ArraySymbolSource::Context(eval), args)
+}
+
+/// `aset` reading its arguments in place.
+///
+/// The decode before each store is GNU `Faset`'s: CHECK_FIXNUM on the index
+/// (one tag test, not the `ValueKind` decode), then the array type from its
+/// tag and ONE observed header projection (the former form observed a vector
+/// three times on its way to the length). The stores themselves --
+/// `set_vector_slot`, `set_record_slot`, the string byte store, the
+/// bool-vector and char-table writers -- are unchanged.
+#[inline(never)]
+pub(crate) fn builtin_aset_args(symbols: impl ArraySymbolPolicy, args: &[Value]) -> EvalResult {
+    expect_args("aset", args, 3)?;
+    // GNU src/data.c:Faset starts with CHECK_FIXNUM (idx) before checking
+    // whether ARRAY is mutable by `aset`.
+    let Some(idx_fixnum) = args[1].as_fixnum() else {
+        return Err(neovm_value::error::expect_fixnum_failed(&args[1]));
+    };
+    let array = args[0];
+    // A string is told by its tag alone; the write body observes it.
+    if array.is_string() {
+        let _updated = symbols.replace_string(&args[0], &args[1], &args[2], idx_fixnum)?;
+        return Ok(args[2]);
+    }
+    let Some(header) = array.as_veclike_ptr() else {
+        return Err(aset_not_an_array(array));
+    };
+    // SAFETY: a live veclike header; it is read before anything that could
+    // run Lisp or collect.
+    match unsafe { (*header).type_tag } {
+        // A vector or record slot (no in-band tags, P3.2 L0.8).
+        kind @ (VecLikeType::Vector | VecLikeType::Record) => {
+            // SAFETY: the observed header selects the concrete payload type,
+            // as in `aref_fast`; only the length is read here.
+            let len = unsafe {
+                if kind == VecLikeType::Vector {
+                    (*(header as *const neovm_value::tagged::header::VectorObj))
+                        .data
+                        .as_slice()
+                        .len()
+                } else {
+                    (*(header as *const neovm_value::tagged::header::RecordObj))
+                        .data
+                        .as_slice()
+                        .len()
+                }
+            };
+            // A negative index wraps to a huge one: out of range.
+            let idx = idx_fixnum as usize;
+            if idx >= len {
+                return Err(aset_args_out_of_range(args[0], args[1]));
+            }
+            if kind == VecLikeType::Vector {
+                args[0].set_vector_slot(idx, args[2]);
+            } else {
+                args[0].set_record_slot(idx, args[2]);
+            }
+            Ok(args[2])
+        }
+        // GNU `Faset`: any non-nil VALUE stores 1.
+        VecLikeType::BoolVector => {
+            if super::boolvec::bool_vector_set(&args[0], idx_fixnum as usize, args[2].is_truthy()) {
+                Ok(args[2])
+            } else {
+                Err(aset_args_out_of_range(args[0], args[1]))
+            }
+        }
+        VecLikeType::CharTable => {
+            let ch = expect_char_table_index(&args[1])?;
+            super::chartable::builtin_set_char_table_range_with_style(
+                vec![args[0], Value::fixnum(ch), args[2]],
+                None,
+                symbols.mode(),
+            )
+        }
+        _ => Err(aset_not_an_array(array)),
+    }
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_vconcat(args: Vec<Value>) -> EvalResult {
+    builtin_vconcat_slice(&args)
+}
+
+#[doc(hidden)]
+pub fn builtin_vconcat_slice(args: &[Value]) -> EvalResult {
+    let mut result = Vec::new();
+    for arg in args {
+        match arg.kind() {
+            ValueKind::Veclike(VecLikeType::BoolVector) => {
+                result.extend(super::boolvec::bool_vector_elements(arg).unwrap_or_default());
+            }
+            ValueKind::Veclike(VecLikeType::CharTable) => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("sequencep"), *arg],
+                ));
+            }
+            ValueKind::Veclike(VecLikeType::Vector) => {
+                result.extend(arg.as_vector_data().unwrap().clone())
+            }
+            ValueKind::String => {
+                let string = arg.as_lisp_string().expect("string");
+                super::for_each_lisp_string_char(string, |cp| {
+                    result.push(Value::fixnum(cp as i64));
+                });
+            }
+            ValueKind::Nil => {}
+            ValueKind::Cons => result.extend(super::cons_list::collect_proper_list_items(*arg)?),
+            ValueKind::Veclike(VecLikeType::Lambda) => result.extend(lambda_to_closure_vector(arg)),
+            ValueKind::Veclike(VecLikeType::ByteCode) => {
+                result.extend(bytecode_to_closure_vector(arg))
+            }
+            _ => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("sequencep"), *arg],
+                ));
+            }
+        }
+    }
+    Ok(Value::vector(result))
+}
+
+// ===========================================================================
+// Hash table operations
+// ===========================================================================
+
+thread_local! {
+    static HASH_TABLE_TEST_ALIASES: HeapRegistrySlot<HashTableTestRegistry> =
+        HeapRegistrySlot::new(HashTableTestRegistry::default());
+}
+
+/// A Context owns this registry and exclusively lends it to its mutator. The
+/// existing thread-local slot selects that owner; it does not own callback
+/// state. Callback accounting belongs to the Context's GC settings cache.
+#[derive(Default)]
+pub(crate) struct HashTableTestRegistry {
+    aliases: HashMap<String, HashTableTestAlias>,
+}
+
+#[derive(Clone)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct HashTableTestAlias {
+    pub(crate) standard_test: Option<HashTableTest>,
+    pub(crate) user_cmp_function: Option<Value>,
+    pub(crate) user_hash_function: Option<Value>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+impl HashTableTestAlias {
+    pub fn user_cmp_function_copied(&self) -> Option<Value> {
+        self.user_cmp_function
+    }
+
+    pub fn user_hash_function_copied(&self) -> Option<Value> {
+        self.user_hash_function
+    }
+}
+
+pub(super) fn reset_collections_thread_locals() {
+    HASH_TABLE_TEST_ALIASES.with(|slot| slot.reset(HashTableTestRegistry::default()));
+}
+
+/// Carrier park: forget the installed hash-table-test registry handle (a
+/// plain store). The World's registry stays alive through its Contexts.
+pub(super) fn park_collections_thread_locals() {
+    HASH_TABLE_TEST_ALIASES.with(HeapRegistrySlot::park);
+}
+
+/// Root the custom comparison/hash closures registered via
+/// `define-hash-table-test`. They live in the Context-owned registry selected by this thread, so
+/// without rooting them the GC sweeps a still-referenced closure and the next
+/// custom-test `gethash`/`puthash` calls a freed function (use-after-free).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn collect_hash_table_test_registry_gc_roots(
+    registry: &HashTableTestRegistryHandle,
+    group: &mut Vec<Value>,
+) {
+    for alias in registry.borrow().aliases.values() {
+        if let Some(f) = alias.user_cmp_function {
+            group.push(f);
+        }
+        if let Some(f) = alias.user_hash_function {
+            group.push(f);
+        }
+    }
+}
+
+pub(crate) type HashTableTestRegistryHandle = HeapRegistryHandle<HashTableTestRegistry>;
+
+pub(crate) fn current_hash_table_test_registry_handle() -> HashTableTestRegistryHandle {
+    HASH_TABLE_TEST_ALIASES.with(HeapRegistrySlot::current)
+}
+
+pub(crate) fn install_hash_table_test_registry_handle(handle: &HashTableTestRegistryHandle) {
+    HASH_TABLE_TEST_ALIASES.with(|slot| slot.install(handle));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn collect_hash_table_test_alias_gc_roots(group: &mut Vec<Value>) {
+    collect_hash_table_test_registry_gc_roots(&current_hash_table_test_registry_handle(), group);
+}
+
+fn invalid_hash_table_keyword_argument(arg: Value) -> Flow {
+    signal(
+        "error",
+        vec![Value::string("Invalid keyword argument"), arg],
+    )
+}
+
+fn hash_test_from_designator(value: &Value, mode: SymbolMode) -> Option<HashTableTest> {
+    HashTableTest::from_symbol_value(
+        &value
+            .as_symbol_id(mode)
+            .map(Value::from_sym_id)
+            .unwrap_or(*value),
+    )
+}
+
+fn hash_test_from_user_test_pair(
+    test: &Value,
+    hash: &Value,
+    mode: SymbolMode,
+) -> Option<HashTableTest> {
+    let test_name = test.as_symbol_name(mode)?;
+    let hash_name = hash.as_symbol_name(mode)?;
+    match (test_name, hash_name) {
+        ("eq", "sxhash-eq") => Some(HashTableTest::Eq),
+        ("eql", "sxhash-eql") => Some(HashTableTest::Eql),
+        ("equal", "sxhash-equal") => Some(HashTableTest::Equal),
+        _ => None,
+    }
+}
+
+fn register_hash_table_test_alias(name: &str, alias: HashTableTestAlias) {
+    HASH_TABLE_TEST_ALIASES.with(|slot| slot.borrow_mut().aliases.insert(name.to_string(), alias));
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn lookup_hash_table_test_alias(name: &str) -> Option<HashTableTestAlias> {
+    HASH_TABLE_TEST_ALIASES.with(|slot| slot.borrow().aliases.get(name).cloned())
+}
+
+pub(crate) fn maybe_resize_hash_table_for_insert(
+    table: &mut LispHashTable,
+    inserting_new_key: bool,
+) {
+    if !inserting_new_key {
+        return;
+    }
+    let current_size = usize::try_from(table.size.max(0)).unwrap_or(usize::MAX);
+    if table.data.len() < current_size {
+        return;
+    }
+
+    // Match Emacs growth policy: zero-sized tables grow to 6 slots on first
+    // insertion; small tables then grow by 4x (up to size 64), larger tables
+    // grow by 2x.
+    let min_size = 6_i64;
+    let base = table.size.max(min_size).min(i64::MAX / 2);
+    table.size = if table.size == 0 {
+        min_size
+    } else if base <= 64 {
+        base.saturating_mul(4)
+    } else {
+        base.saturating_mul(2)
+    };
+    // `size` is the GNU-visible logical allocation size, not a requirement to
+    // reserve every Rust-side index to the same capacity. A single Lisp entry
+    // is mirrored across several maps/vectors; eagerly reserving all of them at
+    // each logical growth boundary multiplies otherwise-unused capacity. Let
+    // each backing collection grow with the entries actually inserted.
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_define_hash_table_test(args: Vec<Value>) -> EvalResult {
+    define_hash_table_test_with_symbols(args, SymbolMode::Bare)
+}
+
+#[doc(hidden)]
+pub fn builtin_define_hash_table_test_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    define_hash_table_test_with_symbols(args, eval.symbol_mode())
+}
+
+fn define_hash_table_test_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
+    expect_args("define-hash-table-test", &args, 3)?;
+    let Some(alias_name) = args[0].as_symbol_name(mode) else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), args[0]],
+        ));
+    };
+    let standard_test = hash_test_from_user_test_pair(&args[1], &args[2], mode)
+        .or_else(|| hash_test_from_designator(&args[1], mode));
+    // GNU chooses built-in tests only from make-hash-table's :test NAME.
+    // A custom NAME always retains both callbacks, even when its comparison
+    // designator is eq, eql, or equal. Keep the storage-test classification;
+    // user callbacks select the Lisp path independently of that classification.
+    let user_test = neovm_value::hashtab::hash_test_parity_enabled() || standard_test.is_none();
+    register_hash_table_test_alias(
+        alias_name,
+        HashTableTestAlias {
+            standard_test,
+            user_cmp_function: user_test.then_some(args[1]),
+            user_hash_function: user_test.then_some(args[2]),
+        },
+    );
+    Ok(Value::list(vec![args[1], args[2]]))
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_make_hash_table(args: Vec<Value>) -> EvalResult {
+    builtin_make_hash_table_slice(&args)
+}
+
+pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
+    make_hash_table_with_symbols(args, SymbolMode::Bare)
+}
+
+#[doc(hidden)]
+pub fn builtin_make_hash_table_in_state(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    make_hash_table_with_symbols(args, eval.symbol_mode())
+}
+
+fn make_hash_table_with_symbols(args: &[Value], mode: SymbolMode) -> EvalResult {
+    if !args.len().is_multiple_of(2) {
+        return Err(signal(
+            "error",
+            vec![Value::string("Odd number of arguments")],
+        ));
+    }
+
+    let mut test_arg = Value::NIL;
+    let mut weakness_arg = Value::NIL;
+    let mut size_arg = Value::NIL;
+
+    let mut i = args.len();
+    while i >= 2 {
+        i -= 1;
+        let arg = mode.unwrap(args[i]);
+        i -= 1;
+        let kw = mode.unwrap(args[i]);
+        match HashTableMakeKeyword::from_symbol_value(&kw) {
+            Some(HashTableMakeKeyword::Test) => test_arg = arg,
+            Some(HashTableMakeKeyword::Weakness) => weakness_arg = arg,
+            Some(HashTableMakeKeyword::Size) => size_arg = arg,
+            Some(
+                HashTableMakeKeyword::RehashThreshold
+                | HashTableMakeKeyword::RehashSize
+                | HashTableMakeKeyword::Purecopy,
+            ) => {}
+            None => return Err(invalid_hash_table_keyword_argument(kw)),
+        }
+    }
+
+    let (test, test_name) = match test_arg.kind() {
+        ValueKind::Nil => (HashTableTest::Eql, None),
+        _ => {
+            let Some(name) = test_arg.as_symbol_name(mode) else {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("symbolp"), test_arg],
+                ));
+            };
+            let test = match HashTableTest::from_symbol_name(name) {
+                Some(test)
+                    if !neovm_value::hashtab::hash_test_parity_enabled()
+                        || test_arg.as_symbol_id(mode) == Some(intern(test.name())) =>
+                {
+                    test
+                }
+                _ => {
+                    if let Some(alias) = lookup_hash_table_test_alias(name) {
+                        alias.standard_test.unwrap_or(HashTableTest::Equal)
+                    } else {
+                        return Err(signal(
+                            "error",
+                            vec![Value::string("Invalid hash table test"), test_arg],
+                        ));
+                    }
+                }
+            };
+            let test_name = if neovm_value::hashtab::hash_test_parity_enabled() {
+                test_arg.as_symbol_id(mode)
+            } else {
+                Some(intern(name))
+            };
+            (test, test_name)
+        }
+    };
+
+    let size_hint = neovm_value::alloc::HashTableHint::try_from(size_arg)?;
+
+    let weakness = match weakness_arg.kind() {
+        ValueKind::Nil => None,
+        ValueKind::T => Some(HashTableWeakness::KeyAndValue),
+        _ => {
+            let Some(name) = weakness_arg.as_symbol_name(mode) else {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("Invalid hash table weakness"), weakness_arg],
+                ));
+            };
+            match HashTableWeakness::from_symbol_name(name) {
+                Some(weakness) => Some(weakness),
+                None => {
+                    return Err(signal(
+                        "error",
+                        vec![Value::string("Invalid hash table weakness"), weakness_arg],
+                    ));
+                }
+            }
+        }
+    };
+
+    let size = neovm_value::alloc::HashTableSize::try_from(size_hint)?;
+    let table = Value::try_hash_table_with_options(test, size, weakness)?;
+    if table.is_hash_table() {
+        let _ = table.with_hash_table_mut(|ht| {
+            ht.test_name = test_name;
+            if let Some(name_id) = test_name
+                && !(neovm_value::hashtab::hash_test_parity_enabled()
+                    && HashTableTest::from_symbol_name(resolve_sym(name_id))
+                        .is_some_and(|test| name_id == intern(test.name())))
+                && let Some(alias) = lookup_hash_table_test_alias(resolve_sym(name_id))
+            {
+                ht.user_cmp_function = alias.user_cmp_function;
+                ht.user_hash_function = alias.user_hash_function;
+            }
+        });
+    }
+    Ok(table)
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[doc(hidden)]
+pub fn builtin_gethash(args: Vec<Value>) -> EvalResult {
+    builtin_gethash_with_symbols(args, false)
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_gethash_with_symbols(
+    args: Vec<Value>,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    expect_min_args("gethash", &args, 2)?;
+    let default = args.get(2).copied().unwrap_or(Value::NIL);
+    builtin_gethash_values(args[0], args[1], default, symbols_with_pos_enabled)
+}
+
+#[doc(hidden)]
+pub fn builtin_gethash_3(
+    eval: &mut super::eval::Context,
+    key_value: Value,
+    table: Value,
+    default: Value,
+) -> EvalResult {
+    if let Some(result) = builtin_gethash_user_defined(eval, key_value, table, default)? {
+        return Ok(result);
+    }
+    builtin_gethash_values(key_value, table, default, eval.symbols_with_pos_enabled)
+}
+
+fn table_user_defined_test(table: &LispHashTable) -> Option<(Value, Value)> {
+    Some((table.user_cmp_function?, table.user_hash_function?))
+}
+
+/// Whether `table` is a hash table whose test runs Lisp (made with
+/// `define-hash-table-test`): exactly the tables `gethash`/`puthash` send
+/// through their user-defined path before the plain lookup.
+pub(crate) fn hash_table_has_user_test(table: Value) -> bool {
+    table
+        .as_hash_table()
+        .is_some_and(|ht| table_user_defined_test(ht).is_some())
+}
+
+fn check_mutable_hash_table(table: Value) -> Result<(), Flow> {
+    // Rev R2: the nesting count replaces the bool; GNU's table-level rule
+    // carries over — any owner's mutation signals while any owner is inside
+    // a user test or hash function on this table (depth > 0).
+    if table
+        .as_hash_table()
+        .is_some_and(|ht| ht.test_depth.load(std::sync::atomic::Ordering::Acquire) != 0)
+    {
+        return Err(signal(
+            "error",
+            vec![Value::string("hash table test modifies table"), table],
+        ));
+    }
+    Ok(())
+}
+
+fn hash_table_user_defined_call(
+    eval: &mut super::eval::Context,
+    table: Value,
+    function: Value,
+    args: impl Into<LispArgVec>,
+) -> EvalResult {
+    if neovm_value::hashtab::hash_test_parity_enabled() {
+        return super::hash_user_callback::with_user_test_guard(eval, table, |eval| {
+            eval.apply(function, args)
+        });
+    }
+    if table
+        .as_hash_table()
+        .is_some_and(|ht| ht.test_depth.load(std::sync::atomic::Ordering::Acquire) != 0)
+    {
+        return eval.apply(function, args);
+    }
+
+    let _ = table
+        .with_hash_table_mut(|ht| ht.test_depth.store(1, std::sync::atomic::Ordering::Release));
+    let result = eval.apply(function, args);
+    let _ = table
+        .with_hash_table_mut(|ht| ht.test_depth.store(0, std::sync::atomic::Ordering::Release));
+    result
+}
+
+fn hash_table_user_hash(
+    eval: &mut super::eval::Context,
+    table: Value,
+    hash_function: Value,
+    key: Value,
+) -> EvalResult {
+    let mut args = LispArgVec::new();
+    args.push(key);
+    let hash = hash_table_user_defined_call(eval, table, hash_function, args)?;
+    Ok(match hash.kind() {
+        ValueKind::Fixnum(n) => Value::fixnum(n),
+        _ => Value::fixnum(neovm_value::hashtab::sxhash_for(
+            &hash,
+            HashTableTest::Equal,
+            eval.symbol_mode(),
+        )),
+    })
+}
+
+fn hash_table_user_keys_equal(
+    eval: &mut super::eval::Context,
+    table: Value,
+    cmp_function: Value,
+    a: Value,
+    b: Value,
+) -> EvalResult {
+    let mut args = LispArgVec::new();
+    args.push(a);
+    args.push(b);
+    hash_table_user_defined_call(eval, table, cmp_function, args)
+}
+
+/// The user-defined hash of a key already stored in TABLE, asking the user's
+/// function only the first time.
+///
+/// GNU keeps every key's hash in the table and compares integers; ours had to
+/// call the user's Lisp hash function once per candidate, so a lookup cost one
+/// Lisp call per entry and grew with the table. Recording the answer makes a
+/// lookup one call plus integer compares.
+fn hash_table_stored_user_hash(
+    eval: &mut super::eval::Context,
+    table: Value,
+    hash_function: Value,
+    stored_key: &HashKey,
+    candidate: Value,
+) -> Result<Value, Flow> {
+    if let Some(cached) = table
+        .as_hash_table()
+        .and_then(|ht| ht.data.user_hash(stored_key))
+    {
+        return Ok(Value::fixnum(cached));
+    }
+    let hash = hash_table_user_hash(eval, table, hash_function, candidate)?;
+    if let Some(bits) = hash.as_fixnum() {
+        let key = stored_key.clone();
+        let _ = table.with_hash_table_mut(|ht| ht.data.set_user_hash(key, bits));
+    }
+    Ok(hash)
+}
+
+/// The stored keys whose remembered hash equals WANTED, or `None` when some
+/// live key has never been hashed.
+///
+/// With every hash remembered, a lookup needs no snapshot of the table and no
+/// clone of it: the keys that could match are found by comparing integers, and
+/// only those few are handed to the user's equality function. The first
+/// lookup after a key is stored still takes the slow path below, which is what
+/// fills this in.
+fn user_test_candidates_by_hash(table: Value, wanted: i64) -> (Vec<(HashKey, Value)>, bool) {
+    let Some(ht) = table.as_hash_table() else {
+        return (Vec::new(), true);
+    };
+    // GNU reaches the keys that hash alike through a bucket vector and a
+    // next-chain (`hash_find_with_hash', fns.c:5086-5100) rather than by
+    // walking the table, which is why its lookup is flat in the table size.
+    // `user_candidates' is that bucket.
+    //
+    // The `contains_key' filter is deliberate belt-and-braces: every removal
+    // path drops the memo, so a bucket should never name a dead key, but if
+    // one ever did this turns the bug into a slower answer rather than a
+    // wrong one.
+    let candidates = ht
+        .data
+        .user_candidates(wanted)
+        .iter()
+        .filter(|key| ht.data.contains_key(key))
+        .map(|key| (key.clone(), hash_key_to_visible_value(ht, key)))
+        .collect();
+    (candidates, ht.data.user_hash_incomplete())
+}
+
+fn builtin_gethash_user_defined(
+    eval: &mut super::eval::Context,
+    key_value: Value,
+    table: Value,
+    default: Value,
+) -> Result<Option<Value>, Flow> {
+    let ValueKind::Veclike(VecLikeType::HashTable) = table.kind() else {
+        return Ok(None);
+    };
+    let ht_ref = table.as_hash_table().unwrap();
+    let Some((cmp_function, hash_function)) = table_user_defined_test(ht_ref) else {
+        return Ok(None);
+    };
+    let wanted = hash_table_user_hash(eval, table, hash_function, key_value)?;
+    if let Some(wanted_bits) = wanted.as_fixnum() {
+        // Whatever hashes are already remembered answer without cloning the
+        // table or rooting a copy of every entry: only the keys that hash
+        // alike reach the user's equality function. A key first seen here has
+        // no remembered hash, so a miss among these falls through to the walk
+        // below, which records one as it goes.
+        let (candidates, unknown) = user_test_candidates_by_hash(table, wanted_bits);
+        if !candidates.is_empty() {
+            let root_scope = eval.save_specpdl_roots();
+            for (_, candidate) in &candidates {
+                eval.push_specpdl_root(*candidate);
+            }
+            let matched = (|| -> Result<Option<Value>, Flow> {
+                for (key, candidate) in &candidates {
+                    if hash_table_user_keys_equal(eval, table, cmp_function, key_value, *candidate)?
+                        .is_truthy()
+                    {
+                        return Ok(table
+                            .as_hash_table()
+                            .and_then(|ht| ht.data.get(key).copied()));
+                    }
+                }
+                Ok(None)
+            })();
+            eval.restore_specpdl_roots(root_scope);
+            let matched = matched?;
+            if matched.is_some() || !unknown {
+                return Ok(Some(matched.unwrap_or(default)));
+            }
+        } else if !unknown {
+            return Ok(Some(default));
+        }
+    }
+
+    let ht = table.as_hash_table().unwrap().clone();
+    let root_scope = eval.save_specpdl_roots();
+    eval.push_specpdl_root(hash_snapshot_root_holder(&ht));
+    let result = (|| -> Result<Option<Value>, Flow> {
+        let wanted_hash = wanted;
+        for key in ht.live_hash_keys_in_slot_order() {
+            if !ht.data.contains_key(key) {
+                continue;
+            }
+            let candidate = hash_key_to_visible_value(&ht, key);
+            if hash_table_stored_user_hash(eval, table, hash_function, key, candidate)?
+                != wanted_hash
+            {
+                continue;
+            }
+            if hash_table_user_keys_equal(eval, table, cmp_function, key_value, candidate)?
+                .is_truthy()
+            {
+                return Ok(Some(ht.data.get(key).copied().unwrap_or(default)));
+            }
+        }
+        Ok(Some(default))
+    })();
+    eval.restore_specpdl_roots(root_scope);
+    result
+}
+
+/// Thread every live (visible-key . value) of a hash-table snapshot onto one
+/// heap list: a SINGLE root keeps the whole snapshot alive while user-defined
+/// hash/equality functions run arbitrary Lisp that may remhash entries from
+/// the live (rooted) table — after which the snapshot's copies would be
+/// unreachable and a GC would free them mid-iteration.
+fn hash_snapshot_root_holder(ht: &LispHashTable) -> Value {
+    let mut holder = Value::NIL;
+    for key in ht.live_hash_keys_in_slot_order() {
+        if let Some(value) = ht.data.get(key) {
+            holder = Value::cons(
+                hash_key_to_visible_value(ht, key),
+                Value::cons(*value, holder),
+            );
+        }
+    }
+    holder
+}
+
+pub(crate) fn builtin_gethash_values(
+    key_value: Value,
+    table: Value,
+    default: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    match table.kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            let ht = table.as_hash_table().unwrap();
+            Ok(ht
+                .data
+                .try_lookup(key_value, ht.test, symbols_with_pos_enabled)?
+                .cloned()
+                .unwrap_or(default))
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), table],
+        )),
+    }
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[doc(hidden)]
+pub fn builtin_puthash(args: Vec<Value>) -> EvalResult {
+    builtin_puthash_with_symbols(args, false)
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_puthash_with_symbols(
+    args: Vec<Value>,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    expect_args("puthash", &args, 3)?;
+    builtin_puthash_values(args[0], args[1], args[2], symbols_with_pos_enabled)
+}
+
+#[doc(hidden)]
+pub fn builtin_puthash_3(
+    eval: &mut super::eval::Context,
+    key_value: Value,
+    value: Value,
+    table: Value,
+) -> EvalResult {
+    if builtin_puthash_user_defined(eval, key_value, value, table)?.is_some() {
+        return Ok(value);
+    }
+    builtin_puthash_values(key_value, value, table, eval.symbols_with_pos_enabled)
+}
+
+fn builtin_puthash_user_defined(
+    eval: &mut super::eval::Context,
+    key_value: Value,
+    value: Value,
+    table: Value,
+) -> Result<Option<()>, Flow> {
+    let ValueKind::Veclike(VecLikeType::HashTable) = table.kind() else {
+        return Ok(None);
+    };
+    let ht_ref = table.as_hash_table().unwrap();
+    check_mutable_hash_table(table)?;
+    let Some((cmp_function, hash_function)) = table_user_defined_test(ht_ref) else {
+        return Ok(None);
+    };
+    let wanted = hash_table_user_hash(eval, table, hash_function, key_value)?;
+    // As in the lookup: the hashes already remembered decide which stored keys
+    // can match, without cloning the table or rooting a copy of every entry.
+    if let Some(wanted_bits) = wanted.as_fixnum() {
+        let (candidates, unknown) = user_test_candidates_by_hash(table, wanted_bits);
+        let root_scope = eval.save_specpdl_roots();
+        for (_, candidate) in &candidates {
+            eval.push_specpdl_root(*candidate);
+        }
+        let matched = (|| -> Result<Option<HashKey>, Flow> {
+            for (key, candidate) in &candidates {
+                if hash_table_user_keys_equal(eval, table, cmp_function, key_value, *candidate)?
+                    .is_truthy()
+                {
+                    return Ok(Some(key.clone()));
+                }
+            }
+            Ok(None)
+        })();
+        eval.restore_specpdl_roots(root_scope);
+        let matched = matched?;
+        if matched.is_some() || !unknown {
+            let storage_key = matched.unwrap_or_else(|| key_value.to_hash_key(&HashTableTest::Eq));
+            let _ = table.with_hash_table_mut(|ht| {
+                if let Some(slot) = ht.data.get_mut(&storage_key) {
+                    *slot = value;
+                } else {
+                    maybe_resize_hash_table_for_insert(ht, true);
+                    ht.insert(storage_key.clone(), key_value, value);
+                }
+                // Remember the new key's hash, so a later lookup finds it
+                // without asking the user's function again.
+                ht.data.set_user_hash(storage_key, wanted_bits);
+            });
+            return Ok(Some(()));
+        }
+    }
+
+    let ht_snapshot = table.as_hash_table().unwrap().clone();
+    let root_scope = eval.save_specpdl_roots();
+    eval.push_specpdl_root(hash_snapshot_root_holder(&ht_snapshot));
+    let existing_key = (|| -> Result<Option<HashKey>, Flow> {
+        let wanted_hash = wanted;
+        for key in ht_snapshot.live_hash_keys_in_slot_order() {
+            if !ht_snapshot.data.contains_key(key) {
+                continue;
+            }
+            let candidate = hash_key_to_visible_value(&ht_snapshot, key);
+            if hash_table_stored_user_hash(eval, table, hash_function, key, candidate)?
+                != wanted_hash
+            {
+                continue;
+            }
+            if hash_table_user_keys_equal(eval, table, cmp_function, key_value, candidate)?
+                .is_truthy()
+            {
+                return Ok(Some(key.clone()));
+            }
+        }
+        Ok(None)
+    })();
+    eval.restore_specpdl_roots(root_scope);
+    let existing_key = existing_key?;
+
+    let storage_key = existing_key.unwrap_or_else(|| key_value.to_hash_key(&HashTableTest::Eq));
+    let _ = table.with_hash_table_mut(|ht| {
+        if let Some(slot) = ht.data.get_mut(&storage_key) {
+            *slot = value;
+        } else {
+            maybe_resize_hash_table_for_insert(ht, true);
+            ht.insert(storage_key.clone(), key_value, value);
+        }
+        // Record here too, not only on the fast arm above. `unknown' is
+        // derived from "every live key has a remembered hash", so a single
+        // insert that skipped this would make every later lookup take the
+        // full walk for the rest of the table's life.
+        if let Some(wanted_bits) = wanted.as_fixnum() {
+            ht.data.set_user_hash(storage_key, wanted_bits);
+        }
+    });
+    Ok(Some(()))
+}
+
+fn builtin_puthash_values(
+    key_value: Value,
+    value: Value,
+    table: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    if neovm_value::tagged::gc::concurrent_hash_mutation_active() {
+        return builtin_puthash_values_concurrent(
+            key_value,
+            value,
+            table,
+            symbols_with_pos_enabled,
+        );
+    }
+    match table.kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(table)?;
+            let test = table.as_hash_table().unwrap().test;
+            // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
+            unsafe {
+                table.with_hash_table_mut_inactive(|ht| -> Result<(), Flow> {
+                    match ht
+                        .data
+                        .try_probe_for_insert(key_value, test, symbols_with_pos_enabled)?
+                    {
+                        HashProbe::Found(slot) => {
+                            if let Some(stored) = ht.data.slot_value_mut(slot) {
+                                *stored = value;
+                            }
+                        }
+                        HashProbe::Absent(hash) => {
+                            maybe_resize_hash_table_for_insert(ht, true);
+                            let key = key_value.to_hash_key_swp(&test, symbols_with_pos_enabled);
+                            ht.data.insert_absent(hash, key, key_value, value);
+                        }
+                    }
+                    Ok(())
+                })
+            }
+            .unwrap_or(Ok(()))?;
+            Ok(value)
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), table],
+        )),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn builtin_puthash_values_concurrent(
+    key_value: Value,
+    value: Value,
+    table: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    match table.kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(table)?;
+            let test = table.as_hash_table().unwrap().test;
+            table
+                .with_hash_table_mut_concurrent(|ht| -> Result<(), Flow> {
+                    match ht
+                        .data
+                        .try_probe_for_insert(key_value, test, symbols_with_pos_enabled)?
+                    {
+                        HashProbe::Found(slot) => {
+                            if let Some(stored) = ht.data.slot_value_mut(slot) {
+                                *stored = value;
+                            }
+                        }
+                        HashProbe::Absent(hash) => {
+                            maybe_resize_hash_table_for_insert(ht, true);
+                            let key = key_value.to_hash_key_swp(&test, symbols_with_pos_enabled);
+                            ht.data.insert_absent(hash, key, key_value, value);
+                        }
+                    }
+                    Ok(())
+                })
+                .unwrap_or(Ok(()))?;
+            Ok(value)
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), table],
+        )),
+    }
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[doc(hidden)]
+pub fn builtin_remhash(args: Vec<Value>) -> EvalResult {
+    builtin_remhash_with_symbols(args, false)
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_remhash_with_symbols(
+    args: Vec<Value>,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    expect_args("remhash", &args, 2)?;
+    builtin_remhash_values(args[0], args[1], symbols_with_pos_enabled)
+}
+
+#[doc(hidden)]
+pub fn builtin_remhash_2(
+    eval: &mut super::eval::Context,
+    key_value: Value,
+    table: Value,
+) -> EvalResult {
+    if builtin_remhash_user_defined(eval, key_value, table)?.is_some() {
+        return Ok(Value::NIL);
+    }
+    builtin_remhash_values(key_value, table, eval.symbols_with_pos_enabled)
+}
+
+fn builtin_remhash_user_defined(
+    eval: &mut super::eval::Context,
+    key_value: Value,
+    table: Value,
+) -> Result<Option<()>, Flow> {
+    let ValueKind::Veclike(VecLikeType::HashTable) = table.kind() else {
+        return Ok(None);
+    };
+    let ht_ref = table.as_hash_table().unwrap();
+    let Some((cmp_function, hash_function)) = table_user_defined_test(ht_ref) else {
+        return Ok(None);
+    };
+    check_mutable_hash_table(table)?;
+    // Same fast arm as `gethash'/`puthash': the remembered hashes pick the
+    // candidates, so only the keys that hash alike reach the user's equality
+    // function and the table is neither cloned nor snapshot-rooted. Without
+    // this, `remhash' walked and re-hashed every entry -- it was the most
+    // expensive of the three by an order of magnitude.
+    let wanted = hash_table_user_hash(eval, table, hash_function, key_value)?;
+    if let Some(wanted_bits) = wanted.as_fixnum() {
+        let (candidates, unknown) = user_test_candidates_by_hash(table, wanted_bits);
+        let root_scope = eval.save_specpdl_roots();
+        for (_, candidate) in &candidates {
+            eval.push_specpdl_root(*candidate);
+        }
+        let matched = (|| -> Result<Option<HashKey>, Flow> {
+            for (key, candidate) in &candidates {
+                if hash_table_user_keys_equal(eval, table, cmp_function, key_value, *candidate)?
+                    .is_truthy()
+                {
+                    return Ok(Some(key.clone()));
+                }
+            }
+            Ok(None)
+        })();
+        eval.restore_specpdl_roots(root_scope);
+        if let Some(storage_key) = matched? {
+            let _ = table.with_hash_table_mut(|ht| {
+                let _ = ht.data.remove(&storage_key);
+            });
+            return Ok(Some(()));
+        }
+        if !unknown {
+            return Ok(Some(()));
+        }
+    }
+
+    let ht_snapshot = table.as_hash_table().unwrap().clone();
+    let root_scope = eval.save_specpdl_roots();
+    eval.push_specpdl_root(hash_snapshot_root_holder(&ht_snapshot));
+    let existing_key = (|| -> Result<Option<HashKey>, Flow> {
+        let wanted_hash = wanted;
+        let mut existing_key = None;
+        for key in ht_snapshot.live_hash_keys_in_slot_order() {
+            if !ht_snapshot.data.contains_key(key) {
+                continue;
+            }
+            let candidate = hash_key_to_visible_value(&ht_snapshot, key);
+            if hash_table_stored_user_hash(eval, table, hash_function, key, candidate)?
+                != wanted_hash
+            {
+                continue;
+            }
+            if hash_table_user_keys_equal(eval, table, cmp_function, key_value, candidate)?
+                .is_truthy()
+            {
+                existing_key = Some(key.clone());
+                break;
+            }
+        }
+        Ok(existing_key)
+    })();
+    eval.restore_specpdl_roots(root_scope);
+    let existing_key = existing_key?;
+
+    if let Some(storage_key) = existing_key {
+        let _ = table.with_hash_table_mut(|ht| {
+            let _ = ht.data.remove(&storage_key);
+        });
+    }
+    Ok(Some(()))
+}
+
+#[doc(hidden)]
+pub fn builtin_remhash_values(
+    key_value: Value,
+    table: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    if neovm_value::tagged::gc::concurrent_hash_mutation_active() {
+        return builtin_remhash_values_concurrent(key_value, table, symbols_with_pos_enabled);
+    }
+    match table.kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(table)?;
+            let test = table.as_hash_table().unwrap().test;
+            // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
+            unsafe {
+                table.with_hash_table_mut_inactive(|ht| {
+                    ht.data
+                        .try_remove_by_value(key_value, test, symbols_with_pos_enabled)
+                        .map(|_| ())
+                })
+            }
+            .unwrap_or(Ok(()))?;
+            Ok(Value::NIL)
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), table],
+        )),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn builtin_remhash_values_concurrent(
+    key_value: Value,
+    table: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    match table.kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(table)?;
+            let test = table.as_hash_table().unwrap().test;
+            table
+                .with_hash_table_mut_concurrent(|ht| {
+                    ht.data
+                        .try_remove_by_value(key_value, test, symbols_with_pos_enabled)
+                        .map(|_| ())
+                })
+                .unwrap_or(Ok(()))?;
+            Ok(Value::NIL)
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), table],
+        )),
+    }
+}
+
+#[doc(hidden)]
+pub fn builtin_clrhash(args: Vec<Value>) -> EvalResult {
+    if neovm_value::tagged::gc::concurrent_hash_mutation_active() {
+        return builtin_clrhash_concurrent(args);
+    }
+    expect_args("clrhash", &args, 1)?;
+    match args[0].kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(args[0])?;
+            // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
+            let _ = unsafe {
+                args[0].with_hash_table_mut_inactive(|ht| {
+                    ht.data.clear();
+                })
+            };
+            // Be compatible with GNU Emacs (and XEmacs): return the table.
+            Ok(args[0])
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), args[0]],
+        )),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn builtin_clrhash_concurrent(args: Vec<Value>) -> EvalResult {
+    expect_args("clrhash", &args, 1)?;
+    match args[0].kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(args[0])?;
+            let _ = args[0].with_hash_table_mut_concurrent(|ht| {
+                ht.data.clear();
+            });
+            // Be compatible with GNU Emacs (and XEmacs): return the table.
+            Ok(args[0])
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), args[0]],
+        )),
+    }
+}
+
+#[doc(hidden)]
+pub fn builtin_hash_table_count(args: Vec<Value>) -> EvalResult {
+    expect_args("hash-table-count", &args, 1)?;
+    match args[0].kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => Ok(Value::fixnum(
+            args[0].as_hash_table().unwrap().data.len() as i64,
+        )),
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), args[0]],
+        )),
+    }
+}
+
+#[doc(hidden)]
+pub fn builtin_char_to_string(args: Vec<Value>) -> EvalResult {
+    expect_args("char-to-string", &args, 1)?;
+    let code = expect_character_code(&args[0])? as u32;
+    if code <= 0x7f {
+        // ASCII → unibyte
+        Ok(Value::heap_string(
+            neovm_value::heap_types::LispString::from_unibyte(vec![code as u8]),
+        ))
+    } else {
+        // GNU Fchar_to_string uses CHAR_STRING followed by
+        // make_string_from_bytes.  Non-ASCII Unicode, extended Emacs
+        // characters, and raw-byte characters therefore all produce
+        // multibyte strings containing Emacs-internal bytes.
+        let mut buf = [0u8; neovm_value::emacs_char::MAX_MULTIBYTE_LENGTH];
+        let len = neovm_value::emacs_char::char_string(code, &mut buf);
+        Ok(Value::heap_string(
+            neovm_value::heap_types::LispString::from_emacs_bytes(buf[..len].to_vec()),
+        ))
+    }
+}
+
+#[doc(hidden)]
+pub fn builtin_string_to_char(args: Vec<Value>) -> EvalResult {
+    expect_args("string-to-char", &args, 1)?;
+    let string = args[0].as_lisp_string().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), args[0]],
+        )
+    })?;
+    // The first character only (GNU `Fstring_to_char': `STRING_CHAR' of the
+    // data); decoding the whole string made this O(length).
+    let first = super::lisp_string_char_at(string, 0).unwrap_or(0);
+    Ok(Value::fixnum(first as i64))
+}
+
+// ===========================================================================
+// Property lists
+// ===========================================================================
+
+#[doc(hidden)]
+pub fn builtin_plist_get(args: Vec<Value>) -> EvalResult {
+    builtin_plist_get_eq_swp(args, false)
+}
+
+/// `plist-get` taking its arguments as a SLICE, so a call allocates nothing.
+///
+/// The default native subr shape is `SubrFn::Many`, whose dispatch arm does
+/// `args[args_start..args_start + nargs].to_vec()` -- a heap allocation on
+/// EVERY call, purely to hand over the arguments. GNU has no equivalent: its
+/// subrs receive `Lisp_Object`s directly, or a `Lisp_Object *` for MANY, and
+/// nothing conses to make a call.
+///
+/// `plist-get` is the single hottest builtin in org editing -- 57373 calls,
+/// 12.87% of all builtin calls, in a 40-iteration screenful loop -- because
+/// org-element stores node properties in plists. Every one of those was a
+/// `Vec` allocation for two arguments, feeding the GC cost that shows up as
+/// ~8-9% of org (jemalloc alone 3.3%).
+///
+/// `SubrFn::ManySlice` already existed and is already wired into the
+/// dispatcher (`apply`, `funcall`, `sort`, `string-match` use it); this just
+/// opts `plist-get` into it. The rare PREDICATE form still needs an owned
+/// `Vec` because the predicate can run Lisp that mutates the list mid-walk, so
+/// it delegates to the existing entry point.
+/// `plist-get` as a three-slot subr (an omitted PREDICATE arrives as nil).
+#[doc(hidden)]
+pub fn builtin_plist_get_3(
+    eval: &mut super::eval::Context,
+    plist: Value,
+    prop: Value,
+    predicate: Value,
+) -> EvalResult {
+    if predicate.is_nil() {
+        return Ok(
+            neovm_value::plist::plist_get_swp(plist, &prop, eval.symbols_with_pos_enabled)
+                .unwrap_or(Value::NIL),
+        );
+    }
+    builtin_plist_get_with_ctx(eval, vec![plist, prop, predicate])
+}
+
+pub(crate) fn builtin_plist_get_with_ctx(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("plist-get", &args, 2)?;
+    expect_max_args("plist-get", &args, 3)?;
+    if args.get(2).is_none_or(|value| value.is_nil()) {
+        return builtin_plist_get_eq_swp(args, eval.symbols_with_pos_enabled);
+    }
+
+    let plist = args[0];
+    let prop = args[1];
+    let predicate = args[2];
+    let roots = eval.save_specpdl_roots();
+    eval.push_specpdl_root(plist);
+    eval.push_specpdl_root(prop);
+    eval.push_specpdl_root(predicate);
+
+    // The predicate can setcdr the plist mid-walk, unlinking the interior
+    // cells this cursor still points at; root the moving cursor in one
+    // updatable slot so the remainder stays alive transitively (the GNU
+    // equivalent survives via conservative C-stack scanning of the tail).
+    // The cycle tortoise is compared by identity, so it is rooted too.
+    let cursor_slot = eval.push_specpdl_root_slot(Value::NIL);
+    let tortoise_slot = eval.push_specpdl_root_slot(Value::NIL);
+    let mut cursor = plist;
+    let mut cycle = neovm_value::plist::TailCycleCheck::new(cursor);
+    let plist_result = loop {
+        match cursor.kind() {
+            ValueKind::Cons => {
+                eval.set_specpdl_root_slot(&cursor_slot, cursor);
+                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise());
+                if !cursor.cons_cdr().is_cons() {
+                    break Ok(Value::NIL);
+                }
+                match eval.apply2(predicate, cursor.cons_car(), prop) {
+                    Ok(value) => {
+                        // GNU re-reads XCDR (tail) after the call: the
+                        // predicate may have replaced the value cell. GNU
+                        // dereferences a non-cons here; plist-get never
+                        // signals, so end the walk.
+                        let pair_cdr = cursor.cons_cdr();
+                        if !pair_cdr.is_cons() {
+                            break Ok(Value::NIL);
+                        }
+                        if value.is_truthy() {
+                            break Ok(pair_cdr.cons_car());
+                        }
+                        cursor = pair_cdr.cons_cdr();
+                        // FOR_EACH_TAIL_SAFE: a cycle just ends the walk.
+                        if cycle.step(cursor).is_some() {
+                            break Ok(Value::NIL);
+                        }
+                    }
+                    Err(err) => break Err(err),
+                }
+            }
+            _ => break Ok(Value::NIL),
+        }
+    };
+
+    eval.restore_specpdl_roots(roots);
+    plist_result
+}
+
+fn builtin_plist_get_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bool) -> EvalResult {
+    expect_min_args("plist-get", &args, 2)?;
+    expect_max_args("plist-get", &args, 3)?;
+    if args.get(2).is_some_and(|value| !value.is_nil()) {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), args[2]],
+        ));
+    }
+    Ok(
+        neovm_value::plist::plist_get_swp(args[0], &args[1], symbols_with_pos_enabled)
+            .unwrap_or(Value::NIL),
+    )
+}
+
+#[doc(hidden)]
+pub fn builtin_plist_put(args: Vec<Value>) -> EvalResult {
+    builtin_plist_put_eq_swp(args, false)
+}
+
+#[doc(hidden)]
+pub fn builtin_plist_put_with_ctx(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("plist-put", &args, 3)?;
+    expect_max_args("plist-put", &args, 4)?;
+    if args.get(3).is_none_or(|value| value.is_nil()) {
+        return builtin_plist_put_eq_swp(args, eval.symbols_with_pos_enabled);
+    }
+
+    let plist = args[0];
+    let key = args[1];
+    let new_val = args[2];
+    let predicate = args[3];
+    let roots = eval.save_specpdl_roots();
+    eval.push_specpdl_root(plist);
+    eval.push_specpdl_root(key);
+    eval.push_specpdl_root(new_val);
+    eval.push_specpdl_root(predicate);
+
+    // Root the moving cursor and the trailing prev cell across the
+    // predicate calls (see plist_get above); prev is written back to on
+    // the append path, so a freed prev would be a write to swept memory.
+    let cursor_slot = eval.push_specpdl_root_slot(Value::NIL);
+    let prev_slot = eval.push_specpdl_root_slot(Value::NIL);
+    let tortoise_slot = eval.push_specpdl_root_slot(Value::NIL);
+    let mut cursor = plist;
+    let mut prev = Value::NIL;
+    let mut cycle = neovm_value::plist::TailCycleCheck::new(cursor);
+    let plist_result = loop {
+        match cursor.kind() {
+            ValueKind::Cons => {
+                eval.set_specpdl_root_slot(&cursor_slot, cursor);
+                eval.set_specpdl_root_slot(&prev_slot, prev);
+                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise());
+                if !cursor.cons_cdr().is_cons() {
+                    break Err(signal(
+                        LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("plistp"), plist],
+                    ));
+                }
+
+                match eval.apply2(predicate, cursor.cons_car(), key) {
+                    Ok(value) => {
+                        // GNU re-reads XCDR (tail) after the call: the
+                        // predicate may have replaced the value cell.
+                        let entry_rest = cursor.cons_cdr();
+                        if value.is_truthy() {
+                            // Fsetcar (XCDR (tail), val) checks the cell.
+                            if !entry_rest.is_cons() {
+                                break Err(signal(
+                                    LispCondition::WrongTypeArgument,
+                                    vec![Value::symbol("consp"), entry_rest],
+                                ));
+                            }
+                            entry_rest.set_car(new_val);
+                            break Ok(plist);
+                        }
+                        // GNU dereferences a non-cons here; treat it as the
+                        // dotted tail it now is.
+                        if !entry_rest.is_cons() {
+                            break Err(signal(
+                                LispCondition::WrongTypeArgument,
+                                vec![Value::symbol("plistp"), plist],
+                            ));
+                        }
+                        prev = cursor;
+                        cursor = entry_rest.cons_cdr();
+                        if let Some(cycle_tail) = cycle.step(cursor) {
+                            break Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+                        }
+                    }
+                    Err(err) => break Err(err),
+                }
+            }
+            ValueKind::Nil => {
+                let new_cell = Value::cons(key, Value::cons(new_val, Value::NIL));
+                if prev.is_nil() {
+                    break Ok(new_cell);
+                }
+                prev.cons_cdr().set_cdr(new_cell);
+                break Ok(plist);
+            }
+            _ => {
+                break Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("plistp"), plist],
+                ));
+            }
+        }
+    };
+
+    eval.restore_specpdl_roots(roots);
+    plist_result
+}
+
+fn builtin_plist_put_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bool) -> EvalResult {
+    expect_min_args("plist-put", &args, 3)?;
+    expect_max_args("plist-put", &args, 4)?;
+    if args.get(3).is_some_and(|value| !value.is_nil()) {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), args[3]],
+        ));
+    }
+    let plist = args[0];
+    let key = args[1];
+    let new_val = args[2];
+
+    if plist.is_nil() {
+        return Ok(Value::list(vec![key, new_val]));
+    }
+
+    let mut cursor = plist;
+    let mut last_value_cell: Option<Value> = None;
+    let mut cycle = neovm_value::plist::TailCycleCheck::new(plist);
+
+    loop {
+        match cursor.kind() {
+            ValueKind::Cons => {
+                let entry_key = cursor.cons_car();
+                let entry_rest = cursor.cons_cdr();
+
+                match entry_rest.kind() {
+                    ValueKind::Cons => {
+                        if eq_value_swp(&entry_key, &key, symbols_with_pos_enabled) {
+                            entry_rest.set_car(new_val);
+                            return Ok(plist);
+                        }
+                        let value_cell = entry_rest;
+                        cursor = entry_rest.cons_cdr();
+                        last_value_cell = Some(value_cell);
+                        // GNU plist_put walks with FOR_EACH_TAIL.
+                        if let Some(cycle_tail) = cycle.step(cursor) {
+                            return Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+                        }
+                    }
+                    _ => {
+                        return Err(signal(
+                            LispCondition::WrongTypeArgument,
+                            vec![Value::symbol("plistp"), plist],
+                        ));
+                    }
+                }
+            }
+            ValueKind::Nil => {
+                if let Some(value_cell) = last_value_cell {
+                    let new_tail = Value::cons(key, Value::cons(new_val, Value::NIL));
+                    value_cell.set_cdr(new_tail);
+                    return Ok(plist);
+                }
+                return Ok(Value::list(vec![key, new_val]));
+            }
+            _ => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("plistp"), plist],
+                ));
+            }
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn builtin_plist_member(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let predicate = args
+        .get(2)
+        .and_then(|value| if value.is_nil() { None } else { Some(*value) });
+    if predicate.is_none() {
+        return plist_member_eq_swp(args, eval.symbols_with_pos_enabled);
+    }
+
+    expect_args_range("plist-member", &args, 2, 3)?;
+    let plist = args[0];
+    let prop = args[1];
+
+    // Root Values that survive across eval.apply() in the loop.
+    let roots = eval.save_specpdl_roots();
+    eval.push_specpdl_root(plist);
+    eval.push_specpdl_root(prop);
+    if let Some(p) = predicate {
+        eval.push_specpdl_root(p);
+    }
+
+    // Root the moving cursor and the cycle tortoise across the predicate
+    // calls (see plist_get).
+    let cursor_slot = eval.push_specpdl_root_slot(Value::NIL);
+    let tortoise_slot = eval.push_specpdl_root_slot(Value::NIL);
+    let mut cursor = plist;
+    let mut cycle = neovm_value::plist::TailCycleCheck::new(cursor);
+    let plist_result = loop {
+        match cursor.kind() {
+            ValueKind::Cons => {
+                eval.set_specpdl_root_slot(&cursor_slot, cursor);
+                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise());
+                let entry_key = cursor.cons_car();
+
+                let matches = if let Some(predicate) = &predicate {
+                    match eval.apply2(*predicate, entry_key, prop) {
+                        Ok(v) => v.is_truthy(),
+                        Err(e) => {
+                            break Err(e);
+                        }
+                    }
+                } else {
+                    eq_value(&entry_key, &prop)
+                };
+                if matches {
+                    break Ok(cursor);
+                }
+
+                // See `plist_member_eq` for the nil-terminator
+                // rule: an unpaired last key is a valid end per
+                // GNU, only dotted tails signal plistp. GNU reads
+                // XCDR (tail) after the predicate call.
+                let entry_rest = cursor.cons_cdr();
+                match entry_rest.kind() {
+                    ValueKind::Cons => {
+                        cursor = entry_rest.cons_cdr();
+                        if let Some(cycle_tail) = cycle.step(cursor) {
+                            break Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+                        }
+                    }
+                    ValueKind::Nil => {
+                        break Ok(Value::NIL);
+                    }
+                    _ => {
+                        break Err(signal(
+                            LispCondition::WrongTypeArgument,
+                            vec![Value::symbol("plistp"), plist],
+                        ));
+                    }
+                }
+            }
+            ValueKind::Nil => break Ok(Value::NIL),
+            _ => {
+                break Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("plistp"), plist],
+                ));
+            }
+        }
+    };
+    eval.restore_specpdl_roots(roots);
+    plist_result
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn plist_member_eq(args: Vec<Value>) -> EvalResult {
+    plist_member_eq_swp(args, false)
+}
+
+pub(crate) fn plist_member_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bool) -> EvalResult {
+    expect_args_range("plist-member", &args, 2, 3)?;
+    let plist = args[0];
+    let prop = args[1];
+    if args.get(2).is_some_and(|value| !value.is_nil()) {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), args[2]],
+        ));
+    }
+
+    // Mirrors GNU's `Fplist_member` / `plist_member_eq` (fns.c). Walks
+    // the plist two elements at a time looking for PROP. A nil tail at
+    // any step ends the walk cleanly and returns nil (not-found),
+    // matching GNU `FOR_EACH_TAIL`'s implicit break on non-cons. Only a
+    // non-nil improper tail (dotted list) signals `plistp`. GNU walks with
+    // FOR_EACH_TAIL, so a circular plist signals `circular-list`.
+    let mut cursor = plist;
+    let mut cycle = neovm_value::plist::TailCycleCheck::new(plist);
+    loop {
+        match cursor.kind() {
+            ValueKind::Cons => {
+                let entry_key = cursor.cons_car();
+                let entry_rest = cursor.cons_cdr();
+
+                if eq_value_swp(&entry_key, &prop, symbols_with_pos_enabled) {
+                    return Ok(cursor);
+                }
+
+                match entry_rest.kind() {
+                    ValueKind::Cons => {
+                        cursor = entry_rest.cons_cdr();
+                        if let Some(cycle_tail) = cycle.step(cursor) {
+                            return Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+                        }
+                    }
+                    ValueKind::Nil => {
+                        // Unpaired last key: valid end of plist per
+                        // GNU; return not-found.
+                        return Ok(Value::NIL);
+                    }
+                    _ => {
+                        // Dotted tail after a key: malformed plist.
+                        return Err(signal(
+                            LispCondition::WrongTypeArgument,
+                            vec![Value::symbol("plistp"), plist],
+                        ));
+                    }
+                }
+            }
+            ValueKind::Nil => return Ok(Value::NIL),
+            _ => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("plistp"), plist],
+                ));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/aset_string_in_place_test.rs"]
+mod aset_string_in_place_test;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_collections_test.rs"]
+mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/vector_storage_test.rs"]
+mod vector_storage_tests;
+
+#[cfg(test)]
+#[path = "tests/positioned_builtin_classes_test.rs"]
+mod positioned_builtin_classes_tests;
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    neovm_value::tls_fingerprint::mix(
+        h,
+        HASH_TABLE_TEST_ALIASES.with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),
+    );
+}

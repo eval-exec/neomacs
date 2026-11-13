@@ -8,7 +8,7 @@ use neovm_core::window::{SplitDirection, SplitPlacement};
 
 #[test]
 fn extract_menu_label_preserves_raw_unibyte_strings() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let raw = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
     let expected = raw
@@ -34,7 +34,7 @@ fn extract_menu_label_preserves_raw_unibyte_strings() {
 
 #[test]
 fn collect_from_keymap_includes_inherited_menu_bar_items() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
 
     let parent = make_sparse_list_keymap();
@@ -86,7 +86,7 @@ fn collect_from_keymap_includes_inherited_menu_bar_items() {
 
 #[test]
 fn collect_from_keymap_hides_inherited_undefined_menu_items() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
 
     let keymap = make_sparse_list_keymap();
@@ -148,7 +148,7 @@ fn collect_from_keymap_hides_inherited_undefined_menu_items() {
 /// suppress the global Edit menu.
 #[test]
 fn later_active_keymap_undefined_removes_earlier_menu_item() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
 
     let global_map = make_sparse_list_keymap();
@@ -197,12 +197,12 @@ fn later_active_keymap_undefined_removes_earlier_menu_item() {
 /// where the source keymap order differs from the requested final order.
 #[test]
 fn final_menu_items_follow_the_declared_order() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     eval.eval_str("(setq menu-bar-final-items '(completion inout signals help-menu))")
         .expect("set final menu order through the forwarded Lisp variable");
     assert_eq!(
-        eval.variable_value_by_name("menu-bar-final-items")
+        eval.default_value_only_by_name("menu-bar-final-items")
             .expect("menu-bar-final-items is bound")
             .cons_car()
             .as_bare_symbol_name(),
@@ -231,7 +231,7 @@ fn final_menu_items_follow_the_declared_order() {
 
 #[test]
 fn collect_from_keymap_descends_embedded_menu_bar_keymaps() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
 
     let keymap = make_sparse_list_keymap();
@@ -286,7 +286,7 @@ fn collect_from_keymap_descends_embedded_menu_bar_keymaps() {
 
 #[test]
 fn collect_tty_menu_bar_items_uses_selected_window_local_map() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
 
     let selected_buffer = eval.buffer_manager_mut().create_buffer("selected");
@@ -323,7 +323,7 @@ fn collect_tty_menu_bar_items_uses_selected_window_local_map() {
 
 #[test]
 fn menu_bar_item_cache_tracks_temporary_window_selection() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
 
     let buffer_a = eval.buffer_manager_mut().create_buffer("selection-a");
@@ -412,7 +412,7 @@ fn menu_bar_item_cache_tracks_temporary_window_selection() {
 /// active keymap within one buffer is cached for the same reason.
 #[test]
 fn menu_bar_item_cache_rebuilds_only_at_the_redisplay_invalidation_boundary() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
 
     let buffer_a = eval.buffer_manager_mut().create_buffer("cache-a");
@@ -530,7 +530,7 @@ fn menu_bar_item_cache_rebuilds_only_at_the_redisplay_invalidation_boundary() {
 /// that construction must therefore not discard the frame's prepared menu.
 #[test]
 fn offscreen_buffer_modified_state_does_not_rebuild_the_prepared_menu() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
 
     let visible = eval.buffer_manager_mut().create_buffer("visible-menu");

@@ -13,7 +13,7 @@ impl Drop for RestoreTerminal {
 }
 
 fn fixture() -> (Context, FrameId, FaceResolver, RestoreTerminal) {
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let restore = RestoreTerminal;
     context.set_gc_threshold(usize::MAX);
     pure::configure_terminal_runtime(pure::TerminalRuntimeConfig::interactive(

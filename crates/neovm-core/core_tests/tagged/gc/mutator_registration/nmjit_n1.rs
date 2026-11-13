@@ -16,6 +16,7 @@ use crate::tagged::value::TaggedValue;
 use std::cell::RefCell;
 use std::ops::ControlFlow;
 use std::rc::Rc;
+use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MissingFeature {

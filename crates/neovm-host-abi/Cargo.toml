@@ -8,3 +8,7 @@ repository.workspace = true
 description = "Host boundary contracts for NeoVM"
 
 [dependencies]
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

@@ -1,8 +1,9 @@
 //! Measurement contracts through the public evaluator/frame APIs.
 use neovm_core::emacs_core::{Context, Value};
+use neovm_core::window::DisplayFrameManagerExt;
 #[test]
 fn pixel_measurement_preserves_absolute_stretch_units() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()

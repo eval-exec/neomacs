@@ -29,8 +29,9 @@ use crate::display_row::transition::{
     DisplayRowTextWindowEmitContext, DisplayRowTransitionContinuation, VisualWrapBreak,
 };
 use crate::display_row::walk_state::{TextRowTransitionStatePolicy, WordWrapBreakCandidate};
-use crate::display_source::DisplaySourceStepChar;
-use crate::display_source::DisplaySourceStepItem;
+use crate::display_source::{
+    DisplaySourceResumeCursor, DisplaySourceStepChar, DisplaySourceStepItem,
+};
 use crate::neovm_bridge::LayoutBufferView;
 use crate::types::{LayoutCharPos0, WindowParams};
 
@@ -160,6 +161,7 @@ fn emit_word_wrap_rewind<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
         face_scan,
         row_y_positions,
         surface,
+        cursor_info,
         ..
     } = state;
     let action = BufferSourceWordWrapAction::new(break_candidate);
@@ -169,6 +171,11 @@ fn emit_word_wrap_rewind<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
         loop_context.content_x(),
     );
     source_render.restore_word_wrap_checkpoint(break_candidate);
+    cursor_info.rewind_word_wrap(
+        row_build.row_geometry.row(),
+        break_candidate,
+        loop_context.point_charpos(),
+    );
     action.restore_row_extend(row_build.row_extend, row_build.row_geometry);
     {
         let box_vertical_edges = source_render.trailing_box_run_terminal();
@@ -194,7 +201,7 @@ fn emit_word_wrap_rewind<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
         );
     }
     source_walk.rewind_source_consumption(
-        BufferSourceRewind::WordWrap(source_position),
+        BufferSourceRewind::WordWrap(break_candidate.source_cursor()),
         invisible_text_checkpoint,
     );
     source_walk
@@ -344,7 +351,9 @@ impl<'rows, 'request, 'emit, 'surface, 'face, FS: crate::neovm_bridge::FaceServi
             // counts still all describe the boundary before that string.
             self.state.row_carryover.word_wrap.record_source_candidate(
                 boundary.first(),
-                self.state.progress.source_position(),
+                DisplaySourceResumeCursor::BeforeOverlayStrings(
+                    self.state.progress.source_position(),
+                ),
                 &self.state.source_render,
                 self.state.progress.row_position(),
                 self.state

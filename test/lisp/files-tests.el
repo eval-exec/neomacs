@@ -1704,11 +1704,17 @@ The door of all subtleties!
   (should (equal (file-name-base "foo/bar") "bar")))
 
 (defun files-tests--check-mode (filename)
-  "Return the major mode found in `auto-mode-alist' for FILENAME."
-  (set-auto-mode--find-matching-alist-entry
-   auto-mode-alist
-   (concat "/home/jrhacker/" filename)
-   nil))
+  "Return the major mode chosen from `auto-mode-alist' for FILENAME."
+  (let (selected-mode)
+    ;; The replacement helper executes setters and returns a boolean.  Stub
+    ;; only the setter so these filename tests still inspect the chosen mode
+    ;; without entering or autoloading it.
+    (cl-letf (((symbol-function 'set-auto-mode-0)
+               (lambda (mode &optional _keep-mode-if-same)
+                 (setq selected-mode mode))))
+      (set-auto-mode--from-matching-alist-entry
+       auto-mode-alist (concat "/home/jrhacker/" filename) nil nil nil))
+    selected-mode))
 
 (ert-deftest files-tests-auto-mode-alist ()
   (should (eq (files-tests--check-mode ".gdbinit.in") #'gdb-script-mode))
@@ -1807,6 +1813,183 @@ set to."
   (should (eq major-mode 'fundamental-mode))
   (find-file (ert-resource-file "auto-test.zot3"))
   (should (eq major-mode 'fundamental-mode)))
+
+(defvar files-tests--dir-local-invalid-calls 0)
+(defvar files-tests--dir-local-mode-calls 0)
+
+(defun files-tests--dir-local-marker ()
+  "Record a benign call to a function which is not a major mode."
+  (setq files-tests--dir-local-invalid-calls
+        (1+ files-tests--dir-local-invalid-calls)))
+
+(define-derived-mode files-tests--dir-local-valid-mode fundamental-mode "Files-Valid"
+  "A real major mode used to check directory-local continuation entries."
+  (setq files-tests--dir-local-mode-calls
+        (1+ files-tests--dir-local-mode-calls)))
+
+(defun files-tests--visit-dir-local-auto-mode
+    (entries filename locals-enabled dir-enabled &optional global-entries)
+  "Visit an owned file with directory-local auto-mode ENTRIES.
+Return invalid-call count, valid-mode count, and the final major mode.
+FILENAME and both local-variable flags are explicit so the negative
+controls exercise the same path.  GLOBAL-ENTRIES replaces the trusted
+`auto-mode-alist' only when supplied."
+  (ert-with-temp-directory directory
+    (let* ((file (expand-file-name filename directory))
+           (enable-local-variables locals-enabled)
+           (enable-dir-local-variables dir-enabled)
+           (safe-local-variable-directories nil)
+           (dir-locals-class-alist nil)
+           (dir-locals-directory-cache nil)
+           (auto-mode-alist (or global-entries
+                               '(("\\.txt\\'" . fundamental-mode))))
+           (files-tests--dir-local-invalid-calls 0)
+           (files-tests--dir-local-mode-calls 0)
+           buffer)
+      (unwind-protect
+          (progn
+            (with-temp-file file (insert "Benign directory-local mode fixture.\n"))
+            (with-temp-file (expand-file-name ".dir-locals.el" directory)
+              ;; Collection pushes entries, so the continuation is written
+              ;; last and tried before the final .txt match.
+              (prin1 (list (cons 'auto-mode-alist entries)) (current-buffer))
+              (insert "\n"))
+            (setq buffer (find-file-noselect file))
+            (list files-tests--dir-local-invalid-calls
+                  files-tests--dir-local-mode-calls
+                  (buffer-local-value 'major-mode buffer)))
+        ;; Also reclaim a buffer made before an unexpected visit error.
+        (when-let* ((visited (or buffer (get-file-buffer file))))
+          (when (buffer-live-p visited)
+            (with-current-buffer visited (set-buffer-modified-p nil))
+            (kill-buffer visited)))))))
+
+(ert-deftest files-test-dir-locals-auto-mode-alist-invalid-symbol-continuation ()
+  "Reject a non-mode symbol before a directory-local continuation calls it."
+  (should-not (set-auto-mode--dir-local-valid-p 'files-tests--dir-local-marker))
+  (should
+   (equal
+    (files-tests--visit-dir-local-auto-mode
+     '(("\\.txt\\'" . fundamental-mode)
+       ("\\.probe\\'" files-tests--dir-local-marker t))
+     "sample.txt.probe" t t)
+    '(0 0 fundamental-mode))))
+
+(ert-deftest files-test-dir-locals-auto-mode-alist-invalid-lambda-continuation ()
+  "Reject a lambda before a directory-local continuation calls it."
+  (should
+   (equal
+    (files-tests--visit-dir-local-auto-mode
+     '(("\\.txt\\'" . fundamental-mode)
+       ("\\.probe\\'"
+        (lambda ()
+          (setq files-tests--dir-local-invalid-calls
+                (1+ files-tests--dir-local-invalid-calls)))
+        t))
+     "sample.txt.probe" t t)
+    '(0 0 fundamental-mode))))
+
+(ert-deftest files-test-dir-locals-auto-mode-alist-valid-mode-continuation ()
+  "Run a legitimate continuation, then select the suffix's final mode."
+  (should (set-auto-mode--dir-local-valid-p 'files-tests--dir-local-valid-mode))
+  (should
+   (equal
+    (files-tests--visit-dir-local-auto-mode
+     '(("\\.txt\\'" . fundamental-mode)
+       ("\\.probe\\'" files-tests--dir-local-valid-mode t))
+     "sample.txt.probe" t t)
+    '(0 1 fundamental-mode))))
+
+(ert-deftest files-test-dir-locals-auto-mode-alist-invalid-plain-entry ()
+  "Keep rejecting an invalid ordinary directory-local entry."
+  (should
+   (equal
+    (files-tests--visit-dir-local-auto-mode
+     '(("\\.txt\\'" . files-tests--dir-local-marker)) "sample.txt" t t)
+    '(0 0 fundamental-mode))))
+
+(ert-deftest files-test-dir-locals-auto-mode-alist-local-variables-disabled ()
+  "Neither disabled local-variable path may invoke a continuation."
+  (dolist (flags '((nil t) (t nil)))
+    (should
+     (equal
+      (files-tests--visit-dir-local-auto-mode
+       '(("\\.txt\\'" . fundamental-mode)
+         ("\\.probe\\'" files-tests--dir-local-valid-mode t))
+       "sample.txt.probe" (car flags) (cadr flags))
+      '(0 0 fundamental-mode)))))
+
+(ert-deftest files-test-dir-locals-auto-mode-alist-trusted-global-callback ()
+  "The directory-local restriction must not block trusted global callbacks."
+  (should
+   (equal
+    (files-tests--visit-dir-local-auto-mode
+     nil "sample.txt.probe" nil nil
+     '(("\\.probe\\'" files-tests--dir-local-marker t)
+       ("\\.txt\\'" . fundamental-mode)))
+    '(1 0 fundamental-mode))))
+
+(ert-deftest files-test-dir-locals-auto-mode-alist-nil-continuation ()
+  "A nil handler still strips its suffix and selects a real final mode."
+  (should
+   (equal
+    (files-tests--visit-dir-local-auto-mode
+     '(("\\.txt\\'" . files-tests--dir-local-valid-mode)
+       ("\\.probe\\'" nil t))
+     "sample.txt.probe" t t)
+    '(0 1 files-tests--dir-local-valid-mode))))
+
+(ert-deftest files-test-dir-locals-auto-mode-alist-trusted-global-nil-continuation ()
+  "Preserve the documented nil continuation in the trusted global alist."
+  (should
+   (equal
+    (files-tests--visit-dir-local-auto-mode
+     nil "sample.txt.probe" nil nil
+     '(("\\.probe\\'" nil t)
+       ("\\.txt\\'" . files-tests--dir-local-valid-mode)))
+    '(0 1 files-tests--dir-local-valid-mode))))
+
+(ert-deftest files-test-auto-mode-alist-intermediate-continuation-keeps-same-mode ()
+  "An intermediate continuation never re-enters the current major mode."
+  (ert-with-temp-directory directory
+    (dolist (dir-local '(nil t))
+      (dolist (keep '(nil t))
+        (ert-info ((format "dir-local=%S keep=%S" dir-local keep))
+          (with-temp-buffer
+            (let ((files-tests--dir-local-mode-calls 0))
+              (files-tests--dir-local-valid-mode)
+              (setq files-tests--dir-local-mode-calls 0)
+              (setq buffer-file-name
+                    (expand-file-name "sample.txt.probe" directory))
+              (should
+               (set-auto-mode--apply-alist
+                (list (list (rx ".probe" eos)
+                            'files-tests--dir-local-valid-mode t)
+                      (cons (rx ".txt" eos) 'fundamental-mode))
+                keep dir-local))
+              (should (eq major-mode 'fundamental-mode))
+              (should (= files-tests--dir-local-mode-calls 0)))))))))
+
+(ert-deftest files-test-auto-mode-alist-terminal-continuation-respects-keep-mode ()
+  "Without a later match, the continuation uses the caller's KEEP value."
+  (ert-with-temp-directory directory
+    (dolist (dir-local '(nil t))
+      (dolist (keep '(nil t))
+        (ert-info ((format "dir-local=%S keep=%S" dir-local keep))
+          (with-temp-buffer
+            (let ((files-tests--dir-local-mode-calls 0))
+              (files-tests--dir-local-valid-mode)
+              (setq files-tests--dir-local-mode-calls 0)
+              (setq buffer-file-name
+                    (expand-file-name "sample.txt.probe" directory))
+              (should
+               (set-auto-mode--apply-alist
+                (list (list (rx ".probe" eos)
+                            'files-tests--dir-local-valid-mode t))
+                keep dir-local))
+              (should (eq major-mode 'files-tests--dir-local-valid-mode))
+              (should (= files-tests--dir-local-mode-calls
+                         (if keep 0 1))))))))))
 
 (defun files-tests--save-some-buffers (pred def-pred-bind exp-1 exp-2)
   "Helper function to test `save-some-buffers'.

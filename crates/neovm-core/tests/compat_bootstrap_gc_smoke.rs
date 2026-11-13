@@ -2,7 +2,7 @@ use neovm_core::emacs_core::{Context, LambdaData, LambdaParams, Value};
 
 #[test]
 fn compat_macro_cache_keeps_opaque_values_alive_across_gc() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     let macro_body = vec![Value::list(vec![
         Value::symbol("function"),

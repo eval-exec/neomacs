@@ -9,7 +9,7 @@ error[E0382]: use of moved value: `reader`
   |             ^^^^^^ value used here after move
   |
 note: `RootBatchReader::<'r>::finish` takes ownership of the receiver `self`, which moves `reader`
- --> src/tagged/transport/root_batch.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/transport/root_batch.rs
   |
   |     pub fn finish(mut self) -> Result<(), RootBatchError> {
   |                       ^^^^

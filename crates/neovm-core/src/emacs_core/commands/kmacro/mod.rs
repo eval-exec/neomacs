@@ -16,10 +16,13 @@
 use super::error::{EvalResult, Flow, signal};
 use super::intern::resolve_sym;
 use super::value::*;
+// Split-era path restoration for the in-module test tree: the historical
+// glob re-exported the value aliases; keep the public name crate-internal.
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
-use crate::gc_trace::GcTrace;
-use crate::heap_types::LispString;
+use crate::emacs_core::keyboard::CommandLoopHost;
+#[allow(unused_imports)]
+pub(crate) use neovm_value::heap_types::LispString;
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------------------
@@ -41,84 +44,19 @@ fn prefix_numeric_value(value: &Value) -> i64 {
 }
 
 // ---------------------------------------------------------------------------
-// KmacroManager
+// KmacroManager (plain data, defined in neovm-value)
 // ---------------------------------------------------------------------------
 
-/// Metadata manager for keyboard macros.
-///
-/// GNU keeps the live recording/playback state on the keyboard runtime
-/// (`current_kboard` plus global execution vars) and layers richer kmacro UI
-/// state on top. NeoVM mirrors that split: the keyboard owner handles current
-/// recording/playback, while this manager keeps only the higher-level ring and
-/// counter metadata.
-#[derive(Clone, Debug)]
-pub struct KmacroManager {
-    /// Ring of previously saved macros (most recent first).
-    pub macro_ring: Vec<Vec<Value>>,
-    /// Keyboard macro counter (for `kmacro-insert-counter`).
-    pub counter: i64,
-    /// Format string for the counter (printf-style, default "%d").
-    pub counter_format: LispString,
-}
-
-impl Default for KmacroManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl GcTrace for KmacroManager {
-    fn trace_roots(&self, roots: &mut Vec<Value>) {
-        let Self {
-            macro_ring,
-            counter: _,
-            counter_format,
-        } = self;
-        for macro_entry in macro_ring {
-            for value in macro_entry {
-                roots.push(*value);
-            }
-        }
-        counter_format.trace_roots(roots);
-    }
-}
-
-impl KmacroManager {
-    /// Create a new manager with default state.
-    pub fn new() -> Self {
-        Self {
-            macro_ring: Vec::new(),
-            counter: 0,
-            counter_format: LispString::from_utf8("%d"),
-        }
-    }
-
-    /// Format the counter using the current format string.
-    pub fn format_counter(&self) -> String {
-        // Support basic %d / %o / %x / %X formats.
-        // For anything more complex, fall back to decimal.
-        let fmt = crate::emacs_core::emacs_char::to_utf8_lossy(self.counter_format.as_bytes());
-        if fmt.contains("%d") {
-            fmt.replace("%d", &self.counter.to_string())
-        } else if fmt.contains("%o") {
-            fmt.replace("%o", &format!("{:o}", self.counter))
-        } else if fmt.contains("%x") {
-            fmt.replace("%x", &format!("{:x}", self.counter))
-        } else if fmt.contains("%X") {
-            fmt.replace("%X", &format!("{:X}", self.counter))
-        } else {
-            // Fallback: just print the number.
-            self.counter.to_string()
-        }
-    }
-}
+use crate::emacs_core::interactive::CommandKeyRuntime;
+use neovm_eval::emacs_core::reader::KeyboardInputRuntime;
+pub use neovm_value::kmacro::KmacroManager;
 
 // ===========================================================================
 // Builtins (evaluator-dependent)
 // ===========================================================================
 
 fn last_kbd_macro_or_array_error(eval: &super::eval::Context) -> Result<Vec<Value>, Flow> {
-    eval.command_loop
+    eval.command_loop()
         .last_kbd_macro()
         .map(|events| events.to_vec())
         .ok_or_else(|| {
@@ -186,7 +124,7 @@ fn start_kbd_macro_impl(
     append: bool,
     no_exec: bool,
 ) -> EvalResult {
-    if eval.command_loop.keyboard.kboard.defining_kbd_macro {
+    if eval.command_loop().keyboard.kboard.defining_kbd_macro {
         return Err(signal(
             "error",
             vec![Value::string("Already defining kbd macro")],
@@ -276,7 +214,7 @@ pub(crate) fn builtin_call_last_kbd_macro(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("call-last-kbd-macro", &args, 2)?;
-    if eval.command_loop.keyboard.kboard.defining_kbd_macro {
+    if eval.command_loop().keyboard.kboard.defining_kbd_macro {
         return Err(signal(
             "error",
             vec![Value::string(
@@ -348,7 +286,7 @@ fn name_last_kbd_macro_impl(
         }
     };
 
-    let macro_val = match eval.command_loop.last_kbd_macro() {
+    let macro_val = match eval.command_loop().last_kbd_macro() {
         Some(keys) => Value::vector(keys.to_vec()),
         None => {
             return Err(signal(
@@ -358,7 +296,8 @@ fn name_last_kbd_macro_impl(
         }
     };
 
-    eval.obarray.set_symbol_function(&name, macro_val);
+    eval.obarray_view_mut()
+        .set_symbol_function(&name, macro_val);
     Ok(Value::NIL)
 }
 
@@ -381,7 +320,7 @@ pub(crate) fn builtin_last_kbd_macro(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("last-kbd-macro", &args, 0)?;
-    match eval.command_loop.last_kbd_macro() {
+    match eval.command_loop().last_kbd_macro() {
         Some(keys) => Ok(Value::vector(keys.to_vec())),
         None => Ok(Value::NIL),
     }
@@ -469,3 +408,27 @@ fn resolve_macro_events(eval: &super::eval::Context, value: &Value) -> Result<Ve
 #[cfg(test)]
 #[path = "tests/kmacro_test.rs"]
 mod tests;
+
+// ---------------------------------------------------------------------------
+// Cold entry table (stage-4 K2 batch K7)
+// ---------------------------------------------------------------------------
+//
+// The evaluator's VM byte-code dispatch enters these five bodies through one
+// eval-declared PC2 table installed at `Context::new_inner`/`from_dump`; the
+// bodies stay here because they drive the command loop and the core builtin
+// dispatcher.
+static CANONICAL_KMACRO_HOOKS: crate::emacs_core::eval::kmacro_hooks::KmacroHooks =
+    crate::emacs_core::eval::kmacro_hooks::KmacroHooks::new(
+        builtin_start_kbd_macro,
+        builtin_end_kbd_macro,
+        builtin_call_last_kbd_macro,
+        builtin_execute_kbd_macro,
+        builtin_store_kbd_macro_event,
+    );
+
+/// The one canonical keyboard-macro entry descriptor (published only by the
+/// one core boot entry, peer follow-up F2).
+pub(crate) fn canonical_kmacro_hooks() -> &'static crate::emacs_core::eval::kmacro_hooks::KmacroHooks
+{
+    &CANONICAL_KMACRO_HOOKS
+}

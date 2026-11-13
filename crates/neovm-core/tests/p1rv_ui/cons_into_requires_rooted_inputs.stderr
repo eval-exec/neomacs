@@ -7,17 +7,17 @@ error[E0277]: the trait bound `TaggedValue: RootedSlot` is not satisfied
    |              required by a bound introduced by this call
    |
 help: the following other types implement trait `RootedSlot`
-  --> src/tagged/gc/mutator_registration/root_slot.rs
+  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/root_slot.rs
    |
    | impl RootedSlot for OwnerRootSlot<'_> {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `OwnerRootSlot<'_>`
    |
-  ::: src/tagged/transport/cons_root.rs
+  ::: $WORKSPACE/crates/neovm-value/src/tagged/transport/cons_root.rs
    |
    | impl RootedSlot for SharedRoot {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SharedRoot`
-note: required by a bound in `gc::mutator_registration::cons_allocation::<impl RunAccess<'_, '_>>::cons_into`
-  --> src/tagged/gc/mutator_registration/cons_allocation.rs
+note: required by a bound in `mutator_registration::cons_allocation::<impl RunAccess<'_, '_>>::cons_into`
+  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/cons_allocation.rs
    |
    |     pub fn cons_into<C: RootedSlot, D: RootedSlot, R: RootedSlot>(
-   |                         ^^^^^^^^^^ required by this bound in `gc::mutator_registration::cons_allocation::<impl RunAccess<'_, '_>>::cons_into`
+   |                         ^^^^^^^^^^ required by this bound in `mutator_registration::cons_allocation::<impl RunAccess<'_, '_>>::cons_into`

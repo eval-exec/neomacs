@@ -9,7 +9,7 @@ error[E0080]: evaluation panicked: primitive inventory: duplicate registration
   | |__^ evaluation of `_` failed inside this call
   |
 note: inside `assert_valid`
- --> tests/pentry_ui/../../src/emacs_core/lisp/native/subr/effect_schema.rs
+ --> tests/pentry_ui/../../../neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs
   |
   |             panic!("primitive inventory: duplicate registration")
   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here

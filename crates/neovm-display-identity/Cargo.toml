@@ -9,3 +9,7 @@ description = "Display identity vocabulary shared by the value layer and the dis
 
 [dependencies]
 serde.workspace = true
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

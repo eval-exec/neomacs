@@ -86,6 +86,110 @@ fn try_harness() -> Option<Harness> {
     })
 }
 
+/// Record the active adapter's linear-to-sRGB8 conversion for a known input.
+///
+/// Vulkan permits either neighbour at a .5 tie, so the absolute byte is
+/// adapter-defined: on the P2 hosts the Mesa RADV/llvmpipe path encodes this
+/// probe as [0, 0, 188, 128], while the NVIDIA GTX 1650 (driver 610.57.04)
+/// gives [0, 0, 188, 127] and its surface-copy path truncates one further.
+/// The byte-exact opacity tests therefore compare against references
+/// rendered through this same pipeline instead of this probe's literal
+/// value; this function stays as a fail-loud check that the conversion
+/// itself is deterministic for a given adapter, and it records the observed
+/// class in the test log.
+fn probe_adapter_conversion(h: &mut Harness) -> [u8; 4] {
+    let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+    frame.background = Color::BLUE;
+    frame.background_alpha = 0.5;
+    let mut render_probe = |h: &mut Harness| {
+        h.renderer.render_frame_glyphs(
+            &h.view,
+            &frame,
+            &mut h.atlas,
+            mapping_for(&frame, W, H),
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        px(&read_back(h), 2, 2)
+    };
+    let first = render_probe(h);
+    let second = render_probe(h);
+    assert_eq!(
+        first, second,
+        "the adapter's linear-to-sRGB8 conversion must be deterministic for \
+         the same input"
+    );
+    eprintln!("adapter linear 0.5 alpha / blue 1.0 encodes as {first:?}");
+    first
+}
+
+/// Render `color`/`alpha` as a flat frame into a fresh snapshot pair and run
+/// `effect` on those reference snapshots, returning the rendered pixels.
+///
+/// The effect receives the reference bind groups and the harness target so it
+/// is the SAME production call the test makes on the real snapshots; the
+/// expected linear colour is supplied by the test.  Both the actual pixel and
+/// the reference pixel then pass through the adapter's blend arithmetic and
+/// sRGB conversion, which factors out the permitted conversion rounding
+/// (`Vulkan` .5 ties may round to either neighbour) while keeping the product
+/// blend math pinned exactly.  No pixel tolerance is involved.
+fn reference_effect_pixels(
+    h: &mut Harness,
+    color: Color,
+    alpha: f32,
+    effect: impl FnOnce(&mut WgpuRenderer, &wgpu::BindGroup, &wgpu::BindGroup, &wgpu::TextureView),
+) -> Vec<u8> {
+    let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+    frame.background = color;
+    frame.background_alpha = alpha;
+    reference_effect_pixels_with_frame(h, &frame, effect)
+}
+
+/// [`reference_effect_pixels`] with a caller-built reference frame; the
+/// foreground-opacity checks use this to put a white region where the real
+/// frame has its glyphs, so the adapter's permitted rounding is shared by
+/// the actual and the reference for the text pixels too.
+fn reference_effect_pixels_with_frame(
+    h: &mut Harness,
+    frame: &FrameGlyphBuffer,
+    effect: impl FnOnce(&mut WgpuRenderer, &wgpu::BindGroup, &wgpu::BindGroup, &wgpu::TextureView),
+) -> Vec<u8> {
+    let size = neomacs_renderer_wgpu::SnapshotSize::new(W, H).unwrap();
+    let old = h.renderer.acquire_snapshot(size).unwrap();
+    let new = h.renderer.acquire_snapshot(size).unwrap();
+    h.renderer.render_frame_glyphs(
+        old.view(),
+        frame,
+        &mut h.atlas,
+        mapping_for(frame, W, H),
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    h.renderer.render_frame_glyphs(
+        new.view(),
+        frame,
+        &mut h.atlas,
+        mapping_for(frame, W, H),
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let view = h.view.clone();
+    effect(&mut h.renderer, old.bind_group(), new.bind_group(), &view);
+    read_back(h)
+}
+
 fn mapping_for(frame: &FrameGlyphBuffer, width: u32, height: u32) -> PresentMapping {
     mapping_for_scale(frame, width, height, 1.0)
 }
@@ -1646,8 +1750,8 @@ fn retained_static_reused_across_cursor_colors() {
     let Some(mut h) = try_harness() else {
         return;
     };
-    // The default config cycles cursor color from time; disable it so the
-    // frame's explicit cursor colors drive the pixels for this test.
+    // Keep time-based cursor color cycling disabled so the frame's explicit
+    // cursor colors drive the pixels for this test.
     h.renderer.effects.cursor_color_cycle.enabled = false;
     let frame_a = frame_with_cursor(Color::rgb(1.0, 0.0, 0.0)); // red cursor
     let frame_b = frame_with_cursor(Color::rgb(0.0, 0.4, 1.0)); // blue cursor

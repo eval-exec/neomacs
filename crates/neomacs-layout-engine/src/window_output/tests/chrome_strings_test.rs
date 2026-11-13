@@ -21,7 +21,7 @@ fn area_sources(
 
 #[test]
 fn reused_chrome_preserves_frozen_storage_and_its_existing_root_lease() {
-    let mut evaluator = Box::new(Context::new());
+    let mut evaluator = Box::new(neovm_core::emacs_core::eval_hook_installers::new_context());
     evaluator.setup_thread_locals();
     let mut building = area_sources(&evaluator, PresentedWindowChromeArea::ModeLine, "mode");
     building.extend(area_sources(
@@ -42,7 +42,7 @@ fn reused_chrome_preserves_frozen_storage_and_its_existing_root_lease() {
 
 #[test]
 fn replacing_one_chrome_area_thaws_only_the_new_builder() {
-    let mut evaluator = Box::new(Context::new());
+    let mut evaluator = Box::new(neovm_core::emacs_core::eval_hook_installers::new_context());
     evaluator.setup_thread_locals();
     let mut building = area_sources(&evaluator, PresentedWindowChromeArea::ModeLine, "mode");
     building.extend(area_sources(

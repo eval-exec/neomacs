@@ -44,12 +44,14 @@ use std::time::{Duration, Instant};
 
 pub mod launch;
 mod observation;
+pub mod oracle;
 mod pty_output;
 mod recording;
 pub mod startup;
 
 pub use launch::TuiLaunch;
 pub use observation::{FencedTerminal, TuiObservationError};
+pub use oracle::{assert_neomacs_dumped_runtime, gnu_oracle_program, gnu_oracle_stamp};
 use pty_output::{ObservationCursor, PtyOutputEvent, PtyOutputKind, PtyOutputPump};
 pub use recording::TuiRecordingScope;
 use recording::{
@@ -328,6 +330,10 @@ pub struct TuiSession {
     // 1,000 babel-stable names there and cleans it from kill-emacs-hook. A
     // shared pool makes parallel/repeated tests contend on that finite space.
     _tmp: SessionDirectory,
+    /// The child's transport closed (exit or EOF on the PTY). A waiting
+    /// observer must fail loudly instead of spinning out its whole budget on
+    /// a screen that can no longer change.
+    finished: bool,
     pub name: SessionName,
 }
 
@@ -548,6 +554,7 @@ impl TuiSession {
             recording_delay: recording.delay(),
             home,
             _tmp: tmp,
+            finished: false,
             name: SessionName::new(name, startup),
         }
     }
@@ -586,7 +593,7 @@ impl TuiSession {
         // downsamples every #RRGGBB face to an index (measured: Idx(211) for
         // Rgb(238,121,159)). GitHub runners export no COLORTERM, so pin the
         // terminal both editors see, the same way package_scenario does.
-        TuiLaunch::new("emacs")
+        TuiLaunch::new(crate::gnu_oracle_program().as_os_str())
             .with_uncertified_startup()
             .args([
                 "-nw",
@@ -602,6 +609,21 @@ impl TuiSession {
     /// Spawn GNU Emacs in TUI mode on a PTY whose ERASE character is ERASE.
     pub fn gnu_emacs_with_erase_char(extra_args: &str, erase: PtyEraseChar) -> Self {
         Self::spawn_launch_with_erase_char(Self::gnu_emacs_launch(extra_args), "GNU", erase)
+    }
+
+    /// Spawn GNU Emacs in TUI mode with additional environment values.
+    ///
+    /// The per-launch values are applied after the canonical TUI environment,
+    /// so `TMPDIR` here replaces the ambient/session one.  A test that owns a
+    /// short temporary root uses this instead of inheriting a deep ambient
+    /// `TMPDIR`.
+    pub fn gnu_emacs_with_env(extra_args: &str, env: &[(&str, &std::ffi::OsStr)]) -> Self {
+        Self::spawn_launch_with_erase_char(
+            Self::gnu_emacs_launch(extra_args)
+                .envs(env.iter().map(|(name, value)| (*name, *value))),
+            "GNU",
+            PtyEraseChar::TerminalDefault,
+        )
     }
 
     /// Spawn GNU Emacs on a terminal with explicit TERM and geometry.
@@ -636,6 +658,17 @@ impl TuiSession {
     /// Spawn Neomacs in TUI mode on a PTY whose ERASE character is ERASE.
     pub fn neomacs_with_erase_char(extra_args: &str, erase: PtyEraseChar) -> Self {
         Self::spawn_launch_with_erase_char(Self::neomacs_launch(extra_args), "NEO", erase)
+    }
+
+    /// Spawn Neomacs in TUI mode with additional environment values.
+    ///
+    /// See [`Self::gnu_emacs_with_env`] for the ordering guarantee.
+    pub fn neomacs_with_env(extra_args: &str, env: &[(&str, &std::ffi::OsStr)]) -> Self {
+        Self::spawn_launch_with_erase_char(
+            Self::neomacs_launch(extra_args).envs(env.iter().map(|(name, value)| (*name, *value))),
+            "NEO",
+            PtyEraseChar::TerminalDefault,
+        )
     }
 
     /// Spawn Neomacs on a terminal with explicit TERM and geometry.
@@ -680,13 +713,17 @@ impl TuiSession {
                                 last_activity.map_or(observed_at, |last| last.max(observed_at)),
                             );
                         }
-                        PtyReadProgress::Finished => return,
+                        PtyReadProgress::Finished => {
+                            self.finished = true;
+                            return;
+                        }
                     },
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         self.terminal
                             .require_owner_closed()
                             .expect("PTY owner disconnected without closure");
+                        self.finished = true;
                         return;
                     }
                 }
@@ -710,13 +747,17 @@ impl TuiSession {
                         last_activity =
                             Some(last_activity.map_or(observed_at, |last| last.max(observed_at)));
                     }
-                    PtyReadProgress::Finished => return,
+                    PtyReadProgress::Finished => {
+                        self.finished = true;
+                        return;
+                    }
                 },
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     self.terminal
                         .require_owner_closed()
                         .expect("PTY owner disconnected without closure");
+                    self.finished = true;
                     return;
                 }
             }
@@ -798,6 +839,19 @@ impl TuiSession {
     where
         F: Fn(&[String]) -> bool,
     {
+        self.read_until_screen(max_timeout, |grid, _screen| predicate(grid));
+    }
+
+    /// [`Self::read_until`] with the parsed screen as well as the text grid.
+    ///
+    /// Readiness that depends on cell ATTRIBUTES -- a selection highlight is a
+    /// background colour, not text -- must look at the same screen the later
+    /// assertion will read.  A frame caught between two paints can satisfy a
+    /// text-only predicate while still showing the previous highlight.
+    pub fn read_until_screen<F>(&mut self, max_timeout: Duration, predicate: F)
+    where
+        F: Fn(&[String], &vt100::Screen) -> bool,
+    {
         /// How often the predicate is re-checked while the editor is
         /// silent; small enough that a satisfied predicate is observed
         /// promptly, large enough not to spin on grid snapshots.
@@ -810,9 +864,15 @@ impl TuiSession {
                 break;
             }
             self.read(remaining.min(PREDICATE_POLL));
-            if predicate(&self.text_grid()) {
+            if predicate(&self.text_grid(), self.screen()) {
                 break;
             }
+            assert!(
+                !self.finished,
+                "{} exited while waiting for a screen state:\n{}",
+                self.name,
+                self.text_grid().join("\n")
+            );
             if Instant::now() >= deadline {
                 break;
             }

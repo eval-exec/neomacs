@@ -170,6 +170,26 @@ cask selects the Apple Silicon or Intel build automatically and puts
 brew install --cask neomacs-core/tap/neomacs
 ```
 
+On Gentoo (amd64), the community-maintained
+[`neomacs-gentoo` overlay](https://github.com/xz-dev/neomacs-gentoo) builds
+Neomacs from source as `app-editors/emacs:31-neomacs`, in a separate slot
+alongside GNU Emacs. It requires `app-eselect/eselect-repository`; the ebuild
+is currently keyworded `~amd64`, so accept that keyword for this package if
+needed before emerging:
+
+```bash
+sudo eselect repository add neomacs-gentoo git https://github.com/xz-dev/neomacs-gentoo.git
+sudo emaint sync -r neomacs-gentoo
+sudo emerge --ask app-editors/emacs:31-neomacs
+sudo eselect emacs set emacs-31-neomacs
+```
+
+The overlay maintains its own snapshots, independently of upstream release tags.
+Keep GNU Emacs installed for rollback; use `eselect emacs list` to find its
+selector and `sudo eselect emacs set <selector>` to switch back. See the
+[overlay documentation](https://github.com/xz-dev/neomacs-gentoo#known-gaps)
+for current limitations, including the lack of `emacsclient`.
+
 On Windows, launch `runneomacs.exe` for the GUI without a console window.
 Installer shortcuts use this launcher. Use `neomacs.exe` from a terminal for
 `-nw`, `--batch`, redirected output, and shell exit status.
@@ -190,6 +210,15 @@ Alma and Fedora 43+ — a package built on Ubuntu cannot, because `rpmbuild`
 records the build host's ncurses and glibc symbol versions as requirements. See
 [releasing-linux.md](docs/releasing-linux.md).
 
+The `.deb` and the Linux tarball of v0.0.20 and earlier recorded the build
+account's uid as the owner of their files, so installing them as root (`dpkg -i`,
+a manual `tar -x` into `/usr/local`, or `install.sh --prefix` before this was
+fixed) left the dump and the Lisp tree (and, for the `.deb`,
+`/usr/bin/neomacs`) owned by that uid, rewritable by any local account holding
+it. A fixed `.deb` refuses to install over such an installation until it is
+repaired; to repair it, see
+[releasing-linux.md](docs/releasing-linux.md#repairing-an-installation-from-v0020-or-earlier).
+
 <details>
 <summary><b>Build from source</b></summary>
 
@@ -199,7 +228,7 @@ git clone https://github.com/eval-exec/neomacs && cd neomacs
 # Optional (recommended): repo dev shell with all dependencies
 nix develop --accept-flake-config
 
-# Compiles Rust, bootstraps Elisp, generates the portable dump
+# Compiles Rust, bootstraps Elisp, generates the portable dump and Info manuals
 cargo xtask fresh-build --release
 
 ./target/release/neomacs

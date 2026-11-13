@@ -9,7 +9,7 @@ error[E0382]: use of moved value: `publication`
   |                  ^^^^^^^^^^^ value used here after move
   |
 note: `OwnerPublication::<'owner, 'era>::publish` takes ownership of the receiver `self`, which moves `publication`
- --> src/tagged/gc/mutator_registration/token.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
   |
   |     pub fn publish(self) -> Result<(), RegistrationError> {
   |                    ^^^^

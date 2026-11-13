@@ -1,13 +1,14 @@
 use super::*;
 use crate::emacs_core::error::{FlowKind, FlowRef};
+use crate::emacs_core::eval::SubrValueExt;
 use crate::emacs_core::eval::VariableView;
-use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::symbol::CanonicalAccess;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
 use crate::emacs_core::keymap::make_list_keymap;
-use crate::emacs_core::load::{apply_runtime_startup_state, create_bootstrap_evaluator_cached};
+use crate::emacs_core::load::apply_runtime_startup_state;
+use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::emacs_core::{Context, format_eval_result};
@@ -18,7 +19,7 @@ use strum::IntoEnumIterator;
 
 /// Create evaluator with minimal Elisp shims for interactive testing.
 fn eval_with_interactive_shims() -> Context {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     install_bare_elisp_shims(&mut ev);
     let shims = r#"
 (defalias 'set-mark #'(lambda (pos)
@@ -59,7 +60,7 @@ fn plan_call_interactively_for_test(
     let interactive_form =
         crate::emacs_core::builtins::symbols::builtin_interactive_form(eval, vec![args[0]])?;
     plan_call_interactively_after_interactive_form_in_state(
-        &eval.obarray,
+        &eval.obarray(),
         eval.read_command_keys(),
         args,
         interactive_form,
@@ -73,11 +74,13 @@ fn parse_interactive_code_entries_preserves_raw_unibyte_prompt_bytes() {
     let spec = crate::heap_types::LispString::from_unibyte(vec![b'a', 0xFF, b':', b' ']);
     let parsed = parse_interactive_code_entries(&spec);
 
-    assert!(parsed.prefix_flags.is_empty());
-    assert_eq!(parsed.entries.len(), 1);
-    assert_eq!(parsed.entries[0].0, 'a');
-    assert_eq!(parsed.entries[0].1.as_bytes(), &[0xFF, b':', b' ']);
-    assert!(!parsed.entries[0].1.is_multibyte());
+    let prefix_flags = parsed.prefix_flags();
+    let entries = parsed.entries();
+    assert!(prefix_flags.is_empty());
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].0, 'a');
+    assert_eq!(entries[0].1.as_bytes(), &[0xFF, b':', b' ']);
+    assert!(!entries[0].1.is_multibyte());
 }
 
 #[test]
@@ -184,7 +187,7 @@ fn gnu_subr_keymap_eval_all(src: &str) -> Vec<String> {
     let subr_path = project_root.join("lisp/subr.el");
     let subr_source = fs::read_to_string(&subr_path).expect("read GNU subr.el");
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     install_bare_elisp_shims(&mut ev);
     ev.set_lexical_binding(true);
     for marker in [
@@ -213,7 +216,7 @@ fn gnu_simple_command_execute_eval() -> Context {
     let subr_path = project_root.join("lisp/subr.el");
     let subr_source = fs::read_to_string(&subr_path).expect("read GNU subr.el");
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     install_bare_elisp_shims(&mut ev);
     ev.eval_str(
         r#"
@@ -360,7 +363,7 @@ fn load_gnu_eval_expression_into(ev: &mut Context) {
 }
 
 fn gnu_simple_eval_expression_eval() -> Context {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     install_bare_elisp_shims(&mut ev);
     load_gnu_eval_expression_into(&mut ev);
     ev
@@ -499,7 +502,7 @@ fn call_interactively_evaluates_registry_form_specs() {
         .expect("install registry-form-command");
 
     let sym = crate::emacs_core::intern::intern("registry-form-command");
-    ev.interactive.register_interactive(
+    ev.interactive_mut().register_interactive(
         sym,
         InteractiveSpec::from_value(Value::list(vec![Value::symbol("list"), Value::fixnum(7)])),
     );
@@ -607,7 +610,7 @@ fn defalias_replaces_stale_noarg_registry_spec_with_live_interactive_form() {
     crate::test_utils::init_test_tracing();
     let mut ev = eval_with_interactive_shims();
     let sym = crate::emacs_core::intern::intern("vm-stale-interactive-form");
-    ev.interactive
+    ev.interactive_mut()
         .register_interactive(sym, InteractiveSpec::no_args());
 
     ev.eval_str(
@@ -695,15 +698,12 @@ fn mode_definition_macros_start_as_gnu_autoloads() {
 #[test]
 fn commandp_borrows_subr_arguments_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
-    let entry = crate::emacs_core::eval::lookup_global_subr_entry(intern("commandp"))
+    let _eval = crate::test_utils::new_context();
+    let entry = neovm_eval::test_support::authority::lookup_global_subr_entry(intern("commandp"))
         .expect("commandp should be registered as a builtin subr");
 
     assert!(
-        matches!(
-            entry.function,
-            Some(crate::emacs_core::eval::subr_abi::SubrFn::ManySlice(_))
-        ),
+        neovm_eval::test_support::authority::subr_entry_function_is_many_slice(&entry),
         "GNU Fcommandp receives Lisp_Object arguments directly; Neomacs must not allocate an owned Vec for each command candidate"
     );
 }
@@ -711,7 +711,7 @@ fn commandp_borrows_subr_arguments_like_gnu() {
 #[test]
 fn commandp_non_interactive() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     eval_all_with(&mut ev, r#"(defalias 'my-plain-fn #'(lambda () 42))"#);
     let result = builtin_commandp_interactive(&mut ev, &[Value::symbol("my-plain-fn")]);
     assert!(result.unwrap().is_nil());
@@ -724,13 +724,13 @@ fn commandp_non_interactive() {
 #[test]
 fn commandp_reads_each_function_cell_once() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let command = intern("forward-char");
 
-    ev.obarray.reset_symbol_slot_read_count();
+    ev.obarray().reset_symbol_slot_read_count();
     assert_eq!(
         classify_command_designator_in_state(
-            &ev.obarray,
+            &ev.obarray(),
             &Value::from_sym_id(command),
             false,
             crate::tagged::SymbolMode::Bare
@@ -738,18 +738,18 @@ fn commandp_reads_each_function_cell_once() {
         CommandpClassification::Interactive
     );
     assert_eq!(
-        ev.obarray.symbol_slot_read_count(),
+        ev.obarray().symbol_slot_read_count(),
         1,
         "one symbol alias hop must take one typed function-cell snapshot"
     );
 
     let alias = intern("neo-commandp-function-cell-snapshot-alias");
-    ev.obarray
+    ev.obarray_view_mut()
         .set_symbol_function_id(alias, Value::from_sym_id(command));
-    ev.obarray.reset_symbol_slot_read_count();
+    ev.obarray().reset_symbol_slot_read_count();
     assert_eq!(
         classify_command_designator_in_state(
-            &ev.obarray,
+            &ev.obarray(),
             &Value::from_sym_id(alias),
             false,
             crate::tagged::SymbolMode::Bare
@@ -757,7 +757,7 @@ fn commandp_reads_each_function_cell_once() {
         CommandpClassification::Interactive
     );
     assert_eq!(
-        ev.obarray.symbol_slot_read_count(),
+        ev.obarray().symbol_slot_read_count(),
         2,
         "a two-symbol alias chain must take exactly two typed snapshots"
     );
@@ -770,14 +770,14 @@ fn commandp_reads_each_function_cell_once() {
 #[test]
 fn commandp_reads_interactivity_from_the_subr_object() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function_id(intern("forward-char"))
         .expect("forward-char should have a primitive function cell");
     assert_eq!(function.veclike_type(), Some(VecLikeType::Subr));
 
-    crate::emacs_core::eval::reset_global_subr_lookup_count();
+    neovm_eval::test_support::authority::reset_global_subr_lookup_count();
     assert_eq!(
         classify_command_object_in_state(&function, false, crate::tagged::SymbolMode::Bare),
         CommandpClassification::Interactive
@@ -792,7 +792,7 @@ fn commandp_reads_interactivity_from_the_subr_object() {
 #[test]
 fn subr_registration_refreshes_an_existing_objects_interactivity() {
     crate::test_utils::init_test_tracing();
-    let _ev = Context::new();
+    let _ev = crate::test_utils::new_context();
     let symbol = intern("neo-commandp-late-interactive-subr");
     let function = <Value as SubrValueExt>::subr_from_sym_id(symbol);
     assert_eq!(
@@ -800,9 +800,10 @@ fn subr_registration_refreshes_an_existing_objects_interactivity() {
         Some(crate::tagged::header::SubrInteractivity::NonInteractive)
     );
 
-    let entry = crate::emacs_core::eval::lookup_global_subr_entry(intern("forward-char"))
-        .expect("forward-char should have registered primitive metadata");
-    crate::emacs_core::eval::register_global_subr_entry(symbol, entry);
+    let entry =
+        neovm_eval::test_support::authority::lookup_global_subr_entry(intern("forward-char"))
+            .expect("forward-char should have registered primitive metadata");
+    neovm_eval::test_support::authority::register_global_subr_entry(symbol, entry);
 
     assert_eq!(
         function.subr_interactivity(),
@@ -861,7 +862,7 @@ fn commandp_distinguishes_gnu_docstring_references_from_oclosure_tags() {
 #[test]
 fn commandp_returns_nil_for_raw_unibyte_symbol_name() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let raw_name = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![0xFF]));
     let raw_symbol = ev
         .apply(Value::symbol("intern"), vec![raw_name])
@@ -942,7 +943,7 @@ fn commandp_only_checks_interactive_form_property_for_gnu_fallback_classes() {
 #[test]
 fn commandp_true_for_an_interactive_c_subr() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // GNU 31.0.90: (commandp 'make-local-variable) => t, its intspec being
     // "vMake Local Variable: " (src/data.c).  This used to ask about `ignore',
     // which is lisp/subr.el:501 and not a subr at all (DIVERGENCES.md 152).
@@ -968,7 +969,7 @@ fn eval_expression_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("eval-expression")
         .expect("missing eval-expression bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -999,7 +1000,7 @@ fn commandp_true_for_defun_with_declare_before_interactive() {
 #[test]
 fn commandp_true_for_builtin_forward_char() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_commandp_interactive(&mut ev, &[Value::symbol("forward-char")]);
     assert!(result.unwrap().is_truthy());
 }
@@ -1007,7 +1008,7 @@ fn commandp_true_for_builtin_forward_char() {
 #[test]
 fn commandp_handles_keyboard_macros_and_bytecode_interactive_slots() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let bytecode = crate::emacs_core::builtins::symbols::make_byte_code_from_parts(
         &Value::NIL,
         &Value::string(""),
@@ -1048,7 +1049,7 @@ fn commandp_handles_keyboard_macros_and_bytecode_interactive_slots() {
 #[test]
 fn commandp_true_for_registered_rust_editing_commands() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     for name in [
         "backward-char",
         "delete-char",
@@ -1067,7 +1068,7 @@ fn commandp_true_for_registered_rust_editing_commands() {
         "recenter",
     ] {
         assert!(
-            ev.obarray
+            ev.obarray()
                 .symbol_function(name)
                 .is_some_and(|function| function.is_subr()),
             "{name} must be a registered Rust subr"
@@ -1084,7 +1085,7 @@ fn abbrev_mode_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("abbrev-mode")
         .expect("missing abbrev-mode bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -1110,7 +1111,7 @@ fn bookmark_commands_startup_are_autoloaded() {
     let ev = eval_with_ldefs_boot_autoloads(&names);
     for name in names {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1137,7 +1138,7 @@ fn rectangle_commands_startup_are_autoloaded() {
     let ev = eval_with_ldefs_boot_autoloads(&names);
     for name in names {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1162,7 +1163,7 @@ fn simple_commands_are_real_lisp_functions_after_bootstrap() {
         "process-menu-mode",
     ] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1193,7 +1194,7 @@ fn replace_commands_are_real_lisp_functions_after_bootstrap() {
         "replace-string",
     ] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1216,7 +1217,7 @@ fn subr_key_binding_commands_are_real_lisp_functions_after_bootstrap() {
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     for name in ["global-set-key", "local-set-key"] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1242,7 +1243,7 @@ fn env_command_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("setenv")
         .expect("missing setenv bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -1260,7 +1261,7 @@ fn files_command_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("load-file")
         .expect("missing load-file bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -1281,7 +1282,7 @@ fn regexp_search_aliases_are_available_after_bootstrap() {
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     for name in ["search-forward-regexp", "search-backward-regexp"] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1299,7 +1300,7 @@ fn upcase_char_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let ev = eval_with_ldefs_boot_autoloads(&["upcase-char"]);
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("upcase-char")
         .expect("missing upcase-char startup function cell");
     assert!(crate::emacs_core::autoload::is_autoload_value(
@@ -1315,7 +1316,7 @@ fn mode_and_mark_commands_are_real_lisp_functions_after_bootstrap() {
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     for name in ["auto-composition-mode", "set-mark-command"] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1337,7 +1338,7 @@ fn count_matches_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("count-matches")
         .expect("missing count-matches bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -1358,7 +1359,7 @@ fn kmacro_name_last_macro_startup_is_autoloaded() {
     // during bootstrap -- not via the autoload-only loader.
     let mut ev = eval_with_ldefs_boot_autoloads(&["kmacro-name-last-macro"]);
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("kmacro-name-last-macro")
         .expect("missing kmacro-name-last-macro startup function cell");
     assert!(
@@ -1376,10 +1377,10 @@ fn kmacro_name_last_macro_startup_is_autoloaded() {
 #[test]
 fn raw_context_does_not_prebind_kmacro_name_aliases() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
     for name in ["kmacro-name-last-macro", "name-last-kbd-macro"] {
         assert!(
-            ev.obarray.symbol_function_id(intern(name)).is_none(),
+            ev.obarray().symbol_function_id(intern(name)).is_none(),
             "{name} should come from GNU ldefs-boot/kmacro Lisp, not Context::new"
         );
     }
@@ -1388,7 +1389,7 @@ fn raw_context_does_not_prebind_kmacro_name_aliases() {
 #[test]
 fn ldefs_boot_aliases_name_last_kbd_macro_to_kmacro_name_last_macro() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let ldefs_source =
         fs::read_to_string(crate::test_utils::workspace_root().join("lisp/ldefs-boot.el"))
             .expect("read ldefs-boot.el");
@@ -1404,7 +1405,7 @@ fn ldefs_boot_aliases_name_last_kbd_macro_to_kmacro_name_last_macro() {
     );
 
     let kmacro = ev
-        .obarray
+        .obarray()
         .symbol_function("kmacro-name-last-macro")
         .expect("kmacro-name-last-macro autoload");
     assert!(
@@ -1412,7 +1413,7 @@ fn ldefs_boot_aliases_name_last_kbd_macro_to_kmacro_name_last_macro() {
         "GNU ldefs-boot should install kmacro-name-last-macro as an autoload"
     );
     assert_eq!(
-        ev.obarray.symbol_function("name-last-kbd-macro"),
+        ev.obarray().symbol_function("name-last-kbd-macro"),
         Some(Value::symbol("kmacro-name-last-macro"))
     );
 }
@@ -1424,7 +1425,7 @@ fn remove_hook_is_available_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("remove-hook")
         .expect("missing remove-hook startup function cell");
     assert!(
@@ -1436,7 +1437,7 @@ fn remove_hook_is_available_after_bootstrap() {
 #[test]
 fn commandp_true_for_additional_registered_rust_commands() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     for name in [
         "base64-decode-region",
         "base64-encode-region",
@@ -1464,10 +1465,9 @@ fn commandp_true_for_additional_registered_rust_commands() {
         "top-level",
         "unix-sync",
         "write-region",
-        "x-menu-bar-open-internal",
     ] {
         assert!(
-            ev.obarray
+            ev.obarray()
                 .symbol_function(name)
                 .is_some_and(|function| function.is_subr()),
             "{name} must be a registered Rust subr"
@@ -1475,6 +1475,30 @@ fn commandp_true_for_additional_registered_rust_commands() {
         let result =
             builtin_commandp_interactive(&mut ev, &[Value::symbol(name)]).expect("commandp call");
         assert!(result.is_truthy(), "expected commandp true for {name}");
+    }
+    // Same gate as `subrs.rs` (`#[cfg(not(any(windows, target_os = "macos")))]`).
+    // GNU NS leaves `x-menu-bar-open-internal` void (`mac_x11_subrs_ratchet_test.rs`).
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let name = "x-menu-bar-open-internal";
+        assert!(
+            ev.obarray()
+                .symbol_function(name)
+                .is_some_and(|function| function.is_subr()),
+            "{name} must be a registered Rust subr"
+        );
+        let result =
+            builtin_commandp_interactive(&mut ev, &[Value::symbol(name)]).expect("commandp call");
+        assert!(result.is_truthy(), "expected commandp true for {name}");
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        assert!(
+            ev.obarray()
+                .symbol_function("x-menu-bar-open-internal")
+                .is_none(),
+            "x-menu-bar-open-internal must be void on macOS and Windows, matching GNU NS (mac_x11_subrs_ratchet_test.rs)"
+        );
     }
 }
 
@@ -1520,7 +1544,7 @@ fn commandp_true_for_loaded_lisp_commands_after_bootstrap() {
         "yank-pop",
     ] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1536,7 +1560,7 @@ fn commandp_true_for_loaded_lisp_commands_after_bootstrap() {
 #[test]
 fn commandp_false_for_noninteractive_builtin() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_commandp_interactive(&mut ev, &[Value::symbol("car")]);
     assert!(result.unwrap().is_nil());
 }
@@ -1547,7 +1571,7 @@ fn commandp_false_for_noninteractive_builtin() {
 #[test]
 fn commandp_uses_predeclared_interactive_form_symbol() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let function = Value::symbol("car");
     let _ = InteractiveFormSymbol::id();
 
@@ -1565,7 +1589,7 @@ fn commandp_uses_predeclared_interactive_form_symbol() {
 #[test]
 fn commandp_rejects_overflow_arity() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result =
         builtin_commandp_interactive(&mut ev, &[Value::symbol("ignore"), Value::NIL, Value::NIL])
             .expect_err("commandp should reject more than two arguments");
@@ -1578,13 +1602,14 @@ fn commandp_rejects_overflow_arity() {
 #[test]
 fn commandp_resolves_aliases_and_symbol_designators() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.obarray
+    let mut ev = crate::test_utils::new_context();
+    ev.obarray_view_mut()
         .set_symbol_function("t", Value::symbol("forward-char"));
-    ev.obarray
+    ev.obarray_view_mut()
         .set_symbol_function(":vm-command-alias-keyword", Value::symbol("forward-char"));
-    ev.obarray.set_symbol_function("vm-command-alias", Value::T);
-    ev.obarray.set_symbol_function(
+    ev.obarray_view_mut()
+        .set_symbol_function("vm-command-alias", Value::T);
+    ev.obarray_view_mut().set_symbol_function(
         "vm-command-alias-keyword",
         Value::keyword(":vm-command-alias-keyword"),
     );
@@ -1608,9 +1633,9 @@ fn commandp_resolves_aliases_and_symbol_designators() {
 #[test]
 fn commandp_ignores_registry_metadata_for_an_unbound_symbol() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let symbol = crate::emacs_core::intern::intern("neovm--stale-command-metadata");
-    ev.interactive
+    ev.interactive_mut()
         .register_interactive(symbol, InteractiveSpec::no_args());
 
     let result = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(symbol)])
@@ -1625,7 +1650,7 @@ fn commandp_ignores_registry_metadata_for_an_unbound_symbol() {
 #[test]
 fn commandp_true_for_lambda_with_interactive_form() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let lambda = eval_all_with(&mut ev, "(lambda () (interactive) 1)");
     let value = ev
         .eval_str("(lambda () (interactive) 1)")
@@ -1638,7 +1663,7 @@ fn commandp_true_for_lambda_with_interactive_form() {
 #[test]
 fn commandp_true_for_quoted_lambda_with_interactive_form() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let quoted_lambda = ev
         .eval_str("'(lambda () \"doc\" (interactive) 1)")
         .expect("quoted lambda should evaluate");
@@ -1649,28 +1674,30 @@ fn commandp_true_for_quoted_lambda_with_interactive_form() {
 #[test]
 fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.obarray
-        .set_symbol_value("current-prefix-arg", Value::list(vec![Value::fixnum(4)]));
+    let mut ev = crate::test_utils::runtime_startup_context();
+    unsafe {
+        ev.obarray_view_mut().with_legacy_value_write(|obarray| {
+            obarray.set_symbol_value("current-prefix-arg", Value::list(vec![Value::fixnum(4)]));
+        });
+    }
 
     let mut builtin_plan =
         plan_call_interactively_for_test(&mut ev, &[Value::symbol("forward-char")])
             .expect("plan builtin default interactive command");
     let builtin_resolution = unsafe {
-        let buffers = &mut ev.buffers;
-        let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
+        let custom = crate::emacs_core::custom::CustomManager::new();
+        let (buffers, mut obarray_view) = ev.buffers_and_obarray_view_mut();
+        obarray_view.with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
                 buffers,
-                custom,
-                specpdl,
+                &custom,
+                &[],
                 &mut builtin_plan,
             )
         })
@@ -1687,20 +1714,19 @@ fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
     let mut lambda_plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan interactive lambda");
     let (_, lambda_args) = unsafe {
-        let buffers = &mut ev.buffers;
-        let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
+        let custom = crate::emacs_core::custom::CustomManager::new();
+        let (buffers, mut obarray_view) = ev.buffers_and_obarray_view_mut();
+        obarray_view.with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
                 buffers,
-                custom,
-                specpdl,
+                &custom,
+                &[],
                 &mut lambda_plan,
             )
         })
@@ -1713,27 +1739,26 @@ fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
 #[test]
 fn call_interactively_state_resolution_defers_prompting_specs_to_eval() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::runtime_startup_context();
     let lambda = ev
         .eval_str("(lambda (x) (interactive \"sPrompt: \") x)")
         .expect("eval prompting lambda");
     let mut plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan prompting lambda");
     let resolved = unsafe {
-        let buffers = &mut ev.buffers;
-        let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
+        let custom = crate::emacs_core::custom::CustomManager::new();
+        let (buffers, mut obarray_view) = ev.buffers_and_obarray_view_mut();
+        obarray_view.with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
                 buffers,
-                custom,
-                specpdl,
+                &custom,
+                &[],
                 &mut plan,
             )
         })
@@ -1745,15 +1770,20 @@ fn call_interactively_state_resolution_defers_prompting_specs_to_eval() {
 #[test]
 fn call_interactively_state_resolution_handles_simple_string_codes_without_eval() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.obarray
-        .set_symbol_value("current-prefix-arg", Value::list(vec![Value::fixnum(4)]));
-    let current = ev.buffers.current_buffer_id().expect("current buffer");
-    let _ = ev.buffers.replace_buffer_contents(current, "abcd");
+    let mut ev = crate::test_utils::new_context();
+    unsafe {
+        ev.obarray_view_mut().with_legacy_value_write(|obarray| {
+            obarray.set_symbol_value("current-prefix-arg", Value::list(vec![Value::fixnum(4)]));
+        });
+    }
+    let current = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let _ = ev.edit.buffers.replace_buffer_contents(current, "abcd");
     let _ = ev
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(current, crate::buffer::EmacsBytePos::new(2));
     let _ = ev
+        .edit
         .buffers
         .set_buffer_mark_emacs_byte_pos(current, crate::buffer::EmacsBytePos::new(1));
 
@@ -1772,27 +1802,9 @@ fn call_interactively_state_resolution_handles_simple_string_codes_without_eval(
         &[lambda, Value::NIL, Value::vector(vec![event])],
     )
     .expect("plan simple string-code lambda");
-    let (_, args) = unsafe {
-        let buffers = &mut ev.buffers;
-        let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
-        // SAFETY: this split-state resolver handles only native string-code/
-        // no-argument cases; Lisp/prompting cases are deferred. Its writes are
-        // buffer/runtime Values, not function or canonical descriptor metadata.
-        // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
-            resolve_call_interactively_target_and_args_in_state(
-                VariableView::canonical(CanonicalAccess::TEST, obarray),
-                &mut Vec::new(),
-                buffers,
-                custom,
-                specpdl,
-                &mut plan,
-            )
-        })
-    }
-    .expect("resolve simple string-code args")
-    .expect("shared-state simple string-code path");
+    let (_, args) = resolve_call_interactively_target_and_args_in_vm_runtime(&mut ev, &mut plan)
+        .expect("resolve simple string-code args")
+        .expect("shared-state simple string-code path");
     assert_eq!(
         args,
         vec![
@@ -1812,15 +1824,23 @@ fn call_interactively_state_resolution_handles_simple_string_codes_without_eval(
 #[test]
 fn call_interactively_state_resolution_defers_shift_selection_without_effects() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let current = ev.buffers.current_buffer_id().expect("current buffer");
-    let _ = ev.buffers.replace_buffer_contents(current, "abcd");
+    let mut ev = crate::test_utils::new_context();
+    let current = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let _ = ev.edit.buffers.replace_buffer_contents(current, "abcd");
     let _ = ev
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(current, crate::buffer::EmacsBytePos::new(2));
-    ev.obarray
-        .set_symbol_value("this-command-keys-shift-translated", Value::T);
-    ev.obarray.set_symbol_value("shift-select-mode", Value::T);
+    unsafe {
+        ev.obarray_view_mut().with_legacy_value_write(|obarray| {
+            obarray.set_symbol_value("this-command-keys-shift-translated", Value::T);
+        });
+    }
+    unsafe {
+        ev.obarray_view_mut().with_legacy_value_write(|obarray| {
+            obarray.set_symbol_value("shift-select-mode", Value::T)
+        });
+    }
 
     let lambda = ev
         .eval_str("(lambda (pt) (interactive \"^d\") pt)")
@@ -1828,20 +1848,19 @@ fn call_interactively_state_resolution_defers_shift_selection_without_effects() 
     let mut plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan shift-selection lambda");
     let resolution = unsafe {
-        let buffers = &mut ev.buffers;
-        let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
+        let custom = crate::emacs_core::custom::CustomManager::new();
+        let (buffers, mut obarray_view) = ev.buffers_and_obarray_view_mut();
+        obarray_view.with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
                 buffers,
-                custom,
-                specpdl,
+                &custom,
+                &[],
                 &mut plan,
             )
         })
@@ -1849,7 +1868,7 @@ fn call_interactively_state_resolution_defers_shift_selection_without_effects() 
     .expect("resolve shift-selection args");
     assert!(resolution.is_none());
 
-    let buf = ev.buffers.current_buffer().expect("current buffer");
+    let buf = ev.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.mark_emacs_byte_pos().map(|pos| pos.get()), None);
     assert_eq!(buf.get_buffer_local("mark-active"), Some(Value::NIL));
 }
@@ -1857,46 +1876,30 @@ fn call_interactively_state_resolution_defers_shift_selection_without_effects() 
 #[test]
 fn call_interactively_state_resolution_handles_optional_coding_without_prefix() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let lambda = ev
         .eval_str("(lambda (coding) (interactive \"ZCoding: \") coding)")
         .expect("eval lambda");
     let mut plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan optional coding lambda");
-    let (_, args) = unsafe {
-        let buffers = &mut ev.buffers;
-        let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
-        // SAFETY: this split-state resolver handles only native string-code/
-        // no-argument cases; Lisp/prompting cases are deferred. Its writes are
-        // buffer/runtime Values, not function or canonical descriptor metadata.
-        // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
-            resolve_call_interactively_target_and_args_in_state(
-                VariableView::canonical(CanonicalAccess::TEST, obarray),
-                &mut Vec::new(),
-                buffers,
-                custom,
-                specpdl,
-                &mut plan,
-            )
-        })
-    }
-    .expect("resolve optional coding args")
-    .expect("shared-state optional coding path");
+    let (_, args) = resolve_call_interactively_target_and_args_in_vm_runtime(&mut ev, &mut plan)
+        .expect("resolve optional coding args")
+        .expect("shared-state optional coding path");
     assert_eq!(args, vec![Value::NIL]);
 }
 
 #[test]
 fn interactive_lambda_r_capital_spec_uses_use_region_p_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let current = ev.buffers.current_buffer_id().expect("current buffer");
-    let _ = ev.buffers.replace_buffer_contents(current, "abcd");
+    let mut ev = crate::test_utils::new_context();
+    let current = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let _ = ev.edit.buffers.replace_buffer_contents(current, "abcd");
     let _ = ev
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(current, crate::buffer::EmacsBytePos::new(2));
     let _ = ev
+        .edit
         .buffers
         .set_buffer_mark_emacs_byte_pos(current, crate::buffer::EmacsBytePos::new(1));
 
@@ -1932,7 +1935,7 @@ fn interactive_lambda_r_capital_spec_uses_use_region_p_semantics() {
 #[test]
 fn interactive_p_false_by_default() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_interactive_p(&mut ev, vec![]);
     assert!(result.unwrap().is_nil());
 }
@@ -1940,17 +1943,17 @@ fn interactive_p_false_by_default() {
 #[test]
 fn interactive_p_nil_when_interactive() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.interactive.push_interactive_call(true);
+    let mut ev = crate::test_utils::new_context();
+    ev.interactive_mut().push_interactive_call(true);
     let result = builtin_interactive_p(&mut ev, vec![]);
-    ev.interactive.pop_interactive_call();
+    ev.interactive_mut().pop_interactive_call();
     assert!(result.unwrap().is_nil());
 }
 
 #[test]
 fn called_interactively_p_false_by_default() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_called_interactively_p(&mut ev, vec![]);
     assert!(result.unwrap().is_nil());
 }
@@ -1958,7 +1961,7 @@ fn called_interactively_p_false_by_default() {
 #[test]
 fn called_interactively_p_with_kind() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_called_interactively_p(&mut ev, vec![Value::symbol("any")]);
     assert!(result.unwrap().is_nil());
 }
@@ -1966,37 +1969,37 @@ fn called_interactively_p_with_kind() {
 #[test]
 fn called_interactively_p_kind_interactive_is_nil_when_interactive() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.interactive.push_interactive_call(true);
+    let mut ev = crate::test_utils::new_context();
+    ev.interactive_mut().push_interactive_call(true);
     let result = builtin_called_interactively_p(&mut ev, vec![Value::symbol("interactive")]);
-    ev.interactive.pop_interactive_call();
+    ev.interactive_mut().pop_interactive_call();
     assert!(result.unwrap().is_nil());
 }
 
 #[test]
 fn called_interactively_p_kind_any_is_t_when_interactive() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.interactive.push_interactive_call(true);
+    let mut ev = crate::test_utils::new_context();
+    ev.interactive_mut().push_interactive_call(true);
     let result = builtin_called_interactively_p(&mut ev, vec![Value::symbol("any")]);
-    ev.interactive.pop_interactive_call();
+    ev.interactive_mut().pop_interactive_call();
     assert!(result.unwrap().is_truthy());
 }
 
 #[test]
 fn called_interactively_p_unknown_kind_is_t_when_interactive() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.interactive.push_interactive_call(true);
+    let mut ev = crate::test_utils::new_context();
+    ev.interactive_mut().push_interactive_call(true);
     let result = builtin_called_interactively_p(&mut ev, vec![Value::symbol("foo")]);
-    ev.interactive.pop_interactive_call();
+    ev.interactive_mut().pop_interactive_call();
     assert!(result.unwrap().is_truthy());
 }
 
 #[test]
 fn called_interactively_p_too_many_args() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result =
         builtin_called_interactively_p(&mut ev, vec![Value::symbol("any"), Value::symbol("extra")]);
     assert!(result.is_err());
@@ -2009,7 +2012,7 @@ fn called_interactively_p_too_many_args() {
 #[test]
 fn this_command_keys_empty() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_this_command_keys(&mut ev, vec![]).unwrap();
     assert_eq!(result.as_utf8_str(), Some(""));
 }
@@ -2017,7 +2020,7 @@ fn this_command_keys_empty() {
 #[test]
 fn this_command_keys_after_set() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_this_command_keys_from_string(&crate::heap_types::LispString::from_utf8("ab"))
         .unwrap();
     let result = builtin_this_command_keys(&mut ev, vec![]).unwrap();
@@ -2027,7 +2030,7 @@ fn this_command_keys_after_set() {
 #[test]
 fn this_command_keys_vector_empty() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_this_command_keys_vector(&mut ev, vec![]).unwrap();
     assert!(result.is_vector());
 }
@@ -2035,7 +2038,7 @@ fn this_command_keys_vector_empty() {
 #[test]
 fn this_command_keys_vector_after_set() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_this_command_keys_from_string(&crate::heap_types::LispString::from_utf8("x"))
         .unwrap();
     let result = builtin_this_command_keys_vector(&mut ev, vec![]).unwrap();
@@ -2051,7 +2054,7 @@ fn this_command_keys_vector_after_set() {
 #[test]
 fn this_command_keys_uses_read_command_key_chars() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_read_command_keys(vec![Value::fixnum(97)]);
 
     let text = builtin_this_command_keys(&mut ev, vec![]).unwrap();
@@ -2070,7 +2073,7 @@ fn this_command_keys_uses_read_command_key_chars() {
 #[test]
 fn this_command_keys_returns_vector_for_non_char_read_command_keys() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_read_command_keys(vec![Value::list(vec![Value::symbol("mouse-1")])]);
 
     let result = builtin_this_command_keys(&mut ev, vec![]).unwrap();
@@ -2087,7 +2090,7 @@ fn this_command_keys_returns_vector_for_non_char_read_command_keys() {
 #[test]
 fn this_single_command_keys_prefers_read_command_key_vector() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_read_command_keys(vec![Value::fixnum(97)]);
 
     let result = builtin_this_single_command_keys(&mut ev, vec![]).unwrap();
@@ -2103,7 +2106,7 @@ fn this_single_command_keys_prefers_read_command_key_vector() {
 #[test]
 fn this_single_command_raw_keys_tracks_raw_sequence() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_command_key_sequences(
         vec![Value::fixnum('b' as i64)],
         vec![Value::fixnum('a' as i64)],
@@ -2122,7 +2125,7 @@ fn this_single_command_raw_keys_tracks_raw_sequence() {
 #[test]
 fn clear_this_command_keys_clears_read_key_context() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_read_command_keys(vec![Value::fixnum(97)]);
 
     let result = builtin_clear_this_command_keys(&mut ev, vec![]).unwrap();
@@ -2142,7 +2145,7 @@ fn clear_this_command_keys_clears_read_key_context() {
 #[test]
 fn set_this_command_keys_clears_raw_sequence_history() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_command_key_sequences(
         vec![Value::fixnum('q' as i64)],
         vec![Value::fixnum('z' as i64)],
@@ -2180,7 +2183,7 @@ fn set_this_command_keys_clears_raw_sequence_history() {
 #[test]
 fn clear_this_command_keys_without_keep_record_clears_recent_input_history() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.record_input_event(Value::fixnum(97));
     assert_eq!(ev.recent_input_events(), &[Value::fixnum(97)]);
 
@@ -2192,7 +2195,7 @@ fn clear_this_command_keys_without_keep_record_clears_recent_input_history() {
 #[test]
 fn clear_this_command_keys_with_nil_keep_record_clears_recent_input_history() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.record_input_event(Value::fixnum(98));
     assert_eq!(ev.recent_input_events(), &[Value::fixnum(98)]);
 
@@ -2204,7 +2207,7 @@ fn clear_this_command_keys_with_nil_keep_record_clears_recent_input_history() {
 #[test]
 fn clear_this_command_keys_with_keep_record_preserves_recent_input_history() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.record_input_event(Value::fixnum(99));
     assert_eq!(ev.recent_input_events(), &[Value::fixnum(99)]);
 
@@ -2216,7 +2219,7 @@ fn clear_this_command_keys_with_keep_record_preserves_recent_input_history() {
 #[test]
 fn clear_this_command_keys_rejects_more_than_one_arg() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_clear_this_command_keys(&mut ev, vec![Value::fixnum(1), Value::fixnum(2)]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -2239,7 +2242,7 @@ fn clear_this_command_keys_rejects_more_than_one_arg() {
 #[test]
 fn key_binding_global() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let km = make_list_keymap();
     ev.select_global_map(km);
     // ctrl-f = char 6
@@ -2390,7 +2393,7 @@ fn key_binding_applies_menu_item_filter_prefix_keymap() {
 #[test]
 fn key_binding_unbound() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_key_binding(&mut ev, vec![Value::string("\x1a")]).unwrap();
     assert!(result.is_nil());
 }
@@ -2418,7 +2421,7 @@ fn key_binding_empty_vector_is_nil() {
 #[test]
 fn key_binding_default_plain_char_self_insert() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_key_binding(&mut ev, vec![Value::string("a")]).unwrap();
     assert_eq!(result.as_bare_symbol_name(), Some("self-insert-command"));
 }
@@ -2426,7 +2429,7 @@ fn key_binding_default_plain_char_self_insert() {
 #[test]
 fn key_binding_too_many_args_errors() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_key_binding(
         &mut ev,
         vec![
@@ -2636,9 +2639,9 @@ fn menu_bar_menu_at_x_y_prefers_pending_native_click_key() {
     crate::test_utils::init_test_tracing();
     let mut ev = eval_with_interactive_shims();
     let frame_id = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, crate::buffer::BufferId(1));
-    ev.frames.select_frame(frame_id);
+    ev.frame_manager_mut().select_frame(frame_id);
     ev.pending_menu_bar_popup_anchor = Some(crate::emacs_core::MenuBarPopupAnchor {
         request_id: None,
         frame_id,
@@ -2916,7 +2919,7 @@ fn define_key_sequence_preserves_gnu_prefix_symbol_bindings() {
 #[test]
 fn local_key_binding_nil_when_no_local_map() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_local_key_binding(&mut ev, vec![Value::string("\x03")]).unwrap();
     assert!(result.is_nil());
 }
@@ -2924,7 +2927,7 @@ fn local_key_binding_nil_when_no_local_map() {
 #[test]
 fn local_key_binding_too_many_args_errors() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result =
         builtin_local_key_binding(&mut ev, vec![Value::string("\x03"), Value::NIL, Value::NIL]);
     assert!(result.is_err());
@@ -2933,7 +2936,7 @@ fn local_key_binding_too_many_args_errors() {
 #[test]
 fn minor_mode_key_binding_returns_nil_when_no_modes_are_active() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_minor_mode_key_binding(&mut ev, vec![Value::string("\x03")]).unwrap();
     assert!(result.is_nil());
 }
@@ -3043,7 +3046,7 @@ fn minor_mode_key_binding_invalid_emulation_keymap_id_errors() {
 #[test]
 fn minor_mode_key_binding_too_many_args_errors() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_minor_mode_key_binding(
         &mut ev,
         vec![Value::string("\x03"), Value::T, Value::symbol("extra")],
@@ -3061,7 +3064,7 @@ fn describe_key_briefly_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("describe-key-briefly")
         .expect("missing describe-key-briefly bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -3133,7 +3136,7 @@ fn thingatpt_startup_functions_are_autoloaded() {
         "symbol-at-point",
     ] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing startup function cell for {name}"));
         assert!(
@@ -3145,13 +3148,13 @@ fn thingatpt_startup_functions_are_autoloaded() {
         );
     }
 
-    assert!(!ev.obarray.fboundp("word-at-point"));
+    assert!(!ev.obarray().fboundp("word-at-point"));
 }
 
 #[test]
 fn word_at_point_starts_unbound_before_thingatpt_load() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = eval_all_with(
         &mut ev,
         r#"(progn
@@ -3385,7 +3388,7 @@ fn call_interactively_builtin_delete_char_uses_default_prefix_arg() {
 #[test]
 fn call_interactively_rejects_non_vector_keys_argument() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_call_interactively(
         &mut ev,
         &vec![Value::symbol("ignore"), Value::NIL, Value::string("b")],
@@ -3403,7 +3406,7 @@ fn call_interactively_rejects_non_vector_keys_argument() {
 #[test]
 fn call_interactively_accepts_vector_keys_argument() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let command = ev
         .eval_str("'(lambda () (interactive) nil)")
         .expect("quoted lambda command");
@@ -3418,7 +3421,7 @@ fn call_interactively_accepts_vector_keys_argument() {
 #[test]
 fn call_interactively_does_not_record_keys_argument_in_recent_history() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let command = ev
         .eval_str("'(lambda () (interactive) nil)")
         .expect("quoted lambda command");
@@ -3434,7 +3437,7 @@ fn call_interactively_does_not_record_keys_argument_in_recent_history() {
 #[test]
 fn call_interactively_keys_vector_keeps_this_command_keys_empty_in_batch() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let _ = eval_all_with(
         &mut ev,
         "(fset 'neo-rk-loop-probe
@@ -3460,7 +3463,7 @@ fn call_interactively_keys_vector_keeps_this_command_keys_empty_in_batch() {
 #[test]
 fn call_interactively_rejects_list_keys_argument_without_recording_recent_history() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let keys = Value::list(vec![Value::fixnum(97), Value::fixnum(98)]);
     let result =
         builtin_call_interactively(&mut ev, &vec![Value::symbol("ignore"), Value::NIL, keys])
@@ -3478,7 +3481,7 @@ fn call_interactively_rejects_list_keys_argument_without_recording_recent_histor
 #[test]
 fn call_interactively_rejects_too_many_arguments() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_call_interactively(
         &mut ev,
         &vec![Value::symbol("ignore"), Value::NIL, Value::NIL, Value::NIL],
@@ -3727,7 +3730,7 @@ fn every_builtin_subr_command_exposes_the_interactive_form_that_defines_it() {
 #[test]
 fn registered_builtin_interactive_spec_is_the_command_identity_source() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.register_subr(
         SubrSpec::new(
             "neovm--typed-interactive-registration-test",
@@ -3738,7 +3741,7 @@ fn registered_builtin_interactive_spec_is_the_command_identity_source() {
     );
     let command = crate::emacs_core::intern::intern("neovm--typed-interactive-registration-test");
     assert!(
-        ev.interactive.get_spec(command).is_none(),
+        ev.interactive().get_spec(command).is_none(),
         "immutable Rust subr metadata must not leak into the mutable Lisp registry"
     );
 
@@ -3756,7 +3759,7 @@ fn registered_builtin_interactive_spec_is_the_command_identity_source() {
 #[test]
 fn registered_builtin_alias_resolves_command_identity_without_registry_copy() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.register_subr(
         SubrSpec::new(
             "neovm--typed-interactive-target",
@@ -3777,7 +3780,7 @@ fn registered_builtin_alias_resolves_command_identity_without_registry_copy() {
     );
     let alias = crate::emacs_core::intern::intern("neovm--typed-interactive-alias");
     assert!(
-        ev.interactive.get_spec(alias).is_none(),
+        ev.interactive().get_spec(alias).is_none(),
         "subr aliases must resolve immutable metadata through the function object"
     );
     assert_eq!(results[0], "OK (t (interactive \"P\"))");
@@ -3786,7 +3789,7 @@ fn registered_builtin_alias_resolves_command_identity_without_registry_copy() {
 #[test]
 fn replacing_registered_builtin_with_noninteractive_lambda_removes_command_identity() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let results = eval_all_with(
         &mut ev,
@@ -3802,7 +3805,7 @@ fn replacing_registered_builtin_with_noninteractive_lambda_removes_command_ident
 #[test]
 fn captured_noninteractive_subr_does_not_inherit_replacement_symbol_command_identity() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let results = eval_all_with(
         &mut ev,
@@ -4188,7 +4191,7 @@ fn command_execute_calls_function() {
         r#"(defvar exec-ran nil)
            (defun test-cmd () (setq exec-ran t))"#,
     );
-    ev.interactive.register_interactive(
+    ev.interactive_mut().register_interactive(
         crate::emacs_core::intern::intern("test-cmd"),
         InteractiveSpec::no_args(),
     );
@@ -4201,14 +4204,14 @@ fn command_execute_calls_function() {
         .unwrap();
     assert!(result.is_truthy());
 
-    let ran = ev.obarray.symbol_value_copied("exec-ran").unwrap();
+    let ran = ev.obarray().symbol_value_copied("exec-ran").unwrap();
     assert!(ran.is_truthy());
 }
 
 #[test]
 fn interactive_form_ignores_command_modes_tail_in_closure_slot() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let results = eval_all_with(
         &mut ev,
         r#"(let ((cmd (lambda ()
@@ -4274,7 +4277,7 @@ fn call_interactively_lisp_ignore() {
 #[test]
 fn call_interactively_lambda_interactive_p_uses_current_prefix_arg() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let results = eval_all_with(
         &mut ev,
         r#"(let ((f (lambda (n) (interactive "p") n))
@@ -4305,7 +4308,7 @@ fn command_execute_lambda_interactive_p_uses_prefix_arg() {
 #[test]
 fn call_interactively_lambda_interactive_p_prefers_current_prefix_arg() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let results = eval_all_with(
         &mut ev,
         r#"(let ((f (lambda (n) (interactive "p") n))
@@ -4341,7 +4344,7 @@ fn interactive_lambda_forms_support_p_p_and_expression_specs() {
 #[test]
 fn call_interactively_accepts_quoted_lambda_commands() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let results = eval_all_with(
         &mut ev,
         r#"(let ((current-prefix-arg 3))
@@ -4678,7 +4681,7 @@ U") (list keys up)))))"#,
 #[test]
 fn interactive_lambda_invalid_control_letter_signals_error() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let results = eval_all_with(
         &mut ev,
         r#"(list
@@ -4976,7 +4979,7 @@ fn interactive_lambda_e_spec_does_not_use_unread_queue_without_command_key_conte
 #[test]
 fn interactive_lambda_e_spec_prefers_existing_command_keys_context() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let results = eval_all_with(
         &mut ev,
         r#"(list
@@ -5002,7 +5005,7 @@ fn interactive_lambda_e_spec_prefers_existing_command_keys_context() {
 #[test]
 fn call_interactively_non_command_signals_commandp_error() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_call_interactively(&mut ev, &vec![Value::symbol("car")])
         .expect_err("call-interactively should reject non-command symbols");
     match result.into_kind() {
@@ -5020,7 +5023,7 @@ fn call_interactively_non_command_signals_commandp_error() {
 #[test]
 fn call_interactively_propagates_noninteractive_autoload_failure_before_commandp() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(autoload 'neovm-ci-missing-plain
                    \"neovm-ci-missing-plain-library\"
@@ -5153,7 +5156,7 @@ fn call_interactively_eval_expression_executes_read_expression_result() {
 #[test]
 fn self_insert_command_argument_validation() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let missing = builtin_self_insert_command(&mut ev, vec![])
         .expect_err("self-insert-command should require one arg");
@@ -5755,7 +5758,7 @@ fn where_is_internal_reuses_one_reverse_index_for_many_definitions() {
     );
 
     assert_eq!(results, ["OK ([97] [98])"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 1);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 1);
 }
 
 /// GNU's `Fwhere_is_internal` reads C globals such as
@@ -5822,9 +5825,9 @@ fn where_is_internal_answers_many_command_remappings_from_reverse_index() {
     );
 
     assert_eq!(results, ["OK ([97] [98])"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 1);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 1);
     assert_eq!(
-        eval.interactive
+        eval.interactive()
             .where_is_reverse_index_remapping_lookup_count(),
         2
     );
@@ -5845,7 +5848,7 @@ fn where_is_internal_rebuilds_reverse_index_after_keymap_mutation() {
     );
 
     assert_eq!(results, ["OK ([97] [98])"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 2);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 2);
 }
 
 #[test]
@@ -5864,7 +5867,7 @@ fn where_is_internal_rebuilds_indexed_remapping_after_keymap_mutation() {
     );
 
     assert_eq!(results, ["OK [98]"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 2);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 2);
 }
 
 #[test]
@@ -5882,7 +5885,7 @@ fn where_is_internal_does_not_reuse_reverse_index_for_different_keymaps() {
     );
 
     assert_eq!(results, ["OK ([97] [98])"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 2);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 2);
 }
 
 #[test]
@@ -5899,7 +5902,7 @@ fn where_is_internal_uncached_mode_clears_reverse_index_like_gnu() {
     );
 
     assert_eq!(results, ["OK [97]"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 2);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 2);
 }
 
 #[test]
@@ -7262,9 +7265,10 @@ fn self_inserted_space_fills_without_shifting_point() {
 /// object has to *remove* the stale entry, not leave it behind.
 #[test]
 fn interactive_heap_specs_track_the_heap_valued_specs() {
+    crate::test_utils::init_test_tracing();
     let expected = |registry: &InteractiveRegistry| {
         registry
-            .specs
+            .dump_specs()
             .iter()
             .filter(|(_, spec)| spec.spec.is_heap_object())
             .map(|(symbol, spec)| (*symbol, spec.spec))
@@ -7272,32 +7276,35 @@ fn interactive_heap_specs_track_the_heap_valued_specs() {
     };
 
     let mut registry = InteractiveRegistry::new();
-    let heap = SymId(101);
-    let plain = SymId(102);
-    let flipped = SymId(103);
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    let heap = unsafe { SymId::from_raw(101) };
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    let plain = unsafe { SymId::from_raw(102) };
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    let flipped = unsafe { SymId::from_raw(103) };
 
     registry.register_interactive(heap, InteractiveSpec::new("p"));
     registry.register_interactive(plain, InteractiveSpec { spec: Value::NIL });
     registry.register_interactive(flipped, InteractiveSpec::new("r"));
-    assert_eq!(registry.heap_specs, expected(&registry));
-    assert_eq!(registry.heap_specs.len(), 2);
+    assert_eq!(registry.heap_specs_for_test(), &expected(&registry));
+    assert_eq!(registry.heap_specs_for_test().len(), 2);
 
     // Re-registration that drops the heap value must drop the root with it.
     registry.register_interactive(flipped, InteractiveSpec { spec: Value::NIL });
-    assert_eq!(registry.heap_specs, expected(&registry));
-    assert_eq!(registry.heap_specs.len(), 1);
+    assert_eq!(registry.heap_specs_for_test(), &expected(&registry));
+    assert_eq!(registry.heap_specs_for_test().len(), 1);
 
     registry.unregister_interactive(heap);
-    assert_eq!(registry.heap_specs, expected(&registry));
-    assert!(registry.heap_specs.is_empty());
+    assert_eq!(registry.heap_specs_for_test(), &expected(&registry));
+    assert!(registry.heap_specs_for_test().is_empty());
 
     // The dump restores `specs` in bulk, bypassing `register_interactive`.
     let mut dumped = HashMap::new();
     dumped.insert(heap, InteractiveSpec::new("p"));
     dumped.insert(plain, InteractiveSpec { spec: Value::NIL });
     let restored = InteractiveRegistry::from_dump(dumped);
-    assert_eq!(restored.heap_specs, expected(&restored));
-    assert_eq!(restored.heap_specs.len(), 1);
+    assert_eq!(restored.heap_specs_for_test(), &expected(&restored));
+    assert_eq!(restored.heap_specs_for_test().len(), 1);
 }
 
 #[test]
@@ -7409,4 +7416,81 @@ fn interactive_prefix_policy_runs_once_before_invalid_argument_errors() {
   '(nil t))"#,
     );
     assert_eq!(result, "OK ((error 1) (error 1))");
+}
+
+#[test]
+fn invalid_control_letter_error_follows_text_quoting_style_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `Fcall_interactively` (src/callint.c) signals with `error`, whose format string goes
+    // through `doprnt`: its grave accent and apostrophe follow `text-quoting-style`, but the
+    // letter it formats with `%c` is left as it is, and the octal code takes 3 digits (`%03o`).
+    assert_eq!(
+        eval_one(
+            r##"(let ((message-of
+                    (lambda (spec)
+                      (condition-case err
+                          (call-interactively (list 'lambda nil (list 'interactive spec)))
+                        (error (car (cdr err)))))))
+                  (list
+                   (let ((text-quoting-style 'grave)) (funcall message-of "\xFF"))
+                   (let ((text-quoting-style 'straight)) (funcall message-of "\xFF"))
+                   (let ((text-quoting-style 'curve)) (funcall message-of "\xFF"))
+                   (let ((text-quoting-style 'curve)) (funcall message-of "`"))
+                   (let ((text-quoting-style 'grave)) (funcall message-of "\C-a"))))"##
+        ),
+        concat!(
+            "OK (\"Invalid control letter `\u{ff}' (#o377, #x00ff) in interactive calling string\"",
+            " \"Invalid control letter '\u{ff}' (#o377, #x00ff) in interactive calling string\"",
+            " \"Invalid control letter \u{2018}\u{ff}\u{2019} (#o377, #x00ff) in interactive calling string\"",
+            " \"Invalid control letter \u{2018}`\u{2019} (#o140, #x0060) in interactive calling string\"",
+            " \"Invalid control letter `\u{1}' (#o001, #x0001) in interactive calling string\")"
+        )
+    );
+}
+
+/// GNU `Fcall_interactively` (src/callint.c) reads a `c` argument with `Fread_char` and the up
+/// event that follows a down event with `Fread_event`, and both call
+/// `barf_if_interaction_inhibited` first, so neither consumes an unread event.
+#[test]
+fn shared_state_interactive_reads_honour_inhibit_interaction() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.eval_str("(setq inhibit-interaction t unread-command-events (list ?a '(mouse-1)))")
+        .expect("set up input");
+    let expect_inhibited = |result: Result<(), Flow>| match result
+        .expect_err("the read should be inhibited")
+        .into_kind()
+    {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "inhibited-interaction"),
+        other => panic!("expected a signal, got {other:?}"),
+    };
+
+    let lambda = ev
+        .eval_str("(lambda (c) (interactive \"c\") c)")
+        .expect("eval lambda");
+    let mut plan = plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan c lambda");
+    expect_inhibited(
+        resolve_call_interactively_target_and_args_in_vm_runtime(&mut ev, &mut plan).map(|_| ()),
+    );
+
+    let down = ev
+        .eval_str("[(down-mouse-1)]")
+        .expect("down event sequence");
+    let mut context = InteractiveInvocationContext::default();
+    expect_inhibited(interactive_capture_up_event_in_vm_batch_runtime(
+        &mut ev,
+        &down,
+        &mut context,
+    ));
+
+    // Without a down event there is no read, so no error either.
+    let key = ev.eval_str("[?x]").expect("key sequence");
+    interactive_capture_up_event_in_vm_batch_runtime(&mut ev, &key, &mut context)
+        .expect("no up event to read");
+
+    let unread = ev.eval_str("unread-command-events").expect("unread events");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&unread),
+        "(97 (mouse-1))"
+    );
 }

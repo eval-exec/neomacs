@@ -1,0 +1,141 @@
+[package]
+name = "neovm-eval"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Evaluator and Lisp runtime extracted from neovm-core"
+
+[features]
+# neovm-value/sqlite is a forward, not a default: value's old default
+# features supplied it to this crate's default graph, and the sibling
+# edges now disable defaults.  It does not turn on this crate's own
+# `sqlite` feature (the sqlite subr registrations) -- base did not.
+default = ["jit", "neovm-value/sqlite"]
+# Test-only support surface: enabled only by a dev-dependency of a crate
+# ABOVE neovm-eval (core), never by a product profile.  TEST-SUPPORT-VIS
+# (B3, peer ruling 02:2xZ): named items keep their production visibility and
+# gain `visibility::make(pub)` only in this build; the provider features
+# forward downward so the whole lower graph is in the same test mode.
+test-support = ["neovm-value/test-support", "neovm-text/test-support", "neovm-edit/test-support", "dep:visibility"]
+contract-fixtures = []
+# The moved system-vocabulary table lives in neovm-value; forward the
+# capability down so an eval-only consumer advertises the same
+# `dynamic-setting`/`system-font-setting` rows as a core consumer.
+desktop-font-settings = ["neovm-value/desktop-font-settings"]
+gc-memory-telemetry = []
+jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit"]
+perf-probes = []
+redisplay-test-policy = ["neovm-edit/redisplay-test-policy"]
+sqlite = []
+vm-profile = []
+# Marker: the dbus transport is statically linked by neovm-system, but eval's
+# source still branches on cfg(neomacs_have_dbus). Forwarded by core/system so
+# every crate's build script reaches the same host view.
+dbus-vendored = []
+
+[build-dependencies]
+# Host-cfg probe shared by core/system/value/eval (build_support/host_cfg.rs).
+pkg-config.workspace = true
+# The C long-double bridge this crate's float builtins call.
+cc = "1.4.5"
+
+[dependencies]
+# B3 TEST-SUPPORT-VIS: pub only in the test-support build; product visibility
+# is unchanged.  Test-provider defs are annotated by exact rustc def span.
+visibility = { version = "0.1.1", optional = true }
+neovm-value = { path = "../neovm-value", default-features = false }
+neovm-edit = { path = "../neovm-edit", default-features = false }
+neovm-text = { path = "../neovm-text", default-features = false }
+bitflags.workspace = true
+bytemuck.workspace = true
+cranelift-codegen.workspace = true
+cranelift-frontend.workspace = true
+cranelift-jit.workspace = true
+cranelift-module.workspace = true
+cranelift-native.workspace = true
+cranelift-object.workspace = true
+crossbeam-channel.workspace = true
+encoding_rs.workspace = true
+enum-map.workspace = true
+enumflags2.workspace = true
+errno.workspace = true
+fs4.workspace = true
+getrandom.workspace = true
+hashbrown.workspace = true
+hostname.workspace = true
+keysymdefs.workspace = true
+libc.workspace = true
+libloading.workspace = true
+malachite.workspace = true
+memchr.workspace = true
+memmap2.workspace = true
+native-regex.workspace = true
+neomacs-display-protocol.workspace = true
+num_enum.workspace = true
+object = { version = "0.39", default-features = false, features = ["read", "std"] }
+polling.workspace = true
+rustc-hash.workspace = true
+rustix.workspace = true
+serde.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+smallvec.workspace = true
+stacker.workspace = true
+static_assertions.workspace = true
+strum.workspace = true
+sysinfo.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tree-sitter.workspace = true
+tree-sitter-language.workspace = true
+unicode_names2.workspace = true
+whoami = "2.1.2"
+md-5.workspace = true
+os_pipe.workspace = true
+portable-pty.workspace = true
+rustls.workspace = true
+socket2.workspace = true
+neomacs-video-model.workspace = true
+windows-sys.workspace = true
+
+# `inotify` is the Linux file-notification adapter's dependency
+# (emacs_core/lisp/native/builtins/file_notify/platform/linux, itself compiled
+# only under `#[cfg(target_os = "linux")]`).  inotify 0.11 refuses to build on
+# other targets (`compile_error!` on the missing kcmp_file implementation), so
+# the dependency must be absent there, exactly as neovm-core/Cargo.toml keeps
+# its own inotify edge target-gated.  The macOS backend is kqueue and the
+# Windows backend is w32notify; neither names this crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+inotify.workspace = true
+
+[dev-dependencies]
+# Downward-only: shared value test helpers for this crate's own unit tests.
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support", "test-thread-fallback-heap"] }
+# Downward-only: eval's own tests call text items whose visibility widens
+# under text's test-support feature (the VIS read getters and the casetab/
+# chartable SUBR helpers, e.g. builtin_set_case_table).  This edge enables
+# that surface for eval's test build only; it is not a CacheRootScan gate -
+# the variant is unconditional since the cross-crate cfg fix.
+neovm-text = { path = "../neovm-text", default-features = false, features = ["test-support"] }
+# E3: the redisplay-policy selectors and the edit authority fences are
+# crate-private in production; this dev edge enables edit's test-support
+# surface for eval's own unit tests (downward only; never a product edge).
+neovm-edit = { path = "../neovm-edit", default-features = false, features = ["test-support"] }
+# The A' gate on fence-routed items is cfg(any(test, feature = "test-support"))
+# to match the fence module's cfg (peer P1-HOOKS-2). The optional `visibility`
+# dependency is tied to the test-support feature, so this dev-dependency makes
+# the attribute macro resolvable in this crate's own cfg(test) build too.
+visibility = "0.1.1"
+# External crates the test tree uses directly (test-only; no product edge).
+tracing-subscriber.workspace = true
+neomacs-infra.workspace = true
+flate2.workspace = true
+tree-sitter-json = "0.24"
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

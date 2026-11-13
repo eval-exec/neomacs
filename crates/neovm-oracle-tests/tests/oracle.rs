@@ -7,6 +7,9 @@
 #[path = "../src/common.rs"]
 mod common;
 
+#[path = "oracle_backend_quit_binding.rs"]
+mod oracle_backend_quit_binding;
+
 #[path = "oracle_backtrace_local_remake.rs"]
 mod oracle_backtrace_local_remake;
 
@@ -55,8 +58,17 @@ mod oracle_dual_width_text;
 #[path = "oracle_eob_overlay_motion.rs"]
 mod oracle_eob_overlay_motion;
 
+#[path = "oracle_window_text_chrome.rs"]
+mod oracle_window_text_chrome;
+
+#[path = "oracle_x_open_connection.rs"]
+mod oracle_x_open_connection;
+
 #[path = "oracle_extended_keysyms.rs"]
 mod oracle_extended_keysyms;
+
+#[path = "oracle_face_sentinel_identity.rs"]
+mod oracle_face_sentinel_identity;
 
 #[path = "oracle_face_theme.rs"]
 mod oracle_face_theme;
@@ -64,8 +76,14 @@ mod oracle_face_theme;
 #[path = "oracle_fill_column_stipple.rs"]
 mod oracle_fill_column_stipple;
 
+#[path = "oracle_find_file_directory.rs"]
+mod oracle_find_file_directory;
+
 #[path = "oracle_font_coverage.rs"]
 mod oracle_font_coverage;
+
+#[path = "oracle_font_xlfd_patterns.rs"]
+mod oracle_font_xlfd_patterns;
 
 #[path = "oracle_frame_bar_parameters.rs"]
 mod oracle_frame_bar_parameters;
@@ -115,11 +133,17 @@ mod oracle_pixel_measurement;
 #[path = "oracle_prefix_help.rs"]
 mod oracle_prefix_help;
 
+#[path = "oracle_read_file_name_completion_ignore_case.rs"]
+mod oracle_read_file_name_completion_ignore_case;
+
 #[path = "oracle_shift_selection.rs"]
 mod oracle_shift_selection;
 
 #[path = "oracle_tab_line.rs"]
 mod oracle_tab_line;
+
+#[path = "oracle_thread_signal.rs"]
+mod oracle_thread_signal;
 
 #[path = "oracle_tls_loopback.rs"]
 mod oracle_tls_loopback;

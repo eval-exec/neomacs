@@ -5,6 +5,8 @@
 use super::super::{FrameLayoutAttempt, LayoutEngine};
 use neovm_core::emacs_core::Value;
 use neovm_core::heap_types::LispString;
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -19,7 +21,7 @@ enum MiniScrollCase {
 
 fn real_mini_scroll_log(case: MiniScrollCase) -> String {
     let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
-    let mut eval = neovm_core::emacs_core::load::create_runtime_startup_evaluator_cached()
+    let mut eval = neovm_core::emacs_core::load_boot::create_runtime_startup_evaluator_cached()
         .expect("real runtime startup includes GNU window sizing Lisp");
     // Exercise the live display entry, not native test batch suppression.
     eval.store_variable_by_name("noninteractive", Value::NIL);

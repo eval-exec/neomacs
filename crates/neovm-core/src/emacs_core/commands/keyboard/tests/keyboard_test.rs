@@ -58,7 +58,7 @@ fn basic_char_code_masks() {
 #[test]
 fn tty_erase_char_defaults_to_nil_and_is_special_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // GNU declares this with DEFVAR_LISP in `syms_of_keyboard'
     // (src/keyboard.c:13925) and leaves the value to `init_sys_modes'

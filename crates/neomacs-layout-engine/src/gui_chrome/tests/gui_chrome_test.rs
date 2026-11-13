@@ -2,14 +2,13 @@ use super::*;
 use neomacs_display_protocol::frame_chrome::ChromeAction;
 use neomacs_display_protocol::types::Color;
 use neovm_core::emacs_core::Context;
-use neovm_core::emacs_core::load::{
-    apply_runtime_startup_state, create_bootstrap_evaluator_cached_with_features,
-};
+use neovm_core::emacs_core::load::apply_runtime_startup_state;
+use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached_with_features;
 use neovm_core::heap_types::LispString;
 
 #[test]
 fn parse_tool_bar_item_preserves_raw_unibyte_label_and_help() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let raw = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
     let expected = raw
@@ -30,7 +29,7 @@ fn parse_tool_bar_item_preserves_raw_unibyte_label_and_help() {
 
 #[test]
 fn parse_tool_bar_item_keeps_wrap_separate_from_button_type() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let def = Value::list(vec![
         Value::symbol("menu-item"),
@@ -80,7 +79,7 @@ fn toolbar_icon_name_keeps_gnu_image_base_name() {
 
 #[test]
 fn toolbar_theme_resolves_themed_svg_and_preserves_gnu_fallback() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let spec = Value::list(vec![
         Value::symbol("image"),
@@ -112,7 +111,7 @@ fn toolbar_theme_resolves_themed_svg_and_preserves_gnu_fallback() {
 
 #[test]
 fn toolbar_theme_defaults_to_vscode_like() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let spec = Value::list(vec![
         Value::symbol("image"),
@@ -205,7 +204,7 @@ fn collect_gui_tool_bar_items_after_setup_uses_default_theme() {
 
 #[test]
 fn collect_gui_tool_bar_items_for_frame_uses_that_frames_selected_buffer() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
 
     let primary_buffer = eval.buffer_manager_mut().create_buffer("toolbar-primary");
@@ -527,7 +526,7 @@ fn the_stale_bytecode_refusal_covers_this_crates_tests() {
 /// evaluations across each boundary.
 #[test]
 fn collect_gui_tool_bar_items_for_frame_retains_items_until_gnu_rebuild_predicate() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
 
     let buffer = eval.buffer_manager_mut().create_buffer("toolbar-retained");
@@ -562,7 +561,7 @@ fn collect_gui_tool_bar_items_for_frame_retains_items_until_gnu_rebuild_predicat
     );
     eval.set_variable("tool-bar-map", map);
     let enable_evals = |eval: &Context| {
-        eval.variable_value_by_name("neo-enable-evals")
+        eval.default_value_only_by_name("neo-enable-evals")
             .expect("enable counter")
     };
     // A window that has never generated chrome carries GNU's

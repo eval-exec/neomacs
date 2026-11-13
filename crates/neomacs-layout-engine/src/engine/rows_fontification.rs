@@ -3,6 +3,8 @@
 //! The ledger is confined to the owning serialized mutator's stack. It never
 //! retains a Context, a Lisp value, a source snapshot, or a collector root.
 use super::{LayoutEngine, LayoutPurpose};
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::{
     buffer::{BufferId, CharLen, CharPos0, CharRange},
     emacs_core::{

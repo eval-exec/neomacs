@@ -7,11 +7,11 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 8 |     ThreadTransfer::<LispFwd>::transfer();
   |                                ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<LispFwd>` due to unsatisfied trait bounds
   |
- ::: src/emacs_core/runtime/forward/mod.rs
+ ::: $WORKSPACE/crates/neovm-value/src/forward/mod.rs
   |
   | pub struct LispFwd {
-  | ------------------ doesn't satisfy `LispFwd: Sync`
+  | ------------------ doesn't satisfy `LispFwd: std::marker::Sync`
   |
   = note: the following trait bounds were not satisfied:
-          `*const (): Sync`
-          which is required by `LispFwd: Sync`
+          `*const (): std::marker::Sync`
+          which is required by `LispFwd: std::marker::Sync`

@@ -23,6 +23,11 @@ members = [
     "crates/neomacs-video-model",
     "crates/neomacs-webview",
     "crates/neovm-core",
+    "crates/neovm-system",
+    "crates/neovm-display",
+    "crates/neovm-eval",
+    "crates/neovm-text",
+    "crates/neovm-edit",
     "crates/neovm-display-identity",
     "crates/neovm-host-abi",
     "crates/neovm-oracle-tests",
@@ -94,10 +99,10 @@ zip = { version = "9.1", default-features = false, features = ["deflate"] }
 neomacs-terminfo = { path = "crates/neomacs-terminfo" }
 neomacs-allocator = { path = "crates/neomacs-allocator" }
 neovm-core = { path = "crates/neovm-core", default-features = false }
-neovm-display-identity = { path = "crates/neovm-display-identity" }
-neovm-host-abi = { path = "crates/neovm-host-abi" }
-neovm-oracle-tests = { path = "crates/neovm-oracle-tests" }
-neovm-value = { path = "crates/neovm-value" }
+neovm-display-identity = { path = "crates/neovm-display-identity", default-features = false }
+neovm-host-abi = { path = "crates/neovm-host-abi", default-features = false }
+neovm-oracle-tests = { path = "crates/neovm-oracle-tests", default-features = false }
+neovm-value = { path = "crates/neovm-value", default-features = false }
 neomacs-display-runtime = { path = "crates/neomacs-display-runtime", default-features = false }
 neomacs-display-protocol = { path = "crates/neomacs-display-protocol", default-features = false }
 neomacs-font-materializer = { path = "crates/neomacs-font-materializer" }
@@ -161,6 +166,7 @@ aes = "0.9.1"
 cbc = { version = "0.2.1", features = ["alloc", "block-padding"] }
 sha1 = "0.11"
 sha2 = "0.11"
+sha3 = "0.11"
 hmac = "0.13"
 md-5 = "0.11"
 getrandom = "0.4"
@@ -256,7 +262,7 @@ tl = "0.7"
 htmlize = { version = "1.1", default-features = false, features = ["unescape"] }
 
 # Database
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # Arbitrary precision integers (bignum support).
 # Uses malachite, a pure-Rust bignum library derived from GMP/FLINT
@@ -384,7 +390,7 @@ webpki-roots = "1.0"
 rustls-pki-types = "1"
 
 # Windows
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 # Dev / test
 proptest = "1.6"
@@ -444,6 +450,34 @@ incremental = false
 
 # Optimize interpreter-heavy tests without changing ordinary editor debug builds.
 [profile.test.package.neovm-core]
+opt-level = 2
+
+# The lower value layer carries the modules core's test profile compiles at
+# opt-level 2 (tagged heap, symbols, values).  Keep its test-profile units at
+# the same setting so moving a module does not silently change its codegen.
+[profile.test.package.neovm-value]
+opt-level = 2
+
+# The split carved the rest of that runtime out of neovm-core; each moved
+# crate must keep the same test-profile codegen it had inside core.  Without
+# these overrides the interpreter-heavy test families run at opt-level 0 in
+# every test build: measured on the macmini (test profile), the mapc
+# resumed-chain oracle's falsify body went 2.58 s -> 24.0 s, and the macOS CI
+# job crossed nextest's 600 s per-test timeout at 470f484c21.  A guard
+# (test_profile_codegen_guard_test.rs) keeps the set complete.
+[profile.test.package.neovm-eval]
+opt-level = 2
+
+[profile.test.package.neovm-text]
+opt-level = 2
+
+[profile.test.package.neovm-edit]
+opt-level = 2
+
+[profile.test.package.neovm-system]
+opt-level = 2
+
+[profile.test.package.neovm-display]
 opt-level = 2
 
 # Optimized build driven by a PGO profile. Same codegen settings as release,
@@ -506,8 +540,10 @@ strip = "none"
 # Never vendor dependencies into this repository. Always fork the crate on
 # GitHub and make changes on the fork's `patch` branch. Reference an exact Git
 # revision here and document the branch beside each dependency.
-# Fork branch: patch (includes Wayland/X11 fixes, continuous XI2 units, and Windows precision touchpad panning).
-winit = { git = "https://github.com/eval-exec/winit", rev = "2290f91c602f8efdf102972457a25e8b6e36f90c" }
+# Fork branch: patch (includes Wayland/X11 fixes, continuous XI2 units,
+# Windows precision touchpad panning, Windows Ctrl+Alt command-chord key
+# values, and native input event timestamps).
+winit = { git = "https://github.com/eval-exec/winit", rev = "598fe4b1bf0ac36746d49085a680645d5ef99230" }
 # Fork branch: patch (based on the 0.12.0 release, 1bddc226).
 # hide() pins the decoration buffer scale to 1 before detaching, so Weston does
 # not reject the coalesced state with wl_surface invalid_size at scale 2 (decorated fullscreen).

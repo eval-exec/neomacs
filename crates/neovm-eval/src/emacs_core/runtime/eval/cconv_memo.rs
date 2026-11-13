@@ -1,0 +1,1726 @@
+//! Interpreted-closure creation through `cconv-make-interpreted-closure`
+//! (P4.1 Stage 0): an exact memo of its analysis, its statistics, and the
+//! effect snapshot.
+//!
+//! GNU's `Ffunction` (src/eval.c:560-627) hands every `#'(lambda ...)`
+//! evaluated in a non-empty lexical environment to
+//! `internal-make-interpreted-closure-function`, whose value in a dumped
+//! Emacs is `cconv-make-interpreted-closure` (lisp/emacs-lisp/cconv.el:
+//! 905-972).  When the environment binds lexical variables that function
+//! runs `macroexpand-all` and `cconv-fv` over the lambda to trim the
+//! environment: about 113K instructions per closure, against 6.9K for the
+//! rest of a typical creation.
+//!
+//! # What is memoized
+//!
+//! A trimming call is *eligible* when the memo could serve it: the trusted
+//! set stands (`cconv_trust`), a well-formed environment, a source whose
+//! [`ClosureShape`] and [`ClosureFacts`] exist, no interactive form, and
+//! every head [`HeadVerdict::Plain`] -- no macro, autoloaded macro or
+//! compiler macro, as `macroexpand-1` (macroexp.el:225-247) and
+//! `function-get` (subr.el:4836-4854) would see it.
+//!
+//! The first eligible call on a body is *recorded*: the real Lisp runs, and
+//! its result is kept only if it signalled nothing, moved no
+//! [`EffectSnapshot`] counter, left the trusted set standing and returned an
+//! identity closure (args and body `eq` to the inputs) whose environment is
+//! `(assq V ENV)` cells for some lexical variables V followed by some bare
+//! symbols, or cconv's `(t)` constant.  The entry keeps that *analysis* --
+//! the ordered captured variables and dynamic symbols -- never a closure,
+//! keyed by the body's address and validated on every use:
+//!
+//! - V1: the trusted set still stands;
+//! - V2: the live `(ARGS . BODY)` has the recorded [`ClosureShape`] (a
+//!   recycled address or a mutated body just misses);
+//! - V3: the environment's lexical and dynamic entries are the recorded
+//!   ones, in order;
+//! - V4: the visible `lexical-binding` has the recorded truth value
+//!   (`cconv--not-lexical-var-p` reads the caller's value, cconv.el:641);
+//! - V5: every head's [`HeadVerdict`] is still `Plain` and every symbol's
+//!   `special-variable-p` is unchanged (a later `defvar`, `defmacro`,
+//!   compiler macro or autoload misses);
+//! - V7: `max-lisp-eval-depth` leaves room for the depth the real run would
+//!   use (4 per nesting level plus 64), so the memo never succeeds where GNU
+//!   signals `excessive-lisp-nesting`.
+//!
+//! A hit builds what cconv.el:966-972 builds: a fresh list of the live
+//! environment's `(assq V ENV)` cells and the dynamic symbols, or the `(t)`
+//! constant, and `make-interpreted-closure` of the live args, body,
+//! docstring and interactive form.  The memo does not run while
+//! `debug-on-next-call` is armed, a quit is pending, or
+//! `macroexpand-all-environment`, `overriding-plist-environment`,
+//! `macroexp-inhibit-compiler-macros` or `symbols-with-pos-enabled` is
+//! non-nil.
+//!
+//! Excluded from exactness, as for P0.9's unboxed floats: allocation volume
+//! and what depends on it (`cons-cells-consed`, GC timing, and so when
+//! finalizers and `post-gc-hook` run: GNU runs both at the end of
+//! `garbage_collect`, src/alloc.c:5960 and 5986-5990, at whichever
+//! `maybe_gc` point -- eval.c:2602, eval.c:3206, bytecode.c -- allocation
+//! trips a collection, inside a cconv run or, when the memo spares that
+//! allocation, somewhere after it).
+//!
+//! # Knob
+//!
+//! `NEOVM_CCONV_MEMO` (read once per process):
+//! - `0` or `off`: closure creation exactly as it was;
+//! - `stats`: record and look up, count every outcome ([`CconvMemoEvent`]),
+//!   but always run the Lisp;
+//! - unset, `on` (or `1`): serve hits -- the default since the MELPA verify
+//!   soak (942 package batches, 0 mismatches) and the board A/B
+//!   (rust-lsp-typing -42% instructions, org-journal-open -14%,
+//!   magit-status -3.9%);
+//! - `verify`: on a hit build the memo closure *and* run the Lisp, compare
+//!   them element by element, return the Lisp's closure and count
+//!   mismatches; `NEOVM_CCONV_MEMO_STRICT=1` (and test builds) panic on one.
+//!
+//! `NEOVM_CCONV_FAST` (read once per process; on by default, `off` or `0`
+//! disables) serves the untrimmed case natively (S0.6): when the environment
+//! binds no lexical variable, or the body starts with
+//! `:closure-dont-trim-context` followed by more forms, cconv.el:923-949
+//! only asserts `(consp body)` and `(listp args)`, drops the marker, and
+//! calls `make-interpreted-closure` with the environment unchanged.  The
+//! native path does exactly that while the trusted set stands (the filter
+//! and `make-interpreted-closure` are the dumped ones), outside
+//! `debug-on-next-call` and a pending quit, with 8 levels of
+//! `max-lisp-eval-depth` to spare; an assertion or argument error runs the
+//! Lisp so it signals from the same frames.  Under `NEOVM_CCONV_MEMO=verify`
+//! it is compared with the Lisp like a memo hit.
+//!
+//! The counts are logged at `info` under the `neovm::cconv_memo` target every
+//! 4096 trimming calls and once more at `kill-emacs` (`final ...`);
+//! [`Context::cconv_memo_report`] formats them.  In `--batch`, set
+//! `NEOMACS_LOG_FILE=<path> RUST_LOG=neovm::cconv_memo=info` to see them.
+//!
+//! # Effect snapshot
+//!
+//! [`EffectSnapshot`] is a cheap, generic "did this Lisp run do anything
+//! observable" check: loads, echo-area output, buffer creation and text
+//! changes, `gensym-counter`, function-cell writes, newly interned symbols and
+//! the match data.  Taken before and after a run, a difference means the run
+//! had an effect.  A collection that completes while a run is observed this
+//! way (a recording or verify run) leaves its finalizers and `post-gc-hook`
+//! until after the second snapshot, so the snapshot charges the conversion
+//! with its own effects only; they still run before the filter returns.  A
+//! verify mismatch names the fields that moved (and the function cells
+//! written, and the collections completed, during the run).
+
+use super::cconv_shape::{ClosureFacts, ClosureShape, EnvSummary, FactsRefusal};
+use super::cconv_trust::TrustedSet;
+use super::*;
+use neovm_value::symbol::FunctionEpochBump;
+use std::sync::atomic::{AtomicU8, Ordering};
+use strum::{EnumCount, IntoEnumIterator};
+
+// ---------------------------------------------------------------------------
+// Knob
+// ---------------------------------------------------------------------------
+
+/// What happens around a call of `cconv-make-interpreted-closure`, as
+/// `NEOVM_CCONV_MEMO` names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) enum CconvMemoMode {
+    /// Closure creation is untouched.
+    Off = 0,
+    /// Record and look up, count everything, always run the Lisp.
+    Stats = 1,
+    /// Serve validated hits.
+    On = 2,
+    /// Serve nothing; on a hit compare the memo's closure with the Lisp's.
+    Verify = 3,
+}
+
+/// [`CCONV_MEMO_MODE`] before the knob is read.
+const MODE_UNREAD: u8 = 0xff;
+
+static CCONV_MEMO_MODE: AtomicU8 = AtomicU8::new(MODE_UNREAD);
+
+/// The mode a value of `NEOVM_CCONV_MEMO` selects.
+pub(crate) fn parse_cconv_memo_knob(value: Option<&str>) -> CconvMemoMode {
+    let Some(value) = value.map(str::trim) else {
+        return CconvMemoMode::On;
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "" | "0" | "off" | "false" | "no" => CconvMemoMode::Off,
+        "stats" => CconvMemoMode::Stats,
+        "1" | "on" | "true" | "yes" => CconvMemoMode::On,
+        "verify" => CconvMemoMode::Verify,
+        other => {
+            tracing::warn!(value = other, "NEOVM_CCONV_MEMO: unknown mode, using off");
+            CconvMemoMode::Off
+        }
+    }
+}
+
+/// `NEOVM_CCONV_FAST` before it is read.
+const FAST_UNREAD: u8 = 0xff;
+
+static CCONV_FAST: AtomicU8 = AtomicU8::new(FAST_UNREAD);
+
+/// Whether a value of `NEOVM_CCONV_FAST` enables the native untrimmed path:
+/// on unless explicitly `0`/`off`/`false`/`no` (the default since the same
+/// verify soak and board A/B that turned the memo on).
+pub(crate) fn parse_cconv_fast_knob(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "off" | "false" | "no")
+    )
+}
+
+/// The process-wide `NEOVM_CCONV_FAST`, read on first use.
+fn cconv_fast_from_env() -> bool {
+    match CCONV_FAST.load(Ordering::Relaxed) {
+        FAST_UNREAD => {
+            let on = parse_cconv_fast_knob(std::env::var("NEOVM_CCONV_FAST").ok().as_deref());
+            CCONV_FAST.store(u8::from(on), Ordering::Relaxed);
+            on
+        }
+        byte => byte == 1,
+    }
+}
+
+/// Whether a verify mismatch panics: `NEOVM_CCONV_MEMO_STRICT=1`, and every
+/// test build.
+fn cconv_memo_strict_from_env() -> bool {
+    cfg!(test)
+        || matches!(
+            std::env::var("NEOVM_CCONV_MEMO_STRICT").ok().as_deref(),
+            Some("1" | "on" | "true" | "yes")
+        )
+}
+
+/// The process-wide mode, read from the environment on first use.
+pub(crate) fn cconv_memo_mode_from_env() -> CconvMemoMode {
+    match CCONV_MEMO_MODE.load(Ordering::Relaxed) {
+        MODE_UNREAD => {
+            let mode = parse_cconv_memo_knob(std::env::var("NEOVM_CCONV_MEMO").ok().as_deref());
+            CCONV_MEMO_MODE.store(mode as u8, Ordering::Relaxed);
+            mode
+        }
+        1 => CconvMemoMode::Stats,
+        2 => CconvMemoMode::On,
+        3 => CconvMemoMode::Verify,
+        _ => CconvMemoMode::Off,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Statistics
+// ---------------------------------------------------------------------------
+
+/// One thing that happened to one call of the filter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumCount, strum::IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) enum CconvMemoEvent {
+    /// `internal-make-interpreted-closure-function` was
+    /// `cconv-make-interpreted-closure` and the environment was non-nil.
+    Call,
+    /// The environment binds no lexical variable (cconv.el:935-949 returns
+    /// the closure untrimmed).
+    NoLexvars,
+    /// The body starts with `:closure-dont-trim-context` and more forms:
+    /// the environment is kept whole (bug#59213).
+    DontTrim,
+    /// `NEOVM_CCONV_FAST`: an untrimmed closure built natively.
+    FastServed,
+    /// `NEOVM_CCONV_FAST`: an untrimmed call left to the Lisp (trusted set,
+    /// debugger, quit, depth, a non-list, or an argument error).
+    FastRefused,
+    /// The environment binds lexical variables: the trimming path.
+    Trim,
+    /// The trusted set does not stand (see `cconv_trust`): a trusted
+    /// function was redefined or advised, or the set could not be built.
+    Untrusted,
+    /// Not run through the memo: `debug-on-next-call` is armed.
+    BypassDebug,
+    /// Not run through the memo: a quit is pending.
+    BypassQuit,
+    /// Not run through the memo: a compilation environment
+    /// (`macroexpand-all-environment`, `overriding-plist-environment`,
+    /// `macroexp-inhibit-compiler-macros`, `symbols-with-pos-enabled`).
+    BypassCompileEnv,
+    /// A lookup validated an entry (V1-V7).
+    Hit,
+    /// `on`: the hit was served.
+    Served,
+    /// `verify`: the Lisp built the same closure the memo did.
+    VerifyMatch,
+    /// `verify`: it did not (logged at `error`).
+    VerifyMismatch,
+    /// No entry for this body and environment.
+    MissNoEntry,
+    /// The body at the recorded address has another shape (V2).
+    MissShape,
+    /// A head became a macro or compiler macro, or a symbol's specialness
+    /// changed (V5).
+    MissFacts,
+    /// Too close to `max-lisp-eval-depth` (V7); run, not re-recorded.
+    MissDepth,
+    /// A trimming call whose inputs the memo could serve (S0.3's checks).
+    Eligible,
+    /// The environment is not a proper list of `(SYMBOL . VALUE)` and bare
+    /// symbol entries.
+    RefuseEnv,
+    /// The source is too large or cyclic, or holds a symbol with position.
+    RefuseShape,
+    /// An interactive form: `cconv-analyze-form` may write
+    /// `cconv--interactive-form-funs` (cconv.el:776).
+    RefuseInteractive,
+    /// A `_` variable is used (see `FactsRefusal::UnderscoreUse`).
+    RefuseUnderscore,
+    /// A head is a macro, an autoloaded macro, or an unresolvable alias.
+    RefuseMacroHead,
+    /// A head has a compiler macro.
+    RefuseCompilerMacroHead,
+    /// A trimming run signalled or threw.
+    RunError,
+    /// A trimming run returned a closure whose args and body are `eq` to the
+    /// ones it was given (an identity expansion).
+    RunIdentity,
+    /// A trimming run returned a rewritten body (a macro or compiler macro
+    /// expanded), or something that is not an interpreted closure.
+    RunRewritten,
+    /// The effect snapshot moved across a trimming run.
+    RunEffect,
+    /// A recording run's analysis was stored.
+    Recorded,
+    /// A recording run returned an environment the memo cannot rebuild (not
+    /// `assq` cells followed by symbols), or the trusted set moved.
+    RecordRefused,
+    /// The memo reached its entry cap and was cleared.
+    Cleared,
+    /// A collection completed during an observed run: its finalizers and
+    /// `post-gc-hook` ran when the run ended.
+    GcHooksDeferred,
+}
+
+impl CconvMemoEvent {
+    /// Every event in declaration order. `report` iterates this instead of
+    /// the removed `strum::EnumIter`, so the enum can be re-exported under
+    /// test-support without leaking a private generated iterator type.
+    #[doc(hidden)]
+    pub(crate) const ALL: [CconvMemoEvent; CconvMemoEvent::COUNT] = [
+        Self::Call,
+        Self::NoLexvars,
+        Self::DontTrim,
+        Self::FastServed,
+        Self::FastRefused,
+        Self::Trim,
+        Self::Untrusted,
+        Self::BypassDebug,
+        Self::BypassQuit,
+        Self::BypassCompileEnv,
+        Self::Hit,
+        Self::Served,
+        Self::VerifyMatch,
+        Self::VerifyMismatch,
+        Self::MissNoEntry,
+        Self::MissShape,
+        Self::MissFacts,
+        Self::MissDepth,
+        Self::Eligible,
+        Self::RefuseEnv,
+        Self::RefuseShape,
+        Self::RefuseInteractive,
+        Self::RefuseUnderscore,
+        Self::RefuseMacroHead,
+        Self::RefuseCompilerMacroHead,
+        Self::RunError,
+        Self::RunIdentity,
+        Self::RunRewritten,
+        Self::RunEffect,
+        Self::Recorded,
+        Self::RecordRefused,
+        Self::Cleared,
+        Self::GcHooksDeferred,
+    ];
+}
+
+// The report order is the declaration order; no duplicate or reorder can pass
+// the COUNT-length check.
+const _: () = {
+    let mut index = 0;
+    while index < CconvMemoEvent::COUNT {
+        assert!(CconvMemoEvent::ALL[index] as usize == index);
+        index += 1;
+    }
+};
+
+/// Counts per [`CconvMemoEvent`].
+#[derive(Clone, Debug)]
+pub(crate) struct CconvMemoStats {
+    counts: [u64; CconvMemoEvent::COUNT],
+}
+
+impl Default for CconvMemoStats {
+    fn default() -> Self {
+        Self {
+            counts: [0; CconvMemoEvent::COUNT],
+        }
+    }
+}
+
+impl CconvMemoStats {
+    #[inline]
+    #[doc(hidden)]
+    pub fn count(&self, event: CconvMemoEvent) -> u64 {
+        self.counts[event as usize]
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn note(&mut self, event: CconvMemoEvent) {
+        self.counts[event as usize] = self.counts[event as usize].wrapping_add(1);
+    }
+
+    /// One line per non-zero counter, in declaration order.
+    #[doc(hidden)]
+    pub fn report(&self) -> String {
+        let mut out = String::from("cconv-memo:");
+        for event in CconvMemoEvent::ALL {
+            let n = self.count(event);
+            if n != 0 {
+                let name: &'static str = event.into();
+                out.push_str(&format!(" {name}={n}"));
+            }
+        }
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Effect snapshot
+// ---------------------------------------------------------------------------
+
+/// The observable state a Lisp run could change without leaving a trace in
+/// its return value (see the module docs).  Compared, never interpreted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) struct EffectSnapshot {
+    loads: u64,
+    outputs: u64,
+    next_buffer_id: u64,
+    /// Every live buffer and its `buffer-modified-tick`, in `buffer-list`
+    /// order.
+    buffer_ticks: Vec<(BufferId, i64)>,
+    gensym_counter: usize,
+    function_epoch: u64,
+    obarray_len: usize,
+    match_data: Option<String>,
+}
+
+impl EffectSnapshot {
+    /// The fields that differ in AFTER, as `name: before -> after`, for a
+    /// verify mismatch report.
+    #[doc(hidden)]
+    pub fn describe_change(&self, after: &EffectSnapshot) -> String {
+        let mut out = Vec::new();
+        macro_rules! field {
+            ($name:ident) => {
+                if self.$name != after.$name {
+                    out.push(format!(
+                        "{}: {:?} -> {:?}",
+                        stringify!($name),
+                        self.$name,
+                        after.$name
+                    ));
+                }
+            };
+        }
+        field!(loads);
+        field!(outputs);
+        field!(next_buffer_id);
+        if self.buffer_ticks != after.buffer_ticks {
+            let changed: Vec<String> = after
+                .buffer_ticks
+                .iter()
+                .filter(|entry| !self.buffer_ticks.contains(entry))
+                .map(|(id, tick)| {
+                    let old = self
+                        .buffer_ticks
+                        .iter()
+                        .find(|(old_id, _)| old_id == id)
+                        .map(|(_, t)| *t);
+                    format!("{id:?}: {old:?} -> {tick}")
+                })
+                .collect();
+            let killed = self
+                .buffer_ticks
+                .iter()
+                .filter(|(id, _)| !after.buffer_ticks.iter().any(|(a, _)| a == id))
+                .count();
+            out.push(format!(
+                "buffer_ticks: live {} -> {}, killed {killed}, changed [{}]",
+                self.buffer_ticks.len(),
+                after.buffer_ticks.len(),
+                changed.join(", ")
+            ));
+        }
+        field!(gensym_counter);
+        field!(function_epoch);
+        field!(obarray_len);
+        field!(match_data);
+        out.join("; ")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The per-Context state
+// ---------------------------------------------------------------------------
+
+/// Everything the filter hook keeps on a [`Context`].  Its only Lisp values
+/// are the trusted set's, which the root walk traces.
+#[derive(Debug)]
+pub(crate) struct CconvMemo {
+    mode: CconvMemoMode,
+    /// `NEOVM_CCONV_FAST`: serve the untrimmed case natively.
+    fast: bool,
+    /// Panic on a verify mismatch.
+    strict: bool,
+    stats: CconvMemoStats,
+    pub(super) trusted: TrustedSet,
+    /// Recorded analyses by body address (see the module docs).
+    entries: FxHashMap<usize, SmallVec<[MemoEntry; 2]>>,
+    entry_count: usize,
+    /// Files loaded (bumped by the loader), for [`EffectSnapshot`].
+    loads: u64,
+    /// Echo-area / stderr messages emitted, for [`EffectSnapshot`].
+    outputs: u64,
+    /// Observed runs in progress ([`Context::cconv_observe_lisp`]): while
+    /// non-zero, a completed collection leaves its finalizers and
+    /// `post-gc-hook` to the end of the run.
+    observing: u32,
+    /// Collections that completed during an observed run, whose hooks are
+    /// still to run.
+    owed_gc_hooks: u32,
+    /// Complete a collection at the start of the next observed run.
+    #[cfg(any(test, feature = "test-support"))]
+    collect_in_next_observed_run: bool,
+}
+
+impl CconvMemo {
+    #[doc(hidden)]
+    pub fn new(mode: CconvMemoMode, fast: bool) -> Self {
+        Self {
+            mode,
+            fast,
+            strict: cconv_memo_strict_from_env(),
+            stats: CconvMemoStats::default(),
+            trusted: TrustedSet::default(),
+            entries: FxHashMap::default(),
+            entry_count: 0,
+            loads: 0,
+            outputs: 0,
+            observing: 0,
+            owed_gc_hooks: 0,
+            #[cfg(any(test, feature = "test-support"))]
+            collect_in_next_observed_run: false,
+        }
+    }
+
+    /// A memo in the process-wide modes (`NEOVM_CCONV_MEMO`,
+    /// `NEOVM_CCONV_FAST`).
+    #[doc(hidden)]
+    pub fn from_env() -> Self {
+        Self::new(cconv_memo_mode_from_env(), cconv_fast_from_env())
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn engaged(&self) -> bool {
+        self.mode != CconvMemoMode::Off || self.fast
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn set_mode(&mut self, mode: CconvMemoMode) {
+        self.mode = mode;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn set_fast(&mut self, fast: bool) {
+        self.fast = fast;
+    }
+
+    /// Forget the trusted set, so the next use builds it again.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn reset_trusted_for_test(&mut self) {
+        self.trusted = TrustedSet::default();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn set_strict(&mut self, strict: bool) {
+        self.strict = strict;
+    }
+
+    /// Make the next observed run start with a complete collection, as if
+    /// allocation had tripped one inside it.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn collect_in_next_observed_run_for_test(&mut self) {
+        self.collect_in_next_observed_run = true;
+    }
+
+    /// Corrupt one recorded analysis (drop its first captured variable), so
+    /// `verify` has something to catch (T0.12).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn inject_wrong_analysis_for_test(&mut self) -> bool {
+        for bucket in self.entries.values_mut() {
+            for entry in bucket.iter_mut() {
+                if !entry.lexv.is_empty() {
+                    entry.lexv = entry.lexv[1..].into();
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Forget every recorded analysis.
+    #[doc(hidden)]
+    pub fn clear_entries(&mut self) {
+        self.entries.clear();
+        self.entry_count = 0;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn stats(&self) -> &CconvMemoStats {
+        &self.stats
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn trusted(&self) -> &TrustedSet {
+        &self.trusted
+    }
+
+    #[doc(hidden)]
+    pub fn trace_roots(&self, visit: &mut dyn FnMut(Value)) {
+        self.trusted.trace_roots(visit);
+    }
+
+    #[doc(hidden)]
+    pub fn note(&mut self, event: CconvMemoEvent) {
+        self.stats.note(event);
+        if event == CconvMemoEvent::Trim && self.stats.count(event) % 4096 == 0 {
+            tracing::info!(target: "neovm::cconv_memo", "{}", self.stats.report());
+        }
+    }
+}
+
+/// Most analyses the memo keeps; reaching it clears the memo.
+const MEMO_ENTRY_CAP: usize = 8192;
+
+/// A symbol fact validated on every hit (V5).
+#[derive(Clone, Copy, Debug)]
+struct MemoFact {
+    id: SymId,
+    head: bool,
+    special: bool,
+}
+
+/// One recorded analysis (see the module docs).
+#[derive(Debug)]
+struct MemoEntry {
+    shape: ClosureShape,
+    facts: Box<[MemoFact]>,
+    env: EnvSummary,
+    lexical_binding: bool,
+    /// Captured lexical variables, in the closure environment's order.
+    lexv: Box<[SymId]>,
+    /// Dynamic symbols appended after them.
+    dynv: Box<[SymId]>,
+    /// Depth the real run may use beyond the current depth (V7).
+    depth_budget: usize,
+}
+
+/// A validated entry's analysis, copied out of the map.
+struct MemoHit {
+    lexv: SmallVec<[SymId; 8]>,
+    dynv: SmallVec<[SymId; 4]>,
+}
+
+/// What a recording run can be kept as.
+struct Analysis {
+    shape: ClosureShape,
+    facts: Box<[MemoFact]>,
+}
+
+/// A Lisp run between two [`EffectSnapshot`]s ([`Context::cconv_observe_lisp`]).
+struct ObservedRun {
+    result: EvalResult,
+    before: EffectSnapshot,
+    after: EffectSnapshot,
+    /// Collections that completed during the run (their hooks ran after it).
+    gc_cycles: u64,
+}
+
+/// Most function-cell writes a verify run logs for its mismatch report.
+const OBSERVED_WRITE_LOG_CAP: usize = 16;
+
+/// Function-cell writes (why, and the symbol when there is one).
+type FunctionWriteLog = Vec<(FunctionEpochBump, Option<SymId>)>;
+
+thread_local! {
+    /// While a verify run is observed: the function-cell writes it made, for
+    /// the mismatch report (a moved `function_epoch` alone names nothing).
+    static OBSERVED_FUNCTION_WRITES: RefCell<Option<FunctionWriteLog>> =
+        const { RefCell::new(None) };
+}
+
+/// A function-cell write or other `function_epoch` move (the obarray calls
+/// this for every one); logged only while a verify run is observed.
+pub(crate) fn note_function_epoch_move(why: FunctionEpochBump, sym: Option<SymId>) {
+    OBSERVED_FUNCTION_WRITES.with(|log| {
+        if let Some(log) = log.borrow_mut().as_mut()
+            && log.len() < OBSERVED_WRITE_LOG_CAP
+        {
+            log.push((why, sym));
+        }
+    });
+}
+
+/// Install the evaluator's process-lifetime function-epoch observation sink.
+pub(super) fn install_function_epoch_move_sink_seam() {
+    static SINK: neovm_value::FunctionEpochMoveSink =
+        neovm_value::FunctionEpochMoveSink::new(note_function_epoch_move);
+    // SAFETY: only Context::new_inner and Context::from_dump call this
+    // adapter, before exposing the constructed or restored Context. SINK is
+    // the same process-lifetime table at both seams, and its callback records
+    // only in the current thread's existing observed-function-write log.
+    match unsafe { neovm_value::install_function_epoch_move_sink(&SINK) } {
+        Ok(
+            neovm_value::HookInstallStatus::Installed
+            | neovm_value::HookInstallStatus::AlreadyInstalled,
+        ) => {}
+        Err(neovm_value::HookInstallError::DifferentTable) => {
+            panic!("Context construction or restore: conflicting function-epoch move sink table")
+        }
+    }
+}
+
+/// Push every Lisp value RESULT holds as a specpdl root.
+fn push_result_roots(ctx: &mut Context, result: &EvalResult) {
+    match result.kinded_ref() {
+        Ok(value) => ctx.push_specpdl_root(*value),
+        Err(FlowRef::Signal(sig)) => {
+            ctx.push_specpdl_root(Value::from_sym_id(sig.symbol));
+            for value in sig.data.iter().copied() {
+                ctx.push_specpdl_root(value);
+            }
+            if let Some(raw) = sig.raw_data {
+                ctx.push_specpdl_root(raw);
+            }
+        }
+        Err(FlowRef::Throw(thrown)) => {
+            ctx.push_specpdl_root(thrown.tag);
+            ctx.push_specpdl_root(thrown.value);
+        }
+        Err(FlowRef::ThreadBlocked(blocked)) => {
+            ctx.push_specpdl_root(blocked.blocker);
+            ctx.push_specpdl_root(blocked.remaining_forms);
+        }
+        Err(FlowRef::Shutdown(_)) => {}
+    }
+}
+
+cached_symbol_id!(
+    cconv_make_interpreted_closure_symbol,
+    "cconv-make-interpreted-closure"
+);
+cached_symbol_id!(
+    macroexpand_all_environment_symbol,
+    "macroexpand-all-environment"
+);
+cached_symbol_id!(
+    overriding_plist_environment_memo_symbol,
+    "overriding-plist-environment"
+);
+cached_symbol_id!(
+    macroexp_inhibit_compiler_macros_symbol,
+    "macroexp-inhibit-compiler-macros"
+);
+cached_symbol_id!(gensym_counter_symbol, "gensym-counter");
+cached_symbol_id!(compiler_macro_symbol, "compiler-macro");
+cached_symbol_id!(autoload_cell_symbol, "autoload");
+cached_symbol_id!(macro_cell_symbol, "macro");
+
+/// Longest alias chain [`Context::cconv_head_verdict`] follows.
+const ALIAS_HOP_CAP: usize = 100;
+
+/// What `macroexp--expand-all` would do with a form headed by a symbol, as
+/// far as the memo cares (see the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) enum HeadVerdict {
+    /// Not a macro, not an autoloaded macro, no compiler macro: the form is
+    /// left as it is.
+    Plain,
+    /// A macro, directly or through an alias.
+    Macro,
+    /// An autoload of type `macro` or `t`: `macroexpand-1` would load it.
+    AutoloadMacro,
+    /// `(function-get SYM 'compiler-macro)` is non-nil.
+    CompilerMacro,
+    /// An alias chain longer than [`ALIAS_HOP_CAP`] (or cyclic).
+    Unresolvable,
+}
+
+/// Whether DEF is an autoload whose TYPE (element 4) is `macro` or `t`:
+/// `autoload-do-load` with MACRO-ONLY `macro` would load it
+/// (src/eval.c `Fautoload_do_load`).
+fn autoload_of_macro(def: Value) -> bool {
+    if !def.is_cons() || def.cons_car().as_bare_symbol_id() != Some(autoload_cell_symbol()) {
+        return false;
+    }
+    let mut tail = def;
+    for _ in 0..4 {
+        tail = tail.cons_cdr();
+        if !tail.is_cons() {
+            return false;
+        }
+    }
+    let kind = tail.cons_car();
+    kind.is_t() || kind.as_bare_symbol_id() == Some(macro_cell_symbol())
+}
+
+fn is_macro_cell(def: Value) -> bool {
+    def.is_cons() && def.cons_car().as_bare_symbol_id() == Some(macro_cell_symbol())
+}
+
+/// The `(assq VAR ENV)` of cconv.el:965, skipping non-cons entries.
+fn env_assq(env: Value, var: SymId) -> Option<Value> {
+    let mut tail = env;
+    while tail.is_cons() {
+        let entry = tail.cons_car();
+        if entry.is_cons() && entry.cons_car().as_bare_symbol_id() == Some(var) {
+            return Some(entry);
+        }
+        tail = tail.cons_cdr();
+    }
+    None
+}
+
+/// Whether two closures are the same object element by element, with
+/// their environment spines compared by their elements (both are fresh).
+fn closures_agree(memo: Value, lisp: Value) -> bool {
+    use neovm_value::tagged::header::CLOSURE_CONSTANTS;
+    if memo.veclike_type() != lisp.veclike_type() {
+        return false;
+    }
+    let (Some(memo_slots), Some(lisp_slots)) = (memo.closure_slots(), lisp.closure_slots()) else {
+        return false;
+    };
+    if memo_slots.len() != lisp_slots.len() {
+        return false;
+    }
+    for (index, (a, b)) in memo_slots.iter().zip(lisp_slots.iter()).enumerate() {
+        if index != CLOSURE_CONSTANTS {
+            if a != b {
+                return false;
+            }
+            continue;
+        }
+        if a == b {
+            continue;
+        }
+        let (mut x, mut y) = (*a, *b);
+        while x.is_cons() && y.is_cons() {
+            if x.cons_car() != y.cons_car() {
+                return false;
+            }
+            x = x.cons_cdr();
+            y = y.cons_cdr();
+        }
+        if !(x.is_nil() && y.is_nil()) {
+            return false;
+        }
+    }
+    true
+}
+
+cached_symbol_id!(
+    closure_dont_trim_context_symbol,
+    ":closure-dont-trim-context"
+);
+
+/// Levels of `max-lisp-eval-depth` the native untrimmed path leaves for the
+/// Lisp it replaces (the filter, `mapcar` and its `car-safe` calls,
+/// `make-interpreted-closure`).
+const FAST_DEPTH_BUDGET: usize = 8;
+
+/// cconv.el:936-939: the body starts with `:closure-dont-trim-context` and
+/// has more forms after it.
+fn body_keeps_whole_context(body: Value) -> bool {
+    body.is_cons()
+        && body.cons_car().as_bare_symbol_id() == Some(closure_dont_trim_context_symbol())
+        && !body.cons_cdr().is_nil()
+}
+
+/// ENV is a proper list (so `(mapcar #'car-safe env)` does not signal).
+fn is_proper_list(env: Value) -> bool {
+    let mut tail = env;
+    for _ in 0..super::cconv_shape::ENV_ENTRY_CAP {
+        if !tail.is_cons() {
+            return tail.is_nil();
+        }
+        tail = tail.cons_cdr();
+    }
+    false
+}
+
+/// Whether ENV binds a lexical variable the way cconv.el:931 sees it:
+/// `(delq nil (mapcar #'car-safe env))` is non-empty.
+fn env_has_lexvars(env: Value) -> bool {
+    let mut tail = env;
+    while tail.is_cons() {
+        let entry = tail.cons_car();
+        if entry.is_cons() && !entry.cons_car().is_nil() {
+            return true;
+        }
+        tail = tail.cons_cdr();
+    }
+    false
+}
+
+impl Context {
+    /// A file is being loaded ([`EffectSnapshot`]).
+    #[doc(hidden)]
+    pub fn note_load_effect(&mut self) {
+        self.cconv_memo.loads = self.cconv_memo.loads.wrapping_add(1);
+    }
+
+    /// A message is being emitted ([`EffectSnapshot`]).
+    #[doc(hidden)]
+    pub fn note_output_effect(&mut self) {
+        self.cconv_memo.outputs = self.cconv_memo.outputs.wrapping_add(1);
+    }
+
+    /// The current [`EffectSnapshot`].  Walks the live buffers, so it is
+    /// taken around a recorded run, never on a hit.
+    #[doc(hidden)]
+    pub fn cconv_effect_snapshot(&self) -> EffectSnapshot {
+        let buffer_ticks = self
+            .edit
+            .buffers
+            .buffer_list()
+            .into_iter()
+            .map(|id| {
+                let tick = self.edit.buffers.get(id).map_or(0, |b| b.modified_tick());
+                (id, tick)
+            })
+            .collect();
+        EffectSnapshot {
+            loads: self.cconv_memo.loads,
+            outputs: self.cconv_memo.outputs,
+            next_buffer_id: self.edit.buffers.dump_next_id(),
+            buffer_ticks,
+            gensym_counter: self
+                .builtin_var_value(gensym_counter_symbol())
+                .map_or(0, |value| value.bits()),
+            function_epoch: self.obarray.function_epoch(),
+            obarray_len: self.obarray.len(),
+            match_data: self.match_data.as_ref().map(|data| format!("{data:?}")),
+        }
+    }
+
+    /// The statistics line (see the module docs).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn cconv_memo_report(&self) -> String {
+        self.cconv_memo.stats.report()
+    }
+
+    /// Log the final statistics line at `kill-emacs` when a knob is on, so a
+    /// measured process reports every call, not the last multiple of 4096.
+    #[doc(hidden)]
+    pub fn log_cconv_memo_report(&self) {
+        if self.cconv_memo.engaged() {
+            tracing::info!(target: "neovm::cconv_memo", "final {}", self.cconv_memo.stats.report());
+        }
+    }
+
+    /// The symbol's function cell as `fboundp` sees it.
+    #[doc(hidden)]
+    pub fn cconv_fbound_cell(&self, id: SymId) -> Option<Value> {
+        self.obarray
+            .symbol_function_id(id)
+            .filter(|cell| !cell.is_nil())
+    }
+
+    /// GNU `macrop` (subr.el:4793-4799) of a function cell that is a symbol:
+    /// follow the aliases, then a `(macro ...)` or an autoloaded macro.
+    #[doc(hidden)]
+    pub fn cconv_symbol_macrop(&self, mut id: SymId) -> Option<bool> {
+        let symbol_mode = self.symbol_mode();
+        for _ in 0..ALIAS_HOP_CAP {
+            let Some(def) = self.cconv_fbound_cell(id) else {
+                return Some(false);
+            };
+            match def.as_symbol_id(symbol_mode) {
+                Some(next) if !def.is_nil() => id = next,
+                _ => return Some(is_macro_cell(def) || autoload_of_macro(def)),
+            }
+        }
+        None
+    }
+
+    /// [`HeadVerdict`] for a form headed by ID, mirroring `macroexpand-1`
+    /// with a nil environment and then `function-get` of `compiler-macro`
+    /// with AUTOLOAD nil.  Reads only the function cells and plists; the
+    /// memo refuses to run when `overriding-plist-environment` could make
+    /// `get` answer otherwise.
+    #[doc(hidden)]
+    pub fn cconv_head_verdict(&self, id: SymId) -> HeadVerdict {
+        let symbol_mode = self.symbol_mode();
+        if let Some(def) = self.cconv_fbound_cell(id) {
+            if autoload_of_macro(def) {
+                return HeadVerdict::AutoloadMacro;
+            }
+            if is_macro_cell(def) {
+                return HeadVerdict::Macro;
+            }
+            if let Some(alias) = def.as_symbol_id(symbol_mode) {
+                match self.cconv_symbol_macrop(alias) {
+                    Some(true) => return HeadVerdict::Macro,
+                    Some(false) => {}
+                    None => return HeadVerdict::Unresolvable,
+                }
+            }
+        }
+        let mut f = id;
+        for _ in 0..ALIAS_HOP_CAP {
+            if self
+                .obarray
+                .get_property_id(f, compiler_macro_symbol())
+                .is_some_and(|handler| !handler.is_nil())
+            {
+                return HeadVerdict::CompilerMacro;
+            }
+            let Some(cell) = self.cconv_fbound_cell(f) else {
+                return HeadVerdict::Plain;
+            };
+            match cell.as_symbol_id(symbol_mode) {
+                Some(next) => f = next,
+                None => return HeadVerdict::Plain,
+            }
+        }
+        HeadVerdict::Unresolvable
+    }
+
+    /// The memo's view of a trimming call's source: its shape and facts,
+    /// or the first refusal.
+    #[doc(hidden)]
+    pub fn cconv_analyze_source(
+        &self,
+        params: Value,
+        body: Value,
+    ) -> Result<Analysis, CconvMemoEvent> {
+        let shape = ClosureShape::of(params, body).map_err(|_| CconvMemoEvent::RefuseShape)?;
+        if shape.mentions_interactive {
+            return Err(CconvMemoEvent::RefuseInteractive);
+        }
+        let roles = match ClosureFacts::of(params, body) {
+            Ok(facts) => facts.symbols,
+            Err(FactsRefusal::TooLarge) => return Err(CconvMemoEvent::RefuseShape),
+            Err(FactsRefusal::UnderscoreUse) => return Err(CconvMemoEvent::RefuseUnderscore),
+        };
+        let mut facts = Vec::with_capacity(roles.len());
+        for role in roles {
+            if role.head {
+                match self.cconv_head_verdict(role.id) {
+                    HeadVerdict::Plain => {}
+                    HeadVerdict::CompilerMacro => {
+                        return Err(CconvMemoEvent::RefuseCompilerMacroHead);
+                    }
+                    HeadVerdict::Macro | HeadVerdict::AutoloadMacro | HeadVerdict::Unresolvable => {
+                        return Err(CconvMemoEvent::RefuseMacroHead);
+                    }
+                }
+            }
+            facts.push(MemoFact {
+                id: role.id,
+                head: role.head,
+                special: self.obarray.is_special_id(role.id),
+            });
+        }
+        Ok(Analysis {
+            shape,
+            facts: facts.into_boxed_slice(),
+        })
+    }
+
+    /// Why the memo must not run now, if it must not.
+    #[doc(hidden)]
+    pub fn cconv_bypass(&self) -> Option<CconvMemoEvent> {
+        if self.debug_on_next_call_is_armed() {
+            return Some(CconvMemoEvent::BypassDebug);
+        }
+        if !self.quit_flag.is_nil() {
+            return Some(CconvMemoEvent::BypassQuit);
+        }
+        if self.symbols_with_pos_enabled
+            || [
+                macroexpand_all_environment_symbol(),
+                overriding_plist_environment_memo_symbol(),
+                macroexp_inhibit_compiler_macros_symbol(),
+            ]
+            .into_iter()
+            .any(|var| self.cconv_variable_truthy(var))
+        {
+            return Some(CconvMemoEvent::BypassCompileEnv);
+        }
+        None
+    }
+
+    /// A special variable's visible value is non-nil, as `varref` reads it.
+    #[doc(hidden)]
+    pub fn cconv_variable_truthy(&self, var: SymId) -> bool {
+        self.visible_runtime_variable_value_by_id(var)
+            .ok()
+            .flatten()
+            .is_some_and(|value| !value.is_nil())
+    }
+
+    /// The tightest `max-lisp-eval-depth` in force (global, buffer-local,
+    /// cached), so V7 errs on the side of running the Lisp.
+    #[doc(hidden)]
+    pub fn cconv_eval_depth_limit(&self) -> usize {
+        let as_limit = |value: Option<Value>| {
+            value
+                .and_then(|v| v.as_fixnum())
+                .map(|n| n.max(100) as usize)
+        };
+        let mut limit = self.max_depth;
+        if let Some(global) = as_limit(self.builtin_var_value(max_lisp_eval_depth_symbol())) {
+            limit = limit.min(global);
+        }
+        if self.obarray.is_localized(max_lisp_eval_depth_symbol())
+            && let Some(local) =
+                as_limit(self.variables().value_in_buffer_by_name(
+                    self.edit.buffers.current_buffer(),
+                    "max-lisp-eval-depth",
+                ))
+        {
+            limit = limit.min(local);
+        }
+        limit
+    }
+
+    /// Find and validate (V2-V7) an entry for this call.
+    #[doc(hidden)]
+    pub fn cconv_memo_lookup(
+        &self,
+        params: Value,
+        body: Value,
+        env: &EnvSummary,
+        lexical_binding: bool,
+    ) -> Result<MemoHit, CconvMemoEvent> {
+        let Some(bucket) = self.cconv_memo.entries.get(&body.bits()) else {
+            return Err(CconvMemoEvent::MissNoEntry);
+        };
+        let Some(entry) = bucket
+            .iter()
+            .find(|entry| entry.lexical_binding == lexical_binding && entry.env == *env)
+        else {
+            return Err(CconvMemoEvent::MissNoEntry);
+        };
+        if !entry.shape.matches(params, body) {
+            return Err(CconvMemoEvent::MissShape);
+        }
+        for fact in entry.facts.iter() {
+            if (fact.head && self.cconv_head_verdict(fact.id) != HeadVerdict::Plain)
+                || self.obarray.is_special_id(fact.id) != fact.special
+            {
+                return Err(CconvMemoEvent::MissFacts);
+            }
+        }
+        if self.depth.saturating_add(entry.depth_budget) > self.cconv_eval_depth_limit() {
+            return Err(CconvMemoEvent::MissDepth);
+        }
+        Ok(MemoHit {
+            lexv: entry.lexv.iter().copied().collect(),
+            dynv: entry.dynv.iter().copied().collect(),
+        })
+    }
+
+    /// Build the closure cconv.el:966-972 would return for an analysis.
+    #[doc(hidden)]
+    pub fn cconv_memo_build(
+        &mut self,
+        params: Value,
+        body: Value,
+        env: Value,
+        docstring: Value,
+        iform: Value,
+        hit: &MemoHit,
+    ) -> EvalResult {
+        let newenv = if hit.lexv.is_empty() && hit.dynv.is_empty() {
+            self.cconv_memo.trusted.empty_env()
+        } else {
+            let mut items = Vec::with_capacity(hit.lexv.len() + hit.dynv.len());
+            for var in &hit.lexv {
+                // V3 matched the environment's lexical cars, so the cell
+                // exists; a miss here would be a memo bug, so run the Lisp.
+                let Some(cell) = env_assq(env, *var) else {
+                    return Err(signal(
+                        LispCondition::Error,
+                        vec![Value::string("cconv memo: lost environment cell")],
+                    ));
+                };
+                items.push(cell);
+            }
+            items.extend(hit.dynv.iter().map(|var| Value::from_sym_id(*var)));
+            Value::list(items)
+        };
+        let scope = self.save_specpdl_roots();
+        self.push_specpdl_root(newenv);
+        let closure = builtins::symbols::make_interpreted_closure_from_parts(
+            &params,
+            &body,
+            &newenv,
+            Some(&docstring),
+            Some(&iform),
+        );
+        self.restore_specpdl_roots(scope);
+        closure
+    }
+
+    /// Derive a recording run's analysis result from the closure it returned
+    /// (see the module docs); `None` if the memo could not rebuild it.
+    #[doc(hidden)]
+    pub fn cconv_derive_result(
+        &self,
+        closure: Value,
+        params: Value,
+        body: Value,
+        env: Value,
+    ) -> Option<(Box<[SymId]>, Box<[SymId]>)> {
+        let symbol_mode = self.symbol_mode();
+        use neovm_value::tagged::header::{CLOSURE_ARGLIST, CLOSURE_CODE, CLOSURE_CONSTANTS};
+        if closure.veclike_type() != Some(VecLikeType::Lambda) {
+            return None;
+        }
+        let slots = closure.closure_slots()?;
+        if slots.get(CLOSURE_ARGLIST) != Some(&params) || slots.get(CLOSURE_CODE) != Some(&body) {
+            return None;
+        }
+        let newenv = *slots.get(CLOSURE_CONSTANTS)?;
+        if newenv == self.cconv_memo.trusted.empty_env() {
+            return Some((Box::default(), Box::default()));
+        }
+        let mut lexv = Vec::new();
+        let mut dynv = Vec::new();
+        let mut tail = newenv;
+        while tail.is_cons() {
+            let item = tail.cons_car();
+            if item.is_cons() {
+                let var = item.cons_car().as_symbol_id(symbol_mode)?;
+                if !dynv.is_empty() || env_assq(env, var) != Some(item) {
+                    return None;
+                }
+                lexv.push(var);
+            } else if item.is_symbol(symbol_mode) && !item.is_nil() && !item.is_t() {
+                dynv.push(item.as_symbol_id(symbol_mode)?);
+            } else {
+                return None;
+            }
+            tail = tail.cons_cdr();
+        }
+        if !tail.is_nil() || (lexv.is_empty() && dynv.is_empty()) {
+            return None;
+        }
+        Some((lexv.into_boxed_slice(), dynv.into_boxed_slice()))
+    }
+
+    /// Run the filter itself.
+    #[doc(hidden)]
+    pub fn cconv_run_lisp(
+        &mut self,
+        closure_hook: Value,
+        params: Value,
+        body: Value,
+        env: Value,
+        docstring: Value,
+        iform: Value,
+    ) -> EvalResult {
+        self.apply(closure_hook, vec![params, body, env, docstring, iform])
+    }
+
+    /// Run the filter and classify the run ([`CconvMemoEvent::RunError`] ..
+    /// [`CconvMemoEvent::RunEffect`]); `true` in the second slot when the
+    /// run was clean: no error, an identity closure, no effect.
+    #[doc(hidden)]
+    pub fn cconv_run_observed(
+        &mut self,
+        closure_hook: Value,
+        params: Value,
+        body: Value,
+        env: Value,
+        docstring: Value,
+        iform: Value,
+    ) -> (EvalResult, bool) {
+        let ObservedRun {
+            result,
+            before,
+            after,
+            ..
+        } = self.cconv_observe_lisp(closure_hook, params, body, env, docstring, iform);
+        let mut clean = match &result {
+            Err(_) => {
+                self.cconv_memo.note(CconvMemoEvent::RunError);
+                false
+            }
+            Ok(closure) => {
+                let identity = closure
+                    .closure_slot(neovm_value::tagged::header::CLOSURE_ARGLIST)
+                    .is_some_and(|a| a == params)
+                    && closure.closure_body_value().is_some_and(|b| b == body);
+                self.cconv_memo.note(if identity {
+                    CconvMemoEvent::RunIdentity
+                } else {
+                    CconvMemoEvent::RunRewritten
+                });
+                identity
+            }
+        };
+        if after != before {
+            self.cconv_memo.note(CconvMemoEvent::RunEffect);
+            clean = false;
+        }
+        (result, clean)
+    }
+
+    /// Run the filter between two effect snapshots.  GNU runs the doomed
+    /// finalizers and `post-gc-hook` at the end of `garbage_collect`
+    /// (src/alloc.c), wherever allocation happens to trip a collection --
+    /// inside this very run, or elsewhere when the memo spares its
+    /// allocation.  So a collection that completes while the run is observed
+    /// leaves its hooks to the end of the run, after the second snapshot:
+    /// what they do is no effect of the conversion, and would otherwise be
+    /// charged to it (a closed emacsql connection's finalizer moved
+    /// `function_epoch` inside a verify run).  They still run before the
+    /// filter returns, as if the collection had completed a moment later.
+    #[doc(hidden)]
+    pub fn cconv_observe_lisp(
+        &mut self,
+        closure_hook: Value,
+        params: Value,
+        body: Value,
+        env: Value,
+        docstring: Value,
+        iform: Value,
+    ) -> ObservedRun {
+        let gc_count = self.gc_count;
+        let before = self.cconv_effect_snapshot();
+        self.cconv_memo.observing += 1;
+        #[cfg(any(test, feature = "test-support"))]
+        if std::mem::take(&mut self.cconv_memo.collect_in_next_observed_run) {
+            self.gc_collect_exact();
+        }
+        let result = self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
+        self.cconv_memo.observing -= 1;
+        let after = self.cconv_effect_snapshot();
+        let gc_cycles = self.gc_count.wrapping_sub(gc_count);
+        if self.cconv_memo.observing == 0 && self.cconv_memo.owed_gc_hooks > 0 {
+            self.cconv_run_owed_gc_hooks(&result);
+        }
+        ObservedRun {
+            result,
+            before,
+            after,
+            gc_cycles,
+        }
+    }
+
+    /// Whether a collection that just completed must leave its finalizers
+    /// and `post-gc-hook` to the end of an observed run (see
+    /// [`Self::cconv_observe_lisp`]); counts the owed cycle if so.
+    #[doc(hidden)]
+    pub fn cconv_memo_defers_gc_hooks(&mut self) -> bool {
+        if self.cconv_memo.observing == 0 {
+            return false;
+        }
+        self.cconv_memo.owed_gc_hooks = self.cconv_memo.owed_gc_hooks.saturating_add(1);
+        true
+    }
+
+    /// Run what the collections owed by an observed run left: the doomed
+    /// finalizers, then `post-gc-hook` once per collection (GNU's order).
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn cconv_run_owed_gc_hooks(&mut self, result: &EvalResult) {
+        let cycles = std::mem::take(&mut self.cconv_memo.owed_gc_hooks);
+        self.cconv_memo.note(CconvMemoEvent::GcHooksDeferred);
+        let scope = self.save_specpdl_roots();
+        push_result_roots(self, result);
+        self.run_doomed_finalizers();
+        for _ in 0..cycles {
+            self.run_post_gc_hook();
+        }
+        self.restore_specpdl_roots(scope);
+    }
+
+    /// Run a call the memo does not serve: observed (for the statistics)
+    /// unless the memo is `on`, where only recording runs pay for that.
+    #[doc(hidden)]
+    pub fn cconv_run_unserved(
+        &mut self,
+        closure_hook: Value,
+        params: Value,
+        body: Value,
+        env: Value,
+        docstring: Value,
+        iform: Value,
+    ) -> EvalResult {
+        if self.cconv_memo.mode == CconvMemoMode::On {
+            self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform)
+        } else {
+            self.cconv_run_observed(closure_hook, params, body, env, docstring, iform)
+                .0
+        }
+    }
+
+    /// Whether this hook call goes through [`Self::cconv_filter_call`]: the
+    /// knob is on and the filter is `cconv-make-interpreted-closure` itself.
+    #[inline]
+    #[doc(hidden)]
+    pub fn cconv_filter_call_applies(&self, closure_hook: Value) -> bool {
+        let symbol_mode = self.symbol_mode();
+        self.cconv_memo.engaged()
+            && closure_hook.as_symbol_id(symbol_mode)
+                == Some(cconv_make_interpreted_closure_symbol())
+    }
+
+    /// `cconv-make-interpreted-closure` on the parts `Ffunction` built,
+    /// through the memo (see the module docs).  The caller holds every
+    /// argument as a root.
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn cconv_filter_call(
+        &mut self,
+        closure_hook: Value,
+        params: Value,
+        body: Value,
+        env: Value,
+        docstring: Value,
+        iform: Value,
+    ) -> EvalResult {
+        self.cconv_memo.note(CconvMemoEvent::Call);
+        let keeps_whole_context = body_keeps_whole_context(body);
+        if keeps_whole_context || !env_has_lexvars(env) {
+            self.cconv_memo.note(if keeps_whole_context {
+                CconvMemoEvent::DontTrim
+            } else {
+                CconvMemoEvent::NoLexvars
+            });
+            if self.cconv_memo.fast {
+                return self.cconv_untrimmed(
+                    closure_hook,
+                    params,
+                    body,
+                    env,
+                    docstring,
+                    iform,
+                    keeps_whole_context,
+                );
+            }
+            return self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
+        }
+        if self.cconv_memo.mode == CconvMemoMode::Off {
+            return self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
+        }
+        self.cconv_memo.note(CconvMemoEvent::Trim);
+        let refusal = if !self.cconv_trusted_set_valid() {
+            Some(CconvMemoEvent::Untrusted)
+        } else if !iform.is_nil() {
+            Some(CconvMemoEvent::RefuseInteractive)
+        } else {
+            self.cconv_bypass()
+        };
+        let summary = match (refusal, EnvSummary::of(env)) {
+            (None, Some(summary)) => summary,
+            (refusal, _) => {
+                self.cconv_memo
+                    .note(refusal.unwrap_or(CconvMemoEvent::RefuseEnv));
+                return self.cconv_run_unserved(closure_hook, params, body, env, docstring, iform);
+            }
+        };
+        let lexical_binding = self.cconv_variable_truthy(lexical_binding_symbol());
+        match self.cconv_memo_lookup(params, body, &summary, lexical_binding) {
+            Ok(hit) => {
+                self.cconv_memo.note(CconvMemoEvent::Hit);
+                return match self.cconv_memo.mode {
+                    CconvMemoMode::On => {
+                        match self.cconv_memo_build(params, body, env, docstring, iform, &hit) {
+                            Ok(closure) => {
+                                self.cconv_memo.note(CconvMemoEvent::Served);
+                                Ok(closure)
+                            }
+                            // Unreachable for a recorded shape; the Lisp
+                            // signals from its own frames if it must.
+                            Err(_) => self.cconv_run_lisp(
+                                closure_hook,
+                                params,
+                                body,
+                                env,
+                                docstring,
+                                iform,
+                            ),
+                        }
+                    }
+                    CconvMemoMode::Verify => {
+                        let memo = self.cconv_memo_build(params, body, env, docstring, iform, &hit);
+                        self.cconv_verify_against_lisp(
+                            closure_hook,
+                            params,
+                            body,
+                            env,
+                            docstring,
+                            iform,
+                            memo,
+                        )
+                    }
+                    CconvMemoMode::Stats | CconvMemoMode::Off => {
+                        self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform)
+                    }
+                };
+            }
+            Err(miss) => {
+                self.cconv_memo.note(miss);
+                if miss == CconvMemoEvent::MissDepth {
+                    return self.cconv_run_unserved(
+                        closure_hook,
+                        params,
+                        body,
+                        env,
+                        docstring,
+                        iform,
+                    );
+                }
+            }
+        }
+        let analysis = match self.cconv_analyze_source(params, body) {
+            Ok(analysis) => analysis,
+            Err(refusal) => {
+                self.cconv_memo.note(refusal);
+                return self.cconv_run_unserved(closure_hook, params, body, env, docstring, iform);
+            }
+        };
+        self.cconv_memo.note(CconvMemoEvent::Eligible);
+        let (result, clean) =
+            self.cconv_run_observed(closure_hook, params, body, env, docstring, iform);
+        if !clean {
+            return result;
+        }
+        let derived = match &result {
+            Ok(closure) if self.cconv_trusted_set_valid() => {
+                self.cconv_derive_result(*closure, params, body, env)
+            }
+            _ => None,
+        };
+        let Some((lexv, dynv)) = derived else {
+            self.cconv_memo.note(CconvMemoEvent::RecordRefused);
+            return result;
+        };
+        self.cconv_memo_insert(
+            body,
+            MemoEntry {
+                depth_budget: 4 * analysis.shape.car_depth as usize + 64,
+                shape: analysis.shape,
+                facts: analysis.facts,
+                env: summary,
+                lexical_binding,
+                lexv,
+                dynv,
+            },
+        );
+        result
+    }
+
+    #[doc(hidden)]
+    pub fn cconv_memo_insert(&mut self, body: Value, entry: MemoEntry) {
+        let memo = &mut self.cconv_memo;
+        if memo.entry_count >= MEMO_ENTRY_CAP {
+            memo.clear_entries();
+            memo.note(CconvMemoEvent::Cleared);
+        }
+        let bucket = memo.entries.entry(body.bits()).or_default();
+        // A stale entry for the same environment (its shape or facts no
+        // longer held) is replaced.
+        if let Some(old) = bucket
+            .iter_mut()
+            .find(|old| old.lexical_binding == entry.lexical_binding && old.env == entry.env)
+        {
+            *old = entry;
+        } else {
+            bucket.push(entry);
+            memo.entry_count += 1;
+        }
+        memo.note(CconvMemoEvent::Recorded);
+    }
+
+    /// The native untrimmed path (S0.6, see the module docs).
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub fn cconv_untrimmed(
+        &mut self,
+        closure_hook: Value,
+        params: Value,
+        body: Value,
+        env: Value,
+        docstring: Value,
+        iform: Value,
+        keeps_whole_context: bool,
+    ) -> EvalResult {
+        let servable = body.is_cons()
+            && (params.is_nil() || params.is_cons())
+            && is_proper_list(env)
+            && self.cconv_trusted_set_valid()
+            && !self.debug_on_next_call_is_armed()
+            && self.quit_flag.is_nil()
+            && self.depth.saturating_add(FAST_DEPTH_BUDGET) <= self.cconv_eval_depth_limit();
+        let built = if servable {
+            let kept_body = if keeps_whole_context {
+                body.cons_cdr()
+            } else {
+                body
+            };
+            builtins::symbols::make_interpreted_closure_from_parts(
+                &params,
+                &kept_body,
+                &env,
+                Some(&docstring),
+                Some(&iform),
+            )
+            .ok()
+        } else {
+            None
+        };
+        let Some(closure) = built else {
+            self.cconv_memo.note(CconvMemoEvent::FastRefused);
+            return self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
+        };
+        if self.cconv_memo.mode == CconvMemoMode::Verify {
+            return self.cconv_verify_against_lisp(
+                closure_hook,
+                params,
+                body,
+                env,
+                docstring,
+                iform,
+                Ok(closure),
+            );
+        }
+        self.cconv_memo.note(CconvMemoEvent::FastServed);
+        Ok(closure)
+    }
+
+    /// `verify`: run the Lisp next to the memo's closure MEMO, compare them
+    /// and the effect snapshot, return the Lisp's result.
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub fn cconv_verify_against_lisp(
+        &mut self,
+        closure_hook: Value,
+        params: Value,
+        body: Value,
+        env: Value,
+        docstring: Value,
+        iform: Value,
+        memo: EvalResult,
+    ) -> EvalResult {
+        let scope = self.save_specpdl_roots();
+        if let Ok(closure) = &memo {
+            self.push_specpdl_root(*closure);
+        }
+        OBSERVED_FUNCTION_WRITES.with(|log| *log.borrow_mut() = Some(Vec::new()));
+        let ObservedRun {
+            result: lisp,
+            before,
+            after,
+            gc_cycles,
+        } = self.cconv_observe_lisp(closure_hook, params, body, env, docstring, iform);
+        let writes = OBSERVED_FUNCTION_WRITES.with(|log| log.borrow_mut().take());
+        let quiet = after == before;
+        let agree = match (&memo, &lisp) {
+            (Ok(m), Ok(l)) => closures_agree(*m, *l),
+            _ => false,
+        };
+        self.restore_specpdl_roots(scope);
+        if quiet && agree {
+            self.cconv_memo.note(CconvMemoEvent::VerifyMatch);
+        } else {
+            self.cconv_memo.note(CconvMemoEvent::VerifyMismatch);
+            let shown = |r: &EvalResult| match r {
+                Ok(v) => super::super::print::print_value(v),
+                Err(flow) => format!("{flow:?}"),
+            };
+            let mut effect = before.describe_change(&after);
+            if after.obarray_len > before.obarray_len {
+                let names = self.obarray.all_symbols();
+                let fresh = after.obarray_len - before.obarray_len;
+                let tail = &names[names.len().saturating_sub(fresh.min(16))..];
+                effect.push_str(&format!("; newest symbol ids {tail:?}"));
+            }
+            if let Some(writes) = writes.filter(|w| !w.is_empty()) {
+                let shown: Vec<String> = writes
+                    .iter()
+                    .map(|(why, sym)| {
+                        let why: &'static str = why.into();
+                        match sym {
+                            Some(id) => format!("{} ({why})", resolve_sym(*id)),
+                            None => format!("({why})"),
+                        }
+                    })
+                    .collect();
+                effect.push_str(&format!("; function writes [{}]", shown.join(", ")));
+            }
+            effect.push_str(&format!("; collections during the run {gc_cycles}"));
+            let backtrace = self.render_lisp_backtrace(24);
+            tracing::error!(
+                target: "neovm::cconv_memo",
+                body = %super::super::print::print_value(&body),
+                memo = %shown(&memo),
+                lisp = %shown(&lisp),
+                quiet,
+                effect = %effect,
+                backtrace = %backtrace,
+                "cconv memo verify mismatch"
+            );
+            if self.cconv_memo.strict {
+                panic!(
+                    "cconv memo verify mismatch: body {} memo {} lisp {} quiet {quiet} \
+                     effect [{effect}]\nLisp backtrace:\n{backtrace}",
+                    super::super::print::print_value(&body),
+                    shown(&memo),
+                    shown(&lisp)
+                );
+            }
+        }
+        lisp
+    }
+}
+
+/// Carrier park: drop the observed function-write log.
+pub(crate) fn reset_carrier_tls() {
+    OBSERVED_FUNCTION_WRITES.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    neovm_value::tls_fingerprint::mix(
+        h,
+        OBSERVED_FUNCTION_WRITES.with(|slot| slot.borrow().is_some() as u64),
+    );
+}

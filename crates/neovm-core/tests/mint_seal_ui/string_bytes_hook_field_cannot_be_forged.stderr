@@ -1,0 +1,11 @@
+error[E0603]: static `NOTE_STRING_BYTES_CHANGED` is private
+ --> tests/mint_seal_ui/string_bytes_hook_field_cannot_be_forged.rs:7:39
+  |
+7 |     let _ = &neovm_value::heap_types::NOTE_STRING_BYTES_CHANGED;
+  |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^ private static
+  |
+note: the static `NOTE_STRING_BYTES_CHANGED` is defined here
+ --> $WORKSPACE/crates/neovm-value/src/heap_types.rs
+  |
+  | static NOTE_STRING_BYTES_CHANGED: OnceLock<fn()> = OnceLock::new();
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

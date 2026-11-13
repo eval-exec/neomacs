@@ -163,7 +163,7 @@ jobs:
           ./scripts/test-linux-release-artifacts.sh "${args[@]}"
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-${{ matrix.arch }}
           path: |
@@ -281,7 +281,7 @@ jobs:
           dnf install -y dnf-plugins-core
           dnf config-manager --set-enabled crb || echo "crb: not enabled (not needed for this list)"
           dnf install -y \
-            make binutils cpio diffutils file gcc gcc-c++ pkgconf-pkg-config \
+            make binutils cpio diffutils file gcc gcc-c++ pkgconf-pkg-config texinfo info \
             gawk ncurses-devel fontconfig-devel freetype-devel glib2-devel \
             gstreamer1-devel gstreamer1-plugins-base-devel libdrm-devel \
             dbus-devel \
@@ -357,7 +357,7 @@ jobs:
             --formats tar,rpm
 
       - name: Upload RPM artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpm-el9-${{ matrix.arch }}
           path: dist/*.rpm
@@ -434,6 +434,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install build dependencies
+        uses: ./.github/actions/install-build-deps
+
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
@@ -477,14 +480,14 @@ jobs:
 
       - name: Upload notarization diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-notarization-diagnostics-aarch64
           path: dist/notary/*.json
           if-no-files-found: ignore
 
       - name: Upload macOS aarch64 artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-aarch64
           path: |
@@ -522,6 +525,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Install build dependencies
+        uses: ./.github/actions/install-build-deps
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
@@ -562,14 +568,14 @@ jobs:
 
       - name: Upload notarization diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-notarization-diagnostics-x86_64
           path: dist/notary/*.json
           if-no-files-found: ignore
 
       - name: Upload macOS x86_64 artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-x86_64
           path: |
@@ -607,6 +613,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Install build dependencies
+        uses: ./.github/actions/install-build-deps
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
@@ -655,6 +664,8 @@ jobs:
       - name: Package zip
         shell: bash
         run: |
+          source scripts/lib/info-manuals.sh
+          neomacs_validate_info_manuals info target/release/neomacs.exe
           TARGET="$NEOMACS_RELEASE_TARGET"
           STAGING="neomacs-${VERSION}-${TARGET}"
           mkdir -p "$STAGING"
@@ -665,6 +676,8 @@ jobs:
           cp target/release/neomacs.pdump "$STAGING/"
           cp -r lisp "$STAGING/"
           cp -r etc "$STAGING/"
+          cp -r info "$STAGING/"
+          neomacs_validate_info_manuals "$STAGING/info" "$STAGING/neomacs.exe"
           cp COPYING "$STAGING/"
           mkdir -p dist
           7z a -tzip "dist/${STAGING}.zip" "$STAGING"
@@ -686,7 +699,7 @@ jobs:
             -ConfirmEphemeralRunner
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-${{ matrix.arch }}
           path: |

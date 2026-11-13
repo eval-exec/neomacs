@@ -1,0 +1,1987 @@
+//! GNU-style wait policy for VM event servicing.
+//!
+//! GNU Emacs routes process waits, input waits, timer waits, and redisplay
+//! through `wait_reading_process_output` with explicit policy flags.  This
+//! module gives Neomacs the same shape: callers describe what may be serviced
+//! and what should complete the wait; lower-level process/input code only
+//! performs the service pass.
+
+use crate::emacs_core::process::ProcessContextExt;
+use crate::emacs_core::process::SystemProcessExt;
+use std::time::{Duration, Instant};
+
+use neovm_eval::emacs_core::eval::keyboard::SpecialInputServiceOutcome;
+
+use super::process::{
+    ProcessId, ProcessOutputServiceOutcome, ProcessOutputServiceRequest, ProcessOutputWaitRequest,
+    ProcessOutputWaitTiming, ProcessWaitBackendInterest, ProcessWaitEvents,
+};
+use crate::emacs_core::timer::TimerContextExt;
+use neovm_eval::emacs_core::eval::GnuTimerTimestamp;
+use neovm_eval::emacs_core::reader::KeyboardInputRuntime;
+use neovm_value::error::Flow;
+
+/// Upper bound on the zero-time MINIMUM drain that follows a live read.
+///
+/// GNU's loop (`process.c:6021-6032`) has no such counter; it returns when the
+/// zero-time `select` reports no ready fd. That is the right exit for a ready
+/// burst, but a producer that stays readable at every pass would keep an
+/// `accept-process-output` that has already selected its completion inside the
+/// drain indefinitely. 4096 passes is 256 MiB at the default 64 KiB
+/// `read-process-output-max`, and still covers the 128-byte burst the
+/// one-byte-read regression test builds.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const MAX_MINIMUM_DRAIN_PASSES: usize = 4096;
+
+/// GNU's `status_notify` call *inside* `wait_reading_process_output`
+/// (src/process.c:5554 and :5854), as a capability that only this module can
+/// hand out.
+///
+/// # The fact this type exists to enforce
+///
+/// GNU has exactly five `status_notify` call sites
+/// (`grep -n 'status_notify' src/process.c`):
+///
+/// | GNU line | function | what it had just done |
+/// |---|---|---|
+/// | :1129 | `Fdelete_process`, connection arm | set the status itself |
+/// | :1149 | `Fdelete_process`, child arm | set the status itself |
+/// | :7181 | `process_send_signal`, SIGCONT arm | set the status itself |
+/// | :5554 | `wait_reading_process_output`, top of loop | nothing -- the record is the SIGCHLD handler's |
+/// | :5854 | `wait_reading_process_output`, after the select | nothing -- as above |
+///
+/// The three subr sites notify a status the subr wrote on the line above.
+/// **Every status GNU discovered ASYNCHRONOUSLY is notified from the wait, and
+/// from nowhere else.**  `process_pending_signals` -- what `maybe_quit` reaches
+/// through `probably_quit` (src/lisp.h:3896-3900, src/eval.c:1868-1876) -- is
+/// not on the list at all; its entire body is
+///
+/// ```c
+///   pending_signals = false;
+///   handle_async_input ();
+///   do_pending_atimers ();                          src/keyboard.c:8367-8372
+/// ```
+///
+/// and `grep -c status_notify` over it is **0**.  Nor does GNU's SIGCHLD reach
+/// `pending_signals` in the first place: `grep -n 'pending_signals = '
+/// src/*.c` returns eleven lines and **not one of them is in `process.c`**.
+/// `handle_child_signal`'s wake is `child_signal_notify` (:7766-7767), one
+/// `emacs_write` to a self-pipe that the `select` in the wait is watching.
+/// GNU's own header for the handler names the destination in words:
+/// *"That is saved for the next time keyboard input is done"* (:7669-7671) --
+/// and the function that does keyboard input is `wait_reading_process_output`.
+///
+/// # Why a type rather than a comment
+///
+/// Ledger 193 drained the child-status record at `Context::maybe_quit`, and
+/// the suites did not catch it: a green engine run and a green oracle run
+/// prove nothing about *when* a sentinel runs.  What caught it is Lisp that
+/// binds a variable around its wait -- `magit-run-post-commit-hook` is keyed on
+/// `last-command` -- and finds the binding gone by the time the sentinel runs.
+///
+/// So the constructors below are private to this module.  `maybe_quit` cannot
+/// build one; neither can a subr, a filter, or a future safe point.  Since
+/// `ProcessManager::record_child_status_changes` and
+/// `Context::record_and_notify_status_changes` both require one, "the child-status
+/// record was drained at the wrong safe point" is not rejected by a check --
+/// it is a sentence with no grammar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct WaitStatusNotifySite {
+    gnu: &'static str,
+}
+
+impl WaitStatusNotifySite {
+    /// GNU src/process.c:5540-5556 -- the top-of-loop notify, run BEFORE the
+    /// block.
+    ///
+    /// GNU guards it with `if (update_tick != process_tick)`, *"If status of
+    /// something has changed, and no input is available, notify the user of
+    /// the change right away"*, and does a zero-timeout `thread_select` that
+    /// deliberately clears the child-signal fd from the read mask first --
+    /// *"If a process status has changed, the child signal pipe will likely be
+    /// readable.  We want to ignore it for now, because otherwise we wouldn't
+    /// run into a timeout below."*  The point of the placement is that a
+    /// status recorded while Lisp was busy cannot sit out the wait's whole
+    /// timeout unnotified.
+    fn before_the_block() -> Self {
+        Self {
+            gnu: "src/process.c:5554",
+        }
+    }
+
+    /// GNU src/process.c:5840-5856 -- the notify after the select returned.
+    ///
+    /// GNU's guard there is `nfds == 0 && !read_kbd && update_tick !=
+    /// process_tick`, and its comment says it is the case the :5554 check
+    /// bypassed.  This port reaches it on every wake rather than only on the
+    /// empty one, because this port's block returns the READY SET rather than
+    /// a count, and a process the drain records is not necessarily in it --
+    /// GNU's `status_notify` walks the whole alist and is under no such
+    /// restriction.
+    fn after_the_block() -> Self {
+        Self {
+            gnu: "src/process.c:5854",
+        }
+    }
+
+    /// The GNU line this drain stands for, so a log or a panic can name it.
+    #[allow(dead_code)] // citation surface: the GNU line each constructor stands for; nothing logs it yet
+    pub(crate) fn gnu(self) -> &'static str {
+        self.gnu
+    }
+
+    /// A stand-in for the unit tests that exercise `handle_child_signal`'s
+    /// BODY rather than its placement.
+    ///
+    /// `#[cfg(any(test, feature = "test-support"))]`, so it does not exist in the shipped crate.  The
+    /// guarantee this type carries is about production code, and what enforces
+    /// it is `cargo check -p neovm-core` on the library alone: with the two
+    /// private constructors above and this one compiled out, `wait.rs` is the
+    /// only module that can build the argument
+    /// `ProcessManager::record_child_status_changes` and
+    /// `Context::record_and_notify_status_changes` demand.  A unit test that drives
+    /// a bare `ProcessManager` has no wait to be inside, and saying so here is
+    /// better than letting it reach for `pub(crate)`.
+    ///
+    /// Only a lower crate's test-support build drives a bare ProcessManager
+    /// through this site (core's moved process tests); this crate's own tests
+    /// do not, so the constructor is narrowed to the feature that actually
+    /// consumes it rather than every cfg(test) build.
+    #[cfg(feature = "test-support")]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn for_a_unit_test_of_the_walk_itself() -> Self {
+        Self {
+            gnu: "src/process.c:7734 (the walk, without a wait around it)",
+        }
+    }
+}
+
+/// A finite wait has one elapsed-time authority: its fine monotonic `instant`.
+/// Timeout completion cannot precede it, and poll timeouts must include its
+/// entire fine remainder. Earlier completion requires an event allowed by the
+/// request's policy (input, process activity/status, timer activity, or quit).
+///
+/// `timer_deadline` is a separate wall-clock domain used only to order GNU
+/// timers against the wait boundary; it cannot decide elapsed-time expiration.
+/// These immutable scalars contain no mutator-owned state and may cross threads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+enum WaitDeadline {
+    Poll,
+    Until {
+        instant: Instant,
+        timer_deadline: GnuTimerTimestamp,
+    },
+    Forever,
+}
+
+impl WaitDeadline {
+    fn until(instant: Instant) -> Self {
+        let now = Instant::now();
+        let remaining = instant.saturating_duration_since(now);
+        Self::until_with_timer_deadline(instant, GnuTimerTimestamp::now().add_duration(remaining))
+    }
+
+    fn for_duration(duration: Duration) -> Self {
+        Self::for_duration_with_timer_deadline(
+            duration,
+            GnuTimerTimestamp::now().add_duration(duration),
+        )
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn for_duration_with_timer_deadline(
+        duration: Duration,
+        timer_deadline: GnuTimerTimestamp,
+    ) -> Self {
+        let Some(instant) = Instant::now().checked_add(duration) else {
+            // GNU saturated timespec waits have no representable Rust Instant.
+            // Keep servicing events with the explicit indefinite-wait state.
+            return Self::Forever;
+        };
+        Self::until_with_timer_deadline(instant, timer_deadline)
+    }
+
+    fn until_with_timer_deadline(instant: Instant, timer_deadline: GnuTimerTimestamp) -> Self {
+        Self::Until {
+            instant,
+            timer_deadline,
+        }
+    }
+
+    fn expired(self, now: Instant) -> bool {
+        match self {
+            Self::Until { instant, .. } => now >= instant,
+            Self::Poll | Self::Forever => false,
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn remaining(self, now: Instant) -> Option<Duration> {
+        match self {
+            Self::Poll => Some(Duration::ZERO),
+            Self::Until { instant, .. } => Some(instant.saturating_duration_since(now)),
+            Self::Forever => None,
+        }
+    }
+
+    fn timer_deadline(self) -> Option<GnuTimerTimestamp> {
+        match self {
+            Self::Until { timer_deadline, .. } => Some(timer_deadline),
+            Self::Poll | Self::Forever => None,
+        }
+    }
+}
+
+fn process_output_wait_deadline(timing: ProcessOutputWaitTiming) -> WaitDeadline {
+    match timing {
+        ProcessOutputWaitTiming::Poll => WaitDeadline::Poll,
+        ProcessOutputWaitTiming::For(duration) => WaitDeadline::for_duration(duration),
+        ProcessOutputWaitTiming::Forever => WaitDeadline::Forever,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyboardWaitPolicy {
+    ServiceSpecialOnly,
+    WaitForSpecialInput,
+    YieldOnCommandInput,
+    ReadCommandInput,
+}
+
+impl KeyboardWaitPolicy {
+    fn input_query(
+        self,
+    ) -> Option<neovm_eval::emacs_core::eval::frontend_events::FrontendInputQuery> {
+        use neovm_eval::emacs_core::eval::frontend_events::FrontendInputQuery;
+        match self {
+            // GNU process.c's command wait uses detect_input_pending_run_timers,
+            // without READABLE_EVENTS_FILTER_EVENTS. Ignored focus events must
+            // still reach read_char, or later presentation/resize work stalls.
+            Self::ReadCommandInput => Some(FrontendInputQuery::Readable),
+            Self::YieldOnCommandInput => Some(FrontendInputQuery::Pending(
+                neovm_value::system_vocab::input::InputPendingFilter::ConfiguredIgnoreList,
+            )),
+            Self::ServiceSpecialOnly | Self::WaitForSpecialInput => None,
+        }
+    }
+
+    fn waits_for_host_input(self) -> bool {
+        matches!(
+            self,
+            Self::WaitForSpecialInput | Self::YieldOnCommandInput | Self::ReadCommandInput
+        )
+    }
+
+    fn sets_waiting_for_user_input(self) -> bool {
+        matches!(self, Self::ReadCommandInput)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessWaitPolicy {
+    None,
+    ServiceAny,
+    Any,
+    Target(ProcessId),
+    TargetOnly(ProcessId),
+    TlsHandshake(ProcessId),
+}
+
+impl ProcessWaitPolicy {
+    fn target(process: ProcessId, just_this_one: bool) -> Self {
+        if just_this_one {
+            Self::TargetOnly(process)
+        } else {
+            Self::Target(process)
+        }
+    }
+
+    fn target_process(self) -> Option<ProcessId> {
+        match self {
+            Self::Target(id) | Self::TargetOnly(id) | Self::TlsHandshake(id) => Some(id),
+            Self::None | Self::ServiceAny | Self::Any => None,
+        }
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn just_this_one(self) -> bool {
+        matches!(self, Self::TargetOnly(_))
+    }
+
+    fn services_processes(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    fn satisfied_by(self, outcome: WaitServiceOutcome) -> bool {
+        match self {
+            Self::Any => outcome.has_any_process_activity(),
+            Self::Target(_) | Self::TargetOnly(_) => outcome.has_target_process_activity(),
+            Self::TlsHandshake(_) => outcome.handshake_ready,
+            Self::None | Self::ServiceAny => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimerWaitPolicy {
+    Run,
+    Suppress,
+}
+
+impl TimerWaitPolicy {
+    fn allow(self) -> bool {
+        matches!(self, Self::Run)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpecialInputWaitPolicy {
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    Suppress,
+    ServiceOnly,
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    CompleteOnAny,
+    CompleteOnResize,
+}
+
+impl SpecialInputWaitPolicy {
+    fn services_input(self) -> bool {
+        !matches!(self, Self::Suppress)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+struct WaitRequest {
+    deadline: WaitDeadline,
+    keyboard: KeyboardWaitPolicy,
+    processes: ProcessWaitPolicy,
+    timers: TimerWaitPolicy,
+    redisplay: bool,
+    special_input: SpecialInputWaitPolicy,
+    idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
+}
+
+impl WaitRequest {
+    fn accept_process_output_request(request: ProcessOutputWaitRequest) -> Self {
+        match (request.target_process(), request.allow_timers()) {
+            (Some(id), true) => Self::accept_target_process_output_with_timers(
+                request.timing(),
+                id,
+                request.just_this_one(),
+            ),
+            (Some(id), false) => Self::accept_target_process_output_without_timers(
+                request.timing(),
+                id,
+                request.just_this_one(),
+            ),
+            (None, true) => Self::accept_any_process_output_with_timers(request.timing()),
+            (None, false) => Self::accept_any_process_output_without_timers(request.timing()),
+        }
+    }
+
+    /// GNU `Faccept_process_output` calls `wait_reading_process_output` with
+    /// READ_KBD = 0 (process.c:4957-4959), and that value is exactly what
+    /// suppresses the return-on-input path: when input is pending the loop only
+    /// runs `swallow_events` and keeps waiting, with the `break` deliberately
+    /// `#if 0`-ed out under the comment "Exiting when read_kbd doesn't request
+    /// that seems wrong, though" (process.c:5930-5937).  The docstring states
+    /// the same contract: "if PROCESS is nil, the function should not be
+    /// expected to return before the timeout expires".
+    ///
+    /// So this wait services special input but never completes on pending
+    /// command input.  Yielding there made `accept-process-output` a no-op for
+    /// any caller pumping the event loop while ordinary input was queued --
+    /// most visibly inside a keyboard macro, where the not-yet-executed macro
+    /// events are pending input, so a package that waits for an asynchronous
+    /// HTTP reply from `post-command-hook` returned instantly and never saw the
+    /// reply.  `sit-for` keeps yielding: GNU passes a non-zero READ_KBD there
+    /// (`sit_for`, dispnew.c).
+    fn accept_process_output(
+        deadline: WaitDeadline,
+        processes: ProcessWaitPolicy,
+        timers: TimerWaitPolicy,
+    ) -> Self {
+        Self {
+            deadline,
+            keyboard: KeyboardWaitPolicy::ServiceSpecialOnly,
+            processes,
+            timers,
+            redisplay: false,
+            special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
+        }
+    }
+
+    fn accept_process_output_with_timers(
+        deadline: WaitDeadline,
+        processes: ProcessWaitPolicy,
+    ) -> Self {
+        Self::accept_process_output(deadline, processes, TimerWaitPolicy::Run)
+    }
+
+    fn accept_process_output_without_timers(
+        deadline: WaitDeadline,
+        processes: ProcessWaitPolicy,
+    ) -> Self {
+        Self::accept_process_output(deadline, processes, TimerWaitPolicy::Suppress)
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn accept_any_process_output_with_timers(timing: ProcessOutputWaitTiming) -> Self {
+        Self::accept_process_output_with_timers(
+            process_output_wait_deadline(timing),
+            ProcessWaitPolicy::Any,
+        )
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn accept_any_process_output_without_timers(timing: ProcessOutputWaitTiming) -> Self {
+        Self::accept_process_output_without_timers(
+            process_output_wait_deadline(timing),
+            ProcessWaitPolicy::Any,
+        )
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn accept_target_process_output_with_timers(
+        timing: ProcessOutputWaitTiming,
+        process: ProcessId,
+        just_this_one: bool,
+    ) -> Self {
+        Self::accept_process_output_with_timers(
+            process_output_wait_deadline(timing),
+            ProcessWaitPolicy::target(process, just_this_one),
+        )
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn accept_target_process_output_without_timers(
+        timing: ProcessOutputWaitTiming,
+        process: ProcessId,
+        just_this_one: bool,
+    ) -> Self {
+        Self::accept_process_output_without_timers(
+            process_output_wait_deadline(timing),
+            ProcessWaitPolicy::target(process, just_this_one),
+        )
+    }
+
+    fn read_command_input(deadline: WaitDeadline) -> Self {
+        Self {
+            deadline,
+            keyboard: KeyboardWaitPolicy::ReadCommandInput,
+            processes: ProcessWaitPolicy::ServiceAny,
+            timers: TimerWaitPolicy::Run,
+            redisplay: true,
+            special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn read_command_input_until(deadline: Instant) -> Self {
+        Self::read_command_input(WaitDeadline::until(deadline))
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn read_command_input_forever() -> Self {
+        Self::read_command_input(WaitDeadline::Forever)
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn service_once(redisplay: bool) -> Self {
+        Self {
+            deadline: WaitDeadline::Poll,
+            keyboard: KeyboardWaitPolicy::ServiceSpecialOnly,
+            processes: ProcessWaitPolicy::ServiceAny,
+            timers: TimerWaitPolicy::Run,
+            redisplay,
+            special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
+        }
+    }
+
+    fn input_pending_poll(timers: TimerWaitPolicy) -> Self {
+        Self {
+            deadline: WaitDeadline::Poll,
+            keyboard: KeyboardWaitPolicy::YieldOnCommandInput,
+            processes: ProcessWaitPolicy::None,
+            timers,
+            redisplay: false,
+            special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn input_pending_without_timers() -> Self {
+        Self::input_pending_poll(TimerWaitPolicy::Suppress)
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn input_pending_with_timers() -> Self {
+        Self::input_pending_poll(TimerWaitPolicy::Run)
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn timer_service(redisplay: bool) -> Self {
+        Self {
+            deadline: WaitDeadline::Poll,
+            keyboard: KeyboardWaitPolicy::ServiceSpecialOnly,
+            processes: ProcessWaitPolicy::None,
+            timers: TimerWaitPolicy::Run,
+            redisplay,
+            special_input: SpecialInputWaitPolicy::Suppress,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
+        }
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn sleep_until(deadline: Instant) -> Self {
+        Self {
+            deadline: WaitDeadline::until(deadline),
+            keyboard: KeyboardWaitPolicy::ServiceSpecialOnly,
+            processes: ProcessWaitPolicy::ServiceAny,
+            timers: TimerWaitPolicy::Run,
+            redisplay: false,
+            special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
+        }
+    }
+
+    fn sleep_for_duration_until_timer_deadline(
+        duration: Duration,
+        timer_deadline: GnuTimerTimestamp,
+    ) -> Self {
+        Self {
+            deadline: WaitDeadline::for_duration_with_timer_deadline(duration, timer_deadline),
+            keyboard: KeyboardWaitPolicy::ServiceSpecialOnly,
+            processes: ProcessWaitPolicy::ServiceAny,
+            timers: TimerWaitPolicy::Run,
+            redisplay: false,
+            special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn resize_ack(deadline: Instant) -> Self {
+        Self {
+            deadline: WaitDeadline::until(deadline),
+            keyboard: KeyboardWaitPolicy::WaitForSpecialInput,
+            processes: ProcessWaitPolicy::None,
+            timers: TimerWaitPolicy::Suppress,
+            redisplay: false,
+            special_input: SpecialInputWaitPolicy::CompleteOnResize,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
+        }
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn deadline(self) -> WaitDeadline {
+        self.deadline
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn deadline_is_finite(self) -> bool {
+        matches!(self.deadline, WaitDeadline::Until { .. })
+    }
+
+    fn timer_deadline(self) -> Option<GnuTimerTimestamp> {
+        self.deadline.timer_deadline()
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn deadline_is_forever(self) -> bool {
+        matches!(self.deadline, WaitDeadline::Forever)
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn target_process(self) -> Option<ProcessId> {
+        self.processes.target_process()
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn completes_on_any_process_activity(self) -> bool {
+        matches!(self.processes, ProcessWaitPolicy::Any)
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn completes_on_target_process_activity(self, process: ProcessId) -> bool {
+        matches!(
+            self.processes,
+            ProcessWaitPolicy::Target(id) | ProcessWaitPolicy::TargetOnly(id) if id == process
+        )
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn restricts_process_service_to_target(self) -> bool {
+        self.processes.just_this_one()
+    }
+
+    fn services_process_output(self) -> bool {
+        self.processes.services_processes()
+    }
+
+    fn process_output_service_request(self) -> ProcessOutputServiceRequest {
+        match self.processes {
+            ProcessWaitPolicy::None => ProcessOutputServiceRequest::none(),
+            ProcessWaitPolicy::ServiceAny | ProcessWaitPolicy::Any => {
+                ProcessOutputServiceRequest::any(None)
+            }
+            ProcessWaitPolicy::Target(target) | ProcessWaitPolicy::TlsHandshake(target) => {
+                ProcessOutputServiceRequest::any(Some(target))
+            }
+            ProcessWaitPolicy::TargetOnly(target) => {
+                ProcessOutputServiceRequest::target_only(target)
+            }
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn services_special_input(self) -> bool {
+        self.special_input.services_input()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn waits_for_host_input(self) -> bool {
+        self.keyboard.waits_for_host_input()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn completes_on_command_input(self) -> bool {
+        self.keyboard.input_query().is_some()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn sets_waiting_for_user_input(self) -> bool {
+        self.keyboard.sets_waiting_for_user_input()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn runs_timers(self) -> bool {
+        self.timers.allow()
+    }
+
+    /// The specific process this wait targets (`accept-process-output PROC`),
+    /// if any.
+    fn target_pid(self) -> Option<ProcessId> {
+        self.processes.target_process()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn poll_or_deadline_elapsed(self, now: Instant) -> bool {
+        matches!(self.deadline, WaitDeadline::Poll) || self.deadline.expired(now)
+    }
+
+    fn deadline_elapsed(self, now: Instant) -> bool {
+        self.deadline.expired(now)
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn base_timeout(self, now: Instant) -> Duration {
+        self.deadline
+            .remaining(now)
+            .unwrap_or_else(|| Duration::from_secs(100_000))
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn needs_redisplay_after_service(
+        self,
+        special_input: SpecialInputServiceOutcome,
+        outcome: WaitServiceOutcome,
+    ) -> bool {
+        // GNU `wait_reading_process_output` runs `redisplay_preserve_echo_area`
+        // at the top of every loop iteration when `do_display` is set
+        // (process.c), so a process filter/sentinel that modifies a displayed
+        // buffer during the wait is reflected on screen without waiting for the
+        // next keystroke. Neomacs gates redisplay on activity (a battery-minded
+        // divergence from GNU's unconditional per-iteration redisplay), but that
+        // gate MUST include process activity: a filter running is exactly when a
+        // buffer may have changed. Omitting it left async output — eww "Loading…"
+        // never resolving, comint/async-shell output, LSP — stale on screen until
+        // the user pressed a key. `redisplay()` still no-ops via the unchanged
+        // `RedisplaySignature` when the filter changed nothing displayed, so this
+        // is strictly less aggressive than GNU.
+        self.redisplay
+            && (special_input.redisplay_needed()
+                || outcome.has_timer_activity()
+                || outcome.ran_process_callbacks())
+    }
+
+    fn needs_redisplay_after_command_input(
+        self,
+        special_input: SpecialInputServiceOutcome,
+    ) -> bool {
+        self.redisplay && special_input.redisplay_needed()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn completion_for(self, outcome: WaitServiceOutcome) -> Option<WaitCompletion> {
+        if self.completes_on_command_input() && outcome.has_command_input_pending() {
+            return Some(WaitCompletion::CommandInputPending);
+        }
+
+        // Timer and process callbacks can replace the displayed buffer. Return
+        // to read_char so its bounded display maintenance can discover that
+        // change even when its previous coverage request had no more work.
+        // Only the command loop's UNBOUNDED read takes this exit: a bounded
+        // read (a Lisp `read-char` timeout, the retirement wait) has a
+        // deadline contract to honor, and GNU's loop keeps blocking until
+        // that deadline when nothing but timers ran.
+        if matches!(
+            (self.keyboard, self.deadline),
+            (KeyboardWaitPolicy::ReadCommandInput, WaitDeadline::Forever)
+        ) && (outcome.has_timer_activity() || outcome.ran_process_callbacks())
+        {
+            return Some(WaitCompletion::DisplayActivity);
+        }
+
+        if self.processes.satisfied_by(outcome) {
+            return Some(WaitCompletion::ProcessActivity);
+        }
+
+        match self.special_input {
+            SpecialInputWaitPolicy::CompleteOnAny if outcome.has_special_input_activity() => {
+                return Some(WaitCompletion::SpecialInputActivity);
+            }
+            SpecialInputWaitPolicy::CompleteOnResize if outcome.has_resize_activity() => {
+                return Some(WaitCompletion::SpecialInputActivity);
+            }
+            SpecialInputWaitPolicy::Suppress
+            | SpecialInputWaitPolicy::ServiceOnly
+            | SpecialInputWaitPolicy::CompleteOnAny
+            | SpecialInputWaitPolicy::CompleteOnResize => {}
+        }
+
+        None
+    }
+
+    fn needs_minimum_process_drain_before_completion(
+        self,
+        completion: WaitCompletion,
+        outcome: WaitServiceOutcome,
+    ) -> bool {
+        completion == WaitCompletion::ProcessActivity && outcome.has_any_process_activity()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+enum WaitCompletion {
+    DisplayActivity,
+    ProcessActivity,
+    CommandInputPending,
+    SpecialInputActivity,
+    DeadlineElapsed,
+    /// The wait's target process reached a status that ends the wait in GNU
+    /// (`wait_reading_process_output` breaks when WAIT_PROC's status is
+    /// neither `run` nor a pending connect) or no longer exists (reaped).
+    /// `accept-process-output` returns nil for this, like a timeout.
+    TargetProcessTerminated,
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use neovm_eval::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+fn command_input_outcome_from_completion(completion: WaitCompletion) -> CommandInputWaitOutcome {
+    match completion {
+        WaitCompletion::CommandInputPending => CommandInputWaitOutcome::InputPending,
+        WaitCompletion::DeadlineElapsed | WaitCompletion::TargetProcessTerminated => {
+            CommandInputWaitOutcome::DeadlineElapsed
+        }
+        WaitCompletion::DisplayActivity
+        | WaitCompletion::ProcessActivity
+        | WaitCompletion::SpecialInputActivity => CommandInputWaitOutcome::Interrupted,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum ProcessOutputWaitOutcome {
+    ProcessActivity,
+    NoProcessActivity,
+}
+
+impl ProcessOutputWaitOutcome {
+    fn from_completion(completion: WaitCompletion) -> Self {
+        match completion {
+            WaitCompletion::ProcessActivity => Self::ProcessActivity,
+            WaitCompletion::DisplayActivity
+            | WaitCompletion::CommandInputPending
+            | WaitCompletion::SpecialInputActivity
+            | WaitCompletion::DeadlineElapsed
+            | WaitCompletion::TargetProcessTerminated => Self::NoProcessActivity,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum WaitProcessActivity {
+    #[default]
+    None,
+    Any,
+    Target,
+}
+
+impl WaitProcessActivity {
+    fn record(self, target: bool) -> Self {
+        if target || matches!(self, Self::Target) {
+            Self::Target
+        } else {
+            Self::Any
+        }
+    }
+
+    fn any(self) -> bool {
+        matches!(self, Self::Any | Self::Target)
+    }
+
+    fn target(self) -> bool {
+        matches!(self, Self::Target)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum WaitSpecialInputActivity {
+    #[default]
+    None,
+    Any,
+    Resize,
+}
+
+impl WaitSpecialInputActivity {
+    fn record(self, activity: Self) -> Self {
+        match (self, activity) {
+            (Self::Resize, _) | (_, Self::Resize) => Self::Resize,
+            (Self::Any, _) | (_, Self::Any) => Self::Any,
+            (Self::None, Self::None) => Self::None,
+        }
+    }
+
+    fn any(self) -> bool {
+        matches!(self, Self::Any | Self::Resize)
+    }
+
+    fn resize(self) -> bool {
+        matches!(self, Self::Resize)
+    }
+}
+
+/// Evidence owned by this service pass, never a second input queue. Requeued
+/// Lisp events remain with their canonical reader; staged events remain with
+/// the keyboard/frontend owner. Neither case consumes the pending event.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+enum WaitCommandInput {
+    #[default]
+    None,
+    Requeued,
+    Staged,
+}
+
+static_assertions::assert_eq_size!(WaitCommandInput, bool);
+static_assertions::assert_impl_all!(WaitCommandInput: Copy, Send, Sync);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+struct WaitServiceOutcome {
+    handshake_ready: bool,
+    process_activity: WaitProcessActivity,
+    /// Non-output servicing ran during the wait: a connect completed, a
+    /// sentinel/status-notify fired, or an EOF was handled. Kept SEPARATE from
+    /// `process_activity` (which is output-bytes-only and gates wait
+    /// completion, matching GNU's `got_some_output`) because a sentinel must
+    /// not complete an `accept-process-output` — but it CAN change a displayed
+    /// buffer (eww's completion callback runs in url-http's EOF sentinel), so
+    /// the redisplay decision must see it.
+    process_serviced: bool,
+    special_input_activity: WaitSpecialInputActivity,
+    timers_fired: bool,
+    command_input: WaitCommandInput,
+}
+
+impl WaitServiceOutcome {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn has_any_process_activity(self) -> bool {
+        self.process_activity.any()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn has_target_process_activity(self) -> bool {
+        self.process_activity.target()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn absorb_process_activity(&mut self, process_outcome: ProcessOutputServiceOutcome) {
+        if process_outcome.has_target_process_activity() {
+            self.process_activity = self.process_activity.record(true);
+        } else if process_outcome.has_any_process_activity() {
+            self.process_activity = self.process_activity.record(false);
+        }
+        self.process_serviced |= process_outcome.has_serviced_activity();
+    }
+
+    /// Any process work ran that may have changed a displayed buffer — output
+    /// bytes read (filters) or non-output servicing (sentinels/connects/EOF).
+    /// Distinct from [`Self::has_any_process_activity`], which gates wait
+    /// completion and stays output-only to match GNU's `got_some_output`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn ran_process_callbacks(self) -> bool {
+        self.process_activity.any() || self.process_serviced
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn absorb_special_input_activity(&mut self, special_input: SpecialInputServiceOutcome) {
+        if special_input.has_resize_activity() {
+            self.special_input_activity = self
+                .special_input_activity
+                .record(WaitSpecialInputActivity::Resize);
+        } else if special_input.has_any_activity() {
+            self.special_input_activity = self
+                .special_input_activity
+                .record(WaitSpecialInputActivity::Any);
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn has_special_input_activity(self) -> bool {
+        self.special_input_activity.any()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn has_resize_activity(self) -> bool {
+        self.special_input_activity.resize()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn record_command_input_pending(&mut self, input: WaitCommandInput) {
+        match input {
+            WaitCommandInput::None => {}
+            WaitCommandInput::Requeued | WaitCommandInput::Staged => self.command_input = input,
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn has_command_input_pending(self) -> bool {
+        match self.command_input {
+            WaitCommandInput::None => false,
+            WaitCommandInput::Requeued | WaitCommandInput::Staged => true,
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn record_timer_activity(&mut self, fired: bool) {
+        self.timers_fired |= fired;
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn has_timer_activity(self) -> bool {
+        self.timers_fired
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+enum WaitProcessService {
+    Poll,
+    Ready(ProcessWaitEvents),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+struct WaitBlockActivity {
+    notification_wakeup: bool,
+    process_service: WaitProcessService,
+}
+
+impl WaitBlockActivity {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn poll() -> Self {
+        Self {
+            notification_wakeup: false,
+            process_service: WaitProcessService::Poll,
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn ready_processes(processes: Vec<ProcessId>) -> Self {
+        Self {
+            notification_wakeup: false,
+            process_service: WaitProcessService::Ready(ProcessWaitEvents::ready_processes(
+                processes,
+            )),
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn from_source_events(events: ProcessWaitEvents) -> Self {
+        let notification_wakeup = events.has_notification_wakeup();
+        let process_service = if !events.has_ready_processes() && !events.has_writable_processes() {
+            WaitProcessService::Poll
+        } else {
+            WaitProcessService::Ready(events)
+        };
+        Self {
+            notification_wakeup,
+            process_service,
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn has_notification_wakeup(&self) -> bool {
+        self.notification_wakeup
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn has_external_activity(&self) -> bool {
+        self.notification_wakeup || matches!(self.process_service, WaitProcessService::Ready(_))
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn into_process_service(self) -> WaitProcessService {
+        self.process_service
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+struct WaitTimeoutChoice {
+    pub(crate) duration: Duration,
+    pub(crate) finite_deadline_timeout: bool,
+    pub(crate) shortened_by_timer: bool,
+}
+
+impl WaitTimeoutChoice {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn run_timers_after_block(self, activity: &WaitBlockActivity, deadline_elapsed: bool) -> bool {
+        if deadline_elapsed {
+            return false;
+        }
+
+        self.shortened_by_timer || !self.finite_deadline_timeout || activity.has_external_activity()
+    }
+}
+
+/// How the wait loop blocks for one iteration.
+///
+/// When a wait poller exists (the normal case on every OS) we block on it —
+/// GNU's single `pselect` equivalent — watching input notifications and/or
+/// process fds as the request requires (`Poller`). Without a poller (creation
+/// failed / headless) we fall back to an explicit degraded primitive.
+#[derive(Debug, PartialEq, Eq)]
+enum WaitBlock {
+    /// Zero timeout: service immediately, don't block.
+    Poll,
+    /// Block on the unified poller with the given interest.
+    Poller(ProcessWaitBackendInterest),
+    /// Block directly on the host-input channel (`recv_timeout`), ignoring
+    /// process fds. Used when no poller exists, or when host input is wanted
+    /// but process output is not *and* live process fds exist — polling those
+    /// with no interest would spin (they stay readable), so we wait on the
+    /// channel instead.
+    HostInputChannel,
+    /// No poller: poll process output via a short sleep + harvest all live.
+    ProcessOutputSleep,
+    /// No poller, pure timeout: blind sleep.
+    Sleep,
+}
+
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait WaitContextExt {
+    fn service_wait_request_once(&mut self, request: &WaitRequest) -> Result<(), Flow>;
+
+    fn service_input_pending_without_timers(&mut self) -> Result<(), Flow>;
+
+    fn service_input_pending_with_timers(&mut self) -> Result<(), Flow>;
+
+    fn service_read_char_preliminary_redisplay(
+        &mut self,
+        idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
+    ) -> Result<(), Flow>;
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn service_timers_with_redisplay(&mut self) -> Result<(), Flow>;
+
+    fn service_timers_without_redisplay(&mut self) -> Result<(), Flow>;
+
+    fn service_wait_request_once_outcome(
+        &mut self,
+        request: &WaitRequest,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    fn service_wait_request_first_pass(
+        &mut self,
+        request: &WaitRequest,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn service_wait_request_source_events_outcome(
+        &mut self,
+        request: &WaitRequest,
+        events: ProcessWaitEvents,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    fn service_wait_request_block_activity(
+        &mut self,
+        request: &WaitRequest,
+        activity: WaitBlockActivity,
+        run_timers: bool,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    fn service_wait_request_processes(
+        &mut self,
+        request: &WaitRequest,
+        process_service: WaitProcessService,
+        run_timers: bool,
+        notify_status_after_timers: Option<WaitStatusNotifySite>,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    fn wait_request_target_terminated(&self, request: &WaitRequest) -> bool;
+
+    fn service_minimum_process_drain(
+        &mut self,
+        request: &WaitRequest,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    fn complete_wait_after_required_minimum_drain(
+        &mut self,
+        request: &WaitRequest,
+        outcome: WaitServiceOutcome,
+    ) -> Result<Option<WaitCompletion>, Flow>;
+
+    fn requeued_command_input_for_wait_request(&self, request: &WaitRequest) -> WaitCommandInput;
+
+    fn record_and_notify_status_changes(
+        &mut self,
+        request: &WaitRequest,
+        site: WaitStatusNotifySite,
+    ) -> Result<ProcessOutputServiceOutcome, Flow>;
+
+    fn wait_for_tls_handshake(&mut self, id: ProcessId) -> Result<(), Flow>;
+
+    fn wait_reading_process_output(&mut self, request: WaitRequest)
+    -> Result<WaitCompletion, Flow>;
+
+    fn wait_reading_process_output_inner(
+        &mut self,
+        request: WaitRequest,
+    ) -> Result<WaitCompletion, Flow>;
+
+    fn wait_for_process_output(
+        &mut self,
+        request: ProcessOutputWaitRequest,
+    ) -> Result<ProcessOutputWaitOutcome, Flow>;
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn wait_until(&mut self, deadline: Instant) -> Result<(), Flow>;
+
+    fn wait_for_duration_until_timer_deadline(
+        &mut self,
+        duration: Duration,
+        timer_deadline: GnuTimerTimestamp,
+    ) -> Result<(), Flow>;
+
+    fn wait_for_resize_ack_until(&mut self, deadline: Instant) -> Result<bool, Flow>;
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn wait_for_command_input(
+        &mut self,
+        deadline: Option<Instant>,
+    ) -> Result<CommandInputWaitOutcome, Flow>;
+
+    fn wait_for_command_input_with_idle_policy(
+        &mut self,
+        deadline: Option<Instant>,
+        idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
+    ) -> Result<CommandInputWaitOutcome, Flow>;
+
+    fn block_for_wait_request(
+        &mut self,
+        request: &WaitRequest,
+        wait_time: Duration,
+    ) -> Result<WaitBlockActivity, Flow>;
+
+    fn green_resumed_select_activity(&self) -> WaitBlockActivity;
+
+    fn begin_waiting_for_user_input_if_requested(&mut self, request: &WaitRequest) -> Option<bool>;
+
+    fn end_waiting_for_user_input(&mut self, restore: Option<bool>);
+
+    fn next_gnu_timer_timeout(&self, timer_deadline: Option<GnuTimerTimestamp>)
+    -> Option<Duration>;
+
+    fn next_wait_request_timeout(&self, request: &WaitRequest, now: Instant) -> WaitTimeoutChoice;
+
+    fn wait_block(&self, request: &WaitRequest, wait_time: Duration) -> WaitBlock;
+}
+
+impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
+    fn service_wait_request_once(&mut self, request: &WaitRequest) -> Result<(), Flow> {
+        let _ = self.service_wait_request_once_outcome(request)?;
+        Ok(())
+    }
+
+    fn service_input_pending_without_timers(&mut self) -> Result<(), Flow> {
+        self.service_wait_request_once(&WaitRequest::input_pending_without_timers())
+    }
+
+    fn service_input_pending_with_timers(&mut self) -> Result<(), Flow> {
+        self.service_wait_request_once(&WaitRequest::input_pending_with_timers())
+    }
+
+    /// GNU read_char checks for pending input with timer service before its
+    /// preliminary redisplay (keyboard.c:2693-2721, 12042-12052). Keep the
+    /// phases together so display hooks see timer changes and timer-created
+    /// unread events, while process and special-input service stays afterward.
+    fn service_read_char_preliminary_redisplay(
+        &mut self,
+        idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
+    ) -> Result<(), Flow> {
+        // GNU's initial-frame and inhibit guards are inside redisplay, not
+        // around timer-aware detection (xdisp.c:17369-17387). Neither guard
+        // suppresses this timer-only pass; it preserves the current idle epoch.
+        self.service_timers_without_redisplay()?;
+        self.redisplay_for_input_wait()?;
+
+        // Initial batch frames suppress display, including redisplay caused
+        // by service, while retaining the input/process service pass.
+        let mut request = WaitRequest::service_once(self.input_wait_redisplay_allowed());
+        // Do not take another timer snapshot before read_char's unread-event
+        // and deadline checks. A timer created by the batch above belongs to
+        // a later wait pass (GNU keyboard.c:4911-4943, 2992-3010, 3061-3064).
+        request.timers = TimerWaitPolicy::Suppress;
+        request.idle_policy = idle_policy;
+        self.service_wait_request_once(&request)
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn service_timers_with_redisplay(&mut self) -> Result<(), Flow> {
+        self.service_wait_request_once(&WaitRequest::timer_service(true))
+    }
+
+    fn service_timers_without_redisplay(&mut self) -> Result<(), Flow> {
+        self.service_wait_request_once(&WaitRequest::timer_service(false))
+    }
+
+    fn service_wait_request_once_outcome(
+        &mut self,
+        request: &WaitRequest,
+    ) -> Result<WaitServiceOutcome, Flow> {
+        self.service_wait_request_processes(request, WaitProcessService::Poll, true, None)
+    }
+
+    /// First pass of `wait_reading_process_output`: GNU runs `timer_check`
+    /// (process.c:5490) BEFORE the `status_notify` of :5554, so a ripe timer
+    /// fires ahead of the sentinel (and the output it drains) of a child that
+    /// already exited while Lisp was busy.
+    fn service_wait_request_first_pass(
+        &mut self,
+        request: &WaitRequest,
+    ) -> Result<WaitServiceOutcome, Flow> {
+        self.service_wait_request_processes(
+            request,
+            WaitProcessService::Poll,
+            true,
+            Some(WaitStatusNotifySite::before_the_block()),
+        )
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn service_wait_request_source_events_outcome(
+        &mut self,
+        request: &WaitRequest,
+        events: ProcessWaitEvents,
+    ) -> Result<WaitServiceOutcome, Flow> {
+        self.service_wait_request_block_activity(
+            request,
+            WaitBlockActivity::from_source_events(events),
+            true,
+        )
+    }
+
+    fn service_wait_request_block_activity(
+        &mut self,
+        request: &WaitRequest,
+        activity: WaitBlockActivity,
+        run_timers: bool,
+    ) -> Result<WaitServiceOutcome, Flow> {
+        if activity.has_notification_wakeup() {
+            // Frontend input is one possible notification source.  Probing the
+            // channel is harmless for diagnostics/DNS notifications and keeps
+            // the generic notifier independent of its producers.
+            let _ = self.stage_next_host_input_event_if_available()?;
+        }
+        // GNU process.c:5918-5921 checks requeued command input after select,
+        // before the next timer/process-fd service pass. The outer wait has
+        // already performed its after-select status notification here.
+        let mut requeued = WaitServiceOutcome::default();
+        requeued
+            .record_command_input_pending(self.requeued_command_input_for_wait_request(request));
+        if requeued.has_command_input_pending() {
+            self.maybe_quit()?;
+            return Ok(requeued);
+        }
+        let handshake_ready = match (request.processes, &activity.process_service) {
+            (ProcessWaitPolicy::TlsHandshake(id), WaitProcessService::Ready(events)) => {
+                events.ready_processes_ref().contains(&id)
+                    || events.writable_processes_ref().contains(&id)
+            }
+            _ => false,
+        };
+        let mut outcome = self.service_wait_request_processes(
+            request,
+            activity.into_process_service(),
+            run_timers,
+            None,
+        )?;
+        outcome.handshake_ready = handshake_ready;
+        Ok(outcome)
+    }
+
+    fn service_wait_request_processes(
+        &mut self,
+        request: &WaitRequest,
+        process_service: WaitProcessService,
+        run_timers: bool,
+        notify_status_after_timers: Option<WaitStatusNotifySite>,
+    ) -> Result<WaitServiceOutcome, Flow> {
+        // GNU's kbd buffer is process-wide: a `THREAD_EVENT` a worker stored
+        // while this wait blocked (`src/thread.c:1012`) is already visible to
+        // the wait's command-input check below.  Stage it before that check so
+        // a main thread parked in `read-event` wakes on the event instead of
+        // sleeping to its deadline.
+        self.stage_pending_thread_events()?;
+        let mut outcome = WaitServiceOutcome::default();
+        let special_input = if request.services_special_input() {
+            self.service_wait_request_special_input_events_with_idle_policy(request.idle_policy)?
+        } else {
+            SpecialInputServiceOutcome::default()
+        };
+        outcome.absorb_special_input_activity(special_input);
+
+        // Run timers before draining process output, matching GNU's
+        // `wait_reading_process_output` (src/process.c): it runs `timer_check`
+        // near the top of the loop (before `pselect`) and only reads readable
+        // process fds afterwards, so timer callbacks fire before process
+        // filters in the same service pass. `run_timers` is false when the
+        // wait's deadline has already elapsed at wake time: GNU's loop-top
+        // deadline check (process.c:5469-5478) precedes `timer_check`, so a
+        // timer becoming ripe exactly at the deadline does not fire inside
+        // this wait — while ready process fds from the final pselect are
+        // still read.
+        if run_timers && request.runs_timers() {
+            // A non-local `throw` from a timer callback propagates out of the
+            // wait to the matching outer `catch` (GNU `timer-event-handler`
+            // catches `error` signals only).  `?` returns the throw up through
+            // `accept-process-output` to the VM `catch`, e.g. the
+            // `jsonrpc-request` catch tag completed by a zero-delay timer.
+            outcome.record_timer_activity(self.service_pending_timers_with_wait_policy(false)?);
+        }
+
+        // A timer may request quit while inhibit-quit is temporarily bound.
+        // Honor it before invoking display hooks or more process callbacks;
+        // the caller's binding still determines whether quitting is allowed.
+        self.maybe_quit()?;
+
+        // GNU process.c:5501-5504 returns after timer_check when a callback
+        // queues unread-command-events. Preserve quit priority and leave the
+        // list for read_char, rather than waiting for physical input/deadline.
+        if self.requeued_command_input_for_wait_request(request) == WaitCommandInput::Requeued {
+            // GNU's timer-triggered redisplay precedes its unread-input break
+            // (process.c:5492-5504). A display hook may consume the event, so
+            // obtain completion evidence again after that arbitrary Lisp.
+            if request.needs_redisplay_after_service(special_input, outcome) {
+                self.redisplay()?;
+            }
+            outcome.record_command_input_pending(
+                self.requeued_command_input_for_wait_request(request),
+            );
+            return Ok(outcome);
+        }
+
+        if let Some(site) = notify_status_after_timers {
+            let notified = self.record_and_notify_status_changes(request, site)?;
+            outcome.absorb_process_activity(notified);
+        }
+
+        // Requeued Lisp input was checked at GNU's earlier timer/select sites.
+        // Keep the ready-process drain before staging low-level host input.
+        // In particular, process-only requests must drain available replies
+        // despite queued command input: GNU's read_kbd == 0 does not complete
+        // on that input (process.c:5925-5937).
+        let process_request = request.process_output_service_request();
+        // A non-local `throw` from a process filter/sentinel callback likewise
+        // propagates out of the wait to the matching outer `catch` (GNU's
+        // `read_process_output`/`exec_sentinel` never catch throws).
+        let process_outcome = match process_service {
+            WaitProcessService::Poll => {
+                self.poll_process_output_for_service_request(&process_request)?
+            }
+            WaitProcessService::Ready(events) => {
+                self.poll_ready_process_output_for_service_request(events, &process_request)?
+            }
+        };
+        outcome.absorb_process_activity(process_outcome);
+
+        if let Some(query) = request.keyboard.input_query()
+            && self.stage_pending_command_input_for_wait_request(query)?
+        {
+            outcome.record_command_input_pending(WaitCommandInput::Staged);
+            if request.needs_redisplay_after_command_input(special_input) {
+                self.redisplay()?;
+            }
+            return Ok(outcome);
+        }
+        if request.needs_redisplay_after_service(special_input, outcome) {
+            self.redisplay()?;
+        }
+        Ok(outcome)
+    }
+
+    /// GNU ends a WAIT_PROC wait once the target process is no longer
+    /// running/connecting (process.c drains remaining output, then breaks);
+    /// output read during the final drain still wins via `completion_for`.
+    fn wait_request_target_terminated(&self, request: &WaitRequest) -> bool {
+        if let ProcessWaitPolicy::TlsHandshake(pid) = request.processes {
+            // Deinitialization retires TLS ownership without changing the
+            // process status. Wake its owner so negotiation can fail cleanly.
+            if !self.processes().has_pending_tls_handshake(pid) {
+                return true;
+            }
+        }
+        request.target_pid().is_some_and(|pid| {
+            self.processes()
+                .get(pid)
+                .is_none_or(super::process::process_status_ends_target_wait)
+        })
+    }
+
+    fn service_minimum_process_drain(
+        &mut self,
+        request: &WaitRequest,
+    ) -> Result<WaitServiceOutcome, Flow> {
+        let activity = if self.processes().has_wait_notification_backend() {
+            let events = self
+                .processes()
+                .wait_for_backend_events(Duration::ZERO, ProcessWaitBackendInterest::ProcessesOnly)
+                .unwrap_or_default();
+            WaitBlockActivity::from_source_events(events)
+        } else {
+            WaitBlockActivity::poll()
+        };
+        self.service_wait_request_block_activity(request, activity, true)
+    }
+
+    fn complete_wait_after_required_minimum_drain(
+        &mut self,
+        request: &WaitRequest,
+        mut outcome: WaitServiceOutcome,
+    ) -> Result<Option<WaitCompletion>, Flow> {
+        // Redisplay can also queue Lisp input after the timer/select checks.
+        outcome.record_command_input_pending(self.requeued_command_input_for_wait_request(request));
+        // The service pass checks for command input BEFORE its redisplay
+        // step, so input that arrives during that redisplay (a frontend
+        // completing its wake, a config whose echo traffic lands exactly
+        // then) has missed the outcome's recording.  A wait that completes
+        // on command input must not report a lesser completion while the
+        // input is already pending: GNU's loop would keep iterating and
+        // notice the input on the next pass, so the classification the
+        // caller sees ("input pending") holds either way.  Re-stage once
+        // here, after every callback of the pass has run.
+        if request.completes_on_command_input()
+            && !outcome.has_command_input_pending()
+            && let Some(query) = request.keyboard.input_query()
+            && self.stage_pending_command_input_for_wait_request(query)?
+        {
+            outcome.record_command_input_pending(WaitCommandInput::Staged);
+        }
+        let Some(completion) = request.completion_for(outcome) else {
+            return Ok(None);
+        };
+
+        // GNU's MINIMUM mode repeats zero-time select/read cycles until no
+        // output is ready (process.c:5477, :5867-5870, :6021-6032). A single
+        // readiness pass now yields after one read, so completing after just
+        // one follow-up would leave a buffered burst for the next accept call.
+        // Keep rotating sources and checking timers/quit between reads, for
+        // both targeted and untargeted accepts, without blocking for new bytes.
+        // Explicit PTY coding still controls output-before-status ordering in
+        // the process service layer; it must not suppress the output drain.
+        //
+        // GNU has no pass limit here; the source must go quiet for the wait to
+        // return. This port keeps the same exit for a ready burst, but bounds
+        // the vacuum so a source that is readable at every pass cannot keep an
+        // already-completed accept from yielding to timers and its caller.
+        // At the default 64 KiB read cap, the bound covers 256 MiB; the
+        // one-byte read-cap burst test still drains its whole 128-byte burst.
+        //
+        // A source left readable past the bound stays in its pipe: the next
+        // accept reads it, exactly like GNU's deferred-output path. At the
+        // default 64 KiB read cap the bound covers 256 MiB, far past a pipe's
+        // usual capacity; a deliberately tiny read cap shrinks the covered
+        // burst, and the rest still waits in the pipe instead of being dropped.
+        if request.needs_minimum_process_drain_before_completion(completion, outcome) {
+            for _ in 0..MAX_MINIMUM_DRAIN_PASSES {
+                if !self
+                    .service_minimum_process_drain(request)?
+                    .has_any_process_activity()
+                {
+                    break;
+                }
+            }
+        }
+
+        Ok(Some(completion))
+    }
+
+    fn requeued_command_input_for_wait_request(&self, request: &WaitRequest) -> WaitCommandInput {
+        // GNU keyboard.c:12065-12070 is CONSP(Vunread_command_events), not
+        // requeued_events_pending_p (which also includes input-method queues).
+        // The canonical peek preserves dynamic bindings and a nil first event.
+        if request.completes_on_command_input() && self.peek_unread_command_event().is_some() {
+            WaitCommandInput::Requeued
+        } else {
+            WaitCommandInput::None
+        }
+    }
+
+    /// GNU's `got_some_output = status_notify (NULL, wait_proc)`
+    /// (src/process.c:5554, :5854), with this port's `handle_child_signal`
+    /// immediately in front of it.
+    ///
+    /// GNU splits the two: the record is made in the SIGCHLD handler and the
+    /// notification here.  This port cannot record in a handler (the walk
+    /// allocates and the table is the Lisp thread's), so it does both here --
+    /// **in one call, and that is the invariant.**  A record made without the
+    /// notification following it in the same call is what makes
+    /// `(process-live-p p)` answer `nil` with the sentinel unrun, which is the
+    /// state ledger 198 is about.
+    ///
+    /// GNU's return value is folded into `got_some_output`, which decides
+    /// whether the wait made progress; this port's equivalent is the
+    /// [`ProcessOutputServiceOutcome`] the caller absorbs into the wait's
+    /// completion decision, so the notification's own output reads count for
+    /// the wait exactly as GNU's do.
+    fn record_and_notify_status_changes(
+        &mut self,
+        request: &WaitRequest,
+        site: WaitStatusNotifySite,
+    ) -> Result<ProcessOutputServiceOutcome, Flow> {
+        let target = request.target_process();
+        // GNU `handle_child_signal`'s `FOR_EACH_PROCESS` walk (src/process.c:
+        // 7734-7763).  GNU runs it in the SIGCHLD handler; this port cannot
+        // (the process table is a `HashMap` owned by the Lisp thread and
+        // iterating it allocates, which GNU's own two warnings above the
+        // function forbid), so it runs here, at GNU's own `status_notify`
+        // sites.  It is UNCONDITIONAL because GNU's own arming is not a
+        // signal: `update_tick != process_tick` (:5524, :5845) is a counter,
+        // and it is a performance short-circuit rather than the correctness
+        // invariant -- deleting it from both of GNU's wait sites leaves GNU
+        // correct, because `status_notify`'s body is guarded per process at
+        // :7892.
+        let _stamped = self.processes_mut().record_child_status_changes(site);
+        // GNU `status_notify (NULL, wait_proc)` (:5554, :5854), over the
+        // processes whose own tick moved -- from ANY of GNU's eight sites, not
+        // just the walk above.
+        self.notify_processes_with_unnotified_status_change(target)
+    }
+
+    fn wait_for_tls_handshake(&mut self, id: ProcessId) -> Result<(), Flow> {
+        let mut request = WaitRequest::accept_target_process_output_with_timers(
+            ProcessOutputWaitTiming::Forever,
+            id,
+            false,
+        );
+        request.processes = ProcessWaitPolicy::TlsHandshake(id);
+        request.redisplay = true;
+        self.wait_reading_process_output(request).map(|_| ())
+    }
+
+    fn wait_reading_process_output(
+        &mut self,
+        request: WaitRequest,
+    ) -> Result<WaitCompletion, Flow> {
+        // A reentrant wait must not repeatedly wake on its suspended caller's
+        // TLS descriptor. Restore only still-live streams on every Flow exit.
+        let candidates = self.processes().tls_handshake_process_ids();
+        let suspended: Vec<_> = candidates
+            .into_iter()
+            .filter(|&id| {
+                request.processes != ProcessWaitPolicy::TlsHandshake(id)
+                    && self.processes_mut().suspend_tls_handshake_polling(id)
+            })
+            .collect();
+        let result = self.wait_reading_process_output_inner(request);
+        for id in suspended {
+            self.processes_mut().resume_tls_handshake_polling(id);
+        }
+        result
+    }
+
+    fn wait_reading_process_output_inner(
+        &mut self,
+        request: WaitRequest,
+    ) -> Result<WaitCompletion, Flow> {
+        // GNU src/process.c:5540-5556, on the first pass through the loop:
+        // before anything blocks, notify any status that changed while Lisp
+        // was busy.  Here that means running `handle_child_signal`'s walk
+        // first, because this port could not run it in the handler.
+        let mut outcome = self.service_wait_request_first_pass(&request)?;
+        if let Some(completion) =
+            self.complete_wait_after_required_minimum_drain(&request, outcome)?
+        {
+            return Ok(completion);
+        }
+        if self.wait_request_target_terminated(&request) {
+            return Ok(WaitCompletion::TargetProcessTerminated);
+        }
+        if request.poll_or_deadline_elapsed(Instant::now()) {
+            return Ok(WaitCompletion::DeadlineElapsed);
+        }
+
+        loop {
+            // GNU `wait_reading_process_output` runs `maybe_quit` at the top of
+            // every `while(1)` iteration when `read_kbd >= 0` (process.c:5399-5400),
+            // and `Fsleep_for`/`Faccept_process_output` pass `read_kbd >= 0`.  We
+            // have no internal-no-quit (`read_kbd < 0`) wait policy, so this applies
+            // to all of our waits.  Placing it first means a quit pending before the
+            // first block is caught on iteration 1 (before blocking) and every
+            // iteration thereafter, so C-g interrupts `sleep-for` / poll loops
+            // within one iteration instead of running for the full deadline.  It is
+            // inhibit-quit-safe: `maybe_quit` returns `Ok` when `inhibit-quit` is
+            // non-nil, so `accept-process-output` keeps blocking with quit inhibited.
+            self.maybe_quit()?;
+
+            let now = Instant::now();
+            if request.deadline_elapsed(now) {
+                return Ok(WaitCompletion::DeadlineElapsed);
+            }
+
+            let wait_timeout = self.next_wait_request_timeout(&request, now);
+            let activity = self.block_for_wait_request(&request, wait_timeout.duration)?;
+            // Service cross-thread eval-tasks (e.g. a diagnostics profile
+            // capture) here: a `Poller::notify()` wakes this inner block without
+            // host input, and the block would otherwise re-loop without ever
+            // returning to the outer read_char drain point. Tasks are only the
+            // diagnostics profiler ops today (safe at any wait point); a general
+            // task must stay non-reentrant here.
+            self.drain_eval_tasks();
+            // GNU services a wake in [read fds] → [loop-top deadline check] →
+            // [timer_check] order, so when the deadline elapses during the
+            // block, ready process output is still drained but ripe timers are
+            // NOT run — the deadline break precedes the next `timer_check`
+            // (process.c:5469-5478). Without this, a repeating timer whose
+            // next fire lands exactly on the wait deadline fires once more
+            // than GNU (e.g. 21 vs 20 fires for a 1ms timer in `(sit-for
+            // 0.02)`).
+            let deadline_elapsed = request.deadline_elapsed(Instant::now());
+            let run_timers = wait_timeout.run_timers_after_block(&activity, deadline_elapsed);
+            // GNU src/process.c:5840-5856, immediately after the select
+            // returns.  It runs BEFORE the service pass because the service
+            // pass may be restricted to the block's ready set, and a status a
+            // SIGCHLD recorded is not necessarily in it -- GNU's
+            // `status_notify` walks the whole alist and has no such
+            // restriction.
+            let notified = self.record_and_notify_status_changes(
+                &request,
+                WaitStatusNotifySite::after_the_block(),
+            )?;
+            outcome = self.service_wait_request_block_activity(&request, activity, run_timers)?;
+            outcome.absorb_process_activity(notified);
+
+            if let Some(completion) =
+                self.complete_wait_after_required_minimum_drain(&request, outcome)?
+            {
+                return Ok(completion);
+            }
+            if self.wait_request_target_terminated(&request) {
+                return Ok(WaitCompletion::TargetProcessTerminated);
+            }
+        }
+    }
+
+    fn wait_for_process_output(
+        &mut self,
+        request: ProcessOutputWaitRequest,
+    ) -> Result<ProcessOutputWaitOutcome, Flow> {
+        self.wait_reading_process_output(WaitRequest::accept_process_output_request(request))
+            .map(ProcessOutputWaitOutcome::from_completion)
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn wait_until(&mut self, deadline: Instant) -> Result<(), Flow> {
+        let _ = self.wait_reading_process_output(WaitRequest::sleep_until(deadline))?;
+        Ok(())
+    }
+
+    fn wait_for_duration_until_timer_deadline(
+        &mut self,
+        duration: Duration,
+        timer_deadline: GnuTimerTimestamp,
+    ) -> Result<(), Flow> {
+        let _ = self.wait_reading_process_output(
+            WaitRequest::sleep_for_duration_until_timer_deadline(duration, timer_deadline),
+        )?;
+        Ok(())
+    }
+
+    fn wait_for_resize_ack_until(&mut self, deadline: Instant) -> Result<bool, Flow> {
+        let completion = self.wait_reading_process_output(WaitRequest::resize_ack(deadline))?;
+        Ok(completion == WaitCompletion::SpecialInputActivity)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn wait_for_command_input(
+        &mut self,
+        deadline: Option<Instant>,
+    ) -> Result<CommandInputWaitOutcome, Flow> {
+        self.wait_for_command_input_with_idle_policy(
+            deadline,
+            neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
+        )
+    }
+
+    fn wait_for_command_input_with_idle_policy(
+        &mut self,
+        deadline: Option<Instant>,
+        idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
+    ) -> Result<CommandInputWaitOutcome, Flow> {
+        let mut request = if let Some(deadline) = deadline {
+            if deadline <= Instant::now() {
+                return Ok(CommandInputWaitOutcome::DeadlineElapsed);
+            }
+            WaitRequest::read_command_input_until(deadline)
+        } else {
+            WaitRequest::read_command_input_forever()
+        };
+        request.idle_policy = idle_policy;
+        self.wait_reading_process_output(request)
+            .map(command_input_outcome_from_completion)
+    }
+
+    fn block_for_wait_request(
+        &mut self,
+        request: &WaitRequest,
+        wait_time: Duration,
+    ) -> Result<WaitBlockActivity, Flow> {
+        // GNU `thread_select`: other Lisp threads run during the wait.
+        let wait_time = match self.green_select_switch(wait_time)? {
+            neovm_eval::emacs_core::eval::SelectTurn::Switched => {
+                return Ok(self.green_resumed_select_activity());
+            }
+            neovm_eval::emacs_core::eval::SelectTurn::Block(wait_time) => wait_time,
+        };
+        // A simulated worker's finite select (`accept-process-output`,
+        // `sit-for`, and any other `wait_reading_process_output` timeout)
+        // must not occupy the one OS thread. The caller that released the
+        // global lock continues. `thread-signal` does not wake the park
+        // (src/thread.c:974-982). A poll or a forever wait stays here.
+        if self.threads().current_thread_id() != 0 && !self.green_threads_running() {
+            if let Some(remaining) = request.deadline.remaining(Instant::now()) {
+                if !remaining.is_zero() {
+                    return Err(neovm_value::error::Flow::thread_blocked(
+                        neovm_eval::emacs_core::threads::make_sleep_blocker(
+                            remaining.as_secs_f64(),
+                        ),
+                        neovm_value::value::Value::NIL,
+                    ));
+                }
+            }
+        }
+        // The simulated backend has one OS thread, so the release
+        // `thread_select` performs (src/thread.c:613-643) is its only
+        // chance to run created workers and resume unblocked waiters.
+        // Green and no-thread cases are a single flag test inside.
+        self.sim_release_point(neovm_eval::emacs_core::threads::SimReleasePoint::Select)?;
+        match self.wait_block(request, wait_time) {
+            WaitBlock::Poll => Ok(WaitBlockActivity::poll()),
+            WaitBlock::Poller(interest) => {
+                // Mirror GNU: while blocked reading a command key,
+                // `waiting-for-user-input-p` must report t. The channel path
+                // sets this itself (see `wait_for_next_host_input_event`); the
+                // poller path must set it explicitly around the block.
+                let restore = self.begin_waiting_for_user_input_if_requested(request);
+                let events = self
+                    .processes()
+                    .wait_for_backend_events(wait_time, interest)
+                    .unwrap_or_default();
+                self.end_waiting_for_user_input(restore);
+                Ok(WaitBlockActivity::from_source_events(events))
+            }
+            WaitBlock::HostInputChannel => {
+                let _ = self.wait_for_next_host_input_event(
+                    wait_time,
+                    request.sets_waiting_for_user_input(),
+                )?;
+                Ok(WaitBlockActivity::poll())
+            }
+            WaitBlock::ProcessOutputSleep => {
+                let events = self.processes().wait_for_process_events(wait_time);
+                Ok(WaitBlockActivity::from_source_events(events))
+            }
+            WaitBlock::Sleep => {
+                std::thread::sleep(wait_time);
+                Ok(WaitBlockActivity::ready_processes(Vec::new()))
+            }
+        }
+    }
+
+    /// Decode readiness only after the Green owner reacquired the Baton.
+    /// The idle scheduler observes raw OS events without borrowing the World.
+    /// Process registrations are level-triggered, so a zero-time decode
+    /// recovers writable connect/TLS interest as well as readable output.
+    #[cold]
+    #[inline(never)]
+    fn green_resumed_select_activity(&self) -> WaitBlockActivity {
+        self.processes()
+            .wait_for_backend_events(
+                Duration::ZERO,
+                ProcessWaitBackendInterest::NotificationsAndProcesses,
+            )
+            .map_or_else(
+                WaitBlockActivity::poll,
+                WaitBlockActivity::from_source_events,
+            )
+    }
+
+    /// Set `waiting_for_user_input` for the duration of a poller block when the
+    /// request reads a command key, returning the previous value to restore.
+    fn begin_waiting_for_user_input_if_requested(&mut self, request: &WaitRequest) -> Option<bool> {
+        if request.sets_waiting_for_user_input() {
+            let previous = self.waiting_for_user_input();
+            self.set_waiting_for_user_input(true);
+            Some(previous)
+        } else {
+            None
+        }
+    }
+
+    fn end_waiting_for_user_input(&mut self, restore: Option<bool>) {
+        if let Some(previous) = restore {
+            self.set_waiting_for_user_input(previous);
+        }
+    }
+
+    fn next_gnu_timer_timeout(
+        &self,
+        timer_deadline: Option<GnuTimerTimestamp>,
+    ) -> Option<Duration> {
+        let ordinary = self.next_ordinary_gnu_timer_timeout_before(timer_deadline);
+        let idle = self.next_idle_gnu_timer_timeout();
+
+        match (ordinary, idle) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(timeout), None) | (None, Some(timeout)) => Some(timeout),
+            (None, None) => None,
+        }
+    }
+
+    fn next_wait_request_timeout(&self, request: &WaitRequest, now: Instant) -> WaitTimeoutChoice {
+        let base_timeout = request.base_timeout(now);
+        let mut timeout = base_timeout;
+        let mut shortened_by_timer = false;
+
+        if request.runs_timers() {
+            if let Some(next) = self.next_gnu_timer_timeout(request.timer_deadline())
+                && next < timeout
+            {
+                timeout = next;
+                shortened_by_timer = true;
+            }
+
+            if !self.processes().live_process_ids().is_empty() {
+                timeout = timeout.min(Duration::from_millis(100));
+            }
+        }
+        if request.services_process_output()
+            && request.target_process().is_none()
+            && let Some(next) = self.processes().adaptive_read_timeout()
+        {
+            timeout = timeout.min(next);
+        }
+
+        WaitTimeoutChoice {
+            duration: timeout,
+            finite_deadline_timeout: request.deadline_is_finite() && timeout == base_timeout,
+            shortened_by_timer,
+        }
+    }
+
+    /// Choose how to block for one wait-loop iteration. See [`WaitBlock`].
+    ///
+    /// With a poller present (the normal case) this is GNU's single `pselect`:
+    /// we accept input notifications whenever the request reads host input and
+    /// the process fds whenever it services process output. The one wrinkle is
+    /// `(host input, no process output)` while process fds are live: the poller
+    /// is level-triggered, so polling readable-but-unserviced process fds with
+    /// no interest would spin — there we block on the input channel instead.
+    fn wait_block(&self, request: &WaitRequest, wait_time: Duration) -> WaitBlock {
+        if wait_time.is_zero() {
+            return WaitBlock::Poll;
+        }
+
+        let wants_input = request.waits_for_host_input();
+        let wants_processes = request.services_process_output();
+
+        if self.processes().has_wait_notification_backend() {
+            use ProcessWaitBackendInterest::{
+                NotificationsAndProcesses, NotificationsOnly, ProcessesOnly,
+            };
+            return match (wants_input, wants_processes) {
+                (true, true) => WaitBlock::Poller(NotificationsAndProcesses),
+                (true, false) => {
+                    if self.processes().live_process_ids().is_empty() {
+                        WaitBlock::Poller(NotificationsOnly)
+                    } else if self.input_rx().as_ref().is_some() {
+                        // Live process fds we won't service → channel, no spin.
+                        WaitBlock::HostInputChannel
+                    } else {
+                        // No channel to drain; watch the live process fds.
+                        WaitBlock::Poller(ProcessesOnly)
+                    }
+                }
+                // Process output, or a pure timeout (sleep-for / sit-for timer
+                // service): register notification interest too, so a cross-thread
+                // `Poller::notify()` returns the block. For example, the input
+                // bridge raises it on C-g and also sets `quit_requested`; the wait loop
+                // then re-iterates and `maybe_quit()` raises Quit within one
+                // iteration. This is neomacs' analogue of GNU's SIGINT
+                // interrupting `pselect` inside `sleep-for` (read_kbd == 0): the
+                // wait does not COMPLETE on the staged key (sleep-for's
+                // `completes_on_command_input()` is false), it only wakes to
+                // re-check the quit flag, and the key is reconciled later by the
+                // command loop.
+                (false, _) => WaitBlock::Poller(NotificationsAndProcesses),
+            };
+        }
+
+        // No poller (creation failed / headless): explicit degraded fallbacks.
+        if wants_input && self.input_rx().as_ref().is_some() {
+            WaitBlock::HostInputChannel
+        } else if wants_processes {
+            WaitBlock::ProcessOutputSleep
+        } else {
+            WaitBlock::Sleep
+        }
+    }
+}
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
+
+#[cfg(test)]
+#[path = "tests/fine_deadline.rs"]
+mod fine_deadline_tests;

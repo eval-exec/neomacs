@@ -1,0 +1,15 @@
+error[E0596]: cannot borrow data in dereference of `neovm_core::emacs_core::eval::ObarrayViewMut<'_>` as mutable
+  --> tests/thread_safety_ui/obarray_view_cannot_be_swapped.rs:12:20
+   |
+12 |     std::mem::swap(&mut *first, &mut *second);
+   |                    ^^^^^^^^^^^ cannot borrow as mutable
+   |
+   = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `neovm_core::emacs_core::eval::ObarrayViewMut<'_>`
+
+error[E0596]: cannot borrow data in dereference of `neovm_core::emacs_core::eval::ObarrayViewMut<'_>` as mutable
+  --> tests/thread_safety_ui/obarray_view_cannot_be_swapped.rs:12:33
+   |
+12 |     std::mem::swap(&mut *first, &mut *second);
+   |                                 ^^^^^^^^^^^^ cannot borrow as mutable
+   |
+   = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `neovm_core::emacs_core::eval::ObarrayViewMut<'_>`

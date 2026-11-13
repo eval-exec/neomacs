@@ -21,7 +21,7 @@ fn directory_errors_use_separate_action_errno_and_filename_data() {
     let missing = dir.path().join("missing");
     let file = dir.path().join("file");
     std::fs::write(&file, b"").unwrap();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     for (path, symbol, message) in [
         (&missing, "file-missing", "No such file or directory"),
         (&file, "file-error", "Not a directory"),

@@ -21,6 +21,9 @@ readonly -a build_packages=(
     pkg-config
     cmake
     m4
+    # makeinfo builds the shipped manuals; install-info generates info/dir.
+    texinfo
+    install-info
     libssl-dev
     fontconfig
     libfontconfig1-dev
@@ -79,6 +82,15 @@ requires_libfaketime=false
 install_nerd_fonts=false
 case "$profile" in
     build)
+        # The archived core shard suite (nextest-shards.yml with
+        # LINUX_PROFILE=build) runs the whole neovm-core package, including
+        # the D-Bus rows, which spawn their own private `dbus-daemon`
+        # (crates/neovm-core moved_system dbusbind tests).  libdbus-1-dev in
+        # build_packages supplies only the client library and headers; the
+        # daemon package itself must be present or those rows fail loudly at
+        # PrivateBus::start instead of skipping.  The ecosystem profile
+        # already lists dbus for the window-system tests.
+        profile_packages=(dbus)
         ;;
     # GNU Emacs is NOT an apt package here: every GNU-vs-Neomacs comparison
     # runs against the pinned build installed by
@@ -175,6 +187,8 @@ sudo apt-get install -y --no-install-recommends "${packages[@]}"
 # primitives and discovering the mismatch much later in an oracle test.
 pkg-config --modversion lcms2
 pkg-config --modversion gstreamer-1.0
+makeinfo --version >/dev/null
+install-info --version >/dev/null
 
 if $requires_libfaketime; then
     dpkg -L libfaketime | grep -q '/libfaketime\.so\.1$'

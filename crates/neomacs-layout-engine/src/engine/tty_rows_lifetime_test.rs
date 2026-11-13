@@ -2,12 +2,44 @@
 //! must produce their own witnesses; no cached-query hit or synthetic seal.
 use super::*;
 use crate::engine::{RowsQueryAdmission, RowsQueryPolicy};
+use neovm_core::emacs_core::xfaces::realization::XfacesRealizationContextExt;
 use neovm_core::emacs_core::{
     display_host::{DisplayHost, InertRowsHostAuthority},
     eval::GuiFrameHostRequest,
     terminal::pure,
 };
 use std::num::NonZeroUsize;
+
+/// The collector mode is pinned per fixture instead of inherited from the test
+/// runner's environment: the canonical TTY Rows producers require GEN1, and
+/// the GEN0 twin asserts the typed refusal instead.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GcMode {
+    Generational,
+    Legacy,
+}
+
+impl GcMode {
+    fn apply(self, context: &mut Context) {
+        let enabled = self == Self::Generational;
+        // SAFETY: the fixture owns this Context and assembles it serially
+        // before any Layout call; no collector or compiled leaf runs across
+        // the per-heap policy switch.
+        unsafe {
+            neovm_value::test_support::authority::set_generational_enabled_for_test(
+                context.tagged_heap_mut(),
+                enabled,
+            );
+        }
+        assert_eq!(
+            neovm_value::test_support::authority::generational_enabled_for_test(
+                context.tagged_heap()
+            ),
+            enabled,
+            "the TTY Rows fixture must run under its explicitly pinned GC mode",
+        );
+    }
+}
 
 struct RestoreTerminal;
 impl Drop for RestoreTerminal {
@@ -47,7 +79,25 @@ fn rows() -> WindowLayoutQueryScope {
 }
 
 fn fixture() -> (Context, FrameId, WindowId, BufferId, RestoreTerminal) {
-    let mut context = Context::new();
+    let (context, frame, window, source, restore, observation) =
+        fixture_with_mode(GcMode::Generational);
+    observation
+        .expect("actual warm termcap/default and inert host must be admitted before capture");
+    (context, frame, window, source, restore)
+}
+
+fn fixture_with_mode(
+    gc: GcMode,
+) -> (
+    Context,
+    FrameId,
+    WindowId,
+    BufferId,
+    RestoreTerminal,
+    Result<RowsObservationEpoch, RowsObservationRefusal>,
+) {
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
+    gc.apply(&mut context);
     let restore = RestoreTerminal;
     context.set_gc_threshold(usize::MAX);
     context.gc_collect_exact();
@@ -89,10 +139,16 @@ fn fixture() -> (Context, FrameId, WindowId, BufferId, RestoreTerminal) {
     else {
         unreachable!("the fixture requests the explicit terminal policy")
     };
-    context
-        .begin_tty_rows_observation(frame, Some(&host))
-        .expect("actual warm termcap/default and inert host must be admitted before capture");
-    (context, frame, window, source, restore)
+    let observation = context.begin_tty_rows_observation(frame, Some(&host));
+    (context, frame, window, source, restore, observation)
+}
+
+#[test]
+fn tty_rows_lifetime_gen0_refuses_typed_generational_disabled_before_capture() {
+    let (_context, _frame, _window, _source, _restore, observation) =
+        fixture_with_mode(GcMode::Legacy);
+    let refusal = observation.expect_err("GEN0 must refuse the TTY Rows observation");
+    assert_eq!(refusal, RowsObservationRefusal::GenerationalDisabled);
 }
 
 fn query(

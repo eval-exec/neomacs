@@ -7,7 +7,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 8 |     ThreadTransfer::<ThreadProjectionDescriptor>::transfer();
   |                                                   ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<ThreadProjectionDescriptor>` due to unsatisfied trait bounds
   |
- ::: src/emacs_core/runtime/forward/thread_projection.rs
+ ::: $WORKSPACE/crates/neovm-value/src/forward/thread_projection.rs
   |
   | pub struct ThreadProjectionDescriptor {
   | ------------------------------------- doesn't satisfy `ThreadProjectionDescriptor: Send`

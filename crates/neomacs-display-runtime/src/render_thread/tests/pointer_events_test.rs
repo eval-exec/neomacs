@@ -61,6 +61,7 @@ fn native_titlebar_is_not_a_menu_hit_and_popup_anchor_stays_frame_local() {
             last_ime_cursor_area: None,
             chrome: Default::default(),
             geometry_hints: None,
+            pending_position: None,
         },
         render,
     };

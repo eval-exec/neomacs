@@ -298,7 +298,7 @@ dependencies = [
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "x11rb",
 ]
 
@@ -672,7 +672,7 @@ dependencies = [
  "prettyplease 0.3.0",
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -755,7 +755,7 @@ checksum = "4dbf9978365bac10f54d1d4b04f7ce4427e51f71d61f2fe15e3fed5166474df7"
 dependencies = [
  "bitflags 2.13.1",
  "polling",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "slab",
  "tracing",
 ]
@@ -767,7 +767,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "138efcf0940a02ebf0cc8d1eff41a1682a46b431630f4c52450d6265876021fa"
 dependencies = [
  "calloop",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-client",
 ]
@@ -980,7 +980,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1428,7 +1428,7 @@ dependencies = [
  "document-features",
  "mio",
  "parking_lot",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "signal-hook 0.3.18",
  "signal-hook-mio",
  "winapi",
@@ -1522,7 +1522,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "strsim",
- "syn 3.0.4",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -1544,7 +1544,7 @@ checksum = "2ac7135c3ef02b2f7833bbeb1be5ba7f966dcde8a87c6b87f65a778d71a02785"
 dependencies = [
  "darling_core 0.24.1",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -1657,7 +1657,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1727,7 +1727,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dpi"
 version = "0.1.2"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 
 [[package]]
 name = "dwrote"
@@ -1773,7 +1773,7 @@ checksum = "7127272f64b3e098f7d81f350d672081b879bff896d219c42370dc858b1af9ff"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -1862,7 +1862,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2084,7 +2084,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e72ed92b67c146290f88e9c89d60ca163ea417a446f61ffd7b72df3e7f1dfd5"
 dependencies = [
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -2162,7 +2162,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
 dependencies = [
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "windows-link",
 ]
 
@@ -2257,7 +2257,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3072,7 +3072,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi 0.5.2",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3213,6 +3213,16 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "keccak"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8f198d1db720e4940b5a493201d199d9f24f568f8f746bd13706243a2f71598"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
 ]
 
 [[package]]
@@ -3388,9 +3398,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.38.2"
+version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
+checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
 dependencies = [
  "cc",
  "pkg-config",
@@ -3826,7 +3836,8 @@ dependencies = [
  "neomacs-video-model",
  "neomacs-webview",
  "neovm-core",
- "rustix 1.1.4",
+ "neovm-value",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "signal-hook 0.4.4",
@@ -3922,7 +3933,7 @@ dependencies = [
  "resvg",
  "rio-vt",
  "rustc-hash 2.1.3",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde_json",
  "smithay-clipboard",
  "static_assertions",
@@ -3975,7 +3986,7 @@ dependencies = [
  "neomacs-test-fonts",
  "neomacs-test-oracle",
  "pollster",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "strum",
@@ -4016,6 +4027,7 @@ dependencies = [
  "neomacs-font-materializer",
  "neomacs-test-fonts",
  "neovm-core",
+ "neovm-value",
  "num_enum",
  "objc2-core-foundation",
  "objc2-core-text",
@@ -4090,7 +4102,7 @@ dependencies = [
  "neomacs-infra",
  "neomacs-melpa-test-support",
  "neomacs-test-oracle",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "sha2",
@@ -4146,7 +4158,7 @@ dependencies = [
  "neomacs-infra",
  "pkg-config",
  "regex",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "static_assertions",
  "tempfile",
 ]
@@ -4156,6 +4168,7 @@ name = "neomacs-test-env"
 version = "0.0.20"
 dependencies = [
  "libc",
+ "sha2",
  "tempfile",
 ]
 
@@ -4190,8 +4203,10 @@ dependencies = [
  "neomacs-infra",
  "neomacs-melpa-test-support",
  "neomacs-test-env",
+ "neomacs-test-oracle",
  "pty-process",
  "serde_json",
+ "sha2",
  "static_assertions",
  "tempfile",
  "thiserror 2.0.20",
@@ -4276,7 +4291,6 @@ dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
  "cbc",
- "cc",
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-jit",
@@ -4313,8 +4327,13 @@ dependencies = [
  "neomacs-test-env",
  "neomacs-test-oracle",
  "neomacs-video-model",
+ "neovm-display",
  "neovm-display-identity",
+ "neovm-edit",
+ "neovm-eval",
  "neovm-host-abi",
+ "neovm-system",
+ "neovm-text",
  "neovm-value",
  "network-interface",
  "num_enum",
@@ -4329,10 +4348,9 @@ dependencies = [
  "quick-xml 0.41.0",
  "regex",
  "regex-automata",
- "rodio",
  "rusqlite",
  "rustc-hash 2.1.3",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "rustls",
  "rustls-pki-types",
  "serde",
@@ -4344,11 +4362,12 @@ dependencies = [
  "stacker",
  "static_assertions",
  "strum",
- "syn 3.0.4",
+ "syn 3.0.9",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.20",
  "tl",
+ "toml",
  "tracing",
  "tracing-log",
  "tracing-subscriber",
@@ -4367,10 +4386,128 @@ dependencies = [
 ]
 
 [[package]]
+name = "neovm-display"
+version = "0.0.20"
+dependencies = [
+ "enum-map",
+ "libc",
+ "malachite",
+ "neomacs-display-protocol",
+ "neomacs-video-model",
+ "neovm-edit",
+ "neovm-eval",
+ "neovm-text",
+ "neovm-value",
+ "num_enum",
+ "pkg-config",
+ "regex",
+ "rodio",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "static_assertions",
+ "strum",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+ "visibility",
+]
+
+[[package]]
 name = "neovm-display-identity"
 version = "0.0.20"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "neovm-edit"
+version = "0.0.20"
+dependencies = [
+ "libc",
+ "malachite",
+ "memchr",
+ "neovm-value",
+ "num_enum",
+ "parking_lot",
+ "proptest",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "static_assertions",
+ "strum",
+ "sysinfo",
+ "thiserror 2.0.20",
+ "tracing",
+ "visibility",
+]
+
+[[package]]
+name = "neovm-eval"
+version = "0.0.20"
+dependencies = [
+ "bitflags 2.13.1",
+ "bytemuck",
+ "cc",
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-jit",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
+ "crossbeam-channel",
+ "encoding_rs",
+ "enum-map",
+ "enumflags2",
+ "errno",
+ "flate2",
+ "fs4",
+ "getrandom 0.4.3",
+ "hashbrown 0.17.0",
+ "hostname",
+ "inotify",
+ "keysymdefs",
+ "libc",
+ "libloading 0.9.0",
+ "malachite",
+ "md-5",
+ "memchr",
+ "memmap2",
+ "neomacs-display-protocol",
+ "neomacs-infra",
+ "neomacs-video-model",
+ "neovm-edit",
+ "neovm-text",
+ "neovm-value",
+ "num_enum",
+ "object 0.39.1",
+ "os_pipe",
+ "pkg-config",
+ "polling",
+ "portable-pty",
+ "regex",
+ "rustc-hash 2.1.3",
+ "rustix 1.1.6",
+ "rustls",
+ "serde",
+ "sha1",
+ "sha2",
+ "sha3",
+ "smallvec",
+ "socket2",
+ "stacker",
+ "static_assertions",
+ "strum",
+ "sysinfo",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-json",
+ "tree-sitter-language",
+ "unicode_names2",
+ "visibility",
+ "whoami",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4397,12 +4534,106 @@ dependencies = [
 ]
 
 [[package]]
+name = "neovm-system"
+version = "0.0.20"
+dependencies = [
+ "base64 0.22.1",
+ "crossbeam-channel",
+ "dbus",
+ "dns-lookup",
+ "errno",
+ "libc",
+ "libloading 0.9.0",
+ "malachite",
+ "neovm-edit",
+ "neovm-eval",
+ "neovm-text",
+ "neovm-value",
+ "network-interface",
+ "num_enum",
+ "os_pipe",
+ "pkg-config",
+ "polling",
+ "portable-pty",
+ "regex",
+ "rusqlite",
+ "rustc-hash 2.1.3",
+ "rustix 1.1.6",
+ "rustls",
+ "rustls-pki-types",
+ "socket2",
+ "static_assertions",
+ "strum",
+ "sysinfo",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+ "tree-sitter",
+ "visibility",
+ "webpki-roots",
+ "windows-sys 0.61.2",
+ "x509-parser",
+]
+
+[[package]]
+name = "neovm-text"
+version = "0.0.20"
+dependencies = [
+ "bitflags 2.13.1",
+ "encoding_rs",
+ "enumflags2",
+ "flate2",
+ "htmlize",
+ "itoa",
+ "libc",
+ "memchr",
+ "neomacs-display-protocol",
+ "neovm-edit",
+ "neovm-value",
+ "num_enum",
+ "quick-xml 0.41.0",
+ "regex-automata",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "static_assertions",
+ "strum",
+ "thiserror 2.0.20",
+ "tl",
+ "tracing",
+ "tree-sitter",
+ "unicode-general-category",
+ "visibility",
+]
+
+[[package]]
 name = "neovm-value"
 version = "0.0.20"
 dependencies = [
+ "bitflags 2.13.1",
+ "bytemuck",
+ "getrandom 0.4.3",
+ "hashbrown 0.17.0",
+ "libc",
+ "malachite",
+ "memchr",
+ "neovm-display-identity",
+ "num_enum",
+ "parking_lot",
+ "pkg-config",
+ "rustc-hash 2.1.3",
+ "serde",
+ "serde_json",
+ "smallvec",
  "static_assertions",
+ "strum",
+ "thiserror 2.0.20",
+ "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "typed-index-collections",
+ "unicode-general-category",
+ "visibility",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4528,7 +4759,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5124,7 +5355,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5408,7 +5639,7 @@ dependencies = [
  "concurrent-queue",
  "hermit-abi 0.5.2",
  "pin-project-lite",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -5534,7 +5765,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2bfe0f4c752e450fc2faf62654f1c134747922825d5b04ca717b8874f41a40c0"
 dependencies = [
  "proc-macro2",
- "syn 3.0.4",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -5695,7 +5926,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71cec9e2670207c5ebb9e477763c74436af3b9091dd550b9fb3c1bec7f3ea266"
 dependencies = [
- "rustix 1.1.4",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -6188,9 +6419,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.40.2"
+version = "0.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
+checksum = "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594"
 dependencies = [
  "bitflags 2.13.1",
  "fallible-iterator",
@@ -6247,20 +6478,20 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "rustix"
-version = "1.1.4"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.1",
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6421,7 +6652,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -6501,6 +6732,16 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
+]
+
+[[package]]
+name = "sha3"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
+dependencies = [
+ "digest",
+ "keccak",
 ]
 
 [[package]]
@@ -6681,7 +6922,7 @@ dependencies = [
  "libc",
  "log",
  "memmap2",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "thiserror 2.0.20",
  "wayland-backend",
  "wayland-client",
@@ -6707,7 +6948,7 @@ dependencies = [
  "cursor-icon",
  "log",
  "memmap2",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "thiserror 2.0.20",
  "wayland-client",
  "wayland-csd-frame",
@@ -6789,9 +7030,9 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stacker"
-version = "0.1.24"
+version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "640c8cdd92b6b12f5bcb1803ca3bbf5ab96e5e6b6b96b9ab77dabe9e880b3190"
+checksum = "707f49d46706bacf8a2b00d51dace3f9de527c13eec3778f570c411f89e69967"
 dependencies = [
  "cc",
  "cfg-if",
@@ -6971,9 +7212,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.4"
+version = "3.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
+checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7088,8 +7329,8 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "rustix 1.1.6",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7138,7 +7379,7 @@ checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -7886,6 +8127,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "visibility"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d674d135b4a8c1d7e813e2f8d1c9a58308aee4a680323066025e53132218bd91"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "vt100"
 version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8000,7 +8252,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.9",
  "wasm-bindgen-shared",
 ]
 
@@ -8043,7 +8295,7 @@ checksum = "38a91b4eaddff87b1cd1074985e3713da4af2c49742d1b356b2c01670a67a078"
 dependencies = [
  "cc",
  "downcast-rs",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "scoped-tls",
  "smallvec",
  "wayland-sys",
@@ -8056,7 +8308,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3c36a0f861ad76d0901f2800b46321410d9f73f2ea88aac0650d86c32688073"
 dependencies = [
  "bitflags 2.13.1",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-scanner",
 ]
@@ -8078,7 +8330,7 @@ version = "0.31.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a52d18780be9b1314328a3de5f930b73d2200112e3849ca6cb11822793fb34d"
 dependencies = [
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "wayland-client",
  "xcursor",
 ]
@@ -8481,7 +8733,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8879,7 +9131,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "winit"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 dependencies = [
  "bitflags 2.13.1",
  "cfg_aliases 0.2.2",
@@ -8887,7 +9139,7 @@ dependencies = [
  "dpi",
  "libc",
  "raw-window-handle",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "smol_str",
  "tracing",
  "winit-android",
@@ -8905,7 +9157,7 @@ dependencies = [
 [[package]]
 name = "winit-android"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 dependencies = [
  "android-activity",
  "bitflags 2.13.1",
@@ -8920,7 +9172,7 @@ dependencies = [
 [[package]]
 name = "winit-appkit"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 dependencies = [
  "bitflags 2.13.1",
  "block2",
@@ -8942,7 +9194,7 @@ dependencies = [
 [[package]]
 name = "winit-common"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 dependencies = [
  "block2",
  "dpi",
@@ -8960,7 +9212,7 @@ dependencies = [
 [[package]]
 name = "winit-core"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 dependencies = [
  "bitflags 2.13.1",
  "cursor-icon",
@@ -8975,7 +9227,7 @@ dependencies = [
 [[package]]
 name = "winit-orbital"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 dependencies = [
  "bitflags 2.13.1",
  "dpi",
@@ -8991,7 +9243,7 @@ dependencies = [
 [[package]]
 name = "winit-uikit"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 dependencies = [
  "bitflags 2.13.1",
  "block2",
@@ -9011,7 +9263,7 @@ dependencies = [
 [[package]]
 name = "winit-wayland"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 dependencies = [
  "bitflags 2.13.1",
  "calloop",
@@ -9022,7 +9274,7 @@ dependencies = [
  "memmap2",
  "percent-encoding",
  "raw-window-handle",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "sctk-adwaita",
  "smithay-client-toolkit 0.21.1",
  "smol_str",
@@ -9038,7 +9290,7 @@ dependencies = [
 [[package]]
 name = "winit-web"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 dependencies = [
  "atomic-waker",
  "bitflags 2.13.1",
@@ -9060,7 +9312,7 @@ dependencies = [
 [[package]]
 name = "winit-win32"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 dependencies = [
  "bitflags 2.13.1",
  "cursor-icon",
@@ -9080,7 +9332,7 @@ dependencies = [
 [[package]]
 name = "winit-x11"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
+source = "git+https://github.com/eval-exec/winit?rev=598fe4b1bf0ac36746d49085a680645d5ef99230#598fe4b1bf0ac36746d49085a680645d5ef99230"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
@@ -9090,7 +9342,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "raw-window-handle",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "smol_str",
  "tracing",
  "winit-common",
@@ -9125,7 +9377,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9171,7 +9423,7 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
  "once_cell",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "x11rb-protocol",
  "xcursor",
 ]
@@ -9206,7 +9458,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
- "rustix 1.1.4",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -9251,6 +9503,7 @@ name = "xtask"
 version = "0.0.20"
 dependencies = [
  "flate2",
+ "neomacs-test-env",
  "proc-macro2",
  "rayon",
  "resvg",
@@ -9258,7 +9511,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "strum",
- "syn 3.0.4",
+ "syn 3.0.9",
  "tempfile",
  "toml",
 ]

@@ -101,11 +101,13 @@ fn run_probe(name: &str, program: PathBuf, kind: &str, gnu: bool) -> String {
 }
 
 fn compare_case(kind: &str) {
-    let gnu_program = std::env::var_os("ORACLE_EMACS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("emacs"));
+    // The workspace's one resolver attests GNU, and the canonical-build
+    // probe refuses a same-version rebuild with a non-canonical Lisp tree.
+    // There is deliberately no `ORACLE_EMACS`/PATH fallback here.
+    let gnu_program = neomacs_tui_tests::gnu_oracle_program();
     let gnu = run_probe("GNU", gnu_program, kind, true);
     let program = neomacs_tui_tests::neomacs_binary();
+    neomacs_tui_tests::assert_neomacs_dumped_runtime(&program);
     assert!(
         program.exists(),
         "Neomacs binary missing: {}",

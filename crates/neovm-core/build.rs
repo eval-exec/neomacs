@@ -1,13 +1,4 @@
 use std::path::{Path, PathBuf};
-/// Compile the C long-double bridge with Cargo's target toolchain. `cc` also
-/// discovers Visual Studio tools outside PATH and selects the target CRT.
-fn compile_float_format(manifest: &Path) {
-    cc::Build::new()
-        .file(manifest.join("build_support/float_format.c"))
-        .std("c11")
-        .pic(true)
-        .compile("neovm_float_format");
-}
 
 // SINGLE SOURCE OF TRUTH (ledger 206): the recipe for every Lisp file this
 // build generates lives in `build_support/generated_lisp.rs` and is included
@@ -22,10 +13,25 @@ fn compile_float_format(manifest: &Path) {
 #[path = "build_support/generated_lisp.rs"]
 mod generated_lisp;
 
+// Single source of truth for the host capability cfgs (dbus, lcms2,
+// wkwebview), shared with neovm-system, neovm-value and neovm-eval so every
+// crate's view of one host agrees. See build_support/host_cfg.rs.
+#[path = "../../build_support/host_cfg.rs"]
+mod host_cfg;
+
 // Single source of truth (R2-C2): the `neovm_jit_*` shim names, shared with
 // runtime/jit/aot.rs (MIR_SHIM_NAMES) + crates/neomacs/build.rs via `include!` so the
-// emit/salt set and both export sets can never drift.
-include!("src/emacs_core/runtime/jit/shim_names.rs");
+// emit/salt set and both export sets can never drift.  The relative path below
+// is the ONE spelling of that source file: the same macro feeds `include!` and
+// the `rerun-if-changed` watcher, so the two can never disagree again (a watch
+// path that names nothing makes cargo treat the file as changed on every
+// invocation and rebuild this crate forever).
+macro_rules! shim_names_rel {
+    () => {
+        "../neovm-eval/src/emacs_core/runtime/jit/shim_names.rs"
+    };
+}
+include!(shim_names_rel!());
 
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
@@ -47,14 +53,7 @@ fn main() {
         std::env::var("TARGET").expect("cargo sets TARGET for build scripts")
     );
 
-    // Rust has no C long-double ABI; this bridge retains GNU's exact integer
-    // float conversion instead of narrowing intmax/uintmax to double first.
-    println!("cargo:rerun-if-changed=build_support/float_format.c");
-    compile_float_format(&manifest_dir);
-
-    detect_lcms2();
-    detect_dbus();
-    detect_wkwebview();
+    host_cfg::configure_all();
     ensure_generated_unicode_lisp(&project_root);
     ensure_generated_charset_lisp(&project_root);
 
@@ -64,9 +63,18 @@ fn main() {
     // its undefined imports against them. `-rdynamic` alone is insufficient under
     // the workspace linker (it doesn't promote these otherwise-unreferenced fns
     // to the dynamic table), so we additionally name each shim with
-    // `--export-dynamic-symbol`. `rustc-link-arg-tests` applies ONLY to test
-    // binaries — the lib + production binaries are untouched (production export is
-    // R2's job). Gated on the `jit` feature (the only config that emits AOT).
+    // `--export-dynamic-symbol`. Gated on the `jit` feature (the only config that
+    // emits AOT).
+    //
+    // Both carriers are emitted: `rustc-link-arg` (every linkable target of this
+    // package — for a library crate that is exactly its test/bench binaries, the
+    // lib itself never links, and production binaries live in other packages and
+    // carry their own R2 export) AND `rustc-link-arg-tests`. Measured with the
+    // P2 test-target combo on cargo 1.96.1 + `wild`: the `-tests` lines reach the
+    // build-script output but do NOT reach the lib-test link command, so a
+    // `dlopen`'d AOT `.so` fails with "undefined symbol: neovm_jit_backedge";
+    // `rustc-link-arg` does reach it (83 `neovm_jit_*` dynamic symbols after the
+    // fix, 0 before, all present in the static table).
     //
     // R2 CARRY-FORWARD (R2-B5): the PRODUCTION binary (neomacs-bin) that loads the
     // dump-time preload `.so` MUST replicate BOTH the `#[unsafe(no_mangle)] pub`
@@ -78,10 +86,12 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_JIT").is_some() {
         #[cfg(target_os = "linux")]
         {
+            println!("cargo:rustc-link-arg=-rdynamic");
             println!("cargo:rustc-link-arg-tests=-rdynamic");
             // NEOVM_JIT_SHIM_NAMES is `include!`-ed at module scope (above) from the
             // single-source shim_names.rs — same set aot.rs salts/exports.
             for shim in NEOVM_JIT_SHIM_NAMES {
+                println!("cargo:rustc-link-arg=-Wl,--export-dynamic-symbol={shim}");
                 println!("cargo:rustc-link-arg-tests=-Wl,--export-dynamic-symbol={shim}");
             }
         }
@@ -101,9 +111,7 @@ fn main() {
     );
     println!(
         "cargo:rerun-if-changed={}",
-        manifest_dir
-            .join("src/emacs_core/runtime/jit/shim_names.rs")
-            .display()
+        manifest_dir.join(shim_names_rel!()).display()
     );
 }
 
@@ -186,117 +194,4 @@ fn ensure_generated_charset_lisp(project_root: &Path) {
             Err(err) => panic!("{err}"),
         }
     }
-}
-
-/// Whether this build has a native inline web view.
-///
-/// The backend is `crates/neomacs-webview/src/platform/macos`, compiled only
-/// under `neomacs-webview`'s `webview` feature, which `neomacs` forwards to
-/// this crate's `webview` feature.  There is no library to look for --
-/// `WebKit.framework` ships with macOS -- so the probe is "the feature is on
-/// and the target is macOS".  Either half alone is wrong: the feature on
-/// Linux selects the WPE path, whose `xwidget-internal` is still NotBuilt,
-/// and macOS without the feature has no backend behind the symbol.
-fn detect_wkwebview() {
-    println!("cargo:rustc-check-cfg=cfg(neomacs_have_wkwebview)");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_WEBVIEW");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
-        && std::env::var_os("CARGO_FEATURE_WEBVIEW").is_some()
-    {
-        println!("cargo:rustc-cfg=neomacs_have_wkwebview");
-    }
-}
-
-/// Whether this build has a libdbus transport for `dbusbind`.
-///
-/// GNU's `configure.ac:3921-3942` sets `HAVE_DBUS` when `dbus-1 >= 1.0`
-/// links.  The `dbus` crate is a Unix dependency, but not a macOS one:
-/// `Cargo.toml` keeps the rule and says why.  Windows stays the
-/// `--without-dbus` configuration until a socket watch arm exists.
-/// `c_features` reads this cfg so `(featurep 'dbusbind)` cannot go true
-/// without the library.
-fn detect_dbus() {
-    println!("cargo:rustc-check-cfg=cfg(neomacs_have_dbus)");
-    println!("cargo:rerun-if-env-changed=PKG_CONFIG");
-    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
-    println!("cargo:rerun-if-env-changed=NEOMACS_DISABLE_DBUS");
-
-    // Target, not host: Cargo sets `CARGO_CFG_UNIX` for the crate being built.
-    if std::env::var_os("CARGO_CFG_UNIX").is_none() {
-        return;
-    }
-    // macOS is excluded to match the dependency rule in `Cargo.toml`: the
-    // `dbus` crate is not in that target's graph, so this cfg would compile
-    // `dbusbind` against a crate that is not there.  GNU reaches the same
-    // place on a stock macOS -- no `dbus-1.pc`, so `HAVE_DBUS=no`.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        return;
-    }
-    if std::env::var_os("NEOMACS_DISABLE_DBUS").is_some() {
-        return;
-    }
-
-    let vendored = std::env::var_os("CARGO_FEATURE_DBUS_VENDORED").is_some();
-    let probed = pkg_config::Config::new()
-        .atleast_version("1.0")
-        .cargo_metadata(false)
-        .probe("dbus-1");
-
-    if vendored || probed.is_ok() {
-        println!("cargo:rustc-cfg=neomacs_have_dbus");
-    }
-    if let Ok(library) = probed {
-        if !library.version.is_empty() {
-            println!(
-                "cargo:rustc-env=NEOMACS_DBUS_COMPILED_VERSION={}",
-                library.version
-            );
-        }
-    }
-}
-
-fn detect_lcms2() {
-    println!("cargo:rustc-check-cfg=cfg(neomacs_have_lcms2)");
-    println!("cargo:rerun-if-env-changed=PKG_CONFIG");
-    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
-    println!("cargo:rerun-if-env-changed=LCMS2_NO_PKG_CONFIG");
-
-    if std::env::var_os("LCMS2_NO_PKG_CONFIG").is_some() {
-        return;
-    }
-
-    let Ok(library) = pkg_config::Config::new()
-        .cargo_metadata(false)
-        .probe("lcms2")
-    else {
-        return;
-    };
-
-    println!("cargo:rustc-cfg=neomacs_have_lcms2");
-    let candidates = lcms2_library_candidates(&library.link_paths);
-    if !candidates.is_empty() {
-        println!("cargo:rustc-env=NEOMACS_LCMS2_LIBRARY_CANDIDATES={candidates}");
-    }
-}
-
-fn lcms2_library_candidates(paths: &[PathBuf]) -> String {
-    let mut candidates = Vec::new();
-    let names: &[&str] = std::cfg_select! {
-        target_os = "windows" => &["liblcms2-2.dll", "lcms2.dll"],
-        target_os = "macos" => &["liblcms2.2.dylib", "liblcms2.dylib"],
-        target_os = "linux" => &["liblcms2.so.2", "liblcms2.so"],
-        unix => &["liblcms2.so.2", "liblcms2.so"],
-        _ => &["lcms2"],
-    };
-
-    for path in paths {
-        for name in names {
-            let candidate = path.join(name);
-            if candidate.exists() {
-                candidates.push(candidate.display().to_string());
-            }
-        }
-    }
-
-    candidates.join(":")
 }

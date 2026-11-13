@@ -4,7 +4,7 @@ use common::run_oracle_eval;
 use neovm_core::emacs_core::{Context, format_eval_result_with_eval};
 
 fn run_neovm_eval_minimal(form: &str) -> Result<String, String> {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let result = eval.eval_str(form);
     Ok(format_eval_result_with_eval(&eval, &result))
 }

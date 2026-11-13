@@ -1,5 +1,9 @@
 //! T2 storage/code separation, including cfg(test) adapters.
 use std::path::{Path, PathBuf};
+
+use super::architecture_production_source_roots::{
+    production_dir_in, production_file, production_source_files,
+};
 fn sources(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(root).expect("source directory") {
@@ -15,8 +19,7 @@ fn sources(root: &Path) -> Vec<PathBuf> {
 }
 #[test]
 fn subr_storage_has_no_upper_entry_type_or_module() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for p in sources(&src.join("tagged")) {
+    for p in sources(&production_dir_in("neovm-value", "tagged")) {
         let text = std::fs::read_to_string(&p).expect("source");
         assert!(
             !text.contains("SubrFn"),
@@ -32,34 +35,36 @@ fn subr_storage_has_no_upper_entry_type_or_module() {
 }
 #[test]
 fn subr_factory_constructor_and_refresh_have_one_production_site() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut factory = Vec::new();
     let mut constructor = Vec::new();
     let mut updater = Vec::new();
-    for p in sources(&src) {
-        if p.components().any(|part| part.as_os_str() == "tests") {
+    for file in production_source_files() {
+        if file.relative.split('/').any(|part| part == "tests") {
             continue;
         }
-        let text = std::fs::read_to_string(&p).expect("source");
+        let text = std::fs::read_to_string(&file.path).expect("source");
         for line in text.lines() {
             if line.contains("impl CanonicalSubrFactory for ") {
-                factory.push(p.clone());
+                factory.push(file.path.clone());
             }
             if line.contains("SubrObj::new_unchecked(") {
-                constructor.push(p.clone());
+                constructor.push(file.path.clone());
             }
             if line.contains("::update_static_subr_object_entry(") {
-                updater.push(p.clone());
+                updater.push(file.path.clone());
             }
         }
     }
     assert_eq!(
         factory,
-        vec![src.join("emacs_core/runtime/eval/subr_abi.rs")]
+        vec![production_file("src/emacs_core/runtime/eval/subr_abi.rs")]
     );
     assert_eq!(
         constructor,
-        vec![src.join("emacs_core/runtime/eval/subr_abi.rs")]
+        vec![production_file("src/emacs_core/runtime/eval/subr_abi.rs")]
     );
-    assert_eq!(updater, vec![src.join("emacs_core/runtime/eval/mod.rs")]);
+    assert_eq!(
+        updater,
+        vec![production_file("src/emacs_core/runtime/eval/mod.rs")]
+    );
 }

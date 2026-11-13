@@ -5,7 +5,7 @@ error[E0423]: cannot initialize a tuple struct which contains private fields
   |                   ^^^^^^^^^^^^^
   |
 note: constructor is not visible here due to private fields
- --> src/host_effect/contracts.rs
+ --> $WORKSPACE/crates/neovm-eval/src/host_effect/contracts.rs
   |
   |           pub struct $name(NonZeroU64);
   |                            ^^^^^^^^^^ private field

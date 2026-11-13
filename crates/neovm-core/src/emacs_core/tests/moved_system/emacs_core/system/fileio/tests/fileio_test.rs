@@ -1,0 +1,9649 @@
+use crate::test_utils::runtime_startup_eval_all;
+use neovm_eval::emacs_core::eval::Context;
+use neovm_eval::emacs_core::print::format_eval_result;
+use neovm_system::emacs_core::fileio::*;
+use neovm_value::error::EvalResult;
+use neovm_value::error::{FlowKind, FlowResultExt};
+use neovm_value::intern::intern;
+use neovm_value::value::Value;
+use neovm_value::value::list_to_vec;
+use std::fs;
+use std::io::ErrorKind;
+use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::time::UNIX_EPOCH;
+
+/// Re-homed fileio tests: own a fresh evaluator and call the system
+/// test-support entry (the pre-move helper lived in `fileio` and booted a
+/// Context there; core owns that boot now).
+fn directory_files(
+    dir: &neovm_value::heap_types::LispString,
+    full: bool,
+    match_regex: Option<&neovm_value::heap_types::LispString>,
+    nosort: bool,
+    count: Option<usize>,
+) -> Result<Vec<neovm_value::heap_types::LispString>, String> {
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    neovm_system::emacs_core::fileio::directory_files_for_test(
+        &mut eval,
+        dir,
+        full,
+        match_regex,
+        nosort,
+        count,
+    )
+}
+
+#[path = "backup_test.rs"]
+mod backup_test;
+#[cfg(target_os = "windows")]
+#[path = "windows_test.rs"]
+mod windows_test;
+
+fn bootstrap_eval(src: &str) -> Vec<String> {
+    runtime_startup_eval_all(src)
+}
+
+thread_local! {
+    /// Keep ALL test contexts alive across a single #[test] so that
+    /// heap-backed return values from earlier `call_fileio_builtin!`
+    /// invocations remain valid when later assertions inspect them.
+    /// Previously this stored only the *last* context, which freed
+    /// earlier strings and produced use-after-free panics in tests
+    /// that compared results across multiple builtin calls.
+    static LAST_TEST_CTX: std::cell::RefCell<Vec<Context>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+macro_rules! call_fileio_builtin {
+    ($builtin:ident, $args:expr) => {{
+        let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+        let result = $builtin(&mut eval, $args);
+        LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval));
+        result
+    }};
+}
+
+#[cfg(unix)]
+fn assert_same_file_paths(path1: &str, path2: &str) {
+    use std::os::unix::fs::MetadataExt;
+
+    let meta1 = fs::metadata(path1).expect("metadata path1");
+    let meta2 = fs::metadata(path2).expect("metadata path2");
+    assert_eq!(meta1.dev(), meta2.dev());
+    assert_eq!(meta1.ino(), meta2.ino());
+}
+
+#[cfg(not(unix))]
+fn assert_same_file_paths(path1: &str, path2: &str) {
+    assert_eq!(
+        fs::read(path1).expect("read path1"),
+        fs::read(path2).expect("read path2")
+    );
+}
+
+#[cfg(unix)]
+fn assert_same_file_path_bufs(path1: &std::path::Path, path2: &std::path::Path) {
+    use std::os::unix::fs::MetadataExt;
+
+    let meta1 = fs::metadata(path1).expect("metadata path1");
+    let meta2 = fs::metadata(path2).expect("metadata path2");
+    assert_eq!(meta1.dev(), meta2.dev());
+    assert_eq!(meta1.ino(), meta2.ino());
+}
+
+fn assert_unibyte_string_bytes(value: Value, expected: &[u8]) {
+    let string = value
+        .as_lisp_string()
+        .expect("expected string result for raw-byte assertion");
+    assert!(!string.is_multibyte(), "expected unibyte string");
+    assert_eq!(string.as_bytes(), expected);
+}
+
+#[cfg(unix)]
+fn raw_temp_path(component: &[u8]) -> std::path::PathBuf {
+    let mut bytes = std::env::temp_dir().as_os_str().as_bytes().to_vec();
+    if bytes.last() != Some(&b'/') {
+        bytes.push(b'/');
+    }
+    bytes.extend_from_slice(component);
+    std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes))
+}
+
+#[cfg(unix)]
+fn raw_path_value(path: &std::path::Path) -> Value {
+    Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        path.as_os_str().as_bytes().to_vec(),
+    ))
+}
+
+#[cfg(unix)]
+enum RawFilenameFixture {
+    Created,
+    Unsupported,
+}
+
+#[cfg(unix)]
+fn raw_filename_fixture(result: io::Result<()>) -> RawFilenameFixture {
+    match result {
+        Ok(()) => RawFilenameFixture::Created,
+        Err(error) => {
+            // APFS rejects invalid UTF-8 filename bytes with EILSEQ. GNU also
+            // passes unibyte names unchanged (coding.c:encode_file_name_1) to
+            // native filesystem calls (fileio.c), so these success fixtures
+            // cannot exist there. Probe the actual filesystem, not just the OS.
+            if cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EILSEQ) {
+                tracing::info!(
+                    %error,
+                    "skipping raw filename fixture: filesystem rejects invalid UTF-8"
+                );
+                return RawFilenameFixture::Unsupported;
+            }
+            panic!("creating raw filename fixture: {error}");
+        }
+    }
+}
+
+#[test]
+fn temporary_file_directory_for_eval_accepts_raw_unibyte_string() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        b"/tmp/neomacs-\xFF".to_vec(),
+    ));
+    eval.obarray_mut()
+        .set_symbol_value("temporary-file-directory", raw);
+
+    assert_eq!(
+        temporary_file_directory_for_eval(&eval),
+        Some(neovm_value::heap_types::LispString::from_unibyte(
+            b"/tmp/neomacs-\xFF".to_vec()
+        ))
+    );
+}
+
+#[test]
+fn find_file_name_handler_matches_raw_unibyte_filename_bytes() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let handler = Value::symbol("vm-raw-file-handler");
+    eval.obarray_mut().set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(Value::string("\\`/fake:"), handler)]),
+    );
+
+    let raw_filename = neovm_value::heap_types::LispString::from_unibyte(b"/fake:\xFF".to_vec());
+    assert_eq!(
+        find_file_name_handler_lisp_for_eval(&eval, &raw_filename, Value::symbol("file-exists-p")),
+        handler
+    );
+}
+
+#[test]
+fn find_file_name_handler_reads_its_variables_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU reads the C variables: a lexical argument of the same name is not
+    // seen, and its bare `EQ` inhibits a nil OPERATION while
+    // `inhibit-file-name-operation' is nil. Values from GNU 31.1.
+    let results = bootstrap_eval(
+        r#"
+        (progn (defun vm-fnh-h (&rest _) nil) (defun vm-fnh-h2 (&rest _) nil) nil)
+        (let ((file-name-handler-alist '(("\\`/foo" . vm-fnh-h))))
+          (eval '(list
+                  (funcall (lambda (file-name-handler-alist)
+                             (find-file-name-handler "/foo/bar" 'file-exists-p))
+                           '(("\\`/foo" . vm-fnh-h2)))
+                  (funcall (lambda (inhibit-file-name-operation inhibit-file-name-handlers)
+                             (find-file-name-handler "/foo/bar" 'file-exists-p))
+                           'file-exists-p '(vm-fnh-h)))
+                t))
+        (let ((file-name-handler-alist '(("\\`/foo" . vm-fnh-h))))
+          (list (let ((inhibit-file-name-operation nil)
+                      (inhibit-file-name-handlers '(vm-fnh-h)))
+                  (find-file-name-handler "/foo/bar" nil))
+                (let ((inhibit-file-name-operation nil)
+                      (inhibit-file-name-handlers '(vm-fnh-h)))
+                  (find-file-name-handler "/foo/bar" 'file-exists-p))
+                (let ((inhibit-file-name-operation 'file-exists-p)
+                      (inhibit-file-name-handlers '(vm-fnh-h)))
+                  (find-file-name-handler "/foo/bar" 'file-exists-p))))
+        "#,
+    );
+    assert_eq!(results[1], "OK (vm-fnh-h vm-fnh-h)");
+    assert_eq!(results[2], "OK (nil vm-fnh-h nil)");
+}
+
+/// GNU fileio.c:6408 gates every buffer on `STRINGP (auto_save_file_name)':
+/// a buffer with no auto-save name is never written and never NAMED by
+/// do-auto-save.  Naming a fileless buffer was a Neomacs divergence
+/// (DIVERGENCES.md 152): it wrote `#*buffer*#' under the auto-save-list
+/// prefix and made buffer-modified-p answer `autosaved' where GNU answers t
+/// -- the helm-gitignore parity test surfaced it once its stage bounds
+/// became generous enough for the idle auto-save to land.
+///
+/// Verified against GNU 31.1 in batch: a modified, file-less buffer after
+/// do-auto-save has autosave-name nil and stays modified.
+#[test]
+fn do_auto_save_skips_a_modified_buffer_without_an_auto_save_name() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        b"/tmp/neomacs-\xFF/".to_vec(),
+    ));
+    eval.obarray_mut()
+        .set_symbol_value("auto-save-list-file-prefix", raw);
+
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert_lisp_string(&neovm_value::heap_types::LispString::from_utf8("payload"));
+
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save runs");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert!(
+        buf.auto_save_file_name_value().is_nil(),
+        "do-auto-save must not name a buffer with no auto-save name"
+    );
+    assert!(buf.is_modified(), "GNU leaves a skipped buffer modified");
+    assert!(
+        fs::read_dir("/tmp")
+            .expect("tmp dir")
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().contains("#*"))
+            == false,
+        "no #*buffer*# auto-save file was created"
+    );
+}
+
+/// GNU names the auto-save file in `auto-save-mode' (lisp/files.el) --
+/// do-auto-save only READS `buffer-auto-save-file-name' (fileio.c:6408).
+/// The naming-side coverage belongs to the Lisp layer; here the name is
+/// set explicitly with raw unibyte bytes, and the write must preserve
+/// them.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_preserves_a_raw_unibyte_visited_filename_in_the_auto_save_name() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        b"/tmp/neomacs-\xFF/demo-\xFE".to_vec(),
+    ));
+    {
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
+        buf.set_file_name_value(raw);
+        let auto_name = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+            b"/tmp/neomacs-\xFF/#demo-\xFE#".to_vec(),
+        ));
+        buf.set_auto_save_file_name_value(auto_name.clone());
+        buf.set_buffer_local("buffer-auto-save-file-name", auto_name);
+        buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_utf8("payload"));
+    }
+
+    builtin_do_auto_save(&mut eval, vec![])
+        .expect("do-auto-save should preserve raw visited file names");
+
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_unibyte_string_bytes(
+        buf.auto_save_file_name_value(),
+        b"/tmp/neomacs-\xFF/#demo-\xFE#",
+    );
+}
+
+/// GNU keeps `auto_save_failure_time` on the buffer (`fileio.c:6446-6448`,
+/// `:6488-6489`, `:6528`, `:6537`). A positive time younger than 1200 s
+/// skips the save. `set-buffer-auto-saved` and
+/// `clear-buffer-auto-save-failure` store 0. A fast `do-auto-save` does not.
+/// The 60 s record itself is unit-tested with an injected clock; this test
+/// does not wait.
+#[test]
+fn auto_save_failure_time_on_the_buffer_skips_and_lisp_clears() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let auto_path = std::env::temp_dir().join(format!(
+        "neomacs-as-fail-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    let _ = fs::remove_file(&auto_path);
+    let now = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_secs() as i64;
+    let auto_name = Value::string(auto_path.to_string_lossy().to_string());
+    {
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
+        buf.set_file_name_value(Value::string("/tmp/as-fail-visited.txt"));
+        buf.set_auto_save_file_name_value(auto_name.clone());
+        buf.set_buffer_local("buffer-auto-save-file-name", auto_name);
+        buf.set_buffer_local("buffer-saved-size", Value::fixnum(0));
+        buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_utf8("payload"));
+        buf.set_auto_save_failure_time(now);
+    }
+
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save runs");
+    assert!(
+        !auto_path.exists(),
+        "a failure time inside 1200 s must skip the write"
+    );
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .auto_save_failure_time(),
+        now
+    );
+    assert!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .is_modified()
+    );
+
+    let stale = now - 1300;
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .set_auto_save_failure_time(stale);
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save retries");
+    assert!(
+        auto_path.exists(),
+        "a failure time older than 1200 s must allow the save"
+    );
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .auto_save_failure_time(),
+        stale,
+        "a fast save must not clear or rewrite the timestamp"
+    );
+    let _ = fs::remove_file(&auto_path);
+
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .set_auto_save_failure_time(99);
+    crate::emacs_core::buffer::builtin_set_buffer_auto_saved(&mut eval.edit.buffers, vec![])
+        .expect("set-buffer-auto-saved");
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .auto_save_failure_time(),
+        0
+    );
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .get_buffer_local("buffer-saved-size")
+            .and_then(|value| value.as_fixnum()),
+        Some(7),
+        "set-buffer-auto-saved stores Z-BEG"
+    );
+
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .set_auto_save_failure_time(77);
+    crate::emacs_core::builtins::builtin_clear_buffer_auto_save_failure(&mut eval, vec![])
+        .expect("clear-buffer-auto-save-failure");
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .auto_save_failure_time(),
+        0
+    );
+
+    let base_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .set_auto_save_failure_time(42);
+    let indirect = eval
+        .edit
+        .buffers
+        .create_indirect_buffer(base_id, "as-indirect-fail", true)
+        .expect("indirect buffer");
+    assert_eq!(
+        eval.edit
+            .buffers
+            .get(indirect)
+            .expect("indirect")
+            .auto_save_failure_time(),
+        0,
+        "reset_buffer zeros the time on a cloned indirect buffer"
+    );
+    assert_eq!(
+        eval.edit
+            .buffers
+            .get(base_id)
+            .expect("base")
+            .auto_save_failure_time(),
+        42
+    );
+}
+
+/// GNU copies `auto_save_failure_time` (`pdumper.c:2855`). Buffer section
+/// version 9 stores the i64 after `modtime_size`, and a load installs it
+/// through `Buffer::from_dump_parts`.
+#[test]
+fn auto_save_failure_time_survives_a_pdump_round_trip() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .set_auto_save_failure_time(1_700_000_000);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dump_path = dir.path().join("auto-save-failure-time.pdump");
+    crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    let loaded =
+        crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
+    assert_eq!(
+        loaded
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("restored buffer")
+            .auto_save_failure_time(),
+        1_700_000_000
+    );
+}
+
+// -----------------------------------------------------------------------
+// Path operations
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_expand_file_name_absolute() {
+    crate::test_utils::init_test_tracing();
+    let result = expand_file_name("/usr/bin/ls", None);
+    assert_eq!(result, "/usr/bin/ls");
+}
+
+#[cfg(windows)]
+#[test]
+fn test_expand_file_name_accepts_gnu_windows_absolute_paths() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        expand_file_name("emacs-lisp", Some(r"D:\a\neomacs\neomacs\lisp")),
+        "D:/a/neomacs/neomacs/lisp/emacs-lisp"
+    );
+    assert_eq!(
+        expand_file_name(r"D:\a\neomacs\neomacs\lisp", None),
+        "D:/a/neomacs/neomacs/lisp"
+    );
+    assert!(file_name_absolute_p("D:/a/neomacs"));
+    assert!(file_name_absolute_p(r"D:\a\neomacs"));
+}
+
+#[cfg(windows)]
+#[test]
+fn builtin_expand_file_name_treats_drive_paths_as_absolute_on_windows() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let value = builtin_expand_file_name(
+        &mut eval,
+        vec![
+            Value::string("emacs-lisp"),
+            Value::string(r"D:\a\neomacs\neomacs\lisp"),
+        ],
+    )
+    .expect("expand-file-name should accept drive absolute default directory");
+    let result = value
+        .as_lisp_string()
+        .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes()))
+        .expect("string result");
+    assert_eq!(result, "D:/a/neomacs/neomacs/lisp/emacs-lisp");
+}
+
+#[cfg(windows)]
+#[test]
+fn host_paths_are_exposed_to_lisp_with_gnu_windows_separators() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        host_path_to_lisp_file_name_string(std::path::Path::new(r"D:\a\neomacs\neomacs\lisp")),
+        "D:/a/neomacs/neomacs/lisp"
+    );
+}
+
+#[test]
+fn test_expand_file_name_relative() {
+    crate::test_utils::init_test_tracing();
+    let result = expand_file_name("foo.txt", Some("/home/user"));
+    assert_eq!(result, "/home/user/foo.txt");
+}
+
+#[test]
+fn test_expand_file_name_tilde() {
+    crate::test_utils::init_test_tracing();
+    if std::env::var("HOME").is_ok() {
+        let result = expand_file_name("~/test.txt", None);
+        assert!(result.ends_with("/test.txt"));
+        assert!(!result.starts_with("~"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_expand_file_name_tilde_user() {
+    crate::test_utils::init_test_tracing();
+    // GNU fileio.c uses getpwnam's pw_dir; native GNU on Darwin gives /var/root.
+    let root_home = if cfg!(target_os = "macos") {
+        "/var/root/"
+    } else {
+        "/root/"
+    };
+    assert_eq!(expand_file_name("~root/", Some("/tmp")), root_home);
+    assert_eq!(
+        expand_file_name("~neomacs-definitely-missing-user/file", Some("/tmp")),
+        "/tmp/~neomacs-definitely-missing-user/file"
+    );
+}
+
+#[test]
+fn test_expand_file_name_dotdot() {
+    crate::test_utils::init_test_tracing();
+    let result = expand_file_name("../bar.txt", Some("/home/user/dir"));
+    assert_eq!(result, "/home/user/bar.txt");
+}
+
+#[test]
+fn test_expand_file_name_dot() {
+    crate::test_utils::init_test_tracing();
+    let result = expand_file_name("./foo.txt", Some("/home/user"));
+    assert_eq!(result, "/home/user/foo.txt");
+}
+
+#[test]
+fn test_expand_file_name_preserves_directory_marker() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        expand_file_name("fixtures/", Some("/tmp")),
+        "/tmp/fixtures/"
+    );
+    assert_eq!(expand_file_name("", Some("/tmp")), "/tmp");
+}
+
+#[test]
+fn test_expand_file_name_preserves_gnu_superroot_spellings() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(expand_file_name("//server/share/../x", None), "//server/x");
+    assert_eq!(expand_file_name("///server/share/../x", None), "/server/x");
+    assert_eq!(expand_file_name("/../x", None), "/../x");
+    assert_eq!(expand_file_name("/../../x", None), "/x");
+}
+
+#[test]
+fn test_file_truename_missing_file_and_trailing_slash() {
+    crate::test_utils::init_test_tracing();
+    // GNU files.el resolves ancestor symlinks even when the leaf is missing.
+    // In particular, /tmp on Darwin points to /private/tmp.
+    let tmp = fs::canonicalize("/tmp").expect("canonical /tmp");
+    assert_eq!(
+        file_truename("/tmp/neovm-file-truename-missing", None),
+        tmp.join("neovm-file-truename-missing").to_string_lossy()
+    );
+    assert_eq!(
+        file_truename("/tmp/../tmp/", None),
+        format!("{}/", tmp.to_string_lossy())
+    );
+}
+
+#[test]
+fn test_file_truename_resolves_relative_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm-file-truename-rel");
+    let _ = fs::create_dir_all(&dir);
+    let file = dir.join("alpha.txt");
+    fs::write(&file, b"alpha").unwrap();
+
+    let resolved = file_truename("alpha.txt", Some(&dir.to_string_lossy()));
+    assert_eq!(
+        resolved,
+        fs::canonicalize(&file)
+            .expect("canonical fixture file")
+            .to_string_lossy()
+    );
+
+    let _ = fs::remove_file(file);
+    let _ = fs::remove_dir(dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_file_truename_preserves_raw_unibyte_directory_bytes() {
+    crate::test_utils::init_test_tracing();
+    let dir = raw_temp_path(b"neovm-file-truename-\xFF");
+    let _ = fs::remove_dir_all(&dir);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
+    let RawFilenameFixture::Created =
+        raw_filename_fixture(fs::write(dir.join("alpha.txt"), b"alpha"))
+    else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let mut default_dir_bytes = dir.as_os_str().as_bytes().to_vec();
+    default_dir_bytes.push(b'/');
+    eval.set_variable(
+        "default-directory",
+        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+            default_dir_bytes.clone(),
+        )),
+    );
+
+    let value = builtin_file_truename(
+        &mut eval,
+        vec![Value::heap_string(
+            neovm_value::heap_types::LispString::from_unibyte(b"alpha.txt".to_vec()),
+        )],
+    )
+    .expect("file-truename should preserve raw directory bytes");
+
+    let mut expected = dir.as_os_str().as_bytes().to_vec();
+    expected.extend_from_slice(b"/alpha.txt");
+    assert_unibyte_string_bytes(value, &expected);
+
+    let _ = fs::remove_file(dir.join("alpha.txt"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_file_name_directory() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        file_name_directory("/home/user/test.txt"),
+        Some("/home/user/".to_string())
+    );
+    assert_eq!(file_name_directory("test.txt"), None);
+    assert_eq!(
+        file_name_directory("/home/user/dir/"),
+        Some("/home/user/dir/".to_string())
+    );
+    #[cfg(windows)]
+    {
+        assert_eq!(
+            file_name_directory(r"D:\a\neomacs\lisp\international\uni-titlecase.el"),
+            Some(r"D:\a\neomacs\lisp\international\".to_string())
+        );
+    }
+}
+
+#[test]
+fn test_file_name_nondirectory() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(file_name_nondirectory("/home/user/test.txt"), "test.txt");
+    assert_eq!(file_name_nondirectory("test.txt"), "test.txt");
+    assert_eq!(file_name_nondirectory("/home/user/"), "");
+    #[cfg(windows)]
+    {
+        assert_eq!(
+            file_name_nondirectory(r"D:\a\neomacs\lisp\international\uni-titlecase.el"),
+            "uni-titlecase.el"
+        );
+        assert_eq!(file_name_nondirectory(r"D:\a\neomacs\"), "");
+    }
+}
+
+#[test]
+fn test_file_name_as_directory() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(file_name_as_directory("/tmp"), "/tmp/");
+    assert_eq!(file_name_as_directory("/tmp/"), "/tmp/");
+    assert_eq!(file_name_as_directory(""), "./");
+    assert_eq!(file_name_as_directory("foo"), "foo/");
+    assert_eq!(file_name_as_directory("foo/"), "foo/");
+    assert_eq!(file_name_as_directory("~"), "~/");
+    assert_eq!(file_name_as_directory("~/"), "~/");
+}
+
+#[test]
+fn test_directory_file_name() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(directory_file_name("/tmp/"), "/tmp");
+    assert_eq!(directory_file_name("/tmp"), "/tmp");
+    assert_eq!(directory_file_name("/"), "/");
+    assert_eq!(directory_file_name("//"), "//");
+    assert_eq!(directory_file_name("///"), "/");
+    assert_eq!(directory_file_name("foo/"), "foo");
+    assert_eq!(directory_file_name("foo"), "foo");
+    assert_eq!(directory_file_name("a//"), "a");
+    assert_eq!(directory_file_name("~/"), "~");
+    assert_eq!(directory_file_name("~"), "~");
+    assert_eq!(directory_file_name(""), "");
+}
+
+#[test]
+fn test_file_name_concat() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(file_name_concat(&["foo", "bar"]), "foo/bar");
+    assert_eq!(file_name_concat(&["foo", "bar", "zot"]), "foo/bar/zot");
+    assert_eq!(file_name_concat(&["foo/", "bar"]), "foo/bar");
+    assert_eq!(file_name_concat(&["foo/", "bar/", "zot"]), "foo/bar/zot");
+    assert_eq!(file_name_concat(&["foo", "/bar"]), "foo//bar");
+    assert_eq!(file_name_concat(&["foo"]), "foo");
+    assert_eq!(file_name_concat(&["foo/"]), "foo/");
+    assert_eq!(file_name_concat(&["foo", "", "", ""]), "foo");
+    assert_eq!(file_name_concat(&[""]), "");
+    assert_eq!(file_name_concat(&["", "bar"]), "bar");
+    assert_eq!(file_name_concat(&[]), "");
+}
+
+#[test]
+fn test_file_name_absolute_p() {
+    crate::test_utils::init_test_tracing();
+    assert!(file_name_absolute_p("/tmp"));
+    assert!(file_name_absolute_p("~/tmp"));
+    assert!(file_name_absolute_p("~"));
+    assert!(file_name_absolute_p("~root"));
+    assert!(!file_name_absolute_p(
+        "~neomacs-user-that-should-not-exist-2b6ad2e4"
+    ));
+    assert!(!file_name_absolute_p(
+        "~neomacs-user-that-should-not-exist-2b6ad2e4/tmp"
+    ));
+    assert!(!file_name_absolute_p("tmp"));
+    assert!(!file_name_absolute_p("./tmp"));
+}
+
+#[test]
+fn test_directory_name_p() {
+    crate::test_utils::init_test_tracing();
+    assert!(directory_name_p("/tmp/"));
+    assert!(directory_name_p("foo/"));
+    assert!(!directory_name_p("/tmp"));
+    assert!(!directory_name_p("foo"));
+    assert!(!directory_name_p(""));
+    #[cfg(windows)]
+    {
+        assert!(directory_name_p(r"D:\a\"));
+        assert!(!directory_name_p(r"D:\a"));
+    }
+}
+
+#[test]
+fn test_substitute_in_file_name() {
+    crate::test_utils::init_test_tracing();
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    assert_eq!(substitute_in_file_name("$HOME/foo"), format!("{home}/foo"));
+    assert_eq!(
+        substitute_in_file_name("${HOME}/foo"),
+        format!("{home}/foo")
+    );
+    assert_eq!(substitute_in_file_name("$UNDEF/foo"), "$UNDEF/foo");
+    assert_eq!(substitute_in_file_name("$$HOME"), "$HOME");
+    assert_eq!(substitute_in_file_name("${}"), "${}");
+    assert_eq!(substitute_in_file_name("$"), "$");
+    assert_eq!(substitute_in_file_name("${HOME"), "${HOME");
+    assert_eq!(substitute_in_file_name("bar/~/foo"), "~/foo");
+    assert_eq!(
+        substitute_in_file_name("/usr/local/$HOME/foo"),
+        format!("{home}/foo")
+    );
+    assert_eq!(substitute_in_file_name("a//b"), "/b");
+    assert_eq!(substitute_in_file_name("a///b"), "/b");
+}
+
+// -----------------------------------------------------------------------
+// File predicates
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_file_exists_p() {
+    crate::test_utils::init_test_tracing();
+    assert!(file_exists_p("/tmp"));
+    assert!(!file_exists_p("/nonexistent_path_12345"));
+}
+
+#[test]
+fn test_file_directory_p() {
+    crate::test_utils::init_test_tracing();
+    assert!(file_directory_p("/tmp"));
+    assert!(!file_directory_p("/nonexistent_path_12345"));
+}
+
+#[cfg(windows)]
+#[test]
+fn file_readable_p_treats_existing_directories_as_readable_on_windows() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join(format!("neomacs-readable-dir-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    assert!(file_readable_p(&dir.to_string_lossy()));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_file_regular_p() {
+    crate::test_utils::init_test_tracing();
+    // /tmp is a directory, not a regular file
+    assert!(!file_regular_p("/tmp"));
+    assert!(!file_regular_p("/nonexistent_path_12345"));
+}
+
+#[test]
+fn test_file_symlink_p() {
+    crate::test_utils::init_test_tracing();
+    // /tmp itself typically isn't a symlink
+    assert!(!file_symlink_p("/nonexistent_path_12345"));
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_file_symlink_p_preserves_raw_unibyte_target_bytes() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join(format!("neovm-raw-symlink-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+
+    let target_name = b"target-\xFF.txt";
+    let target_path = base.join(std::ffi::OsStr::from_bytes(target_name));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&target_path, b"x")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    let link_path = base.join("link.txt");
+    let RawFilenameFixture::Created = raw_filename_fixture(std::os::unix::fs::symlink(
+        std::ffi::OsStr::from_bytes(target_name),
+        &link_path,
+    )) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    let value = call_fileio_builtin!(
+        builtin_file_symlink_p,
+        vec![Value::string(link_path.to_string_lossy().as_ref())]
+    )
+    .expect("file-symlink-p should preserve raw target bytes");
+    assert_unibyte_string_bytes(value, target_name);
+
+    let _ = fs::remove_file(&link_path);
+    let _ = fs::remove_file(&target_path);
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_file_truename_chases_raw_unibyte_symlink_targets() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join(format!("neovm-raw-truename-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+
+    let target_name = b"target-\xFF.txt";
+    let target_path = base.join(std::ffi::OsStr::from_bytes(target_name));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&target_path, b"x")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
+    let link_path = base.join("link.txt");
+    let RawFilenameFixture::Created = raw_filename_fixture(std::os::unix::fs::symlink(
+        std::ffi::OsStr::from_bytes(target_name),
+        &link_path,
+    )) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string(format!("{}/", base.to_string_lossy())),
+    );
+
+    let value = builtin_file_truename(&mut eval, vec![Value::string("link.txt")])
+        .expect("file-truename should chase raw-byte symlink targets");
+
+    let mut expected = base.as_os_str().as_bytes().to_vec();
+    expected.push(b'/');
+    expected.extend_from_slice(target_name);
+    assert_unibyte_string_bytes(value, &expected);
+
+    let _ = fs::remove_file(&link_path);
+    let _ = fs::remove_file(&target_path);
+    let _ = fs::remove_dir_all(&base);
+}
+
+// -----------------------------------------------------------------------
+// File read/write
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_read_write_file() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_fileio_test");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("test_rw.txt");
+    let path_str = path.to_string_lossy().to_string();
+
+    // Write
+    write_string_to_file("hello, world\n", &path_str, false).unwrap();
+
+    // Read back
+    let contents = read_file_contents(&path_str).unwrap();
+    assert_eq!(contents, "hello, world\n");
+
+    // Append
+    write_string_to_file("second line\n", &path_str, true).unwrap();
+    let contents = read_file_contents(&path_str).unwrap();
+    assert_eq!(contents, "hello, world\nsecond line\n");
+
+    // Overwrite
+    write_string_to_file("replaced\n", &path_str, false).unwrap();
+    let contents = read_file_contents(&path_str).unwrap();
+    assert_eq!(contents, "replaced\n");
+
+    // Predicates on the file we just wrote
+    assert!(file_exists_p(&path_str));
+    assert!(file_regular_p(&path_str));
+    assert!(file_readable_p(&path_str));
+    assert!(!file_directory_p(&path_str));
+
+    // Clean up
+    delete_file(&path_str).unwrap();
+    assert!(!file_exists_p(&path_str));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_file_error_symbol_mapping() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(file_error_symbol(ErrorKind::NotFound), "file-missing");
+    assert_eq!(
+        file_error_symbol(ErrorKind::AlreadyExists),
+        "file-already-exists"
+    );
+    assert_eq!(
+        file_error_symbol(ErrorKind::PermissionDenied),
+        "permission-denied"
+    );
+    assert_eq!(file_error_symbol(ErrorKind::InvalidInput), "file-error");
+}
+
+#[test]
+fn test_signal_file_io_error_uses_specific_condition() {
+    crate::test_utils::init_test_tracing();
+    let flow = signal_file_io_error(
+        std::io::Error::from(ErrorKind::PermissionDenied),
+        "Writing to /tmp/neovm-probe".to_string(),
+    );
+    match flow.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "permission-denied");
+            assert_eq!(sig.data.len(), 1);
+            let Some(message) = sig.data[0].as_utf8_str() else {
+                panic!("expected string error payload");
+            };
+            assert!(message.contains("Writing to /tmp/neovm-probe"));
+        }
+        other => panic!("expected signal, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_delete_file_compat_missing_is_noop() {
+    crate::test_utils::init_test_tracing();
+    let path = std::env::temp_dir().join("neovm_delete_missing_noop.tmp");
+    let path_str = path.to_string_lossy().to_string();
+    let _ = fs::remove_file(&path);
+    assert!(delete_file_compat(&path_str).is_ok());
+}
+
+#[test]
+fn test_builtin_delete_file_accepts_optional_trash_arg() {
+    crate::test_utils::init_test_tracing();
+    let path = std::env::temp_dir().join("neovm_delete_file_trash_arg.tmp");
+    let path_str = path.to_string_lossy().to_string();
+    let _ = fs::remove_file(&path);
+    fs::write(&path, b"x").unwrap();
+
+    let result = call_fileio_builtin!(
+        builtin_delete_file,
+        vec![Value::string(&path_str), Value::T]
+    )
+    .unwrap();
+    assert_eq!(result, Value::NIL);
+    assert!(!path.exists());
+
+    let err = call_fileio_builtin!(
+        builtin_delete_file,
+        vec![Value::string(&path_str), Value::NIL, Value::NIL]
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("delete-file"), Value::fixnum(3)]
+            );
+        }
+        other => panic!("expected signal, got {:?}", other),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_delete_file_internal_handles_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let path = raw_temp_path(b"neovm-delete-file-\xFF");
+    let _ = fs::remove_file(&path);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&path, b"x")) else {
+        return;
+    };
+    let value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        path.as_os_str().as_bytes().to_vec(),
+    ));
+
+    call_fileio_builtin!(builtin_delete_file_internal, vec![value])
+        .expect("delete-file-internal should handle raw-byte paths");
+    assert!(!path.exists());
+}
+
+#[test]
+fn test_builtin_delete_directory_basic_and_recursive() {
+    crate::test_utils::init_test_tracing();
+    let root = std::env::temp_dir().join("neovm_delete_directory_test");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let root_str = root.to_string_lossy().to_string();
+
+    // Non-recursive removal succeeds for empty directories.
+    assert_eq!(
+        call_fileio_builtin!(builtin_delete_directory, vec![Value::string(&root_str)]).unwrap(),
+        Value::NIL
+    );
+    assert!(!root.exists());
+
+    // Non-recursive removal fails for non-empty directories.
+    fs::create_dir_all(&root).unwrap();
+    let nested = root.join("child.txt");
+    fs::write(&nested, b"x").unwrap();
+    let err =
+        call_fileio_builtin!(builtin_delete_directory, vec![Value::string(&root_str)]).unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "file-error");
+        }
+        other => panic!("expected signal, got {:?}", other),
+    }
+
+    // Recursive removal succeeds.
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_delete_directory,
+            vec![Value::string(&root_str), Value::T]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+    assert!(!root.exists());
+}
+
+#[test]
+fn test_builtin_delete_directory_eval_resolves_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm-delete-dir-eval");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string(format!("{}/", base.to_string_lossy())),
+    );
+
+    let child = base.join("child");
+    fs::create_dir_all(&child).unwrap();
+    builtin_delete_directory(&mut eval, vec![Value::string("child")]).unwrap();
+    assert!(!child.exists());
+
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_delete_directory_internal_handles_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let path = raw_temp_path(b"neovm-delete-dir-\xFF");
+    let _ = fs::remove_dir_all(&path);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&path)) else {
+        return;
+    };
+    let value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        path.as_os_str().as_bytes().to_vec(),
+    ));
+
+    call_fileio_builtin!(builtin_delete_directory_internal, vec![value])
+        .expect("delete-directory-internal should handle raw-byte paths");
+    assert!(!path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_make_directory_internal_handles_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let path = raw_temp_path(b"neovm-mkdir-\xFF");
+    let _ = fs::remove_dir_all(&path);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir(&path)) else {
+        return;
+    };
+    fs::remove_dir(&path).expect("remove raw directory capability probe");
+    let value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        path.as_os_str().as_bytes().to_vec(),
+    ));
+
+    call_fileio_builtin!(builtin_make_directory_internal, vec![value])
+        .expect("make-directory-internal should handle raw-byte paths");
+    assert!(path.exists());
+
+    let _ = fs::remove_dir_all(&path);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_builtin_make_symbolic_link_core_semantics() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm-symlink-test");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+    let target = base.join("target.txt");
+    let link = base.join("link.txt");
+    fs::write(&target, b"x").unwrap();
+    let target_str = target.to_string_lossy().to_string();
+    let link_str = link.to_string_lossy().to_string();
+
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_make_symbolic_link,
+            vec![Value::string(&target_str), Value::string(&link_str)]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+    assert!(file_symlink_p(&link_str));
+
+    let err = call_fileio_builtin!(
+        builtin_make_symbolic_link,
+        vec![Value::string(&target_str), Value::string(&link_str)]
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+        other => panic!("expected signal, got {:?}", other),
+    }
+
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_make_symbolic_link,
+            vec![
+                Value::string(&target_str),
+                Value::string(&link_str),
+                Value::T,
+            ]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+
+    delete_file(&link_str).unwrap();
+    delete_file(&target_str).unwrap();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_builtin_make_symbolic_link_eval_uses_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm-symlink-eval");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string(format!("{}/", base.to_string_lossy())),
+    );
+
+    fs::write(base.join("target.txt"), b"x").unwrap();
+    builtin_make_symbolic_link(
+        &mut eval,
+        vec![Value::string("target.txt"), Value::string("link.txt")],
+    )
+    .unwrap();
+    assert!(file_symlink_p(&base.join("link.txt").to_string_lossy()));
+
+    delete_file(&base.join("link.txt").to_string_lossy()).unwrap();
+    delete_file(&base.join("target.txt").to_string_lossy()).unwrap();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_make_symbolic_link_keeps_relative_raw_target_bytes() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm-raw-relative-link");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+
+    let target = base.join(std::ffi::OsStr::from_bytes(b"target-\xFF"));
+    let link = base.join(std::ffi::OsStr::from_bytes(b"link-\xFE"));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&target, b"x")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string(format!("{}/", base.to_string_lossy())),
+    );
+
+    builtin_make_symbolic_link(
+        &mut eval,
+        vec![
+            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+                b"target-\xFF".to_vec(),
+            )),
+            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+                b"link-\xFE".to_vec(),
+            )),
+        ],
+    )
+    .expect("make-symbolic-link should preserve target bytes");
+
+    let read_target = fs::read_link(&link).expect("symlink target");
+    assert_eq!(read_target.as_os_str().as_bytes(), b"target-\xFF");
+
+    let _ = fs::remove_file(&link);
+    let _ = fs::remove_file(&target);
+    let _ = fs::remove_dir_all(base);
+}
+
+// -----------------------------------------------------------------------
+// Directory operations
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_make_directory_and_directory_files() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm_dirtest");
+    let _ = fs::remove_dir_all(&base);
+    let base_str = base.to_string_lossy().to_string();
+
+    // Create with parents
+    let nested = base.join("a/b/c");
+    let nested_str = nested.to_string_lossy().to_string();
+    make_directory(&nested_str, true).unwrap();
+    assert!(file_directory_p(&nested_str));
+
+    // Create files in the base directory
+    for name in &["foo.txt", "bar.txt", "baz.el"] {
+        let p = base.join(name);
+        let mut f = fs::File::create(&p).unwrap();
+        f.write_all(b"data").unwrap();
+    }
+
+    let base_ls = neovm_value::heap_types::LispString::from_unibyte(base_str.as_bytes().to_vec());
+
+    // List files
+    let files = directory_files(&base_ls, false, None, false, None).unwrap();
+    let names: Vec<&[u8]> = files.iter().map(|f| f.as_bytes()).collect();
+    assert!(names.contains(&b".".as_slice()));
+    assert!(names.contains(&b"..".as_slice()));
+    assert!(names.contains(&b"foo.txt".as_slice()));
+    assert!(names.contains(&b"bar.txt".as_slice()));
+    assert!(names.contains(&b"baz.el".as_slice()));
+
+    // List with filter
+    let pattern = neovm_value::heap_types::LispString::from_unibyte(b"\\.el$".to_vec());
+    let filtered = directory_files(&base_ls, false, Some(&pattern), false, None).unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].as_bytes(), b"baz.el");
+
+    // List with full paths
+    let full = directory_files(&base_ls, true, None, false, None).unwrap();
+    for entry in &full {
+        assert!(entry.as_bytes().starts_with(base_str.as_bytes()));
+    }
+
+    // Clean up
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn directory_files_preserves_raw_unibyte_filename() {
+    crate::test_utils::init_test_tracing();
+    use std::os::unix::ffi::OsStrExt;
+
+    let base = std::env::temp_dir().join(format!("neovm_dirtest_raw_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+    // A file whose name carries a raw 0xFF byte (not valid UTF-8). GNU's
+    // directory-files DECODE_FILEs each readdir name and keeps the byte; our
+    // path_to_lisp_file_name keeps it as a raw unibyte byte. Either way it must
+    // NOT be lossily mangled to U+FFFD.
+    let raw_path = base.join(std::ffi::OsStr::from_bytes(b"raw-\xFF-file"));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::File::create(&raw_path).map(drop))
+    else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    let base_ls =
+        neovm_value::heap_types::LispString::from_unibyte(base.as_os_str().as_bytes().to_vec());
+    let files = directory_files(&base_ls, false, None, false, None).unwrap();
+
+    assert!(
+        files.iter().any(|f| f.as_bytes() == b"raw-\xFF-file"),
+        "raw-byte filename not preserved: {:?}",
+        files
+            .iter()
+            .map(|f| f.as_bytes().to_vec())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !files
+            .iter()
+            .any(|f| f.as_bytes() == "raw-\u{FFFD}-file".as_bytes()),
+        "raw-byte filename was lossily mangled to U+FFFD"
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+// -----------------------------------------------------------------------
+// File management: rename, copy
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_rename_and_copy_file() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_rename_copy_test");
+    let _ = fs::create_dir_all(&dir);
+
+    let src = dir.join("source.txt");
+    let dst_rename = dir.join("renamed.txt");
+    let dst_copy = dir.join("copied.txt");
+
+    let src_str = src.to_string_lossy().to_string();
+    let dst_rename_str = dst_rename.to_string_lossy().to_string();
+    let dst_copy_str = dst_copy.to_string_lossy().to_string();
+
+    // Create source
+    write_string_to_file("original content", &src_str, false).unwrap();
+
+    // Copy
+    copy_file(&src_str, &dst_copy_str).unwrap();
+    assert!(file_exists_p(&src_str));
+    assert!(file_exists_p(&dst_copy_str));
+    assert_eq!(
+        read_file_contents(&dst_copy_str).unwrap(),
+        "original content"
+    );
+
+    // Rename
+    rename_file(&src_str, &dst_rename_str).unwrap();
+    assert!(!file_exists_p(&src_str));
+    assert!(file_exists_p(&dst_rename_str));
+    assert_eq!(
+        read_file_contents(&dst_rename_str).unwrap(),
+        "original content"
+    );
+
+    // Clean up
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_builtin_rename_file_overwrite_semantics() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_builtin_rename_overwrite");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let src = dir.join("src.txt");
+    let dst = dir.join("dst.txt");
+    fs::write(&src, b"x").unwrap();
+    fs::write(&dst, b"y").unwrap();
+    let src_s = src.to_string_lossy().to_string();
+    let dst_s = dst.to_string_lossy().to_string();
+
+    let err = call_fileio_builtin!(
+        builtin_rename_file,
+        vec![Value::string(&src_s), Value::string(&dst_s)]
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+        other => panic!("expected signal, got {:?}", other),
+    }
+
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_rename_file,
+            vec![Value::string(&src_s), Value::string(&dst_s), Value::T]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+    assert!(!src.exists());
+    assert!(dst.exists());
+
+    let err = call_fileio_builtin!(
+        builtin_rename_file,
+        vec![
+            Value::string("a"),
+            Value::string("b"),
+            Value::NIL,
+            Value::NIL,
+        ]
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+        other => panic!("expected wrong-number-of-arguments, got {:?}", other),
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_file_cross_device_regular_file_copies_then_deletes_source() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_rename_exdev_fallback");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let src = dir.join("src.txt");
+    let dst = dir.join("dst.txt");
+    fs::write(&src, b"payload").unwrap();
+
+    let attempts = std::cell::Cell::new(0);
+    rename_path_with_cross_device_fallback(&src, &dst, true, |from, to| {
+        attempts.set(attempts.get() + 1);
+        assert_eq!(from, src.as_path());
+        assert_eq!(to, dst.as_path());
+        Err(io::Error::from_raw_os_error(libc::EXDEV))
+    })
+    .unwrap();
+
+    assert_eq!(attempts.get(), 1);
+    assert!(!src.exists());
+    assert_eq!(fs::read(&dst).unwrap(), b"payload");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_builtin_copy_file_optional_arg_semantics() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_builtin_copy_optional");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let src = dir.join("src.txt");
+    let dst = dir.join("dst.txt");
+    fs::write(&src, b"src").unwrap();
+    fs::write(&dst, b"dst").unwrap();
+    let src_s = src.to_string_lossy().to_string();
+    let dst_s = dst.to_string_lossy().to_string();
+
+    let err = call_fileio_builtin!(
+        builtin_copy_file,
+        vec![Value::string(&src_s), Value::string(&dst_s)]
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+        other => panic!("expected signal, got {:?}", other),
+    }
+
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_copy_file,
+            vec![Value::string(&src_s), Value::string(&dst_s), Value::T]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_copy_file,
+            vec![
+                Value::string(&src_s),
+                Value::string(&dst_s),
+                Value::T,
+                Value::T,
+                Value::T,
+                Value::T,
+            ]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+
+    let err = call_fileio_builtin!(
+        builtin_copy_file,
+        vec![
+            Value::string("a"),
+            Value::string("b"),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+        ]
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+        other => panic!("expected wrong-number-of-arguments, got {:?}", other),
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// GNU `copy-file` gives KEEP-TIME semantic meaning independently of the
+/// platform copy primitive: a non-nil value preserves the source's
+/// last-modified time (`src/fileio.c:Fcopy_file`).
+#[test]
+fn copy_file_keep_time_preserves_source_modification_time() {
+    crate::test_utils::init_test_tracing();
+    let parent = crate::test_utils::workspace_root()
+        .as_path()
+        .join("target")
+        .join("neovm-core-fileio-tests");
+    fs::create_dir_all(&parent).expect("create workspace test directory");
+    let directory = tempfile::Builder::new()
+        .prefix("copy-keep-time-")
+        .tempdir_in(parent)
+        .expect("create copy-file fixture");
+    let source = directory.path().join("source.txt");
+    let destination = directory.path().join("destination.txt");
+    fs::write(&source, "contents").expect("create copy source");
+
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(86_400);
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&source)
+        .expect("open copy source")
+        .set_times(fs::FileTimes::new().set_accessed(old).set_modified(old))
+        .expect("age copy source");
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    builtin_copy_file(
+        &mut eval,
+        vec![
+            Value::string(source.display().to_string()),
+            Value::string(destination.display().to_string()),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("copy file with KEEP-TIME");
+
+    let destination_modified = fs::metadata(&destination)
+        .expect("stat copied file")
+        .modified()
+        .expect("copied file modification time");
+    assert_eq!(
+        destination_modified, old,
+        "copy-file ignored non-nil KEEP-TIME"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_copy_file_handles_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let base = raw_temp_path(b"neovm-copy-\xFF");
+    let _ = fs::remove_dir_all(&base);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&base)) else {
+        return;
+    };
+
+    let src = base.join(std::ffi::OsStr::from_bytes(b"src-\xFE"));
+    let dst = base.join(std::ffi::OsStr::from_bytes(b"dst-\xFD"));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&src, b"copy me")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    builtin_copy_file(
+        &mut crate::emacs_core::eval_hook_installers::new_context(),
+        vec![raw_path_value(&src), raw_path_value(&dst)],
+    )
+    .expect("copy-file should handle raw-byte paths");
+    assert_eq!(fs::read(&dst).unwrap(), b"copy me");
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn builtin_copy_file_directory_target_uses_source_basename() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_copy_dir_target");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let src = dir.join("source.txt");
+    let dst_dir = dir.join("dest");
+    fs::create_dir_all(&dst_dir).unwrap();
+    fs::write(&src, b"copied").unwrap();
+
+    let dst_dir_arg = format!("{}/", dst_dir.to_string_lossy());
+    builtin_copy_file(
+        &mut crate::emacs_core::eval_hook_installers::new_context(),
+        vec![
+            Value::string(src.to_string_lossy().as_ref()),
+            Value::string(&dst_dir_arg),
+        ],
+    )
+    .expect("copy-file should target basename within directory");
+
+    assert_eq!(fs::read(dst_dir.join("source.txt")).unwrap(), b"copied");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_builtin_add_name_to_file_semantics() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_add_name_to_file_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let src = dir.join("source.txt");
+    let dst = dir.join("alias.txt");
+    fs::write(&src, b"x").unwrap();
+
+    let src_str = src.to_string_lossy().to_string();
+    let dst_str = dst.to_string_lossy().to_string();
+
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_add_name_to_file,
+            vec![Value::string(&src_str), Value::string(&dst_str)]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+    assert!(file_exists_p(&dst_str));
+    assert_same_file_paths(&src_str, &dst_str);
+
+    let err = call_fileio_builtin!(
+        builtin_add_name_to_file,
+        vec![Value::string(&src_str), Value::string(&dst_str)]
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+        other => panic!("expected signal, got {:?}", other),
+    }
+
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_add_name_to_file,
+            vec![Value::string(&src_str), Value::string(&dst_str), Value::T,]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+    assert_same_file_paths(&src_str, &dst_str);
+
+    let missing = dir.join("missing.txt").to_string_lossy().to_string();
+    let dst2 = dir.join("alias2.txt").to_string_lossy().to_string();
+    let err = call_fileio_builtin!(
+        builtin_add_name_to_file,
+        vec![Value::string(&missing), Value::string(&dst2)]
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-missing"),
+        other => panic!("expected signal, got {:?}", other),
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_rename_file_handles_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let base = raw_temp_path(b"neovm-rename-\xFF");
+    let _ = fs::remove_dir_all(&base);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&base)) else {
+        return;
+    };
+
+    let src = base.join(std::ffi::OsStr::from_bytes(b"src-\xFE"));
+    let dst = base.join(std::ffi::OsStr::from_bytes(b"dst-\xFD"));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&src, b"rename me")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    builtin_rename_file(
+        &mut crate::emacs_core::eval_hook_installers::new_context(),
+        vec![raw_path_value(&src), raw_path_value(&dst)],
+    )
+    .expect("rename-file should handle raw-byte paths");
+    assert!(!src.exists());
+    assert_eq!(fs::read(&dst).unwrap(), b"rename me");
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn builtin_rename_file_directory_target_uses_source_basename() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_rename_dir_target");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let src = dir.join("source.txt");
+    let dst_dir = dir.join("dest");
+    fs::create_dir_all(&dst_dir).unwrap();
+    fs::write(&src, b"renamed").unwrap();
+
+    let dst_dir_arg = format!("{}/", dst_dir.to_string_lossy());
+    builtin_rename_file(
+        &mut crate::emacs_core::eval_hook_installers::new_context(),
+        vec![
+            Value::string(src.to_string_lossy().as_ref()),
+            Value::string(&dst_dir_arg),
+        ],
+    )
+    .expect("rename-file should target basename within directory");
+
+    assert!(!src.exists());
+    assert_eq!(fs::read(dst_dir.join("source.txt")).unwrap(), b"renamed");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_add_name_to_file_handles_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let base = raw_temp_path(b"neovm-add-name-\xFF");
+    let _ = fs::remove_dir_all(&base);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&base)) else {
+        return;
+    };
+
+    let src = base.join(std::ffi::OsStr::from_bytes(b"src-\xFE"));
+    let dst = base.join(std::ffi::OsStr::from_bytes(b"dst-\xFD"));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&src, b"link me")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    builtin_add_name_to_file(
+        &mut crate::emacs_core::eval_hook_installers::new_context(),
+        vec![raw_path_value(&src), raw_path_value(&dst)],
+    )
+    .expect("add-name-to-file should handle raw-byte paths");
+    assert_same_file_path_bufs(&src, &dst);
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn builtin_add_name_to_file_directory_target_uses_source_basename() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_add_name_dir_target");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let src = dir.join("source.txt");
+    let dst_dir = dir.join("dest");
+    fs::create_dir_all(&dst_dir).unwrap();
+    fs::write(&src, b"linked").unwrap();
+
+    let dst_dir_arg = format!("{}/", dst_dir.to_string_lossy());
+    builtin_add_name_to_file(
+        &mut crate::emacs_core::eval_hook_installers::new_context(),
+        vec![
+            Value::string(src.to_string_lossy().as_ref()),
+            Value::string(&dst_dir_arg),
+        ],
+    )
+    .expect("add-name-to-file should target basename within directory");
+
+    assert_same_file_paths(
+        src.to_string_lossy().as_ref(),
+        dst_dir.join("source.txt").to_string_lossy().as_ref(),
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_make_symbolic_link_directory_target_uses_target_basename() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_symlink_dir_target");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let target = dir.join("source.txt");
+    let dst_dir = dir.join("links");
+    fs::create_dir_all(&dst_dir).unwrap();
+    fs::write(&target, b"x").unwrap();
+
+    let dst_dir_arg = format!("{}/", dst_dir.to_string_lossy());
+    builtin_make_symbolic_link(
+        &mut crate::emacs_core::eval_hook_installers::new_context(),
+        vec![
+            Value::string(target.to_string_lossy().as_ref()),
+            Value::string(&dst_dir_arg),
+        ],
+    )
+    .expect("make-symbolic-link should target basename within directory");
+
+    let link = dst_dir.join("source.txt");
+    assert!(link.exists());
+    assert_eq!(
+        fs::read_link(&link).unwrap().as_os_str().as_bytes(),
+        target.as_os_str().as_bytes()
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// -----------------------------------------------------------------------
+// File attributes
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_file_attributes() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_attrs_test");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("attrs.txt");
+    let path_str = path.to_string_lossy().to_string();
+
+    write_string_to_file("content", &path_str, false).unwrap();
+
+    let attrs = file_attributes(&path_str).unwrap();
+    assert_eq!(attrs.size, 7); // "content" is 7 bytes
+    assert!(!attrs.is_dir);
+    assert!(!attrs.is_symlink);
+    assert!(attrs.modified.is_some());
+
+    // Directory attributes
+    let dir_str = dir.to_string_lossy().to_string();
+    let dir_attrs = file_attributes(&dir_str).unwrap();
+    assert!(dir_attrs.is_dir);
+
+    // Non-existent file
+    assert!(file_attributes("/nonexistent_path_12345").is_none());
+
+    // Clean up
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// -----------------------------------------------------------------------
+// Builtin wrappers (Value-level)
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_builtin_expand_file_name() {
+    crate::test_utils::init_test_tracing();
+    let result = call_fileio_builtin!(
+        builtin_expand_file_name,
+        vec![Value::string("/usr/local/bin/emacs")]
+    );
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().as_utf8_str(), Some("/usr/local/bin/emacs"));
+
+    // GNU treats an explicit non-string DEFAULT-DIRECTORY as root.
+    let result = call_fileio_builtin!(
+        builtin_expand_file_name,
+        vec![Value::string("a"), Value::symbol("x")]
+    );
+    assert_eq!(result.unwrap().as_utf8_str(), Some("/a"));
+
+    let result = call_fileio_builtin!(
+        builtin_expand_file_name,
+        vec![Value::string("a"), Value::NIL, Value::NIL]
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_builtin_expand_file_name_eval_uses_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    // `default-directory` is a SYMBOL_FORWARDED BUFFER_OBJFWD slot
+    // since Phase 10C; the per-buffer slot is the source of truth.
+    // Using `eval.set_variable` routes through the FORWARDED path
+    // (mirroring GNU's `set_internal` for SYMBOL_FORWARDED) so the
+    // current buffer's slot is updated, which is what
+    // `default_directory_in_state` reads.
+    eval.set_variable("default-directory", Value::string("/tmp/neovm-expand/"));
+
+    let with_implicit = builtin_expand_file_name(&mut eval, vec![Value::string("alpha.txt")]);
+    assert_eq!(
+        with_implicit.unwrap().as_utf8_str(),
+        Some("/tmp/neovm-expand/alpha.txt")
+    );
+
+    let with_nil = builtin_expand_file_name(&mut eval, vec![Value::string("beta.txt"), Value::NIL]);
+    assert_eq!(
+        with_nil.unwrap().as_utf8_str(),
+        Some("/tmp/neovm-expand/beta.txt")
+    );
+}
+
+#[test]
+fn builtin_expand_file_name_empty_name_and_empty_default_dir_returns_empty() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable("default-directory", Value::string("/base/dir/"));
+
+    // GNU: `(expand-file-name "" "")` => "" — both "" share
+    // `empty_unibyte_string`, so they are `eq`, the recursive expansion of
+    // DEFAULT-DIRECTORY is skipped, and the empty NAME is returned unchanged.
+    let both_empty =
+        builtin_expand_file_name(&mut eval, vec![Value::string(""), Value::string("")]).unwrap();
+    assert_eq!(both_empty.as_utf8_str(), Some(""));
+
+    // GNU: `(expand-file-name "")` [nil/absent dir] => "/base/dir" — falls back
+    // to `default-directory`.  The canonical empty-string identity must not
+    // conflate an omitted/nil directory with an explicit empty string.
+    let empty_name_nil_dir = builtin_expand_file_name(&mut eval, vec![Value::string("")]).unwrap();
+    assert_eq!(empty_name_nil_dir.as_utf8_str(), Some("/base/dir"));
+
+    let empty_name_explicit_nil =
+        builtin_expand_file_name(&mut eval, vec![Value::string(""), Value::NIL]).unwrap();
+    assert_eq!(empty_name_explicit_nil.as_utf8_str(), Some("/base/dir"));
+
+    // GNU: `(expand-file-name "x" "")` => "/base/dir/x" — only NAME is empty, so
+    // DEFAULT-DIRECTORY "" is still expanded against `default-directory`.
+    let nonempty_name_empty_dir =
+        builtin_expand_file_name(&mut eval, vec![Value::string("x"), Value::string("")]).unwrap();
+    assert_eq!(nonempty_name_empty_dir.as_utf8_str(), Some("/base/dir/x"));
+
+    // GNU: `(expand-file-name "" "/other/")` => "/other" — non-empty explicit dir.
+    let empty_name_other_dir =
+        builtin_expand_file_name(&mut eval, vec![Value::string(""), Value::string("/other/")])
+            .unwrap();
+    assert_eq!(empty_name_other_dir.as_utf8_str(), Some("/other"));
+}
+
+#[test]
+fn builtin_expand_file_name_preserves_raw_unibyte_default_directory_bytes() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let raw_default = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        b"/tmp/neovm-\xFF/".to_vec(),
+    ));
+    eval.set_variable("default-directory", raw_default);
+
+    let value = builtin_expand_file_name(
+        &mut eval,
+        vec![Value::heap_string(
+            neovm_value::heap_types::LispString::from_unibyte(b"alpha.txt".to_vec()),
+        )],
+    )
+    .expect("expand-file-name should keep raw default-directory bytes");
+
+    assert_unibyte_string_bytes(value, b"/tmp/neovm-\xFF/alpha.txt");
+}
+
+#[test]
+fn builtin_expand_file_name_promotes_ascii_unibyte_name_for_multibyte_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::multibyte_string("/tmp/neovm-e/"),
+    );
+
+    let value = builtin_expand_file_name(
+        &mut eval,
+        vec![Value::heap_string(
+            neovm_value::heap_types::LispString::from_unibyte(b"alpha.txt".to_vec()),
+        )],
+    )
+    .expect("expand-file-name should promote ascii unibyte names like GNU");
+
+    let string = value.as_lisp_string().expect("string result");
+    assert!(string.is_multibyte(), "expected multibyte string");
+    assert_eq!(
+        neovm_value::emacs_char::to_utf8_lossy(string.as_bytes()),
+        "/tmp/neovm-e/alpha.txt"
+    );
+}
+
+#[test]
+fn test_fileio_eval_prefers_current_buffer_local_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let base =
+        std::env::temp_dir().join(format!("neovm-fileio-buffer-local-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(base.join("subdir")).unwrap();
+    fs::write(base.join("alpha.txt"), "alpha").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable("default-directory", Value::string("/tmp/neovm-global/"));
+    let current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let base_str = format!("{}/", base.to_string_lossy());
+    eval.edit
+        .buffers
+        .set_buffer_local_property(current, "default-directory", Value::string(&base_str))
+        .expect("buffer local default-directory should set");
+
+    assert_eq!(
+        builtin_expand_file_name(&mut eval, vec![Value::string("alpha.txt")])
+            .unwrap()
+            .as_utf8_str(),
+        Some(base.join("alpha.txt").to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        builtin_file_truename(&mut eval, vec![Value::string("alpha.txt")])
+            .unwrap()
+            .as_utf8_str(),
+        Some(
+            fs::canonicalize(base.join("alpha.txt"))
+                .expect("canonical fixture file")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert_eq!(
+        builtin_file_exists_p(&mut eval, vec![Value::string("alpha.txt")]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        builtin_file_directory_p(&mut eval, vec![Value::string("subdir")]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        builtin_file_regular_p(&mut eval, vec![Value::string("alpha.txt")]).unwrap(),
+        Value::T
+    );
+
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn test_builtin_file_truename_counter_validation() {
+    crate::test_utils::init_test_tracing();
+    let value = call_fileio_builtin!(
+        builtin_file_truename,
+        vec![Value::string("/tmp"), Value::list(vec![])]
+    )
+    .unwrap();
+    let tmp = fs::canonicalize("/tmp").expect("canonical /tmp");
+    assert_eq!(value.as_utf8_str(), Some(tmp.to_string_lossy().as_ref()));
+
+    let err = call_fileio_builtin!(
+        builtin_file_truename,
+        vec![Value::string("/tmp"), Value::fixnum(1)]
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("listp"), Value::fixnum(1)]);
+        }
+        other => panic!("expected signal, got {:?}", other),
+    }
+
+    let err = call_fileio_builtin!(
+        builtin_file_truename,
+        vec![
+            Value::string("/tmp"),
+            Value::list(vec![Value::symbol("visited")]),
+        ]
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(
+                sig.data,
+                vec![
+                    Value::symbol("number-or-marker-p"),
+                    Value::symbol("visited")
+                ]
+            );
+        }
+        other => panic!("expected signal, got {:?}", other),
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_file_truename_accepts_backslash_drive_paths() {
+    crate::test_utils::init_test_tracing();
+    let value = call_fileio_builtin!(builtin_file_truename, vec![Value::string(r"C:\")]).unwrap();
+    assert_eq!(value.as_utf8_str(), Some("C:/"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_drive_root_is_file_truename_recursion_root() {
+    crate::test_utils::init_test_tracing();
+    let filename = neovm_value::heap_types::LispString::from_utf8("D:/");
+    let dirfile = lisp_directory_file_name(&filename);
+    assert_eq!(dirfile.as_utf8_str(), Some("D:/"));
+
+    let value = call_fileio_builtin!(builtin_file_truename, vec![Value::string("D:/")]).unwrap();
+    assert_eq!(value.as_utf8_str(), Some("D:/"));
+}
+
+#[test]
+fn test_builtin_file_truename_eval_uses_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string("/tmp/neovm-file-truename/"),
+    );
+
+    let value = builtin_file_truename(&mut eval, vec![Value::string("alpha.txt")]).unwrap();
+    let expected = fs::canonicalize("/tmp")
+        .expect("canonical /tmp")
+        .join("neovm-file-truename/alpha.txt");
+    assert_eq!(
+        value.as_utf8_str(),
+        Some(expected.to_string_lossy().as_ref())
+    );
+}
+
+#[test]
+fn test_builtin_make_temp_file_core_paths() {
+    crate::test_utils::init_test_tracing();
+    let file =
+        call_fileio_builtin!(builtin_make_temp_file, vec![Value::string("neovm-mtf-")]).unwrap();
+    let file_path = file.as_utf8_str().unwrap().to_string();
+    assert!(file_exists_p(&file_path));
+    delete_file(&file_path).unwrap();
+
+    let dir = call_fileio_builtin!(
+        builtin_make_temp_file,
+        vec![Value::string("neovm-mtf-dir-"), Value::T]
+    )
+    .unwrap();
+    let dir_path = dir.as_utf8_str().unwrap().to_string();
+    assert!(file_directory_p(&dir_path));
+    fs::remove_dir(&dir_path).unwrap();
+
+    let with_text = call_fileio_builtin!(
+        builtin_make_temp_file,
+        vec![
+            Value::string("neovm-mtf-text-"),
+            Value::NIL,
+            Value::string(".txt"),
+            Value::string("abc"),
+        ]
+    )
+    .unwrap();
+    let text_path = with_text.as_utf8_str().unwrap().to_string();
+    assert_eq!(read_file_contents(&text_path).unwrap(), "abc");
+    delete_file(&text_path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn test_builtin_make_temp_file_private_unix_mode_bits() {
+    // GNU's `make-temp-file-internal` routes through gnulib `gen_tempname`,
+    // which creates files via `open(..., O_CREAT|O_EXCL, S_IRUSR|S_IWUSR)`
+    // (mode 0600) and directories via `mkdir(..., S_IRWXU)` (mode 0700),
+    // regardless of the process umask.  The docstring promises "the
+    // file/directory is created with access mode bits that limit access to
+    // the current user."  Neomacs previously created temp files/dirs with the
+    // umask-derived 0644/0755, leaking world-readable temp files.
+    use std::os::unix::fs::MetadataExt;
+    crate::test_utils::init_test_tracing();
+
+    let file = call_fileio_builtin!(
+        builtin_make_temp_file,
+        vec![Value::string("neovm-mtf-mode-")]
+    )
+    .unwrap();
+    let file_path = file.as_utf8_str().unwrap().to_string();
+    let file_mode = fs::metadata(&file_path).unwrap().mode() & 0o7777;
+    assert_eq!(
+        file_mode, 0o600,
+        "temp file should be created with private mode 0600, got {file_mode:o}"
+    );
+    delete_file(&file_path).unwrap();
+
+    let dir = call_fileio_builtin!(
+        builtin_make_temp_file,
+        vec![Value::string("neovm-mtf-mode-dir-"), Value::T]
+    )
+    .unwrap();
+    let dir_path = dir.as_utf8_str().unwrap().to_string();
+    let dir_mode = fs::metadata(&dir_path).unwrap().mode() & 0o7777;
+    assert_eq!(
+        dir_mode, 0o700,
+        "temp directory should be created with private mode 0700, got {dir_mode:o}"
+    );
+    fs::remove_dir(&dir_path).unwrap();
+}
+
+#[test]
+fn test_builtin_make_temp_file_validation() {
+    crate::test_utils::init_test_tracing();
+    let err = call_fileio_builtin!(builtin_make_temp_file, vec![Value::fixnum(1)]).unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("sequencep"), Value::fixnum(1)]);
+        }
+        other => panic!("expected signal, got {:?}", other),
+    }
+
+    let err = call_fileio_builtin!(
+        builtin_make_temp_file,
+        vec![Value::string("neo"), Value::NIL, Value::fixnum(1)]
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
+        }
+        other => panic!("expected signal, got {:?}", other),
+    }
+}
+
+#[test]
+fn builtin_file_name_directory_preserves_raw_unibyte_bytes() {
+    crate::test_utils::init_test_tracing();
+    let value = call_fileio_builtin!(
+        builtin_file_name_directory,
+        vec![Value::heap_string(
+            neovm_value::heap_types::LispString::from_unibyte(
+                b"/tmp/neovm-\xFF/alpha.txt".to_vec()
+            )
+        )]
+    )
+    .expect("file-name-directory should keep raw bytes");
+
+    assert_unibyte_string_bytes(value, b"/tmp/neovm-\xFF/");
+}
+
+#[test]
+fn builtin_file_name_nondirectory_preserves_raw_unibyte_bytes() {
+    crate::test_utils::init_test_tracing();
+    let value = call_fileio_builtin!(
+        builtin_file_name_nondirectory,
+        vec![Value::heap_string(
+            neovm_value::heap_types::LispString::from_unibyte(b"/tmp/neovm-\xFF".to_vec())
+        )]
+    )
+    .expect("file-name-nondirectory should keep raw bytes");
+
+    assert_unibyte_string_bytes(value, b"neovm-\xFF");
+}
+
+#[test]
+fn builtin_file_name_as_directory_preserves_raw_unibyte_bytes() {
+    crate::test_utils::init_test_tracing();
+    let value = call_fileio_builtin!(
+        builtin_file_name_as_directory,
+        vec![Value::heap_string(
+            neovm_value::heap_types::LispString::from_unibyte(b"neovm-\xFF".to_vec())
+        )]
+    )
+    .expect("file-name-as-directory should keep raw bytes");
+
+    assert_unibyte_string_bytes(value, b"neovm-\xFF/");
+}
+
+#[test]
+fn builtin_directory_file_name_preserves_raw_unibyte_bytes() {
+    crate::test_utils::init_test_tracing();
+    let value = call_fileio_builtin!(
+        builtin_directory_file_name,
+        vec![Value::heap_string(
+            neovm_value::heap_types::LispString::from_unibyte(b"neovm-\xFF/".to_vec())
+        )]
+    )
+    .expect("directory-file-name should keep raw bytes");
+
+    assert_unibyte_string_bytes(value, b"neovm-\xFF");
+}
+
+#[test]
+fn test_builtin_make_temp_file_eval_honors_temp_directory() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let dir = std::env::temp_dir().join("neovm-mtf-eval");
+    let _ = fs::create_dir_all(&dir);
+    eval.obarray_mut().set_symbol_value(
+        "temporary-file-directory",
+        Value::string(format!("{}/", dir.to_string_lossy())),
+    );
+
+    let value = builtin_make_temp_file(&mut eval, vec![Value::string("eval-neo-")]).unwrap();
+    let path = value.as_utf8_str().unwrap().to_string();
+    assert!(path.starts_with(&dir.to_string_lossy().to_string()));
+    assert!(file_exists_p(&path));
+    delete_file(&path).unwrap();
+    let _ = fs::remove_dir(&dir);
+}
+
+#[test]
+fn test_builtin_make_nearby_temp_file_core_semantics() {
+    crate::test_utils::init_test_tracing();
+    let path = call_fileio_builtin!(
+        builtin_make_nearby_temp_file,
+        vec![Value::string("neovm-nearby-")]
+    )
+    .unwrap();
+    let path_str = path.as_utf8_str().unwrap().to_string();
+    assert!(file_exists_p(&path_str));
+    delete_file(&path_str).unwrap();
+
+    let dir = call_fileio_builtin!(
+        builtin_make_nearby_temp_file,
+        vec![Value::string("neovm-nearby-dir-"), Value::T]
+    )
+    .unwrap();
+    let dir_str = dir.as_utf8_str().unwrap().to_string();
+    assert!(file_directory_p(&dir_str));
+    fs::remove_dir(&dir_str).unwrap();
+
+    let base = std::env::temp_dir().join("neovm-nearby-parent");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+    let prefix = base.join("child-").to_string_lossy().to_string();
+    let nearby =
+        call_fileio_builtin!(builtin_make_nearby_temp_file, vec![Value::string(&prefix)]).unwrap();
+    let nearby_str = nearby.as_utf8_str().unwrap().to_string();
+    assert_eq!(
+        file_name_directory(&nearby_str),
+        file_name_directory(&prefix),
+    );
+    assert!(file_exists_p(&nearby_str));
+    delete_file(&nearby_str).unwrap();
+    fs::remove_dir_all(&base).unwrap();
+}
+
+#[test]
+fn test_builtin_make_nearby_temp_file_eval_relative_prefix_uses_temp_dir() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm-nearby-eval");
+    let sub = base.join("sub");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&sub).unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string(format!("{}/", base.to_string_lossy())),
+    );
+
+    let err =
+        builtin_make_nearby_temp_file(&mut eval, vec![Value::string("sub/child-")]).unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-missing"),
+        other => panic!("expected signal, got {:?}", other),
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn test_builtin_file_predicates() {
+    crate::test_utils::init_test_tracing();
+    let result = call_fileio_builtin!(builtin_file_exists_p, vec![Value::string("/tmp")]);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_truthy());
+
+    let result = call_fileio_builtin!(builtin_file_directory_p, vec![Value::string("/tmp")]);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_truthy());
+
+    let result = call_fileio_builtin!(
+        builtin_file_exists_p,
+        vec![Value::string("/no_such_file_xyz")]
+    );
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_nil());
+}
+
+#[test]
+fn test_builtin_access_file_semantics() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_access_file,
+            vec![Value::string("/tmp"), Value::string("read")]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+
+    let missing = call_fileio_builtin!(
+        builtin_access_file,
+        vec![
+            Value::string("/definitely-not-here-neovm"),
+            Value::string("read"),
+        ]
+    )
+    .expect_err("missing file should signal");
+    match missing.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "file-missing");
+            assert_eq!(sig.data.first(), Some(&Value::string("read")));
+            assert_eq!(
+                sig.data.last(),
+                Some(&Value::string("/definitely-not-here-neovm"))
+            );
+        }
+        other => panic!("expected file-missing signal, got {:?}", other),
+    }
+
+    let file_type = call_fileio_builtin!(
+        builtin_access_file,
+        vec![Value::fixnum(1), Value::string("read")]
+    )
+    .expect_err("FILE should require string");
+    match file_type.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
+        }
+        other => panic!("expected wrong-type-argument, got {:?}", other),
+    }
+
+    let op_type = call_fileio_builtin!(
+        builtin_access_file,
+        vec![Value::string("/tmp"), Value::fixnum(1)]
+    )
+    .expect_err("OPERATION should require string");
+    match op_type.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
+        }
+        other => panic!("expected wrong-type-argument, got {:?}", other),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_access_file_preserves_raw_unibyte_filename_in_errors() {
+    crate::test_utils::init_test_tracing();
+    let raw_missing = raw_temp_path(b"neovm-access-missing-\xFF");
+    let _ = fs::remove_file(&raw_missing);
+    let raw_value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        raw_missing.as_os_str().as_bytes().to_vec(),
+    ));
+
+    let err = call_fileio_builtin!(builtin_access_file, vec![raw_value, Value::string("read")])
+        .expect_err("missing raw-byte file should signal");
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "file-missing");
+            assert_eq!(sig.data.first(), Some(&Value::string("read")));
+            let path = sig.data.last().expect("raw filename in signal data");
+            let string = path.as_lisp_string().expect("raw filename string");
+            assert!(!string.is_multibyte(), "expected unibyte filename");
+            assert_eq!(string.as_bytes(), raw_missing.as_os_str().as_bytes());
+        }
+        other => panic!("expected file-missing signal, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_builtin_file_modes_semantics() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_file_modes,
+            vec![Value::string("/tmp/neovm-file-modes-missing")]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+
+    let path = call_fileio_builtin!(
+        builtin_make_temp_file,
+        vec![Value::string("neovm-file-modes-")]
+    )
+    .unwrap();
+    let path_str = path.as_utf8_str().unwrap().to_string();
+    let mode = call_fileio_builtin!(builtin_file_modes, vec![Value::string(&path_str)]).unwrap();
+    assert!(mode.is_fixnum());
+    let with_flag =
+        call_fileio_builtin!(builtin_file_modes, vec![Value::string(&path_str), Value::T]).unwrap();
+    assert!(with_flag.is_fixnum());
+    delete_file(&path_str).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_file_modes_treats_any_non_nil_flag_as_nofollow() {
+    crate::test_utils::init_test_tracing();
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir =
+        std::env::temp_dir().join(format!("neovm-file-modes-nofollow-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir(&dir).unwrap();
+    let target = dir.join("target");
+    let link = dir.join("link");
+    fs::write(&target, b"x").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let link_name = Value::string(link.to_string_lossy());
+    let nofollow = call_fileio_builtin!(
+        builtin_file_modes,
+        vec![link_name, Value::symbol("nofollow")]
+    )
+    .unwrap();
+    let arbitrary = call_fileio_builtin!(
+        builtin_file_modes,
+        vec![link_name, Value::symbol("anything-non-nil")]
+    )
+    .unwrap();
+    let t_flag = call_fileio_builtin!(builtin_file_modes, vec![link_name, Value::T]).unwrap();
+    let follow = call_fileio_builtin!(builtin_file_modes, vec![link_name, Value::NIL]).unwrap();
+
+    assert_eq!(arbitrary, nofollow);
+    assert_eq!(t_flag, nofollow);
+    assert_eq!(follow.as_fixnum().unwrap() & 0o7777, 0o600);
+
+    let _ = fs::remove_file(&link);
+    let _ = fs::remove_file(&target);
+    let _ = fs::remove_dir(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_file_modes_handles_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let path = raw_temp_path(b"neovm-file-modes-\xFF");
+    let _ = fs::remove_file(&path);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&path, b"x")) else {
+        return;
+    };
+    let value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        path.as_os_str().as_bytes().to_vec(),
+    ));
+
+    let mode = call_fileio_builtin!(builtin_file_modes, vec![value]).unwrap();
+    assert!(mode.is_fixnum());
+
+    let _ = fs::remove_file(&path);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_file_predicates_handle_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let base = raw_temp_path(b"neovm-preds-\xFF");
+    let _ = fs::remove_dir_all(&base);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&base)) else {
+        return;
+    };
+
+    let file = base.join(std::ffi::OsStr::from_bytes(b"file-\xFF"));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&file, b"x")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
+    let file_value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        file.as_os_str().as_bytes().to_vec(),
+    ));
+    let dir_value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        base.as_os_str().as_bytes().to_vec(),
+    ));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&file).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&file, perms).unwrap();
+    }
+
+    assert_eq!(
+        call_fileio_builtin!(builtin_file_exists_p, vec![file_value]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        call_fileio_builtin!(builtin_file_readable_p, vec![file_value]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        call_fileio_builtin!(builtin_file_writable_p, vec![file_value]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        call_fileio_builtin!(builtin_file_regular_p, vec![file_value]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        call_fileio_builtin!(builtin_file_executable_p, vec![file_value]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        call_fileio_builtin!(builtin_file_directory_p, vec![dir_value]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        call_fileio_builtin!(builtin_file_accessible_directory_p, vec![dir_value]).unwrap(),
+        Value::T
+    );
+
+    let _ = fs::remove_file(&file);
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_builtin_file_modes_eval_respects_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm-file-modes-eval");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+    let file = base.join("alpha.txt");
+    fs::write(&file, b"x").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string(format!("{}/", base.to_string_lossy())),
+    );
+    let mode = builtin_file_modes(&mut eval, vec![Value::string("alpha.txt")]).unwrap();
+    assert!(mode.is_fixnum());
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_builtin_set_file_modes_semantics() {
+    crate::test_utils::init_test_tracing();
+    let path = call_fileio_builtin!(
+        builtin_make_temp_file,
+        vec![Value::string("neovm-set-file-modes-")]
+    )
+    .unwrap();
+    let path_str = path.as_utf8_str().unwrap().to_string();
+
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_set_file_modes,
+            vec![Value::string(&path_str), Value::fixnum(0o600)]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_set_file_modes,
+            vec![Value::string(&path_str), Value::fixnum(0o640), Value::T]
+        )
+        .unwrap(),
+        Value::NIL
+    );
+    assert_eq!(
+        call_fileio_builtin!(builtin_file_modes, vec![Value::string(&path_str)])
+            .unwrap()
+            .as_int(),
+        Some(0o640)
+    );
+
+    delete_file(&path_str).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_set_file_modes_handles_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let path = raw_temp_path(b"neovm-set-file-modes-\xFF");
+    let _ = fs::remove_file(&path);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&path, b"x")) else {
+        return;
+    };
+    let value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        path.as_os_str().as_bytes().to_vec(),
+    ));
+
+    call_fileio_builtin!(builtin_set_file_modes, vec![value, Value::fixnum(0o600)])
+        .expect("set-file-modes should handle raw-byte paths");
+    let mode = call_fileio_builtin!(builtin_file_modes, vec![value]).unwrap();
+    assert_eq!(mode.as_int(), Some(0o600));
+
+    let _ = fs::remove_file(&path);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_set_file_modes_preserves_raw_unibyte_filename_in_errors() {
+    crate::test_utils::init_test_tracing();
+    let missing = raw_temp_path(b"neovm-set-file-modes-missing-\xFF");
+    let _ = fs::remove_file(&missing);
+    let value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        missing.as_os_str().as_bytes().to_vec(),
+    ));
+
+    let err = call_fileio_builtin!(builtin_set_file_modes, vec![value, Value::fixnum(0o600)])
+        .expect_err("missing raw-byte file should signal");
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
+            let path = sig.data.last().expect("raw filename in chmod signal");
+            let string = path.as_lisp_string().expect("raw filename string");
+            assert!(!string.is_multibyte(), "expected unibyte filename");
+            assert_eq!(string.as_bytes(), missing.as_os_str().as_bytes());
+        }
+        other => panic!("expected signal, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_builtin_set_file_modes_eval_respects_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm-set-file-modes-eval");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+    let file = base.join("alpha.txt");
+    fs::write(&file, b"x").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string(format!("{}/", base.to_string_lossy())),
+    );
+    builtin_set_file_modes(
+        &mut eval,
+        vec![Value::string("alpha.txt"), Value::fixnum(0o600)],
+    )
+    .unwrap();
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_file_modes,
+            vec![Value::string(file.to_string_lossy().to_string())]
+        )
+        .unwrap()
+        .as_int(),
+        Some(0o600)
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_builtin_directory_files_args() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_dirfiles_builtin");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let dir_str = dir.to_string_lossy().to_string();
+    let file = dir.join("beta.el");
+    fs::write(&file, "").unwrap();
+    fs::write(dir.join("alpha.txt"), "").unwrap();
+    fs::write(dir.join(".hidden"), "").unwrap();
+
+    let result = call_fileio_builtin!(
+        builtin_directory_files,
+        vec![
+            Value::string(&dir_str),
+            Value::NIL,
+            Value::string("\\.el$"),
+            Value::NIL,
+            Value::fixnum(1),
+        ]
+    )
+    .unwrap();
+    let items = list_to_vec(&result).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].as_utf8_str(), Some("beta.el"));
+
+    let unsorted = call_fileio_builtin!(
+        builtin_directory_files,
+        vec![Value::string(&dir_str), Value::NIL, Value::NIL, Value::T,]
+    )
+    .unwrap();
+    let unsorted_items = list_to_vec(&unsorted).unwrap();
+
+    let unsorted_limited = call_fileio_builtin!(
+        builtin_directory_files,
+        vec![
+            Value::string(&dir_str),
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+            Value::fixnum(2),
+        ]
+    )
+    .unwrap();
+    let unsorted_limited_items = list_to_vec(&unsorted_limited).unwrap();
+    let tail = &unsorted_items[unsorted_items.len() - 2..];
+    assert_eq!(unsorted_limited_items.as_slice(), tail);
+
+    let sorted_limited = call_fileio_builtin!(
+        builtin_directory_files,
+        vec![
+            Value::string(&dir_str),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum(2),
+        ]
+    )
+    .unwrap();
+    let mut sorted_from_unsorted = unsorted_limited_items.clone();
+    sorted_from_unsorted.sort_by(|a, b| {
+        let a = a.as_utf8_str().unwrap_or_default();
+        let b = b.as_utf8_str().unwrap_or_default();
+        a.cmp(b)
+    });
+    assert_eq!(list_to_vec(&sorted_limited).unwrap(), sorted_from_unsorted);
+
+    let result = call_fileio_builtin!(
+        builtin_directory_files,
+        vec![
+            Value::string(&dir_str),
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+            Value::fixnum(0),
+        ]
+    )
+    .unwrap();
+    assert!(list_to_vec(&result).unwrap().is_empty());
+
+    let result = call_fileio_builtin!(
+        builtin_directory_files,
+        vec![
+            Value::string(&dir_str),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum(-1),
+        ]
+    );
+    assert!(result.is_err());
+
+    let result = call_fileio_builtin!(
+        builtin_directory_files,
+        vec![
+            Value::string(&dir_str),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::fixnum(0),
+            Value::NIL,
+        ]
+    );
+    assert!(result.is_err());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn directory_files_decodes_names_before_matching_and_returning_them() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join(format!("neovm_dirfiles_unicode_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("Übung – Lösung.zip"), "").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.obarray_mut().set_symbol_value(
+        "default-file-name-coding-system",
+        Value::symbol("utf-8-unix"),
+    );
+    let result = builtin_directory_files(
+        &mut eval,
+        vec![
+            Value::string(dir.to_string_lossy().to_string()),
+            Value::NIL,
+            Value::string("Übung"),
+        ],
+    )
+    .unwrap();
+
+    let items = list_to_vec(&result).unwrap();
+    assert_eq!(items.len(), 1);
+    let name = items[0].as_lisp_string().unwrap();
+    assert!(name.is_multibyte());
+    assert_eq!(name.as_utf8_str(), Some("Übung – Lösung.zip"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn directory_files_keeps_ascii_decoded_names_unibyte_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join(format!(
+        "neovm_dirfiles_string_width_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("répertoire.bmk"), "").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.obarray_mut().set_symbol_value(
+        "default-file-name-coding-system",
+        Value::symbol("utf-8-unix"),
+    );
+    let result = builtin_directory_files(
+        &mut eval,
+        vec![Value::string(dir.to_string_lossy().to_string())],
+    )
+    .expect("directory-files should decode directory entries");
+
+    let items = list_to_vec(&result).expect("directory-files must return a list");
+    let entries: Vec<_> = items
+        .iter()
+        .map(|value| value.as_lisp_string().expect("directory entry string"))
+        .collect();
+    let dot = entries
+        .iter()
+        .find(|entry| entry.as_bytes() == b".")
+        .expect("dot entry");
+    let dotdot = entries
+        .iter()
+        .find(|entry| entry.as_bytes() == b"..")
+        .expect("dot-dot entry");
+    let accented = entries
+        .iter()
+        .find(|entry| entry.as_utf8_str() == Some("répertoire.bmk"))
+        .expect("decoded accented entry");
+
+    assert!(!dot.is_multibyte(), "GNU keeps decoded ASCII names unibyte");
+    assert!(
+        !dotdot.is_multibyte(),
+        "GNU keeps decoded ASCII names unibyte"
+    );
+    assert!(
+        accented.is_multibyte(),
+        "a UTF-8 filename containing non-ASCII must be decoded to multibyte"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// GNU `directory_files_internal` (src/dired.c) applies COUNT to the *raw*
+// readdir stream — it breaks after COUNT entries (`if (ind == last) break;`)
+// and only THEN sorts.  So `(directory-files DIR nil nil nil COUNT)` is the
+// SORT of the first COUNT readdir entries, NOT the lexicographic prefix of the
+// fully sorted listing.  Readdir order is not portable, so assert the
+// ALGORITHM directly: the sorted-COUNT result must equal sort(first COUNT of
+// the raw readdir order), and must contain at most COUNT entries.
+#[test]
+fn test_directory_files_count_truncates_raw_stream_before_sort_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_dirfiles_count_algo");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    for name in &["m.txt", "a.txt", "z.txt", "q.txt", "b.txt"] {
+        fs::write(dir.join(name), "").unwrap();
+    }
+    let dir_ls = neovm_value::heap_types::LispString::from_unibyte(
+        dir.to_string_lossy().as_bytes().to_vec(),
+    );
+
+    const COUNT: usize = 3;
+
+    // `nosort` keeps the traversal order WITHOUT sorting, exactly like GNU when
+    // NOSORT is non-nil.  Both GNU and neomacs build the list with `cons`
+    // (prepend), so the NOSORT listing is the REVERSE of the raw readdir order.
+    // COUNT breaks after the first COUNT *readdir* entries, which are therefore
+    // the LAST COUNT entries of the NOSORT listing; GNU then sorts them.
+    let nosort = directory_files(&dir_ls, false, None, true, None).unwrap();
+    let first_count_readdir = &nosort[nosort.len().saturating_sub(COUNT)..];
+    let mut expected: Vec<Vec<u8>> = first_count_readdir
+        .iter()
+        .map(|s| s.as_bytes().to_vec())
+        .collect();
+    expected.sort();
+
+    // The COUNT result must be sort(first-COUNT-of-raw), NOT the global sorted
+    // prefix.
+    let counted = directory_files(&dir_ls, false, None, false, Some(COUNT)).unwrap();
+    let counted_bytes: Vec<Vec<u8>> = counted.iter().map(|s| s.as_bytes().to_vec()).collect();
+
+    assert!(
+        counted_bytes.len() <= COUNT,
+        "COUNT must cap the entry count"
+    );
+    assert_eq!(
+        counted_bytes, expected,
+        "directory-files COUNT must truncate the raw readdir stream before sorting"
+    );
+    // Sanity: the result is itself sorted.
+    let mut sorted_check = counted_bytes.clone();
+    sorted_check.sort();
+    assert_eq!(counted_bytes, sorted_check);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_builtin_directory_files_eval_respects_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm_dirfiles_eval_builtin");
+    let fixture = base.join("fixtures");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&fixture).unwrap();
+    fs::write(fixture.join("alpha.txt"), "").unwrap();
+    fs::write(fixture.join("beta.el"), "").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let base_str = format!("{}/", base.to_string_lossy());
+    eval.set_variable("default-directory", Value::string(&base_str));
+
+    let result = builtin_directory_files(
+        &mut eval,
+        vec![
+            Value::string("fixtures"),
+            Value::NIL,
+            Value::string("\\.el$"),
+        ],
+    )
+    .unwrap();
+    let items = list_to_vec(&result).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].as_utf8_str(), Some("beta.el"));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn directory_files_expands_tilde_from_lisp_process_environment_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::current_dir()
+        .expect("current directory")
+        .join("tmp")
+        .join(format!("neovm-directory-files-home-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(base.join("Projects")).expect("create HOME fixture");
+    let home = base.to_string_lossy().replace('\\', "\\\\");
+
+    let results = bootstrap_eval(&format!(
+        r#"(let ((previous-home (getenv "HOME"))
+                 (abbreviated-home-dir nil))
+             (unwind-protect
+                 (progn
+                   (setenv "HOME" "{home}")
+                   (list
+                    (directory-files "~/")
+                    (mapcar #'car (directory-files-and-attributes "~/"))))
+               (setenv "HOME" previous-home)))"#
+    ));
+
+    assert_eq!(
+        results,
+        vec![r#"OK (("." ".." "Projects") ("." ".." "Projects"))"#]
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_builtin_directory_files_nonexistent_signals_file_missing() {
+    crate::test_utils::init_test_tracing();
+    let result = call_fileio_builtin!(
+        builtin_directory_files,
+        vec![Value::string("/nonexistent_dir_xyz_12345")]
+    );
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-missing"),
+        other => panic!("expected file-missing signal, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_builtin_directory_files_invalid_regexp_signals_invalid_regexp() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_dirfiles_invalid_regexp");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let dir_str = dir.to_string_lossy().to_string();
+
+    let result = call_fileio_builtin!(
+        builtin_directory_files,
+        vec![
+            Value::string(&dir_str),
+            Value::NIL,
+            Value::string("[invalid"),
+        ]
+    );
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "invalid-regexp"),
+        other => panic!("expected invalid-regexp signal, got {:?}", other),
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_builtin_file_ops_eval_respects_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm_fileops_eval_builtin");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+    fs::write(base.join("alpha.txt"), "x").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let base_str = format!("{}/", base.to_string_lossy());
+    eval.set_variable("default-directory", Value::string(&base_str));
+
+    builtin_copy_file(
+        &mut eval,
+        vec![Value::string("alpha.txt"), Value::string("beta.txt")],
+    )
+    .unwrap();
+    assert!(base.join("beta.txt").exists());
+
+    builtin_rename_file(
+        &mut eval,
+        vec![Value::string("beta.txt"), Value::string("gamma.txt")],
+    )
+    .unwrap();
+    assert!(!base.join("beta.txt").exists());
+    assert!(base.join("gamma.txt").exists());
+
+    builtin_delete_file(&mut eval, vec![Value::string("gamma.txt")]).unwrap();
+    assert!(!base.join("gamma.txt").exists());
+
+    builtin_add_name_to_file(
+        &mut eval,
+        vec![Value::string("alpha.txt"), Value::string("delta.txt")],
+    )
+    .unwrap();
+    assert!(base.join("delta.txt").exists());
+    assert_same_file_paths(
+        &base.join("alpha.txt").to_string_lossy(),
+        &base.join("delta.txt").to_string_lossy(),
+    );
+    builtin_delete_file(&mut eval, vec![Value::string("delta.txt")]).unwrap();
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_builtin_rename_file_eval_overwrite_semantics() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm_rename_eval_overwrite");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+    fs::write(base.join("src.txt"), "x").unwrap();
+    fs::write(base.join("dst.txt"), "y").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let base_str = format!("{}/", base.to_string_lossy());
+    eval.set_variable("default-directory", Value::string(&base_str));
+
+    let err = builtin_rename_file(
+        &mut eval,
+        vec![Value::string("src.txt"), Value::string("dst.txt")],
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+        other => panic!("expected signal, got {:?}", other),
+    }
+
+    assert_eq!(
+        builtin_rename_file(
+            &mut eval,
+            vec![Value::string("src.txt"), Value::string("dst.txt"), Value::T],
+        )
+        .unwrap(),
+        Value::NIL
+    );
+    assert!(!base.join("src.txt").exists());
+    assert!(base.join("dst.txt").exists());
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_builtin_copy_file_eval_optional_arg_semantics() {
+    crate::test_utils::init_test_tracing();
+    let base = std::env::temp_dir().join("neovm_copy_eval_optional");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+    fs::write(base.join("src.txt"), "src").unwrap();
+    fs::write(base.join("dst.txt"), "dst").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let base_str = format!("{}/", base.to_string_lossy());
+    eval.set_variable("default-directory", Value::string(&base_str));
+
+    let err = builtin_copy_file(
+        &mut eval,
+        vec![Value::string("src.txt"), Value::string("dst.txt")],
+    )
+    .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+        other => panic!("expected signal, got {:?}", other),
+    }
+
+    assert_eq!(
+        builtin_copy_file(
+            &mut eval,
+            vec![Value::string("src.txt"), Value::string("dst.txt"), Value::T],
+        )
+        .unwrap(),
+        Value::NIL
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_builtin_file_name_ops() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    let result = builtin_file_name_directory(&mut ev, vec![Value::string("/home/user/test.el")]);
+    assert_eq!(result.unwrap().as_utf8_str(), Some("/home/user/"));
+
+    #[cfg(windows)]
+    {
+        let result = builtin_file_name_directory(
+            &mut ev,
+            vec![Value::string(
+                r"D:\a\neomacs\neomacs\lisp\international\uni-titlecase.el",
+            )],
+        );
+        assert_eq!(
+            result.unwrap().as_utf8_str(),
+            Some("D:/a/neomacs/neomacs/lisp/international/")
+        );
+    }
+
+    let result = builtin_file_name_nondirectory(&mut ev, vec![Value::string("/home/user/test.el")]);
+    assert_eq!(result.unwrap().as_utf8_str(), Some("test.el"));
+
+    #[cfg(windows)]
+    {
+        let result = builtin_file_name_nondirectory(
+            &mut ev,
+            vec![Value::string(
+                r"D:\a\neomacs\neomacs\lisp\international\uni-titlecase.el",
+            )],
+        );
+        assert_eq!(result.unwrap().as_utf8_str(), Some("uni-titlecase.el"));
+    }
+
+    let result = builtin_file_name_as_directory(&mut ev, vec![Value::string("/home/user")]);
+    assert_eq!(result.unwrap().as_utf8_str(), Some("/home/user/"));
+
+    let result = builtin_directory_file_name(&mut ev, vec![Value::string("/home/user/")]);
+    assert_eq!(result.unwrap().as_utf8_str(), Some("/home/user"));
+
+    let result = builtin_file_name_concat(vec![
+        Value::string("foo"),
+        Value::string(""),
+        Value::NIL,
+        Value::string("bar"),
+    ]);
+    assert_eq!(result.unwrap().as_utf8_str(), Some("foo/bar"));
+}
+
+#[test]
+fn test_builtin_file_name_ops_strict_types() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    assert!(builtin_file_name_directory(&mut ev, vec![Value::symbol("x")]).is_err());
+    assert!(builtin_file_name_nondirectory(&mut ev, vec![Value::symbol("x")]).is_err());
+    assert!(builtin_file_name_as_directory(&mut ev, vec![Value::symbol("x")]).is_err());
+    assert!(builtin_directory_file_name(&mut ev, vec![Value::symbol("x")]).is_err());
+}
+
+#[test]
+fn file_name_with_extension_bootstrap_matches_gnu_elisp() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(
+        r#"
+        (file-name-with-extension "foo" "el")
+        (file-name-with-extension "foo.el" "txt")
+        (file-name-with-extension "foo" ".el")
+        (condition-case err (file-name-with-extension "foo" "") (error (car err)))
+        (condition-case err (file-name-with-extension "/tmp/dir/" "el") (error (car err)))
+        (condition-case err (file-name-with-extension 'x "el") (error (car err)))
+        (condition-case err (file-name-with-extension "x" 'el) (error (car err)))
+        "#,
+    );
+    assert_eq!(results[0], r#"OK "foo.el""#);
+    assert_eq!(results[1], r#"OK "foo.txt""#);
+    assert_eq!(results[2], r#"OK "foo.el""#);
+    assert_eq!(results[3], "OK error");
+    assert_eq!(results[4], "OK error");
+    assert_eq!(results[5], "OK wrong-type-argument");
+    assert_eq!(results[6], "OK wrong-type-argument");
+}
+
+#[test]
+fn file_name_splitters_bootstrap_match_gnu_files_el() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(
+        r#"
+        (list (subrp (symbol-function 'file-name-extension))
+              (subrp (symbol-function 'file-name-sans-extension))
+              (subrp (symbol-function 'file-name-base))
+              (subrp (symbol-function 'file-name-parent-directory))
+              (subrp (symbol-function 'file-name-split)))
+        (file-name-extension "/home/user/test.el")
+        (file-name-extension "/home/user/test.el" t)
+        (file-name-extension "no_ext" t)
+        (file-name-sans-extension "/home/user/test.el")
+        (file-name-base "/home/user/test.el")
+        (file-name-parent-directory "/foo/bar")
+        (file-name-parent-directory "/foo/")
+        (file-name-parent-directory "/")
+        (file-name-parent-directory "foo/bar")
+        (file-name-parent-directory "foo")
+        (file-name-parent-directory "//usr")
+        (file-name-split "/foo/bar")
+        (file-name-split "/")
+        (file-name-split "foo/")
+        (file-name-split "")
+        "#,
+    );
+    assert_eq!(results[0], "OK (nil nil nil nil nil)");
+    assert_eq!(results[1], r#"OK "el""#);
+    assert_eq!(results[2], r#"OK ".el""#);
+    assert_eq!(results[3], r#"OK """#);
+    assert_eq!(results[4], r#"OK "/home/user/test""#);
+    assert_eq!(results[5], r#"OK "test""#);
+    assert_eq!(results[6], r#"OK "/foo/""#);
+    assert_eq!(results[7], r#"OK "/""#);
+    assert_eq!(results[8], "OK nil");
+    assert_eq!(results[9], r#"OK "foo/""#);
+    assert_eq!(results[10], r#"OK "./""#);
+    assert_eq!(results[11], r#"OK "//""#);
+    assert_eq!(results[12], r#"OK ("" "foo" "bar")"#);
+    assert_eq!(results[13], r#"OK ("" "" "")"#);
+    assert_eq!(results[14], r#"OK ("foo" "")"#);
+    assert_eq!(results[15], "OK nil");
+}
+
+#[test]
+fn file_name_splitters_bootstrap_error_shapes_match_gnu_files_el() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(
+        r#"
+        (condition-case err (file-name-extension 'x) (error (car err)))
+        (condition-case err (file-name-extension "x" nil nil) (error (car err)))
+        (condition-case err (file-name-sans-extension 'x) (error (car err)))
+        (condition-case err (file-name-base 'x) (error (car err)))
+        (condition-case err (file-name-parent-directory 'x) (error (car err)))
+        (condition-case err (file-name-split 'x) (error (car err)))
+        "#,
+    );
+    assert_eq!(results[0], "OK wrong-type-argument");
+    assert_eq!(results[1], "OK wrong-number-of-arguments");
+    assert_eq!(results[2], "OK wrong-type-argument");
+    assert_eq!(results[3], "OK wrong-type-argument");
+    assert_eq!(results[4], "OK wrong-type-argument");
+    assert_eq!(results[5], "OK wrong-type-argument");
+}
+
+#[test]
+fn file_name_sans_versions_bootstrap_matches_gnu_files_el() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(
+        r#"
+        (subrp (symbol-function 'file-name-sans-versions))
+        (file-name-sans-versions "foo.~12~")
+        (file-name-sans-versions "foo.~12~.~3~")
+        (file-name-sans-versions "foo.~~")
+        (file-name-sans-versions "foo.~12~" t)
+        "#,
+    );
+    assert_eq!(results[0], "OK nil");
+    assert_eq!(results[1], r#"OK "foo""#);
+    assert_eq!(results[2], r#"OK "foo.~12~""#);
+    assert_eq!(results[3], r#"OK "foo.~""#);
+    assert_eq!(results[4], r#"OK "foo.~12~""#);
+}
+
+#[test]
+fn file_name_sans_versions_bootstrap_error_shapes_match_gnu_files_el() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(
+        r#"
+        (condition-case err (file-name-sans-versions 'x) (error (car err)))
+        (condition-case err (file-name-sans-versions "x" nil nil) (error (car err)))
+        "#,
+    );
+    assert_eq!(results[0], "OK wrong-type-argument");
+    assert_eq!(results[1], "OK wrong-number-of-arguments");
+}
+
+#[test]
+fn file_name_misc_bootstrap_matches_gnu_files_el() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(
+        r##"
+        (list (subrp (symbol-function 'convert-standard-filename))
+              (subrp (symbol-function 'backup-file-name-p))
+              (subrp (symbol-function 'auto-save-file-name-p))
+              (subrp (symbol-function 'abbreviate-file-name)))
+        (backup-file-name-p "foo.~12~")
+        (backup-file-name-p "foo.txt")
+        (auto-save-file-name-p "#foo#")
+        (auto-save-file-name-p "foo.txt")
+        (let* ((home (expand-file-name "~"))
+               (under (concat home "/project")))
+          (list (equal (abbreviate-file-name home) "~")
+                (equal (abbreviate-file-name under) "~/project")
+                (abbreviate-file-name "/tmp/x")))
+        (convert-standard-filename "/tmp/x")
+        (convert-standard-filename 'x)
+        (convert-standard-filename 42)
+        "##,
+    );
+    assert_eq!(results[0], "OK (nil nil nil nil)");
+    assert_eq!(results[1], "OK 7");
+    assert_eq!(results[2], "OK nil");
+    assert_eq!(results[3], "OK 0");
+    assert_eq!(results[4], "OK nil");
+    assert_eq!(results[5], r#"OK (t t "/tmp/x")"#);
+    assert_eq!(results[6], r#"OK "/tmp/x""#);
+    assert_eq!(results[7], "OK x");
+    assert_eq!(results[8], "OK 42");
+}
+
+#[test]
+fn file_name_misc_bootstrap_error_shapes_match_gnu_files_el() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(
+        r#"
+        (condition-case err (backup-file-name-p 'x) (error (car err)))
+        (condition-case err (auto-save-file-name-p 'x) (error (car err)))
+        (condition-case err (abbreviate-file-name 'x) (error (car err)))
+        (condition-case err (convert-standard-filename) (error (car err)))
+        (condition-case err (convert-standard-filename nil nil) (error (car err)))
+        "#,
+    );
+    assert_eq!(results[0], "OK wrong-type-argument");
+    assert_eq!(results[1], "OK wrong-type-argument");
+    assert_eq!(results[2], "OK wrong-type-argument");
+    assert_eq!(results[3], "OK wrong-number-of-arguments");
+    assert_eq!(results[4], "OK wrong-number-of-arguments");
+}
+
+#[test]
+fn test_builtin_file_name_concat_strict_types() {
+    crate::test_utils::init_test_tracing();
+    let result = builtin_file_name_concat(vec![Value::NIL, Value::string("bar")]);
+    assert_eq!(result.unwrap().as_utf8_str(), Some("bar"));
+
+    let result = builtin_file_name_concat(vec![Value::symbol("foo"), Value::string("bar")]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_builtin_path_predicates() {
+    crate::test_utils::init_test_tracing();
+    let result = builtin_file_name_absolute_p(vec![Value::string("/tmp")]);
+    assert_eq!(result.unwrap(), Value::T);
+
+    let result = builtin_file_name_absolute_p(vec![Value::string("tmp")]);
+    assert_eq!(result.unwrap(), Value::NIL);
+
+    let result = builtin_file_name_absolute_p(vec![Value::string(
+        "~neovm-user-that-should-not-exist-94d11b/tmp",
+    )]);
+    assert_eq!(result.unwrap(), Value::NIL);
+
+    let result = builtin_directory_name_p(vec![Value::string("foo/")]);
+    assert_eq!(result.unwrap(), Value::T);
+
+    let result = builtin_directory_name_p(vec![Value::string("foo")]);
+    assert_eq!(result.unwrap(), Value::NIL);
+
+    let base = std::env::temp_dir().join("neovm_builtin_directory_empty_p");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).unwrap();
+    let file = base.join("entry");
+    fs::write(&file, "x").unwrap();
+
+    fs::remove_file(&file).unwrap();
+
+    fs::remove_dir_all(&base).unwrap();
+}
+
+#[test]
+fn test_builtin_path_predicates_strict_types() {
+    crate::test_utils::init_test_tracing();
+    let result = builtin_file_name_absolute_p(vec![Value::symbol("foo")]);
+    assert!(result.is_err());
+
+    let result = builtin_directory_name_p(vec![Value::NIL]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_builtin_file_predicates_strict_types() {
+    crate::test_utils::init_test_tracing();
+    assert!(call_fileio_builtin!(builtin_file_exists_p, vec![Value::NIL]).is_err());
+    assert!(call_fileio_builtin!(builtin_file_readable_p, vec![Value::NIL]).is_err());
+    assert!(call_fileio_builtin!(builtin_file_writable_p, vec![Value::NIL]).is_err());
+    assert!(call_fileio_builtin!(builtin_file_directory_p, vec![Value::NIL]).is_err());
+    assert!(call_fileio_builtin!(builtin_file_regular_p, vec![Value::NIL]).is_err());
+    assert!(call_fileio_builtin!(builtin_file_symlink_p, vec![Value::NIL]).is_err());
+    assert!(call_fileio_builtin!(builtin_file_name_case_insensitive_p, vec![Value::NIL]).is_err());
+    assert!(
+        call_fileio_builtin!(
+            builtin_file_newer_than_file_p,
+            vec![Value::NIL, Value::string("/tmp")]
+        )
+        .is_err()
+    );
+    assert!(
+        call_fileio_builtin!(
+            builtin_file_newer_than_file_p,
+            vec![Value::string("/tmp"), Value::NIL]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn test_eval_file_predicates_respect_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_fileio_eval_default_dir");
+    let subdir = dir.join("subdir");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&subdir).expect("create test subdir");
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable("default-directory", Value::string(dir.to_string_lossy()));
+
+    let is_dir = builtin_file_directory_p(&mut eval, vec![Value::string("subdir")])
+        .expect("file-directory-p eval");
+    assert!(is_dir.is_truthy());
+
+    let exists = builtin_file_exists_p(&mut eval, vec![Value::string("subdir")])
+        .expect("file-exists-p eval");
+    assert!(exists.is_truthy());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_file_name_case_insensitive_eval_respects_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_fileio_case_insensitive_eval");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create test dir");
+    let file = dir.join("alpha.txt");
+    fs::write(&file, b"x").expect("create test file");
+
+    let absolute = call_fileio_builtin!(
+        builtin_file_name_case_insensitive_p,
+        vec![Value::string(file.to_string_lossy())]
+    )
+    .expect("absolute case-insensitive query");
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string(format!("{}/", dir.to_string_lossy())),
+    );
+    let relative =
+        builtin_file_name_case_insensitive_p(&mut eval, vec![Value::string("alpha.txt")])
+            .expect("relative case-insensitive query");
+    assert_eq!(relative, absolute);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_file_system_info_handles_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let dir = raw_temp_path(b"neovm-file-system-info-\xFF");
+    let _ = fs::remove_dir_all(&dir);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
+
+    let value = builtin_file_system_info(
+        &mut crate::emacs_core::eval_hook_installers::new_context(),
+        vec![raw_path_value(&dir)],
+    )
+    .expect("file-system-info should accept raw-byte paths");
+    let parts = list_to_vec(&value).expect("file-system-info should return list");
+    assert_eq!(parts.len(), 3);
+    assert!(parts.iter().all(|value| value.is_fixnum()));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_file_system_info_eval_respects_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm-file-system-info-eval");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create test dir");
+
+    let mut absolute_eval = crate::emacs_core::eval_hook_installers::new_context();
+    let absolute = builtin_file_system_info(
+        &mut absolute_eval,
+        vec![Value::string(dir.to_string_lossy().as_ref())],
+    )
+    .expect("absolute file-system-info");
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string(format!("{}/", dir.to_string_lossy())),
+    );
+    let relative = builtin_file_system_info(&mut eval, vec![Value::string(".")])
+        .expect("relative file-system-info");
+    let absolute_parts = list_to_vec(&absolute).expect("absolute file-system-info list");
+    let relative_parts = list_to_vec(&relative).expect("relative file-system-info list");
+    assert_eq!(absolute_parts.len(), 3);
+    assert_eq!(relative_parts.len(), 3);
+    assert_eq!(absolute_parts[0], relative_parts[0]);
+    assert!(absolute_parts.iter().all(|value| value.is_fixnum()));
+    assert!(relative_parts.iter().all(|value| value.is_fixnum()));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_builtin_file_newer_than_file_p_semantics() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm-file-newer-than-file-p");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create test dir");
+
+    let old = dir.join("old.txt");
+    let new = dir.join("new.txt");
+    let missing = dir.join("missing.txt");
+
+    fs::write(&old, b"old").expect("write old file");
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    fs::write(&new, b"new").expect("write new file");
+
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_file_newer_than_file_p,
+            vec![
+                Value::string(new.to_string_lossy()),
+                Value::string(old.to_string_lossy()),
+            ]
+        )
+        .expect("newer"),
+        Value::T
+    );
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_file_newer_than_file_p,
+            vec![
+                Value::string(old.to_string_lossy()),
+                Value::string(new.to_string_lossy()),
+            ]
+        )
+        .expect("older"),
+        Value::NIL
+    );
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_file_newer_than_file_p,
+            vec![
+                Value::string(missing.to_string_lossy()),
+                Value::string(old.to_string_lossy()),
+            ]
+        )
+        .expect("missing first"),
+        Value::NIL
+    );
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_file_newer_than_file_p,
+            vec![
+                Value::string(old.to_string_lossy()),
+                Value::string(missing.to_string_lossy()),
+            ]
+        )
+        .expect("missing second"),
+        Value::T
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_file_newer_than_file_p_eval_respects_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm-file-newer-than-file-p-eval");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create test dir");
+
+    let old = dir.join("old.txt");
+    let new = dir.join("new.txt");
+    fs::write(&old, b"old").expect("write old file");
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    fs::write(&new, b"new").expect("write new file");
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string(format!("{}/", dir.to_string_lossy())),
+    );
+
+    let result = builtin_file_newer_than_file_p(
+        &mut eval,
+        vec![Value::string("new.txt"), Value::string("old.txt")],
+    )
+    .expect("relative newer check");
+    assert_eq!(result, Value::T);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_file_newer_than_file_p_handles_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let dir = raw_temp_path(b"neovm-file-newer-\xFF");
+    let _ = fs::remove_dir_all(&dir);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
+
+    let old = dir.join(std::ffi::OsStr::from_bytes(b"old-\xFE"));
+    let new = dir.join(std::ffi::OsStr::from_bytes(b"new-\xFD"));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&old, b"old")) else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&new, b"new")) else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    assert_eq!(
+        builtin_file_newer_than_file_p(
+            &mut crate::emacs_core::eval_hook_installers::new_context(),
+            vec![raw_path_value(&new), raw_path_value(&old)]
+        )
+        .expect("raw file-newer-than-file-p"),
+        Value::T
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_builtin_set_file_times_semantics() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm-set-file-times");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create test dir");
+
+    let older = dir.join("older.txt");
+    let newer = dir.join("newer.txt");
+    fs::write(&older, b"older").expect("write older");
+    fs::write(&newer, b"newer").expect("write newer");
+
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_set_file_times,
+            vec![Value::string(older.to_string_lossy()), Value::fixnum(0),]
+        )
+        .expect("set-file-times"),
+        Value::T
+    );
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_set_file_times,
+            vec![Value::string(newer.to_string_lossy()), Value::NIL, Value::T,]
+        )
+        .expect("set-file-times with flag"),
+        Value::T
+    );
+    assert_eq!(
+        call_fileio_builtin!(
+            builtin_file_newer_than_file_p,
+            vec![
+                Value::string(newer.to_string_lossy()),
+                Value::string(older.to_string_lossy()),
+            ]
+        )
+        .expect("newer-than"),
+        Value::T
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_set_file_times_handles_raw_unibyte_paths() {
+    crate::test_utils::init_test_tracing();
+    let dir = raw_temp_path(b"neovm-set-file-times-\xFF");
+    let _ = fs::remove_dir_all(&dir);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
+
+    let file = dir.join(std::ffi::OsStr::from_bytes(b"alpha-\xFE"));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&file, b"alpha")) else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    assert_eq!(
+        builtin_set_file_times(
+            &mut crate::emacs_core::eval_hook_installers::new_context(),
+            vec![raw_path_value(&file), Value::fixnum(0)],
+        )
+        .expect("raw set-file-times"),
+        Value::T
+    );
+
+    let mtime = fs::metadata(&file)
+        .expect("metadata")
+        .modified()
+        .expect("modified")
+        .duration_since(UNIX_EPOCH)
+        .expect("epoch")
+        .as_secs();
+    assert_eq!(mtime, 0);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_set_file_times_eval_respects_default_directory() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm-set-file-times-eval");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create test dir");
+    let file = dir.join("alpha.txt");
+    fs::write(&file, b"alpha").expect("write file");
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable(
+        "default-directory",
+        Value::string(format!("{}/", dir.to_string_lossy())),
+    );
+
+    assert_eq!(
+        builtin_set_file_times(
+            &mut eval,
+            vec![Value::string("alpha.txt"), Value::fixnum(0)],
+        )
+        .expect("eval set-file-times"),
+        Value::T
+    );
+    let mtime = fs::metadata(&file)
+        .expect("metadata")
+        .modified()
+        .expect("modified")
+        .duration_since(UNIX_EPOCH)
+        .expect("epoch")
+        .as_secs();
+    assert_eq!(mtime, 0);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_visited_file_modtime_state_builtins_use_current_buffer_file_name() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+
+    assert_eq!(
+        builtin_verify_visited_file_modtime(&mut eval, vec![Value::make_buffer(current)])
+            .expect("verify-visited-file-modtime"),
+        Value::T
+    );
+
+    let missing = builtin_set_visited_file_modtime(&mut eval, vec![Value::NIL])
+        .expect_err("missing visited file should signal");
+    match missing.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::NIL]);
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+
+    eval.edit
+        .buffers
+        .set_buffer_file_name(current, Value::string("/tmp/neovm-visited-file.txt"))
+        .expect("buffer file name should set");
+    assert_eq!(
+        builtin_set_visited_file_modtime(&mut eval, vec![Value::NIL])
+            .expect("set-visited-file-modtime"),
+        Value::NIL
+    );
+}
+
+#[test]
+fn test_default_file_modes_round_trip() {
+    crate::test_utils::init_test_tracing();
+    let original = builtin_default_file_modes(vec![])
+        .expect("default-file-modes")
+        .as_int()
+        .expect("default-file-modes int");
+    assert_eq!(
+        builtin_set_default_file_modes(vec![Value::fixnum(0o700)]).expect("set-default-file-modes"),
+        Value::NIL
+    );
+    assert_eq!(
+        builtin_default_file_modes(vec![])
+            .expect("default-file-modes after set")
+            .as_int(),
+        Some(0o700)
+    );
+    let _ = builtin_set_default_file_modes(vec![Value::fixnum(original)]);
+}
+
+#[test]
+fn test_default_file_modes_argument_errors() {
+    crate::test_utils::init_test_tracing();
+    assert!(builtin_set_default_file_modes(vec![]).is_err());
+    assert!(builtin_default_file_modes(vec![Value::fixnum(1)]).is_err());
+    assert!(builtin_set_default_file_modes(vec![Value::NIL]).is_err());
+}
+
+#[test]
+fn test_builtin_substitute_in_file_name() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    let result =
+        builtin_substitute_in_file_name(&mut ev, vec![Value::string("$HOME/foo")]).unwrap();
+    assert_eq!(result.as_utf8_str(), Some("$HOME/foo"));
+
+    let values = bootstrap_eval(
+        r#"
+(let ((process-environment (copy-sequence process-environment)))
+  (setenv "NEOMACS_SUBSTITUTE_UNIT_HOME" "/tmp/neomacs-home")
+  (substitute-in-file-name "$NEOMACS_SUBSTITUTE_UNIT_HOME/foo"))
+"#,
+    );
+    assert_eq!(
+        values.last().map(String::as_str),
+        Some(r#"OK "/tmp/neomacs-home/foo""#)
+    );
+}
+
+#[test]
+fn test_builtin_substitute_in_file_name_strict_type() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    let result = builtin_substitute_in_file_name(&mut ev, vec![Value::symbol("foo")]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_builtin_wrong_arg_count() {
+    crate::test_utils::init_test_tracing();
+    // expand-file-name needs at least 1 arg
+    let result = call_fileio_builtin!(builtin_expand_file_name, vec![]);
+    assert!(result.is_err());
+
+    // file-exists-p needs exactly 1 arg
+    let result = call_fileio_builtin!(builtin_file_exists_p, vec![]);
+    assert!(result.is_err());
+}
+
+// -----------------------------------------------------------------------
+// Context-dependent builtins
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_insert_file_contents_and_write_region() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_fileio_test");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("eval_test.txt");
+    let path_str = path.to_string_lossy().to_string();
+
+    // Write a test file to disk
+    write_string_to_file("hello from file", &path_str, false).unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    // insert-file-contents
+    let result = builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)]);
+    assert!(result.is_ok());
+
+    // Check that the buffer now contains the text
+    let buf = eval.edit.buffers.current_buffer().unwrap();
+    assert_eq!(buf.buffer_string(), "hello from file");
+
+    // write-region: write entire buffer to a new file
+    let out_path = dir.join("output.txt");
+    let out_str = out_path.to_string_lossy().to_string();
+    let result = builtin_write_region(
+        &mut eval,
+        vec![Value::NIL, Value::NIL, Value::string(&out_str)],
+    );
+    assert!(result.is_ok());
+
+    let written = read_file_contents(&out_str).unwrap();
+    assert_eq!(written, "hello from file");
+
+    // Clean up
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn insert_file_contents_non_visit_change_hooks_match_gnu() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = std::env::temp_dir().join("neovm_eval_insert_file_contents_change_hooks");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("insert.txt");
+    let path_str = path.to_string_lossy().to_string();
+    fs::write(&path, "abc").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"
+(progn
+  (erase-buffer)
+  (insert "xx")
+  (goto-char 2)
+  (setq neomacs-ifc-events nil)
+  (setq before-change-functions
+        (list (lambda (beg end)
+                (setq neomacs-ifc-events
+                      (cons (list 'before beg end) neomacs-ifc-events)))))
+  (setq after-change-functions
+        (list (lambda (beg end old-len)
+                (setq neomacs-ifc-events
+                      (cons (list 'after beg end old-len) neomacs-ifc-events))))))
+"#,
+    )
+    .expect("hook setup should evaluate");
+
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)])
+        .expect("insert-file-contents should succeed");
+
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"
+(list (buffer-string) (point) (nreverse neomacs-ifc-events))
+"#,
+    ));
+    assert_eq!(rendered, "OK (\"xabcx\" 2 ((before 2 2) (after 2 5 0)))");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_insert_file_contents_visit_sets_file_name_and_clears_modified() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_insert_file_contents_visit");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("visit.txt");
+    let path_str = path.to_string_lossy().to_string();
+    write_string_to_file("visited text", &path_str, false).unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let result = builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str), Value::T])
+        .expect("insert-file-contents with visit should succeed");
+    let parts = list_to_vec(&result).expect("insert-file-contents should return list");
+    assert_eq!(parts[0].as_utf8_str(), Some(path_str.as_str()));
+
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(buf.buffer_string(), "visited text");
+    assert_eq!(
+        buf.file_name_runtime_string_owned().as_deref(),
+        Some(path_str.as_str())
+    );
+    assert!(
+        buf.buffer_local_value("buffer-file-truename")
+            .unwrap_or(Value::NIL)
+            .is_nil()
+    );
+    assert!(!buf.is_modified());
+    assert!(buf.get_undo_list().is_nil());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn insert_file_contents_visit_does_not_signal_change_hooks_like_gnu() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = std::env::temp_dir().join("neovm_eval_insert_file_contents_visit_hooks");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("visit-hooks.txt");
+    let path_str = path.to_string_lossy().to_string();
+    fs::write(&path, "abc").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"
+(progn
+  (setq neomacs-ifc-events nil)
+  (setq before-change-functions
+        (list (lambda (beg end)
+                (setq neomacs-ifc-events
+                      (cons (list 'before beg end) neomacs-ifc-events)))))
+  (setq after-change-functions
+        (list (lambda (beg end old-len)
+                (setq neomacs-ifc-events
+                      (cons (list 'after beg end old-len) neomacs-ifc-events))))))
+"#,
+    )
+    .expect("hook setup should evaluate");
+
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str), Value::T])
+        .expect("visited insert-file-contents should succeed");
+
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"
+(list (buffer-string) (point) neomacs-ifc-events)
+"#,
+    ));
+    assert_eq!(rendered, "OK (\"abc\" 1 nil)");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn insert_file_contents_replace_preserves_matching_ends_and_hooks_like_gnu() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = std::env::temp_dir().join("neovm_eval_insert_file_contents_replace_hooks");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("replace.txt");
+    let path_str = path.to_string_lossy().to_string();
+    fs::write(&path, "abXYZe").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"
+(progn
+  (erase-buffer)
+  (insert "abcde")
+  (goto-char 4)
+  (setq neomacs-ifc-events nil)
+  (setq before-change-functions
+        (list (lambda (beg end)
+                (setq neomacs-ifc-events
+                      (cons (list 'before beg end) neomacs-ifc-events)))))
+  (setq after-change-functions
+        (list (lambda (beg end old-len)
+                (setq neomacs-ifc-events
+                      (cons (list 'after beg end old-len) neomacs-ifc-events))))))
+"#,
+    )
+    .expect("hook setup should evaluate");
+
+    builtin_insert_file_contents(
+        &mut eval,
+        vec![
+            Value::string(&path_str),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("replace insert-file-contents should succeed");
+
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"
+(list (buffer-string) (point) (nreverse neomacs-ifc-events))
+"#,
+    ));
+    assert_eq!(
+        rendered,
+        "OK (\"abXYZe\" 4 ((before 3 5) (after 3 3 2) (before 3 3) (after 3 6 0)))"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn insert_file_contents_visit_replace_hides_file_name_from_change_hooks_like_gnu() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = std::env::temp_dir().join("neovm_eval_insert_file_contents_visit_replace_name");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("replace.txt");
+    let path_str = path.to_string_lossy().to_string();
+    fs::write(&path, "external contents").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let current_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
+        .set_buffer_file_name(current_id, Value::string(&path_str))
+        .expect("set visited file name");
+    eval.eval_str(
+        r#"
+(progn
+  (erase-buffer)
+  (insert "stale contents")
+  (setq neomacs-ifc-file-names nil)
+  (setq before-change-functions
+        (list (lambda (_beg _end)
+                (setq neomacs-ifc-file-names
+                      (cons buffer-file-name neomacs-ifc-file-names))))))
+"#,
+    )
+    .expect("hook setup should evaluate");
+
+    builtin_insert_file_contents(
+        &mut eval,
+        vec![
+            Value::string(&path_str),
+            Value::T,
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("visited replacement should succeed without a supersession check");
+
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"
+(list (buffer-string) buffer-file-name (nreverse neomacs-ifc-file-names))
+"#,
+    ));
+    assert_eq!(
+        rendered,
+        format!("OK (\"external contents\" \"{path_str}\" (nil nil))")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn insert_file_contents_visit_missing_file_completes_visit_before_error() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_insert_file_contents_missing_visit");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("missing.txt");
+    let path_str = path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let _ = eval.edit.buffers.set_buffer_modified_flag(current, true);
+
+    let err = builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str), Value::T])
+        .expect_err("missing visited file should signal file-missing");
+    match err.into_kind() {
+        neovm_value::error::FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "file-missing");
+        }
+        other => panic!("expected file-missing signal, got {other:?}"),
+    }
+
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(
+        buf.file_name_runtime_string_owned().as_deref(),
+        Some(path_str.as_str())
+    );
+    assert!(
+        buf.buffer_local_value("buffer-file-truename")
+            .unwrap_or(Value::NIL)
+            .is_nil()
+    );
+    assert!(!buf.is_modified());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn insert_file_contents_sets_last_coding_before_after_insert_hook() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_insert_file_contents_coding_hook");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("ascii.txt");
+    let path_str = path.to_string_lossy().to_string();
+    write_string_to_file("ascii text\n", &path_str, false).unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(defalias 'after-insert-file-set-coding
+             #'(lambda (_inserted _visit)
+                 (setq neomacs-test-last-coding-in-hook last-coding-system-used)
+                 nil))"#,
+    )
+    .expect("define hook");
+
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str), Value::T])
+        .expect("insert-file-contents with visit should succeed");
+
+    assert_eq!(
+        eval.visible_variable_value_or_nil("neomacs-test-last-coding-in-hook")
+            .as_bare_symbol_name(),
+        Some("undecided-unix")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn decode_insert_file_contents_defaults_to_gnu_ascii_undecided_codings() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    let without_eol =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval, b"alpha", true, None,
+        )
+        .expect("decode ascii text without EOL evidence");
+    assert_eq!(without_eol.text().as_utf8_str(), Some("alpha"));
+    assert_eq!(without_eol.coding, "undecided");
+
+    let unix =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            b"alpha line\nbeta line\n",
+            true,
+            None,
+        )
+        .expect("decode ascii unix text");
+    assert_eq!(unix.text().as_utf8_str(), Some("alpha line\nbeta line\n"));
+    assert_eq!(unix.coding, "undecided-unix");
+
+    let dos = neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+        &mut eval,
+        b"alpha line\r\nbeta line\r\n",
+        true,
+        None,
+    )
+    .expect("decode ascii dos text");
+    assert_eq!(dos.text().as_utf8_str(), Some("alpha line\nbeta line\n"));
+    assert_eq!(dos.coding, "undecided-dos");
+
+    let mac = neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+        &mut eval,
+        b"alpha line\rbeta line\r",
+        true,
+        None,
+    )
+    .expect("decode ascii mac text");
+    assert_eq!(mac.text().as_utf8_str(), Some("alpha line\nbeta line\n"));
+    assert_eq!(mac.coding, "undecided-mac");
+
+    let stray_cr_in_dos =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            b"alpha\rbeta\r\n",
+            true,
+            None,
+        )
+        .expect("decode GNU-compatible mixed CR and CRLF text");
+    assert_eq!(stray_cr_in_dos.coding, "undecided-dos");
+
+    // No bounded evidence window: `decode_eol` (src/coding.c:6785-6806) ORs a
+    // flag per line terminator over the WHOLE decoded text, so a fourth, bare
+    // LF after three CR LFs makes the text MIXED and selects unix.  The three-
+    // terminator limit belongs to `detect_eol` (src/coding.c:6373), which
+    // serves `detect-coding-string` and never runs on this path.  Re-derived by
+    // running the case under GNU Emacs 31.0.90: a file holding
+    // `a\r\nb\r\nc\r\nd\n` reads back with every CR intact and
+    // `last-coding-system-used' `undecided-unix'; the previous `undecided-dos'
+    // pin recorded Neomacs's own answer.
+    let a_fourth_bare_lf_makes_the_text_mixed =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            b"a\r\nb\r\nc\r\nd\n",
+            true,
+            None,
+        )
+        .expect("decode text whose line endings disagree");
+    assert_eq!(
+        a_fourth_bare_lf_makes_the_text_mixed.text().as_utf8_str(),
+        Some("a\r\nb\r\nc\r\nd\n")
+    );
+    assert_eq!(
+        a_fourth_bare_lf_makes_the_text_mixed.coding,
+        "undecided-unix"
+    );
+}
+
+#[test]
+fn decode_insert_file_contents_preserves_lone_cr_in_lf_text() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    let decoded =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            b"alpha\rdata\nbeta\n",
+            true,
+            None,
+        )
+        .expect("decode ascii unix text with embedded cr");
+    assert_eq!(decoded.text().as_utf8_str(), Some("alpha\rdata\nbeta\n"));
+    assert_eq!(decoded.coding, "undecided-unix");
+
+    let decoded =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            b"(setq probe \"a\rb\")\n",
+            true,
+            None,
+        )
+        .expect("decode source-loaded unix text with embedded cr");
+    assert_eq!(
+        decoded.text().as_utf8_str(),
+        Some("(setq probe \"a\rb\")\n")
+    );
+    assert_eq!(decoded.coding, "undecided-unix");
+}
+
+#[test]
+fn insert_file_contents_preserves_lone_cr_in_lf_text() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("embedded-cr.el");
+    fs::write(&path, b"(setq probe \"a\rb\")\n").expect("write fixture");
+    let path_str = path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)])
+        .expect("insert-file-contents should preserve embedded cr");
+
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(buf.buffer_string(), "(setq probe \"a\rb\")\n");
+    assert_eq!(
+        eval.visible_variable_value_or_nil("last-coding-system-used")
+            .as_bare_symbol_name(),
+        Some("undecided-unix")
+    );
+}
+
+#[test]
+fn insert_file_contents_consumes_utf8_signature() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("bom-source.el");
+    fs::write(&path, b"\xEF\xBB\xBF;;; bom-source.el --- fixture\n")
+        .expect("write utf-8 signature fixture");
+    let path_str = path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)])
+        .expect("insert-file-contents should consume UTF-8 signature");
+
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(buf.buffer_string(), ";;; bom-source.el --- fixture\n");
+    assert_eq!(
+        eval.visible_variable_value_or_nil("last-coding-system-used")
+            .as_bare_symbol_name(),
+        Some("utf-8-with-signature-unix")
+    );
+}
+
+#[test]
+fn decode_insert_file_contents_source_load_normalizes_detected_eols() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    let decoded =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            b"(message \"alpha\")\r\n(message \"beta\")\r\n",
+            true,
+            Some("utf-8-emacs"),
+        )
+        .expect("decode source-loaded dos-eol text with explicit utf-8-emacs coding");
+
+    assert_eq!(
+        decoded.text().as_utf8_str(),
+        Some("(message \"alpha\")\n(message \"beta\")\n")
+    );
+    assert_eq!(decoded.coding, "utf-8-emacs-dos");
+
+    let decoded =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            b"(message \"alpha\")\r(message \"beta\")\r",
+            true,
+            None,
+        )
+        .expect("decode source-loaded mac-eol text");
+
+    assert_eq!(
+        decoded.text().as_utf8_str(),
+        Some("(message \"alpha\")\n(message \"beta\")\n")
+    );
+    assert_eq!(decoded.coding, "undecided-mac");
+}
+
+#[test]
+fn decode_insert_file_contents_accepts_chinese_big5_coding() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    let decoded =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            &[0xa4, 0x40, b'\r', b'\n'],
+            true,
+            Some("chinese-big5-unix"),
+        )
+        .expect("decode Big5 file bytes");
+
+    assert_eq!(decoded.text().as_utf8_str(), Some("一\r\n"));
+    assert_eq!(decoded.coding, "chinese-big5-unix");
+}
+
+#[test]
+fn decode_insert_file_contents_accepts_chinese_gb2312_coding() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    let decoded =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            &[0xd2, 0xbb, b'\r', b'\n'],
+            true,
+            Some("cn-gb-2312-unix"),
+        )
+        .expect("decode GB2312 file bytes");
+
+    assert_eq!(decoded.text().as_utf8_str(), Some("一\r\n"));
+    // `coding` here is `last-coding-system-used', and GNU reports the ALIAS the
+    // caller named when its end-of-line type is already concrete:
+    // `Fdefine_coding_system_alias` puts the alias in the coding-system hash
+    // table as a KEY of its own (src/coding.c), so `CODING_ID_NAME (coding.id)`
+    // (src/coding.c:9497) is the alias, and `adjust_coding_eol_type` returns
+    // "Already adjusted" without rewriting the id (src/coding.c:6477-6479).
+    // Re-derived by running the case under GNU Emacs 31.0.90:
+    // `last-coding-system-used' is `cn-gb-2312-unix' while
+    // `buffer-file-coding-system' -- which Lisp canonicalises separately -- is
+    // `chinese-iso-8bit-unix'.  The bare `cn-gb-2312' spelling, whose eol type
+    // IS undecided, does report the canonical `chinese-iso-8bit-dos'.
+    assert_eq!(decoded.coding, "cn-gb-2312-unix");
+}
+
+#[test]
+fn insert_file_contents_preserves_decoded_charset_text_property() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gb2312.txt");
+    fs::write(&path, [0xd2, 0xbb, b'\n']).expect("write GB2312 fixture");
+    let path_str = path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable("coding-system-for-read", Value::symbol("cn-gb-2312-unix"));
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)])
+        .expect("insert-file-contents should decode GB2312");
+
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(buf.buffer_string(), "一\n");
+    assert_eq!(
+        buf.text_props_get_property_at_emacs_byte_pos(
+            neovm_edit::buffer::EmacsBytePos::new(0),
+            Value::symbol("charset")
+        )
+        .and_then(|value| value.as_bare_symbol_name()),
+        Some("chinese-gb2312")
+    );
+    assert_eq!(
+        buf.text_props_get_property_at_emacs_byte_pos(
+            neovm_edit::buffer::EmacsBytePos::new("一".len()),
+            Value::symbol("charset")
+        )
+        .and_then(|value| value.as_bare_symbol_name()),
+        Some("chinese-gb2312")
+    );
+}
+
+#[test]
+fn decode_insert_file_contents_adds_detected_eol_to_base_coding_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    let decoded =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            &[0xd2, 0xbb, b'\r', b'\n'],
+            true,
+            Some("cn-gb-2312"),
+        )
+        .expect("decode GB2312 file bytes with detected DOS EOL");
+
+    assert_eq!(decoded.text().as_utf8_str(), Some("一\n"));
+    assert_eq!(decoded.coding, "chinese-iso-8bit-dos");
+}
+
+#[test]
+fn write_region_honors_dynamic_coding_system_for_write() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("dynamic-coding.eld");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(let ((coding-system-for-write 'emacs-internal))
+             (with-temp-file "{path_lisp}"
+               (insert "abc")))
+           last-coding-system-used"#
+    ));
+
+    assert_eq!(results[0], "OK nil");
+    assert_eq!(results[1], "OK emacs-internal");
+    assert_eq!(std::fs::read(&path).expect("read output"), b"abc");
+}
+
+#[test]
+fn write_region_annotation_plan_intersperses_sorted_text_and_runs_post_cleanup() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("annotations.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(let (first-saw second-saw post-ran)
+             (with-temp-buffer
+               (insert "éZ")
+               (let ((write-region-annotate-functions
+                      (list
+                       (lambda (start end)
+                         (setq first-saw
+                               (list start end
+                                     (copy-tree write-region-annotations-so-far)))
+                         (list (cons start "<A>") (cons end "<END1>")))
+                       (lambda (start end)
+                         (setq second-saw
+                               (list start end
+                                     (copy-tree write-region-annotations-so-far)))
+                         (list (cons 2 "<B>") (cons end "<END2>")))))
+                     (write-region-post-annotation-function
+                      (lambda () (setq post-ran t))))
+                 (write-region (point-min) (point-max)
+                               "{path_lisp}" nil 'silent)))
+             (list first-saw second-saw post-ran))"#
+    ));
+
+    assert_eq!(
+        results[0],
+        "OK ((1 3 nil) (1 3 ((1 . \"<A>\") (3 . \"<END1>\"))) t)"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("read annotated output"),
+        "<A>é<B>Z<END2><END1>".as_bytes()
+    );
+}
+
+#[test]
+fn write_region_annotation_plan_preserves_order_within_equal_position_batches() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("equal-position-annotations.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(with-temp-buffer
+             (insert "x")
+             (let ((write-region-annotate-functions
+                    (list
+                     (lambda (start _end)
+                       (list (cons start "<A1>") (cons start "<A2>")))
+                     (lambda (start _end)
+                       (list (cons start "<B1>") (cons start "<B2>"))))))
+               (write-region (point-min) (point-max)
+                             "{path_lisp}" nil 'silent)))"#
+    ));
+
+    assert_eq!(results[0], "OK nil");
+    assert_eq!(
+        std::fs::read(&path).expect("read equal-position output"),
+        b"<B1><B2><A1><A2>x"
+    );
+}
+
+#[test]
+fn write_region_literal_source_skips_annotations_but_runs_post_cleanup() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("literal.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(let (annotation-ran post-ran)
+             (with-temp-buffer
+               (let ((write-region-annotate-functions
+                      (list (lambda (&rest _)
+                              (setq annotation-ran t)
+                              (list (cons 1 "BAD")))))
+                     (write-region-post-annotation-function
+                      (lambda () (setq post-ran t))))
+                 (write-region "raw" nil "{path_lisp}" nil 'silent)))
+             (list annotation-ran post-ran))"#
+    ));
+
+    assert_eq!(results[0], "OK (nil t)");
+    assert_eq!(std::fs::read(&path).expect("read literal output"), b"raw");
+}
+
+#[test]
+fn write_region_annotation_buffer_switch_replaces_source_and_cleans_up_in_gnu_order() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("replacement.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(let (replacement cleanup)
+             (unwind-protect
+                 (with-temp-buffer
+                   (insert "old")
+                   (let ((write-region-annotate-functions
+                          (list (lambda (_start _end)
+                                  (setq replacement (generate-new-buffer " *replacement*"))
+                                  (set-buffer replacement)
+                                  (insert "new")
+                                  nil)))
+                         (write-region-post-annotation-function
+                          (lambda () (push (buffer-string) cleanup))))
+                     (write-region (point-min) (point-max)
+                                   "{path_lisp}" nil 'silent))
+                   (list (nreverse cleanup) (buffer-string)))
+               (when (buffer-live-p replacement)
+                 (kill-buffer replacement))))"#
+    ));
+
+    assert_eq!(results[0], "OK ((\"new\" \"old\") \"old\")");
+    assert_eq!(
+        std::fs::read(&path).expect("read replacement output"),
+        b"new"
+    );
+}
+
+#[test]
+fn write_region_honors_buffer_coding_cookie_over_default_dos_eol() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("generated-lisp.el");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved-default (default-value 'buffer-file-coding-system)))
+             (unwind-protect
+                 (progn
+                   (set-default 'buffer-file-coding-system 'undecided-dos)
+                   (with-temp-buffer
+                     (insert "alpha\n;; Local Variables:\n;; coding: utf-8-emacs-unix\n;; End:\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     last-coding-system-used))
+               (set-default 'buffer-file-coding-system saved-default)))"#
+    ));
+
+    assert_eq!(results[0], "OK utf-8-emacs-unix");
+    assert_eq!(
+        std::fs::read(&path).expect("read generated Lisp output"),
+        b"alpha\n;; Local Variables:\n;; coding: utf-8-emacs-unix\n;; End:\n"
+    );
+}
+
+#[test]
+fn write_region_raw_text_coding_skips_select_safe_coding_system() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("raw-cache.xml");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // GNU `choose_write_coding_system': a raw-text-type coding system is
+    // byte-faithful, so `select-safe-coding-system-function` is not consulted
+    // even when the text carries a coding cookie (here the XML declaration).
+    // Neo used to call the Lisp selector, which compares the cookie with the
+    // raw-text coding and asks for a coding system; in batch that prompt reads
+    // stdin and signals end-of-file.  The selector is installed as the global
+    // default because the Rust write path resolves the visible default value.
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'select-safe-coding-system-function))
+                 (selector-calls 0))
+             (unwind-protect
+                 (progn
+                   (fset 'raw-text-write-selector
+                         (lambda (&rest _args)
+                           (setq selector-calls (1+ selector-calls))
+                           'utf-8-unix))
+                   (set-default 'select-safe-coding-system-function
+                                'raw-text-write-selector)
+                   (with-temp-buffer
+                     (setq buffer-file-coding-system 'no-conversion)
+                     (insert "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss/>\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     (list selector-calls last-coding-system-used)))
+               (set-default 'select-safe-coding-system-function saved)
+               (fmakunbound 'raw-text-write-selector)))"#
+    ));
+
+    assert_eq!(results[0], "OK (0 no-conversion)");
+    assert_eq!(
+        std::fs::read(&path).expect("read raw cache output"),
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss/>\n"
+    );
+}
+
+#[test]
+fn unibyte_buffer_without_local_coding_forces_gnu_raw_text() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("unibyte-raw.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // Recorded from GNU 31.1 (`emacs -Q --batch`, src/fileio.c:5383-5450):
+    // a fresh unibyte buffer with no buffer-local `buffer-file-coding-system`
+    // takes the first `force_raw_text` source (fileio.c:5389-5393), so
+    // `last-coding-system-used` is `raw-text-unix` (the inherited utf-8-unix
+    // coding converted by `raw_text_coding_system`, fileio.c:5448-5450).
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'buffer-file-coding-system)))
+             (unwind-protect
+                 (progn
+                   (set-default 'buffer-file-coding-system 'utf-8-unix)
+                   (with-temp-buffer
+                     (set-buffer-multibyte nil)
+                     (insert "hello\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     (list (local-variable-p 'buffer-file-coding-system)
+                           last-coding-system-used)))
+               (set-default 'buffer-file-coding-system saved)))"#
+    ));
+
+    assert_eq!(results[0], "OK (nil raw-text-unix)");
+    assert_eq!(
+        std::fs::read(&path).expect("read unibyte output"),
+        b"hello\n"
+    );
+}
+
+#[test]
+fn unibyte_buffer_inherits_gnu_raw_text_eol_from_the_default_coding() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("unibyte-raw-dos.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // Recorded from GNU 31.1: with the default coding utf-8-dos and a fresh
+    // unibyte buffer, `raw_text_coding_system (utf-8-dos)` (fileio.c:5450)
+    // keeps the DOS end-of-line type: last-coding-system-used = raw-text-dos
+    // and the file is CRLF.
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'buffer-file-coding-system)))
+             (unwind-protect
+                 (progn
+                   (set-default 'buffer-file-coding-system 'utf-8-dos)
+                   (with-temp-buffer
+                     (set-buffer-multibyte nil)
+                     (insert "hello\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     last-coding-system-used))
+               (set-default 'buffer-file-coding-system saved)))"#
+    ));
+
+    assert_eq!(results[0], "OK raw-text-dos");
+    assert_eq!(
+        std::fs::read(&path).expect("read unibyte dos output"),
+        [b'h', b'e', b'l', b'l', b'o', b'\r', b'\n']
+    );
+}
+
+#[test]
+fn unibyte_buffer_with_local_coding_skips_gnu_force_raw_text() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("unibyte-local.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // Recorded from GNU 31.1: a buffer-local coding disables the unibyte
+    // force source (fileio.c:5389-5393), so the write uses that coding:
+    // last-coding-system-used = utf-8-unix.
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'buffer-file-coding-system)))
+             (unwind-protect
+                 (progn
+                   (set-default 'buffer-file-coding-system 'utf-8-dos)
+                   (with-temp-buffer
+                     (set-buffer-multibyte nil)
+                     (setq-local buffer-file-coding-system 'utf-8-unix)
+                     (insert "hello\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     last-coding-system-used))
+               (set-default 'buffer-file-coding-system saved)))"#
+    ));
+
+    assert_eq!(results[0], "OK utf-8-unix");
+    assert_eq!(
+        std::fs::read(&path).expect("read unibyte local output"),
+        b"hello\n"
+    );
+}
+
+#[test]
+fn local_raw_text_inherits_gnu_buffer_default_eol_before_force() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("local-raw-text.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // Recorded from GNU 31.1: a local raw-text coding still takes the second
+    // force source (fileio.c:5416-5423); `!using_default_coding` first
+    // inherits the buffer default's EOL (fileio.c:5437-5443), and
+    // `raw_text_coding_system` keeps it, so the result is raw-text-dos.
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'buffer-file-coding-system)))
+             (unwind-protect
+                 (progn
+                   (set-default 'buffer-file-coding-system 'raw-text-dos)
+                   (with-temp-buffer
+                     (setq-local buffer-file-coding-system 'raw-text)
+                     (insert "hello\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     last-coding-system-used))
+               (set-default 'buffer-file-coding-system saved)))"#
+    ));
+
+    assert_eq!(results[0], "OK raw-text-dos");
+    assert_eq!(
+        std::fs::read(&path).expect("read local raw-text output"),
+        [b'h', b'e', b'l', b'l', b'o', b'\r', b'\n']
+    );
+}
+
+#[test]
+fn local_selectable_coding_inherits_gnu_buffer_default_eol_after_selecting() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("local-utf8.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // Recorded from GNU 31.1: after `select-safe-coding-system` returns the
+    // local utf-8, `!using_default_coding` inherits the buffer default's
+    // utf-8-dos end-of-line type (fileio.c:5437-5443).
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'buffer-file-coding-system)))
+             (unwind-protect
+                 (progn
+                   (set-default 'buffer-file-coding-system 'utf-8-dos)
+                   (with-temp-buffer
+                     (setq-local buffer-file-coding-system 'utf-8)
+                     (insert "hello\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     last-coding-system-used))
+               (set-default 'buffer-file-coding-system saved)))"#
+    ));
+
+    assert_eq!(results[0], "OK utf-8-dos");
+    assert_eq!(
+        std::fs::read(&path).expect("read local utf-8 output"),
+        [b'h', b'e', b'l', b'l', b'o', b'\r', b'\n']
+    );
+}
+
+#[test]
+fn write_region_uses_runtime_shift_jis_codec() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("shift-jis.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(with-temp-buffer
+             (insert "日本\n")
+             (setq buffer-file-coding-system 'japanese-shift-jis-unix)
+             (write-region nil nil "{path_lisp}" nil 'silent))"#
+    ));
+
+    assert_eq!(results[0], "OK nil");
+    assert_eq!(
+        std::fs::read(&path).expect("read Shift-JIS output"),
+        [0x93, 0xfa, 0x96, 0x7b, b'\n']
+    );
+}
+
+#[test]
+fn write_region_uses_iso2022_file_stream_boundary() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("iso-2022-jp.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(let ((text "日本語の設計"))
+             (let ((coding-system-for-write 'iso-2022-jp))
+               (with-temp-buffer
+                 (insert text)
+                 (write-region nil nil "{path_lisp}" nil 'silent)))
+             (string-to-list (encode-coding-string text 'iso-2022-jp)))"#
+    ));
+
+    assert_eq!(
+        results[0],
+        "OK (27 36 66 70 124 75 92 56 108 36 78 64 95 55 87 27 40 66)"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("read ISO-2022-JP output"),
+        [27, 36, 66, 70, 124, 75, 92, 56, 108, 36, 78, 64, 95, 55, 87]
+    );
+}
+
+#[test]
+fn insert_file_contents_honors_dynamic_big5_coding_system_for_read() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("big5.txt");
+    fs::write(&path, [0xa4, 0x40, b'\r', b'\n']).expect("write Big5 fixture");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(let ((coding-system-for-read
+                  (coding-system-change-eol-conversion 'big5 'unix)))
+             (with-temp-buffer
+               (insert-file-contents "{path_lisp}")
+               (list (special-variable-p 'coding-system-for-read)
+                     (equal (string-to-list (buffer-string)) '(19968 13 10))
+                     last-coding-system-used)))"#
+    ));
+
+    assert_eq!(results[0], "OK (t t chinese-big5-unix)");
+}
+
+#[test]
+fn insert_file_contents_honors_dynamic_gb2312_coding_system_for_read() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gb2312.txt");
+    fs::write(&path, [0xd2, 0xbb, b'\r', b'\n']).expect("write GB2312 fixture");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(let ((coding-system-for-read
+                  (coding-system-change-eol-conversion 'cn-gb-2312 'unix)))
+             (with-temp-buffer
+               (insert-file-contents "{path_lisp}")
+               (list (special-variable-p 'coding-system-for-read)
+                     (equal (string-to-list (buffer-string)) '(19968 13 10))
+                     last-coding-system-used)))"#
+    ));
+
+    assert_eq!(results[0], "OK (t t chinese-iso-8bit-unix)");
+}
+
+#[test]
+fn insert_file_contents_consults_file_coding_system_alist_when_auto_coding_declines() {
+    crate::test_utils::init_test_tracing();
+
+    // Live GNU (emacs -Q --batch), pure-ASCII fixture:
+    //   before modify-coding-system-alist -> undecided-unix
+    //   after  modify-coding-system-alist -> utf-8-unix
+    // scala-mode registers exactly such an entry from its autoloads
+    // (scala-mode-autoloads.el:49), which is what promotes its .sbt and
+    // .worksheet.sc buffers.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("promoted.sbt");
+    fs::write(&path, b"ThisBuild / scalaVersion := \"2.13.16\"\n").expect("write ASCII fixture");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(list (with-temp-buffer
+                   (insert-file-contents "{path_lisp}")
+                   last-coding-system-used)
+                 (let ((file-coding-system-alist
+                        (cons (cons "\\.sbt\\'" (cons 'utf-8 'utf-8))
+                              file-coding-system-alist)))
+                   (with-temp-buffer
+                     (insert-file-contents "{path_lisp}")
+                     last-coding-system-used)))"#
+    ));
+
+    assert_eq!(results[0], "OK (undecided-unix utf-8-unix)");
+}
+
+#[test]
+fn insert_file_contents_prefers_auto_coding_over_file_coding_system_alist() {
+    crate::test_utils::init_test_tracing();
+
+    // GNU asks `file-coding-system-alist' only when `set-auto-coding-function'
+    // declined (src/fileio.c:4411-4420, :5057-5066), so a `coding:' cookie
+    // outranks a matching alist entry.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("cookie.sbt");
+    fs::write(
+        &path,
+        [
+            b'%', b' ', b'-', b'*', b'-', b' ', b'c', b'o', b'd', b'i', b'n', b'g', b':', b' ',
+            b'c', b'n', b'-', b'g', b'b', b'-', b'2', b'3', b'1', b'2', b' ', b'-', b'*', b'-',
+            b'\n', 0xd2, 0xbb, b'\n',
+        ],
+    )
+    .expect("write cookie fixture");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(let ((file-coding-system-alist
+                  (cons (cons "\\.sbt\\'" (cons 'utf-8 'utf-8))
+                        file-coding-system-alist)))
+             (with-temp-buffer
+               (insert-file-contents "{path_lisp}")
+               last-coding-system-used))"#
+    ));
+
+    assert_eq!(results[0], "OK chinese-iso-8bit-unix");
+}
+
+#[test]
+fn insert_file_contents_uses_set_auto_coding_function_for_coding_cookie() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("pinyin-cookie.map");
+    fs::write(
+        &path,
+        [
+            b'%', b' ', b'-', b'*', b'-', b' ', b'c', b'o', b'd', b'i', b'n', b'g', b':', b' ',
+            b'c', b'n', b'-', b'g', b'b', b'-', b'2', b'3', b'1', b'2', b' ', b'-', b'*', b'-',
+            b'\r', b'\n', 0xd2, 0xbb, b'\r', b'\n',
+        ],
+    )
+    .expect("write GB2312 coding-cookie fixture");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let results = bootstrap_eval(&format!(
+        r#"(with-temp-buffer
+             (insert-file-contents "{path_lisp}")
+             (let ((codes (string-to-list (buffer-string))))
+               (list last-coding-system-used
+                     (not (null (memq 19968 codes)))
+                     (null (memq 13 codes)))))"#
+    ));
+
+    assert_eq!(results[0], "OK (chinese-iso-8bit-dos t t)");
+}
+
+#[test]
+fn insert_file_contents_empty_buffer_auto_coding_uses_current_buffer_like_gnu() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("empty-buffer-auto-coding.txt");
+    fs::write(&path, b"alpha\n").expect("write fixture");
+    let path_str = path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+             (defalias 'neovm-test-set-auto-coding-function
+               (lambda (_filename _size)
+                 (setq neovm-test-auto-coding-buffer
+                       (buffer-name (current-buffer)))
+                 nil))
+             (setq set-auto-coding-function
+                   'neovm-test-set-auto-coding-function))"#,
+    )
+    .expect("install set-auto-coding-function probe");
+
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)])
+        .expect("insert-file-contents should succeed");
+
+    assert_eq!(
+        eval.visible_variable_value_or_nil("neovm-test-auto-coding-buffer")
+            .as_utf8_str(),
+        Some("*scratch*")
+    );
+    assert!(
+        eval.edit
+            .buffers
+            .find_buffer_by_name(" *code-converting-work*")
+            .is_none(),
+        "GNU's empty-buffer insert-file-contents path does not create the work buffer"
+    );
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .buffer_string(),
+        "alpha\n"
+    );
+}
+
+#[test]
+fn insert_file_contents_sets_last_coding_before_after_insert_file_set_coding() {
+    crate::test_utils::init_test_tracing();
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("neovm-test")
+        .join(format!(
+            "insert-file-coding-order-{}-{unique}",
+            std::process::id()
+        ));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("dos.txt");
+    fs::write(&path, b"alpha\r\nbeta\r\n").expect("write dos fixture");
+    let path_str = path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+             (setq neovm-seen-insert-file-coding nil)
+             (defalias 'after-insert-file-set-coding
+               (lambda (inserted visit)
+                 (setq neovm-seen-insert-file-coding last-coding-system-used)
+                 inserted)))"#,
+    )
+    .expect("install after-insert-file-set-coding probe");
+
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)])
+        .expect("insert-file-contents should decode dos fixture");
+
+    assert_eq!(
+        format_eval_result(&eval.eval_str("neovm-seen-insert-file-coding")),
+        "OK undecided-dos"
+    );
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(buf.buffer_string(), "alpha\nbeta\n");
+}
+
+#[test]
+fn decode_insert_file_contents_defaults_to_gnu_utf8_coding_for_non_ascii_text() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    let decoded =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            "alpha cafe\n".as_bytes(),
+            true,
+            None,
+        )
+        .expect("decode utf-8 text");
+    assert_eq!(decoded.text().as_utf8_str(), Some("alpha cafe\n"));
+    assert_eq!(decoded.coding, "undecided-unix");
+
+    let decoded =
+        neovm_system::emacs_core::fileio::test_support::decode_insert_file_contents_for_test(
+            &mut eval,
+            "alpha caf\u{00E9}\n".as_bytes(),
+            true,
+            None,
+        )
+        .expect("decode utf-8 accented text");
+    assert_eq!(decoded.text().as_utf8_str(), Some("alpha caf\u{00E9}\n"));
+    assert_eq!(decoded.coding, "utf-8-unix");
+}
+
+/// With no newline bytes, GNU's undecided decoder has no EOL evidence, so
+/// `after-insert-file-set-coding` leaves the new buffer's default
+/// `utf-8-unix` coding intact.  In particular, the EOL component is Unix (0),
+/// not undecided/nil; this is the third `U` in the TTY mode-line `UUU`.
+#[test]
+fn find_file_ascii_without_newline_keeps_gnu_default_utf8_unix_eol() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("ascii-without-newline.txt");
+    fs::write(&path, b"ab").expect("write no-newline ASCII fixture");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let mut eval = crate::test_utils::runtime_startup_context();
+
+    let result = eval
+        .eval_str(&format!(
+            r##"(progn
+                   ;; `runtime_startup_context` ends at loadup.  Startup then
+                   ;; derives UTF-8 from this test host's C.UTF-8 locale; mirror
+                   ;; that GNU `-Q` state explicitly here.
+                   (set-language-environment "UTF-8")
+                   (let ((buffer (find-file-noselect "{path_lisp}")))
+                     (with-current-buffer buffer
+                       (list (default-value 'buffer-file-coding-system)
+                             buffer-file-coding-system
+                             (coding-system-eol-type
+                              buffer-file-coding-system)))))"##
+        ))
+        .expect("visit no-newline ASCII file");
+
+    assert_eq!(format!("{result}"), "(utf-8-unix utf-8-unix 0)");
+}
+
+/// An ASCII `.el` file with LF evidence is decoded as `utf-8-unix`, then GNU's
+/// `after-insert-file-set-coding` preserves the file-alist preference by
+/// publishing `prefer-utf-8-unix` on the visited buffer.  That coding system
+/// deliberately declares the `-` mnemonic despite containing `utf-8` in its
+/// name.
+#[test]
+fn find_file_ascii_elisp_with_newline_publishes_prefer_utf8_unix_coding() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("ascii-with-newline.el");
+    fs::write(&path, b"(message \"ascii\")\n").expect("write ASCII fixture");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let mut eval = crate::test_utils::runtime_startup_context();
+
+    let result = eval
+        .eval_str(&format!(
+            r##"(progn
+                   (set-language-environment "UTF-8")
+                   ;; This checks the file decoder, not subsequent VC I/O.
+                   ;; A repository-local TMPDIR enables vc-refresh-state's
+                   ;; Git subprocesses; GNU callproc.c publishes their coding
+                   ;; as last-coding-system-used after the file was decoded.
+                   (let* ((vc-handled-backends nil)
+                          (buffer (find-file-noselect "{path_lisp}")))
+                     (with-current-buffer buffer
+                       (list last-coding-system-used
+                             buffer-file-coding-system))))"##
+        ))
+        .expect("visit newline-terminated ASCII file");
+
+    assert_eq!(format!("{result}"), "(prefer-utf-8-unix prefer-utf-8-unix)");
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_insert_file_contents_handles_raw_unibyte_filename() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = raw_temp_path(b"neovm-insert-file-\xFF");
+    let _ = fs::remove_dir_all(&dir);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
+
+    let path = dir.join(std::ffi::OsStr::from_bytes(b"visit-\xFE"));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&path, b"raw file")) else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let result = builtin_insert_file_contents(&mut eval, vec![raw_path_value(&path), Value::T])
+        .expect("insert-file-contents should accept raw-byte filenames");
+    let parts = list_to_vec(&result).expect("insert-file-contents should return list");
+    assert_unibyte_string_bytes(parts[0], path.as_os_str().as_bytes());
+
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(buf.buffer_string(), "raw file");
+    assert_unibyte_string_bytes(buf.file_name_value(), path.as_os_str().as_bytes());
+    assert!(!buf.is_modified());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_insert_file_contents_visit_rejects_partial_and_nonempty_visits() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_insert_file_contents_visit_errors");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("visit.txt");
+    let path_str = path.to_string_lossy().to_string();
+    write_string_to_file("visited text", &path_str, false).unwrap();
+
+    let mut eval_partial = crate::emacs_core::eval_hook_installers::new_context();
+    let partial = builtin_insert_file_contents(
+        &mut eval_partial,
+        vec![Value::string(&path_str), Value::T, Value::fixnum(0)],
+    )
+    .expect_err("visit with BEG should reject");
+    match partial.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "error");
+            assert_eq!(
+                sig.data,
+                vec![Value::string("Attempt to visit less than an entire file")]
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+
+    let mut eval_nonempty = crate::emacs_core::eval_hook_installers::new_context();
+    eval_nonempty
+        .edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert("x");
+    let nonempty =
+        builtin_insert_file_contents(&mut eval_nonempty, vec![Value::string(&path_str), Value::T])
+            .expect_err("visit in non-empty buffer without replace should reject");
+    match nonempty.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "error");
+            assert_eq!(
+                sig.data,
+                vec![Value::string(
+                    "Cannot do file visiting in a non-empty buffer"
+                )]
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn insert_file_contents_visit_decodes_text_enriched_formats() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = std::env::temp_dir().join("neovm_eval_insert_file_contents_text_enriched");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("hello.enriched");
+    fs::write(
+        &path,
+        concat!(
+            "Content-Type: text/enriched\n",
+            "\n",
+            "<x-color><param>orange red</param>hello</x-color>\n",
+        ),
+    )
+    .unwrap();
+
+    let path_str = path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+             (defalias 'format-decode
+               (lambda (_format len _visit)
+                 (delete-region (point-min) (point-max))
+                 (insert "hello\n")
+                 (setq buffer-file-format '(text/enriched))
+                 6))
+             (setq after-insert-file-functions
+                   (list (lambda (len)
+                           (setq enriched-mode t)
+                           len))))"#,
+    )
+    .expect("stub format decode setup");
+
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str), Value::T])
+        .expect("insert-file-contents should decode text/enriched");
+
+    assert_eq!(
+        format_eval_result(&eval.eval_str("buffer-file-format")),
+        "OK (text/enriched)"
+    );
+    assert_eq!(format_eval_result(&eval.eval_str("enriched-mode")), "OK t");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(buf.buffer_string(), "hello\n");
+    assert_eq!(
+        buf.file_name_runtime_string_owned().as_deref(),
+        Some(path_str.as_str())
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A file name handler only replaces the *reading* part of
+/// `insert-file-contents`.  GNU refuses a read-only buffer before calling it
+/// (src/fileio.c:4146-4147); afterwards the handler branch takes INSERTED
+/// from the handler's `(FILE N)` when N fits after point (:4168-4170) and
+/// does `goto handled` (:4171), so the post-insert tail still runs -- the
+/// VISIT bookkeeping (:5148-5169), `after-insert-file-set-coding`
+/// (:5174-5184), and, when INSERTED > 0, `format-decode` and
+/// `after-insert-file-functions` (:5189-5306) -- and the handler's own value
+/// is returned, or `(FILE INSERTED)` when it is nil (:5331-5332).  Handlers
+/// that decode the text themselves (jka-compr, epa-file, url-handlers) rely
+/// on this for `buffer-file-coding-system`.
+///
+/// Expected values are verified against the pinned GNU 31.1 oracle below.
+#[test]
+fn insert_file_contents_runs_post_insert_steps_after_a_file_name_handler() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(include_str!("insert_file_handler.el"));
+    assert_eq!(results[0], "OK nil");
+    // The coding system follows `last-coding-system-used`, and the hook sees
+    // the handler's count with point before the inserted text.
+    assert_eq!(
+        results[1],
+        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 1 t)) "héllo")"#
+    );
+    // VISIT: the buffer is already unmodified when the hook runs, the undo
+    // list of an initially empty buffer is discarded, and save_length is set.
+    assert_eq!(
+        results[2],
+        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 1 nil)) nil nil 5)"#
+    );
+    // N beyond ZV - PT: INSERTED is 0, so the coding system is still set but
+    // `format-decode` and the hooks are skipped; the value is the handler's.
+    assert_eq!(results[3], r#"OK (("/vm-ifc:x" 99) utf-8-unix nil)"#);
+    // A nil value is replaced by (FILE INSERTED).
+    assert_eq!(results[4], r#"OK (("/vm-ifc:x" 0) nil)"#);
+    // A read-only buffer is refused before the handler is called.
+    assert_eq!(results[5], "OK (buffer-read-only 0)");
+    // Indirect-buffer visits are refused before dispatch too.
+    assert_eq!(
+        results[6],
+        r#"OK ("Cannot do file visiting in an indirect buffer" 0)"#
+    );
+    // Decode runs before the hook, and an out-of-range count skips both.
+    assert_eq!(
+        results[7],
+        r#"OK ((("/vm-ifc:x" 5) ((format-decode 5 1 nil) (after-insert 5 1 t))) (("/vm-ifc:x" 99) nil))"#
+    );
+}
+
+#[test]
+fn insert_file_contents_handler_matches_live_gnu() {
+    crate::test_utils::init_test_tracing();
+    let forms = include_str!("insert_file_handler.el");
+    let gnu_form =
+        format!("(mapc (lambda (form) (princ \"OK \") (prin1 (eval form)) (terpri)) '({forms}))");
+    let output = crate::test_utils::gnu_probe_command()
+        .args(["-Q", "--batch", "--eval", &gnu_form])
+        .output()
+        .expect("run pinned GNU Emacs oracle");
+    assert!(
+        output.status.success(),
+        "GNU handler oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let gnu = String::from_utf8(output.stdout).expect("GNU oracle UTF-8 output");
+    assert_eq!(
+        bootstrap_eval(forms),
+        gnu.lines().collect::<Vec<_>>(),
+        "file name handler post-insert behavior must match pinned GNU"
+    );
+}
+
+#[test]
+fn test_insert_file_contents_beg_end_semantics() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_insert_file_contents_beg_end");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("slice.txt");
+    let path_str = path.to_string_lossy().to_string();
+    write_string_to_file("abcdef", &path_str, false).unwrap();
+
+    let mut eval_slice = crate::emacs_core::eval_hook_installers::new_context();
+    let inserted = builtin_insert_file_contents(
+        &mut eval_slice,
+        vec![
+            Value::string(&path_str),
+            Value::NIL,
+            Value::fixnum(2),
+            Value::fixnum(4),
+        ],
+    )
+    .expect("insert-file-contents 2..4 should succeed");
+    assert_eq!(
+        list_to_vec(&inserted).unwrap()[1],
+        Value::fixnum(2),
+        "inserted char count should match slice length"
+    );
+    assert_eq!(
+        eval_slice
+            .edit
+            .buffers
+            .current_buffer()
+            .unwrap()
+            .buffer_string(),
+        "cd",
+        "slice 2..4 should insert 'cd'"
+    );
+
+    let mut eval_empty = crate::emacs_core::eval_hook_installers::new_context();
+    let inserted_zero = builtin_insert_file_contents(
+        &mut eval_empty,
+        vec![
+            Value::string(&path_str),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::fixnum(2),
+        ],
+    )
+    .expect("insert-file-contents start>end should succeed with empty insertion");
+    assert_eq!(list_to_vec(&inserted_zero).unwrap()[1], Value::fixnum(0));
+    assert_eq!(
+        eval_empty
+            .edit
+            .buffers
+            .current_buffer()
+            .unwrap()
+            .buffer_string(),
+        ""
+    );
+
+    let mut eval_tail = crate::emacs_core::eval_hook_installers::new_context();
+    let inserted_tail = builtin_insert_file_contents(
+        &mut eval_tail,
+        vec![
+            Value::string(&path_str),
+            Value::NIL,
+            Value::fixnum(2),
+            Value::fixnum(99),
+        ],
+    )
+    .expect("insert-file-contents end beyond file should clamp");
+    assert_eq!(list_to_vec(&inserted_tail).unwrap()[1], Value::fixnum(4));
+    assert_eq!(
+        eval_tail
+            .edit
+            .buffers
+            .current_buffer()
+            .unwrap()
+            .buffer_string(),
+        "cdef"
+    );
+
+    let mut eval_bad = crate::emacs_core::eval_hook_installers::new_context();
+    let bad_offset = builtin_insert_file_contents(
+        &mut eval_bad,
+        vec![
+            Value::string(&path_str),
+            Value::NIL,
+            Value::fixnum(-1),
+            Value::fixnum(2),
+        ],
+    )
+    .expect_err("negative BEG should reject with file-offset predicate");
+    match bad_offset.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("file-offset"), Value::fixnum(-1)]
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_insert_file_contents_and_write_region_arity_bounds() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_fileio_arity_bounds");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let file_path = dir.join("arity.txt");
+    let file_str = file_path.to_string_lossy().to_string();
+    write_string_to_file("", &file_str, false).unwrap();
+
+    let mut eval_insert_ok = crate::emacs_core::eval_hook_installers::new_context();
+    let insert_ok = builtin_insert_file_contents(
+        &mut eval_insert_ok,
+        vec![
+            Value::string(&file_str),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .expect("5-arg insert-file-contents should succeed");
+    assert_eq!(list_to_vec(&insert_ok).unwrap()[1], Value::fixnum(0));
+
+    let mut eval_insert_bad = crate::emacs_core::eval_hook_installers::new_context();
+    let insert_bad = builtin_insert_file_contents(
+        &mut eval_insert_bad,
+        vec![
+            Value::string(&file_str),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .expect_err("6-arg insert-file-contents should fail");
+    match insert_bad.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("insert-file-contents"), Value::fixnum(6)]
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+
+    let out_path = dir.join("arity-out.txt");
+    let out_str = out_path.to_string_lossy().to_string();
+
+    let mut eval_write_ok = crate::emacs_core::eval_hook_installers::new_context();
+    eval_write_ok
+        .edit
+        .buffers
+        .current_buffer_mut()
+        .unwrap()
+        .insert("x");
+    builtin_write_region(
+        &mut eval_write_ok,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(&out_str),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .expect("7-arg write-region should succeed");
+
+    let mut eval_write_bad = crate::emacs_core::eval_hook_installers::new_context();
+    eval_write_bad
+        .edit
+        .buffers
+        .current_buffer_mut()
+        .unwrap()
+        .insert("x");
+    let write_bad = builtin_write_region(
+        &mut eval_write_bad,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(&out_str),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .expect_err("8-arg write-region should fail");
+    match write_bad.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("write-region"), Value::fixnum(8)]
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_find_file_noselect_arity_bounds() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_find_file_noselect_arity");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let file_path = dir.join("arity.txt");
+    let file_str = file_path.to_string_lossy().to_string();
+    write_string_to_file("", &file_str, false).unwrap();
+
+    let mut eval_ok = crate::emacs_core::eval_hook_installers::new_context();
+    let ok = builtin_find_file_noselect(
+        &mut eval_ok,
+        vec![Value::string(&file_str), Value::NIL, Value::NIL, Value::NIL],
+    )
+    .expect("4-arg find-file-noselect should succeed");
+    assert!(ok.is_buffer());
+
+    let mut eval_bad = crate::emacs_core::eval_hook_installers::new_context();
+    let bad = builtin_find_file_noselect(
+        &mut eval_bad,
+        vec![
+            Value::string(&file_str),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .expect_err("5-arg find-file-noselect should fail");
+    match bad.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("find-file-noselect"), Value::fixnum(5)]
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_eval_fileio_relative_paths_respect_default_directory() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_fileio_relative");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let alpha_path = dir.join("alpha.txt");
+    fs::write(&alpha_path, "alpha\n").unwrap();
+    let alpha_str = alpha_path.to_string_lossy().to_string();
+    let out_path = dir.join("out.txt");
+    let out_str = out_path.to_string_lossy().to_string();
+    let default_dir = format!("{}/", dir.to_string_lossy());
+
+    let mut eval_insert = crate::emacs_core::eval_hook_installers::new_context();
+    eval_insert.set_variable("default-directory", Value::string(&default_dir));
+    let inserted =
+        builtin_insert_file_contents(&mut eval_insert, vec![Value::string("alpha.txt")]).unwrap();
+    let inserted_parts = list_to_vec(&inserted).unwrap();
+    assert_eq!(inserted_parts[0].as_utf8_str(), Some(alpha_str.as_str()));
+    let ibuf = eval_insert.edit.buffers.current_buffer().unwrap();
+    assert_eq!(ibuf.buffer_string(), "alpha\n");
+
+    let mut eval_write = crate::emacs_core::eval_hook_installers::new_context();
+    eval_write.set_variable("default-directory", Value::string(&default_dir));
+    eval_write
+        .edit
+        .buffers
+        .current_buffer_mut()
+        .unwrap()
+        .insert("neo");
+    builtin_write_region(
+        &mut eval_write,
+        vec![Value::NIL, Value::NIL, Value::string("out.txt")],
+    )
+    .unwrap();
+    assert_eq!(read_file_contents(&out_str).unwrap(), "neo");
+
+    let mut eval_find = crate::emacs_core::eval_hook_installers::new_context();
+    eval_find.set_variable("default-directory", Value::string(&default_dir));
+    let found =
+        builtin_find_file_noselect(&mut eval_find, vec![Value::string("alpha.txt")]).unwrap();
+    if !found.is_buffer() {
+        panic!("expected Buffer");
+    };
+    let buf_id = found.as_buffer_id().unwrap();
+    let fbuf = eval_find.edit.buffers.get(buf_id).unwrap();
+    assert_eq!(fbuf.buffer_string(), "alpha\n");
+    assert_eq!(
+        fbuf.file_name_runtime_string_owned().as_deref(),
+        Some(alpha_str.as_str())
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_write_region_bounds_and_order_semantics() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_write_region_bounds");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let out_path = dir.join("out.txt");
+    let out_str = out_path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .unwrap()
+        .insert("abc");
+    let current = Value::make_buffer(eval.edit.buffers.current_buffer().unwrap().id());
+
+    builtin_write_region(
+        &mut eval,
+        vec![Value::fixnum(3), Value::fixnum(1), Value::string(&out_str)],
+    )
+    .expect("write-region should accept reversed in-range bounds");
+    assert_eq!(read_file_contents(&out_str).unwrap(), "ab");
+
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let marker_start = neovm_edit::emacs_core::marker::make_marker_value(
+        Some(buffer_id),
+        Some(neovm_edit::buffer::LispCharPos1::new(2)),
+        false,
+    );
+    let marker_end = neovm_edit::emacs_core::marker::make_marker_value(
+        Some(buffer_id),
+        Some(neovm_edit::buffer::LispCharPos1::new(4)),
+        false,
+    );
+    builtin_write_region(
+        &mut eval,
+        vec![marker_start, marker_end, Value::string(&out_str)],
+    )
+    .expect("write-region should accept marker bounds");
+    assert_eq!(read_file_contents(&out_str).unwrap(), "bc");
+
+    for (start, end) in [(-1, 2), (1, -1), (1, 9)] {
+        let err = builtin_write_region(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                Value::string(&out_str),
+            ],
+        )
+        .expect_err("out-of-range bounds should signal");
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
+                assert_eq!(sig.symbol_name(), "args-out-of-range");
+                assert_eq!(
+                    sig.data,
+                    vec![current, Value::fixnum(start), Value::fixnum(end)]
+                );
+            }
+            other => panic!("unexpected flow: {other:?}"),
+        }
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_write_region_mustbenew_excl_semantics() {
+    // GNU `Fwrite_region` MUSTBENEW handling (src/fileio.c):
+    //   open_flags |= EQ (mustbenew, Qexcl) ? O_EXCL : ...
+    // When MUSTBENEW is `excl` and the file already exists, the O_EXCL open
+    // fails with EEXIST, which `get_file_errno_data` turns into
+    //   (file-already-exists "File exists" FILENAME).
+    // When the file does not exist, the write succeeds normally.
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_write_region_excl");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    // --- excl on a NON-existent file: succeeds and writes content. ---
+    let new_path = dir.join("brand-new.txt");
+    let new_str = new_path.to_string_lossy().to_string();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.edit.buffers.current_buffer_mut().unwrap().insert("hi");
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(&new_str),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::symbol("excl"),
+        ],
+    )
+    .expect("excl write-region to a new file should succeed");
+    assert_eq!(read_file_contents(&new_str).unwrap(), "hi");
+
+    // --- excl on an EXISTING file: signals file-already-exists. ---
+    let err = builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(&new_str),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::symbol("excl"),
+        ],
+    )
+    .expect_err("excl write-region to an existing file should signal");
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "file-already-exists");
+            // GNU data: (file-already-exists "File exists" FILENAME)
+            assert_eq!(
+                sig.data,
+                vec![Value::string("File exists"), Value::string(&new_str)],
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+    // The pre-existing content must be untouched by the failed excl write.
+    assert_eq!(read_file_contents(&new_str).unwrap(), "hi");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_write_region_visit_sets_file_name_and_clears_modified() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_write_region_visit");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let out_path = dir.join("visited.txt");
+    let out_str = out_path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable("noninteractive", Value::NIL);
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .unwrap()
+        .insert("neo");
+    assert!(eval.edit.buffers.current_buffer().unwrap().is_modified());
+
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(&out_str),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("write-region with visit should succeed");
+
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(
+        buf.file_name_runtime_string_owned().as_deref(),
+        Some(out_str.as_str())
+    );
+    assert!(
+        buf.buffer_local_value("buffer-file-truename")
+            .unwrap_or(Value::NIL)
+            .is_nil()
+    );
+    assert!(!buf.is_modified());
+    assert_eq!(read_file_contents(&out_str).unwrap(), "neo");
+    let expected_message = format!("Wrote {}", out_str);
+    assert_eq!(
+        eval.current_message_text().as_deref(),
+        Some(expected_message.as_str())
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn write_region_reports_nonvisiting_interactive_operation() {
+    crate::test_utils::init_test_tracing();
+
+    let dir =
+        std::env::temp_dir().join(format!("neovm_write_region_report_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    for (label, append, initial, expected_prefix) in [
+        ("truncate", Value::NIL, "old", "Wrote "),
+        ("append", Value::T, "old", "Added to "),
+        ("seek", Value::fixnum(1), "old", "Updated "),
+    ] {
+        let out_path = dir.join(format!("{label}.txt"));
+        let out_str = out_path.to_string_lossy().to_string();
+        write_string_to_file(initial, &out_str, false).unwrap();
+
+        let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+        eval.set_variable("noninteractive", Value::NIL);
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .unwrap()
+            .insert("neo");
+        builtin_write_region(
+            &mut eval,
+            vec![
+                Value::NIL,
+                Value::NIL,
+                Value::string(&out_str),
+                append,
+                Value::NIL,
+            ],
+        )
+        .expect("non-visiting write-region should succeed");
+
+        assert_eq!(
+            eval.current_message_text().as_deref(),
+            Some(format!("{expected_prefix}{out_str}").as_str()),
+            "GNU reports the completed write operation even when VISIT is nil"
+        );
+        let buffer = eval.edit.buffers.current_buffer().expect("current buffer");
+        assert!(
+            buffer.file_name_value().is_nil(),
+            "VISIT=nil must not make the buffer visit the output"
+        );
+        assert!(
+            buffer.is_modified(),
+            "VISIT=nil must not mark the source buffer saved"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn write_region_unlocks_a_successfully_saved_file() {
+    crate::test_utils::init_test_tracing();
+
+    let dir =
+        std::env::temp_dir().join(format!("neovm_write_region_unlock_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let out_path = dir.join("visited.txt");
+    let lock_path = dir.join(".#visited.txt");
+    let out_str = out_path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable("create-lockfiles", Value::T);
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .unwrap()
+        .insert("neo");
+    crate::emacs_core::filelock::builtin_lock_file(&mut eval, vec![Value::string(&out_str)])
+        .expect("first modification should lock the visited file");
+    assert!(
+        fs::symlink_metadata(&lock_path).is_ok(),
+        "precondition: a dangling Emacs lock symlink exists"
+    );
+
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(&out_str),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("write-region with visit should save the buffer");
+
+    assert!(
+        matches!(
+            fs::symlink_metadata(&lock_path),
+            Err(error) if error.kind() == io::ErrorKind::NotFound
+        ),
+        "GNU unlocks LOCKNAME after write-region closes the file"
+    );
+    assert!(!eval.edit.buffers.current_buffer().unwrap().is_modified());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn write_region_unlocks_explicit_lockname_after_open_error() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = std::env::temp_dir().join(format!(
+        "neovm_write_region_error_unlock_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let out_path = dir.join("missing-parent/out.txt");
+    let lock_target = dir.join("logical-visit.txt");
+    let lock_path = dir.join(".#logical-visit.txt");
+    let out_str = out_path.to_string_lossy().to_string();
+    let lock_target_str = lock_target.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable("create-lockfiles", Value::T);
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .unwrap()
+        .insert("neo");
+    crate::emacs_core::filelock::builtin_lock_file(
+        &mut eval,
+        vec![Value::string(&lock_target_str)],
+    )
+    .expect("pre-existing explicit lock");
+    assert!(fs::symlink_metadata(&lock_path).is_ok());
+
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(&out_str),
+            Value::NIL,
+            Value::NIL,
+            Value::string(&lock_target_str),
+        ],
+    )
+    .expect_err("opening an output below a missing directory must fail");
+
+    assert!(
+        matches!(
+            fs::symlink_metadata(&lock_path),
+            Err(error) if error.kind() == io::ErrorKind::NotFound
+        ),
+        "GNU unlocks an explicit LOCKNAME when write-region fails after locking"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_write_region_visit_updates_recorded_modtime_and_size() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_write_region_modtime");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let out_path = dir.join("visited.txt");
+    fs::write(&out_path, b"a").unwrap();
+    let out_str = out_path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
+        .set_buffer_file_name(current, Value::string(&out_str))
+        .expect("set visited file");
+    builtin_set_visited_file_modtime(&mut eval, vec![Value::NIL])
+        .expect("record initial visited file modtime");
+
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .unwrap()
+        .insert("a\nb\n");
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(&out_str),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("write-region with visit should succeed");
+
+    assert_eq!(
+        builtin_verify_visited_file_modtime(&mut eval, vec![])
+            .expect("verify-visited-file-modtime after visiting write"),
+        Value::T
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_write_region_string_start_numeric_append_and_visit_string_semantics() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_write_region_string_append");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let out_path = dir.join("out.txt");
+    let out_str = out_path.to_string_lossy().to_string();
+    let visit_path = dir.join("visit.txt");
+    let visit_str = visit_path.to_string_lossy().to_string();
+    write_string_to_file("abcde", &out_str, false).unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .unwrap()
+        .insert("buffer text");
+    assert!(eval.edit.buffers.current_buffer().unwrap().is_modified());
+
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::string("XY"),
+            Value::NIL,
+            Value::string(&out_str),
+            Value::fixnum(2),
+            Value::string(&visit_str),
+        ],
+    )
+    .expect("write-region string start with numeric append should succeed");
+
+    assert_eq!(read_file_contents(&out_str).unwrap(), "abXYe");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(
+        buf.file_name_runtime_string_owned().as_deref(),
+        Some(visit_str.as_str())
+    );
+    assert!(!buf.is_modified());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_write_region_preserves_unibyte_raw_bytes() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = std::env::temp_dir().join("neovm_eval_write_region_raw_bytes");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let out_path = dir.join("buffer.bin");
+    let out_str = out_path.to_string_lossy().to_string();
+    let out2_path = dir.join("string.bin");
+    let out2_str = out2_path.to_string_lossy().to_string();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    {
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
+        buf.set_multibyte_value(false);
+        buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_unibyte(vec![
+            0xFF,
+        ]));
+    }
+
+    builtin_write_region(
+        &mut eval,
+        vec![Value::NIL, Value::NIL, Value::string(&out_str)],
+    )
+    .expect("write-region should preserve raw buffer bytes");
+    assert_eq!(fs::read(&out_path).unwrap(), vec![0xFF]);
+
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+                0xFE, 0xFF,
+            ])),
+            Value::NIL,
+            Value::string(&out2_str),
+        ],
+    )
+    .expect("write-region string payload should preserve raw bytes");
+    assert_eq!(fs::read(&out2_path).unwrap(), vec![0xFE, 0xFF]);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_write_region_handles_raw_unibyte_filename_and_visit() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = raw_temp_path(b"neovm-write-region-\xFF");
+    let _ = fs::remove_dir_all(&dir);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
+
+    let out_path = dir.join(std::ffi::OsStr::from_bytes(b"buffer-\xFE"));
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable("make-backup-files", Value::NIL);
+    {
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
+        buf.set_multibyte_value(false);
+        buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_unibyte(vec![
+            0xFF, b'A',
+        ]));
+    }
+
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            raw_path_value(&out_path),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("write-region should accept raw-byte filenames");
+
+    assert_eq!(fs::read(&out_path).unwrap(), vec![0xFF, b'A']);
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_unibyte_string_bytes(buf.file_name_value(), out_path.as_os_str().as_bytes());
+    assert!(!buf.is_modified());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_write_region_does_not_create_backup_for_raw_unibyte_filename() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = raw_temp_path(b"neovm-write-region-no-backup-\xFF");
+    let _ = fs::remove_dir_all(&dir);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
+
+    let out_path = dir.join(std::ffi::OsStr::from_bytes(b"buffer-\xFE"));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&out_path, b"old bytes"))
+    else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
+    let backup_path = dir.join(std::ffi::OsStr::from_bytes(b"buffer-\xFE~"));
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    {
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
+        buf.set_multibyte_value(false);
+        buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_unibyte(vec![
+            0xFF, b'A',
+        ]));
+    }
+
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            raw_path_value(&out_path),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("write-region should not run save-buffer backup logic");
+
+    assert_eq!(fs::read(&out_path).unwrap(), vec![0xFF, b'A']);
+    assert!(
+        !backup_path.exists(),
+        "GNU write-region does not create backup files; backup-buffer is part of save-buffer"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_find_file_noselect() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_value::value::{ValueKind, VecLikeType};
+
+    let dir = std::env::temp_dir().join("neovm_findfile_test");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("findme.txt");
+    let path_str = path.to_string_lossy().to_string();
+
+    write_string_to_file("file content here", &path_str, false).unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    // find-file-noselect
+    let result = builtin_find_file_noselect(&mut eval, vec![Value::string(&path_str)]);
+    assert!(result.is_ok());
+    let buf_val = result.unwrap();
+    match buf_val.kind() {
+        ValueKind::Veclike(VecLikeType::Buffer) => {
+            let buf = eval
+                .edit
+                .buffers
+                .get(buf_val.as_buffer_id().unwrap())
+                .unwrap();
+            assert_eq!(buf.buffer_string(), "file content here");
+            assert!(buf.file_name_value().is_string());
+            assert!(!buf.is_modified());
+            assert!(buf.get_undo_list().is_nil());
+        }
+        _other => panic!("Expected Buffer, got {:?}", buf_val),
+    }
+
+    // Calling again with the same file should return the same buffer
+    let result2 = builtin_find_file_noselect(&mut eval, vec![Value::string(&path_str)]);
+    assert!(result2.is_ok());
+    let buf_val2 = result2.unwrap();
+    assert!(buf_val.is_buffer() && buf_val2.is_buffer());
+    assert_eq!(buf_val, buf_val2);
+
+    // Clean up
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_find_file_noselect_handles_raw_unibyte_filename() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = raw_temp_path(b"neovm-find-file-\xFF");
+    let _ = fs::remove_dir_all(&dir);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
+
+    let path = dir.join(std::ffi::OsStr::from_bytes(b"find-\xFE"));
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&path, b"file content here"))
+    else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let result = builtin_find_file_noselect(&mut eval, vec![raw_path_value(&path)])
+        .expect("find-file-noselect should accept raw-byte filename");
+    let buf_id = result.as_buffer_id().expect("buffer result");
+    let buf = eval.edit.buffers.get(buf_id).expect("buffer");
+    assert_eq!(buf.buffer_string(), "file content here");
+    assert_unibyte_string_bytes(buf.file_name_value(), path.as_os_str().as_bytes());
+
+    let result2 = builtin_find_file_noselect(&mut eval, vec![raw_path_value(&path)])
+        .expect("repeat raw find-file-noselect");
+    assert_eq!(result, result2);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn bootstrap_find_file_noselect_applies_footer_local_variables() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("locals.txt");
+    fs::write(
+        &path,
+        "headline\n\n\
+         ;; Local Variables:\n\
+         ;; tab-width: 42\n\
+         ;; End:\n",
+    )
+    .expect("write local-vars fixture");
+
+    let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    let path_str = path.to_string_lossy().to_string();
+    let rendered = format_eval_result(&eval.eval_str(&format!(
+        r#"(let ((buf (find-file-noselect {:?})))
+                 (with-current-buffer buf
+                   (list tab-width
+                         (local-variable-p 'tab-width (current-buffer))
+                         default-directory)))"#,
+        path_str
+    )));
+
+    let expected_dir = format!("{}/", dir.path().to_string_lossy());
+    assert_eq!(rendered, format!("OK (42 t {expected_dir:?})"));
+}
+
+#[test]
+fn bootstrap_find_file_noselect_runs_find_file_hook() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("hook.txt");
+    fs::write(&path, "hook body\n").expect("write hook fixture");
+
+    let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    let path_str = path.to_string_lossy().to_string();
+    let rendered = format_eval_result(&eval.eval_str(&format!(
+        r#"(let ((find-file-hook (list (lambda () (setq-local neovm-find-file-hook-ran t)))))
+                 (let ((buf (find-file-noselect {:?})))
+                   (with-current-buffer buf
+                     (list (bound-and-true-p neovm-find-file-hook-ran)
+                           buffer-file-name))))"#,
+        path_str
+    )));
+
+    assert_eq!(rendered, format!("OK (t {path_str:?})"));
+}
+
+#[test]
+fn bootstrap_find_file_noselect_undo_preserves_visited_file_contents() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("undo-visit.txt");
+    fs::write(&path, "alpha line\n").expect("write undo fixture");
+
+    let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    let path_str = path.to_string_lossy().to_string();
+    let rendered = format_eval_result(&eval.eval_str(&format!(
+        r#"(let ((buf (find-file-noselect {:?})))
+             (with-current-buffer buf
+               (goto-char (point-max))
+               (insert "omega line")
+               (condition-case _err
+                   (undo)
+                 (error nil))
+               ;; GNU's first-change entry is `(t . VISITED-FILE-MODTIME)`
+               ;; (`src/undo.c:209-223`), so its datum varies per run.  Fold it
+               ;; to whether it is the modtime `primitive-undo` will compare it
+               ;; against (`lisp/simple.el:3669-3688`); GNU prints `(t . t)`.
+               (list (buffer-string)
+                     pending-undo-list
+                     (mapcar (lambda (entry)
+                               (if (and (consp entry) (eq (car entry) t))
+                                   (cons t (equal (cdr entry)
+                                                  (visited-file-modtime)))
+                                 entry))
+                             buffer-undo-list))))"#,
+        path_str
+    )));
+
+    assert_eq!(
+        rendered,
+        r#"OK ("alpha line
+" t (("omega line" . 12) (12 . 22) (t . t)))"#
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn builtin_do_auto_save_preserves_raw_unibyte_filename_and_bytes() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = raw_temp_path(b"neovm-auto-save-\xFF");
+    let _ = fs::remove_dir_all(&dir);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
+
+    let visited_path = dir.join(std::ffi::OsStr::from_bytes(b"visited-\xFE"));
+    let auto_path = dir.join(std::ffi::OsStr::from_bytes(b"#visited-\xFE#"));
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    {
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
+        buf.set_multibyte_value(false);
+        buf.set_file_name_value(raw_path_value(&visited_path));
+        buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_unibyte(vec![
+            0xFF, b'A',
+        ]));
+    }
+    // `buffer-auto-save-file-name' is set explicitly (auto-save-mode's job,
+    // lisp/files.el) -- do-auto-save only reads it (fileio.c:6408).
+    {
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
+        let auto_name = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+            auto_path.as_os_str().as_bytes().to_vec(),
+        ));
+        buf.set_auto_save_file_name_value(auto_name.clone());
+        buf.set_buffer_local("buffer-auto-save-file-name", auto_name);
+    }
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save should preserve raw filenames");
+
+    assert_eq!(fs::read(&auto_path).unwrap(), vec![0xFF, b'A']);
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_unibyte_string_bytes(
+        buf.auto_save_file_name_value(),
+        auto_path.as_os_str().as_bytes(),
+    );
+    assert_eq!(
+        buf.buffer_local_value("buffer-saved-size"),
+        Some(Value::fixnum(2))
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// GNU `Fdo_auto_save` runs `auto-save-hook` before it snapshots any
+/// buffers.  Hook changes therefore belong to the auto-save image produced by
+/// the same call, rather than being deferred until a later auto-save.
+#[test]
+fn builtin_do_auto_save_runs_auto_save_hook_before_writing_buffer() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let visited_path = dir.path().join("visited.txt");
+    let auto_path = dir.path().join("#visited.txt#");
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    {
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
+        buf.set_file_name_value(Value::string(visited_path.to_string_lossy()));
+        let auto_name = Value::string(auto_path.to_string_lossy());
+        buf.set_buffer_local("buffer-auto-save-file-name", auto_name);
+        buf.set_auto_save_file_name_value(auto_name);
+        buf.insert("before\n");
+    }
+    eval.eval_str(
+        r#"(progn
+             (setq neo-auto-save-hook-inhibit-quit nil)
+             (setq auto-save-hook
+                   (list (lambda ()
+                           (setq neo-auto-save-hook-inhibit-quit inhibit-quit)
+                           (goto-char (point-max))
+                           (insert "from-hook\n")))))"#,
+    )
+    .expect("install auto-save-hook");
+
+    eval.eval_str("(do-auto-save nil t)")
+        .expect("do-auto-save should run its hook and write the current buffer");
+
+    assert_eq!(
+        fs::read_to_string(&auto_path).expect("read auto-save image"),
+        "before\nfrom-hook\n",
+        "auto-save image must include changes made by auto-save-hook"
+    );
+    assert_eq!(
+        eval.eval_symbol("neo-auto-save-hook-inhibit-quit")
+            .expect("hook should record inhibit-quit"),
+        Value::T,
+        "GNU safe hook execution dynamically binds inhibit-quit"
+    );
+}
+
+/// Sets the umask through `set-default-file-modes` and restores the previous
+/// one when dropped.  nextest runs each test in its own process.
+#[cfg(unix)]
+struct DefaultFileModesScope {
+    previous: i64,
+}
+
+#[cfg(unix)]
+impl DefaultFileModesScope {
+    fn set(modes: i64) -> Self {
+        let previous = builtin_default_file_modes(vec![])
+            .expect("default-file-modes")
+            .as_int()
+            .expect("default-file-modes is an integer");
+        builtin_set_default_file_modes(vec![Value::fixnum(modes)]).expect("set-default-file-modes");
+        Self { previous }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for DefaultFileModesScope {
+    fn drop(&mut self) {
+        let _ = builtin_set_default_file_modes(vec![Value::fixnum(self.previous)]);
+    }
+}
+
+/// Give BUF unsaved text, VISITED as its file name (when given), and
+/// AUTO_SAVE as its `buffer-auto-save-file-name`.
+#[cfg(unix)]
+fn prepare_buffer_for_auto_save(
+    buf: &mut crate::buffer::Buffer,
+    visited: Option<&str>,
+    auto_save: &std::path::Path,
+) {
+    if let Some(visited) = visited {
+        buf.set_file_name_value(Value::string(visited));
+    }
+    let auto_name = Value::string(auto_save.to_string_lossy());
+    buf.set_buffer_local("buffer-auto-save-file-name", auto_name);
+    buf.set_auto_save_file_name_value(auto_name);
+    buf.insert("unsaved secret\n");
+}
+
+#[cfg(unix)]
+fn file_permission_bits(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).expect("stat file").permissions().mode() & 0o7777
+}
+
+/// GNU `auto_save_1` (src/fileio.c:6249-6273) creates the auto-save file with
+/// `(visited file modes | 0600) & 0777`, and open(2) applies the umask on top.
+/// Neomacs created it with the bare umask default instead, so the unsaved
+/// contents of a 0600 file landed in a 0644 `#file#`.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_creates_the_auto_save_file_with_the_visited_file_modes() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::test_utils::init_test_tracing();
+    // (default-file-modes, visited file modes, expected auto-save file modes)
+    let cases: [(i64, u32, u32); 7] = [
+        (0o755, 0o600, 0o600),
+        (0o755, 0o640, 0o640),
+        (0o755, 0o750, 0o750),
+        // Owner read/write is always added, so the next pass can overwrite.
+        (0o755, 0o400, 0o600),
+        (0o755, 0o444, 0o644),
+        // The umask still masks the visited file's modes...
+        (0o700, 0o644, 0o600),
+        // ...and the visited file's modes are never widened.
+        (0o777, 0o604, 0o604),
+    ];
+    for (default_modes, visited_modes, expected) in cases {
+        let _modes = DefaultFileModesScope::set(default_modes);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let visited = dir.path().join("secret.txt");
+        let auto_save = dir.path().join("#secret.txt#");
+        fs::write(&visited, "saved secret\n").expect("write visited file");
+        fs::set_permissions(&visited, fs::Permissions::from_mode(visited_modes))
+            .expect("chmod visited file");
+
+        let mut eval = crate::test_utils::new_context();
+        prepare_buffer_for_auto_save(
+            eval.edit
+                .buffers
+                .current_buffer_mut()
+                .expect("current buffer"),
+            Some(&visited.to_string_lossy()),
+            &auto_save,
+        );
+        builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+
+        assert_eq!(
+            fs::read_to_string(&auto_save).expect("read auto-save file"),
+            "unsaved secret\n"
+        );
+        assert_eq!(
+            file_permission_bits(&auto_save),
+            expected,
+            "auto-save of a {visited_modes:o} file under default-file-modes {default_modes:o}"
+        );
+    }
+}
+
+/// The same rule through the Lisp layer: `find-file-noselect` on a 0600 file,
+/// `auto-save-mode` naming `#secret.txt#` (lisp/files.el), then `do-auto-save`.
+#[cfg(unix)]
+#[test]
+fn auto_save_mode_keeps_the_auto_save_file_of_a_private_file_private() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let visited = dir.path().join("secret.txt");
+    fs::write(&visited, "saved secret\n").expect("write visited file");
+    fs::set_permissions(&visited, fs::Permissions::from_mode(0o600)).expect("chmod visited file");
+
+    let results = bootstrap_eval(&format!(
+        r##"(with-current-buffer (find-file-noselect {visited:?})
+              (auto-save-mode 1)
+              (goto-char (point-max))
+              (insert "unsaved edit\n")
+              (do-auto-save t t)
+              (prog1 (list (file-name-nondirectory buffer-auto-save-file-name)
+                           (file-modes buffer-auto-save-file-name))
+                (set-buffer-modified-p nil)
+                (kill-buffer)))"##
+    ));
+    assert_eq!(results, vec![r##"OK ("#secret.txt#" 384)"##.to_string()]);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("#secret.txt#")).expect("read auto-save file"),
+        "saved secret\nunsaved edit\n"
+    );
+}
+
+/// With no visited file, or before the visited file exists, GNU keeps
+/// `auto_save_mode_bits = 0666` (src/fileio.c:6254): the umask alone decides.
+/// "Does not exist" is a stat failing with ENOENT or ENOTDIR, the two errno
+/// values `file_metadata_errno` turns into nil (src/fileio.c:325-330).
+#[cfg(unix)]
+#[test]
+fn do_auto_save_uses_0666_without_an_existing_visited_file() {
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // A buffer that visits no file, such as a mail draft.
+    let draft_auto_save = dir.path().join("#*mail*#");
+    let mut eval = crate::test_utils::new_context();
+    prepare_buffer_for_auto_save(
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
+        None,
+        &draft_auto_save,
+    );
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+    assert_eq!(file_permission_bits(&draft_auto_save), 0o644);
+
+    // A buffer visiting a file that has never been saved.
+    let new_file = dir.path().join("new.txt");
+    let new_auto_save = dir.path().join("#new.txt#");
+    let mut eval = crate::test_utils::new_context();
+    prepare_buffer_for_auto_save(
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
+        Some(&new_file.to_string_lossy()),
+        &new_auto_save,
+    );
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+    assert!(
+        !new_file.exists(),
+        "auto-saving must not create the visited file"
+    );
+    assert_eq!(file_permission_bits(&new_auto_save), 0o644);
+
+    // A visited name below a regular file: the stat fails with ENOTDIR.
+    let plain_file = dir.path().join("plain.txt");
+    fs::write(&plain_file, "not a directory\n").expect("write regular file");
+    let under_file = plain_file.join("new.txt");
+    let under_file_auto_save = dir.path().join("#plain.txt!new.txt#");
+    let mut eval = crate::test_utils::new_context();
+    prepare_buffer_for_auto_save(
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
+        Some(&under_file.to_string_lossy()),
+        &under_file_auto_save,
+    );
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+    assert_eq!(file_permission_bits(&under_file_auto_save), 0o644);
+}
+
+/// GNU's `file-modes` signals when the stat fails with any errno other than
+/// ENOENT and ENOTDIR (`file_metadata_errno`, src/fileio.c:325-330), and
+/// `Fdo_auto_save` catches the error (src/fileio.c:6478): a visited file that
+/// exists but cannot be stat'ed is not auto-saved at all.  It must not be
+/// auto-saved with the 0666 default, which would expose a private file.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_writes_nothing_when_the_visited_file_cannot_be_stat_ed() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // ELOOP: a symbolic link to itself.
+    let looped = dir.path().join("loop.txt");
+    std::os::unix::fs::symlink(&looped, &looped).expect("create a symlink loop");
+    let looped_auto_save = dir.path().join("#loop.txt#");
+
+    // EACCES: a 0600 file in a directory that may not be searched.
+    let locked_dir = dir.path().join("locked");
+    fs::create_dir(&locked_dir).expect("create locked directory");
+    let locked = locked_dir.join("secret.txt");
+    fs::write(&locked, "saved secret\n").expect("write visited file");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o600)).expect("chmod visited file");
+    let locked_auto_save = dir.path().join("#locked!secret.txt#");
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o000))
+        .expect("chmod locked directory");
+    // The superuser can still stat it; the EACCES case needs an ordinary user.
+    let locked_is_unreadable = fs::metadata(&locked).is_err();
+
+    let mut eval = crate::test_utils::new_context();
+    prepare_buffer_for_auto_save(
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
+        Some(&looped.to_string_lossy()),
+        &looped_auto_save,
+    );
+    let locked_id = eval.edit.buffers.create_buffer("secret.txt");
+    prepare_buffer_for_auto_save(
+        eval.edit.buffers.get_mut(locked_id).expect("locked buffer"),
+        Some(&locked.to_string_lossy()),
+        &locked_auto_save,
+    );
+    let result = builtin_do_auto_save(&mut eval, vec![]);
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o700))
+        .expect("restore locked directory");
+
+    result.expect("the stat errors stay inside do-auto-save");
+    assert_eq!(
+        (
+            looped_auto_save.exists(),
+            locked_is_unreadable && locked_auto_save.exists()
+        ),
+        (false, false),
+        "auto-save files written for (ELOOP, EACCES) visited files"
+    );
+}
+
+/// GNU's `write_region` only hands the modes to open(2) (`O_WRONLY | O_CREAT
+/// | O_TRUNC`, src/fileio.c:5634-5652) and never chmods: an auto-save file
+/// that already exists keeps its modes, whatever the visited file's are.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_keeps_the_modes_of_an_existing_auto_save_file() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    for (visited_modes, existing_modes) in [(0o600, 0o644), (0o644, 0o600)] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let visited = dir.path().join("secret.txt");
+        let auto_save = dir.path().join("#secret.txt#");
+        fs::write(&visited, "saved secret\n").expect("write visited file");
+        fs::set_permissions(&visited, fs::Permissions::from_mode(visited_modes))
+            .expect("chmod visited file");
+        fs::write(&auto_save, "stale auto-save\n").expect("write old auto-save file");
+        fs::set_permissions(&auto_save, fs::Permissions::from_mode(existing_modes))
+            .expect("chmod old auto-save file");
+
+        let mut eval = crate::test_utils::new_context();
+        prepare_buffer_for_auto_save(
+            eval.edit
+                .buffers
+                .current_buffer_mut()
+                .expect("current buffer"),
+            Some(&visited.to_string_lossy()),
+            &auto_save,
+        );
+        builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+
+        assert_eq!(
+            fs::read_to_string(&auto_save).expect("read auto-save file"),
+            "unsaved secret\n"
+        );
+        assert_eq!(file_permission_bits(&auto_save), existing_modes);
+    }
+}
+
+/// "Remote files don't cooperate with fstatat": when the visited file cannot
+/// be stat'ed, GNU asks `file-modes`, whose file name handler supplies the
+/// modes (src/fileio.c:6264-6267).  The auto-save file of a TRAMP buffer is
+/// local (`auto-save-file-name-transforms` puts it in
+/// `temporary-file-directory`), and must not be more readable than the remote
+/// file.  The handler runs with the auto-saved buffer current
+/// (`set_buffer_internal (b)`, src/fileio.c:6453), and the buffer current on
+/// entry is selected again afterwards (src/fileio.c:6482).
+#[cfg(unix)]
+#[test]
+fn do_auto_save_takes_a_remote_visited_file_modes_from_its_handler() {
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
+
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str(
+        "(fset 'm2-remote-modes-handler \
+         '(lambda (operation &rest args) \
+            (cond ((eq operation 'file-modes) \
+                   (setq m2-remote-modes-asked (car args)) \
+                   (setq m2-remote-modes-buffer (buffer-name)) #o600) \
+                  ((eq operation 'expand-file-name) (car args)) \
+                  (t nil))))",
+    )
+    .expect("define the stand-in handler");
+    eval.eval_str("(setq m2-remote-modes-asked nil m2-remote-modes-buffer nil)")
+        .expect("seed the witnesses");
+    eval.obarray_mut().set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/m2-remote:"),
+            Value::symbol("m2-remote-modes-handler"),
+        )]),
+    );
+    let entry_buffer = eval.edit.buffers.current_buffer_id();
+    let remote_id = eval.edit.buffers.create_buffer("secret.txt");
+    prepare_buffer_for_auto_save(
+        eval.edit.buffers.get_mut(remote_id).expect("remote buffer"),
+        Some("/m2-remote:host:/secret.txt"),
+        &auto_save,
+    );
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+
+    assert_eq!(
+        eval.eval_str("m2-remote-modes-asked")
+            .expect("read the witness")
+            .as_utf8_str(),
+        Some("/m2-remote:host:/secret.txt")
+    );
+    assert_eq!(
+        eval.eval_str("m2-remote-modes-buffer")
+            .expect("read the witness")
+            .as_utf8_str(),
+        Some("secret.txt"),
+        "the handler runs in the buffer being auto-saved"
+    );
+    assert_eq!(eval.edit.buffers.current_buffer_id(), entry_buffer);
+    assert_eq!(file_permission_bits(&auto_save), 0o600);
+}
+
+/// GNU runs `auto_save_1` under `internal_condition_case (auto_save_1, Qt,
+/// auto_save_error)` (src/fileio.c:6478): when asking for the visited file's
+/// modes signals, that buffer's auto-save file is not written, the error does
+/// not escape `do-auto-save`, and the other buffers are still auto-saved.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_skips_a_buffer_whose_modes_handler_signals() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let remote_auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
+    let local = dir.path().join("local.txt");
+    let local_auto_save = dir.path().join("#local.txt#");
+    fs::write(&local, "saved secret\n").expect("write visited file");
+    fs::set_permissions(&local, fs::Permissions::from_mode(0o600)).expect("chmod visited file");
+
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str(
+        "(fset 'm2-failing-modes-handler \
+         '(lambda (operation &rest args) \
+            (cond ((eq operation 'file-modes) \
+                   (signal 'file-error '(\"m2 handler failure\"))) \
+                  ((eq operation 'expand-file-name) (car args)) \
+                  (t nil))))",
+    )
+    .expect("define the failing handler");
+    eval.obarray_mut().set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/m2-remote:"),
+            Value::symbol("m2-failing-modes-handler"),
+        )]),
+    );
+    prepare_buffer_for_auto_save(
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
+        Some("/m2-remote:host:/secret.txt"),
+        &remote_auto_save,
+    );
+    let local_id = eval.edit.buffers.create_buffer("local.txt");
+    prepare_buffer_for_auto_save(
+        eval.edit.buffers.get_mut(local_id).expect("local buffer"),
+        Some(&local.to_string_lossy()),
+        &local_auto_save,
+    );
+
+    builtin_do_auto_save(&mut eval, vec![]).expect("the handler error stays inside do-auto-save");
+
+    assert!(
+        !remote_auto_save.exists(),
+        "a buffer whose modes could not be read is not auto-saved"
+    );
+    assert_eq!(file_permission_bits(&local_auto_save), 0o600);
+}
+
+/// GNU's `write_region` reads the buffer only after `auto_save_1` has asked
+/// `file-modes` for the visited file's modes (src/fileio.c:6264-6273).  Text
+/// that the handler inserts is therefore in the auto-save file, and the
+/// buffer counts as auto-saved at its new modification tick.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_writes_the_text_a_modes_handler_inserted() {
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
+
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str(
+        "(fset 'm2-editing-modes-handler \
+         '(lambda (operation &rest args) \
+            (cond ((eq operation 'file-modes) \
+                   (goto-char (point-max)) \
+                   (insert \"handler edit\\n\") \
+                   #o600) \
+                  ((eq operation 'expand-file-name) (car args)) \
+                  (t nil))))",
+    )
+    .expect("define the editing handler");
+    eval.obarray_mut().set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/m2-remote:"),
+            Value::symbol("m2-editing-modes-handler"),
+        )]),
+    );
+    prepare_buffer_for_auto_save(
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
+        Some("/m2-remote:host:/secret.txt"),
+        &auto_save,
+    );
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+
+    assert_eq!(
+        fs::read_to_string(&auto_save).expect("read auto-save file"),
+        "unsaved secret\nhandler edit\n"
+    );
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(
+        buf.autosave_modified_tick(),
+        buf.modified_tick(),
+        "the recorded auto-save covers the handler's edit"
+    );
+}
+
+/// GNU `auto_save_error` (src/fileio.c:6233-6245) reports a failed auto-save
+/// with `(display-warning 'auto-save "Auto-saving BUFFER: MESSAGE" :error)`,
+/// from the buffer being auto-saved, whether reading the visited file's modes
+/// or writing failed.  `Fdo_auto_save` then records the buffer as auto-saved
+/// anyway (src/fileio.c:6480-6481): the next pass neither retries it nor
+/// warns again before the buffer changes.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_warns_about_a_buffer_it_cannot_auto_save() {
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let remote_auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
+    // The directory does not exist, so open(2) fails with ENOENT.
+    let unwritable_auto_save = dir.path().join("missing").join("#notes#");
+
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str(
+        "(fset 'display-warning \
+         '(lambda (type message &optional level _buffer-name) \
+            (setq m2-warnings \
+                  (cons (list type message level (buffer-name)) m2-warnings))))",
+    )
+    .expect("define the stand-in display-warning");
+    eval.eval_str("(setq m2-warnings nil)")
+        .expect("seed the witness");
+    eval.eval_str(
+        "(fset 'm2-failing-modes-handler \
+         '(lambda (operation &rest args) \
+            (cond ((eq operation 'file-modes) \
+                   (signal 'file-error '(\"m2 handler failure\"))) \
+                  ((eq operation 'expand-file-name) (car args)) \
+                  (t nil))))",
+    )
+    .expect("define the failing handler");
+    eval.obarray_mut().set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/m2-remote:"),
+            Value::symbol("m2-failing-modes-handler"),
+        )]),
+    );
+    let entry_buffer = eval.edit.buffers.current_buffer_id();
+    let remote_id = eval.edit.buffers.create_buffer("secret.txt");
+    prepare_buffer_for_auto_save(
+        eval.edit.buffers.get_mut(remote_id).expect("remote buffer"),
+        Some("/m2-remote:host:/secret.txt"),
+        &remote_auto_save,
+    );
+    let notes_id = eval.edit.buffers.create_buffer("notes");
+    prepare_buffer_for_auto_save(
+        eval.edit.buffers.get_mut(notes_id).expect("notes buffer"),
+        None,
+        &unwritable_auto_save,
+    );
+
+    builtin_do_auto_save(&mut eval, vec![]).expect("the errors stay inside do-auto-save");
+    let warnings = |eval: &mut Context| {
+        eval.eval_str("(prin1-to-string (reverse m2-warnings))")
+            .expect("read the witness")
+            .as_utf8_str()
+            .expect("a string")
+            .to_owned()
+    };
+    let expected = format!(
+        "((auto-save \"Auto-saving secret.txt: m2 handler failure\" :error \"secret.txt\") \
+         (auto-save \"Auto-saving notes: Opening output file: No such file or directory, {}\" \
+         :error \"notes\"))",
+        unwritable_auto_save.display()
+    );
+    assert_eq!(warnings(&mut eval), expected);
+    assert_eq!(eval.edit.buffers.current_buffer_id(), entry_buffer);
+    assert!(!remote_auto_save.exists());
+
+    builtin_do_auto_save(&mut eval, vec![]).expect("second pass");
+    assert_eq!(
+        warnings(&mut eval),
+        expected,
+        "a failed buffer is not retried before it changes"
+    );
+
+    eval.edit
+        .buffers
+        .get_mut(notes_id)
+        .expect("notes buffer")
+        .insert("more\n");
+    builtin_do_auto_save(&mut eval, vec![]).expect("third pass");
+    assert_eq!(
+        eval.eval_str("(length m2-warnings)")
+            .expect("read the witness")
+            .as_fixnum(),
+        Some(3),
+        "the changed buffer is tried, and reported, again"
+    );
+}
+
+/// A context that reaches `auto_save_error` (src/fileio.c:6234-6245): a
+/// remote visited file whose `file-modes` handler signals, so `auto_save_1`
+/// fails before it writes anything.
+///
+/// Every caller is unix-gated with `prepare_buffer_for_auto_save`.
+#[cfg(unix)]
+fn auto_save_error_fixture() -> (tempfile::TempDir, Context, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str(
+        "(fset 'm2-bell-modes-handler \
+         '(lambda (operation &rest args) \
+            (cond ((eq operation 'file-modes) \
+                   (signal 'file-error '\"m2 bell failure\")) \
+                  ((eq operation 'expand-file-name) (car args)) \
+                  (t nil))))",
+    )
+    .expect("define the failing handler");
+    eval.obarray_mut().set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/m2-remote:"),
+            Value::symbol("m2-bell-modes-handler"),
+        )]),
+    );
+    let remote_id = eval.edit.buffers.create_buffer("secret.txt");
+    prepare_buffer_for_auto_save(
+        eval.edit.buffers.get_mut(remote_id).expect("remote buffer"),
+        Some("/m2-remote:host:/secret.txt"),
+        &auto_save,
+    );
+    (dir, eval, auto_save)
+}
+
+/// `auto_save_error` calls `ring_bell` directly (src/fileio.c:6239), and GNU's
+/// `ring_bell` runs a non-nil `ring-bell-function` with the variable set to nil
+/// for the call, restoring it after a normal return (src/terminal.c:56-79).
+#[cfg(unix)]
+#[test]
+fn auto_save_error_calls_ring_bell_function_with_the_variable_nil() {
+    let _modes = DefaultFileModesScope::set(0o755);
+    let (_dir, mut eval, _auto_save) = auto_save_error_fixture();
+    eval.eval_str(
+        r#"(progn
+             (setq m2-bell-called nil m2-bell-saw-nil nil)
+             (setq ring-bell-function
+                   (lambda ()
+                     (setq m2-bell-called t
+                           m2-bell-saw-nil (null ring-bell-function)))))"#,
+    )
+    .expect("install the ring-bell witness");
+    builtin_do_auto_save(&mut eval, vec![]).expect("the error stays inside do-auto-save");
+    assert_eq!(eval.eval_symbol("m2-bell-called").unwrap(), Value::T);
+    assert_eq!(
+        eval.eval_symbol("m2-bell-saw-nil").unwrap(),
+        Value::T,
+        "ring-bell-function must be nil while the function runs"
+    );
+    assert!(
+        eval.eval_str("(functionp ring-bell-function)")
+            .unwrap()
+            .is_truthy(),
+        "the original ring-bell-function is restored after a normal return"
+    );
+}
+
+/// GNU's `ring_bell` never signals the keyboard-macro `user-error` that
+/// `bitch_at_user` would (src/dispnew.c:6875-6887): `auto_save_error` calls
+/// `ring_bell` directly, not `ding`.
+#[cfg(unix)]
+#[test]
+fn auto_save_error_ring_bell_does_not_signal_inside_a_keyboard_macro() {
+    let _modes = DefaultFileModesScope::set(0o755);
+    let (_dir, mut eval, _auto_save) = auto_save_error_fixture();
+    eval.eval_str("(setq executing-kbd-macro t)")
+        .expect("enter a keyboard macro");
+    builtin_do_auto_save(&mut eval, vec![]).expect("ring_bell never signals a user-error");
+}
+
+#[cfg(unix)]
+const BELL_PROBE_ENV: &str = "NEOVM_AUTO_SAVE_BELL_PROBE";
+#[cfg(unix)]
+const BELL_PROBE_MARKER: &str = "AUTO-SAVE-BELL-PROBE ";
+
+/// `ring_bell` does not write BEL in batch: `auto_save_error` reaches the
+/// terminal-hook arm only when `ring-bell-function` is nil, and a batch frame
+/// has no terminal bell hook. The probe re-runs this test in a fresh process
+/// so the whole stdout of one auto-save error can be inspected.
+#[cfg(unix)]
+#[test]
+fn auto_save_error_never_writes_bel_in_batch() {
+    let name = "auto_save_error_never_writes_bel_in_batch";
+    if std::env::var_os(BELL_PROBE_ENV).is_some() {
+        let _modes = DefaultFileModesScope::set(0o755);
+        let (_dir, mut eval, _auto_save) = auto_save_error_fixture();
+        builtin_do_auto_save(&mut eval, vec![]).expect("probe do-auto-save");
+        println!("{BELL_PROBE_MARKER}");
+        return;
+    }
+    let module = module_path!();
+    let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+    let exe = std::env::current_exe().expect("test binary path");
+    let output = crate::test_utils::canonical_test_command(&exe)
+        .arg("--exact")
+        .arg(format!("{module}::{name}"))
+        .arg("--nocapture")
+        .env(BELL_PROBE_ENV, "1")
+        .output()
+        .expect("spawn auto-save bell probe");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "probe child failed: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains(BELL_PROBE_MARKER),
+        "probe child printed no marker: {stdout:?}"
+    );
+    assert!(
+        !output.stdout.contains(&0x07u8),
+        "auto-save error wrote BEL to stdout: {stdout:?}"
+    );
+}
+
+/// GNU's `ring_bell` reads the CURRENT binding: a dynamic `let` of
+/// `ring-bell-function` writes the C variable through specbind, so the
+/// let-bound function rings and the default function is never called
+/// (lead #867 pinned-GNU probe).
+#[cfg(unix)]
+#[test]
+fn auto_save_error_calls_a_dynamically_let_bound_ring_bell_function() {
+    let _modes = DefaultFileModesScope::set(0o755);
+    let (_dir, mut eval, _auto_save) = auto_save_error_fixture();
+    eval.eval_str(
+        r#"(progn
+             (setq m2-bell-events nil)
+             (setq ring-bell-function
+                   (lambda () (setq m2-bell-events
+                                    (cons (list 'm2-default (null ring-bell-function))
+                                          m2-bell-events))))
+             (let ((ring-bell-function
+                    (lambda () (setq m2-bell-events
+                                     (cons (list 'm2-let (null ring-bell-function))
+                                           m2-bell-events)))))
+               (do-auto-save t)))"#,
+    )
+    .expect("do-auto-save inside a dynamic let");
+    assert_eq!(
+        eval.eval_str("(equal m2-bell-events '((m2-let t)))")
+            .unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        eval.eval_str("(functionp ring-bell-function)").unwrap(),
+        Value::T
+    );
+}
+
+/// A buffer-local `ring-bell-function` is the current binding in the
+/// auto-saved buffer, so GNU rings it, never the default, and the function
+/// sees the variable nil while it runs (lead #867 pinned-GNU probe).
+#[cfg(unix)]
+#[test]
+fn auto_save_error_calls_a_buffer_local_ring_bell_function() {
+    let _modes = DefaultFileModesScope::set(0o755);
+    let (_dir, mut eval, _auto_save) = auto_save_error_fixture();
+    eval.eval_str(
+        r#"(progn
+             (setq m2-bell-events nil)
+             (setq ring-bell-function
+                   (lambda () (setq m2-bell-events
+                                    (cons (list 'm2-default (null ring-bell-function))
+                                          m2-bell-events))))
+             (set-buffer (get-buffer-create "secret.txt"))
+             (set (make-local-variable 'ring-bell-function)
+                  (lambda () (setq m2-bell-events
+                                   (cons (list 'm2-local (null ring-bell-function))
+                                         m2-bell-events))))
+             (do-auto-save t))"#,
+    )
+    .expect("do-auto-save with a buffer-local ring-bell-function");
+    assert_eq!(
+        eval.eval_str("(equal m2-bell-events '((m2-local t)))")
+            .unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        eval.eval_str("(functionp ring-bell-function)").unwrap(),
+        Value::T
+    );
+}
+
+/// The let / buffer-local / default protocol against pinned GNU 31.1.
+#[test]
+fn auto_save_ring_bell_matches_live_gnu() {
+    crate::test_utils::init_test_tracing();
+    let forms = include_str!("auto_save_ring_bell.el");
+    let gnu_form =
+        format!("(mapc (lambda (form) (princ \"OK \") (prin1 (eval form)) (terpri)) '({forms}))");
+    let output = crate::test_utils::gnu_probe_command()
+        .args(["-Q", "--batch", "--eval", &gnu_form])
+        .output()
+        .expect("run pinned GNU Emacs oracle");
+    assert!(
+        output.status.success(),
+        "GNU ring-bell oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let gnu = String::from_utf8(output.stdout).expect("GNU oracle UTF-8 output");
+    assert_eq!(
+        bootstrap_eval(forms),
+        gnu.lines().collect::<Vec<_>>(),
+        "ring_bell must read/write the current ring-bell-function binding like pinned GNU"
+    );
+}
+
+/// The same report through the Lisp layer: `display-warning` is autoloaded
+/// from warnings.el and logs the warning in `*Warnings*`.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_logs_a_failed_auto_save_in_the_warnings_buffer() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let auto_save = dir.path().join("missing").join("#notes#");
+
+    // `after-init-time` and `noninteractive` keep `display-warning` from
+    // deferring the warning to the end of startup or popping up a window.
+    let results = bootstrap_eval(&format!(
+        r##"(let ((after-init-time (current-time))
+                  (noninteractive t))
+              (with-current-buffer (get-buffer-create "notes")
+                (setq buffer-auto-save-file-name {auto_save:?})
+                (insert "unsaved secret\n")
+                (do-auto-save t t)
+                (prog1 (with-current-buffer "*Warnings*" (buffer-string))
+                  (set-buffer-modified-p nil)
+                  (kill-buffer))))"##
+    ));
+    let expected = format!(
+        "Error (auto-save): Auto-saving notes: Opening output file: \
+         No such file or directory, {}",
+        auto_save.display()
+    );
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0].starts_with("OK ") && results[0].contains(&expected),
+        "{results:?} should log {expected:?}"
+    );
+}
+
+#[test]
+fn test_find_file_noselect_nonexistent() {
+    crate::test_utils::init_test_tracing();
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_value::value::{ValueKind, VecLikeType};
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let result = builtin_find_file_noselect(
+        &mut eval,
+        vec![Value::string("/tmp/neovm_nonexistent_file_xyz.txt")],
+    );
+    assert!(result.is_ok());
+    let nonexistent_buf = result.unwrap();
+    match nonexistent_buf.kind() {
+        ValueKind::Veclike(VecLikeType::Buffer) => {
+            let buf = eval
+                .edit
+                .buffers
+                .get(nonexistent_buf.as_buffer_id().unwrap())
+                .unwrap();
+            // Buffer should be empty for a nonexistent file
+            assert_eq!(buf.buffer_string(), "");
+            assert!(buf.file_name_value().is_string());
+        }
+        _other => panic!("Expected Buffer, got {:?}", nonexistent_buf),
+    }
+}
+
+#[test]
+fn file_local_name_bootstrap_matches_gnu_files_el() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(
+        r#"
+        (subrp (symbol-function 'file-local-name))
+        (file-local-name "/tmp/local")
+        (file-local-name "/ssh:user@host#22:/tmp/file")
+        "#,
+    );
+    assert_eq!(results[0], "OK nil");
+    assert_eq!(results[1], r#"OK "/tmp/local""#);
+    assert_eq!(results[2], r#"OK "/tmp/file""#);
+}
+
+#[test]
+fn file_local_name_bootstrap_error_shapes_match_gnu_files_el() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(
+        r#"
+        (condition-case err (file-local-name nil) (error (car err)))
+        "#,
+    );
+    assert_eq!(results[0], "OK wrong-type-argument");
+}
+
+// #189: cross-device `rename-file` fallback must handle directories and
+// symlinks, not just regular files (GNU `Frename_file` EXDEV path).
+#[test]
+fn rename_by_copy_delete_moves_a_directory_tree() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(src.join("sub")).unwrap();
+    std::fs::write(src.join("a.txt"), "hello").unwrap();
+    std::fs::write(src.join("sub/b.txt"), "nested").unwrap();
+    let dst = tmp.path().join("dst");
+    rename_regular_file_by_copy_delete(&src, &dst, false).expect("dir move");
+    assert!(!src.exists(), "source directory removed");
+    assert_eq!(std::fs::read_to_string(dst.join("a.txt")).unwrap(), "hello");
+    assert_eq!(
+        std::fs::read_to_string(dst.join("sub/b.txt")).unwrap(),
+        "nested"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_by_copy_delete_recreates_a_symlink() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let target = tmp.path().join("target.txt");
+    std::fs::write(&target, "data").unwrap();
+    let src = tmp.path().join("link");
+    std::os::unix::fs::symlink(&target, &src).unwrap();
+    let dst = tmp.path().join("moved-link");
+    rename_regular_file_by_copy_delete(&src, &dst, false).expect("symlink move");
+    assert!(!src.exists(), "source symlink removed");
+    assert_eq!(std::fs::read_link(&dst).unwrap(), target);
+}
+
+/// Task #26: the `directory-files` MATCH argument runs GNU
+/// `fast_string_match_internal` (`src/dired.c:311`), which arms
+/// `re_match_object` = the file name and `RE_SETUP_SYNTAX_TABLE_FOR_OBJECT`
+/// (`src/syntax.c:277`): `\sw` classifies by the CURRENT BUFFER's syntax
+/// table. Measured GNU 31 (buffer-local copy of the standard table, `?z`
+/// made whitespace, files abc + zzz): → ("abc").
+#[test]
+fn directory_files_match_reads_current_buffer_syntax_table() {
+    crate::test_utils::init_test_tracing();
+    let dir = std::env::temp_dir().join("neovm_dirfiles_syntax_table");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let dir_str = dir.to_string_lossy().to_string();
+    fs::write(dir.join("abc"), "").unwrap();
+    fs::write(dir.join("zzz"), "").unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str("(set-syntax-table (copy-syntax-table (standard-syntax-table)))")
+        .expect("set-syntax-table");
+    eval.eval_str("(modify-syntax-entry ?z \" \")")
+        .expect("modify-syntax-entry");
+    let result = builtin_directory_files(
+        &mut eval,
+        vec![
+            Value::string(&dir_str),
+            Value::NIL,
+            Value::string("\\`\\sw+\\'"),
+        ],
+    )
+    .unwrap();
+    let names: Vec<String> = list_to_vec(&result)
+        .expect("file list")
+        .iter()
+        .map(|v| v.as_utf8_str().unwrap().to_string())
+        .collect();
+    LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval));
+    assert_eq!(
+        names,
+        vec!["abc"],
+        "directory-files MATCH must consult the buffer's syntax table"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Task #26: GNU `Ffind_file_name_handler` (`src/fileio.c:411`) matches
+/// `file-name-handler-alist` regexps with `fast_string_match`, under the
+/// current buffer's syntax table. Measured GNU 31 (buffer-local table, `?z`
+/// made whitespace, alist ("\\`\\sw+\\'" . my-handler)): "abc" → my-handler,
+/// "zzz" → nil.
+#[test]
+fn find_file_name_handler_reads_current_buffer_syntax_table() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str("(set-syntax-table (copy-syntax-table (standard-syntax-table)))")
+        .expect("set-syntax-table");
+    eval.eval_str("(modify-syntax-entry ?z \" \")")
+        .expect("modify-syntax-entry");
+    eval.obarray_mut().set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`\\sw+\\'"),
+            Value::symbol("my-handler"),
+        )]),
+    );
+
+    let hit = builtin_find_file_name_handler(
+        &mut eval,
+        vec![Value::string("abc"), Value::symbol("insert-file-contents")],
+    )
+    .unwrap();
+    let miss = builtin_find_file_name_handler(
+        &mut eval,
+        vec![Value::string("zzz"), Value::symbol("insert-file-contents")],
+    )
+    .unwrap();
+    let hit_name = hit.as_bare_symbol_name().map(|name| name.to_string());
+    LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval));
+    assert_eq!(
+        hit_name.as_deref(),
+        Some("my-handler"),
+        "handler regexp \\sw must match abc under the buffer table"
+    );
+    assert!(
+        miss.is_nil(),
+        "zzz must not match \\sw+ once ?z is whitespace in the buffer table"
+    );
+}
+
+/// GNU `Fverify_visited_file_modtime` (fileio.c:6129) decodes BUF and tests
+/// THAT buffer's recorded modtime.  `lock_file` (filelock.c:605) passes the
+/// buffer visiting the file being locked, which need not be the current one,
+/// so ignoring BUF and always reading the current buffer is a real divergence.
+#[test]
+fn verify_visited_file_modtime_uses_its_buffer_argument_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let visited = dir.path().join("note.txt");
+    std::fs::write(&visited, b"hello\n").expect("write visited file");
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let original = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let visitor_value = eval
+        .eval_str(r#"(get-buffer-create "visitor")"#)
+        .expect("create the visiting buffer");
+    let visitor_id = visitor_value.as_buffer_id().expect("buffer value");
+    eval.edit
+        .buffers
+        .set_buffer_file_name(visitor_id, Value::string(visited.to_string_lossy()))
+        .expect("set buffer-file-name");
+    eval.eval_str(r#"(set-buffer "visitor")"#)
+        .expect("select the visiting buffer");
+    eval.eval_str("(set-visited-file-modtime '(0 0))")
+        .expect("record a stale modtime");
+
+    // The visiting buffer is current and its recorded modtime is stale, so
+    // an omitted BUF answers nil...
+    let current_answer = builtin_verify_visited_file_modtime(&mut eval, vec![])
+        .expect("verify-visited-file-modtime with no BUF");
+    assert!(
+        current_answer.is_nil(),
+        "the current buffer's modtime is stale"
+    );
+    // ...while BUF naming a buffer that visits nothing answers t.  Ignoring
+    // BUF and re-reading the current buffer would answer nil here.
+    let other_answer =
+        builtin_verify_visited_file_modtime(&mut eval, vec![Value::make_buffer(original)])
+            .expect("verify-visited-file-modtime with BUF");
+    assert_eq!(
+        other_answer,
+        Value::T,
+        "BUF, not the current buffer, decides the answer"
+    );
+}
+
+/// The other half of GNU's Bug#56397 change ("Fix undo of changes in cloned
+/// indirect buffers", commit 74f43f82e6b): with `record_first_change` reading
+/// the BASE buffer's modtime, `Fset_visited_file_modtime` refuses the
+/// no-argument form in an indirect buffer instead of expanding its nil file
+/// name (`src/fileio.c:6202-6203`).  GNU 31.0.90 signals
+/// `(error "An indirect buffer does not have a visited file")`, while a plain
+/// buffer with no visited file still gets `(wrong-type-argument stringp nil)`
+/// from `Fexpand_file_name` -- the two cases must stay distinguishable.
+#[test]
+fn set_visited_file_modtime_refuses_an_indirect_buffer() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let base = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let indirect = eval
+        .edit
+        .buffers
+        .create_indirect_buffer(base, "indirect-modtime-145", false)
+        .expect("indirect buffer");
+    eval.edit.buffers.set_current(indirect);
+
+    match builtin_set_visited_file_modtime(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "error");
+            assert_eq!(
+                sig.data,
+                vec![Value::string(
+                    "An indirect buffer does not have a visited file"
+                )]
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+}
+
+/// GNU `Fset_visited_file_modtime`'s integer arm is
+/// `check_integer_range (time_flag, -1, 0)` followed by
+/// `make_timespec (0, UNKNOWN_MODTIME_NSECS - flag)` (`src/fileio.c:6188-6196`),
+/// so the only integers it accepts are the two non-timestamps
+/// `visited-file-modtime` can return, and each round-trips to itself.  GNU
+/// 31.0.90: `0` -> `0`, `-1` -> `-1`, `5` -> `(args-out-of-range 5 -1 0)`.
+/// Neomacs took any fixnum and answered `0` for all three, so the "the visited
+/// file does not exist" state could not be expressed at all.
+#[test]
+fn set_visited_file_modtime_flags_are_the_two_values_visited_file_modtime_returns() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    for flag in [0, -1] {
+        builtin_set_visited_file_modtime(&mut eval, vec![Value::fixnum(flag)])
+            .expect("an in-range modtime flag");
+        let reported =
+            builtin_visited_file_modtime(&mut eval, vec![]).expect("visited-file-modtime");
+        assert_eq!(
+            reported.as_fixnum(),
+            Some(flag),
+            "flag {flag} must round-trip through visited-file-modtime"
+        );
+    }
+
+    match builtin_set_visited_file_modtime(&mut eval, vec![Value::fixnum(5)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "args-out-of-range");
+            assert_eq!(
+                sig.data,
+                vec![Value::fixnum(5), Value::fixnum(-1), Value::fixnum(0)]
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+}
+
+/// GNU asks the file-name handler BEFORE it stats
+/// (`Fverify_visited_file_modtime`, src/fileio.c:6138-6143), which is the only
+/// reason a remote buffer can answer at all: the visited name is not a path on
+/// this filesystem, so the stat that follows can only fail.
+///
+/// Without the dispatch, a TRAMP buffer reports "the file changed" the instant
+/// it is visited, and `tramp-handle-lock-file` (lisp/net/tramp.el:5137-5149)
+/// turns that into `ask-user-about-supersession-threat` -- "Cannot resolve
+/// conflict in batch mode" (lisp/userlock.el:178) -- on the first keystroke.
+#[test]
+fn verify_visited_file_modtime_asks_the_file_name_handler_before_it_stats() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        "(fset 'pw174-modtime-handler \
+         '(lambda (operation &rest _args) \
+            (if (eq operation 'verify-visited-file-modtime) 'handled nil)))",
+    )
+    .expect("define the stand-in handler");
+    eval.obarray_mut().set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/pw174:"),
+            Value::symbol("pw174-modtime-handler"),
+        )]),
+    );
+    eval.eval_str("(setq buffer-file-name \"/pw174:payments:/workspace/config.txt\")")
+        .expect("visit a remote name");
+    // A recorded modtime is required: GNU returns t for an unknown one before
+    // it ever reaches the handler (src/fileio.c:6136).
+    eval.eval_str("(set-visited-file-modtime (list 27272 1328 0 0))")
+        .expect("record a modtime");
+
+    assert_eq!(
+        eval.eval_str("(verify-visited-file-modtime)")
+            .expect("verify-visited-file-modtime"),
+        Value::symbol("handled"),
+    );
+}
+
+/// The other half of the same GNU rule: `Fset_visited_file_modtime` with no
+/// argument asks the file-name handler before it stats (src/fileio.c:6211-6216),
+/// because for a remote buffer only the handler can reach the file.
+///
+/// Without it the buffer keeps whatever `insert-file-contents` left -- in this
+/// port, the wall clock at visit time -- and the gap between that and the
+/// file's own mtime grows with however long the connection took to open.  Once
+/// it passes TRAMP's two-second tolerance (lisp/net/tramp.el:5962) the buffer
+/// reports "changed" and the first edit dies in
+/// `ask-user-about-supersession-threat`.
+#[test]
+fn set_visited_file_modtime_asks_the_file_name_handler_before_it_stats() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    // GNU expands the buffer's file name first (src/fileio.c:6209), and that
+    // expansion is itself a handled operation, so the stand-in must answer it
+    // the way a real handler does -- by returning the name.
+    eval.eval_str(
+        "(fset 'pw174-set-modtime-handler \
+         '(lambda (operation &rest args) \
+            (cond ((eq operation 'set-visited-file-modtime) \
+                   (setq pw174-set-modtime-called operation) nil) \
+                  ((eq operation 'expand-file-name) (car args)) \
+                  (t nil))))",
+    )
+    .expect("define the stand-in handler");
+    eval.eval_str("(setq pw174-set-modtime-called nil)")
+        .expect("seed the witness");
+    eval.obarray_mut().set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/pw174:"),
+            Value::symbol("pw174-set-modtime-handler"),
+        )]),
+    );
+    eval.eval_str("(setq buffer-file-name \"/pw174:payments:/workspace/config.txt\")")
+        .expect("visit a remote name");
+
+    eval.eval_str("(set-visited-file-modtime)")
+        .expect("set-visited-file-modtime");
+
+    assert_eq!(
+        eval.eval_str("pw174-set-modtime-called")
+            .expect("read the witness"),
+        Value::symbol("set-visited-file-modtime"),
+    );
+}
+
+/// GNU keeps a full 4 KiB head only when it reaches explicit END. Otherwise
+/// the nonempty-destination probe retains its first 1 KiB and physical tail.
+#[test]
+fn auto_coding_probe_shows_the_head_and_tail_like_gnu() {
+    let small: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+    assert_eq!(
+        &*auto_coding_probe_bytes(&small, 0..small.len(), Some(small.len())),
+        &small[..]
+    );
+    // 5 KiB: 1 KiB of head, then everything past the 4 KiB head read.
+    let mid: Vec<u8> = (0..5120u32).map(|i| (i % 253) as u8).collect();
+    assert_eq!(
+        &*auto_coding_probe_bytes(&small, 0..small.len(), None),
+        &small[..1024]
+    );
+    assert_eq!(
+        &*auto_coding_probe_bytes(&small, 0..small.len(), Some(5000)),
+        &small[..1024]
+    );
+    let probe = auto_coding_probe_bytes(&mid, 0..mid.len(), None);
+    assert_eq!(probe.len(), 1024 + 1024);
+    assert_eq!(&probe[..1024], &mid[..1024]);
+    assert_eq!(&probe[1024..], &mid[4096..]);
+    // 20 KiB: 1 KiB of head plus the last 3 KiB.
+    let big: Vec<u8> = (0..20480u32).map(|i| (i % 241) as u8).collect();
+    let probe = auto_coding_probe_bytes(&big, 0..big.len(), None);
+    assert_eq!(probe.len(), 1024 + 3072);
+    assert_eq!(&probe[..1024], &big[..1024]);
+    assert_eq!(&probe[1024..], &big[20480 - 3072..]);
+    // A partial read seeks against physical EOF before clamping to END.
+    for range in [0..5000, 500..5500] {
+        let probe = auto_coding_probe_bytes(&big, range.clone(), Some(range.end));
+        assert_eq!(probe.len(), 4096);
+        assert_eq!(&probe[..1024], &big[range.start..range.start + 1024]);
+        assert_eq!(&probe[1024..], &big[range.end - 3072..range.end]);
+    }
+}
+
+/// With a nonempty destination, a coding cookie in the tail is still seen
+/// when the file is larger than the probe, and SIZE is the probe's length.
+#[test]
+fn insert_file_contents_auto_coding_probe_size_is_the_probe_length() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("big-auto-coding.txt");
+    let mut content = "x".repeat(40_000);
+    content.push_str("\n;; Local Variables:\n;; coding: latin-1\n;; End:\n");
+    fs::write(&path, content.as_bytes()).expect("write fixture");
+    let path_str = path.to_string_lossy().to_string();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str("(insert \"prefix\")")
+        .expect("make the destination nonempty for GNU's head/tail path");
+    eval.eval_str(
+        r#"(progn
+             (defalias 'neovm-test-set-auto-coding-function
+               (lambda (_filename size)
+                 (setq neovm-test-auto-coding-size size
+                       neovm-test-auto-coding-saw-tail
+                       (save-excursion
+                         (goto-char (point-max))
+                         (search-backward "coding: latin-1" nil t)))
+                 nil))
+             (setq set-auto-coding-function
+                   'neovm-test-set-auto-coding-function))"#,
+    )
+    .expect("install set-auto-coding-function probe");
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)])
+        .expect("insert-file-contents should succeed");
+    assert_eq!(
+        eval.visible_variable_value_or_nil("neovm-test-auto-coding-size")
+            .as_fixnum(),
+        Some(1024 + 3072)
+    );
+    assert!(
+        !eval
+            .visible_variable_value_or_nil("neovm-test-auto-coding-saw-tail")
+            .is_nil(),
+        "the tail's coding cookie must be inside the probe"
+    );
+}
+
+/// GNU's empty-buffer path passes the complete inserted file, even when a
+/// file just over 4 KiB has its coding footer in the middle of a head/tail gap.
+#[test]
+fn insert_file_contents_empty_auto_coding_keeps_the_full_source() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("empty-auto-coding.txt");
+    let footer = b"\n;; Local Variables:\n;; coding: utf-8\n;; End:\n";
+    let mut content = vec![b'x'; 4100 - footer.len()];
+    content.extend_from_slice(footer);
+    fs::write(&path, &content).expect("write fixture");
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+             (defalias 'neovm-test-set-auto-coding-function
+               (lambda (_filename size)
+                 (setq neovm-test-auto-coding-size size
+                       neovm-test-auto-coding-saw-tail
+                       (save-excursion
+                         (goto-char (point-max))
+                         (search-backward "coding: utf-8" nil t)))
+                 nil))
+             (setq set-auto-coding-function
+                   'neovm-test-set-auto-coding-function))"#,
+    )
+    .expect("install auto-coding observer");
+    builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_string_lossy())])
+        .expect("insert-file-contents should succeed");
+    assert_eq!(
+        eval.visible_variable_value_or_nil("neovm-test-auto-coding-size")
+            .as_fixnum(),
+        Some(4100)
+    );
+    assert!(
+        eval.visible_variable_value_or_nil("neovm-test-auto-coding-saw-tail")
+            .is_truthy(),
+        "the complete file's footer must be visible to the empty-buffer callback"
+    );
+}
+
+#[cfg(test)]
+#[path = "time_boundary.rs"]
+mod time_boundary;
+
+#[test]
+fn insert_file_contents_empty_auto_coding_decodes_callback_mutations() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mutating-auto-coding.txt");
+    fs::write(&path, vec![b'x'; 6000]).unwrap();
+    for (action, count, first, second) in [
+        ("(delete-char 1) (insert \"Y\") 'utf-8-unix", 6000, 89, 120),
+        ("(insert \"YZ\") 'utf-8-unix", 6002, 89, 90),
+        ("(delete-char 2) 'utf-8-unix", 5998, 120, 120),
+        ("(delete-char 1) (insert \"Y\") nil", 6000, 89, 120),
+    ] {
+        let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+        eval.eval_str("(defalias 'undo-auto-amalgamate (lambda (&rest _) nil))")
+            .unwrap();
+        eval.eval_str(&format!(
+            "(setq coding-system-for-read nil set-auto-coding-function
+                   (lambda (_name _size) (goto-char 3501) {action}))"
+        ))
+        .unwrap();
+        let result =
+            builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())])
+                .unwrap();
+        assert_eq!(result.cons_cdr().cons_car().as_fixnum(), Some(count));
+        let actual = eval.eval_str("(list (buffer-size) (char-after 3501) (char-after 3502) enable-multibyte-characters (point))").unwrap();
+        let expected = Value::list(vec![
+            Value::fixnum(count),
+            Value::fixnum(first),
+            Value::fixnum(second),
+            Value::T,
+            Value::fixnum(1),
+        ]);
+        assert!(
+            crate::emacs_core::value::equal_value(&actual, &expected, 0),
+            "action {action}: {actual:?}"
+        );
+    }
+}
+
+#[test]
+fn insert_file_contents_empty_auto_coding_error_restores_state_after_gc() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("auto-coding-error.txt");
+    fs::write(&path, vec![b'x'; 6000]).unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str("(defalias 'undo-auto-amalgamate (lambda (&rest _) nil))")
+        .unwrap();
+    eval.eval_str("(setq buffer-undo-list (list (cons 8 9)) coding-system-for-read nil set-auto-coding-function (lambda (_name _size) (goto-char 3501) (insert \"YZ\") (garbage-collect) (error \"probe failed\")))").unwrap();
+    assert!(
+        builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())])
+            .is_err()
+    );
+    let actual = eval
+        .eval_str("(list (buffer-size) enable-multibyte-characters buffer-undo-list (point))")
+        .unwrap();
+    let expected = eval.eval_str("'(0 t ((8 . 9)) 1)").unwrap();
+    assert!(
+        crate::emacs_core::value::equal_value(&actual, &expected, 0),
+        "{actual:?}"
+    );
+}
+
+fn panicking_empty_file_coding_probe(eval: &mut Context, _args: Vec<Value>) -> EvalResult {
+    let buffer = eval.edit.buffers.current_buffer().expect("staged source");
+    assert!(!buffer.get_multibyte());
+    assert_eq!(buffer.total_char_len().get(), 6000);
+    assert!(buffer.get_undo_list().is_t());
+    eval.eval_str("(goto-char 3501) (insert \"YZ\")")
+        .expect("callback mutation");
+    eval.gc_collect_exact();
+    let target = eval
+        .edit
+        .buffers
+        .find_buffer_by_name(" *coding-panic-other*")
+        .expect("callback target");
+    eval.set_current_buffer_unrecorded(target)
+        .expect("callback buffer switch");
+    panic!("native empty-file coding probe panic fixture");
+}
+
+fn assert_empty_file_coding_panic_restores_source(filename_fallback: bool) {
+    use neovm_eval::emacs_core::eval::SpecBinding;
+    use neovm_eval::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("coding-panic.txt");
+    fs::write(&path, vec![b'x'; 6000]).unwrap();
+    let multibyte = true;
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let source = eval.edit.buffers.current_buffer_id().expect("source");
+    eval.edit.buffers.create_buffer(" *coding-panic-other*");
+    eval.edit
+        .buffers
+        .set_buffer_multibyte_flag(source, multibyte)
+        .expect("source mode");
+    eval.register_subr(SubrSpec::new(
+        "neovm-panicking-file-coding",
+        NativeFn::ContextVec(panicking_empty_file_coding_probe),
+        SubrArity::new(1, Some(2)),
+    ));
+    eval.eval_str("(defalias 'undo-auto-amalgamate (lambda (&rest _) nil)) (setq buffer-undo-list (list (cons 8 9)) coding-system-for-read nil)").unwrap();
+    eval.eval_str(if filename_fallback {
+            "(setq set-auto-coding-function nil file-coding-system-alist '((\".\" . neovm-panicking-file-coding)))"
+        } else {
+            "(setq set-auto-coding-function 'neovm-panicking-file-coding)"
+        }).unwrap();
+    let original_undo = eval.edit.buffers.get(source).unwrap().get_undo_list();
+    let root_count = |eval: &Context| {
+        eval.specpdl()
+            .iter()
+            .filter(|binding| matches!(binding, SpecBinding::GcRoot { .. }))
+            .count()
+    };
+    let initial_roots = root_count(&eval);
+    let boundary = eval.module_boundary_snapshot();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ =
+            builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())]);
+    }))
+    .expect_err("native callback must propagate its panic");
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"native empty-file coding probe panic fixture")
+    );
+    // Inspect the probe's roots before the containing module boundary
+    // retires evaluator frames: outer containment must not mask a leak.
+    assert_eq!(
+        root_count(&eval),
+        initial_roots,
+        "probe roots must retire before outer containment"
+    );
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(source));
+    let buffer = eval.edit.buffers.get(source).expect("restored source");
+    assert!(
+        buffer.is_text_empty(),
+        "staged and callback bytes must retire"
+    );
+    assert_eq!(buffer.get_multibyte(), multibyte);
+    assert_eq!(buffer.get_undo_list(), original_undo);
+    assert_eq!(buffer.point_lisp_char_pos().as_i64(), 1);
+    eval.restore_module_boundary(&boundary);
+    let actual = eval.eval_str("(list buffer-undo-list (point))").unwrap();
+    let expected = eval.eval_str("'(((8 . 9)) 1)").unwrap();
+    assert!(
+        crate::emacs_core::value::equal_value(&actual, &expected, 0),
+        "{actual:?}"
+    );
+}
+
+#[test]
+fn empty_auto_coding_native_panic_restores_source() {
+    assert_empty_file_coding_panic_restores_source(false);
+}
+
+#[test]
+fn empty_filename_coding_native_panic_restores_source() {
+    assert_empty_file_coding_panic_restores_source(true);
+}
+
+fn panicking_nonempty_file_coding_probe(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("probe work buffer");
+    assert!(!buffer.get_multibyte());
+    assert_eq!(
+        buffer.total_char_len().get() as i64,
+        args[1].as_fixnum().expect("probe byte count")
+    );
+    eval.eval_str("(goto-char 2) (insert \"YZ\")")
+        .expect("work buffer mutation");
+    eval.gc_collect_exact();
+    let target = eval
+        .edit
+        .buffers
+        .find_buffer_by_name(" *coding-panic-other*")
+        .expect("callback target");
+    eval.set_current_buffer_unrecorded(target)
+        .expect("callback buffer switch");
+    panic!("native nonempty-file coding probe panic fixture");
+}
+
+#[test]
+fn nonempty_auto_coding_native_panic_restores_current_buffer() {
+    use neovm_eval::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nonempty-coding-panic.txt");
+    let bytes = vec![b'x'; 6000];
+    fs::write(&path, &bytes).unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let source = eval.edit.buffers.current_buffer_id().expect("source");
+    eval.edit.buffers.create_buffer(" *coding-panic-other*");
+    eval.register_subr(SubrSpec::new(
+        "neovm-panicking-file-coding",
+        NativeFn::ContextVec(panicking_nonempty_file_coding_probe),
+        SubrArity::new(2, Some(2)),
+    ));
+    eval.eval_str("(defalias 'undo-auto-amalgamate (lambda (&rest _) nil)) (insert \"original\") (goto-char 3) (setq buffer-undo-list (list (cons 8 9)) coding-system-for-read nil set-auto-coding-function 'neovm-panicking-file-coding)").unwrap();
+    let original_undo = eval.edit.buffers.get(source).unwrap().get_undo_list();
+    let boundary = eval.module_boundary_snapshot();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ =
+            builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())]);
+    }))
+    .expect_err("native callback must propagate its panic");
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"native nonempty-file coding probe panic fixture")
+    );
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(source));
+    let buffer = eval.edit.buffers.get(source).expect("unchanged source");
+    assert_eq!(buffer.dump_text_bytes(), b"original");
+    assert!(buffer.get_multibyte());
+    assert_eq!(buffer.get_undo_list(), original_undo);
+    assert_eq!(buffer.point_lisp_char_pos().as_i64(), 3);
+    eval.restore_module_boundary(&boundary);
+    let actual = eval
+        .eval_str("(list (buffer-string) enable-multibyte-characters buffer-undo-list (point))")
+        .unwrap();
+    let expected = eval.eval_str("'(\"original\" t ((8 . 9)) 3)").unwrap();
+    assert!(
+        crate::emacs_core::value::equal_value(&actual, &expected, 0),
+        "{actual:?}"
+    );
+    let work = eval
+        .edit
+        .buffers
+        .find_buffer_by_name(" *code-converting-work*")
+        .expect("retained work buffer");
+    let work = eval.edit.buffers.get(work).unwrap();
+    assert!(work.dump_text_bytes().starts_with(b"xYZx"));
+    assert_eq!(
+        work.total_char_len().get(),
+        auto_coding_probe_bytes(&bytes, 0..bytes.len(), None).len() + 2
+    );
+}
+
+#[test]
+fn insert_file_contents_empty_filename_coding_sees_and_can_change_raw_source() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("filename-probe.txt");
+    for length in [0, 6000] {
+        fs::write(&path, vec![b'x'; length]).unwrap();
+        for auto in ["nil", "(lambda (_name _size) nil)"] {
+            let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+            eval.eval_str(&format!(
+                r#"
+                (defalias 'undo-auto-amalgamate (lambda (&rest _) nil))
+                (defalias 'neovm-mutating-filename-coding
+                  (lambda (_args)
+                    (setq neovm-filename-probe
+                          (list (buffer-size) enable-multibyte-characters (eq buffer-undo-list t)))
+                    (goto-char (point-min)) (insert "Y") 'utf-8-unix))
+                (setq coding-system-for-read nil set-auto-coding-function {auto}
+                      file-coding-system-alist '(("." . neovm-mutating-filename-coding)))
+            "#
+            ))
+            .unwrap();
+            let result = builtin_insert_file_contents(
+                &mut eval,
+                vec![Value::string(path.to_str().unwrap())],
+            )
+            .unwrap();
+            assert_eq!(
+                result.cons_cdr().cons_car().as_fixnum(),
+                Some(length as i64 + 1)
+            );
+            let observed = eval.eval_str("neovm-filename-probe").unwrap();
+            let expected = Value::list(vec![Value::fixnum(length as i64), Value::NIL, Value::T]);
+            assert!(crate::emacs_core::value::equal_value(
+                &observed, &expected, 0
+            ));
+            assert_eq!(
+                eval.eval_str("(char-after 1)").unwrap().as_fixnum(),
+                Some(89)
+            );
+        }
+    }
+}
+
+#[test]
+fn empty_coding_probe_preserves_callback_modified_state_and_ticks_on_error() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("probe-modification.txt");
+    fs::write(&path, vec![b'x'; 6000]).unwrap();
+    for initial in [false, true] {
+        for (action, expected_modified) in [
+            ("nil", initial),
+            ("(set-buffer-modified-p t)", true),
+            ("(set-buffer-modified-p nil)", false),
+            ("(insert \"Y\")", true),
+            ("(progn (insert \"Y\") (set-buffer-modified-p nil))", false),
+            ("(put-text-property 1 2 'face 'bold)", true),
+        ] {
+            let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+            let id = eval.edit.buffers.current_buffer_id().unwrap();
+            eval.edit
+                .buffers
+                .set_buffer_modified_flag(id, initial)
+                .unwrap();
+            eval.eval_str(&format!(r#"
+                (defalias 'undo-auto-amalgamate (lambda (&rest _) nil))
+                (setq neovm-probe-before (list (buffer-modified-tick) (buffer-chars-modified-tick)))
+                (defalias 'neovm-error-filename-coding
+                  (lambda (_args)
+                    (setq neovm-probe-seen
+                          (list (buffer-modified-p)
+                                (equal neovm-probe-before (list (buffer-modified-tick) (buffer-chars-modified-tick)))))
+                    {action}
+                    (setq neovm-probe-after (list (buffer-modified-tick) (buffer-chars-modified-tick)))
+                    (error "coding probe error")))
+                (setq coding-system-for-read nil set-auto-coding-function nil
+                      file-coding-system-alist '(("." . neovm-error-filename-coding)))
+            "#)).unwrap();
+            assert!(
+                builtin_insert_file_contents(
+                    &mut eval,
+                    vec![Value::string(path.to_str().unwrap())]
+                )
+                .is_err()
+            );
+            let actual = eval.eval_str("(list neovm-probe-seen (buffer-size) (buffer-modified-p) (equal neovm-probe-after (list (buffer-modified-tick) (buffer-chars-modified-tick))) enable-multibyte-characters)").unwrap();
+            let expected = Value::list(vec![
+                Value::list(vec![if initial { Value::T } else { Value::NIL }, Value::T]),
+                Value::fixnum(0),
+                if expected_modified {
+                    Value::T
+                } else {
+                    Value::NIL
+                },
+                Value::T,
+                Value::T,
+            ]);
+            assert!(
+                crate::emacs_core::value::equal_value(&actual, &expected, 0),
+                "initial={initial} action={action} {actual:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn empty_coding_probe_exposes_raw_text_without_moving_existing_markers_or_overlays() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("probe-markers.txt");
+    fs::write(&path, vec![b'x'; 6000]).unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"
+        (setq neovm-probe-marker (copy-marker 1 t)
+              neovm-probe-overlay (make-overlay 1 1 nil t t)
+              coding-system-for-read nil
+              set-auto-coding-function
+              (lambda (_name _size)
+                (setq neovm-probe-seen
+                      (list (marker-position neovm-probe-marker)
+                            (overlay-start neovm-probe-overlay) (overlay-end neovm-probe-overlay)
+                            (point) (buffer-size)))
+                'utf-8-unix))
+    "#,
+    )
+    .unwrap();
+    builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())]).unwrap();
+    let actual = eval.eval_str("(list neovm-probe-seen (marker-position neovm-probe-marker) (overlay-start neovm-probe-overlay) (overlay-end neovm-probe-overlay))").unwrap();
+    let expected = eval.eval_str("'((1 1 1 1 6000) 6001 6001 6001)").unwrap();
+    assert!(
+        crate::emacs_core::value::equal_value(&actual, &expected, 0),
+        "{actual:?}"
+    );
+}
+
+#[test]
+fn empty_coding_probe_rejects_a_swapped_text_owner_even_when_char_ticks_collide() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("probe-swapped.txt");
+    fs::write(&path, b"A").unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let donor = eval.edit.buffers.create_buffer("probe-donor");
+    eval.edit
+        .buffers
+        .set_buffer_multibyte_flag(donor, false)
+        .unwrap();
+    let history = eval.edit.buffers.create_buffer("probe-history");
+    eval.set_variable("neovm-probe-donor", Value::make_buffer(donor));
+    eval.set_variable("neovm-probe-history", Value::make_buffer(history));
+    eval.eval_str(
+        r#"
+        (buffer-swap-text neovm-probe-history)
+        (set-buffer-modified-p nil)
+        (setq coding-system-for-read nil set-auto-coding-function
+              (lambda (_name _size)
+                (let ((before (buffer-chars-modified-tick)))
+                  (buffer-swap-text neovm-probe-donor)
+                  (setq neovm-probe-collided (= before (buffer-chars-modified-tick))))
+                'utf-8-unix))
+    "#,
+    )
+    .unwrap();
+    let result =
+        builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())])
+            .unwrap();
+    assert_eq!(result.cons_cdr().cons_car().as_fixnum(), Some(0));
+    assert!(eval.eval_str("neovm-probe-collided").unwrap().is_t());
+    assert!(eval.edit.buffers.current_buffer().unwrap().is_text_empty());
+    assert_eq!(
+        eval.edit.buffers.get(donor).unwrap().dump_text_bytes(),
+        b"A"
+    );
+}
+
+// Native panic fixture: exercises Rust unwinding through the actual
+// format-decode callback path of the insert-file pipeline.
+fn p410_panicking_format_decode(eval: &mut Context, _args: Vec<Value>) -> EvalResult {
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-point-motion-hooks")
+            .is_truthy()
+    );
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-modification-hooks")
+            .is_truthy()
+    );
+    assert!(neovm_edit::buffer::undo::undo_list_is_disabled(
+        &eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("source")
+            .get_undo_list()
+    ));
+    let target = eval
+        .edit
+        .buffers
+        .find_buffer_by_name(" *p410-panic-target*")
+        .expect("target");
+    eval.set_current_buffer_unrecorded(target)
+        .expect("callback buffer switch");
+    panic!("native format-decode panic fixture");
+}
+
+/// A Rust panic during decoding retires the dynamic suffix and the saved
+/// undo root storage-only (P4.11), but keeps what GNU's signal path keeps:
+/// the callback-selected buffer and the disabled undo list (fileio.c:5198).
+#[test]
+fn decoding_panic_cleans_dynamic_suffix_and_roots_but_keeps_inverse_state() {
+    use neovm_eval::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let source = eval.edit.buffers.current_buffer_id().expect("source");
+    let target = eval.edit.buffers.create_buffer(" *p410-panic-target*");
+    eval.edit
+        .buffers
+        .insert_into_buffer(source, "abc")
+        .expect("source text");
+    eval.edit
+        .buffers
+        .configure_buffer_undo_list(target, Value::NIL)
+        .expect("target undo");
+    let old_undo = Value::cons(Value::fixnum(424242), Value::NIL);
+    eval.edit
+        .buffers
+        .configure_buffer_undo_list(source, old_undo)
+        .expect("source undo");
+    for name in ["inhibit-point-motion-hooks", "inhibit-modification-hooks"] {
+        eval.try_set_runtime_binding_by_id(intern(name), Value::NIL)
+            .expect("initial dynamic value");
+    }
+    eval.register_subr(SubrSpec::new(
+        "format-decode",
+        NativeFn::ContextVec(p410_panicking_format_decode),
+        SubrArity::new(3, Some(3)),
+    ));
+    let original_count = eval.specpdl().len();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = run_after_insert_file_pipeline(&mut eval, source, false, false, 3);
+    }));
+    assert!(panicked.is_err());
+    assert_eq!(
+        eval.specpdl().len(),
+        original_count,
+        "bindings and saved undo root must retire"
+    );
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-point-motion-hooks")
+            .is_nil()
+    );
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-modification-hooks")
+            .is_nil()
+    );
+    assert_eq!(
+        eval.edit.buffers.current_buffer_id(),
+        Some(target),
+        "callback-selected buffer persists"
+    );
+    assert!(neovm_edit::buffer::undo::undo_list_is_disabled(
+        &eval
+            .edit
+            .buffers
+            .get(source)
+            .expect("source")
+            .get_undo_list()
+    ));
+    assert!(
+        eval.edit
+            .buffers
+            .get(target)
+            .expect("target")
+            .get_undo_list()
+            .is_nil()
+    );
+    eval.gc_collect_exact();
+    assert!(
+        !eval.tagged_heap().owns_heap_value_for_test(old_undo),
+        "retired undo snapshot must not leak a GC root"
+    );
+}
+
+// These rows live in the executing Core target, not a lower-crate lib-test.
+// All temporary native files stay under this workspace's tmp/v10x directory.
+fn auto_save_write_handler_fixture() -> (tempfile::TempDir, Context, std::path::PathBuf) {
+    auto_save_write_handler_fixture_with_context(crate::test_utils::new_context())
+}
+
+fn auto_save_write_handler_fixture_with_context(
+    mut eval: Context,
+) -> (tempfile::TempDir, Context, std::path::PathBuf) {
+    let base = crate::test_utils::workspace_root().join("tmp/v10x");
+    fs::create_dir_all(&base).unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix("auto-save-handler-")
+        .tempdir_in(&base)
+        .unwrap();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    let target = dir.path().join("handled-save");
+    let visited = dir.path().join("ordinary-file");
+    fs::write(&visited, b"on disk\n").unwrap();
+    eval.obarray_mut().set_symbol_value(
+        "asr-directory",
+        Value::string(format!("{}/", dir.path().display())),
+    );
+    eval.obarray_mut()
+        .set_symbol_value("asr-target", Value::string(target.to_string_lossy()));
+    eval.obarray_mut()
+        .set_symbol_value("asr-visited", Value::string(visited.to_string_lossy()));
+    eval.eval_str(
+        r#"
+        (setq auto-save-list-file-name nil create-lockfiles nil
+              asr-write-count 0 asr-write-args nil asr-action 'return
+              asr-nested-active nil asr-inner-outcome nil)
+        (fset 'asr-delegate (lambda (operation arguments)
+          (let ((inhibit-file-name-handlers
+                 (cons 'asr-file-handler
+                       (and (eq inhibit-file-name-operation operation)
+                            inhibit-file-name-handlers)))
+                (inhibit-file-name-operation operation))
+            (apply operation arguments))))
+        (fset 'asr-file-handler (lambda (operation &rest arguments)
+          (if (eq operation 'write-region)
+              (progn
+                (setq asr-write-count (1+ asr-write-count)
+                      asr-write-args arguments)
+                (cond ((eq asr-action 'throw)
+                       (throw 'asr-escape 'handler-escaped))
+                      ((memq asr-action '(nested-return nested-throw))
+                       (if asr-nested-active
+                           (if (eq asr-action 'nested-throw)
+                               (throw 'asr-inner-escape 'inner-escaped)
+                             'handled)
+                         (let ((asr-nested-active t))
+                           (setq asr-inner-outcome
+                                 (catch 'asr-inner-escape
+                                   (do-auto-save t t)
+                                   'inner-returned))
+                           (asr-delegate operation arguments))))
+                      ((eq asr-action 'delegate)
+                       (asr-delegate operation arguments))
+                      ((eq asr-action 'mutate)
+                       (goto-char (point-max))
+                       (insert "handler-edit\n")
+                       (asr-delegate operation arguments))
+                      (t 'handled)))
+            (asr-delegate operation arguments))))
+        (set-buffer (get-buffer-create "asr-core-subject"))
+        (setq default-directory asr-directory
+              buffer-file-name asr-visited
+              buffer-auto-save-file-name "sub/../handled-save"
+              auto-save-visited-file-name nil)
+        (insert "seed\n")
+        (set-buffer-modified-p t)
+        (setq file-name-handler-alist
+              (list (cons (concat "\\`" (regexp-quote asr-target) "\\'")
+                          'asr-file-handler)))
+    "#,
+    )
+    .expect("install real write-region handler fixture");
+    (dir, eval, target)
+}
+
+fn assert_auto_save_write_handler_args(visited: bool) {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.obarray_mut().set_symbol_value(
+        "auto-save-visited-file-name",
+        if visited { Value::T } else { Value::NIL },
+    );
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
+        .expect("native auto-save handler pass");
+    let actual = eval.eval_str("asr-write-args").unwrap();
+    eprintln!(
+        "AUTO_SAVE_HANDLER visited={visited} args={actual:?} target_exists={}",
+        target.exists()
+    );
+    let expected = Value::list(vec![
+        Value::NIL,
+        Value::NIL,
+        Value::string(target.to_string_lossy()),
+        Value::NIL,
+        if visited {
+            Value::T
+        } else {
+            Value::symbol("lambda")
+        },
+        Value::string(target.to_string_lossy()),
+        Value::NIL,
+    ]);
+    assert_eq!(
+        actual, expected,
+        "GNU passes the complete canonical seven arguments"
+    );
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(1));
+    assert!(!target.exists(), "a returning magic handler owns the write");
+    let current = eval.edit.buffers.current_buffer().unwrap();
+    assert_eq!(
+        current.get_buffer_local("buffer-saved-size"),
+        Some(Value::fixnum(5))
+    );
+    if visited {
+        assert_eq!(
+            current.file_name_runtime_string_owned().as_deref(),
+            Some(target.to_string_lossy().as_ref())
+        );
+        assert!(
+            !current.is_modified(),
+            "VISIT=t commits successful handler visiting state"
+        );
+    } else {
+        assert!(
+            current.is_modified(),
+            "ordinary auto-save does not become a real save"
+        );
+        assert_eq!(current.autosave_modified_tick(), current.modified_tick());
+    }
+}
+
+#[test]
+fn auto_save_write_region_handler_receives_expanded_full_args_lambda() {
+    assert_auto_save_write_handler_args(false);
+}
+
+#[test]
+fn auto_save_write_region_handler_receives_full_args_visit_t_without_retargeting() {
+    assert_auto_save_write_handler_args(true);
+}
+
+#[test]
+fn auto_save_write_region_handler_mutation_is_written_and_marked_once() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(setq asr-action 'mutate)").unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("handler edit/delegation");
+    eprintln!(
+        "AUTO_SAVE_MUTATION count={:?} target={target:?}",
+        eval.eval_str("asr-write-count").unwrap()
+    );
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(1));
+    assert_eq!(fs::read(&target).unwrap(), b"seed\nhandler-edit\n");
+    let current = eval.edit.buffers.current_buffer().unwrap();
+    assert_eq!(current.autosave_modified_tick(), current.modified_tick());
+    assert_eq!(
+        current.get_buffer_local("buffer-saved-size"),
+        Some(Value::fixnum(18))
+    );
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).unwrap();
+    assert_eq!(
+        eval.eval_str("asr-write-count").unwrap(),
+        Value::fixnum(1),
+        "no second write without another edit"
+    );
+}
+
+#[test]
+fn auto_save_write_region_handler_original_matched_throw_escapes_before_marking() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(setq asr-action 'throw)").unwrap();
+    let subject = eval.edit.buffers.current_buffer_id().unwrap();
+    let before = eval
+        .edit
+        .buffers
+        .get(subject)
+        .unwrap()
+        .autosave_modified_tick();
+    let controller = eval.edit.buffers.create_buffer("asr-controller");
+    eval.switch_current_buffer(controller).unwrap();
+    let result = eval
+        .eval_str("(catch 'asr-escape (do-auto-save t nil) 'did-not-throw)")
+        .unwrap();
+    eprintln!(
+        "AUTO_SAVE_THROW result={result:?} count={:?}",
+        eval.eval_str("asr-write-count").unwrap()
+    );
+    assert_eq!(result, Value::symbol("handler-escaped"));
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(1));
+    assert!(!target.exists());
+    assert_eq!(
+        eval.edit.buffers.current_buffer_id(),
+        Some(subject),
+        "GNU leaves before restoring the controller"
+    );
+    let buffer = eval.edit.buffers.get(subject).unwrap();
+    assert_eq!(buffer.autosave_modified_tick(), before);
+    assert!(buffer.is_modified());
+}
+
+#[test]
+fn auto_save_write_region_handler_dispatch_is_native_despite_redefined_function_cell() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(fset 'write-region (lambda (&rest arguments) (error \"shadow write-region must not run\")))").unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("direct native dispatcher");
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(1));
+    assert!(!target.exists());
+}
+
+#[test]
+fn write_region_successful_handler_keeps_return_value_and_visit_bookkeeping() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    let result = builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string("sub/../handled-save"),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .unwrap();
+    assert_eq!(result, Value::symbol("handled"));
+    let buffer = eval.edit.buffers.current_buffer().unwrap();
+    assert!(!buffer.is_modified());
+    assert_eq!(
+        buffer.file_name_runtime_string_owned().as_deref(),
+        Some(target.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        buffer.get_buffer_local("buffer-saved-size"),
+        Some(Value::fixnum(5))
+    );
+    assert!(!target.exists());
+}
+
+#[test]
+fn write_region_handler_expands_string_visit_before_selecting_default_lockname() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    let visit = target.with_file_name("visit-as");
+    eval.obarray_mut()
+        .set_symbol_value("asr-expanded-visit", Value::string(visit.to_string_lossy()));
+    eval.eval_str(
+        r#"
+      (setq asr-visit-expansions 0)
+      (fset 'asr-visit-expander (lambda (operation &rest arguments)
+        (if (eq operation 'expand-file-name)
+            (progn (setq asr-visit-expansions (1+ asr-visit-expansions)) asr-expanded-visit)
+          (error "unexpected visit operation"))))
+      (setq file-name-handler-alist
+            (cons (cons "\\`asr-visit:" 'asr-visit-expander) file-name-handler-alist))
+    "#,
+    )
+    .unwrap();
+    let original_visit = Value::string("asr-visit:relative");
+    let result = builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string("sub/../handled-save"),
+            Value::NIL,
+            original_visit,
+        ],
+    )
+    .unwrap();
+    assert_eq!(result, Value::symbol("handled"));
+    assert_eq!(
+        eval.eval_str("asr-visit-expansions").unwrap(),
+        Value::fixnum(1)
+    );
+    assert_eq!(
+        eval.eval_str("asr-write-args").unwrap(),
+        Value::list(vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            original_visit,
+            Value::string(visit.to_string_lossy()),
+            Value::NIL
+        ])
+    );
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .unwrap()
+            .file_name_runtime_string_owned()
+            .as_deref(),
+        Some(visit.to_string_lossy().as_ref())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_save_write_region_handler_delegation_preserves_visited_creation_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let _modes = DefaultFileModesScope::set(0o777);
+    let (dir, mut eval, target) = auto_save_write_handler_fixture();
+    fs::set_permissions(
+        dir.path().join("ordinary-file"),
+        fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+    eval.eval_str("(setq asr-action 'delegate)").unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("actual delegated auto-save");
+    eprintln!(
+        "AUTO_SAVE_DELEGATED_MODE count={:?} mode={:o}",
+        eval.eval_str("asr-write-count").unwrap(),
+        file_permission_bits(&target)
+    );
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(1));
+    assert_eq!(fs::read(&target).unwrap(), b"seed\n");
+    assert_eq!(
+        file_permission_bits(&target),
+        0o640,
+        "delegation inherits native auto-save creation mode"
+    );
+    // Identical valid START/END/VISIT arguments in an ordinary call must not
+    // infer auto-save. Its fresh output uses the regular0666 creation mode.
+    fs::remove_file(&target).unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        file_permission_bits(&target),
+        0o666,
+        "normal return restored ordinary native write policy"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_save_write_region_matched_throw_restores_delegated_native_write_policy() {
+    use std::os::unix::fs::PermissionsExt;
+    let _modes = DefaultFileModesScope::set(0o777);
+    let (dir, mut eval, target) = auto_save_write_handler_fixture();
+    fs::set_permissions(
+        dir.path().join("ordinary-file"),
+        fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+    eval.eval_str("(setq asr-action 'throw)").unwrap();
+    assert_eq!(
+        eval.eval_str("(catch 'asr-escape (do-auto-save t t) 'did-not-throw)")
+            .unwrap(),
+        Value::symbol("handler-escaped")
+    );
+    assert!(!target.exists());
+    eval.eval_str("(setq asr-action 'delegate)").unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        file_permission_bits(&target),
+        0o666,
+        "original Flow restored ordinary policy before reaching its catch"
+    );
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(2));
+}
+
+#[cfg(unix)]
+fn assert_recursive_auto_save_handler_native_policy(action: &str, outcome: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let _modes = DefaultFileModesScope::set(0o755);
+    let (dir, mut eval, target) = auto_save_write_handler_fixture();
+    fs::set_permissions(
+        dir.path().join("ordinary-file"),
+        fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+    eval.obarray_mut()
+        .set_symbol_value("asr-action", Value::symbol(action));
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
+        .expect("outer handler resumes after inner native scope");
+    eprintln!(
+        "AUTO_SAVE_RECURSIVE action={action} mode={:o} count={:?}",
+        file_permission_bits(&target),
+        eval.eval_str("asr-write-count").unwrap()
+    );
+    assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(2));
+    assert_eq!(
+        eval.eval_str("asr-inner-outcome").unwrap(),
+        Value::symbol(outcome)
+    );
+    assert_eq!(fs::read(&target).unwrap(), b"seed\n");
+    assert_eq!(
+        file_permission_bits(&target),
+        0o644,
+        "GNU clears auto_saving after inner return/Flow; outer delegation is ordinary, not a restored0640 scope"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_save_write_region_recursive_normal_return_clears_native_active_flag() {
+    assert_recursive_auto_save_handler_native_policy("nested-return", "inner-returned");
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_save_write_region_recursive_matched_throw_clears_native_active_flag() {
+    assert_recursive_auto_save_handler_native_policy("nested-throw", "inner-escaped");
+}
+
+// GNU policy-r2 attests format/coding in the pinned batch oracle. Its separate
+// initialized real -nw PTY rows establish the interactive Wrote positive control;
+// the bare GNU batch echo state was not used as that positive control.
+fn assert_auto_save_file_format_policy(
+    auto_formats: &str,
+    expected: &[u8],
+    expected_format: Option<&str>,
+) {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str(
+        r#"
+      (setq asr-action 'delegate asr-format-args nil
+            buffer-file-format '(asr-normal))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (setq asr-format-args (list format start end original index))
+          (list (cons 1 (if (eq format 'asr-auto) "A" "N")))))
+    "#,
+    )
+    .unwrap();
+    let auto_formats = eval
+        .eval_str(auto_formats)
+        .expect("format value in the subject heap");
+    eval.set_variable("buffer-auto-save-file-format", auto_formats);
+    let original = eval.edit.buffers.current_buffer_id().unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
+        .expect("canonical native format annotation");
+    assert_eq!(fs::read(&target).unwrap(), expected);
+    let actual_args = eval.eval_str("asr-format-args").unwrap();
+    eprintln!("AUTO_SAVE_FORMAT bytes={expected:?} args={actual_args:?}");
+    let expected_args = expected_format.map_or(Value::NIL, |format| {
+        Value::list(vec![
+            Value::symbol(format),
+            Value::NIL,
+            Value::NIL,
+            Value::make_buffer(original),
+            Value::fixnum(0),
+        ])
+    });
+    assert_eq!(
+        actual_args, expected_args,
+        "GNU calls the actual format hook with all five arguments"
+    );
+}
+
+#[test]
+fn auto_save_write_region_uses_auto_save_file_format_list() {
+    assert_auto_save_file_format_policy("'(asr-auto)", b"Aseed\n", Some("asr-auto"));
+}
+
+#[test]
+fn auto_save_write_region_nil_auto_save_file_format_suppresses_normal_format() {
+    assert_auto_save_file_format_policy("nil", b"seed\n", None);
+}
+
+#[test]
+fn auto_save_write_region_t_auto_save_file_format_uses_normal_format() {
+    assert_auto_save_file_format_policy("t", b"Nseed\n", Some("asr-normal"));
+}
+
+#[test]
+fn write_region_ordinary_uses_buffer_file_format_despite_auto_save_format() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str(
+        r#"
+      (setq asr-action 'delegate asr-format-args nil
+            buffer-file-format '(asr-normal)
+            buffer-auto-save-file-format '(asr-auto))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (setq asr-format-args (list format start end original index))
+          (list (cons 1 (if (eq format 'asr-auto) "A" "N")))))
+    "#,
+    )
+    .unwrap();
+    let original = eval.edit.buffers.current_buffer_id().unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+        ],
+    )
+    .expect("ordinary canonical format annotation");
+    assert_eq!(fs::read(&target).unwrap(), b"Nseed\n");
+    assert_eq!(
+        eval.eval_str("asr-format-args").unwrap(),
+        Value::list(vec![
+            Value::symbol("asr-normal"),
+            Value::NIL,
+            Value::NIL,
+            Value::make_buffer(original),
+            Value::fixnum(0),
+        ])
+    );
+}
+
+fn assert_auto_save_write_coding_policy(equal_names: bool, invalid_coding: bool) {
+    let (_dir, mut eval, target) =
+        auto_save_write_handler_fixture_with_context(crate::test_utils::runtime_startup_context());
+    eval.eval_str(
+        r#"
+      (erase-buffer) (insert "é\n")
+      (setq asr-action 'delegate)
+    "#,
+    )
+    .unwrap();
+    if equal_names {
+        eval.eval_str("(setq buffer-file-name asr-target buffer-auto-save-file-name asr-target)")
+            .unwrap();
+    }
+    eval.set_variable(
+        "coding-system-for-write",
+        Value::symbol(if invalid_coding {
+            "asr-no-such-coding-system"
+        } else {
+            "utf-16le-unix"
+        }),
+    );
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("GNU auto-save coding choice");
+    let (expected_bytes, expected_coding): (&[u8], &str) = if equal_names {
+        (&[0xe9, 0, 0x0a, 0], "utf-16le-unix")
+    } else {
+        (&[0xc3, 0xa9, 0x0a], "utf-8-emacs-unix")
+    };
+    eprintln!(
+        "AUTO_SAVE_CODING equal={equal_names} invalid={invalid_coding} bytes={:?}",
+        fs::read(&target).unwrap()
+    );
+    assert_eq!(fs::read(&target).unwrap(), expected_bytes);
+    assert_eq!(
+        eval.eval_str("last-coding-system-used").unwrap(),
+        Value::symbol(expected_coding)
+    );
+}
+
+#[test]
+fn auto_save_write_region_distinct_names_force_utf8_before_bound_coding() {
+    assert_auto_save_write_coding_policy(false, false);
+}
+
+#[test]
+fn auto_save_write_region_distinct_names_ignore_invalid_bound_coding() {
+    assert_auto_save_write_coding_policy(false, true);
+}
+
+#[test]
+fn auto_save_write_region_equal_names_preserve_bound_coding() {
+    assert_auto_save_write_coding_policy(true, false);
+}
+
+#[test]
+fn write_region_ordinary_distinct_names_preserve_bound_coding() {
+    let (_dir, mut eval, target) =
+        auto_save_write_handler_fixture_with_context(crate::test_utils::runtime_startup_context());
+    eval.eval_str(
+        r#"
+      (erase-buffer) (insert "é\n")
+      (setq asr-action 'delegate coding-system-for-write 'utf-16le-unix)
+    "#,
+    )
+    .unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+        ],
+    )
+    .expect("ordinary write obeys bound coding");
+    assert_eq!(fs::read(&target).unwrap(), &[0xe9, 0, 0x0a, 0]);
+    assert_eq!(
+        eval.eval_str("last-coding-system-used").unwrap(),
+        Value::symbol("utf-16le-unix")
+    );
+}
+
+#[test]
+fn auto_save_write_region_active_visit_t_suppresses_native_wrote_message() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(setq asr-action 'delegate auto-save-visited-file-name t noninteractive nil)")
+        .unwrap();
+    assert!(eval.current_message_text().is_none());
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
+        .expect("active canonical visiting write");
+    assert_eq!(fs::read(&target).unwrap(), b"seed\n");
+    assert!(
+        eval.current_message_text().is_none(),
+        "GNU active VISIT=t emits no native Wrote message"
+    );
+}
+
+#[test]
+fn write_region_ordinary_interactive_visit_t_reports_native_wrote_message() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(setq asr-action 'delegate noninteractive nil)")
+        .unwrap();
+    assert!(eval.current_message_text().is_none());
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("ordinary interactive native visiting write");
+    assert_eq!(fs::read(&target).unwrap(), b"seed\n");
+    let expected = format!("Wrote {}", target.display());
+    assert_eq!(
+        eval.current_message_text().as_deref(),
+        Some(expected.as_str())
+    );
+}
+
+#[test]
+fn write_region_ordinary_batch_visit_t_suppresses_native_wrote_message() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str("(setq asr-action 'delegate noninteractive t)")
+        .unwrap();
+    assert!(eval.current_message_text().is_none());
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::NIL,
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .expect("ordinary batch native visiting write");
+    assert_eq!(fs::read(&target).unwrap(), b"seed\n");
+    assert!(
+        eval.current_message_text().is_none(),
+        "GNU batch mode suppresses Wrote even outside auto-save"
+    );
+}
+
+// These bodies mirror the five GNU final-source probes. Apply only after the
+// parent's GNU attestation completes; all paths use the actual native entry.
+#[test]
+fn auto_save_write_region_nil_start_captures_same_buffer_format_append() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str(
+        r#"
+      (setq asr-action 'delegate buffer-auto-save-file-format '(asr-append))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (goto-char (point-max)) (insert "tail\n") nil))
+    "#,
+    )
+    .unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("format append auto-save");
+    assert_eq!(fs::read(&target).unwrap(), b"seed\ntail\n");
+}
+
+#[test]
+fn auto_save_write_region_nil_start_uses_late_narrowing_and_annotation_origin() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str(
+        r#"
+      (erase-buffer) (insert "abcdef\n")
+      (setq asr-action 'delegate buffer-auto-save-file-format '(asr-narrow))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (narrow-to-region 3 6)
+          (list (cons 3 "X") (cons 5 "Y"))))
+    "#,
+    )
+    .unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T]).expect("format narrowing auto-save");
+    assert_eq!(
+        fs::read(&target).unwrap(),
+        b"XcdYe",
+        "annotation coordinates use the final accessible beginning"
+    );
+}
+
+fn install_auto_save_post_annotation_control(eval: &mut Context, text: &str) -> (Value, Value) {
+    eval.set_variable("asr-replacement-text", Value::string(text));
+    eval.eval_str(
+        r#"
+      (setq asr-action 'delegate asr-original (current-buffer) asr-post-buffers nil)
+      (fset 'asr-record-post
+        (lambda () (setq asr-post-buffers (cons (current-buffer) asr-post-buffers))))
+      (set-buffer (get-buffer-create "asr-final-source-replacement"))
+      (erase-buffer) (insert asr-replacement-text)
+      (setq asr-replacement (current-buffer)
+            write-region-post-annotation-function 'asr-record-post)
+      (set-buffer asr-original)
+      (setq write-region-post-annotation-function 'asr-record-post)
+    "#,
+    )
+    .unwrap();
+    (
+        eval.eval_str("asr-original").unwrap(),
+        eval.eval_str("asr-replacement").unwrap(),
+    )
+}
+
+#[test]
+fn auto_save_write_region_format_switch_does_not_enqueue_extra_post_annotation_buffer() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    let (original, _replacement) = install_auto_save_post_annotation_control(&mut eval, "FORMAT\n");
+    eval.eval_str(
+        r#"
+      (setq buffer-auto-save-file-format '(asr-switch))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (set-buffer asr-replacement) nil))
+    "#,
+    )
+    .unwrap();
+    builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
+        .expect("format replacement auto-save");
+    assert_eq!(fs::read(&target).unwrap(), b"FORMAT\n");
+    assert_eq!(
+        eval.eval_str("asr-post-buffers").unwrap(),
+        Value::list(vec![original])
+    );
+    assert_eq!(eval.eval_str("(current-buffer)").unwrap(), original);
+}
+
+#[test]
+fn write_region_regular_annotation_switch_enqueues_replacement_post_annotation_buffer() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    let (original, replacement) = install_auto_save_post_annotation_control(&mut eval, "HOOK\n");
+    eval.eval_str(
+        r#"
+      (fset 'asr-switch-annotation
+        (lambda (start end) (set-buffer asr-replacement) nil))
+      (setq write-region-annotate-functions '(asr-switch-annotation))
+    "#,
+    )
+    .unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::fixnum(1),
+            Value::fixnum(6),
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+        ],
+    )
+    .expect("ordinary annotation replacement");
+    assert_eq!(fs::read(&target).unwrap(), b"HOOK\n");
+    // Recording prepends, so this proves actual cleanup order replacement,
+    // then original; the format callback control above has only original.
+    assert_eq!(
+        eval.eval_str("asr-post-buffers").unwrap(),
+        Value::list(vec![original, replacement])
+    );
+}
+
+#[test]
+fn write_region_explicit_range_survives_format_switch_away_and_back() {
+    let (_dir, mut eval, target) = auto_save_write_handler_fixture();
+    eval.eval_str(
+        r#"
+      (erase-buffer) (insert "abcdef\n")
+      (setq asr-action 'delegate asr-original (current-buffer) asr-format-trace nil)
+      (set-buffer (get-buffer-create "asr-format-other"))
+      (erase-buffer) (insert "OTHER\n")
+      (setq asr-replacement (current-buffer))
+      (set-buffer asr-original)
+      (setq buffer-file-format '(asr-away asr-back))
+      (fset 'format-annotate-function
+        (lambda (format start end original index)
+          (setq asr-format-trace (cons (list format start end original index) asr-format-trace))
+          (set-buffer (if (eq format 'asr-away) asr-replacement asr-original)) nil))
+    "#,
+    )
+    .unwrap();
+    let original = eval.eval_str("asr-original").unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![
+            Value::fixnum(2),
+            Value::fixnum(4),
+            Value::string(target.to_string_lossy()),
+            Value::NIL,
+            Value::symbol("lambda"),
+        ],
+    )
+    .expect("away/back format writer");
+    assert_eq!(
+        fs::read(&target).unwrap(),
+        b"bc",
+        "only the final buffer identity decides whether the caller's explicit range is replaced"
+    );
+    assert_eq!(
+        eval.eval_str("(nreverse asr-format-trace)").unwrap(),
+        Value::list(vec![
+            Value::list(vec![
+                Value::symbol("asr-away"),
+                Value::fixnum(2),
+                Value::fixnum(4),
+                original,
+                Value::fixnum(0)
+            ]),
+            Value::list(vec![
+                Value::symbol("asr-back"),
+                Value::fixnum(1),
+                Value::fixnum(7),
+                original,
+                Value::fixnum(1)
+            ]),
+        ])
+    );
+}
+
+#[test]
+fn auto_save_materialized_annotation_property_survives_coding_selector_gc() {
+    // GNU31.1 attested sameform: (saved 1 1 1), Aseed\n. A weak-key
+    // table is the observer, not an ownership root. On loss the selector
+    // throws BEFORE encoding, so this regression never depends on reading
+    // a reclaimed property value or on a native crash.
+    let base = crate::test_utils::workspace_root().join("tmp/v10x");
+    fs::create_dir_all(&base).expect("workspace probe directory");
+    let directory = tempfile::Builder::new()
+        .prefix("materialized-property-")
+        .tempdir_in(&base)
+        .expect("materialized property directory");
+    let target = directory.path().join("auto-save-target");
+    fs::write(&target, b"old\n").expect("seed the equal visited/auto-save target");
+    let mut eval = crate::test_utils::new_context();
+    let form = include_str!("fileio_materialized_properties_probe.el").replace(
+        "@TARGET@",
+        &format!("{:?}", target.to_str().expect("UTF-8 fixture path")),
+    );
+    let result = eval.eval_str(&form);
+    assert_eq!(
+        format_eval_result(&result),
+        "OK (saved 1 1 1)",
+        "materialized annotation properties must remain roots through the coding selector's full GC",
+    );
+    assert_eq!(fs::read(&target).expect("read auto-save bytes"), b"Aseed\n");
+}

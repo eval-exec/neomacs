@@ -1,7 +1,9 @@
 //! Unchanged-input capture costs, not complete redisplay or GPU frame times.
 //! Run: cargo bench -p neovm-core --bench layout_input_capture
 use criterion::{Criterion, criterion_group, criterion_main};
-use neovm_core::emacs_core::Context;
+use neovm_core::emacs_core::eval_hook_installers;
+use neovm_core::window::DisplayFrameManagerExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 use std::{hint::black_box, time::Duration};
 
 fn capture_benchmarks(c: &mut Criterion) {
@@ -40,7 +42,7 @@ fn capture_benchmarks(c: &mut Criterion) {
     group.warm_up_time(Duration::from_millis(300));
     group.measurement_time(Duration::from_secs(1));
     for (name, setup) in cases {
-        let mut eval = Context::new();
+        let mut eval = eval_hook_installers::new_context();
         let buffer = eval.buffer_manager().current_buffer().unwrap().id();
         eval.buffer_manager_mut()
             .get_mut(buffer)

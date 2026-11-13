@@ -53,7 +53,7 @@ impl DisplayItemSource for CountingSource {
 
 #[test]
 fn reused_output_slot_replaces_item_and_faces_at_every_source_step() {
-    let _context = Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00ffffff, 0, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
@@ -85,7 +85,7 @@ fn reused_output_slot_replaces_item_and_faces_at_every_source_step() {
 
 #[test]
 fn resumed_and_deferred_items_replace_stale_slot_without_advancing_source() {
-    let _context = Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00ffffff, 0, 14.0, None);
     for deferred in [false, true] {
@@ -124,7 +124,7 @@ fn resumed_and_deferred_items_replace_stale_slot_without_advancing_source() {
 
 #[test]
 fn exhausted_structural_source_drains_emission_once_outside_output_slot() {
-    let _context = Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00ffffff, 0, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);

@@ -120,10 +120,49 @@ impl RuntimeDirectory {
     }
 }
 
+/// The largest sandbox HOME path the package-TUI prompt row can display.
+///
+/// The save stage writes `Write file: <home>/.gitignore` on one 160-column
+/// row (`helm_gitignore_test/harness.rs`), so a deeper HOME cannot be typed.
+/// Keep a margin for the prompt and the tempfile suffix.
+const MAX_SANDBOX_HOME: usize = 120;
+
+/// Base directory for a scenario's ephemeral case root.
+///
+/// The sandbox root is disposable, so choose the MELPA cache root when its
+/// path leaves the HOME short enough for the package-TUI prompt row; a deep
+/// worktree or CI sandbox falls back to the system temporary directory (and,
+/// on Unix, `/tmp` as the last resort).  This is the same shape as the
+/// socket fixtures' sun_path handling: the harness, not the caller's path,
+/// picks a location the fixture can display and bind.
+fn sandbox_case_base(label: &str) -> PathBuf {
+    // tempfile appends six random characters to the prefix.
+    let prefix_and_suffix = sanitize_label(label).len() + 1 + 6;
+    let needed = prefix_and_suffix + "/home".len();
+    let fits = |base: &Path| base.as_os_str().len() + 1 + needed <= MAX_SANDBOX_HOME;
+
+    let cache_root = neomacs_infra::melpa_cache_root();
+    if fits(&cache_root) {
+        return cache_root;
+    }
+    let system_tmp = std::env::temp_dir();
+    if fits(&system_tmp) {
+        return system_tmp;
+    }
+    #[cfg(unix)]
+    {
+        let slash_tmp = PathBuf::from("/tmp");
+        if fits(&slash_tmp) {
+            return slash_tmp;
+        }
+    }
+    cache_root
+}
+
 impl MelpaSandbox {
     /// Create a sandbox below the melpa cache root.
     pub fn new(label: &str) -> Result<Self, String> {
-        let base = neomacs_infra::melpa_cache_root();
+        let base = sandbox_case_base(label);
         fs::create_dir_all(&base).map_err(|error| {
             format!(
                 "failed to create MELPA scratch directory {}: {error}",
@@ -586,10 +625,46 @@ pub use neomacs_infra::packages::install::{
     publish_package_preparation_failure,
 };
 /// The path to the `neomacs` binary (override with `NEOMACS_BIN`).
+///
+/// The resolved binary is attested against its fresh-build stamp before it is
+/// returned.  A MELPA/treesit probe that spawns an editor whose Lisp tree was
+/// synced, stripped or regenerated after the build measures a bootstrap, not
+/// the product: the treesit oracle family once spawned an unattested editor
+/// from an ad-hoc nextest filter because this resolver read `NEOMACS_BIN`
+/// without checking the stamp, and six oracle tests appeared to diverge from
+/// GNU until a fresh build was run.  The check is the same cached verification
+/// the oracle and TUI harnesses use: one full content check per nextest run,
+/// keyed by the stamp's sha256 and `NEXTEST_RUN_ID`;
+/// `NEOVM_SKIP_FRESH_BUILD_STAMP=<non-empty>` is the shared documented
+/// override and its value is echoed.
 pub fn neomacs_binary() -> PathBuf {
-    std::env::var_os("NEOMACS_BIN")
+    let binary = std::env::var_os("NEOMACS_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target/release/neomacs"))
+        .unwrap_or_else(|| workspace_root().join("target/release/neomacs"));
+    attested_neomacs_binary(binary)
+}
+
+/// [`neomacs_binary`]'s attestation half, split out so the pinning test can
+/// point it at a temporary binary and Lisp tree without mutating the process
+/// environment.
+pub(crate) fn attest_binary(binary: &Path, runtime_root: &Path) -> Result<(), String> {
+    let lisp_root = runtime_root.join("lisp");
+    neomacs_test_env::fresh_build_stamp::verify(binary, &lisp_root).map(|_| ())
+}
+
+fn attested_neomacs_binary(binary: PathBuf) -> PathBuf {
+    static ATTESTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ATTESTED.get_or_init(|| {
+        // The runtime tree is the one the spawned editor reads: an
+        // out-of-tree or staged runtime is selected by NEOMACS_RUNTIME_ROOT.
+        let runtime_root = std::env::var_os("NEOMACS_RUNTIME_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(workspace_root);
+        if let Err(message) = attest_binary(&binary, &runtime_root) {
+            panic!("{message}");
+        }
+    });
+    binary
 }
 
 /// Environment entry exported by a prepared package set.

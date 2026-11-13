@@ -70,6 +70,10 @@ cd "$repo_root"
 
 # shellcheck source=./scripts/lib/archlib.sh
 source "$repo_root/scripts/lib/archlib.sh"
+# shellcheck source=./scripts/lib/info-manuals.sh
+source "$repo_root/scripts/lib/info-manuals.sh"
+# shellcheck source=./scripts/lib/macos-tarball.sh
+source "$repo_root/scripts/lib/macos-tarball.sh"
 
 dist_dir="$repo_root/dist"
 version="$(get_version)"
@@ -164,6 +168,8 @@ for required in "$release_dir/neomacs" "$release_dir/neomacsclient" "$release_di
   fi
 done
 
+neomacs_validate_info_manuals "$repo_root/info" "$release_dir/neomacs"
+
 rm -rf "$app_bundle"
 
 # GNU's self-contained NS bundle, verbatim (configure.ac:2790-2793):
@@ -221,7 +227,7 @@ install -m 0644 "$release_dir/neomacs.pdump" "$archlib_dir/neomacs.pdump"
 cp -a lisp "$app_bundle/Contents/Resources/neomacs/"
 cp -a etc "$app_bundle/Contents/Resources/neomacs/"
 cp -a leim "$app_bundle/Contents/Resources/neomacs/"
-cp -a info "$app_bundle/Contents/Resources/neomacs/" 2>/dev/null || true
+cp -a info "$app_bundle/Contents/Resources/neomacs/"
 
 cat >"$app_bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -406,7 +412,15 @@ ditto -c -k --sequesterRsrc --keepParent "$archive_staging" "$zip"
 # Keep macOS metadata enabled. The tarball is a macOS binary distribution, and
 # the clean-runner extraction verifies that signatures and any stapled app
 # ticket survive the round trip.
-tar -C "$dist_dir" -czf "$tarball" "$artifact_stem"
+#
+# Members are recorded as root's (0/0), not the runner account's (501/20):
+# root extracting the tarball, say into /Applications, restores the recorded
+# owner, which would hand the bundle to whichever local account holds 501.
+# Ownership is not part of the code signature.  --uid/--gid rather than
+# --owner/--group, which older bsdtar releases may lack.  The audit runs here,
+# in the release job, because nothing else checks the tarball automatically.
+tar --uid 0 --gid 0 --numeric-owner -C "$dist_dir" -czf "$tarball" "$artifact_stem"
+neomacs_audit_macos_tarball "$tarball"
 rm -rf "$archive_staging"
 
 echo "creating .dmg..."

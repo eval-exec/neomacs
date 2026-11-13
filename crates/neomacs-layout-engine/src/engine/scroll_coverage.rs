@@ -19,22 +19,32 @@ use crate::row_layout::worker::{RowJobTicket, RowWorker};
 use crate::window_output::prepared_body::position_buffer_rows;
 use neovm_core::buffer::CharPos0;
 use neovm_core::tagged::collection_reads::{self, CollectionReads};
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::window::{FrameId, WindowId};
 
 /// Keep speculative work bounded, including cyclic user lists. Recheck at
 /// admission because custom marker variables need not bump display ticks.
-pub(super) fn inactive_overlay_arrows(evaluator: &neovm_core::emacs_core::Context) -> bool {
-    let mut tail = evaluator
-        .variable_value(crate::fixed_symbols::OVERLAY_ARROW_VARIABLE_LIST.id())
-        .unwrap_or(Value::NIL);
+pub(super) fn inactive_overlay_arrows(
+    evaluator: &neovm_core::emacs_core::Context,
+    buffer_id: Option<neovm_core::buffer::BufferId>,
+) -> bool {
+    // The same GNU reads as the renderer: the list and each listed symbol are
+    // `find_symbol_value` with the window's buffer current
+    // (xdisp.c:17074-17083).  A buffer-local arrow must keep worker pages
+    // from being reused, or the redisplay that draws it could be skipped.
+    let read = |id| match buffer_id {
+        Some(buffer_id) => crate::neovm_bridge::visible_display_value(evaluator, buffer_id, id),
+        None => crate::neovm_bridge::visible_value(evaluator, id),
+    };
+    let mut tail =
+        read(crate::fixed_symbols::OVERLAY_ARROW_VARIABLE_LIST.id()).unwrap_or(Value::NIL);
     for _ in 0..32 {
         if !tail.is_cons() {
             return true;
         }
         if let Some(sym) = tail.cons_car().as_bare_symbol_id()
-            && evaluator
-                .variable_value(sym)
-                .is_some_and(|value| !value.is_nil())
+            && read(sym).is_some_and(|value| !value.is_nil())
         {
             return false;
         }
@@ -205,6 +215,8 @@ impl ScrollCoverage {
             })
     }
 
+    /// Validate completed worker coverage and publish bounded prepared rows.
+    /// Reject stale admissions and do not publish incomplete bridge coverage.
     pub(super) fn drain(
         &mut self,
         destination: &mut PreparedViewports,
@@ -275,9 +287,20 @@ impl ScrollCoverage {
             };
             admission.retained.key.window_start = char_pos.get() as i64;
         }
+        // Small-font rows can reach the matrix's row limit before its pixel
+        // bottom. Match both bounds of the canonical viewport walk.
+        let capacity = admission
+            .retained
+            .matrix
+            .rows
+            .iter()
+            .skip(admission.row_base)
+            .filter(|row| !RetainedWindowMatrix::is_chrome_role(row.role))
+            .count();
         let mut height = 0.0;
         let visible = rows
             .iter()
+            .take(capacity)
             .take_while(|row| {
                 let take = height < regions.text_body.height;
                 if take {
@@ -289,9 +312,7 @@ impl ScrollCoverage {
         let fills_viewport = height >= regions.text_body.height;
         // A suffix can start in a visual continuation: it certifies scroll
         // coverage, not a fresh viewport starting at that buffer character.
-        let complete_viewport = !bridge
-            && (fills_viewport
-                || rows.len() == admission.retained.matrix.rows.len() - admission.row_base);
+        let complete_viewport = !bridge && (fills_viewport || visible == capacity);
         if !bridge {
             rows.truncate(visible);
         }
@@ -333,6 +354,7 @@ impl ScrollCoverage {
         snapshot.rows = body.geometry.rows;
         snapshot.body_rows = body.geometry.body_rows;
         snapshot.logical_cursor = None;
+        snapshot.logical_cursor_dimensions = None;
         snapshot.phys_cursor = None;
         // Geometry remains private; keep the captured source identity separately
         // so bounded measurement can validate it together with the read certificate.
@@ -374,6 +396,19 @@ impl ScrollCoverage {
 }
 
 impl LayoutEngine {
+    /// Retire original evaluator leases independently of presentation acceptance.
+    /// Idle and aborted attempts still process deleted owners, including when
+    /// every remaining frame is hidden or no selected frame exists.
+    pub(super) fn retire_removed_frame_owners(
+        &mut self,
+        evaluator: &neovm_core::emacs_core::Context,
+    ) {
+        self.frame_visual_histories
+            .retain_live(|frame| evaluator.frame_manager().get(frame).is_some());
+        self.prepared_viewports
+            .retain_live_frames(|frame| evaluator.frame_manager().get(frame).is_some());
+    }
+
     /// A completed idle page needs one fresh immutable transport publication.
     pub fn take_scroll_coverage_publication(&mut self) -> bool {
         std::mem::take(&mut self.scroll_coverage.publication_pending)
@@ -385,6 +420,7 @@ impl LayoutEngine {
         &mut self,
         evaluator: &neovm_core::emacs_core::Context,
     ) -> Option<ScrollCoverageProgress> {
+        self.retire_removed_frame_owners(evaluator);
         self.prepared_viewports.retire_invalid_dependencies();
         if !self.prepared_viewports.invalidated.is_empty() {
             // Retire the old render-thread certificate even before a new
@@ -529,7 +565,29 @@ impl LayoutEngine {
                             // The same lower offset as ScrollSurface::clamp_offset;
                             // no glyph materialization is needed to schedule work.
                             let headroom = coverage.viewport.y + coverage.origin - bounds.y;
-                            headroom <= retained.key.char_height * 2.0
+                            // Two physical lines of one short face are fewer
+                            // pixels than `2 * char_height`. The tallest body
+                            // row is that face when the page is uniform, and
+                            // stays the frame font when any row is at least
+                            // that tall. A clipped fragment must not shrink it.
+                            let line = coverage
+                                .content
+                                .matrix
+                                .rows
+                                .iter()
+                                .filter(|row| {
+                                    row.enabled
+                                        && row.height_px > 0.0
+                                        && !RetainedWindowMatrix::is_chrome_role(row.role)
+                                })
+                                .map(|row| row.height_px)
+                                .fold(0.0_f32, f32::max);
+                            let unit = if line > 0.0 && line + 1.0 < retained.key.char_height {
+                                line
+                            } else {
+                                retained.key.char_height
+                            };
+                            headroom <= unit * 2.0
                         })
                     })
                     .unwrap_or(true)
@@ -1172,7 +1230,7 @@ impl LayoutEngine {
             crate::display_property::DisplayPropertyTarget::Graphical,
             evaluator.symbol_mode(),
         );
-        if !inactive_overlay_arrows(evaluator) {
+        if !inactive_overlay_arrows(evaluator, Some(buffer_id)) {
             return Err(RowProgramError::Unsupported);
         }
         // The complete body kernel will widen this domain; these policies

@@ -123,7 +123,9 @@ pub(crate) fn seed_input_decode_map_from_terminal(eval: &mut Context) {
         tracing::debug!("term_get_fkeys: no termcap/terminfo database for TERM={term:?}");
         return;
     };
-    let Some(input_decode_map) = eval.variable_value_by_name("input-decode-map") else {
+    // GNU reads KVAR (current_kboard, Vinput_decode_map) (keyboard.c:11028);
+    // the visible read resolves the current terminal's kboard binding.
+    let Some(input_decode_map) = eval.builtin_var_value_by_name("input-decode-map") else {
         return;
     };
 

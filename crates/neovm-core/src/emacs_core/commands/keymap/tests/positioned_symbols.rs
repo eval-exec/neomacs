@@ -1,10 +1,11 @@
 use super::*;
+use crate::emacs_core::eval::keymap_lookup::{assq_in_alist, minor_mode_map_entry};
 
 #[test]
 fn issue554_positioned_keymap_markers_follow_symbol_mode() {
-    let mut ctx = Context::new();
-    let marker = ctx
-        .tagged_heap
+    let mut ctx = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let marker = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("keymap"), Value::fixnum(0));
     let map = Value::list(vec![marker]);
     assert!(is_list_keymap(&map, SymbolMode::Positioned));
@@ -15,21 +16,21 @@ fn issue554_positioned_keymap_markers_follow_symbol_mode() {
     );
     assert_eq!(KeymapMarker::from_value(marker, SymbolMode::Bare), None);
     assert_eq!(
-        get_keymap_in_obarray(&ctx.obarray, &map, true, SymbolMode::Positioned)
+        get_keymap_in_obarray(&ctx.obarray(), &map, true, SymbolMode::Positioned)
             .unwrap()
             .bits(),
         map.bits()
     );
-    assert!(get_keymap_in_obarray(&ctx.obarray, &map, true, SymbolMode::Bare).is_err());
+    assert!(get_keymap_in_obarray(&ctx.obarray(), &map, true, SymbolMode::Bare).is_err());
 }
 
 #[test]
 fn issue554_positioned_keymap_events_match_and_update_canonical_symbols() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let event = Value::symbol("f5");
-    let positioned = ctx
-        .tagged_heap
-        .alloc_symbol_with_pos(event, Value::fixnum(0));
+    let positioned =
+        // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+        unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(event, Value::fixnum(0));
     let first = Value::symbol("first-command");
     let second = Value::symbol("second-command");
     let map = make_sparse_list_keymap();
@@ -50,28 +51,29 @@ fn issue554_positioned_keymap_events_match_and_update_canonical_symbols() {
 
 #[test]
 fn issue554_positioned_keymap_designators_resolve_function_cells() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let map = make_sparse_list_keymap();
     let alias = Value::symbol("issue554-keymap-alias");
-    let positioned = ctx
-        .tagged_heap
-        .alloc_symbol_with_pos(alias, Value::fixnum(0));
-    ctx.obarray
+    let positioned =
+        // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+        unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(alias, Value::fixnum(0));
+    ctx.obarray_view_mut()
         .set_symbol_function("issue554-keymap-alias", map);
     assert_eq!(
-        get_keymap_in_obarray(&ctx.obarray, &positioned, true, SymbolMode::Positioned)
+        get_keymap_in_obarray(&ctx.obarray(), &positioned, true, SymbolMode::Positioned)
             .unwrap()
             .bits(),
         map.bits()
     );
-    assert!(get_keymap_in_obarray(&ctx.obarray, &positioned, true, SymbolMode::Bare).is_err());
+    assert!(get_keymap_in_obarray(&ctx.obarray(), &positioned, true, SymbolMode::Bare).is_err());
 }
 
 #[test]
 fn issue554_positioned_minor_mode_alists_use_assq_identity() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let key = Value::symbol("issue554-mode");
-    let positioned = ctx.tagged_heap.alloc_symbol_with_pos(key, Value::fixnum(0));
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let positioned = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(key, Value::fixnum(0));
     let map = make_sparse_list_keymap();
     let entry = Value::cons(positioned, map);
     let alist = Value::list(vec![entry]);

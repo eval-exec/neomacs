@@ -2,7 +2,7 @@
 use neovm_core::emacs_core::{
     display_host::{FontCoverage, FontCoverageRequest, FontCoverageTarget, FontEntityHandle},
     eval::{DisplayHost, FontSpecResolveRequest, GuiFrameHostRequest, ResolvedFontSpecMatch},
-    load::create_bootstrap_evaluator_cached,
+    load_boot::create_bootstrap_evaluator_cached,
 };
 use neovm_core::heap_types::LispString;
 

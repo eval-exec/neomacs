@@ -54,7 +54,7 @@ jobs:
 
       - name: Initialize CodeQL
         id: init
-        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
           # CodeQL 2.26.4 regresses Rust analysis enough to terminate the hosted runner.
           # Remove this pin after https://github.com/github/codeql/issues/22463 is fixed.
@@ -78,7 +78,7 @@ jobs:
       # CodeQL CLI the init step installed; the SARIF carries the category set
       # by analyze.
       - name: Analyze
-        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
           category: /language:${{ matrix.language }}
           upload: never

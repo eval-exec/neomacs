@@ -2,7 +2,7 @@ use super::*;
 use neovm_core::emacs_core::Context;
 
 fn read_with_properties(properties: &str) -> Vec<u8> {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(progn (set-buffer (get-buffer-create \"*bounded-read*\")) (insert (apply 'concat (make-list 10000 \"café line\\n\"))))").unwrap();
     eval.eval_str(properties).unwrap();
     let buffer = eval.buffer_manager().current_buffer().unwrap();
@@ -100,7 +100,7 @@ fn source_read_preserves_accessible_tail_when_no_safe_bound_exists() {
 
 #[test]
 fn sync_source_budget_preserves_semantic_end_point_and_window_start() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(progn (set-buffer (get-buffer-create \"*sync-read*\")) (insert (apply 'concat (make-list 100 \"café line\\n\"))))").unwrap();
     let buffer = eval.buffer_manager().current_buffer().unwrap();
     let view = crate::neovm_bridge::BorrowedLayoutBuffer::for_window(
@@ -142,7 +142,7 @@ fn sync_source_budget_preserves_semantic_end_point_and_window_start() {
 
 #[test]
 fn sync_source_budget_keeps_real_eob_when_lookahead_runs_out() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str(
         "(progn (set-buffer (get-buffer-create \"*sync-tail*\")) (insert \"one\\ntwo\\n\"))",
     )
@@ -188,7 +188,7 @@ fn sync_horizon_exhaustion_is_independent_of_semantic_eob() {
     assert!(!BufferWindowReadBoundary::WindowRows.exhausts_sync_horizon(44, 44, 40, 1000));
 }
 fn sync_read_with_properties(properties: &str) -> (Vec<u8>, BufferWindowSource) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(progn (set-buffer (get-buffer-create \"*sync-hazard*\")) (insert (apply 'concat (make-list 100 \"row\\n\"))))").unwrap();
     eval.eval_str(properties).unwrap();
     let buffer = eval.buffer_manager().current_buffer().unwrap();
@@ -253,7 +253,7 @@ fn sync_source_budget_preserves_full_source_without_safe_lookahead() {
 #[test]
 fn window_character_budget_bounds_long_lines_and_preserves_semantic_metadata() {
     for text in [format!("{}λ", "a".repeat(800_000)), "λé".repeat(400_000)] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         eval.buffer_manager_mut()
             .current_buffer_mut()
             .unwrap()
@@ -313,7 +313,7 @@ fn window_character_budget_bounds_long_lines_and_preserves_semantic_metadata() {
 
 #[test]
 fn window_character_budget_distinguishes_horizon_from_real_accessible_end() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.buffer_manager_mut()
         .current_buffer_mut()
         .unwrap()
@@ -378,7 +378,7 @@ fn window_character_budget_remains_progressive_with_hidden_or_selective_source()
         "(put-text-property 1 (point-max) 'display \"replacement\")",
         "(set (make-local-variable 'selective-display) 2)",
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         eval.buffer_manager_mut()
             .current_buffer_mut()
             .unwrap()
@@ -424,7 +424,7 @@ fn window_character_budget_remains_progressive_with_hidden_or_selective_source()
 /// same question from the newline cache, src/search.c:675).
 #[test]
 fn window_rows_budget_stops_a_newline_less_tail_at_the_allowance() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.buffer_manager_mut()
         .current_buffer_mut()
         .unwrap()
@@ -489,7 +489,7 @@ fn window_rows_budget_keeps_the_newline_bound_when_the_rows_fit() {
             BufferWindowReadBoundary::WindowChars(CharPos0::new(1024)),
         ),
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         eval.buffer_manager_mut()
             .current_buffer_mut()
             .unwrap()

@@ -1941,6 +1941,8 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
         self
     }
 
+    /// Resolve source-newline font geometry and line-end effects before
+    /// advancing the row transition, including intercepted display newlines.
     pub(crate) fn render_and_apply<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServices>(
         self,
         source_walk: &mut BufferSourceWalk<'_, B>,
@@ -1961,13 +1963,19 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
         let mut source_render = source_render;
         let context = self.context;
 
-        let resolved_height = if self.line_height
-            != crate::display_item::DisplayLineHeightPolicy::Default
-            && source_render
-                .measurement_mode()
-                .uses_concrete_font_geometry()
-        {
-            let defaults = context.row_geometry_defaults;
+        // The frame default is a fallback, not a minimum for a small font.
+        // Share this decision with worker-prepared rows; ordinary default-font
+        // rows keep their accumulated geometry without scanning glyphs.
+        let defaults = context.row_geometry_defaults;
+        let face = context.active_face_state.metrics();
+        let resolved_height = if source_render
+            .measurement_mode()
+            .uses_concrete_font_geometry()
+            && crate::display_row::metrics::newline_requires_height_resolution(
+                self.line_height,
+                (face.row_height(), face.ascent()),
+                (defaults.height, defaults.ascent),
+            ) {
             let fallback =
                 crate::display_row::metrics::DisplayRowFallbackMetrics::from_default_face_extents(
                     context.default_char_width,
@@ -1975,7 +1983,6 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                     defaults.ascent,
                 );
             let content = source_render.current_row_visible_content_metrics(face_ids, fallback);
-            let face = context.active_face_state.metrics();
             let metrics = crate::display_row::metrics::resolve_line_height(
                 self.line_height,
                 (content.height_px(), content.ascent_px()),
@@ -2070,7 +2077,13 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                 fill_char_width: metrics.char_width(),
                 indicator_char_width: context.default_char_width,
             };
-            source_render.render_line_end(&line_end_ctx, line_end_geometry, face_ids);
+            source_render.render_line_end(&line_end_ctx, line_end_geometry, face_ids, &|from| {
+                crate::display_row::trailing_whitespace::buffer_trailing_whitespace_p(
+                    buffer,
+                    context.point_charpos,
+                    from,
+                )
+            });
         }
         // The row ends at a real buffer newline, so it owns the columns past
         // its last glyph. The cell is the one GNU's `append_space_for_newline`
@@ -2316,6 +2329,13 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                     indicator_char_width: context.default_char_width,
                 },
                 face_ids,
+                &|from| {
+                    crate::display_row::trailing_whitespace::buffer_trailing_whitespace_p(
+                        buffer,
+                        context.point_charpos,
+                        from,
+                    )
+                },
             );
         }
         line_break_action.apply_before_row_transition(
@@ -2505,14 +2525,19 @@ impl BufferSourceLineBreakSourceAction {
         x: f32,
         col: usize,
     ) -> CapturedCursorInfo {
-        CapturedCursorInfo::from_active_face_state(
-            active_face_state,
-            CapturedCursorPlacement::from_row_text_position(
-                row_geometry.text_position(x, self.ch_start_byte_idx, col),
-                CapturedCursorSlotWidth::FaceChar,
-                false,
-            ),
-        )
+        // append_space_for_newline gives the synthetic glyph the accumulated
+        // row extents. Resolve after finalization, when spacing is also known.
+        CapturedCursorInfo {
+            vertical_source: crate::display_cursor::CursorVerticalSource::SyntheticNewline,
+            ..CapturedCursorInfo::from_active_face_state(
+                active_face_state,
+                CapturedCursorPlacement::from_row_text_position(
+                    row_geometry.text_position(x, self.ch_start_byte_idx, col),
+                    CapturedCursorSlotWidth::FaceChar,
+                    false,
+                ),
+            )
+        }
     }
 
     pub(crate) fn capture_cursor_if_point(

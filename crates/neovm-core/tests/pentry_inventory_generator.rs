@@ -427,11 +427,16 @@ fn pentry_inventory_generator_accepts_unrelated_cfg_select_expression() {
 
 #[test]
 fn architecture_pentry_inventory_source_matches_cold_sidecar() {
-    let manifest = neomacs_infra::crate_root!();
-    let project = manifest.join("../..");
+    let core_manifest = neomacs_infra::crate_root!();
+    let project = core_manifest.join("../..");
+    // After the evaluator split the subr machinery and the generated
+    // inventory live in neovm-eval; the generator scans it plus the other
+    // subr-declaring crates and names them workspace-relative.
+    let manifest = project.join("crates/neovm-eval");
     // Build.rs deliberately retains its narrow original inputs: this scan is
     // explicit test/tool work, never an input to every incremental core build.
-    let build_script = fs::read_to_string(manifest.join("build.rs")).expect("core build script");
+    let build_script =
+        fs::read_to_string(core_manifest.join("build.rs")).expect("core build script");
     assert!(
         !build_script.contains("build_support/pentry_inventory.rs"),
         "the full-source inventory scanner belongs in the architecture gate, not build.rs"
@@ -450,7 +455,7 @@ fn architecture_pentry_inventory_source_matches_cold_sidecar() {
         .expect("checked-in cold inventory");
     assert!(
         generated == sidecar,
-        "stale cold inventory: run cargo xtask pentry-inventory <OUTPUT-DIR>, then copy pentry_inventory.rs to crates/neovm-core/src/emacs_core/lisp/native/subr/effect_inventory.inc; fresh artifacts: {}",
+        "stale cold inventory: run cargo xtask pentry-inventory <OUTPUT-DIR>, then copy pentry_inventory.rs to crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_inventory.inc; fresh artifacts: {}",
         output.display()
     );
     eprintln!("pentry architecture artifacts: {}", output.display());

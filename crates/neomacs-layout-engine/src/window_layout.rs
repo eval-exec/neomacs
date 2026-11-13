@@ -7,6 +7,7 @@
 
 use crate::display_face_policy::EffectiveWindowDefaultFace;
 use crate::display_frame_output::WindowFrameGeometry;
+use crate::neovm_bridge::DividerCornerPolicy;
 use crate::types::{FrameParams, WindowParams};
 use neomacs_display_protocol::types::Rect;
 use neovm_core::window::PresentedWindowRegions;
@@ -60,11 +61,30 @@ impl WindowChromeMetrics {
 ///
 /// This is a layout-domain value, not a renderer reconstruction.  Body rows,
 /// chrome, scroll bars, hit testing, popup anchors, and evaluator queries must
-/// all consume rectangles projected from this same value.
+/// all consume rectangles projected from this same value. GNU deliberately
+/// uses disjoint bottom-owned corners for hit classification (xdisp.c:2945),
+/// while its draw routines may overlap those dividers (xdisp.c:37780). Keep
+/// that visual projection private; it is not overlapping interaction geometry.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct WindowLayoutBox {
     chrome: WindowChromeMetrics,
     regions: PresentedWindowRegions,
+    divider_paint: WindowDividerPaint,
+}
+
+/// Visual rectangles derived with the accepted interaction partition. They
+/// need not be disjoint: GNU draws the right edge last in its overlap case.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WindowDividerPaint {
+    pub(crate) right: Option<Rect>,
+    pub(crate) bottom: Option<Rect>,
+    corner: DividerCornerPolicy,
+}
+
+impl WindowDividerPaint {
+    pub(crate) fn right_paints_last(self) -> bool {
+        self.corner == DividerCornerPolicy::Overlap && self.right.is_some() && self.bottom.is_some()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -73,6 +93,7 @@ pub(crate) struct WindowDividerLayout {
     bottom_edge: f32,
     right_width: f32,
     bottom_height: f32,
+    corner: DividerCornerPolicy,
 }
 
 impl WindowDividerLayout {
@@ -89,10 +110,7 @@ impl WindowDividerLayout {
         } else {
             0.0
         };
-        let bottom_height = if !params.is_minibuffer()
-            && !geometry.is_bottommost
-            && frame_params.bottom_divider_width > 0
-        {
+        let bottom_height = if geometry.has_bottom_divider(params, frame_params) {
             frame_params.bottom_divider_width as f32
         } else {
             0.0
@@ -102,6 +120,7 @@ impl WindowDividerLayout {
             bottom_edge: geometry.bottom_edge,
             right_width,
             bottom_height,
+            corner: geometry.divider_corner,
         }
     }
 
@@ -112,6 +131,7 @@ impl WindowDividerLayout {
             bottom_edge: params.bounds.y + params.bounds.height,
             right_width: 0.0,
             bottom_height: 0.0,
+            corner: DividerCornerPolicy::Overlap,
         }
     }
 }
@@ -236,6 +256,8 @@ impl WindowLayoutBox {
             mode_h,
         ));
 
+        // GNU ON_RIGHT_DIVIDER excludes the bottom strip; ON_BOTTOM_DIVIDER
+        // spans the full width, independently of the visual corner policy.
         let right_divider = optional_rect(Rect::new(
             dividers.right_edge - dividers.right_width,
             outer.y,
@@ -245,12 +267,36 @@ impl WindowLayoutBox {
         let bottom_divider = optional_rect(Rect::new(
             outer.x,
             dividers.bottom_edge - bottom_divider_h,
-            content_width,
+            outer.width.max(0.0),
             bottom_divider_h,
         ));
+        let divider_paint = WindowDividerPaint {
+            right: optional_rect(Rect::new(
+                dividers.right_edge - dividers.right_width,
+                outer.y,
+                right_divider_w,
+                if dividers.corner == DividerCornerPolicy::BottomCovers {
+                    content_height
+                } else {
+                    outer.height.max(0.0)
+                },
+            )),
+            bottom: optional_rect(Rect::new(
+                outer.x,
+                dividers.bottom_edge - bottom_divider_h,
+                if dividers.corner == DividerCornerPolicy::RightCovers {
+                    content_width
+                } else {
+                    outer.width.max(0.0)
+                },
+                bottom_divider_h,
+            )),
+            corner: dividers.corner,
+        };
 
         Self {
             chrome,
+            divider_paint,
             regions: PresentedWindowRegions {
                 outer,
                 text_body: body,
@@ -278,6 +324,10 @@ impl WindowLayoutBox {
 
     pub(crate) fn regions(self) -> PresentedWindowRegions {
         self.regions
+    }
+
+    pub(crate) fn divider_paint(self) -> WindowDividerPaint {
+        self.divider_paint
     }
 
     pub(crate) fn body(self) -> Rect {

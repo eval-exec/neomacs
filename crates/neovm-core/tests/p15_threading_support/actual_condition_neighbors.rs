@@ -23,7 +23,10 @@ pub(crate) mod emacs_core {
     pub(crate) mod threads {
         use super::error::Flow;
         use super::value::Value;
-        use crate::threading::RecursionDepth;
+        // The real condition_wait.rs moved to neovm-eval and imports the real
+        // neovm_value recursion-depth type. The mock manager must return that
+        // same type; a fixture-local copy is a distinct type (E0308).
+        use neovm_value::heap_types::threading::RecursionDepth;
 
         // Opaque neighbours retain the real heap word's auto traits. No shim
         // constructor or association query can pretend to validate handles.

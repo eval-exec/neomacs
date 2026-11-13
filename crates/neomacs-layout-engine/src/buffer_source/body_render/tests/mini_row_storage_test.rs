@@ -95,7 +95,7 @@ fn window_params() -> WindowParams {
 }
 
 fn mini_setup(measurement: WindowSourceExtent) -> (BufferWindowGeometry, BufferSourceWalkSetup) {
-    let _runtime = Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut params = window_params();
     params.source_extent = measurement;
     let layout_box = WindowLayoutBox::resolve(

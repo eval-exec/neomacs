@@ -1,11 +1,31 @@
+warning: unused import: `crate::threading`
+ --> tests/p15_threading_ui/../p15_threading_support/actual_condition_neighbors.rs
+  |
+  |     pub(crate) use crate::threading;
+  |                    ^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::actual_payload::emacs_core::value::buffer_vocab`
+ --> tests/p15_threading_ui/../p15_threading_support/actual_condition_neighbors.rs
+  |
+  |         pub(crate) use crate::actual_payload::emacs_core::value::buffer_vocab;
+  |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `heap_types`
+ --> tests/p15_threading_ui/condition_wait_unvalidated_association.rs:7:61
+  |
+7 |     ConditionId, MutexId, ThreadKey, Wait, api, emacs_core, heap_types,
+  |                                                             ^^^^^^^^^^
+
 error[E0451]: fields `condition`, `mutex` and `depth` of struct `ValidatedWait` are private
-  --> tests/p15_threading_ui/condition_wait_unvalidated_association.rs:18:9
+  --> tests/p15_threading_ui/condition_wait_unvalidated_association.rs:22:9
    |
-17 |     condition_wait::ConditionWait::Waiting(condition_wait::ValidatedWait {
+21 |     condition_wait::ConditionWait::Waiting(condition_wait::ValidatedWait {
    |                                            ----------------------------- in this type
-18 |         condition,
+22 |         condition,
    |         ^^^^^^^^^ private field
-19 |         mutex,
+23 |         mutex,
    |         ^^^^^ private field
-20 |         depth,
+24 |         depth,
    |         ^^^^^ private field

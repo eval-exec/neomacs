@@ -1,0 +1,617 @@
+//! Measured display-row motion shared by Lisp motion and window scrolling.
+//!
+//! GNU's interactive `vertical-motion` uses the same display iterator as
+//! redisplay. Retained rows are a fast path, not a substitute for measurement.
+//! GNU's intentionally different batch engine stays in `editing/indent`.
+
+mod measurement;
+pub(crate) mod paging;
+pub(crate) mod pixels;
+mod policy;
+pub(crate) mod recenter;
+pub(crate) use policy::ScrollGoal;
+
+use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
+use crate::window::display::WindowDisplayContextExt;
+use crate::window::{DisplayRowSnapshot, FrameId, WindowDisplaySnapshot, WindowId};
+use neovm_edit::buffer::{AccessibleCharRange, BufferId, LispCharPos1};
+use neovm_edit::emacs_core::display_metrics::{
+    LineWrap, MeasuredMotion, MotionEngine, MotionRequest,
+};
+use neovm_eval::emacs_core::eval::Context;
+use neovm_value::error::{Flow, LispCondition, signal};
+use neovm_value::value::Value;
+
+/// GNU's own branch, `if (noninteractive)` (`src/indent.c:2280`).
+///
+/// The batch engine is the only producer of `ComputeMotion`; see the
+/// `MotionEngine` type documentation in the edit layer's display metrics.
+pub(crate) fn engine_for_context(eval: &Context) -> MotionEngine {
+    if eval.noninteractive() {
+        MotionEngine::ComputeMotion
+    } else {
+        MotionEngine::DisplayIterator
+    }
+}
+
+/// Exhausting measured coverage is not proof of reaching a buffer boundary.
+/// Keep that distinction inside the resolver; only settled motion may be
+/// returned to a caller that will commit point or window-start.
+enum RowMotion {
+    Complete(MeasuredMotion),
+    AccessibleBoundary(MeasuredMotion),
+    NeedsMoreRows,
+}
+
+impl RowMotion {
+    fn settled(self) -> Option<MeasuredMotion> {
+        match self {
+            Self::Complete(motion) | Self::AccessibleBoundary(motion) => Some(motion),
+            Self::NeedsMoreRows => None,
+        }
+    }
+}
+
+fn motion_window(
+    eval: &Context,
+    window: Option<WindowId>,
+    current_buffer: BufferId,
+) -> Option<(FrameId, WindowId)> {
+    let (frame_id, window_id) = if let Some(window_id) = window {
+        let frame_id = eval.frame_manager().find_window_frame_id(window_id)?;
+        (frame_id, window_id)
+    } else {
+        let frame = eval.frame_manager().selected_frame()?;
+        (frame.id, frame.selected_window)
+    };
+    let leaf = eval.frame_manager().get(frame_id)?.find_window(window_id)?;
+    (leaf.buffer_id() == Some(current_buffer)).then_some((frame_id, window_id))
+}
+
+fn snapshot_text_rows(snapshot: &WindowDisplaySnapshot) -> Vec<&DisplayRowSnapshot> {
+    let mut rows: Vec<_> = snapshot
+        .rows
+        .iter()
+        .filter(|row| row.start_buffer_pos.is_some() && row.end_buffer_pos.is_some())
+        .collect();
+    rows.sort_by_key(|row| row.row);
+    rows
+}
+
+fn snapshot_row_index_for_pos(rows: &[&DisplayRowSnapshot], pos: LispCharPos1) -> Option<usize> {
+    rows.iter().position(|row| {
+        row.start_buffer_pos.is_some_and(|start| start <= pos)
+            && row.end_buffer_pos.is_some_and(|end| pos <= end)
+    })
+}
+
+/// The row a display-motion origin belongs to.
+///
+/// GNU never asks which row contains a position.  `Fvertical_motion` reseats at
+/// the start of the origin's line, walks forward to the origin, and -- when that
+/// walk overshoots a line that is truncated on the right (`it.line_wrap ==
+/// TRUNCATE && it.current_x >= it.last_visible_x`) -- backtracks one line,
+/// landing back on the truncated row itself (src/indent.c:2393-2400, "We might
+/// overshoot if lines are truncated and point lies beyond the right margin").
+///
+/// A row answers the same question with its span, and a right-truncated row's
+/// span stops where the drawing stopped (`find_row_edges` gives it
+/// `it->current.pos` for `maxpos`, src/xdisp.c:25269), so a position beyond the
+/// right margin falls in the gap before the next row starts instead of in any
+/// row at all.  Rows partition the source, so such a gap is always text a row
+/// stopped drawing without ending its line, and that row owns the origin --
+/// which is exactly the row GNU's overshoot correction lands on.
+fn snapshot_row_index_for_pos_or_truncated_line(
+    rows: &[&DisplayRowSnapshot],
+    pos: LispCharPos1,
+    end_lisp: LispCharPos1,
+) -> Option<usize> {
+    if let Some(index) = snapshot_row_index_for_pos(rows, pos) {
+        return Some(index);
+    }
+    rows.iter().enumerate().rev().find_map(|(index, row)| {
+        // A next row bounds an omitted (e.g. truncated) source tail. Without
+        // one, only an explicitly measured truncation boundary grants ownership.
+        let inside_line = match rows.get(index + 1).and_then(|next| next.start_buffer_pos) {
+            Some(next_start) => pos < next_start,
+            None => row
+                .truncated_end_buffer_pos
+                .is_some_and(|end| pos <= end.min(end_lisp)),
+        };
+        (row.start_buffer_pos.is_some_and(|start| start <= pos) && inside_line).then_some(index)
+    })
+}
+
+/// The pixel height of the screen line holding POS.
+///
+/// GNU's `Fline_pixel_height` runs `start_display` at point and then
+/// `move_it_by_lines (&it, 0)` (src/xdisp.c), so the answer does not depend
+/// on POS lying inside the window's current rows.  Lay out rows from POS's
+/// source line, as vertical motion does, and grow the row budget until a row
+/// holds POS.  `None` means no frontend can lay the window out now.
+pub(crate) fn screen_line_height_at(
+    eval: &mut Context,
+    frame: FrameId,
+    window: WindowId,
+    buffer: BufferId,
+    pos: LispCharPos1,
+) -> Result<Option<i64>, Flow> {
+    // Lisp run by a layout query (a mode-line `:eval`, a fontification
+    // function) cannot start another one.  GNU measures there; falling back
+    // is closer to that than signaling, as nested chrome Position queries
+    // already do in `query_window_layout_scope`.
+    if eval.window_layout_query_running() {
+        return Ok(None);
+    }
+    let Some(source) = eval.edit.buffers.get(buffer) else {
+        return Ok(None);
+    };
+    let start = measurement::backtrack(source, pos, 0);
+    let end = source.accessible_char_region().end_lisp();
+    let mut count = std::num::NonZeroUsize::new(4).expect("nonzero row budget");
+    loop {
+        let Some(snapshot) = measurement::query(eval, frame, window, buffer, start, count)? else {
+            return Ok(None);
+        };
+        let rows = snapshot_text_rows(&snapshot);
+        if let Some(index) = snapshot_row_index_for_pos_or_truncated_line(&rows, pos, end) {
+            return Ok(Some(rows[index].height));
+        }
+        // Rows already past POS, or fewer rows than asked for, mean more rows
+        // cannot place it.
+        let covered_pos = rows
+            .last()
+            .and_then(|row| row.end_buffer_pos)
+            .is_some_and(|row_end| row_end >= pos.min(end));
+        if rows.len() < count.get() || covered_pos {
+            return Ok(None);
+        }
+        let Some(next) = count
+            .get()
+            .checked_mul(2)
+            .and_then(std::num::NonZeroUsize::new)
+        else {
+            return Ok(None);
+        };
+        count = next;
+    }
+}
+
+/// Leave pushed replacement text without discarding the physical rows crossed.
+/// GNU's move_it_by_lines advances out of a replacing string before returning
+/// a buffer point. Its vpos still counts those rows.
+fn stop_after_source_anchor(
+    snapshot: &WindowDisplaySnapshot,
+    rows: &[&DisplayRowSnapshot],
+    from: usize,
+    anchor: LispCharPos1,
+) -> Option<(usize, LispCharPos1)> {
+    for (index, row) in rows.iter().enumerate().skip(from) {
+        let start = row.start_buffer_pos?;
+        let end = row.end_buffer_pos?;
+        if start > anchor {
+            return Some((index, start));
+        }
+        if end > anchor {
+            // Only the final mixed row needs a glyph scan. String-only rows
+            // are skipped in O(1), keeping the entire walk O(rows + points).
+            let target = snapshot
+                .iter_row_points(row.row)
+                .filter(|point| point.buffer_pos > anchor)
+                .map(|point| point.buffer_pos)
+                .chain(std::iter::once(end))
+                .min()?;
+            return Some((index, target));
+        }
+    }
+    None
+}
+
+/// One place on a screen row where GNU's goal-column walk can come to rest.
+///
+/// GNU reaches a `vertical-motion` goal column with
+/// `move_it_in_display_line (&it, ZV, first_x + to_x, MOVE_TO_X)`
+/// (src/indent.c:2540), and `move_it_in_display_line_to` has TWO ways to stop:
+/// at a glyph that reaches the goal x, or -- when the goal is past everything
+/// the row draws -- where the DISPLAY LINE itself ends. Naming both as stops
+/// keeps that second exit from being an afterthought: a row's end is a
+/// position in its own right, and on a newline-terminated row it is the
+/// newline, which sits one column past the last glyph because it draws none.
+#[derive(Clone, Copy)]
+struct RowGoalStop {
+    col: i64,
+    x: i64,
+    pos: LispCharPos1,
+}
+
+impl RowGoalStop {
+    /// Ordering key for "the LAST stop that does not pass the goal column".
+    ///
+    /// GNU's `MOVE_TO_X` walk places a glyph only while it still fits before
+    /// the goal, and backs up to `x_before_this_char` as soon as one would
+    /// pass it (src/xdisp.c:10385-10400), so the answer is the greatest stop
+    /// column that is `<= goal` -- never the nearer stop beyond it.  Measured
+    /// under GNU Emacs 31.0.90 on a 24-column window whose row starts with a
+    /// TAB: goal columns 1 through 7 all answer the TAB's own position at
+    /// column 0, and only goal 8 reaches the glyph after it.
+    fn reach_key(self, target_col: i64) -> (i64, i64, i64, i64) {
+        let reached = self.col <= target_col;
+        // Among reachable stops take the greatest column; among unreachable
+        // ones (a goal before the row's first stop) take the smallest.
+        let order = if reached { self.col } else { -self.col };
+        (i64::from(reached), order, self.x, self.pos.as_i64())
+    }
+}
+
+/// Every stop the goal-column walk may land on for one row: the drawn glyphs,
+/// then the row's own end boundary.
+fn row_goal_stops(
+    snapshot: &WindowDisplaySnapshot,
+    row: &DisplayRowSnapshot,
+    wrap: LineWrap,
+) -> impl Iterator<Item = RowGoalStop> {
+    let admit_edge = wrap.goal_stops_at_row_edge();
+    let glyphs = snapshot
+        .iter_row_points(row.row)
+        // A marker column IS a goal stop, except under WORD_WRAP.  See
+        // [`LineWrap::goal_stops_at_row_edge`] for GNU's mechanism and the
+        // measurement; ledger 212 section 5 declined this without the gate and
+        // recorded the 45 probes it cost, and ledger 212 residual 1 named the
+        // reading it could not make come out -- it was reading
+        // `move_it_in_display_line_to`, and the deciding code is its CALLER.
+        .filter(move |point| admit_edge || point.role.is_position())
+        .map(|point| RowGoalStop {
+            col: point.col,
+            x: point.x,
+            pos: point.buffer_pos,
+        });
+    let row_end = row.end_buffer_pos.map(|pos| RowGoalStop {
+        col: row.end_col,
+        x: row.end_x,
+        pos,
+    });
+    glyphs.chain(row_end)
+}
+
+/// The position a `(COLS . LINES)` goal lands on within one published row.
+///
+/// `cols` stays exactly as Lisp wrote it: the snapshot's columns are
+/// WINDOW-relative (`DisplayPointSnapshot::col` is measured from the text
+/// area's left edge), which is the space GNU's goal is already expressed in.
+/// GNU has to add `it->first_visible_x` (`src/indent.c:2540`) only because its
+/// walk counts from the LINE start; the scanner in `editing/indent` does the same for
+/// the same reason (`ScreenLineExtent::goal_col_in_line_space`), and doing it
+/// here as well would apply the hscroll twice.
+fn snapshot_target_pos_on_row(
+    snapshot: &WindowDisplaySnapshot,
+    row: &DisplayRowSnapshot,
+    cols: Option<i64>,
+    wrap: LineWrap,
+) -> Option<LispCharPos1> {
+    let Some(target_col) = cols.map(|col| col.max(0)) else {
+        return row.start_buffer_pos;
+    };
+    row_goal_stops(snapshot, row, wrap)
+        .max_by_key(|stop| stop.reach_key(target_col))
+        .map(|stop| stop.pos)
+        .or(row.start_buffer_pos)
+}
+
+/// Resolve motion from fresh retained rows or the canonical row producer.
+/// No point, viewport marker, or presentation is committed here.
+pub(crate) fn resolve(
+    eval: &mut Context,
+    request: MotionRequest,
+) -> Result<Option<MeasuredMotion>, Flow> {
+    if !engine_for_context(eval).uses_display_rows() {
+        return Ok(None);
+    }
+    let Some((frame_id, window_id)) = motion_window(eval, request.window, request.buffer) else {
+        return Ok(None);
+    };
+    let request = MotionRequest {
+        window: Some(window_id),
+        ..request
+    };
+    let Some((accessible, wrap)) = motion_parameters(eval, request) else {
+        return Ok(None);
+    };
+    if let Some(snapshot) = eval.fresh_window_display_snapshot(frame_id, window_id, request.buffer)
+        && let Some(motion) = vertical_motion_on_rows(snapshot, request, accessible, wrap).settled()
+    {
+        return Ok(Some(motion));
+    }
+
+    // GNU reruns the display iterator when redisplay's rows are unavailable.
+    // The column scanner cannot substitute for that walk: display strings,
+    // proportional faces and replacements can change the row boundaries.
+    measurement::resolve(eval, frame_id, window_id, request)
+}
+
+fn motion_parameters(
+    eval: &mut Context,
+    request: MotionRequest,
+) -> Option<(AccessibleCharRange, LineWrap)> {
+    // Read wrapping after a query's Lisp callbacks, not before them. A plain
+    // row request has no goal-column walk and needs no wrapping lookup.
+    let wrap = match request.goal_column {
+        Some(_) => crate::emacs_core::window_cmds::window_line_wrap(
+            eval,
+            request.window.map(|id| Value::make_window(id.0)),
+            request.buffer,
+            MotionEngine::DisplayIterator,
+        ),
+        None => LineWrap::Truncate,
+    };
+    Some((
+        eval.edit
+            .buffers
+            .get(request.buffer)?
+            .accessible_char_region(),
+        wrap,
+    ))
+}
+
+/// Integer motion leaves an EOB overlay before returning a valid buffer point.
+/// Its physical distance is independent of the reachable-source-row view.
+/// GNU resets that distance only when the motion origin itself is ZV
+/// (`src/indent.c:2496-2525`), not whenever the current row happens to end there.
+fn integer_eob_overlay_motion(
+    snapshot: &WindowDisplaySnapshot,
+    request: MotionRequest,
+    end: LispCharPos1,
+    current: &DisplayRowSnapshot,
+    anchor_row: &DisplayRowSnapshot,
+) -> Option<RowMotion> {
+    use crate::window::EobOverlayMotionCoverage;
+
+    // A goal-column walk has a separate GNU traversal phase; this extent
+    // certifies the integer-LINES walk only.
+    if request.rows <= 0 || request.goal_column.is_some() || anchor_row.end_buffer_pos != Some(end)
+    {
+        return None;
+    }
+    let extent = match snapshot.eob_overlay_motion {
+        EobOverlayMotionCoverage::NotObserved => {
+            if !anchor_row.end_source.is_overlay_string() {
+                return None;
+            }
+            None
+        }
+        EobOverlayMotionCoverage::Incomplete { anchor } => {
+            if anchor != end && !anchor_row.end_source.is_overlay_string() {
+                return None;
+            }
+            None
+        }
+        EobOverlayMotionCoverage::Complete(extent) => {
+            if extent.anchor() == end {
+                Some(extent)
+            } else {
+                if !anchor_row.end_source.is_overlay_string() {
+                    return None;
+                }
+                None
+            }
+        }
+    };
+    if request.origin == end {
+        return Some(RowMotion::AccessibleBoundary(MeasuredMotion {
+            target: end,
+            moved: 0,
+        }));
+    }
+    let Some(extent) = extent else {
+        return Some(RowMotion::NeedsMoreRows);
+    };
+    let moved = anchor_row
+        .row
+        .checked_sub(current.row)
+        .filter(|distance| *distance >= 0)
+        .and_then(|distance| {
+            i64::try_from(extent.following_rows())
+                .ok()
+                .and_then(|tail| distance.checked_add(tail))
+        });
+    Some(match moved {
+        Some(moved) => RowMotion::AccessibleBoundary(MeasuredMotion { target: end, moved }),
+        None => RowMotion::NeedsMoreRows,
+    })
+}
+
+fn vertical_motion_on_rows(
+    snapshot: &WindowDisplaySnapshot,
+    request: MotionRequest,
+    accessible: AccessibleCharRange,
+    wrap: LineWrap,
+) -> RowMotion {
+    use crate::window::DisplayRowEndSource;
+
+    let mut rows = snapshot_text_rows(snapshot);
+    // Further EOB overlay rows carry the same anchor, so they are not distinct
+    // source landings. Keep their physical distance in the producer's extent
+    // instead of trying to recover it from repeated or sourceless rows.
+    while rows.len() > 1 {
+        let last = rows[rows.len() - 1];
+        let previous = rows[rows.len() - 2];
+        if !last.end_source.is_overlay_string()
+            || !previous.end_source.is_overlay_string()
+            || last.end_buffer_pos != Some(accessible.end_lisp())
+            || previous.end_buffer_pos != Some(accessible.end_lisp())
+        {
+            break;
+        }
+        rows.pop();
+    }
+    let Some(mut current_idx) =
+        snapshot_row_index_for_pos_or_truncated_line(&rows, request.origin, accessible.end_lisp())
+    else {
+        return RowMotion::NeedsMoreRows;
+    };
+    // A before-string inserts rows before the source cursor; positive motion
+    // begins where its buffer character resumes. Backwards motion still
+    // counts every inserted physical row.
+    if request.rows >= 0 {
+        while current_idx + 1 < rows.len()
+            && rows[current_idx].end_source == DisplayRowEndSource::OverlayBeforeString
+            && rows[current_idx].end_buffer_pos == Some(request.origin)
+        {
+            current_idx += 1;
+        }
+    }
+    let mut target_idx = (current_idx as i64).saturating_add(request.rows);
+    let mut source_floor = None;
+
+    // GNU's first positive step leaves the entire replacement at point; any
+    // remaining steps advance from that valid source position. Keep the
+    // original physical index so traversed replacement rows remain counted.
+    let current = rows[current_idx];
+    if let Some(motion) =
+        integer_eob_overlay_motion(snapshot, request, accessible.end_lisp(), current, current)
+    {
+        return motion;
+    }
+    if request.rows > 0 && current.end_source.is_overlay_string() {
+        if current.end_buffer_pos == Some(accessible.end_lisp()) {
+            return RowMotion::AccessibleBoundary(MeasuredMotion {
+                target: accessible.end_lisp(),
+                moved: 0,
+            });
+        }
+        let mut first_step = current_idx + 1;
+        while first_step < rows.len() && rows[first_step].end_source.is_overlay_string() {
+            first_step += 1;
+        }
+        if first_step == rows.len() {
+            return RowMotion::NeedsMoreRows;
+        }
+        target_idx = (first_step as i64).saturating_add(request.rows - 1);
+    }
+    // Zero motion reseats before the current logical line. Reaching an
+    // anchor from the preceding buffer newline is a valid source cursor;
+    // starting at BEGV already inside pushed text is not. Query the missing
+    // predecessor rather than treating the retained viewport edge as BEGV.
+    let zero_at_source_boundary = request.rows == 0
+        && current_idx > 0
+        && rows[current_idx - 1].end_source == DisplayRowEndSource::Buffer;
+    if request.rows == 0
+        && current_idx == 0
+        && request.origin > accessible.start_lisp()
+        && current.end_source.is_display_string()
+    {
+        return RowMotion::NeedsMoreRows;
+    }
+    if request.rows >= 0
+        && !zero_at_source_boundary
+        && current.end_source.is_display_string()
+        && current.end_buffer_pos == Some(request.origin)
+    {
+        let Some((after_idx, after_pos)) =
+            stop_after_source_anchor(snapshot, &rows, current_idx + 1, request.origin)
+        else {
+            return RowMotion::NeedsMoreRows;
+        };
+        let steps = if request.rows == 0 {
+            // GNU move_it_vertically_backward(dy=0) probes until the source
+            // cursor is valid, or until an explicit newline in a pushed
+            // string, then replays that many physical rows. A visual wrap is
+            // not the same cursor state as a string newline.
+            rows[current_idx..after_idx]
+                .iter()
+                .position(|row| row.end_source == DisplayRowEndSource::DisplayStringNewline)
+                .map_or(after_idx - current_idx, |index| index + 1) as i64
+        } else {
+            request.rows
+        };
+        target_idx = (after_idx as i64).saturating_add(steps.saturating_sub(1).max(0));
+        source_floor = Some((after_idx, after_pos));
+    }
+
+    if target_idx < 0 {
+        if rows[0].start_buffer_pos != Some(accessible.start_lisp()) {
+            return RowMotion::NeedsMoreRows;
+        }
+        let Some(target) = snapshot_target_pos_on_row(snapshot, rows[0], request.goal_column, wrap)
+        else {
+            return RowMotion::NeedsMoreRows;
+        };
+        return RowMotion::AccessibleBoundary(MeasuredMotion {
+            target,
+            moved: -(current_idx as i64),
+        });
+    }
+    if target_idx >= rows.len() as i64 {
+        // A viewport edge is not evidence of an accessible-buffer boundary.
+        let last_idx = rows.len() - 1;
+        if rows[last_idx].end_buffer_pos != Some(accessible.end_lisp()) {
+            return RowMotion::NeedsMoreRows;
+        }
+        if let Some(motion) = integer_eob_overlay_motion(
+            snapshot,
+            request,
+            accessible.end_lisp(),
+            current,
+            rows[last_idx],
+        ) {
+            return motion;
+        }
+        return RowMotion::AccessibleBoundary(MeasuredMotion {
+            target: accessible.end_lisp(),
+            moved: last_idx as i64 - current_idx as i64,
+        });
+    }
+    let mut target_idx = target_idx as usize;
+    if request.rows > 0 {
+        while target_idx + 1 < rows.len()
+            && rows[target_idx].end_source.is_overlay_string()
+            && rows[target_idx].end_buffer_pos != Some(accessible.end_lisp())
+        {
+            target_idx += 1;
+        }
+        if rows[target_idx].end_source.is_overlay_string()
+            && rows[target_idx].end_buffer_pos != Some(accessible.end_lisp())
+        {
+            return RowMotion::NeedsMoreRows;
+        }
+    }
+    if request.rows >= 0 && target_idx > 0 {
+        let previous = rows[target_idx - 1];
+        if previous.end_source.is_display_string()
+            && previous.end_buffer_pos == rows[target_idx].start_buffer_pos
+        {
+            let anchor = previous.end_buffer_pos.expect("source row");
+            let Some((after_idx, after_pos)) =
+                stop_after_source_anchor(snapshot, &rows, target_idx, anchor)
+            else {
+                return RowMotion::NeedsMoreRows;
+            };
+            target_idx = after_idx;
+            source_floor = Some((after_idx, after_pos));
+        }
+    }
+    let Some(mut target) =
+        snapshot_target_pos_on_row(snapshot, rows[target_idx], request.goal_column, wrap)
+    else {
+        return RowMotion::NeedsMoreRows;
+    };
+    if let Some((row_idx, source_pos)) = source_floor
+        && row_idx == target_idx
+    {
+        // A goal column inside pushed text cannot move point back into the
+        // replacement after the vertical walk has left it.
+        target = target.max(source_pos);
+    }
+    RowMotion::Complete(MeasuredMotion {
+        target,
+        moved: if request.rows == 0 {
+            0
+        } else {
+            target_idx as i64 - current_idx as i64
+        },
+    })
+}
+
+#[cfg(test)]
+#[path = "tests/motion_test.rs"]
+mod tests;

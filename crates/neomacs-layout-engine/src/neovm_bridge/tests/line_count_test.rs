@@ -37,7 +37,7 @@ fn check_counts<B: LayoutBufferView>(access: &RustBufferAccess<'_, B>, cases: &[
 
 #[test]
 fn scalar_and_memchr_counts_match_across_fragmented_non_ascii_text() {
-    let _runtime = Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "pré\n日本\nomega\rhidden\nfin\n";
     let gap = text.find("omega").unwrap();
     let newline = text.find('\n').unwrap();
@@ -80,7 +80,7 @@ fn scalar_and_memchr_counts_match_across_fragmented_non_ascii_text() {
 
 #[test]
 fn line_count_preserves_narrowed_origins_and_explicit_widened_ranges() {
-    let _runtime = Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "outside\né\n日本\nend\nhidden\n";
     let start = text.find('é').unwrap();
     let end = text.find("hidden").unwrap();
@@ -104,7 +104,7 @@ fn line_count_preserves_narrowed_origins_and_explicit_widened_ranges() {
 
 #[test]
 fn line_count_preserves_empty_reversed_negative_and_clamped_ranges() {
-    let _runtime = Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     for kind in BufferTextBackendKind::implemented_variants() {
         let buffer = buffer(kind, "a\r\nb\nc");
         let snapshot = LayoutBufferSnapshot::from_buffer(&buffer);

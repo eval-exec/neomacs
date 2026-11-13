@@ -115,7 +115,7 @@ jobs:
             --archive-file neomacs-workspace-tests.tar.zst
 
       - name: Upload workspace test archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: neomacs-workspace-tests-nextest-archive-linux-x86_64
           path: neomacs-workspace-tests.tar.zst
@@ -316,12 +316,12 @@ jobs:
           --no-fail-fast
 
   # The compile-fail contracts build only with the `contract-fixtures`
-  # feature because each runner compiles separate trybuild fixture crates,
-  # which does not fit a nextest per-test watchdog; the default suites and the
-  # shard matrix therefore never run them, so this standalone job is their
-  # home. It needs the workspace checkout, not the nextest archive, and it
-  # stays out of the shard matrix: this is gate-wt.sh's compile-contracts
-  # step with plain cargo test.
+  # feature, so the default suites and the shard matrix never run them and
+  # this standalone job is their home. It needs the workspace checkout, not
+  # the nextest archive, and it stays out of the shard matrix. The runners go
+  # through nextest like every other test; .config/nextest.toml runs them one
+  # at a time (trybuild serializes its scratch project behind one lock) with a
+  # watchdog sized for a fixture crate build instead of a unit test.
   compile-contracts:
     name: compile contracts (linux x86_64)
     runs-on: ubuntu-24.04
@@ -345,6 +345,7 @@ jobs:
           cache-key: ci-compile-contracts-linux-x86_64
           cache-shared-key: linux-x86_64-dev
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
 
       # trybuild always invokes `cargo --offline` on a scratch project that
       # copies this workspace's Cargo.lock and [patch.crates-io] table. The
@@ -358,29 +359,33 @@ jobs:
         run: cargo fetch --locked
 
       # The runners are compiled only with the `contract-fixtures` feature
-      # (41eaff923a moved them off #[ignore]). Without it the four test
-      # targets build empty and `cargo test` reports 0 passed, so the job
-      # also counts the runners that actually ran: p0s3 1, p1rv 3,
-      # thread_safety 11 (its own, sole-owner, p2ht, pentry, nmjit N1,
-      # three host-effect tests, intern-shared, P15 and split T2) and chartable_write 1,
-      # plus one nested nmjit runner: 17 passed in the summary. Every runner lives in
-      # these test targets: the job never builds the opt-level-2 lib unit-test
-      # binary, and no runner hides in the `core` binary, which no contract
-      # job builds with the feature.
+      # (41eaff923a moved them off #[ignore]). Without it the test targets
+      # build empty and nextest runs nothing, so the job also counts
+      # the runners that actually passed: p0s3 1, p1rv 3, thread_safety 12
+      # (its own, sole-owner, p2ht, pentry, nmjit N1, three host-effect
+      # tests, intern-shared, P15, split T2 and obarray_view_swap_compile_contracts),
+      # chartable_write 1, and mint_seal 1 (the mint-seal trybuild fixtures);
+      # check_compile_contracts.py enforces these per-target counts and the
+      # summary. The nmjit N1 runner drives the isolated
+      # nmjit-type-contracts workspace through its own nested nextest run.
+      # Every runner lives in these test targets: the job never builds the
+      # opt-level-2 lib unit-test binary, and no runner hides in the `core`
+      # binary, which no contract job builds with the feature.
+      - name: Self-test the contract result parser
+        run: python3 scripts/check_compile_contracts.py --self-test
+
       - name: Run the compile-fail contracts
         run: |
           set -o pipefail
           {
             # --no-fail-fast: one failing runner must not hide the others' goldens
             # (2026-10-29: a red p1rv runner hid 4 stale thread_safety goldens).
-            env -u TRYBUILD cargo test -p neovm-core --features contract-fixtures --no-fail-fast \
+            env -u TRYBUILD cargo nextest run -p neovm-core --features contract-fixtures --no-fail-fast \
               --test p0s3_contracts --test p1rv_contracts \
-              --test thread_safety_contracts --test chartable_write_contracts
+              --test thread_safety_contracts --test chartable_write_contracts \
+              --test mint_seal_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
-          ran=$(grep -oE 'test result: ok\. [0-9]+ passed' "$RUNNER_TEMP/contracts.log" \
-            | awk '{s += $4} END {print s + 0}')
-          echo "compile-fail contract runners passed: $ran"
-          test "$ran" -ge 17
+          python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
 
   # The same contracts on the arm64 macOS toolchain. rustc on aarch64-apple-darwin
   # orders and caps its E0277/E0599 notes differently, so the suite keeps
@@ -409,22 +414,24 @@ jobs:
           cache-shared-key: macos-aarch64-dev
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           target: aarch64-apple-darwin
+          install-nextest: true
 
       - name: Fetch locked crates for trybuild's offline builds
         run: cargo fetch --locked
+
+      - name: Self-test the contract result parser
+        run: python3 scripts/check_compile_contracts.py --self-test
 
       - name: Run the compile-fail contracts
         run: |
           set -o pipefail
           {
-            env -u TRYBUILD cargo test -p neovm-core --features contract-fixtures --no-fail-fast \
+            env -u TRYBUILD cargo nextest run -p neovm-core --features contract-fixtures --no-fail-fast \
               --test p0s3_contracts --test p1rv_contracts \
-              --test thread_safety_contracts --test chartable_write_contracts
+              --test thread_safety_contracts --test chartable_write_contracts \
+              --test mint_seal_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
-          ran=$(grep -oE 'test result: ok\. [0-9]+ passed' "$RUNNER_TEMP/contracts.log" \
-            | awk '{s += $4} END {print s + 0}')
-          echo "compile-fail contract runners passed: $ran"
-          test "$ran" -ge 17
+          python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
 
   gnu-emacs-oracle:
     name: GNU Emacs oracle (linux x86_64)
@@ -486,7 +493,14 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build fresh release runtime
-        run: cargo xtask fresh-build --release
+        run: |
+          # The dump writer creates the image with GNU's open(..., 0666)
+          # (src/pdumper.c:4200), so its mode is 0666 masked by the umask.
+          # Pin the standard 022 build umask so the artifact this job
+          # packages, and the staged-release assertion below, are
+          # deterministic across runner images.
+          umask 022
+          cargo xtask fresh-build --release
 
       - name: Smoke the pdump relocating fallback (NEOVM_PDUMP_NO_FIXED_MAP)
         run: |
@@ -545,6 +559,11 @@ jobs:
       - name: Verify install.sh against a staged release tree
         run: |
           set -eux
+          # The staging below copies the build artifacts rather than
+          # re-installing them, so their modes reach the archive unchanged;
+          # pin the umask so cp cannot mask a permission regression (and so
+          # the archive-entry assertion is deterministic across runners).
+          umask 022
           triple=x86_64-unknown-linux-gnu
           crate_version="$(
             awk '/^\[workspace\.package\]/{s=1;next} /^\[/{s=0}
@@ -569,8 +588,31 @@ jobs:
               cp target/release/neomacs.pdump "$pkg/bin/neomacs.pdump"
             fi
             cp -r lisp etc "$pkg/share/neomacs/"
+            # Members owned by uid/gid 1001, what the v0.0.20 release tarball
+            # recorded (the release runner's account), whatever account this
+            # runner happens to use: the root install below has to prove
+            # install.sh never carries an archive's owner into the tree.
             tar czf "$staged/neomacs-$version-$triple.tar.gz" \
+              --owner=1001 --group=1001 --numeric-owner \
               -C "$pkg_parent" "neomacs-$version-$triple"
+            # The installed runtime is loaded by every user: a root install
+            # puts the dump in a system prefix, and the check below runs the
+            # editor as an unprivileged account.  The writer requests GNU's
+            # open(..., 0666) creation mode, so under this step's pinned 022
+            # umask the entry must be -rw-r--r--; the old tempfile default
+            # was a hard 0600 that plain cp carried into the archive and a
+            # root install then made unreadable.  Assert the archive entry
+            # before install.sh, so the packaging layer stays pinned even if
+            # install.sh later normalizes modes.
+            local dump_rel
+            if [ "$layout" = archlib ]; then
+              dump_rel="$archlib/neomacs.pdump"
+            else
+              dump_rel="bin/neomacs.pdump"
+            fi
+            tar tvzf "$staged/neomacs-$version-$triple.tar.gz" \
+              | grep -F "/$dump_rel" | grep -q '^-rw-r--r--' \
+              || { echo "packaged $dump_rel is not 0644 (world-readable)" >&2; exit 1; }
             ( cd "$staged" && sha256sum "neomacs-$version-$triple.tar.gz" > SHA256SUMS )
             local prefix="$stage_root/prefix"
             NEOMACS_DOWNLOAD_BASE="file://$stage_root" \
@@ -595,6 +637,24 @@ jobs:
             test -d "$ver_dir/share/neomacs/lisp"
             env -u NEOMACS_RUNTIME_ROOT \
               "$prefix/bin/neomacs" --batch --eval '(princ (emacs-version))'
+
+            # The same archive installed by root into a system prefix.  Root's
+            # tar restores the archive's owner (1001, above) unless told not
+            # to, and `cp -a' carries it on, so a uid-1001 account could then
+            # rewrite the dump and the Lisp tree.  Everything installed must be
+            # root's, and still runnable by an ordinary user.
+            local root_prefix foreign
+            root_prefix="$(mktemp -d /tmp/neomacs-root-install.XXXXXX)"
+            sudo env NEOMACS_DOWNLOAD_BASE="file://$stage_root" \
+              sh install.sh --tag "v$version" --prefix "$root_prefix" --skip-smoke
+            foreign="$(sudo find "$root_prefix" -mindepth 1 \( ! -user 0 -o ! -group 0 \) -print)"
+            if [ -n "$foreign" ]; then
+              printf 'not owned by root:root after a root install:\n%s\n' "$foreign" >&2
+              exit 1
+            fi
+            env -u NEOMACS_RUNTIME_ROOT \
+              "$root_prefix/bin/neomacs" --batch --eval '(princ (emacs-version))'
+            sudo rm -rf "$root_prefix"
           }
 
           stage_release citest archlib
@@ -603,18 +663,25 @@ jobs:
       - name: Package shared test runtime
         run: |
           test -x target/release/neomacs
+          test -x target/release/neomacsclient
           test -f target/release/neomacs.pdump
           test -f lisp/international/charscript.el
           test -f lisp/international/charprop.el
           test -d etc/charsets
+          # The fresh-build stamp attests the binary to the Lisp tree; the
+          # oracle harnesses refuse a runtime without it.  Package it with the
+          # pair it belongs to.
+          test -f target/release/neomacs.fresh-build-stamp
           tar czf neomacs-test-runtime-linux-x86_64.tar.gz \
             target/release/neomacs \
+            target/release/neomacsclient \
             target/release/neomacs.pdump \
+            target/release/neomacs.fresh-build-stamp \
             lisp \
             etc
 
       - name: Upload shared test runtime
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: neomacs-test-runtime-linux-x86_64
           path: neomacs-test-runtime-linux-x86_64.tar.gz
@@ -736,9 +803,10 @@ jobs:
         name: Unpack shared test runtime
         run: |
           tar xzf neomacs-test-runtime-linux-x86_64.tar.gz
-          chmod +x target/release/neomacs
+          chmod +x target/release/neomacs target/release/neomacsclient
           test -f lisp/international/charscript.el
           test -f lisp/international/charprop.el
+          test -f target/release/neomacs.fresh-build-stamp
 
       - &download_workspace_test_archive
         name: Download workspace test archive
@@ -748,7 +816,7 @@ jobs:
           path: .
 
       - name: Install Nix for exact MELPA test runtimes
-        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
 
       # After the MELPA Nix install so the action reuses that Nix instead of
       # provisioning its own.
@@ -1070,7 +1138,7 @@ jobs:
 
       - name: Upload GUI diagnostics
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: neomacs-gui-tests-linux-${{ github.run_id }}
           path: |

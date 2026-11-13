@@ -27,7 +27,8 @@ use crate::buffer_source::face_resolution::BufferSourceFaceResolutionContext;
 use crate::buffer_source::text_source::BufferTextSourceCursor;
 use crate::display_item::RenderFaceRef;
 use crate::display_source::{
-    DisplayNonTextAreaEmission, DisplaySourceContext, DisplaySourceTextPosition,
+    DisplayNonTextAreaEmission, DisplaySourceContext, DisplaySourceResumeCursor,
+    DisplaySourceTextPosition,
 };
 use crate::display_source_resolver::{
     DisplaySourcePropertyResolver, DisplaySourceResolveState, PendingDisplaySourceFace,
@@ -200,17 +201,16 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
     }
 
     /// Reseat the producer at a word-wrap checkpoint and resume with runs
-    /// BATCHED again. GNU RESTORE_IT restores the complete iterator, so
-    /// insertion elements produced after the checkpoint must replay too.
+    /// BATCHED again. GNU RESTORE_IT restores the complete iterator, including
+    /// whether insertions at the checkpoint precede or follow retained glyphs.
     ///
     /// Dropping the batching decline here is the faithful conversion of what the
     /// pending queue's clear did at these same two call sites: the continuation
     /// row measures from a fresh pen, so the remainder of a run refused on the
     /// previous row may well fit whole and must get the chance to.
-    pub(crate) fn rewind_word_wrap_to(&mut self, source_position: DisplaySourceTextPosition) {
+    pub(crate) fn rewind_word_wrap_to(&mut self, cursor: DisplaySourceResumeCursor) {
         self.source_cursor.set_char_granularity_end(None);
-        self.source_cursor
-            .rewind_for_word_wrap_to(CharPos0::new(source_position.charpos().max(0) as usize));
+        self.source_cursor.rewind_for_word_wrap_to(cursor);
     }
 
     /// Retry one overflowing buffer character without replaying insertion

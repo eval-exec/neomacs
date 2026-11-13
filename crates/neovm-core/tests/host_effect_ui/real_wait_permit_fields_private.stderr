@@ -1,3 +1,68 @@
+warning: unexpected `cfg` condition value: `test-support`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  |     #[cfg(any(test, feature = "test-support"))]
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `contract-fixtures`, `dbus-vendored`, `default`, `desktop-font-settings`, `display-stop-validate`, `fuzzing`, `gc-memory-telemetry`, `jit`, `perf-probes`, `redisplay-test-policy`, `sound`, `sqlite`, `vm-profile`, and `webview`
+  = help: consider adding `test-support` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: type `HostSessionIdentity` is more private than the item `ControlWake::revoke_exact_host_session`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  |     pub(crate) fn revoke_exact_host_session(&self, identity: &Arc<HostSessionIdentity>) {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `ControlWake::revoke_exact_host_session` is reachable at visibility `pub(crate)`
+  |
+note: but type `HostSessionIdentity` is only usable at visibility `pub(self)`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  | struct HostSessionIdentity;
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: `#[warn(private_interfaces)]` on by default
+
+warning: type `wake::Metadata` is more private than the item `ControlWake::lock`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  |     pub fn lock(&self) -> MutexGuard<'_, Metadata> {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `ControlWake::lock` is reachable at visibility `pub(crate)`
+  |
+note: but type `wake::Metadata` is only usable at visibility `pub(self)`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  | struct Metadata {
+  | ^^^^^^^^^^^^^^^
+
+warning: type `NudgeScope<'_>` is more private than the item `ControlWake::publish_nudge`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  | /     pub(crate) fn publish_nudge(
+  | |         &self,
+  | |         destination: ControlDestination,
+  | |         reason: ControlNudge,
+  | |         scope: NudgeScope<'_>,
+  | |     ) -> ControlNudgeOutcome {
+  | |____________________________^ method `ControlWake::publish_nudge` is reachable at visibility `pub(crate)`
+  |
+note: but type `NudgeScope<'_>` is only usable at visibility `pub(self)`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  | enum NudgeScope<'a> {
+  | ^^^^^^^^^^^^^^^^^^^
+
+warning: type `wake::Metadata` is more private than the item `WaitRegistration::observe`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  |     pub fn observe(&self, metadata: &Metadata) -> Option<ControlWakeOutcome> {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `WaitRegistration::observe` is reachable at visibility `pub(crate)`
+  |
+note: but type `wake::Metadata` is only usable at visibility `pub(self)`
+ --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
+  |
+  | struct Metadata {
+  | ^^^^^^^^^^^^^^^
+
 error[E0451]: field `_confined` of struct `RealWaitPermit` is private
  --> tests/host_effect_ui/real_wait_permit_fields_private.rs:8:9
   |

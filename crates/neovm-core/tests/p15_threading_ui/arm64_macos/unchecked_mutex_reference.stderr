@@ -1,3 +1,11 @@
+warning: unused import: `emacs_core`
+ --> tests/p15_threading_ui/arm64_macos/../unchecked_mutex_reference.rs
+  |
+  | use actual_payload::{emacs_core, tagged, threading, value};
+  |                      ^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
 error[E0451]: fields `id` and `value` of struct `MutexReference` are private
  --> tests/p15_threading_ui/arm64_macos/../unchecked_mutex_reference.rs
   |

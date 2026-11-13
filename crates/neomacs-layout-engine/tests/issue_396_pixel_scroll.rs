@@ -6,11 +6,12 @@ use neovm_core::window::{FrameId, Window, WindowId};
 #[test]
 fn lisp_precision_scroll_survives_redisplay_in_both_directions() {
     use neomacs_layout_engine::engine::WindowLayoutQueryEngine;
-    use neovm_core::emacs_core::load::{
-        apply_runtime_startup_state, create_bootstrap_evaluator_cached_with_features,
-    };
+    use neovm_core::emacs_core::load::apply_runtime_startup_state;
+    use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached_with_features;
     use neovm_core::emacs_core::value::Value;
+    use neovm_core::window::DisplayFrameManagerExt;
     use neovm_core::window::WindowLayoutQueryOutcome;
+    use neovm_core::window::display::WindowDisplayContextExt;
 
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"])
         .expect("bootstrap Lisp scroll commands");
@@ -31,7 +32,8 @@ fn lisp_precision_scroll_survives_redisplay_in_both_directions() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     eval.eval_str(
         r#"
         (require 'pixel-scroll)

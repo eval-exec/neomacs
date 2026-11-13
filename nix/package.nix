@@ -8,6 +8,8 @@
 }:
 let
   inherit (pkgs) lib;
+  gnuEmacsVersion =
+    (builtins.fromTOML (builtins.readFile (source + "/parity-reference.toml"))).emacs_version;
   craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
   cargoSrc = craneLib.cleanCargoSource source;
   productionCapabilities = import ./production-capabilities.nix {
@@ -42,6 +44,7 @@ let
       rustToolchain
       pkgs.binutils
       pkgs.pkg-config
+      pkgs.texinfo
       pkgs.llvmPackages.clang
       pkgs.makeWrapper
     ]
@@ -108,6 +111,12 @@ craneLib.buildPackage (
     src = source;
     inherit cargoArtifacts;
 
+    nativeBuildInputs =
+      commonArgs.nativeBuildInputs
+      ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+        pkgs.patchelf
+      ];
+
     # A dumped build environment can turn build-only inputs into runtime
     # dependencies even when the executable never links them. Let Nix's
     # output reference scan reject that regression after fixup hooks run.
@@ -120,6 +129,7 @@ craneLib.buildPackage (
       pkgs.llvmPackages.clang
       pkgs.pkg-config
       pkgs.binutils
+      pkgs.texinfo
     ];
 
     postBuild = ''
@@ -130,7 +140,11 @@ craneLib.buildPackage (
       mkdir -p "$out/share/neomacs"
       cp -r lisp "$out/share/neomacs/"
       cp -r etc "$out/share/neomacs/"
+      cp -r info "$out/share/neomacs/"
       chmod -R u+w "$out/share/neomacs"
+      # Standard Info readers discover the same package-owned manuals that
+      # Neomacs loads through NEOMACS_RUNTIME_ROOT.
+      ln -s neomacs/info "$out/share/info"
 
       # GNU Emacs installs this version-independent site-lisp root.
       # Nixpkgs' emacsPackagesFor wrapper composes its generated site-start
@@ -150,7 +164,6 @@ craneLib.buildPackage (
       mkdir -p \
         "$out/share/applications" \
         "$out/share/icons" \
-        "$out/share/info" \
         "$out/share/man"
       ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
         bash scripts/install-linux-desktop-assets.sh "$out"
@@ -170,19 +183,30 @@ craneLib.buildPackage (
       install -m 0644 "$final_pdump" "$out/bin/neomacs-$fingerprint.pdump"
 
       ln -s neomacs "$out/bin/emacs"
+      ln -s neomacs "$out/bin/emacs-${gnuEmacsVersion}"
       ln -s neomacsclient "$out/bin/emacsclient"
 
       wrapProgram "$out/bin/neomacs" \
-        --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath runtimeLibs}" \
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--prefix LD_LIBRARY_PATH : \"${pkgs.lib.makeLibraryPath runtimeLibs}\""} \
         --set-default RUST_LOG info \
         --set-default NEOMACS_RUNTIME_ROOT "$out/share/neomacs" \
         ${lib.concatStringsSep " \\\n        " linuxWrapArgs}
     '';
 
+    postFixup = lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+      # Standard fixup shrinks search paths to DT_NEEDED libraries. Add the
+      # complete runtime set afterward so executable-local dlopen still works
+      # without exporting package library paths to every child process.
+      test -x "$out/bin/.neomacs-wrapped"
+      # Keep the executable's private libraries ahead of caller LD paths,
+      # preserving the old wrapper's priority without changing child envs.
+      patchelf --force-rpath --add-rpath "${pkgs.lib.makeLibraryPath runtimeLibs}" "$out/bin/.neomacs-wrapped"
+    '';
+
     setupHook = ./setup-hook.sh;
 
     passthru = {
-      inherit gstreamerRuntime productionCapabilities;
+      inherit gnuEmacsVersion gstreamerRuntime productionCapabilities;
     };
 
     meta = {

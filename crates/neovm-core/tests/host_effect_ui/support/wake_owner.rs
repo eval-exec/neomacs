@@ -7,5 +7,5 @@ mod contracts {
     pub use neovm_core::host_effect::contracts::ReadDeadline;
 }
 
-#[path = "../../../src/host_effect/wake.rs"]
+#[path = "../../../../neovm-eval/src/host_effect/wake.rs"]
 pub(crate) mod wake;

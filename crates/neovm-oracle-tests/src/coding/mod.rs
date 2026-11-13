@@ -2,7 +2,9 @@
 
 mod advanced;
 mod basic;
+mod detection_state;
 mod metadata;
+mod null_detection;
 mod string;
 mod string_advanced;
 mod system_comprehensive;

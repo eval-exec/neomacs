@@ -9,6 +9,7 @@
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_LAYOUT_FRESHNESS_SPANS` | `on` | `off`; `on`/`1`/`true`/`yes` | Pass the complete token through proven native preparation and chrome publication. |
 
+use neovm_core::window::display::WindowDisplayContextExt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FreshnessSpanMode {
     Capture,

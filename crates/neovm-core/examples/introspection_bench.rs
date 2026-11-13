@@ -90,7 +90,7 @@ fn main() {
         }
     };
 
-    let mut evaluator = Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let total_ops = options.iterations.saturating_mul(forms.len());
     let start = Instant::now();
 
@@ -115,7 +115,8 @@ fn main() {
     if options.per_form {
         println!("per_form_ns_per_op:");
         for (idx, form) in forms.iter().enumerate() {
-            let mut per_form_evaluator = Context::new();
+            let mut per_form_evaluator =
+                neovm_core::emacs_core::eval_hook_installers::new_context();
             let per_form_start = Instant::now();
             for _ in 0..options.iterations {
                 eval_or_exit(&mut per_form_evaluator, *form);

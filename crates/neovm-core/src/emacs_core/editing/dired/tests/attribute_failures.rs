@@ -7,7 +7,7 @@ fn file_attributes_signals_errors_other_than_missing_metadata() {
     let dir = tempfile::tempdir_in(root).unwrap();
     std::os::unix::fs::symlink("loop", dir.path().join("loop")).unwrap();
     let path = dir.path().join("loop/entry");
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let error =
         builtin_file_attributes(&mut ctx, vec![Value::string(path.to_str().unwrap())]).unwrap_err();
     match error.into_kind() {
@@ -42,7 +42,7 @@ fn directory_attribute_permission_failure_is_signalled_before_count() {
     let dir = tempfile::tempdir_in(root).unwrap();
     std::fs::write(dir.path().join("entry"), b"").unwrap();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o444)).unwrap();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = builtin_directory_files_and_attributes(
         &mut ctx,
         vec![

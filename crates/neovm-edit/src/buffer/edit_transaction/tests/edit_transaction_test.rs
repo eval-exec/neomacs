@@ -1,0 +1,613 @@
+use super::*;
+
+fn state(
+    pt_byte: usize,
+    pt: usize,
+    begv_byte: usize,
+    begv: usize,
+    zv_byte: usize,
+    zv: usize,
+) -> BufferEditState {
+    BufferEditState::new(
+        TextPositionAnchor::from_usize(pt, pt_byte),
+        TextPositionAnchor::from_usize(begv, begv_byte),
+        TextPositionAnchor::from_usize(zv, zv_byte),
+    )
+}
+
+fn replace_state(old: BufferEditState) -> BufferEditState {
+    replace_state_after_edit(
+        old,
+        TextReplacement::new(
+            TextEditRange::from_usize(20, 36, 10, 18),
+            crate::buffer::TextExtent::from_usize(3, 5),
+        ),
+    )
+}
+
+fn same_len_edit() -> MeasuredSameLenEdit {
+    MeasuredSameLenEdit::new(
+        TextEditRange::from_usize(0, 10, 0, 10),
+        TextEditRange::from_usize(3, 10, 3, 10),
+    )
+}
+
+fn insertion() -> TextInsertion {
+    TextInsertion::from_usize(20, 10, 3, 5)
+}
+
+fn deleted_range() -> TextEditRange {
+    TextEditRange::from_usize(20, 36, 10, 18)
+}
+
+fn measured_insert_edit() -> MeasuredInsertEdit {
+    MeasuredInsertEdit::by_insertion_type(insertion(), InsertMarkerPlacement::AfterMarkers)
+}
+
+fn measured_delete_edit() -> MeasuredDeleteEdit {
+    MeasuredDeleteEdit::new(deleted_range())
+}
+
+fn measured_replace_edit() -> MeasuredReplaceEdit {
+    MeasuredReplaceEdit::new(TextReplacement::new(
+        deleted_range(),
+        TextExtent::from_usize(3, 5),
+    ))
+}
+
+fn state_policy_for_shared_sibling(edit: SharedTextEditMetadata) -> SharedTextEditStatePolicy {
+    edit.state_policy_for_shared_sibling(|| SharedBufferStateUpdate::RefreshFromStateMarkers)
+}
+
+#[test]
+fn shared_edit_metadata_derives_sibling_state_policy() {
+    assert_eq!(
+        state_policy_for_shared_sibling(SharedTextEditMetadata::Insert(measured_insert_edit())),
+        SharedTextEditStatePolicy::StateFields(SharedBufferStateUpdate::RefreshFromStateMarkers)
+    );
+    assert_eq!(
+        state_policy_for_shared_sibling(SharedTextEditMetadata::Delete(measured_delete_edit())),
+        SharedTextEditStatePolicy::StateFields(SharedBufferStateUpdate::RefreshFromStateMarkers)
+    );
+    assert_eq!(
+        state_policy_for_shared_sibling(SharedTextEditMetadata::Replace(measured_replace_edit())),
+        SharedTextEditStatePolicy::StateFields(SharedBufferStateUpdate::RefreshFromStateMarkers)
+    );
+    assert_eq!(
+        state_policy_for_shared_sibling(SharedTextEditMetadata::Transposition {
+            edit: same_len_edit(),
+            transposition: TextTransposition::from_usize(2, 5, 1, 3, 8, 10, 5, 7),
+            anchor_policy: TranspositionAnchorPolicy::FollowText,
+            modified_state: SameLenModifiedStatePolicy::PreserveUnmodifiedIfClean,
+        }),
+        SharedTextEditStatePolicy::StateFields(SharedBufferStateUpdate::RefreshFromStateMarkers)
+    );
+    assert_eq!(
+        state_policy_for_shared_sibling(SharedTextEditMetadata::SameLen {
+            edit: same_len_edit(),
+            modified_state: SameLenModifiedStatePolicy::PreserveUnmodifiedIfClean,
+        }),
+        SharedTextEditStatePolicy::NoStateFields
+    );
+}
+
+#[test]
+fn insert_state_current_buffer_advances_point_at_insert_and_zv() {
+    assert_eq!(
+        insert_state_after_edit(
+            state(20, 10, 0, 0, 60, 42),
+            insertion(),
+            InsertSideEffectPolicy::current_buffer(),
+        ),
+        state(25, 13, 0, 0, 65, 45)
+    );
+}
+
+#[test]
+fn insert_state_shared_buffer_keeps_point_at_insert_and_shifts_begv_after_insert() {
+    assert_eq!(
+        insert_state_after_edit(
+            state(20, 10, 28, 14, 60, 42),
+            insertion(),
+            InsertSideEffectPolicy::shared_buffer(SharedBufferStateUpdate::UpdateFields),
+        ),
+        state(20, 10, 33, 17, 65, 45)
+    );
+}
+
+#[test]
+fn insert_state_shifts_zv_at_insert_position() {
+    assert_eq!(
+        insert_state_after_edit(
+            state(0, 0, 0, 0, 20, 10),
+            insertion(),
+            InsertSideEffectPolicy::shared_buffer(SharedBufferStateUpdate::UpdateFields),
+        ),
+        state(0, 0, 0, 0, 25, 13)
+    );
+}
+
+#[test]
+fn delete_state_current_buffer_maps_point_inside_range_to_deleted_start() {
+    assert_eq!(
+        delete_state_after_edit(
+            state(28, 14, 0, 0, 60, 42),
+            deleted_range(),
+            DeleteSideEffectPolicy::current_buffer(),
+        ),
+        state(20, 10, 0, 0, 44, 34)
+    );
+}
+
+#[test]
+fn delete_state_keeps_point_at_deleted_start() {
+    assert_eq!(
+        delete_state_after_edit(
+            state(20, 10, 0, 0, 60, 42),
+            deleted_range(),
+            DeleteSideEffectPolicy::current_buffer(),
+        ),
+        state(20, 10, 0, 0, 44, 34)
+    );
+}
+
+#[test]
+fn delete_state_shared_buffer_shifts_point_begv_and_zv() {
+    assert_eq!(
+        delete_state_after_edit(
+            state(44, 24, 28, 14, 60, 42),
+            deleted_range(),
+            DeleteSideEffectPolicy::shared_buffer(SharedBufferStateUpdate::UpdateFields),
+        ),
+        state(28, 16, 20, 10, 44, 34)
+    );
+}
+
+#[test]
+fn insert_and_delete_state_skip_update_when_policy_disables_state_fields() {
+    let original = state(44, 24, 28, 14, 60, 42);
+
+    assert_eq!(
+        insert_state_after_edit(
+            original,
+            insertion(),
+            InsertSideEffectPolicy::shared_buffer(SharedBufferStateUpdate::RefreshFromStateMarkers,),
+        ),
+        original
+    );
+    assert_eq!(
+        delete_state_after_edit(
+            original,
+            deleted_range(),
+            DeleteSideEffectPolicy::shared_buffer(SharedBufferStateUpdate::RefreshFromStateMarkers,),
+        ),
+        original
+    );
+}
+
+#[test]
+fn replace_state_maps_point_inside_deleted_range_to_replacement_end() {
+    assert_eq!(
+        replace_state(state(28, 14, 0, 0, 60, 42)),
+        state(25, 13, 0, 0, 49, 37)
+    );
+}
+
+#[test]
+fn replace_state_keeps_point_at_deleted_start() {
+    assert_eq!(
+        replace_state(state(20, 10, 0, 0, 60, 42)),
+        state(20, 10, 0, 0, 49, 37)
+    );
+}
+
+#[test]
+fn replace_state_maps_point_at_deleted_end_to_replacement_end() {
+    assert_eq!(
+        replace_state(state(36, 18, 0, 0, 60, 42)),
+        state(25, 13, 0, 0, 49, 37)
+    );
+}
+
+#[test]
+fn replace_state_shifts_point_after_deleted_range_by_extent_delta() {
+    assert_eq!(
+        replace_state(state(44, 24, 0, 0, 60, 42)),
+        state(33, 19, 0, 0, 49, 37)
+    );
+}
+
+#[test]
+fn replace_state_clamps_begv_inside_deleted_range_to_deleted_start() {
+    assert_eq!(
+        replace_state(state(0, 0, 28, 14, 60, 42)),
+        state(0, 0, 20, 10, 49, 37)
+    );
+}
+
+#[test]
+fn replace_state_maps_begv_at_deleted_end_to_deleted_start() {
+    assert_eq!(
+        replace_state(state(0, 0, 36, 18, 60, 42)),
+        state(0, 0, 20, 10, 49, 37)
+    );
+}
+
+#[test]
+fn replace_state_maps_zv_inside_deleted_range_to_replacement_end() {
+    assert_eq!(
+        replace_state(state(0, 0, 0, 0, 28, 14)),
+        state(0, 0, 0, 0, 25, 13)
+    );
+}
+
+#[test]
+fn modification_tick_delta_is_logarithmic_and_never_zero() {
+    assert_eq!(modification_tick_delta(CharLen::new(0)), 1);
+    assert_eq!(modification_tick_delta(CharLen::new(1)), 1);
+    assert_eq!(modification_tick_delta(CharLen::new(2)), 2);
+    assert_eq!(modification_tick_delta(CharLen::new(3)), 2);
+    assert_eq!(modification_tick_delta(CharLen::new(4)), 3);
+    assert_eq!(modification_tick_delta(CharLen::new(8)), 4);
+}
+
+#[test]
+fn same_len_edit_keeps_storage_and_modified_ranges_separate() {
+    let edit = same_len_edit();
+
+    assert_eq!(
+        edit.storage_range(),
+        TextEditRange::from_usize(0, 10, 0, 10)
+    );
+    assert_eq!(
+        edit.modified_range(),
+        TextEditRange::from_usize(3, 10, 3, 10)
+    );
+    assert_eq!(edit.changed_chars(), CharLen::new(7));
+}
+
+#[test]
+fn same_len_substitution_plan_records_per_character_multibyte_ranges() {
+    let range = TextEditRange::from_usize(0, "a日本日".len(), 0, 4);
+    let plan = SameLenSubstitutionPlan::new(
+        range,
+        "a日本日".as_bytes(),
+        true,
+        '日' as u32,
+        "本".as_bytes(),
+    )
+    .expect("matching chars should produce a substitution plan");
+
+    assert_eq!(plan.replacement_bytes(), "a本本本".as_bytes());
+    assert_eq!(
+        plan.changed_ranges(),
+        &[
+            TextEditRange::from_usize(1, 4, 1, 2),
+            TextEditRange::from_usize(7, 10, 3, 4),
+        ]
+    );
+    assert_eq!(
+        plan.first_to_last_changed_range(),
+        TextEditRange::from_usize(1, 10, 1, 4)
+    );
+    assert_eq!(
+        plan.replacement_for_range(range, true),
+        TextReplacement::new(range, TextExtent::from_usize(4, "a本本本".len()))
+    );
+}
+
+#[test]
+fn same_len_substitution_plan_records_unibyte_ranges_and_rejects_non_bytes() {
+    let range = TextEditRange::from_usize(20, 25, 10, 15);
+    let plan = SameLenSubstitutionPlan::new(range, b"ababa", false, b'a' as u32, b"z")
+        .expect("matching unibyte chars should produce a substitution plan");
+
+    assert_eq!(plan.replacement_bytes(), b"zbzbz");
+    assert_eq!(
+        plan.changed_ranges(),
+        &[
+            TextEditRange::from_usize(20, 21, 10, 11),
+            TextEditRange::from_usize(22, 23, 12, 13),
+            TextEditRange::from_usize(24, 25, 14, 15),
+        ]
+    );
+    assert_eq!(
+        plan.first_to_last_changed_range(),
+        TextEditRange::from_usize(20, 25, 10, 15)
+    );
+    assert!(SameLenSubstitutionPlan::new(range, b"ababa", false, 0x100, b"z").is_none());
+    assert!(SameLenSubstitutionPlan::new(range, b"ababa", false, b'a' as u32, b"zz").is_none());
+}
+
+#[test]
+fn same_len_substitution_plan_returns_none_without_matches() {
+    let range = TextEditRange::from_usize(0, 5, 0, 5);
+
+    assert!(SameLenSubstitutionPlan::new(range, b"abcde", true, b'z' as u32, b"q").is_none());
+}
+
+#[test]
+fn transposition_storage_plan_swaps_outer_regions_over_full_span() {
+    let transposition = TextTransposition::from_usize(2, 5, 1, 3, 8, 10, 5, 7);
+    let plan = TranspositionStoragePlan::new(transposition, b"abc", b"XYZ", b"de");
+    let span = TextEditRange::from_usize(2, 10, 1, 7);
+
+    assert_eq!(plan.replacement_bytes(), b"deXYZabc");
+    assert_eq!(
+        plan.replacement(),
+        TextReplacement::new(span, span.extent())
+    );
+    assert_eq!(plan.edit(), MeasuredSameLenEdit::covering(span));
+}
+
+fn probe_modification_state(buffer: &Buffer) -> (i64, i64, i64, Value) {
+    (
+        buffer.modified_tick(),
+        buffer.chars_modified_tick(),
+        buffer.save_modified_tick(),
+        buffer.get_undo_list(),
+    )
+}
+
+#[test]
+fn raw_probe_exposure_keeps_metadata_and_sibling_restrictions() {
+    crate::test_utils::init_test_tracing();
+    for target_indirect in [false, true] {
+        let mut buffers = BufferManager::new();
+        assert!(
+            buffers
+                .expose_empty_unibyte_buffer_bytes(BufferId(u64::MAX), b"x")
+                .is_none()
+        );
+        let id = buffers.create_buffer("raw-probe");
+        assert!(
+            buffers
+                .expose_empty_unibyte_buffer_bytes(id, b"x")
+                .is_none()
+        );
+        buffers.set_buffer_multibyte_flag(id, false).unwrap();
+        buffers.get_mut(id).unwrap().set_undo_list(Value::T);
+        let indirect = buffers
+            .create_indirect_buffer(id, "raw-probe-indirect", false)
+            .unwrap();
+        let (id, sibling_id) = if target_indirect {
+            (indirect, id)
+        } else {
+            (id, indirect)
+        };
+        let before = probe_modification_state(buffers.get(id).unwrap());
+        let revision = buffers.get(id).unwrap().capture_content_revision();
+        let bytes = b"a\0\xff\x80\nz";
+        buffers
+            .expose_empty_unibyte_buffer_bytes(id, bytes)
+            .unwrap();
+        let buffer = buffers.get(id).unwrap();
+        assert_eq!(buffer.dump_text_bytes(), bytes);
+        assert_eq!(buffer.point_char_pos(), CharPos0::ZERO);
+        assert_eq!(buffer.point_max_char_pos().get(), bytes.len());
+        assert_eq!(probe_modification_state(buffer), before);
+        assert!(!revision.matches_buffer(buffer));
+        let sibling = buffers.get(sibling_id).unwrap();
+        assert_eq!(sibling.dump_text_bytes(), bytes);
+        assert_eq!(sibling.point_max_char_pos(), CharPos0::ZERO);
+        assert_eq!(sibling.point_char_pos(), CharPos0::ZERO);
+        assert!(
+            buffers
+                .expose_empty_unibyte_buffer_bytes(id, b"more")
+                .is_none()
+        );
+        assert_eq!(buffers.get(id).unwrap().dump_text_bytes(), bytes);
+    }
+}
+
+#[test]
+fn native_cleanup_preserves_callback_metadata_even_on_panic_but_advances_content_revision() {
+    crate::test_utils::init_test_tracing();
+    let mut buffers = BufferManager::new();
+    let id = buffers.create_buffer("raw-probe-cleanup");
+    buffers.set_buffer_multibyte_flag(id, false).unwrap();
+    buffers.get_mut(id).unwrap().set_undo_list(Value::T);
+    let base = id;
+    let id = buffers
+        .create_indirect_buffer(base, "raw-probe-cleanup-indirect", false)
+        .unwrap();
+    buffers.get_mut(base).unwrap().autosave_modified_tick = 30;
+    buffers.get_mut(id).unwrap().autosave_modified_tick = 40;
+    buffers
+        .expose_empty_unibyte_buffer_bytes(id, b"raw\xff")
+        .unwrap();
+    buffers.set_buffer_modified_flag(id, true).unwrap();
+    let before = probe_modification_state(buffers.get(id).unwrap());
+    let revision = buffers.get(id).unwrap().capture_content_revision();
+    let range = buffers.get(id).unwrap().full_emacs_byte_range();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        buffers.with_preserved_modification_state(id, |buffers| {
+            buffers.delete_buffer_emacs_byte_range(id, range).unwrap();
+            panic!("native bookkeeping panic");
+        });
+    }));
+    assert!(result.is_err());
+    let buffer = buffers.get(id).unwrap();
+    assert!(buffer.is_text_empty());
+    assert!(buffer.is_modified());
+    assert_eq!(probe_modification_state(buffer), before);
+    assert!(!revision.matches_buffer(buffer));
+    assert_eq!(buffers.get(base).unwrap().autosave_modified_tick, 30);
+    assert_eq!(buffers.get(id).unwrap().autosave_modified_tick, 40);
+}
+
+#[test]
+fn content_revision_ignores_properties_and_rejects_swapped_text_owners() {
+    crate::test_utils::init_test_tracing();
+    let mut buffers = BufferManager::new();
+    let id = buffers.create_buffer("content-revision");
+    buffers.insert_into_buffer(id, "A").unwrap();
+    let revision = buffers.get(id).unwrap().capture_content_revision();
+    buffers
+        .set_buffer_text_properties_in_emacs_byte_range(
+            id,
+            EmacsByteRange::new(EmacsBytePos::ZERO, EmacsBytePos::new(1)),
+            vec![(Value::symbol("fontified"), Value::T)],
+        )
+        .unwrap();
+    assert!(revision.matches_buffer(buffers.get(id).unwrap()));
+    let other = buffers.create_buffer("content-revision-donor");
+    buffers.insert_into_buffer(other, "B").unwrap();
+    buffers.swap_buffer_text(id, other).unwrap();
+    assert!(!revision.matches_buffer(buffers.get(id).unwrap()));
+}
+
+#[test]
+fn physical_edit_lease_validates_live_geometry_and_cancellation() {
+    crate::test_utils::init_test_tracing();
+    let mut buffers = BufferManager::new();
+    let id = buffers.create_buffer(" *physical-edit-lease-validation*");
+    buffers
+        .get_mut(id)
+        .expect("live buffer")
+        .set_multibyte_value(true);
+    buffers
+        .insert_lisp_string_into_buffer(id, &LispString::from_utf8("aé€"))
+        .expect("seed multibyte text");
+    for (start, end) in [(2, 1), (0, 4), (4, 4)] {
+        assert!(
+            buffers
+                .prepare_buffer_edit(
+                    id,
+                    crate::buffer::CharRange::new(CharPos0::new(start), CharPos0::new(end),)
+                )
+                .is_none()
+        );
+    }
+    let dead = buffers.create_buffer(" *physical-edit-lease-dead*");
+    assert!(buffers.kill_buffer(dead));
+    assert!(
+        buffers
+            .prepare_buffer_edit(
+                dead,
+                crate::buffer::CharRange::new(CharPos0::ZERO, CharPos0::ZERO,)
+            )
+            .is_none()
+    );
+    // The physical boundary is independent of command-specific narrowing.
+    buffers
+        .narrow_buffer_to_emacs_byte_range(
+            id,
+            EmacsByteRange::new(EmacsBytePos::new(1), EmacsBytePos::new(3)),
+        )
+        .expect("narrow to é");
+    {
+        let lease = buffers
+            .prepare_buffer_edit(
+                id,
+                crate::buffer::CharRange::new(CharPos0::new(1), CharPos0::new(3)),
+            )
+            .expect("valid live physical range");
+        assert_eq!(lease.buffer_id(), id);
+        assert_eq!(
+            lease.range().char_range(),
+            crate::buffer::CharRange::new(CharPos0::new(1), CharPos0::new(3),)
+        );
+        assert_eq!(
+            lease.range().byte_range(),
+            EmacsByteRange::new(EmacsBytePos::new(1), EmacsBytePos::new(6),)
+        );
+        // Dropping an unconsumed lease cancels without callbacks or edits.
+    }
+    let buffer = buffers.get(id).expect("live buffer");
+    assert_eq!(
+        buffer.buffer_substring_range(buffer.full_emacs_byte_range()),
+        "aé€"
+    );
+    assert_eq!(
+        buffer.accessible_emacs_byte_range(),
+        EmacsByteRange::new(EmacsBytePos::new(1), EmacsBytePos::new(3),)
+    );
+}
+
+#[test]
+fn physical_edit_lease_consumes_typed_multibyte_mutations() {
+    crate::test_utils::init_test_tracing();
+    let mut buffers = BufferManager::new();
+    let id = buffers.create_buffer(" *physical-edit-lease-mutations*");
+    buffers
+        .get_mut(id)
+        .expect("live buffer")
+        .set_multibyte_value(true);
+    buffers
+        .insert_lisp_string_into_buffer(id, &LispString::from_utf8("aé€"))
+        .expect("seed multibyte text");
+    let extracted = buffers
+        .prepare_buffer_edit(
+            id,
+            crate::buffer::CharRange::new(CharPos0::new(1), CharPos0::new(2)),
+        )
+        .expect("live extract lease")
+        .delete_and_extract()
+        .expect("extracted é");
+    assert_eq!(extracted.as_bytes(), "é".as_bytes());
+    assert!(extracted.is_multibyte());
+    assert_eq!(buffers.get(id).expect("live buffer").buffer_string(), "a€");
+    let extent = buffers
+        .prepare_buffer_edit(
+            id,
+            crate::buffer::CharRange::new(CharPos0::new(1), CharPos0::new(2)),
+        )
+        .expect("live replace lease")
+        .replace(&LispString::from_utf8("λq"))
+        .expect("replaced €");
+    assert_eq!(
+        extent,
+        TextExtent::new(CharLen::new(2), EmacsByteLen::new(3))
+    );
+    assert_eq!(buffers.get(id).expect("live buffer").buffer_string(), "aλq");
+    assert_eq!(
+        buffers
+            .prepare_buffer_edit(
+                id,
+                crate::buffer::CharRange::new(CharPos0::ZERO, CharPos0::new(1),)
+            )
+            .expect("live delete lease")
+            .delete(),
+        Ok(())
+    );
+    assert_eq!(buffers.get(id).expect("live buffer").buffer_string(), "λq");
+}
+
+#[test]
+fn physical_edit_lease_empty_operations_preserve_legacy_results() {
+    crate::test_utils::init_test_tracing();
+    let mut buffers = BufferManager::new();
+    let id = buffers.create_buffer(" *physical-edit-lease-empty*");
+    let empty = crate::buffer::CharRange::new(CharPos0::ZERO, CharPos0::ZERO);
+    assert_eq!(
+        buffers
+            .prepare_buffer_edit(id, empty)
+            .expect("empty lease")
+            .delete(),
+        Ok(())
+    );
+    assert!(
+        buffers
+            .prepare_buffer_edit(id, empty)
+            .expect("empty lease")
+            .delete_and_extract()
+            .is_none()
+    );
+    assert_eq!(
+        buffers
+            .prepare_buffer_edit(id, empty)
+            .expect("empty lease")
+            .replace(&LispString::from_unibyte(Vec::new())),
+        Some(TextExtent::ZERO)
+    );
+    assert_eq!(buffers.delete_buffer_char_range(id, empty), Some(()));
+    assert_eq!(
+        buffers.replace_buffer_emacs_byte_range_lisp_string(
+            id,
+            EmacsByteRange::new(EmacsBytePos::ZERO, EmacsBytePos::ZERO),
+            &LispString::from_unibyte(Vec::new())
+        ),
+        Some(())
+    );
+}

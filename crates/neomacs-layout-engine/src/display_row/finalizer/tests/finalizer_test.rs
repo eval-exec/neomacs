@@ -32,6 +32,27 @@ fn phys_cursor(window_id: i64, row: usize, col: u16) -> PhysCursor {
     }
 }
 
+/// GNU enlarges only the displaced side; shifting a glyph does not shrink its opposite extent.
+#[test]
+fn logical_content_metrics_preserve_opposite_extents_when_shifted() {
+    for (offset, expected) in [
+        (-3.0, (16.0, 13.0)),
+        (3.0, (16.0, 10.0)),
+        (0.0, (13.0, 10.0)),
+    ] {
+        let mut row = GlyphRow::new(GlyphRowRole::Text);
+        push_text(&mut row, "x");
+        let glyph = &mut row.glyphs[GlyphArea::Text as usize][0];
+        glyph.pixel_height = 13.0;
+        glyph.pixel_ascent = 10.0;
+        glyph.vertical_offset_px = offset;
+        assert_eq!(
+            display_row_visible_content_metrics(&row, 13.0, 10.0, |_| None),
+            expected
+        );
+    }
+}
+
 #[test]
 fn finalizes_matrix_row_with_bidi_reorder() {
     let mut row = GlyphRow::new(GlyphRowRole::Text);

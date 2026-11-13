@@ -11,7 +11,6 @@ share one universal options struct.
                     :radius 48)
 
 (neomacs-effect-get 'cursor-glow)
-(neomacs-effect-reset 'cursor-glow)
 (neomacs-effect-names)
 ```
 
@@ -28,7 +27,6 @@ positional setters:
                     :enabled t :speed 2.4
                     :style 'critically-damped-spring
                     :duration 0.15 :trail-size 0.7)
-(neomacs-effect-set 'cursor-color-cycle :enabled t :fps 24)
 (neomacs-effect-set 'cursor-blink :enabled t :interval 0.5)
 (neomacs-effect-set 'cursor-size-transition :enabled t :duration 0.15)
 (neomacs-effect-set 'buffer-transition
@@ -53,6 +51,20 @@ before reaching the renderer.  Frame rates are positive integers, so `:fps 0`
 is rejected rather than silently coerced by the scheduler.
 
 ## Profiles
+
+### Cursor color cycling
+
+Cursor color cycling is disabled by default so an untouched configuration
+does not keep requesting ambient animation frames in an idle editor. To opt
+in through Custom:
+
+```elisp
+(customize-set-variable 'neomacs-effect-cursor-color-cycle
+                        '(:enabled t :fps 24))
+```
+
+Use `:enabled nil` to disable it again. Existing explicit opt-in settings
+continue to work; the animation rate still defaults to 24 Hz when enabled.
 
 ### Default cursor motion
 
@@ -124,7 +136,7 @@ Effect updates are control-plane operations, not frame-loop operations.  The
 small serialization cost buys one source of truth and strict, atomic
 validation without affecting rendering performance.
 
-The default cursor color cycle is driven by the centralized frame scheduler,
+When enabled, cursor color cycling is driven by the centralized frame scheduler,
 not an Elisp timer.  Its `:fps` setting defaults to 24 and is capped to the
 current display rate.  Frames use compositor-only cursor damage, and color is
 derived from elapsed presentation time, so missed or deliberately skipped

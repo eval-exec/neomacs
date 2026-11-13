@@ -3,6 +3,7 @@
 
 use super::{ChromePositionSource, set_chrome_position_source_for_test};
 use neovm_core::emacs_core::{Context, Value};
+use neovm_core::window::DisplayFrameManagerExt;
 
 fn positions_both_ways(
     state: &neomacs_display_protocol::glyph_matrix::FrameDisplayState,
@@ -24,7 +25,7 @@ fn laid_out_frame(
     window_system: bool,
     split: bool,
 ) -> neomacs_display_protocol::glyph_matrix::FrameDisplayState {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -113,7 +114,7 @@ fn row_walk_finds_the_whole_frame_walks_chrome_string_positions() {
 
 #[test]
 fn row_walk_of_a_frame_without_chrome_strings_is_empty() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()

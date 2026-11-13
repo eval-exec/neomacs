@@ -444,12 +444,42 @@ fn oracle_emacs_available() -> bool {
 }
 
 pub(crate) fn neomacs_binary_path() -> String {
-    std::env::var("NEOVM_BINARY_PATH").unwrap_or_else(|_| {
+    let path = std::env::var("NEOVM_BINARY_PATH").unwrap_or_else(|_| {
         oracle_sandbox::project_root()
             .join("target/release/neomacs")
             .to_string_lossy()
             .into_owned()
-    })
+    });
+    ensure_fresh_build_attested(&path);
+    path
+}
+
+/// Refuse to measure an editor whose binary and Lisp tree did not come from
+/// the same `cargo xtask fresh-build` run.
+///
+/// A stale tree silently measures a source bootstrap instead of the product:
+/// a remote lane lost its `.elc` files to an rsync `--delete` after the build
+/// and six tests "diverged" from GNU until a fresh build was run.  The check
+/// itself lives in `neomacs_test_env::fresh_build_stamp` so the TUI oracle
+/// harness and the recipe use the same implementation; it performs one full
+/// content verification per nextest run (the result is cached by stamp SHA and
+/// `NEXTEST_RUN_ID`) and fails fast for the remaining test processes.
+///
+/// `NEOVM_SKIP_FRESH_BUILD_STAMP=<non-empty>` is the one documented override;
+/// its value is echoed to stderr by the verifier.
+fn ensure_fresh_build_attested(binary: &str) {
+    static ATTESTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ATTESTED.get_or_init(|| {
+        let lisp_root = project_lisp_dir();
+        match neomacs_test_env::fresh_build_stamp::verify(std::path::Path::new(binary), &lisp_root)
+        {
+            Ok(neomacs_test_env::fresh_build_stamp::StampVerdict::Verified { .. }) => {}
+            Ok(neomacs_test_env::fresh_build_stamp::StampVerdict::Overridden { .. }) => {
+                // `verify` already echoed the override; the run is unattested.
+            }
+            Err(message) => panic!("{message}"),
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1503,6 +1533,295 @@ pub(crate) fn assert_oracle_parity_expect(form: &str, expected: expect_test::Exp
     assert_oracle_parity_expect_with_sandbox(form, expected, &sandbox, EvalProgram::Normalized);
 }
 
+/// Parity of the batch stderr `do-auto-save` writes through `message1`.
+///
+/// The harness outcome marker and the blank line it prints ahead of that
+/// marker are removed. Directory prefixes owned by this case become
+/// `[ORACLE-TMP]`. What remains is the product text GNU prints on stderr.
+pub(crate) fn assert_oracle_batch_stderr_parity_expect(form: &str, expected: expect_test::Expect) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let eval_program = EvalProgram::Normalized;
+    let observe = |engine: OracleEngine| {
+        let sandbox = oracle_sandbox(form, &[], &project_lisp_dir());
+        let roots = sandbox.stderr_path_roots();
+        let output = spawn_batch_editor(&sandbox, eval_program, engine).expect("editor should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let evaluation =
+            CapturedEvaluation::from_marked_streams(&stdout, &stderr, ORACLE_OUTCOME_MARKER)
+                .unwrap_or_else(|error| {
+                    panic!("invalid marked outcome: {error}\nstdout:\n{stdout}\nstderr:\n{stderr}")
+                });
+        assert!(
+            evaluation.outcome().is_value(),
+            "form signalled on stderr observation: {:?}\nstderr:\n{stderr}",
+            evaluation.outcome()
+        );
+        inline_debug_text(&product_batch_stderr(&stderr, &roots))
+    };
+    match OracleMode::from_env() {
+        OracleMode::Snapshot => expected.assert_eq(&observe(OracleEngine::Neomacs)),
+        OracleMode::Verify => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            expected.assert_eq(&oracle);
+            assert_eq!(neovm, oracle, "oracle stderr mismatch for form: {form}");
+        }
+        OracleMode::Refresh => expected.assert_eq(&observe(OracleEngine::Gnu)),
+        OracleMode::Live => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            assert_eq!(neovm, oracle, "oracle stderr mismatch for form: {form}");
+        }
+    }
+}
+
+/// Batch stderr plus the printed return value, both pinned to GNU.
+///
+/// The payload is the filtered stderr, then a line `VALUE OK …` from the
+/// marked outcome. An empty stderr is only that value line.
+pub(crate) fn assert_oracle_batch_stderr_and_value_expect(
+    form: &str,
+    expected: expect_test::Expect,
+) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let eval_program = EvalProgram::Normalized;
+    let observe = |engine: OracleEngine| {
+        let sandbox = oracle_sandbox(form, &[], &project_lisp_dir());
+        let roots = sandbox.stderr_path_roots();
+        let output = spawn_batch_editor(&sandbox, eval_program, engine).expect("editor should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let evaluation =
+            CapturedEvaluation::from_marked_streams(&stdout, &stderr, ORACLE_OUTCOME_MARKER)
+                .unwrap_or_else(|error| {
+                    panic!("invalid marked outcome: {error}\nstdout:\n{stdout}\nstderr:\n{stderr}")
+                });
+        assert!(
+            evaluation.outcome().is_value(),
+            "form signalled: {:?}\nstderr:\n{stderr}",
+            evaluation.outcome()
+        );
+        let stderr_text = product_batch_stderr(&stderr, &roots);
+        let payload = if stderr_text.is_empty() {
+            format!("VALUE {}", evaluation.outcome())
+        } else {
+            format!("{stderr_text}\nVALUE {}", evaluation.outcome())
+        };
+        inline_debug_text(&payload)
+    };
+    match OracleMode::from_env() {
+        OracleMode::Snapshot => expected.assert_eq(&observe(OracleEngine::Neomacs)),
+        OracleMode::Verify => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            expected.assert_eq(&oracle);
+            assert_eq!(
+                neovm, oracle,
+                "oracle stderr/value mismatch for form: {form}"
+            );
+        }
+        OracleMode::Refresh => expected.assert_eq(&observe(OracleEngine::Gnu)),
+        OracleMode::Live => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            assert_eq!(
+                neovm, oracle,
+                "oracle stderr/value mismatch for form: {form}"
+            );
+        }
+    }
+}
+
+/// Batch exit status plus the product stderr, for a form that calls `kill-emacs`.
+///
+/// The payload is `EXIT <code>` and then the filtered stderr. A successful
+/// wrapper exit and any product diagnostics are checked against the oracle.
+#[cfg(test)]
+pub(crate) fn assert_oracle_batch_exit_and_stderr_expect(
+    form: &str,
+    expected: expect_test::Expect,
+) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let eval_program = EvalProgram::Normalized;
+    let observe = |engine: OracleEngine| {
+        let sandbox = oracle_sandbox(form, &[], &project_lisp_dir());
+        let roots = sandbox.stderr_path_roots();
+        let output = spawn_batch_editor_any_status(&sandbox, eval_program, engine)
+            .expect("editor should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let code = output.status.code().unwrap_or(-1);
+        let stderr_text = product_batch_stderr(&stderr, &roots);
+        inline_debug_text(&format!("EXIT {code}\n{stderr_text}"))
+    };
+    match OracleMode::from_env() {
+        OracleMode::Snapshot => expected.assert_eq(&observe(OracleEngine::Neomacs)),
+        OracleMode::Verify => {
+            let oracle = observe(OracleEngine::Gnu);
+            expected.assert_eq(&oracle);
+            let neovm = observe(OracleEngine::Neomacs);
+            assert_eq!(
+                neovm, oracle,
+                "oracle exit/stderr mismatch for form: {form}"
+            );
+        }
+        OracleMode::Refresh => expected.assert_eq(&observe(OracleEngine::Gnu)),
+        OracleMode::Live => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            assert_eq!(
+                neovm, oracle,
+                "oracle exit/stderr mismatch for form: {form}"
+            );
+        }
+    }
+}
+
+/// A write-error auto-save must not print BEL on batch stdout.
+///
+/// GNU `auto_save_error` calls `ring_bell` directly (`fileio.c:6239`,
+/// `terminal.c:56-79`). Lisp `(ding)` would write BEL to stdout in batch.
+/// The stderr error line is the witness that the error path ran.
+pub(crate) fn assert_oracle_batch_stdout_has_no_bel(form: &str) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let eval_program = EvalProgram::Normalized;
+    let observe = |engine: OracleEngine| {
+        let sandbox = oracle_sandbox(form, &[], &project_lisp_dir());
+        let output = spawn_batch_editor(&sandbox, eval_program, engine).expect("editor should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let evaluation =
+            CapturedEvaluation::from_marked_streams(&stdout, &stderr, ORACLE_OUTCOME_MARKER)
+                .unwrap_or_else(|error| {
+                    panic!("invalid marked outcome: {error}\nstdout:\n{stdout}\nstderr:\n{stderr}")
+                });
+        assert!(
+            evaluation.outcome().is_value(),
+            "form signalled: {:?}\nstderr:\n{stderr}",
+            evaluation.outcome()
+        );
+        assert!(
+            !output.stdout.contains(&0x07),
+            "BEL in batch stdout\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("Error (auto-save)"),
+            "error path did not warn\nstderr:\n{stderr}"
+        );
+        let text = stdout
+            .replace('\r', "")
+            .lines()
+            .filter(|line| !line.contains(ORACLE_OUTCOME_MARKER) && !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        inline_debug_text(&text)
+    };
+    match OracleMode::from_env() {
+        OracleMode::Snapshot => {
+            observe(OracleEngine::Neomacs);
+        }
+        OracleMode::Verify | OracleMode::Live => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            assert_eq!(neovm, oracle, "oracle stdout mismatch for form: {form}");
+        }
+        OracleMode::Refresh => {
+            observe(OracleEngine::Gnu);
+        }
+    }
+}
+
+fn spawn_batch_editor(
+    sandbox: &OracleSandbox,
+    eval_program: EvalProgram,
+    engine: OracleEngine,
+) -> Result<std::process::Output, String> {
+    let mut cmd = batch_editor_command(sandbox, eval_program, engine);
+    let output = cmd
+        .output()
+        .map_err(|error| format!("failed to run batch editor: {error}"))?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(format!(
+            "batch editor failed: status={}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ))
+    }
+}
+
+/// Spawn a batch editor and keep a non-zero status.
+///
+/// `kill-emacs` with a fixnum argument calls `exit` with that status
+/// (`emacs.c:3082-3088`). The harness wrapper never prints its outcome marker.
+/// A timed-out editor is killed and reaped before returning an error.
+#[cfg(test)]
+fn spawn_batch_editor_any_status(
+    sandbox: &OracleSandbox,
+    eval_program: EvalProgram,
+    engine: OracleEngine,
+) -> Result<std::process::Output, String> {
+    let mut cmd = batch_editor_command(sandbox, eval_program, engine);
+    neomacs_melpa_test_support::output_with_timeout_pinned(
+        &mut cmd,
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|error| format!("failed to run batch editor: {error:?}"))
+}
+
+fn batch_editor_command(
+    sandbox: &OracleSandbox,
+    eval_program: EvalProgram,
+    engine: OracleEngine,
+) -> PinnedCommand {
+    let (program, identity) = match engine {
+        OracleEngine::Gnu => {
+            let oracle = attested_oracle_emacs();
+            (
+                oracle.executable().to_path_buf(),
+                WindowSystemIdentity::Gnu(gnu_window_system(sandbox, oracle.executable())),
+            )
+        }
+        OracleEngine::Neomacs => (
+            PathBuf::from(neomacs_binary_path()),
+            WindowSystemIdentity::Neovm,
+        ),
+    };
+    let mut cmd = sandbox.pinned_command(&program);
+    sandbox.configure(&mut cmd);
+    cmd.env(OracleEngine::ENV, engine.as_env_value());
+    match engine {
+        OracleEngine::Gnu => {
+            cmd.env("EMACSNATIVELOADPATH", "/dev/null");
+            apply_virtual_memory_limit(&mut cmd, oracle_mem_limit_bytes());
+        }
+        OracleEngine::Neomacs => {
+            if let Some(mem_limit) = neomacs_binary_mem_limit_bytes() {
+                apply_virtual_memory_limit(&mut cmd, mem_limit);
+            }
+        }
+    }
+    eval_program.configure_command(&mut cmd, identity);
+    cmd
+}
+
+fn product_batch_stderr(stderr: &str, roots: &[String]) -> String {
+    let mut text = stderr.replace('\r', "");
+    for root in roots {
+        text = text.replace(root, "[ORACLE-TMP]");
+    }
+    text.lines()
+        .filter(|line| !line.contains(ORACLE_OUTCOME_MARKER) && !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn inline_debug_text(text: &str) -> String {
+    format!("{:?}", text.replace('\0', "\\0"))
+}
+
 /// Pin a KNOWN divergence as an expected failure: `expected` is GNU's answer
 /// (written by `NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`, never by hand), and
 /// the test passes while Neomacs still answers something else.
@@ -1630,6 +1949,69 @@ pub(crate) fn assert_oracle_parity_under_envs_expect(
     neomacs_envs: &[&[(&str, &str)]],
     expected: expect_test::Expect,
 ) {
+    run_parity_under_envs(form, neomacs_envs, expected, None);
+}
+
+/// What one Neomacs arm of an environment matrix actually executed, read from
+/// the final `[neovm-jit-final]` line of that run's JIT statistics
+/// (`NEOVM_JIT_STATS_FILE`, which implies the compile-stats report).
+#[derive(Debug)]
+pub(crate) struct JitTierWitness {
+    /// Leaf compiles this session (`compiles=`).
+    pub compiles: u64,
+    /// Native entries into compiled leaves (`native_entries=`).
+    pub native_entries: u64,
+    /// All deopt causes (`deopts[total=`).
+    pub deopts: u64,
+    /// The whole report, for failure messages.
+    pub stats: String,
+}
+
+/// Parse the final `[neovm-jit-final]` line of a JIT stats file.
+fn final_jit_tier_witness(stats: String) -> Option<JitTierWitness> {
+    let line = stats
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("[neovm-jit-final]"))?;
+    let field = |prefix: &str| {
+        line.split_whitespace()
+            .find_map(|token| token.strip_prefix(prefix))?
+            .parse()
+            .ok()
+    };
+    Some(JitTierWitness {
+        compiles: field("compiles=")?,
+        native_entries: field("native_entries=")?,
+        deopts: field("deopts[total=")?,
+        stats,
+    })
+}
+
+/// Like [`assert_oracle_parity_under_envs_expect`], and additionally requires
+/// every Neomacs arm to show the engine activity the arm claims.
+///
+/// The witness reads the `NEOVM_JIT_STATS_FILE` report of the same run whose
+/// answer was just compared, so it observes that run rather than a re-run. It
+/// is kept outside the expectation and cannot move the expected payload: a
+/// knob arm that silently stops taking effect, or a form that never reaches
+/// the tier the arm claims, turns the test RED even while every answer still
+/// matches GNU. GNU never reads these variables; the matrix stays
+/// Neomacs-only.
+pub(crate) fn assert_oracle_parity_under_envs_expect_with_witness(
+    form: &str,
+    neomacs_envs: &[&[(&str, &str)]],
+    expected: expect_test::Expect,
+    witness: impl Fn(&[(&str, &str)], &JitTierWitness),
+) {
+    run_parity_under_envs(form, neomacs_envs, expected, Some(&witness));
+}
+
+fn run_parity_under_envs(
+    form: &str,
+    neomacs_envs: &[&[(&str, &str)]],
+    expected: expect_test::Expect,
+    witness: Option<&dyn Fn(&[(&str, &str)], &JitTierWitness)>,
+) {
     ensure_nonempty_form(form).expect("form should not be empty");
     let eval_program = EvalProgram::Normalized;
     let sandbox_with = |extra_env: &[(&str, &str)]| {
@@ -1650,11 +2032,34 @@ pub(crate) fn assert_oracle_parity_under_envs_expect(
         return;
     }
     for extra_env in neomacs_envs {
-        let neovm = run_neomacs_binary_eval_with_sandbox(&sandbox_with(extra_env), eval_program)
+        let stats_dir = witness
+            .is_some()
+            .then(|| tempfile::tempdir().expect("JIT tier witness tempdir"));
+        let stats_path = stats_dir.as_ref().map(|dir| {
+            dir.path()
+                .join("jit-stats.txt")
+                .to_string_lossy()
+                .into_owned()
+        });
+        let mut env: Vec<(&str, &str)> = extra_env.to_vec();
+        if let Some(path) = &stats_path {
+            env.push(("NEOVM_JIT_STATS_FILE", path.as_str()));
+        }
+        let neovm = run_neomacs_binary_eval_with_sandbox(&sandbox_with(&env), eval_program)
             .unwrap_or_else(|e| panic!("neomacs binary eval should run under {extra_env:?}: {e}"));
         match &oracle {
             None => expected.assert_eq(&inline_expect_payload(&neovm)),
             Some(oracle) => assert_neovm_oracle_parity(&neovm, oracle, form),
+        }
+        if let (Some(observe), Some(path)) = (witness, &stats_path) {
+            let stats = std::fs::read_to_string(path).unwrap_or_default();
+            let report = final_jit_tier_witness(stats).unwrap_or_else(|| {
+                panic!(
+                    "arm {extra_env:?} left no [neovm-jit-final] report at {path}: \
+                     the tier witness would be vacuous"
+                )
+            });
+            observe(extra_env, &report);
         }
     }
 }

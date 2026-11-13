@@ -23,6 +23,8 @@
 //!   (`xmenu.c`/`pgtkmenu.c`) temporarily selects the frame's selected
 //!   window buffer before calling `menu_bar_items`.
 
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,8 +285,10 @@ fn resolve_keymap(eval: &Context, value: &Value) -> Option<Value> {
     if is_keymap(value, eval.symbol_mode()) {
         return Some(*value);
     }
+    // GNU's `menu_bar_items` resolves a symbol-valued menu entry with
+    // `symbol-value` (find_symbol_value), not the default cell.
     if let Some(name) = value.as_symbol_name(eval.symbol_mode())
-        && let Some(symbol_value) = eval.variable_value_by_name(name)
+        && let Some(symbol_value) = crate::neovm_bridge::visible_value_by_name(eval, name)
         && is_keymap(&symbol_value, eval.symbol_mode())
     {
         return Some(symbol_value);
@@ -297,7 +301,9 @@ fn resolve_keymap(eval: &Context, value: &Value) -> Option<Value> {
 /// the current end.  The declared list therefore defines the final items'
 /// order; this is not a stable partition of their source-keymap order.
 fn move_final_items_to_end(eval: &Context, items: &mut Vec<TtyMenuBarItem>) {
-    let final_items = match eval.variable_value_by_name("menu-bar-final-items") {
+    // keyboard.c reads Vmenu_bar_final_items from the C global (keyboard.c:8732).
+    let final_items = match crate::neovm_bridge::visible_value_by_name(eval, "menu-bar-final-items")
+    {
         Some(value) => value,
         None => return,
     };

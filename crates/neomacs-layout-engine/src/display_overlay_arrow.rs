@@ -63,7 +63,7 @@ pub(crate) fn draw_overlay_arrows<B: LayoutBufferView, FS: crate::neovm_bridge::
     face_ids: &mut FrameFaceAttempt,
     style: OverlayArrowStyle,
 ) {
-    let vars = arrow_variables(evaluator);
+    let vars = arrow_variables(evaluator, buffer_id);
     if vars.is_empty() {
         return;
     }
@@ -111,7 +111,7 @@ pub(crate) fn draw_overlay_arrows<B: LayoutBufferView, FS: crate::neovm_bridge::
                 }
             }
             OverlayArrowStyle::TextString { char_width } => {
-                let Some(text) = arrow_string(evaluator, var) else {
+                let Some(text) = arrow_string(evaluator, var, buffer_id) else {
                     continue;
                 };
                 if text.is_empty() {
@@ -128,10 +128,15 @@ pub(crate) fn draw_overlay_arrows<B: LayoutBufferView, FS: crate::neovm_bridge::
 
 /// The symbols in `overlay-arrow-variable-list`, skipping non-symbols exactly
 /// as GNU's loop does.
-fn arrow_variables(evaluator: &Context) -> Vec<Value> {
-    let Some(list) =
-        evaluator.variable_value(crate::fixed_symbols::OVERLAY_ARROW_VARIABLE_LIST.id())
-    else {
+fn arrow_variables(evaluator: &Context, buffer_id: BufferId) -> Vec<Value> {
+    // GNU reads Voverlay_arrow_variable_list with the window's buffer current
+    // (`overlay_arrow_in_current_buffer_p`, xdisp.c:17074), so a `let' or a
+    // buffer-local binding is the list that decides.
+    let Some(list) = crate::neovm_bridge::visible_display_value(
+        evaluator,
+        buffer_id,
+        crate::fixed_symbols::OVERLAY_ARROW_VARIABLE_LIST.id(),
+    ) else {
         return Vec::new();
     };
     let mut vars = Vec::new();
@@ -150,7 +155,10 @@ fn arrow_variables(evaluator: &Context) -> Vec<Value> {
 /// into `buffer_id` (GNU additionally requires `current_buffer`).
 fn arrow_marker_charpos(evaluator: &Context, var: Value, buffer_id: BufferId) -> Option<usize> {
     let sym = var.as_bare_symbol_id()?;
-    let value = evaluator.variable_value(sym)?;
+    // GNU's `find_symbol_value (var)` runs with the window's buffer current
+    // (`overlay_arrow_in_current_buffer_p`, xdisp.c:17081), so the buffer's
+    // local marker and a live `let' both reach it.
+    let value = crate::neovm_bridge::visible_display_value(evaluator, buffer_id, sym)?;
     let marker = value.as_marker_data()?;
     (marker.buffer_id() == Some(buffer_id)).then_some(marker.charpos.get())
 }
@@ -158,7 +166,7 @@ fn arrow_marker_charpos(evaluator: &Context, var: Value, buffer_id: BufferId) ->
 /// GNU `overlay_arrow_string_or_property`: the symbol's own
 /// `overlay-arrow-string` property when it is a string, else the global
 /// `overlay-arrow-string`.
-fn arrow_string(evaluator: &Context, var: Value) -> Option<String> {
+fn arrow_string(evaluator: &Context, var: Value, buffer_id: BufferId) -> Option<String> {
     let sym = var.as_bare_symbol_id()?;
     let prop_key = crate::fixed_symbols::OVERLAY_ARROW_STRING.id();
     neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(sym);
@@ -176,9 +184,15 @@ fn arrow_string(evaluator: &Context, var: Value) -> Option<String> {
         }
         plist = rest.cons_cdr();
     }
-    evaluator
-        .variable_value(crate::fixed_symbols::OVERLAY_ARROW_STRING.id())
-        .and_then(|value| value.as_str_owned())
+    // `overlay_arrow_string_or_property` falls back to Voverlay_arrow_string
+    // with the window's buffer current (xdisp.c:17057-17065); term/calc.el
+    // makes that variable buffer-local, which is what this read must honor.
+    crate::neovm_bridge::visible_display_value(
+        evaluator,
+        buffer_id,
+        crate::fixed_symbols::OVERLAY_ARROW_STRING.id(),
+    )
+    .and_then(|value| value.as_str_owned())
 }
 
 /// GNU's fringe bitmap for `var` (xdisp.c, the `FRAME_WINDOW_P` branch of

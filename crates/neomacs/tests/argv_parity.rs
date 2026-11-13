@@ -159,6 +159,95 @@ fn quick_passes_through_to_lisp() {
     assert_stdout_parity(&n, &e, "-Q peek parity");
 }
 
+fn script_args_fixture() -> tempfile::TempDir {
+    let fixture = neomacs_test_env::bounded_temp_dir("nv-script-args-")
+        .expect("create owned script argument fixture");
+    std::fs::write(
+        fixture.path().join("args.el"),
+        "(princ (format \"%S\\n\" command-line-args-left))\n",
+    )
+    .expect("write trusted argument-printing script");
+    for name in ["a", "b", "-Q"] {
+        std::fs::write(fixture.path().join(name), b"").expect("write owned plain file");
+    }
+    fixture
+}
+
+#[test]
+fn script_quick_options_are_consumed_before_loading() {
+    let fixture = script_args_fixture();
+    let directory = fixture
+        .path()
+        .canonicalize()
+        .expect("canonical fixture path");
+    let directory = directory.to_str().expect("UTF-8 fixture path");
+    // Let the script return normally: clearing argv or exiting inside it would
+    // hide the subsequent Unknown option failure reported in issue #746.
+    for quick in ["-Q", "--quick", "-quick"] {
+        for options in [[quick, "--batch"], ["--batch", quick]] {
+            let argv = [
+                "--chdir", directory, options[0], options[1], "--script", "args.el", "a", "b",
+            ];
+            let e = run_oracle_emacs(&argv);
+            assert_eq!(e.status, 0, "GNU script failed for {argv:?}: {e:?}");
+            assert_eq!(e.stdout, "(\"a\" \"b\")\n", "GNU argv for {argv:?}: {e:?}");
+            let n = run_neomacs(&argv);
+            assert_eq!(n.status, 0, "Neomacs script failed for {argv:?}: {n:?}");
+            assert_eq!(
+                n.stdout, e.stdout,
+                "script argv differs for {argv:?}: {n:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn script_preserves_literal_quick_option_after_terminator() {
+    let fixture = script_args_fixture();
+    let directory = fixture
+        .path()
+        .canonicalize()
+        .expect("canonical fixture path");
+    let directory = directory.to_str().expect("UTF-8 fixture path");
+    let argv = ["--chdir", directory, "--script", "args.el", "--", "-Q"];
+    let e = run_oracle_emacs(&argv);
+    assert_eq!(e.status, 0, "GNU literal script argument failed: {e:?}");
+    assert_eq!(
+        e.stdout, "(\"--\" \"-Q\")\n",
+        "GNU literal script argv: {e:?}"
+    );
+    let n = run_neomacs(&argv);
+    assert_eq!(n.status, 0, "Neomacs literal script argument failed: {n:?}");
+    assert_eq!(n.stdout, e.stdout, "literal script argv differs: {n:?}");
+}
+
+#[test]
+fn scripteval_quick_options_are_consumed_before_evaluation() {
+    let fixture = script_args_fixture();
+    let directory = fixture
+        .path()
+        .canonicalize()
+        .expect("canonical fixture path");
+    let directory = directory.to_str().expect("UTF-8 fixture path");
+    // GNU emacs.c:2132-2140 also re-sorts the -x -> -scripteval rewrite.
+    // The trusted fixture's final princ returns a string, so GNU's script
+    // evaluator exits 0 rather than treating a numeric result as an exit code.
+    for argv in [
+        ["--chdir", directory, "-Q", "-x", "args.el", "a", "b"],
+        ["--chdir", directory, "-x", "args.el", "-Q", "a", "b"],
+    ] {
+        let e = run_oracle_emacs(&argv);
+        assert_eq!(e.status, 0, "GNU -x failed for {argv:?}: {e:?}");
+        assert_eq!(
+            e.stdout, "(\"a\" \"b\")\n",
+            "GNU -x argv for {argv:?}: {e:?}"
+        );
+        let n = run_neomacs(&argv);
+        assert_eq!(n.status, 0, "Neomacs -x failed for {argv:?}: {n:?}");
+        assert_eq!(n.stdout, e.stdout, "-x argv differs for {argv:?}: {n:?}");
+    }
+}
+
 #[test]
 fn no_site_lisp_drops_site_lisp_from_load_path() {
     let argv = [

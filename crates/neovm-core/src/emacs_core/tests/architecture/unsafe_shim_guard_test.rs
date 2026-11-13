@@ -15,20 +15,9 @@
 //!     section. The ABI, the `#[unsafe(no_mangle)]` symbol and the
 //!     address-based JIT symbol table are unchanged by that marker.
 
-use std::path::{Path, PathBuf};
+use super::architecture_production_source_roots::production_source_files;
 
 const LINT: &str = "not_unsafe_ptr_arg_deref";
-
-fn source_files(directory: &Path, files: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(directory).expect("read source directory") {
-        let path = entry.expect("source entry").path();
-        if path.is_dir() {
-            source_files(&path, files);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            files.push(path);
-        }
-    }
-}
 
 /// Keep code tokens only: comments and string/char/raw-string literals are
 /// dropped while every newline is preserved, so the scans match declarations
@@ -328,27 +317,19 @@ fn safe_pointer_extern_fns(source: &str) -> Vec<(String, usize)> {
 
 #[test]
 fn unsafe_shims_carry_no_not_unsafe_ptr_arg_deref_allow() {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let root = manifest.join("src");
-    let mut files = Vec::new();
-    source_files(&root, &mut files);
+    let files = production_source_files();
     assert!(
         files.len() > 100,
-        "the guard must scan the whole crate source tree, saw {} files",
+        "the guard must scan every production source tree, saw {} files",
         files.len()
     );
     let mut offenders = Vec::new();
-    for path in &files {
-        let source = code_only(&std::fs::read_to_string(path).expect("read source file"));
-        let relative = path.strip_prefix(&manifest).unwrap_or(path);
+    for file in &files {
+        let source = code_only(&std::fs::read_to_string(&file.path).expect("read source file"));
+        let relative = file.workspace_relative();
         for (line, content) in source.lines().enumerate() {
             if content.contains("#[allow(") && content.contains(LINT) {
-                offenders.push(format!(
-                    "{}:{}: {}",
-                    relative.display(),
-                    line + 1,
-                    content.trim()
-                ));
+                offenders.push(format!("{relative}:{}: {}", line + 1, content.trim()));
             }
         }
         let stripped = source
@@ -359,11 +340,10 @@ fn unsafe_shims_carry_no_not_unsafe_ptr_arg_deref_allow() {
         if found > 0
             && !offenders
                 .iter()
-                .any(|entry| entry.starts_with(&format!("{}:", relative.display())))
+                .any(|entry| entry.starts_with(&format!("{relative}:")))
         {
             offenders.push(format!(
-                "{}: {found} multi-line or combined allow attribute(s)",
-                relative.display()
+                "{relative}: {found} multi-line or combined allow attribute(s)"
             ));
         }
     }
@@ -378,23 +358,20 @@ fn unsafe_shims_carry_no_not_unsafe_ptr_arg_deref_allow() {
 
 #[test]
 fn unsafe_shims_are_the_only_pointer_taking_extern_c_declarations() {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let root = manifest.join("src");
-    let mut files = Vec::new();
-    source_files(&root, &mut files);
+    let files = production_source_files();
     assert!(
         files.len() > 100,
-        "the guard must scan the whole crate source tree, saw {} files",
+        "the guard must scan every production source tree, saw {} files",
         files.len()
     );
     let mut offenders = Vec::new();
     let mut scanned = 0usize;
-    for path in &files {
-        let source = code_only(&std::fs::read_to_string(path).expect("read source file"));
-        let relative = path.strip_prefix(&manifest).unwrap_or(path);
+    for file in &files {
+        let source = code_only(&std::fs::read_to_string(&file.path).expect("read source file"));
+        let relative = file.workspace_relative();
         scanned += source.matches("extern \"C\"").count();
         for (name, line) in safe_pointer_extern_fns(&source) {
-            offenders.push(format!("{}:{line}: {name}", relative.display()));
+            offenders.push(format!("{relative}:{line}: {name}"));
         }
     }
     assert!(

@@ -1,0 +1,129 @@
+{
+  "model_source_sha256": "c43992525a765d6871225fbae42683ca9713ee994599a1f0ace63f49f007de63",
+  "results": [
+    {
+      "mode": "stacked",
+      "variant": "fresh",
+      "log": "tmp/wt-lead-jitcall/tmp/D1-alias-model/owner-final-stacked-fresh.log",
+      "head": "ce358cf478ffaf9e549ead9bfae9c470bbb18c21",
+      "status": "clean (status --short printed no entries; outer test-anywhere admission also status=0)",
+      "finished": "2026-11-10T13:52:38Z",
+      "rc": 0,
+      "summary": "12 passed, 0 skipped",
+      "passed": [
+        "apply_fresh_raw_after_mutable_owner_normalization",
+        "apply_old_raw_before_mutable_owner_normalization",
+        "apply_old_raw_before_plain_owner_read_control",
+        "direct_raw_callback_control",
+        "finish_callbacks_preserve_owner",
+        "macro_arm_0_preserves_owner",
+        "macro_arm_1_preserves_owner",
+        "macro_arm_2_preserves_owner",
+        "paired_argument_preserves_owner",
+        "source_arm_0_preserves_owner",
+        "source_arm_1_preserves_owner",
+        "source_arm_2_preserves_owner"
+      ],
+      "failed": [],
+      "miri_undefined_behavior_reports": 0,
+      "sha256": "66876faec4246ed9f0dce05f950799e03187b6a1b8f91b0c69825d7bba6b7ffc",
+      "archived_log": "owner-final-stacked-fresh.log.gz",
+      "archive_sha256": "5e5beb804a80431ca8fb10bbcca7a8e412115481a1bc9a576d943581288a2bb8"
+    },
+    {
+      "mode": "stacked",
+      "variant": "baseline",
+      "log": "tmp/wt-lead-jitcall/tmp/D1-alias-model/owner-final-stacked-baseline.log",
+      "head": "ce358cf478ffaf9e549ead9bfae9c470bbb18c21",
+      "status": "clean (status --short printed no entries; outer test-anywhere admission also status=0)",
+      "finished": "2026-11-10T13:57:16Z",
+      "rc": 100,
+      "summary": "4 passed, 8 failed, 0 skipped",
+      "passed": [
+        "apply_fresh_raw_after_mutable_owner_normalization",
+        "apply_old_raw_before_mutable_owner_normalization",
+        "apply_old_raw_before_plain_owner_read_control",
+        "direct_raw_callback_control"
+      ],
+      "failed": [
+        "finish_callbacks_preserve_owner",
+        "macro_arm_0_preserves_owner",
+        "macro_arm_1_preserves_owner",
+        "macro_arm_2_preserves_owner",
+        "paired_argument_preserves_owner",
+        "source_arm_0_preserves_owner",
+        "source_arm_1_preserves_owner",
+        "source_arm_2_preserves_owner"
+      ],
+      "miri_undefined_behavior_reports": 8,
+      "sha256": "2c39a22df681e25988dd256f4c2023c68f98b1f8a04b85c46557a06efc178d81",
+      "archived_log": "owner-final-stacked-baseline.log.gz",
+      "archive_sha256": "e998be12d3d8c37e57202feae8a6a86e912e030d4f01edfedbdc51e0705a20fb"
+    },
+    {
+      "mode": "tree",
+      "variant": "fresh",
+      "log": "tmp/wt-lead-jitcall/tmp/D1-alias-model/owner-final-tree-fresh.log",
+      "head": "ce358cf478ffaf9e549ead9bfae9c470bbb18c21",
+      "status": "clean (status --short printed no entries; outer test-anywhere admission also status=0)",
+      "finished": "2026-11-10T13:57:11Z",
+      "rc": 0,
+      "summary": "12 passed, 0 skipped",
+      "passed": [
+        "apply_fresh_raw_after_mutable_owner_normalization",
+        "apply_old_raw_before_mutable_owner_normalization",
+        "apply_old_raw_before_plain_owner_read_control",
+        "direct_raw_callback_control",
+        "finish_callbacks_preserve_owner",
+        "macro_arm_0_preserves_owner",
+        "macro_arm_1_preserves_owner",
+        "macro_arm_2_preserves_owner",
+        "paired_argument_preserves_owner",
+        "source_arm_0_preserves_owner",
+        "source_arm_1_preserves_owner",
+        "source_arm_2_preserves_owner"
+      ],
+      "failed": [],
+      "miri_undefined_behavior_reports": 0,
+      "sha256": "123f6d66587b10b03dcc9e94206b95fd4ee5d85f9fd60dcd0fbe96c9303cd278",
+      "archived_log": "owner-final-tree-fresh.log.gz",
+      "archive_sha256": "662087aeaef714a02a9fb59d77f434b5814edbf7a98829059e91277e67da9599"
+    },
+    {
+      "mode": "tree",
+      "variant": "baseline",
+      "log": "tmp/wt-lead-jitcall/tmp/D1-alias-model/owner-final-tree-baseline.log",
+      "head": "ce358cf478ffaf9e549ead9bfae9c470bbb18c21",
+      "status": "clean (status --short printed no entries; outer test-anywhere admission also status=0)",
+      "finished": "2026-11-10T13:57:22Z",
+      "rc": 100,
+      "summary": "4 passed, 8 failed, 0 skipped",
+      "passed": [
+        "apply_fresh_raw_after_mutable_owner_normalization",
+        "apply_old_raw_before_mutable_owner_normalization",
+        "apply_old_raw_before_plain_owner_read_control",
+        "direct_raw_callback_control"
+      ],
+      "failed": [
+        "finish_callbacks_preserve_owner",
+        "macro_arm_0_preserves_owner",
+        "macro_arm_1_preserves_owner",
+        "macro_arm_2_preserves_owner",
+        "paired_argument_preserves_owner",
+        "source_arm_0_preserves_owner",
+        "source_arm_1_preserves_owner",
+        "source_arm_2_preserves_owner"
+      ],
+      "miri_undefined_behavior_reports": 8,
+      "sha256": "c7e02680cb1179e19b4174acb9d9ce79432fd58ea9aab63944d19d1e324020d4",
+      "archived_log": "owner-final-tree-baseline.log.gz",
+      "archive_sha256": "15e0ce78cc1c0bfd80188fa280386b643dba1002f910954bf5e143e8599336e1"
+    }
+  ],
+  "all_12_added_names_have_finished_PASS_under_both_FRESH_modes": true,
+  "executed_source_archive": "executed-model.rs.txt",
+  "checked_in_source_sha256": "770745f891d0fe200561090039f44e5aa1c63a47a070972e48e57f23c6840e57",
+  "source_difference": "Whitespace only in callback_pointer macro blocks; original executed bytes archived; post-commit fresh verification remains required.",
+  "format_diff_archive": "source-format.diff.gz",
+  "archive_encoding": "gzip; mtime=0; original decompressed log hashes retained"
+}

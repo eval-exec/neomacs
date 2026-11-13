@@ -5,8 +5,10 @@
 
 use crate::emacs_core::Context;
 use crate::emacs_core::eval::QuitRequest;
-use crate::emacs_core::process::{BackendWaitEntry, WaitNotifier};
+use crate::emacs_core::process::{BackendWaitEntry, SystemProcessExt, WaitNotifier};
 use crate::keyboard::InputEvent;
+use neovm_display::window::DisplayFrameManagerExt;
+use neovm_system::emacs_core::wait::WaitContextExt;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -16,11 +18,13 @@ pub(crate) use crate::host_input::{HostInputPublishError, HostInputPublisher};
 
 /// Give timer fixtures a displayed buffer whose real edits admit redisplay.
 pub(crate) fn select_visible_fixture(context: &mut Context, name: &str) {
-    let buffer = context.buffers.create_buffer(name);
-    context.buffers.set_current(buffer);
-    let frame = context.frames.create_frame("wait-fixture", 80, 24, buffer);
+    let buffer = context.edit.buffers.create_buffer(name);
+    context.edit.buffers.set_current(buffer);
+    let frame = context
+        .frame_manager_mut()
+        .create_frame("wait-fixture", 80, 24, buffer);
     assert!(
-        context.frames.select_frame(frame),
+        context.frame_manager_mut().select_frame(frame),
         "selected wait fixture frame"
     );
 }
@@ -212,7 +216,7 @@ impl InputGateOwner {
 impl InputGate {
     pub(crate) fn arm(self, context: &mut Context, witness: WaitWitness) {
         context
-            .processes
+            .processes_mut()
             .before_next_backend_wait_for_test(move |entry| {
                 self.observed
                     .send(ObservedAtWait { witness, entry })
@@ -320,13 +324,13 @@ mod tests {
 
     #[test]
     fn zero_service_poll_retains_gate_until_positive_input_wait() {
-        let mut context = Context::new();
+        let mut context = crate::test_utils::new_context();
         let input_owner = InputGateOwner::install(&mut context);
         let (gate, publication) =
             input_owner.gate(vec![InputEvent::key_press(KeyEvent::char('x'))]);
         gate.arm(&mut context, WaitWitness::InputWaitEntered);
         context
-            .processes
+            .processes()
             .wait_for_backend_events(
                 Duration::ZERO,
                 crate::emacs_core::process::ProcessWaitBackendInterest::NotificationsOnly,
@@ -334,7 +338,7 @@ mod tests {
             .expect("native wait backend");
         assert!(
             matches!(
-                context.input_rx.as_ref().expect("receiver").try_recv(),
+                context.input_rx().as_ref().expect("receiver").try_recv(),
                 Err(crossbeam_channel::TryRecvError::Empty)
             ),
             "zero service poll must not authorize input"
@@ -346,7 +350,10 @@ mod tests {
             .expect("positive wait authorizes input");
         assert_eq!(observed.witness, WaitWitness::InputWaitEntered);
         assert!(observed.entry.requested_timeout() > Duration::ZERO);
-        assert_eq!(context.command_loop.keyboard.pending_input_events.len(), 1);
+        assert_eq!(
+            context.command_loop().keyboard.pending_input_events.len(),
+            1
+        );
         assert_eq!(
             completion.expect("command-input wait"),
             crate::emacs_core::wait::CommandInputWaitOutcome::InputPending
@@ -355,12 +362,15 @@ mod tests {
             context.read_char().expect("single queued key"),
             crate::emacs_core::value::Value::fixnum('x' as i64)
         );
-        assert_eq!(context.command_loop.keyboard.pending_input_events.len(), 0);
+        assert_eq!(
+            context.command_loop().keyboard.pending_input_events.len(),
+            0
+        );
     }
 
     #[test]
     fn missing_gate_cancels_without_publishing_the_normal_key() {
-        let mut context = Context::new();
+        let mut context = crate::test_utils::new_context();
         let input_owner = InputGateOwner::install(&mut context);
         let (gate, publication) =
             input_owner.gate(vec![InputEvent::key_press(KeyEvent::char('x'))]);
@@ -379,7 +389,7 @@ mod tests {
         );
         assert!(
             matches!(
-                context.input_rx.as_ref().expect("receiver").try_recv(),
+                context.input_rx().as_ref().expect("receiver").try_recv(),
                 Err(crossbeam_channel::TryRecvError::Empty)
             ),
             "no normal input without a witness"
@@ -389,7 +399,7 @@ mod tests {
 
     #[test]
     fn dropping_publication_cancels_its_waiting_producer_without_input() {
-        let mut context = Context::new();
+        let mut context = crate::test_utils::new_context();
         let input_owner = InputGateOwner::install(&mut context);
         let (gate, mut publication) =
             input_owner.gate(vec![InputEvent::key_press(KeyEvent::char('x'))]);
@@ -404,7 +414,7 @@ mod tests {
         assert!(matches!(outcome, GateOutcome::Cancelled));
         assert!(!context.quit_requested.is_requested());
         assert!(matches!(
-            context.input_rx.as_ref().expect("receiver").try_recv(),
+            context.input_rx().as_ref().expect("receiver").try_recv(),
             Err(crossbeam_channel::TryRecvError::Empty)
         ));
         drop(gate);

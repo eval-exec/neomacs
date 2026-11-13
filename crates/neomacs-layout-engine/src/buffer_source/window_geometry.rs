@@ -58,6 +58,10 @@ pub(crate) struct BufferWindowGeometry {
     pub(crate) char_width: f32,
     pub(crate) char_height: f32,
     pub(crate) max_rows: usize,
+    /// Glyph slots for the body walk. This is `max_rows` when every row is at
+    /// least the frame font, and the pixel box when a shorter face must still
+    /// reach the window bottom. Scroll margin keeps using `max_rows`.
+    pub(crate) matrix_body_rows: usize,
     pub(crate) display_text_row_base: usize,
     pub(crate) display_text_rows: usize,
     pub(crate) bottom_chrome_rows: usize,
@@ -105,6 +109,33 @@ impl BufferWindowGeometry {
     /// area is always `text_y .. text_y + text_height`, independent of this.
     pub(crate) fn row_origin_y(&self) -> f32 {
         self.text_y - self.vscroll
+    }
+
+    /// Matrix index of the mode line when a shorter face grew the body.
+    ///
+    /// A partial edit overwrites `display_text_row_base` with the exposed
+    /// row. The mode line stays on the full-window index from `into_geometry`
+    /// unless the body slot count itself grew.
+    pub(crate) fn allocated_mode_line_row(self) -> usize {
+        self.mode_line_display_row + self.matrix_body_rows.saturating_sub(self.display_text_rows)
+    }
+
+    /// Reserve body slots when `face_line_px` is a shorter realized line box.
+    ///
+    /// GNU `required_matrix_height` (src/dispnew.c) divides the pixel box by
+    /// the smallest font on the window. Two extra slots cover a partial row
+    /// at the top and the bottom. The frame-font count stays the floor, and
+    /// a face at least as tall as that font does not move the mode line.
+    pub(crate) fn widen_body_for_shorter_face(&mut self, face_line_px: f32) {
+        if !(face_line_px >= 1.0 && face_line_px + 1.0 < self.char_height) {
+            return;
+        }
+        let span = self.vscroll + self.text_height;
+        if span <= 0.0 {
+            return;
+        }
+        let pixel_rows = (span / face_line_px).ceil() as usize + 2;
+        self.matrix_body_rows = self.matrix_body_rows.max(pixel_rows);
     }
 }
 
@@ -215,7 +246,10 @@ impl BufferWindowGeometryRequest {
         self,
         line_number_field: LineNumberFieldLayout,
     ) -> BufferWindowGeometry {
-        let max_rows = self.visible_max_rows();
+        let font_rows = self.visible_max_rows();
+        // Scroll margin and the pinned viewport row count stay on the frame
+        // font (`window_box_height / frame_line_height`).
+        let max_rows = font_rows;
         let width_policy = DisplayRowCharWidthPolicy::new(self.char_width);
         let line_number_pixel_width = line_number_field.extent().get();
         let display_text_row_base = self.top_chrome_rows;
@@ -227,6 +261,10 @@ impl BufferWindowGeometryRequest {
             } else {
                 max_rows.max(1)
             };
+        // The frame font is the body slot count until a full layout sees a
+        // shorter face at the window start and widens `matrix_body_rows`.
+        // Scroll margin, `max_rows`, and `mode_line_display_row` stay here.
+        let matrix_body_rows = display_text_rows;
         let mode_line_display_row = display_text_row_base + display_text_rows;
         // GNU appends line-number glyphs to TEXT_AREA, then advances current_x
         // before producing buffer text.  The matrix therefore spans the whole
@@ -279,6 +317,7 @@ impl BufferWindowGeometryRequest {
             char_width: self.char_width,
             char_height: self.char_height,
             max_rows,
+            matrix_body_rows,
             display_text_row_base,
             display_text_rows,
             bottom_chrome_rows: self.bottom_chrome_rows,

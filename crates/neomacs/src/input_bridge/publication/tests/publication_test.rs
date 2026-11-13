@@ -52,7 +52,7 @@ impl<P> Fixture<P> {
     fn with_factory(
         factory: impl FnOnce(HostInputPublisher, SharedPrimaryWindowSize, TestQuit) -> P,
     ) -> Self {
-        let mut context = Context::new();
+        let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
         let input = HostInputPublisher::install(&mut context);
         let steps = Arc::new(Mutex::new(Vec::new()));
         let primary_size = Arc::new(Mutex::new(PrimaryWindowSize {

@@ -1,0 +1,40 @@
+warning: unexpected `cfg` condition value: `test-support`
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/../../world/sole_owner.rs
+  |
+  | #[cfg(not(any(test, feature = "test-support")))]
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `contract-fixtures`, `dbus-vendored`, `default`, `desktop-font-settings`, `display-stop-validate`, `fuzzing`, `gc-memory-telemetry`, `jit`, `perf-probes`, `redisplay-test-policy`, `sound`, `sqlite`, `vm-profile`, and `webview`
+  = help: consider adding `test-support` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition value: `test-support`
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/../../world/sole_owner.rs
+  |
+  | #[cfg(any(test, feature = "test-support"))]
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `contract-fixtures`, `dbus-vendored`, `default`, `desktop-font-settings`, `display-stop-validate`, `fuzzing`, `gc-memory-telemetry`, `jit`, `perf-probes`, `redisplay-test-policy`, `sound`, `sqlite`, `vm-profile`, and `webview`
+  = help: consider adding `test-support` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<SoleOwnerDriver>`, but its trait bounds were not satisfied
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/send_driver.rs
+  |
+  |     ThreadTransfer::<SoleOwnerDriver>::transfer(driver);
+  |                                        ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<SoleOwnerDriver>` due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/../../world/sole_owner.rs
+  |
+  | pub(crate) struct SoleOwnerDriver {
+  | --------------------------------- doesn't satisfy `SoleOwnerDriver: Send`
+  |
+ ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/../../../../../../../neovm-core/tests/thread_safety_ui/support/thread_bounds.rs
+  |
+  | pub struct ThreadTransfer<T>(PhantomData<T>);
+  | ---------------------------- associated function or constant `transfer` not found for this struct
+  |
+  = note: the following trait bounds were not satisfied:
+          `*mut (): Send`
+          which is required by `SoleOwnerDriver: Send`

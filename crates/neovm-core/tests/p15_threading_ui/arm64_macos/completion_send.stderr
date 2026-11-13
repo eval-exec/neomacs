@@ -1,10 +1,18 @@
+warning: unused import: `emacs_core`
+ --> tests/p15_threading_ui/arm64_macos/../completion_send.rs
+  |
+  | use actual_payload::{emacs_core, tagged, threading, value};
+  |                      ^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
 error[E0599]: the associated function or constant `check` exists for struct `ThreadTransfer<CompletingThread>`, but its trait bounds were not satisfied
  --> tests/p15_threading_ui/arm64_macos/../completion_send.rs
   |
   |     ThreadTransfer::<CompletingThread>::check();
   |                                         ^^^^^ associated function or constant cannot be called on `ThreadTransfer<CompletingThread>` due to unsatisfied trait bounds
   |
- ::: tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../src/emacs_core/runtime/threads/completion.rs
+ ::: tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../../neovm-eval/src/emacs_core/runtime/threads/completion.rs
   |
   | pub(crate) struct CompletingThread {
   | ---------------------------------- doesn't satisfy `CompletingThread: Send`

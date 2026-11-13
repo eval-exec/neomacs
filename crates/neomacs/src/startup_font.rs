@@ -55,7 +55,9 @@ impl StartupFont {
     ) -> Option<Self> {
         let mut metrics = FontMetricsService::new();
         let mut open = |candidate: neomacs_display_runtime::font_defaults::InitialFontCandidate| {
-            let request = FrameFontRequest::from_name(candidate.name())?;
+            let request = neovm_core::emacs_core::display_host::frame_font_request_from_name(
+                candidate.name(),
+            )?;
             let requested_size = match request.size() {
                 FrameFontSize::Default => candidate.default_size().font_size(),
                 explicit => explicit,

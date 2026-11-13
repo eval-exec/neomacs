@@ -24,10 +24,16 @@ import sys
 # - a process-wide global allocator must not leak into other tests
 ALLOWED_EXTRA_TARGETS = {
     ("neovm-core", "main_thread_stack"),
+    # Compile-fail contract runners: the Linux compile-contracts job selects
+    # each one with `--test` and counts the runner that ran
+    # (.github/workflows/test-suite.yml, "Run the compile-fail contracts").
+    # mint_seal_contracts joined that list with its trybuild fixtures.
     ("neovm-core", "thread_safety_contracts"),
     ("neovm-core", "chartable_write_contracts"),
     ("neovm-core", "p0s3_contracts"),
     ("neovm-core", "p1rv_contracts"),
+    ("neovm-core", "mint_seal_contracts"),
+    # A process-wide global allocator must not leak into other tests.
     ("neovm-core", "gnu_overlay_deletion_allocations"),
     ("neomacs", "daemon_lifecycle"),
     ("neomacs", "windows_launcher"),

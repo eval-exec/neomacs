@@ -3,6 +3,9 @@
 use super::position_chrome::{PositionBodyPartition, PositionQueryPartition};
 use super::rows_lifetime::{CertifiedRowsHit, PublicationCandidate, StoredRows};
 use crate::buffer_source::render_attempt::QueryRowCoverage;
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::{
     emacs_core::Context,
     window::{FrameId, WindowDisplaySnapshot, WindowId, WindowLayoutQuery, WindowLayoutQueryScope},
@@ -274,9 +277,11 @@ impl QueryCache {
             // A larger range does not certify arbitrary callbacks invoked
             // with a different fontification extent.
             if entry.scope != scope {
-                let source = evaluator.buffer_manager().get(buffer)?;
-                let fontification = source.buffer_local_value_id(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id())
-                    .or_else(|| evaluator.variable_value(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id()));
+                let fontification = crate::neovm_bridge::visible_display_value(
+                    evaluator,
+                    buffer,
+                    crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id(),
+                );
                 if fontification.is_some_and(|value| !value.is_nil()) {
                     return None;
                 }
@@ -319,9 +324,11 @@ impl QueryCache {
                 };
             }
             if matches!(scope, WindowLayoutQueryScope::Rows { .. } | WindowLayoutQueryScope::Pixels { .. }) {
-                let source = evaluator.buffer_manager().get(buffer)?;
-                let fontification = source.buffer_local_value_id(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id())
-                    .or_else(|| evaluator.variable_value(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id()));
+                let fontification = crate::neovm_bridge::visible_display_value(
+                    evaluator,
+                    buffer,
+                    crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id(),
+                );
                 if fontification.is_some_and(|value| !value.is_nil()) {
                     return None;
                 }

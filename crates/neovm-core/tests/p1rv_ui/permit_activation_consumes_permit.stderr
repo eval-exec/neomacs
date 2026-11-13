@@ -9,7 +9,7 @@ error[E0382]: use of moved value: `permit`
   |                  ^^^^^^ value used here after move
   |
 note: `MutatorPermit::<'era>::activate` takes ownership of the receiver `self`, which moves `permit`
- --> src/tagged/gc/mutator_registration/token.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
   |
   |         mut self,
   |             ^^^^

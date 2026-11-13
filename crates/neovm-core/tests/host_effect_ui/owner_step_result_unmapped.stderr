@@ -5,7 +5,7 @@ error[E0004]: non-exhaustive patterns: `&OwnerStepResult::ContractInjected(_)` n
    |                          ^^^^^^^ pattern `&OwnerStepResult::ContractInjected(_)` not covered
    |
 note: `OwnerStepResult<'_>` defined here
-  --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+  --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/owner_step.rs
    |
    |           pub(crate) enum OwnerStepResult<'s> {
    |                           ^^^^^^^^^^^^^^^

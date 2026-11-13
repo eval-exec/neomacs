@@ -105,6 +105,19 @@ pub(crate) struct DisplayLineHeightMetrics {
     pub newline_ascent: f32,
 }
 
+/// Only an unchanged default-font newline can keep seeded row extents.
+/// Other newline fonts resolve from actual content, including taller empty
+/// lines; ordinary default-font rows avoid an unnecessary glyph scan.
+pub(crate) fn newline_requires_height_resolution(
+    policy: crate::display_item::DisplayLineHeightPolicy,
+    face: (f32, f32),
+    default: (f32, f32),
+) -> bool {
+    policy != crate::display_item::DisplayLineHeightPolicy::Default
+        || face.1 != default.1
+        || face.0 - face.1 != default.0 - default.1
+}
+
 pub(crate) fn resolve_line_height(
     policy: crate::display_item::DisplayLineHeightPolicy,
     content: (f32, f32),

@@ -296,8 +296,13 @@ fn cursor_color_cycle_cadence_follows_the_effective_frame_profile() {
 #[test]
 fn cursor_color_cycle_cadence_pauses_when_the_cycle_cannot_change_pixels() {
     let display_60_hz = std::num::NonZeroU16::new(60).unwrap();
-    let global = EffectsConfig::default();
+    let mut global = EffectsConfig::default();
+    global.cursor_color_cycle.enabled = true;
     let filled = frame_with_cursor_effects(None, CursorStyle::FilledBox);
+    assert_eq!(
+        RenderApp::cursor_color_cycle_cadence(&filled, &global, display_60_hz, true),
+        std::num::NonZeroU16::new(24)
+    );
     assert_eq!(
         RenderApp::cursor_color_cycle_cadence(&filled, &global, display_60_hz, false),
         None,
@@ -356,7 +361,8 @@ fn cursor_color_cycle_state_translates_to_an_exact_scheduler_demand() {
     use super::frame_sched::{Cadence, DemandReason, FrameDemand, Invalidation, LayerMask};
 
     let display_60_hz = std::num::NonZeroU16::new(60).unwrap();
-    let global = EffectsConfig::default();
+    let mut global = EffectsConfig::default();
+    global.cursor_color_cycle.enabled = true;
     let frame = frame_with_cursor_effects(None, CursorStyle::FilledBox);
     let expected = FrameDemand {
         invalidation: Invalidation::CompositeOnly {
@@ -383,6 +389,34 @@ fn cursor_color_cycle_state_translates_to_an_exact_scheduler_demand() {
 }
 
 #[test]
+fn default_cursor_effects_do_not_create_standing_cycle_demand() {
+    use super::frame_sched::{FrameCoordinator, NativeWindowId, PacingAction};
+
+    let mut coordinator = FrameCoordinator::new();
+    let id = NativeWindowId(7);
+    let now = neomacs_display_protocol::frame_time::observe_platform_now();
+    let display_60_hz = std::num::NonZeroU16::new(60).unwrap();
+    let global = EffectsConfig::default();
+    let frame = frame_with_cursor_effects(None, CursorStyle::FilledBox);
+
+    assert_eq!(
+        RenderApp::reconcile_cursor_color_cycle_demand(
+            &mut coordinator,
+            id,
+            Some(&frame),
+            &global,
+            display_60_hz,
+            true,
+            now,
+        ),
+        PacingAction::Sleep,
+        "untouched defaults must not animate a focused, visible idle cursor"
+    );
+    assert!(coordinator.active_reasons(id).is_empty());
+    assert_eq!(coordinator.next_wake_deadline_unserviced(), None);
+}
+
+#[test]
 fn cursor_color_cycle_reconciliation_drives_attributed_frames_and_retracts() {
     use super::frame_sched::{
         ClockSource, DemandReason, FrameCoordinator, FrameTick, NativeWindowId, PacingAction,
@@ -393,7 +427,8 @@ fn cursor_color_cycle_reconciliation_drives_attributed_frames_and_retracts() {
     let id = NativeWindowId(7);
     let now = neomacs_display_protocol::frame_time::observe_platform_now();
     let display_60_hz = std::num::NonZeroU16::new(60).unwrap();
-    let global = EffectsConfig::default();
+    let mut global = EffectsConfig::default();
+    global.cursor_color_cycle.enabled = true;
     let frame = frame_with_cursor_effects(None, CursorStyle::FilledBox);
     let tick = |at| FrameTick {
         frame_time: at,

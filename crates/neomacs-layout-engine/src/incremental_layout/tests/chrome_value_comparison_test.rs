@@ -46,7 +46,7 @@ fn property_string(plist: Value) -> Value {
 
 #[test]
 fn chrome_captured_memo_keys_match_core_equality_for_all_fixture_pairs() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let positioned = neovm_core::tagged::gc::with_tagged_heap(|heap| {
         heap.alloc_symbol_with_pos(Value::symbol("chrome-key"), Value::fixnum(3))
     });
@@ -146,7 +146,7 @@ enum MutatedOwner {
 
 #[test]
 fn chrome_captured_memo_keys_preserve_core_collection_read_dependencies() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     for shape in ComparisonShape::iter() {
         for mutated_owner in MutatedOwner::iter() {
             let string = Value::string("mutable");
@@ -381,7 +381,7 @@ fn encode_string_with_core_equality(value: Value, scope: PropertyScope) -> Optio
 
 #[test]
 fn chrome_captured_memo_keys_preserve_recursive_property_encoding_and_admission() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let face = Value::symbol("face");
     let bold = Value::symbol("bold");
     let italic = Value::symbol("italic");

@@ -106,7 +106,7 @@ fn display_row_metrics_for_smaller_gui_face_do_not_inherit_default_descent() {
 
 #[test]
 fn chrome_lisp_string_row_request_preserves_policy_inputs() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let base_face = ResolvedFace::default();
     let mut symbol_values = std::collections::HashMap::new();
     let align_value = Value::make_int(12);
@@ -139,7 +139,7 @@ fn chrome_lisp_string_row_request_preserves_policy_inputs() {
 
 #[test]
 fn window_chrome_display_row_request_renders_measured_lifecycle_row() {
-    let eval = Context::new();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
     let base_face =
@@ -191,7 +191,7 @@ fn window_chrome_display_row_request_renders_measured_lifecycle_row() {
 
 #[test]
 fn header_line_fills_the_complete_window_width_with_its_base_face() {
-    let eval = Context::new();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
     let base_face = window_chrome_test_face(
@@ -270,7 +270,7 @@ fn assert_matches_proportional_dot_width(actual: f32, label: &str) {
 
 #[test]
 fn window_chrome_gui_tab_and_mode_lines_use_font_backed_glyph_advances() {
-    let eval = Context::new();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let face_resolver =
         FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, Some("neo".to_string()));
@@ -326,7 +326,7 @@ fn window_chrome_gui_tab_and_mode_lines_use_font_backed_glyph_advances() {
 
 #[test]
 fn frame_tab_bar_gui_uses_font_backed_glyph_advances() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let face_resolver =
         FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, Some("neo".to_string()));
@@ -358,7 +358,7 @@ fn frame_tab_bar_gui_uses_font_backed_glyph_advances() {
 
 #[test]
 fn frame_tab_bar_fills_the_complete_frame_width_with_its_base_face() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
     let base_face = window_chrome_test_face(&face_resolver, &DisplayOrigin::TabBar);
@@ -400,7 +400,7 @@ fn frame_tab_bar_fills_the_complete_frame_width_with_its_base_face() {
 
 #[test]
 fn tab_bar_hit_regions_preserve_body_close_and_add_item_meaning() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let presentation = eval.begin_interaction_presentation();
     let slots = vec![
@@ -712,7 +712,7 @@ fn tab_pointer_test_frame(highlight_face: FaceId) -> FrameGlyphBuffer {
 
 #[test]
 fn tab_bar_pointer_counts_compositions_as_one_primitive_not_one_per_source_character() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     crate::test_composition::install_rules(&mut eval);
     for composition in ["e\u{301}", "👩‍💻"] {
         let presentation = eval.begin_interaction_presentation();
@@ -799,7 +799,7 @@ fn tab_bar_pointer_counts_compositions_as_one_primitive_not_one_per_source_chara
 
 #[test]
 fn tab_bar_pointer_appearance_body_and_close_share_whole_tab_mouse_face() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let presentation = eval.begin_interaction_presentation();
     let rendered = RenderedDisplayRow::new(
@@ -893,7 +893,7 @@ fn tab_bar_pointer_appearance_body_and_close_share_whole_tab_mouse_face() {
 
 #[test]
 fn tab_bar_pointer_appearance_add_image_uses_resolved_raised_and_sunken_relief() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let presentation = eval.begin_interaction_presentation();
     let rendered = RenderedDisplayRow::new(
@@ -989,7 +989,7 @@ fn presented_menu_item(eval: &mut Context, posn_string: Value) -> String {
 
 #[test]
 fn built_tab_bar_preserves_concatenated_caption_ranges() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let source = TabBarDisplaySource {
         entries: vec![
@@ -1022,7 +1022,7 @@ fn built_tab_bar_preserves_concatenated_caption_ranges() {
 /// face height, and reuses the same built row at render time.
 #[test]
 fn window_chrome_mode_line_row_grows_for_tall_display_element() {
-    let eval = Context::new();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
     let base_face =
@@ -1110,7 +1110,7 @@ fn window_chrome_mode_line_row_grows_for_tall_display_element() {
 
 #[test]
 fn tab_bar_display_source_extracts_menu_items_until_nested_keymap() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let keymap = Value::list(vec![
         KeymapMarker::Keymap.symbol_value(),
         Value::list(vec![
@@ -1175,7 +1175,7 @@ fn tab_bar_display_source_extracts_menu_items_until_nested_keymap() {
 
 #[test]
 fn tab_bar_pointer_appearance_uses_each_effective_mouse_face_and_skips_invalid_face() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let presentation = eval.begin_interaction_presentation();
     let rendered = RenderedDisplayRow::new(
@@ -1253,7 +1253,7 @@ fn tab_bar_pointer_appearance_uses_each_effective_mouse_face_and_skips_invalid_f
 
 #[test]
 fn tab_bar_mouse_face_coalesces_adjacent_wide_source_characters_not_display_columns() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let text = Value::string_with_text_properties(
         "中👨",
@@ -1317,7 +1317,7 @@ fn tab_bar_mouse_face_coalesces_adjacent_wide_source_characters_not_display_colu
 
 #[test]
 fn disabled_tab_bar_item_publishes_no_pointer_behavior() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let rendered = RenderedDisplayRow::new(
         GlyphRow::new(GlyphRowRole::TabBar),
@@ -1364,7 +1364,7 @@ fn disabled_tab_bar_item_publishes_no_pointer_behavior() {
 
 #[test]
 fn tab_bar_display_source_builds_concat_text_and_preserves_items() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let source = TabBarDisplaySource {
         entries: vec![
             TabBarDisplayEntry {

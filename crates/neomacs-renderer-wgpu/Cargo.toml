@@ -9,7 +9,12 @@ description = "WGPU text renderer primitives for Neomacs"
 autotests = false
 
 [features]
-default = []
+# Explicit forwards for what neovm-core's dependency edges used to bring in
+# through their enabled defaults (reached here via the layout engine).  Kept
+# as features so --no-default-features stays a real no-jit build.
+default = ["jit", "sqlite"]
+jit = ["neomacs-layout-engine/jit"]
+sqlite = ["neomacs-layout-engine/sqlite"]
 video = ["dep:neomacs-video"]
 video-dmabuf = ["video"]
 webview = []

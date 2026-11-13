@@ -1,11 +1,13 @@
 use neomacs_display_protocol::types::Color;
 use neomacs_layout_engine::engine::{FrameLayoutAttempt, LayoutEngine};
 use neovm_core::emacs_core::{Context, Value};
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::window::FrameParam;
 
 #[test]
 fn child_frame_keeps_border_properties_and_exact_pixel_placement() {
-    let mut evaluator = Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = evaluator
         .buffer_manager()
         .current_buffer()
@@ -63,7 +65,7 @@ fn child_frame_keeps_border_properties_and_exact_pixel_placement() {
 
 #[test]
 fn tty_frame_outer_border_width_is_zero_without_erasing_parameter() {
-    let mut evaluator = Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = evaluator
         .buffer_manager()
         .current_buffer()

@@ -1,0 +1,7142 @@
+//! Keyboard input and command loop.
+//!
+//! Implements the Emacs command loop:
+//! - Key event representation
+//! - Key sequence reading
+//! - Command dispatch (keymap lookup → funcall)
+//! - Interactive command argument parsing
+//! - Minibuffer input
+//! - Recursive edit support
+//! - Pre/post-command hooks
+//! - Prefix argument handling
+
+use crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
+use crate::emacs_core::eval::keymap_lookup::KeymapMarker;
+use neovm_value::error::LispCondition;
+use neovm_value::intern::{WellKnown, intern, resolve_sym};
+use neovm_value::tagged::value::SymbolMode;
+
+use neovm_value::keyboard_pure::KEY_CHAR_META;
+// decode_storage_char_codes import removed — now using emacs_char directly
+use neovm_value::heap_types::LispString;
+use neovm_value::value::{Value, ValueKind, VecLikeType};
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
+mod diagnostic_knobs;
+mod display_service;
+mod input_method;
+mod keysym;
+mod unread;
+
+pub use keysym::{native_key_android, native_key_macos, native_key_ohos, native_key_windows};
+pub(crate) use neovm_value::system_vocab::input::{
+    ExecutingKbdMacroRuntimeSnapshot, KeySequenceBufferSelection, ReadKeySequenceOptions,
+    TtyInputDecoding,
+};
+pub(crate) use unread::UnreadCommandEvent;
+
+/// GNU fatal signals that `terminate_due_to_signal` passes to
+/// `Fkill_emacs(make_fixnum(sig))` (`emacs.c:441-462`). The exit code is
+/// the signal number. SIGHUP is 1, SIGINT is 2, SIGTERM is 15.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) enum FatalSignal {
+    Hangup = 1,
+    Interrupt = 2,
+    Terminate = 15,
+}
+
+/// Builds a [`ShutdownRequest`] whose code is the signal number and whose
+/// restart flag is false. A method on the value-crate struct would be a new
+/// plain-pub identity, and that ledger is already at its ceiling.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) trait FatalSignalShutdown {
+    fn fatal_signal(signal: FatalSignal) -> Self;
+}
+
+// Command-loop and keyboard state lives in the evaluator data module
+// (stage-4 W2/E6b); these re-exports keep the historical keyboard paths.
+pub(crate) use crate::emacs_core::eval::data::command_loop::{
+    AUTO_SAVE_TIMEOUT, COMMAND_EXECUTE, ECHO_KEYSTROKES, ECHO_KEYSTROKES_HELP, EXECUTING_KBD_MACRO,
+    HELP_CHAR, HELP_EVENT_LIST, INPUT_METHOD_FUNCTION, INTERNAL_TIMER_START_IDLE,
+    KEY_TRANSLATION_MAP, KEYBOARD_TRANSLATE_TABLE, KeyEchoDecoration, KeyEchoState,
+    LAST_INPUT_EVENT, LAST_KBD_MACRO, LAST_NONMENU_EVENT, MouseEventPayload, PREFIX_HELP_COMMAND,
+    SPECIAL_EVENT_MAP, THIS_COMMAND_KEYS_SHIFT_TRANSLATED, TRANSLATE_UPPER_CASE_KEY_BINDINGS,
+    UNDEFINED_SYMBOL, UNREAD_INPUT_METHOD_EVENTS, UNREAD_POST_INPUT_METHOD_EVENTS,
+    help_event_echo_suffix, num_nonmacro_input_events_symbol,
+};
+pub use crate::emacs_core::eval::data::command_loop::{
+    CommandLoop, KBoard, KeyboardRuntime, LastMouseClick, MousePixelPositionState, MousePressState,
+    NonmacroInputEvent, PrefixArg, PresentedInteractions, PresentedMouseArea,
+    PresentedMouseObservation, PresentedMouseTarget, ReadKeySequenceState,
+};
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FrontendWebValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<FrontendWebValue>),
+    Object(std::collections::BTreeMap<String, FrontendWebValue>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FrontendWebProcessFailure {
+    Crashed,
+    ExceededMemoryLimit,
+    Terminated,
+    Unresponsive,
+    LaunchFailed,
+    Other(i32),
+}
+
+/// The load phases GNU reports through `load-changed` (src/xwidget.c:2427-2447).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrontendLoadPhase {
+    Started,
+    Redirected,
+    Committed,
+    Finished,
+}
+
+impl FrontendLoadPhase {
+    /// The string GNU stores as the event's fourth element.
+    pub const fn gnu_name(self) -> &'static str {
+        match self {
+            Self::Started => "load-started",
+            Self::Redirected => "load-redirected",
+            Self::Committed => "load-committed",
+            Self::Finished => "load-finished",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FrontendWebViewEvent {
+    Ready {
+        id: neomacs_display_protocol::WebViewId,
+        generation: u64,
+    },
+    Failed {
+        id: neomacs_display_protocol::WebViewId,
+        generation: u64,
+        error: String,
+    },
+    Closed {
+        id: neomacs_display_protocol::WebViewId,
+        generation: u64,
+    },
+    TitleChanged {
+        id: neomacs_display_protocol::WebViewId,
+        generation: u64,
+        title: String,
+    },
+    UriChanged {
+        id: neomacs_display_protocol::WebViewId,
+        generation: u64,
+        uri: String,
+    },
+    LoadProgressChanged {
+        id: neomacs_display_protocol::WebViewId,
+        generation: u64,
+        progress: f64,
+    },
+    /// One GNU `load-changed` phase; the evaluator turns it into the
+    /// `(xwidget-event load-changed XWIDGET STRING)` input event
+    /// `lisp/xwidget.el` handles.
+    LoadChanged {
+        id: neomacs_display_protocol::WebViewId,
+        generation: u64,
+        phase: FrontendLoadPhase,
+    },
+    LoadFinished {
+        id: neomacs_display_protocol::WebViewId,
+        generation: u64,
+        navigation: Option<u64>,
+    },
+    ScriptFinished {
+        view: neomacs_display_protocol::WebViewId,
+        generation: u64,
+        request: u64,
+        result: Result<FrontendWebValue, String>,
+    },
+    ProcessFailed {
+        id: neomacs_display_protocol::WebViewId,
+        generation: u64,
+        failure: FrontendWebProcessFailure,
+    },
+    FocusChanged {
+        id: neomacs_display_protocol::WebViewId,
+        generation: u64,
+        focused: bool,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Key events
+// ---------------------------------------------------------------------------
+
+/// Modifier flags for key events.
+///
+/// GNU distinguishes `alt_modifier' from `meta_modifier` (src/event.h), and
+/// the NS modifier policy cooks Option to either of them
+/// (`parse_solitary_modifier', src/keyboard.c:7917), so this struct carries
+/// both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Modifiers {
+    pub ctrl: bool,
+    pub meta: bool,
+    pub shift: bool,
+    pub super_: bool,
+    pub hyper: bool,
+    pub alt: bool,
+}
+
+impl Modifiers {
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn ctrl() -> Self {
+        Self {
+            ctrl: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn meta() -> Self {
+        Self {
+            meta: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn ctrl_meta() -> Self {
+        Self {
+            ctrl: true,
+            meta: true,
+            ..Self::default()
+        }
+    }
+
+    /// Convert to Emacs modifier bitmask.
+    pub fn to_bits(&self) -> u32 {
+        use neovm_value::keyboard_pure::{
+            KEY_CHAR_ALT, KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT,
+            KEY_CHAR_SUPER,
+        };
+        let mut bits = 0u32;
+        if self.ctrl {
+            bits |= KEY_CHAR_CTRL as u32;
+        }
+        if self.meta {
+            bits |= KEY_CHAR_META as u32;
+        }
+        if self.shift {
+            bits |= KEY_CHAR_SHIFT as u32;
+        }
+        if self.super_ {
+            bits |= KEY_CHAR_SUPER as u32;
+        }
+        if self.hyper {
+            bits |= KEY_CHAR_HYPER as u32;
+        }
+        if self.alt {
+            bits |= KEY_CHAR_ALT as u32;
+        }
+        bits
+    }
+
+    /// Parse from Emacs modifier bitmask.
+    pub fn from_bits(bits: u32) -> Self {
+        use neovm_value::keyboard_pure::{
+            KEY_CHAR_ALT, KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT,
+            KEY_CHAR_SUPER,
+        };
+        Self {
+            ctrl: bits & KEY_CHAR_CTRL as u32 != 0,
+            meta: bits & KEY_CHAR_META as u32 != 0,
+            shift: bits & KEY_CHAR_SHIFT as u32 != 0,
+            super_: bits & KEY_CHAR_SUPER as u32 != 0,
+            hyper: bits & KEY_CHAR_HYPER as u32 != 0,
+            alt: bits & KEY_CHAR_ALT as u32 != 0,
+        }
+    }
+
+    /// Format as Emacs modifier prefix (e.g., "C-M-").
+    ///
+    /// The order is GNU's canonical modifier order (`event_modifier_prefix`,
+    /// mirroring keymap.c:1478): A- C- H- M- S- s-.
+    pub fn prefix_string(&self) -> String {
+        let mut s = String::new();
+        if self.alt {
+            s.push_str("A-");
+        }
+        if self.ctrl {
+            s.push_str("C-");
+        }
+        if self.hyper {
+            s.push_str("H-");
+        }
+        if self.meta {
+            s.push_str("M-");
+        }
+        if self.shift {
+            s.push_str("S-");
+        }
+        if self.super_ {
+            s.push_str("s-");
+        }
+        s
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !self.ctrl && !self.meta && !self.shift && !self.super_ && !self.hyper && !self.alt
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SpecialInputServiceActivity {
+    #[default]
+    None,
+    Any,
+    Resize,
+}
+
+impl SpecialInputServiceActivity {
+    #[doc(hidden)]
+    pub fn record(self, activity: Self) -> Self {
+        match (self, activity) {
+            (Self::Resize, _) | (_, Self::Resize) => Self::Resize,
+            (Self::Any, _) | (_, Self::Any) => Self::Any,
+            (Self::None, Self::None) => Self::None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn any(self) -> bool {
+        matches!(self, Self::Any | Self::Resize)
+    }
+
+    #[doc(hidden)]
+    pub fn resize(self) -> bool {
+        matches!(self, Self::Resize)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct SpecialInputServiceOutcome {
+    redisplay_needed: bool,
+    activity: SpecialInputServiceActivity,
+}
+
+impl SpecialInputServiceOutcome {
+    #[doc(hidden)]
+    pub fn any_activity() -> Self {
+        Self {
+            redisplay_needed: false,
+            activity: SpecialInputServiceActivity::Any,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn resize_with_redisplay() -> Self {
+        Self {
+            redisplay_needed: true,
+            activity: SpecialInputServiceActivity::Resize,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            redisplay_needed: self.redisplay_needed || other.redisplay_needed,
+            activity: self.activity.record(other.activity),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn from_internal_effects(effects: super::frontend_events::InternalEventEffects) -> Self {
+        Self {
+            redisplay_needed: effects.redisplay_needed,
+            activity: SpecialInputServiceActivity::None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn has_any_activity(self) -> bool {
+        self.activity.any()
+    }
+
+    #[doc(hidden)]
+    pub fn has_resize_activity(self) -> bool {
+        self.activity.resize()
+    }
+
+    #[doc(hidden)]
+    pub fn redisplay_needed(self) -> bool {
+        self.redisplay_needed
+    }
+}
+
+/// A single key event (keystroke).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyEvent {
+    /// The base key (character or named key).
+    pub key: Key,
+    /// Active modifiers.
+    pub modifiers: Modifiers,
+}
+
+/// The base key of a keystroke.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Key {
+    /// A character key (e.g., 'a', '1', space).
+    Char(char),
+    /// A named function key.
+    Named(NamedKey),
+    /// A function key carried by name, for the keys no [`NamedKey`] variant
+    /// enumerates: Undo, Redo, Menu, the XF86 block, and the reserved
+    /// identities the frontend gives a native key with no keysym.
+    ///
+    /// GNU models every function key this way — the event *is* a symbol,
+    /// named by `modify_event_symbol` from `system-key-alist`, the toolkit's
+    /// keysym name, or the key's number — so a key nothing enumerated is
+    /// still bindable instead of being dropped.
+    Function(String),
+}
+
+/// Named (non-character) keys.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NamedKey {
+    Return,
+    Tab,
+    Escape,
+    Backspace,
+    Delete,
+    Insert,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Left,
+    Right,
+    Up,
+    Down,
+    F(u8), // F1-F24
+}
+
+impl KeyEvent {
+    pub fn char(c: char) -> Self {
+        Self {
+            key: Key::Char(c),
+            modifiers: Modifiers::none(),
+        }
+    }
+
+    pub fn char_with_mods(c: char, mods: Modifiers) -> Self {
+        Self {
+            key: Key::Char(c),
+            modifiers: mods,
+        }
+    }
+
+    pub fn named(key: NamedKey) -> Self {
+        Self {
+            key: Key::Named(key),
+            modifiers: Modifiers::none(),
+        }
+    }
+
+    pub fn named_with_mods(key: NamedKey, mods: Modifiers) -> Self {
+        Self {
+            key: Key::Named(key),
+            modifiers: mods,
+        }
+    }
+
+    /// Convert this host key event into the Lisp-visible Emacs event
+    /// representation used by the command loop and keymap lookup.
+    pub fn to_emacs_event_value(&self) -> Value {
+        let event = crate::emacs_core::eval::keymap_lookup::KeyEvent::from(self.clone());
+        crate::emacs_core::eval::keymap_lookup::key_event_to_emacs_event(&event)
+    }
+
+    /// True if this event is GNU Emacs's default `quit-char`: `C-g`.
+    ///
+    /// Used by the input-bridge thread to set `Context::quit_requested`
+    /// without a round-trip through the evaluator. The evaluator's own
+    /// `event_is_quit_char` is still consulted in `read_char` to honor
+    /// customized `quit-char` values; this helper only catches the
+    /// overwhelmingly common default so a blocked bytecode loop can be
+    /// interrupted.
+    pub fn is_default_quit_char(&self) -> bool {
+        if !matches!(self.key, Key::Char('g')) {
+            return false;
+        }
+        let m = self.modifiers;
+        m.ctrl && !m.meta && !m.super_ && !m.hyper
+    }
+
+    /// Format as Emacs key description (e.g., "C-x", "M-f", "RET").
+    pub fn to_description(&self) -> String {
+        let emacs_event = self.to_emacs_event_value();
+        // A Rust-side label (logs, messages): decode here rather than making
+        // the shared builder lossy for the Lisp-facing callers.
+        neovm_value::keyboard_pure::describe_single_key_value(&emacs_event, false, SymbolMode::Bare)
+            .map(|bytes| neovm_value::emacs_char::to_utf8_lossy(&bytes))
+            .unwrap_or_else(|_| format!("{:?}", emacs_event))
+    }
+
+    /// Parse an Emacs key description (e.g., "C-x", "M-f").
+    pub fn from_description(desc: &str) -> Option<Self> {
+        let encoded = super::kbd::parse_kbd_string(desc).ok()?;
+        let events = super::kbd::key_events_from_designator(&encoded).ok()?;
+        let [event] = events.as_slice() else {
+            return None;
+        };
+        Self::from_emacs_key_event(event.clone())
+    }
+
+    #[doc(hidden)]
+    pub fn from_emacs_key_event(
+        event: crate::emacs_core::eval::keymap_lookup::KeyEvent,
+    ) -> Option<Self> {
+        match event {
+            crate::emacs_core::eval::keymap_lookup::KeyEvent::Char {
+                code,
+                ctrl,
+                meta,
+                shift,
+                super_,
+                hyper,
+                alt,
+            } => {
+                if alt {
+                    return None;
+                }
+                // GNU's `kbd` parser collapses `C-x` into raw control
+                // codepoint U+0018 with `ctrl=false` (mirroring elisp
+                // `?\C-x => 24`). Reverse that here so terminal-level
+                // KeyEvents still carry a `ctrl` modifier for ASCII
+                // letters — otherwise `(C-x).key` reads as char 0x18
+                // and rendering / matching breaks.
+                let (code, ctrl) = if !ctrl
+                    && (code as u32) < 0x20
+                    && code != '\r'
+                    && code != '\t'
+                    && code != '\u{1b}'
+                    && code != '\u{7f}'
+                {
+                    let lowered = ((code as u8) | 0x60) as char;
+                    if lowered.is_ascii_alphabetic() {
+                        (lowered, true)
+                    } else {
+                        (code, false)
+                    }
+                } else {
+                    (code, ctrl)
+                };
+                let key = match code {
+                    '\r' => Key::Named(NamedKey::Return),
+                    '\t' => Key::Named(NamedKey::Tab),
+                    '\u{1b}' => Key::Named(NamedKey::Escape),
+                    '\u{7f}' => Key::Named(NamedKey::Backspace),
+                    other => Key::Char(other),
+                };
+                Some(KeyEvent {
+                    key,
+                    modifiers: Modifiers {
+                        ctrl,
+                        meta,
+                        shift,
+                        super_,
+                        hyper,
+                        alt,
+                    },
+                })
+            }
+            crate::emacs_core::eval::keymap_lookup::KeyEvent::Function {
+                name,
+                ctrl,
+                meta,
+                shift,
+                super_,
+                hyper,
+                alt,
+            } => {
+                if alt {
+                    return None;
+                }
+                let key = match resolve_sym(name) {
+                    "return" => Key::Named(NamedKey::Return),
+                    "tab" => Key::Named(NamedKey::Tab),
+                    "escape" => Key::Named(NamedKey::Escape),
+                    "backspace" => Key::Named(NamedKey::Backspace),
+                    "delete" => Key::Named(NamedKey::Delete),
+                    "insert" => Key::Named(NamedKey::Insert),
+                    "home" => Key::Named(NamedKey::Home),
+                    "end" => Key::Named(NamedKey::End),
+                    "prior" => Key::Named(NamedKey::PageUp),
+                    "next" => Key::Named(NamedKey::PageDown),
+                    "left" => Key::Named(NamedKey::Left),
+                    "right" => Key::Named(NamedKey::Right),
+                    "up" => Key::Named(NamedKey::Up),
+                    "down" => Key::Named(NamedKey::Down),
+                    other if other.starts_with('f') => {
+                        let num = other.strip_prefix('f')?.parse::<u8>().ok()?;
+                        Key::Named(NamedKey::F(num))
+                    }
+                    _ => return None,
+                };
+                Some(KeyEvent {
+                    key,
+                    modifiers: Modifiers {
+                        ctrl,
+                        meta,
+                        shift,
+                        super_,
+                        hyper,
+                        alt,
+                    },
+                })
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Key sequence
+// ---------------------------------------------------------------------------
+
+/// A sequence of key events forming a complete key binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeySequence {
+    pub events: Vec<KeyEvent>,
+}
+
+impl KeySequence {
+    pub fn new() -> Self {
+        Self { events: Vec::new() }
+    }
+
+    pub fn single(event: KeyEvent) -> Self {
+        Self {
+            events: vec![event],
+        }
+    }
+
+    pub fn push(&mut self, event: KeyEvent) {
+        self.events.push(event);
+    }
+
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    /// Format as Emacs key sequence description.
+    pub fn to_description(&self) -> String {
+        self.events
+            .iter()
+            .map(|e| e.to_description())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Parse an Emacs key sequence description (e.g., "C-x C-f").
+    pub fn from_description(desc: &str) -> Option<Self> {
+        let encoded = super::kbd::parse_kbd_string(desc).ok()?;
+        let emacs_events = super::kbd::key_events_from_designator(&encoded).ok()?;
+        let events = emacs_events
+            .into_iter()
+            .map(KeyEvent::from_emacs_key_event)
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self { events })
+    }
+}
+
+impl Default for KeySequence {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ReadCharEvent {
+    event: Value,
+    allow_input_method: bool,
+    command_key_recording: CommandKeyRecording,
+    input_history: InputHistoryRecording,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum InputHistoryRecording {
+    BeforeInputMethod,
+    AfterInputMethod,
+    AlreadyRecorded,
+}
+
+/// GNU `read_char` changes the idle epoch only when it has no end time.
+/// A timed read inside an idle callback belongs to the existing idle episode.
+#[derive(Clone, Copy, Debug)]
+enum ReadCharWaitMode {
+    Unbounded,
+    Timed { deadline: std::time::Instant },
+}
+
+impl ReadCharWaitMode {
+    #[doc(hidden)]
+    pub fn from_timeout(timeout: Option<std::time::Duration>) -> Self {
+        match timeout {
+            None => Self::Unbounded,
+            Some(timeout) => Self::Timed {
+                deadline: std::time::Instant::now() + timeout,
+            },
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn deadline(self) -> Option<std::time::Instant> {
+        match self {
+            Self::Unbounded => None,
+            Self::Timed { deadline } => Some(deadline),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn idle_policy(self) -> IdleTransitionPolicy {
+        match self {
+            Self::Unbounded => IdleTransitionPolicy::Manage,
+            Self::Timed { .. } => IdleTransitionPolicy::Preserve,
+        }
+    }
+}
+
+/// Whether input servicing owns the current idle episode. Timed Lisp reads
+/// leave it unchanged, including while servicing events in the unified wait.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub enum IdleTransitionPolicy {
+    Manage,
+    Preserve,
+}
+
+impl IdleTransitionPolicy {
+    #[doc(hidden)]
+    pub fn start_idle(self, eval: &mut crate::emacs_core::Context) {
+        if matches!(self, Self::Manage) {
+            eval.timer_start_idle();
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn stop_idle(self, eval: &mut crate::emacs_core::Context) {
+        if matches!(self, Self::Manage) {
+            eval.timer_stop_idle();
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn resume_idle(self, eval: &mut crate::emacs_core::Context) {
+        if matches!(self, Self::Manage) {
+            eval.timer_resume_idle();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CommandKeyRecording {
+    Append,
+    AppendIfEmpty,
+}
+
+impl ReadCharEvent {
+    #[doc(hidden)]
+    pub fn fresh_input_method_candidate(event: Value) -> Self {
+        Self {
+            event,
+            allow_input_method: true,
+            command_key_recording: CommandKeyRecording::Append,
+            input_history: InputHistoryRecording::BeforeInputMethod,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn reread_input_method_candidate(event: Value) -> Self {
+        Self {
+            event,
+            allow_input_method: true,
+            command_key_recording: CommandKeyRecording::AppendIfEmpty,
+            input_history: InputHistoryRecording::AfterInputMethod,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn post_input_method(event: Value) -> Self {
+        Self {
+            event,
+            allow_input_method: false,
+            command_key_recording: CommandKeyRecording::AppendIfEmpty,
+            input_history: InputHistoryRecording::AlreadyRecorded,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn unread_command(unread: UnreadCommandEvent) -> Self {
+        match unread {
+            UnreadCommandEvent::Fresh(event) => Self {
+                // The t wrapper changes command-key bookkeeping, but still
+                // jumps past GNU's physical-input recording block.
+                input_history: InputHistoryRecording::AfterInputMethod,
+                ..Self::fresh_input_method_candidate(event)
+            },
+            UnreadCommandEvent::Reread(event) => Self::reread_input_method_candidate(event),
+            UnreadCommandEvent::AlreadyRecorded(event) => Self {
+                input_history: InputHistoryRecording::AlreadyRecorded,
+                ..Self::reread_input_method_candidate(event)
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum InputMethodEvent {
+    NotApplied,
+    Consumed,
+    Translated(Value),
+}
+
+/// The two command values GNU `read_key_sequence` publishes at its `done`
+/// label: the binding the keymaps produced and the command `command_loop_1`
+/// executes after one level of `command-remapping`.
+///
+/// GNU applies the remapping inside `read_key_sequence`, before `unbind_to`,
+/// so it uses the keymaps of the buffer that was current while reading
+/// (keyboard.c:11860-11868).  `command_loop_1` then reuses that answer
+/// (keyboard.c:1464-1495) instead of asking again; asking again would remap a
+/// remapped command and would record the wrong `this-original-command`.
+/// Keeping the two values in one private-field type makes the relationship
+/// explicit at every caller.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[doc(hidden)]
+pub struct ReadCommandBinding {
+    /// GNU `read_key_sequence_cmd`, recorded as `this-original-command`.
+    original: Value,
+    /// GNU `read_key_sequence_remapped` when non-nil, else `original`.
+    executed: Value,
+}
+
+impl ReadCommandBinding {
+    /// The keymaps bound COMMAND without remapping it.
+    #[doc(hidden)]
+    pub fn unremapped(command: Value) -> Self {
+        Self {
+            original: command,
+            executed: command,
+        }
+    }
+
+    /// COMMAND is remapped to TARGET; a nil TARGET means no remapping.
+    #[doc(hidden)]
+    pub fn remapped(command: Value, target: Value) -> Self {
+        Self {
+            original: command,
+            executed: if target.is_nil() { command } else { target },
+        }
+    }
+
+    /// Pair the keymaps' answer with the answer of the one remapping lookup
+    /// `resolve_active_key_binding` already performed.
+    #[doc(hidden)]
+    pub fn from_resolution(
+        resolution: crate::emacs_core::eval::keymap_lookup::ActiveKeyBindingResolution,
+    ) -> Self {
+        // `lookup` is what the keymaps bound; `binding` is its one-level
+        // remap, or the printable-character self-insert fallback when the
+        // keymaps bound nothing at all.
+        if resolution.lookup.is_nil() || resolution.lookup.is_fixnum() {
+            Self::unremapped(resolution.binding)
+        } else {
+            Self::remapped(resolution.lookup, resolution.binding)
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn original(self) -> Value {
+        self.original
+    }
+
+    #[doc(hidden)]
+    pub fn executed(self) -> Value {
+        self.executed
+    }
+}
+
+/// A command-loop key read either resolves one complete command or reaches a
+/// typed input boundary.  Keeping the boundary distinct from an ordinary
+/// `(empty, nil)` tuple prevents callers from accidentally dispatching macro
+/// exhaustion as an undefined key sequence.
+#[derive(Clone, Debug, PartialEq)]
+#[doc(hidden)]
+pub enum CommandKeySequenceRead {
+    Command {
+        keys: Vec<Value>,
+        binding: ReadCommandBinding,
+    },
+    End(CommandKeySequenceEnd),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum CommandKeySequenceEnd {
+    /// GNU `read_key_sequence` returned zero after `at_end_of_macro_p`.
+    KeyboardMacroIteration,
+    /// The evaluator has no command-input source left to read.
+    Input,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct KeySequenceSuffixTranslation {
+    start: usize,
+    replacement: Vec<Value>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CurrentKeySequenceTranslation {
+    translated_events: Vec<Value>,
+    has_pending_translation_prefix: bool,
+    application: KeySequenceTranslationApplication,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeySequenceTranslationApplication {
+    NotApplied,
+    Applied,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CommandBindingResolution {
+    Current(crate::emacs_core::eval::keymap_lookup::ActiveKeyBindingResolution),
+    Stale,
+}
+
+impl CommandBindingResolution {
+    #[doc(hidden)]
+    pub fn invalidate(&mut self) {
+        *self = Self::Stale;
+    }
+
+    #[doc(hidden)]
+    pub fn invalidate_if_applied(&mut self, application: KeySequenceTranslationApplication) {
+        if application == KeySequenceTranslationApplication::Applied {
+            self.invalidate();
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct KeySequenceShiftTranslation {
+    index: usize,
+    original_event: Value,
+}
+
+#[derive(Clone, Debug)]
+enum UndefinedMouseSequenceFallback {
+    Rewrite {
+        events: Vec<Value>,
+        resolved: crate::emacs_core::eval::keymap_lookup::ActiveKeyBindingResolution,
+    },
+    Drop {
+        retained_events: Vec<Value>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MouseEventFallbackStep {
+    Rewrite,
+    Drop,
+}
+
+// ---------------------------------------------------------------------------
+// Keysym conversion (X11/winit keysyms → neovm-core KeyEvent)
+// ---------------------------------------------------------------------------
+
+// X11 keysym constants used by the render thread (winit) and TTY frontend.
+pub const XK_RETURN: u32 = 0xFF0D;
+pub const XK_TAB: u32 = 0xFF09;
+pub const XK_BACKSPACE: u32 = 0xFF08;
+pub const XK_DELETE: u32 = 0xFFFF;
+pub const XK_ESCAPE: u32 = 0xFF1B;
+pub const XK_LEFT: u32 = 0xFF51;
+pub const XK_UP: u32 = 0xFF52;
+pub const XK_RIGHT: u32 = 0xFF53;
+pub const XK_DOWN: u32 = 0xFF54;
+pub const XK_HOME: u32 = 0xFF50;
+pub const XK_END: u32 = 0xFF57;
+pub const XK_PAGE_UP: u32 = 0xFF55;
+pub const XK_PAGE_DOWN: u32 = 0xFF56;
+pub const XK_INSERT: u32 = 0xFF63;
+pub const XK_F1: u32 = 0xFFBE;
+pub const XK_F24: u32 = 0xFFD5;
+
+// Render thread modifier bitmask constants.
+//
+// These are the wire values of `neomacs_display_protocol`'s
+// `TransportModifierBit` masks (`modifier_policy.rs`); `Alt` and `Hyper`
+// were appended when the NS modifier policy (issue #442) taught the
+// transport to carry the full GNU modifier set, which distinguishes
+// `alt_modifier' from `meta_modifier'.
+pub const RENDER_SHIFT_MASK: u32 = 1 << 0;
+pub const RENDER_CTRL_MASK: u32 = 1 << 1;
+pub const RENDER_META_MASK: u32 = 1 << 2;
+pub const RENDER_SUPER_MASK: u32 = 1 << 3;
+pub const RENDER_ALT_MASK: u32 = 1 << 4;
+pub const RENDER_HYPER_MASK: u32 = 1 << 5;
+
+/// Meaning of a character-shaped frontend event before it enters Emacs's
+/// command loop.
+///
+/// A produced text character has already consumed Shift (for example,
+/// `Shift+a` produced `A`).  A command chord still needs GNU's
+/// `make_lispy_event` case/modifier cooking.  Control chords are distinct
+/// because `make_ctrl_char` must retain Shift for letters: `C-S-f` and `C-f`
+/// are different Emacs events even though both have control code 6.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FrontendCharacterInput {
+    Text {
+        produced: char,
+        shift_pressed: bool,
+    },
+    NonControlChord {
+        produced: char,
+        modifiers: NonControlChordModifiers,
+    },
+    ControlChord {
+        produced: char,
+        modifiers: ControlChordModifiers,
+    },
+}
+
+/// Modifier state whose construction proves that Control is not active but
+/// another command modifier is.  Keeping this separate from a control chord
+/// makes Shift cooking exhaustive at compile time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NonControlChordModifiers(Modifiers);
+
+/// Modifier state whose construction proves that Control is active.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ControlChordModifiers(Modifiers);
+
+impl FrontendCharacterInput {
+    #[doc(hidden)]
+    pub fn classify(produced: char, modifiers: Modifiers) -> Self {
+        if modifiers.ctrl {
+            Self::ControlChord {
+                produced,
+                modifiers: ControlChordModifiers(modifiers),
+            }
+        } else if modifiers.meta
+            || modifiers.super_
+            || modifiers.hyper
+            // GNU cooks `parse_solitary_modifier("alt")' to a distinct
+            // `alt_modifier' bit (`src/keyboard.c:7941`), which is as much a
+            // command modifier as meta: the NS modifier policy can map
+            // Option to `alt' (issue #442), and that chord must reach the
+            // command loop as `A-x', never as text.
+            || modifiers.alt
+        {
+            Self::NonControlChord {
+                produced,
+                modifiers: NonControlChordModifiers(modifiers),
+            }
+        } else {
+            Self::Text {
+                produced,
+                shift_pressed: modifiers.shift,
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn into_key_event(self) -> KeyEvent {
+        match self {
+            Self::Text {
+                produced,
+                shift_pressed,
+            } => KeyEvent::char_with_mods(
+                produced,
+                Modifiers {
+                    // GNU distinguishes S-SPC even though ordinary shifted
+                    // text consumes Shift into the produced character.
+                    shift: shift_pressed && produced == ' ',
+                    ..Modifiers::none()
+                },
+            ),
+            Self::NonControlChord {
+                produced,
+                modifiers: NonControlChordModifiers(mut modifiers),
+            } => {
+                let produced = normalize_command_character_case(produced, modifiers.shift);
+                // For non-control chords the character's case/punctuation
+                // carries Shift.  Space is GNU's explicit exception.
+                modifiers.shift = modifiers.shift && produced == ' ';
+                KeyEvent::char_with_mods(produced, modifiers)
+            }
+            Self::ControlChord {
+                produced,
+                modifiers: ControlChordModifiers(mut modifiers),
+            } => {
+                let mut produced = normalize_command_character_case(produced, modifiers.shift);
+                // GNU make_ctrl_char converts an uppercase ASCII letter to
+                // the same control code as its lowercase form and records
+                // the lost case information in CHAR_SHIFT.
+                let shifted_control_letter = produced.is_ascii_uppercase();
+                if shifted_control_letter {
+                    produced = produced.to_ascii_lowercase();
+                }
+                modifiers.shift = modifiers.shift && (shifted_control_letter || produced == ' ');
+                KeyEvent::char_with_mods(produced, modifiers)
+            }
+        }
+    }
+}
+
+/// Apply GNU's Caps-Lock-safe command-chord case rule from
+/// `src/keyboard.c:make_lispy_event`.
+fn normalize_command_character_case(character: char, shift_pressed: bool) -> char {
+    if character.is_ascii_uppercase() && !shift_pressed {
+        character.to_ascii_lowercase()
+    } else if character.is_ascii_lowercase() && shift_pressed {
+        character.to_ascii_uppercase()
+    } else {
+        character
+    }
+}
+
+/// Convert frontend render/TTY modifier bits into the core modifier model.
+pub fn render_modifiers_to_modifiers(bits: u32) -> Modifiers {
+    Modifiers {
+        ctrl: bits & RENDER_CTRL_MASK != 0,
+        meta: bits & RENDER_META_MASK != 0,
+        shift: bits & RENDER_SHIFT_MASK != 0,
+        super_: bits & RENDER_SUPER_MASK != 0,
+        hyper: bits & RENDER_HYPER_MASK != 0,
+        alt: bits & RENDER_ALT_MASK != 0,
+    }
+}
+
+/// Toolkit input identity. Text and keysyms overlap numerically, so their
+/// provenance must survive transport (U+FF0D is text; XK_Return is a key).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrontendKey {
+    /// A Unicode scalar supplied as text by the toolkit or input method.
+    Character(char),
+    /// A key identity in the X11/native keysym domain, not a code point.
+    Keysym(u32),
+}
+
+/// Cook frontend input without interpreting text as a keysym.
+/// Key releases are ignored; frame identity and command modifiers are retained.
+pub fn render_key_transport_to_input_event(
+    key: FrontendKey,
+    modifiers: u32,
+    pressed: bool,
+    emacs_frame_id: u64,
+) -> Option<InputEvent> {
+    if !pressed {
+        return None;
+    }
+
+    let key_event = match key {
+        FrontendKey::Character(character) => {
+            FrontendCharacterInput::classify(character, render_modifiers_to_modifiers(modifiers))
+                .into_key_event()
+        }
+        FrontendKey::Keysym(keysym) => keysym_to_key_event(keysym, modifiers)?,
+    };
+    Some(InputEvent::key_press_in_frame(key_event, emacs_frame_id))
+}
+
+/// Convert a raw keysym and modifier bitmask (from the render thread) into
+/// a neovm-core `KeyEvent`.
+///
+/// Returns `None` for keysyms that should be ignored (modifier-only keys,
+/// unknown keysyms, etc.).
+pub fn keysym_to_key_event(keysym: u32, modifiers: u32) -> Option<KeyEvent> {
+    let mut mods = render_modifiers_to_modifiers(modifiers);
+
+    let key = match keysym {
+        // Raw TTY ESC is GNU's `meta-prefix-char` character, not the named
+        // GUI Escape function key.
+        0x1B => Key::Char('\u{1b}'),
+        // Raw TTY DEL is an ASCII key event in GNU's tty_read_avail_input.
+        // Backends that know they saw a physical Backspace key send XK_BACKSPACE.
+        0x7F => Key::Char('\u{7f}'),
+        // Control characters (Ctrl + letter): winit gives us the control
+        // character (0x01-0x1A) as the keysym when Ctrl is held.  Convert
+        // back to the corresponding letter and force the ctrl modifier.
+        0x01..=0x1A => {
+            let ch = (keysym + 0x60) as u8 as char; // 0x18 → 'x'
+            mods.ctrl = true;
+            Key::Char(ch)
+        }
+        // Printable ASCII
+        0x20..=0x7E => Key::Char(keysym as u8 as char),
+        // Raw TTY bytes that are control characters (and thus excluded by
+        // the `!ch.is_control()` guard in the catch-all below).  Emitted as
+        // Key::Char so they produce the same fixnum events GNU creates in
+        // tty_read_avail_input (buf.code = cbuf[i]).
+        0x00 => Key::Char('\0'),
+        0x1C..=0x1F | 0x80..=0xFF => Key::Char(char::from_u32(keysym).unwrap()),
+        // Named keys
+        XK_RETURN => Key::Named(NamedKey::Return),
+        XK_TAB => Key::Named(NamedKey::Tab),
+        XK_BACKSPACE => Key::Named(NamedKey::Backspace),
+        XK_DELETE => Key::Named(NamedKey::Delete),
+        XK_ESCAPE => Key::Named(NamedKey::Escape),
+        XK_LEFT => Key::Named(NamedKey::Left),
+        XK_RIGHT => Key::Named(NamedKey::Right),
+        XK_UP => Key::Named(NamedKey::Up),
+        XK_DOWN => Key::Named(NamedKey::Down),
+        XK_HOME => Key::Named(NamedKey::Home),
+        XK_END => Key::Named(NamedKey::End),
+        XK_PAGE_UP => Key::Named(NamedKey::PageUp),
+        XK_PAGE_DOWN => Key::Named(NamedKey::PageDown),
+        XK_INSERT => Key::Named(NamedKey::Insert),
+        // Modifier keys are state, reported through `ModifiersChanged`.
+        k if keysym::is_modifier_key(k) => return None,
+        // Function keys.  XK_F1 is 0xffbe and the block is contiguous through
+        // XK_F35, so the number is arithmetic rather than a table — which is
+        // why F13-F35 are ordinary keys here and not "unsupported".
+        k if keysym::is_function_key(k) => {
+            Key::Named(NamedKey::F((k - keysym::FUNCTION_KEY_BASE + 1) as u8))
+        }
+        // X's Unicode keysym block: 0x01000000 + a code point.
+        k if (0x0100_0000..=0x0110_ffff).contains(&k) => {
+            Key::Char(char::from_u32(k & 0x00ff_ffff).expect("unicode keysym block"))
+        }
+        // `XK_VoidSymbol` is "no key at all".
+        k if k == 0x00ff_ffff => return None,
+        // From the special block up, every keysym is a named function key:
+        // the cursor, misc, keypad and F blocks, the XF86/vendor space, and
+        // the reserved bands for native keys with no keysym.  GNU names each
+        // of them (keyboard.c `modify_event_symbol`) and, when even the
+        // toolkit's table has no entry, names it after its number — so
+        // nothing is dropped merely for being unlisted.
+        k if keysym::is_named_keysym(k) => {
+            Key::Function(keysym::function_key_name(k).unwrap_or_else(|| format!("key-{k}")))
+        }
+        // Below the special block, the keysym ranges are character ranges.
+        k if char::from_u32(k).is_some_and(|ch| !ch.is_control()) => {
+            Key::Char(char::from_u32(k).expect("printed scalar"))
+        }
+        // What is left is a scalar the arms above did not claim: the
+        // remaining non-keys, ignored as GNU ignores them.
+        _ => return None,
+    };
+
+    Some(match key {
+        Key::Char(character) => FrontendCharacterInput::classify(character, mods).into_key_event(),
+        Key::Named(named) => KeyEvent::named_with_mods(named, mods),
+        Key::Function(name) => KeyEvent {
+            key: Key::Function(name),
+            modifiers: mods,
+        },
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Input event types
+// ---------------------------------------------------------------------------
+
+/// Stable owner used to route bytes from a text terminal.
+///
+/// The primary frontend historically used frame id zero to mean "whichever
+/// frame is selected now".  Additional terminals instead identify the
+/// terminal itself: their displayed top frame can change after the input
+/// thread is created, so baking the opening frame id into that thread is
+/// incorrect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TtyInputTarget {
+    SelectedFrame,
+    Frame(neovm_value::display_vocab::FrameId),
+    Terminal(u64),
+}
+
+impl TtyInputTarget {
+    #[doc(hidden)]
+    pub fn from_frontend_frame_id(emacs_frame_id: u64) -> Self {
+        if emacs_frame_id == 0 {
+            Self::SelectedFrame
+        } else {
+            Self::Frame(neovm_value::display_vocab::FrameId(emacs_frame_id))
+        }
+    }
+}
+
+/// Input events from the display layer.
+#[derive(Clone, Debug)]
+pub enum InputEvent {
+    Tracked {
+        receipt: neomacs_display_protocol::input_progress::InputDelivery,
+        event: Box<InputEvent>,
+    },
+    /// Native diagnostic observation; unwrapped by the ordered command reader.
+    Observed {
+        token: neomacs_display_protocol::input_latency::InputToken,
+        event: Box<InputEvent>,
+    },
+    /// Uninterpreted bytes from a Unix TTY.
+    ///
+    /// The evaluator expands this transport batch into ordered
+    /// [`Self::TtyByte`] events.  The active read policy then either preserves
+    /// each byte or decodes it through the selected keyboard coding system.
+    RawTtyBytes {
+        bytes: Vec<u8>,
+        target: TtyInputTarget,
+    },
+    /// One still-undecoded byte produced by expanding a
+    /// [`Self::RawTtyBytes`] transport batch.
+    ///
+    /// Keeping bytes queued in this form lets each read decide whether to
+    /// preserve or decode them, like GNU's terminal event queue.
+    TtyByte { byte: u8, target: TtyInputTarget },
+    /// One character produced by decoding one or more [`Self::TtyByte`]
+    /// events through `keyboard-coding-system`.
+    /// This evaluator-internal event keeps decoded characters in the same
+    /// ordered frontend queue as every other input fact.
+    TtyCharacter {
+        character: neovm_value::emacs_char::EmacsChar,
+        target: TtyInputTarget,
+    },
+    /// Keyboard key press.
+    KeyPress { key: KeyEvent, emacs_frame_id: u64 },
+    /// Mouse button press.
+    MousePress {
+        button: MouseButton,
+        x: f32,
+        y: f32,
+        modifiers: Modifiers,
+        target_frame_id: u64,
+    },
+    /// Mouse button release.
+    MouseRelease {
+        button: MouseButton,
+        x: f32,
+        y: f32,
+        target_frame_id: u64,
+    },
+    /// Mouse movement.
+    MouseMove {
+        x: f32,
+        y: f32,
+        modifiers: Modifiers,
+        target_frame_id: u64,
+    },
+    /// Semantic pointer observation resolved against the displayed presentation.
+    PresentedRegion {
+        presentation: u64,
+        hit: Option<neomacs_display_protocol::PresentedHit>,
+        x: f32,
+        y: f32,
+        target_frame_id: u64,
+    },
+    /// Mouse scroll.
+    MouseScroll {
+        delta_x: f32,
+        delta_y: f32,
+        x: f32,
+        y: f32,
+        modifiers: Modifiers,
+        target_frame_id: u64,
+    },
+    /// Precise wheel input. Like GNU's WHEEL_EVENT, this becomes a Lisp wheel
+    /// command with a pixel-delta pair for `pixel-scroll-precision`.
+    PixelScroll {
+        delta_x: f32,
+        delta_y: f32,
+        x: f32,
+        y: f32,
+        modifiers: Modifiers,
+        target_frame_id: u64,
+    },
+    /// A display dependency changed and evaluator layout must be republished.
+    LayoutInvalidated,
+    /// Renderer image-cache lifecycle changed for a stable image identity.
+    ImageStateChanged {
+        event: neomacs_display_protocol::image::ImageStateEvent,
+    },
+    /// Popup menu selection.  The display layer reports the selected
+    /// zero-based item index; -1 means the menu was cancelled.
+    MenuSelection {
+        index: i32,
+        token: Option<neomacs_display_protocol::menu::MenuToken>,
+    },
+    /// Tool-bar item click.  The display layer reports the zero-based
+    /// index in the current rendered tool-bar item vector.
+    ToolBarClick { index: i32, emacs_frame_id: u64 },
+    /// Pointer observation resolved against the immutable displayed presentation.
+    PresentedPointer {
+        presentation: u64,
+        interaction: u32,
+        pressed: bool,
+        button: u8,
+        x: f32,
+        y: f32,
+        emacs_frame_id: u64,
+    },
+    /// Renderer installed this presentation as its drawing and hit-test source.
+    PresentationActivated {
+        presentation: u64,
+        emacs_frame_id: u64,
+    },
+    /// Renderer rejected or superseded this presentation before activation.
+    PresentationDiscarded {
+        presentation: u64,
+        emacs_frame_id: u64,
+    },
+    /// Renderer no longer displays or generates hits for this presentation.
+    PresentationRetired { presentation: u64 },
+    /// Menu-bar item click.  `key` is the exact rendered top-level menu key;
+    /// x/y and anchor fields are geometry for legacy Lisp and native popup
+    /// placement.
+    MenuBarClick {
+        request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
+        index: i32,
+        key: String,
+        menu_x: f32,
+        menu_y: f32,
+        anchor_x: f32,
+        anchor_y: f32,
+        anchor_width: f32,
+        anchor_height: f32,
+        emacs_frame_id: u64,
+    },
+    /// Window resize.
+    Resize {
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+        emacs_frame_id: u64,
+    },
+    /// Window focus change.
+    Focus { focused: bool, emacs_frame_id: u64 },
+    /// Monitor configuration changed.
+    MonitorsChanged {
+        monitors: Vec<crate::emacs_core::builtins::NeomacsMonitorInfo>,
+    },
+    /// Native desktop preferences, distinct from installed-font catalog changes.
+    SystemFontsChanged {
+        fonts: crate::emacs_core::eval::protocol::SystemFonts,
+        display: neomacs_display_protocol::GraphicalDisplayIdentity,
+    },
+    /// Window-selection change.
+    SelectWindow {
+        window_id: neovm_edit::emacs_core::display_metrics::WindowId,
+    },
+    /// Window-manager close request.
+    WindowClose { emacs_frame_id: u64 },
+    /// A TTY connection was lost, rather than a window being closed.
+    /// GNU keyboard.c:8129 deletes the whole terminal with `noelisp`;
+    /// graphical display loss has a different backend-specific ordering.
+    TtyHangup { terminal_id: u64 },
+    /// GNU `THREAD_EVENT`: `thread-signal` targeted the main thread
+    /// (`src/thread.c:1007-1013`).  The reader rebuilds
+    /// `(thread-event SENDER ERROR-SYMBOL DATA)` and runs its
+    /// `special-event-map` binding (`src/keyboard.c`, THREAD_EVENT;
+    /// `lisp/thread.el:thread-handle-event`).  The fields carry the exact
+    /// Lisp objects GNU stores in `event.arg` (`list3`), so the event keeps
+    /// the sender's identity; they travel as [`SharedRoot`]s because a Green
+    /// worker produces the event and the main mutator consumes it, and every
+    /// input event must stay `Send`.
+    ThreadEvent {
+        sender: neovm_value::tagged::transport::SharedRoot,
+        error_symbol: neovm_value::tagged::transport::SharedRoot,
+        data: neovm_value::tagged::transport::SharedRoot,
+    },
+    /// The display rebuilt its GPU state after a device loss. Renderer-side
+    /// media objects are gone: the display host must re-resolve them and a
+    /// full redisplay must be forced.
+    DisplayReset,
+    /// Backend-neutral browser state delivered by the frontend service.
+    WebView(FrontendWebViewEvent),
+    /// A shader surface failed to build on the render thread after naga
+    /// pre-validation accepted it. Runs `neomacs-surface-error-functions`
+    /// with the surface id and the renderer's error string.
+    SurfaceCreateFailed { id: u32, error: String },
+    /// A full-frame shader failed to build on the render thread after
+    /// evaluator-side validation accepted it.
+    FrameShaderFailed { error: String },
+    /// A compositor-owned neo-term failed to create after reserving its ID.
+    TerminalCreateFailed {
+        id: crate::emacs_core::eval::protocol::TerminalId,
+        error: String,
+    },
+    /// A compositor-owned neo-term child process exited.
+    TerminalExited {
+        id: crate::emacs_core::eval::protocol::TerminalId,
+    },
+    /// A compositor-owned neo-term published a new title.
+    TerminalTitleChanged {
+        id: crate::emacs_core::eval::protocol::TerminalId,
+        title: String,
+    },
+}
+
+impl InputEvent {
+    pub fn raw_tty_bytes(bytes: Vec<u8>, emacs_frame_id: u64) -> Self {
+        Self::RawTtyBytes {
+            bytes,
+            target: TtyInputTarget::from_frontend_frame_id(emacs_frame_id),
+        }
+    }
+
+    pub fn raw_tty_bytes_for_terminal(bytes: Vec<u8>, terminal_id: u64) -> Self {
+        Self::RawTtyBytes {
+            bytes,
+            target: TtyInputTarget::Terminal(terminal_id),
+        }
+    }
+
+    pub fn key_press(key: KeyEvent) -> Self {
+        Self::KeyPress {
+            key,
+            emacs_frame_id: 0,
+        }
+    }
+
+    pub fn key_press_in_frame(key: KeyEvent, emacs_frame_id: u64) -> Self {
+        Self::KeyPress {
+            key,
+            emacs_frame_id,
+        }
+    }
+
+    /// Whether this transport fact contains GNU Emacs's default quit input,
+    /// `C-g`, and should wake an evaluator that is busy outside `read_char`.
+    pub fn requests_default_quit(&self) -> bool {
+        match self {
+            Self::RawTtyBytes { bytes, .. } => bytes.contains(&0x07),
+            Self::TtyByte { byte, .. } => *byte == 0x07,
+            Self::TtyCharacter { character, .. } => character.code() == 0x07,
+            Self::KeyPress { key, .. } => key.is_default_quit_char(),
+            Self::Tracked { .. }
+            | Self::Observed { .. }
+            | Self::MousePress { .. }
+            | Self::MouseRelease { .. }
+            | Self::MouseMove { .. }
+            | Self::PresentedRegion { .. }
+            | Self::MouseScroll { .. }
+            | Self::PixelScroll { .. }
+            | Self::LayoutInvalidated
+            | Self::ImageStateChanged { .. }
+            | Self::MenuSelection { .. }
+            | Self::ToolBarClick { .. }
+            | Self::PresentedPointer { .. }
+            | Self::PresentationActivated { .. }
+            | Self::PresentationDiscarded { .. }
+            | Self::PresentationRetired { .. }
+            | Self::MenuBarClick { .. }
+            | Self::Resize { .. }
+            | Self::Focus { .. }
+            | Self::MonitorsChanged { .. }
+            | Self::SystemFontsChanged { .. }
+            | Self::SelectWindow { .. }
+            | Self::WindowClose { .. }
+            | Self::TtyHangup { .. }
+            // A THREAD_EVENT is an input event, never the quit character.
+            | Self::ThreadEvent { .. }
+            | Self::DisplayReset
+            | Self::WebView(_)
+            | Self::SurfaceCreateFailed { .. }
+            | Self::FrameShaderFailed { .. }
+            | Self::TerminalCreateFailed { .. }
+            | Self::TerminalExited { .. }
+            | Self::TerminalTitleChanged { .. } => false,
+        }
+    }
+}
+
+pub use neovm_value::keyboard_pure::MouseButton;
+
+/// Index into [`KBoard::button_down`].
+fn mouse_button_slot(button: MouseButton) -> usize {
+    match button {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+        MouseButton::Button4 => 3,
+        MouseButton::Button5 => 4,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Prefix argument
+// ---------------------------------------------------------------------------
+
+fn apply_resize_input_event_in_keyboard_runtime(
+    frames: &mut crate::emacs_core::eval::data::window_state::FrameManager,
+    buffers: &neovm_edit::buffer::BufferManager,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+    emacs_frame_id: u64,
+) -> Option<neovm_value::display_vocab::FrameId> {
+    let target_fid = if emacs_frame_id == 0 {
+        frames.selected_frame().map(|frame| frame.id)
+    } else {
+        Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
+    };
+
+    if let Some(fid) = target_fid
+        && let Some(frame) = frames.get_mut(fid)
+    {
+        frame.device_scale_factor = if scale_factor.is_finite() && scale_factor > 0.0 {
+            scale_factor
+        } else {
+            1.0
+        };
+        let old_root_bounds = *frame.root_window().bounds();
+        let pending = frame.pending_gui_resize;
+        crate::emacs_core::eval::lifecycle::resize_frame_pixelwise_with_buffer_constraints(
+            frame, buffers, width, height,
+        );
+        frame.pending_gui_resize =
+            pending.and_then(|pending| pending.after_native_observation(width, height));
+        (old_root_bounds != *frame.root_window().bounds()).then_some(fid)
+    } else {
+        None
+    }
+}
+
+fn pending_live_gui_resize_target(
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
+    emacs_frame_id: u64,
+) -> Option<neovm_value::display_vocab::FrameId> {
+    let target_fid = if emacs_frame_id == 0 {
+        frames.selected_frame().map(|frame| frame.id)
+    } else {
+        Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
+    }?;
+    frames.get(target_fid).and_then(|frame| {
+        frame
+            .pending_gui_resize
+            .as_ref()
+            .filter(|pending| pending.is_queued())
+            .map(|_| target_fid)
+    })
+}
+
+fn sync_pending_resize_events_in_keyboard_runtime(
+    frames: &mut crate::emacs_core::eval::data::window_state::FrameManager,
+    buffers: &neovm_edit::buffer::BufferManager,
+    input_rx: &mut super::host_input::HostInputReceiver,
+    keyboard: &mut KeyboardRuntime,
+    publications: &mut Vec<neovm_value::display_vocab::FrameId>,
+) -> bool {
+    let mut applied_resize = false;
+    let mut deferred = VecDeque::new();
+    let pending_input_events = &mut keyboard.pending_input_events;
+
+    loop {
+        match pending_input_events.front() {
+            Some(InputEvent::Focus { .. }) => {
+                if let Some(event) = pending_input_events.pop_visible_front() {
+                    deferred.push_back(event);
+                }
+            }
+            Some(InputEvent::Resize {
+                width,
+                height,
+                scale_factor,
+                emacs_frame_id,
+            }) => {
+                if pending_live_gui_resize_target(frames, *emacs_frame_id).is_some() {
+                    break;
+                }
+                let (width, height, scale_factor, emacs_frame_id) =
+                    (*width, *height, *scale_factor, *emacs_frame_id);
+                pending_input_events.pop_visible_front();
+                if let Some(frame) = apply_resize_input_event_in_keyboard_runtime(
+                    frames,
+                    buffers,
+                    width,
+                    height,
+                    scale_factor,
+                    emacs_frame_id,
+                ) && crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
+                {
+                    publications.push(frame);
+                }
+                applied_resize = true;
+            }
+            _ => break,
+        }
+    }
+
+    if !pending_input_events.is_empty() {
+        while let Some(event) = deferred.pop_back() {
+            pending_input_events.push_front(event);
+        }
+        return applied_resize;
+    }
+
+    let Some(rx) = input_rx.as_ref().cloned() else {
+        while let Some(event) = deferred.pop_back() {
+            pending_input_events.push_front(event);
+        }
+        return applied_resize;
+    };
+
+    loop {
+        match rx.try_recv() {
+            Ok(InputEvent::Resize {
+                width,
+                height,
+                scale_factor,
+                emacs_frame_id,
+            }) => {
+                if pending_live_gui_resize_target(frames, emacs_frame_id).is_some() {
+                    // Preserve host resize acks until the geometry-query path
+                    // flushes the deferred live-GUI resize request.
+                    deferred.push_back(InputEvent::Resize {
+                        width,
+                        height,
+                        scale_factor,
+                        emacs_frame_id,
+                    });
+                    break;
+                }
+                if let Some(frame) = apply_resize_input_event_in_keyboard_runtime(
+                    frames,
+                    buffers,
+                    width,
+                    height,
+                    scale_factor,
+                    emacs_frame_id,
+                ) && crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
+                {
+                    publications.push(frame);
+                }
+                applied_resize = true;
+            }
+            Ok(event @ InputEvent::Focus { .. }) => {
+                deferred.push_back(event);
+            }
+            Ok(event) => {
+                deferred.push_back(event);
+                break;
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => break,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                break;
+            }
+        }
+    }
+
+    while let Some(event) = deferred.pop_back() {
+        pending_input_events.push_front(event);
+    }
+
+    applied_resize
+}
+
+fn sync_opening_gui_frame_size_from_host_in_keyboard_runtime(
+    frames: &mut crate::emacs_core::eval::data::window_state::FrameManager,
+    buffers: &neovm_edit::buffer::BufferManager,
+    display_host: Option<&dyn crate::emacs_core::eval::DisplayHost>,
+) -> Option<neovm_value::display_vocab::FrameId> {
+    let trace_host_sync = diagnostic_knobs::trace_host_sync_enabled();
+    let Some(host) = display_host else {
+        if trace_host_sync {
+            tracing::debug!("sync_opening_gui_frame_size_from_host: no display host");
+        }
+        return None;
+    };
+    if !host.opening_gui_frame_pending() {
+        if trace_host_sync {
+            tracing::debug!("sync_opening_gui_frame_size_from_host: no opening gui frame pending");
+        }
+        return None;
+    }
+    let Some(size) = host.current_primary_window_size() else {
+        if trace_host_sync {
+            tracing::debug!("sync_opening_gui_frame_size_from_host: host size unavailable");
+        }
+        return None;
+    };
+    if size.width == 0 || size.height == 0 {
+        if trace_host_sync {
+            tracing::debug!(
+                "sync_opening_gui_frame_size_from_host: ignoring zero host size {}x{}",
+                size.width,
+                size.height
+            );
+        }
+        return None;
+    }
+    let Some(fid) = frames.selected_frame().map(|frame| frame.id) else {
+        if trace_host_sync {
+            tracing::debug!("sync_opening_gui_frame_size_from_host: no selected frame");
+        }
+        return None;
+    };
+    let Some(frame) = frames.get_mut(fid) else {
+        if trace_host_sync {
+            tracing::debug!(
+                "sync_opening_gui_frame_size_from_host: selected frame {:?} missing",
+                fid
+            );
+        }
+        return None;
+    };
+    if frame.effective_window_system().is_none() {
+        if trace_host_sync {
+            tracing::debug!(
+                "sync_opening_gui_frame_size_from_host: selected frame {:?} is not gui (size={}x{})",
+                fid,
+                frame.width,
+                frame.height
+            );
+        }
+        return None;
+    }
+    if frame.width == size.width && frame.height == size.height {
+        if trace_host_sync {
+            tracing::debug!(
+                "sync_opening_gui_frame_size_from_host: selected frame {:?} already matches host size {}x{}",
+                fid,
+                size.width,
+                size.height
+            );
+        }
+        return None;
+    }
+    tracing::debug!(
+        "sync_opening_gui_frame_size_from_host: resizing selected frame {:?} from {}x{} to {}x{}",
+        fid,
+        frame.width,
+        frame.height,
+        size.width,
+        size.height
+    );
+    crate::emacs_core::eval::lifecycle::resize_frame_pixelwise_with_buffer_constraints(
+        frame,
+        buffers,
+        size.width,
+        size.height,
+    );
+    Some(fid)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MousePosnMetrics {
+    point: Option<i64>,
+    col: Option<i64>,
+    row: Option<i64>,
+    width: Option<i64>,
+    height: Option<i64>,
+    anchor_x: Option<i64>,
+    anchor_y: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MousePosnDescriptor {
+    window_or_frame: Value,
+    area: Option<&'static str>,
+    x: i64,
+    y: i64,
+    metrics: MousePosnMetrics,
+}
+
+enum QueuedReadCharEvent {
+    None,
+    HandledInternally,
+    Event(ReadCharEvent),
+}
+
+impl crate::emacs_core::eval::Context {
+    #[doc(hidden)]
+    pub fn service_leading_internal_frontend_events(
+        &mut self,
+    ) -> super::frontend_events::InternalEventEffects {
+        let mut effects = super::frontend_events::InternalEventEffects::default();
+        while let Some(event) = self
+            .command_loop
+            .keyboard
+            .pending_input_events
+            .take_leading_internal()
+        {
+            let event_effects = match event {
+                super::frontend_events::InternalFrontendEvent::PresentedRegion {
+                    presentation,
+                    hit,
+                    x,
+                    y,
+                    target_frame_id,
+                } => {
+                    // This observation precedes its pointer action in the
+                    // same queue. It is not Lisp input, but must be consumed
+                    // during input waits so later resize events can progress.
+                    if let Some(frame_id) = self.event_frame_id(target_frame_id)
+                        && let Some(frame) = self.frames.get(frame_id)
+                        && frame.active_presentation().map(|id| id.get()) == Some(presentation)
+                    {
+                        self.command_loop
+                            .keyboard
+                            .kboard
+                            .presented_mouse_observation = Some(PresentedMouseObservation {
+                            presentation,
+                            hit,
+                            x,
+                            y,
+                            frame_id: frame_id.0,
+                        });
+                    }
+                    super::frontend_events::InternalEventEffects::default()
+                }
+                super::frontend_events::InternalFrontendEvent::PresentationRetired {
+                    presentation,
+                } => {
+                    self.retire_interaction_presentation(presentation);
+                    if let Some(presentation) =
+                        crate::emacs_core::eval::data::window_state::PresentationId::try_new(
+                            presentation,
+                        )
+                    {
+                        for frame in self.frame_manager_mut().frames_mut() {
+                            frame.retire_display_presentation(presentation);
+                        }
+                    }
+                    super::frontend_events::InternalEventEffects::default()
+                }
+                super::frontend_events::InternalFrontendEvent::PresentationActivated {
+                    presentation,
+                    emacs_frame_id,
+                } => {
+                    if let Some(presentation) =
+                        crate::emacs_core::eval::data::window_state::PresentationId::try_new(
+                            presentation,
+                        )
+                        && let Some(frame) = self
+                            .frame_manager_mut()
+                            .get_mut(neovm_value::display_vocab::FrameId(emacs_frame_id))
+                        && let Err(error) = frame.activate_display_presentation(presentation)
+                    {
+                        tracing::debug!(
+                            ?error,
+                            emacs_frame_id,
+                            "ignored activation for a presentation no longer prepared"
+                        );
+                    }
+                    super::frontend_events::InternalEventEffects::default()
+                }
+                super::frontend_events::InternalFrontendEvent::PresentationDiscarded {
+                    presentation,
+                    emacs_frame_id,
+                } => {
+                    self.retire_interaction_presentation(presentation);
+                    if let Some(presentation) =
+                        crate::emacs_core::eval::data::window_state::PresentationId::try_new(
+                            presentation,
+                        )
+                        && let Some(frame) = self
+                            .frame_manager_mut()
+                            .get_mut(neovm_value::display_vocab::FrameId(emacs_frame_id))
+                    {
+                        frame.discard_display_presentation(presentation);
+                    }
+                    super::frontend_events::InternalEventEffects::default()
+                }
+                super::frontend_events::InternalFrontendEvent::LayoutInvalidated => {
+                    self.invalidate_media();
+                    super::frontend_events::InternalEventEffects {
+                        redisplay_needed: true,
+                    }
+                }
+                super::frontend_events::InternalFrontendEvent::ImageStateChanged { event } => {
+                    // Async media completed or lost renderer residency, so
+                    // retained image glyphs must not be reused. Reconcile the
+                    // exact identity before bumping media_generation.
+                    if let Some(host) = self.display_host.as_ref() {
+                        host.reconcile_image_catalog_for_media_rebuild(event);
+                    }
+                    self.invalidate_media();
+                    super::frontend_events::InternalEventEffects {
+                        redisplay_needed: true,
+                    }
+                }
+            };
+            effects = effects.merge(event_effects);
+        }
+        effects
+    }
+
+    pub fn begin_interaction_presentation(&mut self) -> u64 {
+        self.command_loop.presented_interactions.begin()
+    }
+
+    pub fn register_presented_mouse_target(
+        &mut self,
+        presentation: u64,
+        target: PresentedMouseTarget,
+    ) -> u32 {
+        self.command_loop
+            .presented_interactions
+            .register_mouse_target(presentation, target)
+    }
+
+    pub fn resolve_presented_mouse_target(
+        &self,
+        presentation: u64,
+        interaction: u32,
+    ) -> Option<PresentedMouseTarget> {
+        self.command_loop
+            .presented_interactions
+            .resolve(presentation, interaction)
+    }
+
+    pub fn retire_interaction_presentation(&mut self, presentation: u64) {
+        self.command_loop
+            .presented_interactions
+            .retire(presentation);
+    }
+
+    #[doc(hidden)]
+    pub fn restore_delayed_selection_event(&mut self, delayed_selection_event: &mut Option<Value>) {
+        if let Some(event) = delayed_selection_event.take() {
+            self.command_loop.keyboard.set_unread_selection_event(event);
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn restore_key_sequence_current_buffer(
+        &mut self,
+        saved_current_buffer: &mut Option<neovm_edit::buffer::BufferId>,
+    ) {
+        if let Some(buffer_id) = saved_current_buffer.take() {
+            self.restore_current_buffer_if_live(buffer_id);
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn has_switch_frame_event_kind(event: &Value, mode: SymbolMode) -> bool {
+        match event.kind() {
+            ValueKind::Cons => {
+                let pair_car = event.cons_car();
+                let _pair_cdr = event.cons_cdr();
+                matches!(
+                    pair_car.as_symbol_name(mode),
+                    Some("switch-frame") | Some("select-window")
+                )
+            }
+            _ => false,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn lispy_frame_event_target(&self, emacs_frame_id: u64) -> Option<Value> {
+        if emacs_frame_id == 0 {
+            self.frames
+                .selected_frame()
+                .map(|frame| Value::make_frame(frame.id.0))
+        } else {
+            let fid = neovm_value::display_vocab::FrameId(emacs_frame_id);
+            self.frames.get(fid)?;
+            Some(Value::make_frame(emacs_frame_id))
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn make_lispy_focus_event(&self, focused: bool, emacs_frame_id: u64) -> Option<Value> {
+        let frame = self.lispy_frame_event_target(emacs_frame_id)?;
+        Some(Value::list(vec![
+            Value::symbol(if focused { "focus-in" } else { "focus-out" }),
+            frame,
+        ]))
+    }
+
+    #[doc(hidden)]
+    pub fn make_lispy_delete_frame_event(&self, emacs_frame_id: u64) -> Option<Value> {
+        let frame = self.lispy_frame_event_target(emacs_frame_id)?;
+        Some(Value::list(vec![
+            Value::symbol("delete-frame"),
+            Value::list(vec![frame]),
+        ]))
+    }
+
+    #[doc(hidden)]
+    pub fn make_lispy_select_window_event(
+        &self,
+        window_id: neovm_edit::emacs_core::display_metrics::WindowId,
+    ) -> Option<Value> {
+        for frame_id in self.frames.frame_list() {
+            let Some(frame) = self.frames.get(frame_id) else {
+                continue;
+            };
+            if frame.find_window(window_id).is_some() {
+                return Some(Value::list(vec![
+                    Value::symbol("select-window"),
+                    Value::list(vec![Value::make_window(window_id.0)]),
+                ]));
+            }
+        }
+        None
+    }
+
+    #[doc(hidden)]
+    pub fn special_event_binding(&self, event: &Value) -> Option<Value> {
+        let special_event_map = self.builtin_var_value(SPECIAL_EVENT_MAP.id())?;
+        // GNU `read_char` calls `access_keymap` on the event head, so a
+        // full lispy event like `(focus-in FRAME)` must match a keymap entry
+        // stored under just `focus-in`.
+        let lookup_event = match event.kind() {
+            ValueKind::Cons => event.cons_car(),
+            _ => *event,
+        };
+        let binding = crate::emacs_core::eval::keymap_lookup::lookup_key_in_keymaps_in_obarray(
+            self.variables(),
+            &[special_event_map],
+            &[lookup_event],
+            true,
+            self.symbol_mode(),
+        );
+        if binding.is_nil() || binding.is_fixnum() {
+            None
+        } else {
+            Some(binding)
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn execute_special_event_if_bound(
+        &mut self,
+        event: Value,
+    ) -> Result<bool, neovm_value::error::Flow> {
+        let Some(binding) = self.special_event_binding(&event) else {
+            return Ok(false);
+        };
+        if !self.function_value_is_callable(&binding) {
+            return Ok(false);
+        }
+
+        self.assign_by_id(LAST_INPUT_EVENT.id(), event);
+        let keys = Value::vector(vec![event]);
+        self.apply(
+            Value::symbol(&COMMAND_EXECUTE),
+            vec![binding, Value::NIL, keys, Value::T],
+        )?;
+        Ok(true)
+    }
+
+    #[doc(hidden)]
+    pub fn publish_current_key_sequence_as_command_keys(&mut self) {
+        let (translated, raw) = self.command_loop.keyboard.key_sequence_snapshot();
+        self.command_loop.set_command_key_sequences(translated, raw);
+    }
+
+    #[doc(hidden)]
+    pub fn lookup_key_sequence_suffix_translation(
+        &mut self,
+        map: Value,
+        events: &[Value],
+        prompt: Value,
+    ) -> Result<Option<KeySequenceSuffixTranslation>, neovm_value::error::Flow> {
+        use crate::emacs_core::eval::keymap_lookup::is_list_keymap;
+
+        if map.is_nil() || !is_list_keymap(&map, self.symbol_mode()) {
+            return Ok(None);
+        }
+
+        for start in 0..events.len() {
+            // GNU `keyremap_step` walks the translation map one event at a
+            // time with `access_keymap (..., autoload)` — menu-item `:filter`s
+            // run mid-walk (`evil-esc-mode` lives at this exact spot), and a
+            // filter result that is a prefix keymap composes with the parent
+            // chain so the walk can descend into it.  The old whole-suffix
+            // structural lookup stopped at a filter-resolved prefix and
+            // reported the deep translation as unreachable.
+            let mut current_map = map;
+            let suffix = &events[start..];
+            for (index, event) in suffix.iter().enumerate() {
+                let binding =
+                    crate::emacs_core::eval::keymap_lookup::list_keymap_lookup_one_runtime(
+                        self,
+                        &current_map,
+                        event,
+                        true,
+                    )?;
+                if is_list_keymap(&binding, self.symbol_mode()) {
+                    current_map = binding;
+                    continue;
+                }
+                // GNU errors when a *called* translation returns something
+                // invalid; a nil resolution (an explicit nil binding or an
+                // unbound suffix) is simply not a translation for this start.
+                // A translation that ends before the last event is not a
+                // suffix translation: taking it would drop the later events.
+                if binding.is_nil() || index + 1 != suffix.len() {
+                    break;
+                }
+                let Some(replacement) = self.call_key_sequence_translation(binding, prompt)? else {
+                    break;
+                };
+                return Ok(Some(KeySequenceSuffixTranslation { start, replacement }));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Take an already filter-resolved translation binding: when it is
+    /// callable, call it with `prompt` (GNU `access_keymap_keyremap`'s
+    /// DO_FUNCALL branch) and validate the result; otherwise the binding is
+    /// not a translation.  The menu-item filter was already applied by the
+    /// runtime walk, so it must not run twice.
+    #[doc(hidden)]
+    pub fn call_key_sequence_translation(
+        &mut self,
+        binding: Value,
+        prompt: Value,
+    ) -> Result<Option<Vec<Value>>, neovm_value::error::Flow> {
+        let resolved = if self.function_value_is_callable(&binding) {
+            self.apply(binding, vec![prompt])?
+        } else {
+            binding
+        };
+        Ok(key_sequence_translation_events(
+            resolved,
+            self.symbol_mode(),
+        ))
+    }
+
+    #[doc(hidden)]
+    pub fn translation_map_has_pending_suffix_prefix(&self, map: Value, events: &[Value]) -> bool {
+        use crate::emacs_core::eval::keymap_lookup::is_list_keymap;
+        use crate::emacs_core::eval::keymap_lookup::list_keymap_lookup_seq;
+
+        if map.is_nil() || !is_list_keymap(&map, self.symbol_mode()) {
+            return false;
+        }
+
+        (0..events.len()).any(|start| {
+            is_list_keymap(
+                &list_keymap_lookup_seq(&map, &events[start..], self.symbol_mode()),
+                self.symbol_mode(),
+            )
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn apply_translation_map_to_events(
+        &mut self,
+        map: Value,
+        mut translated: Vec<Value>,
+        prompt: Value,
+    ) -> Result<CurrentKeySequenceTranslation, neovm_value::error::Flow> {
+        let mut has_pending_translation_prefix = false;
+        let mut application = KeySequenceTranslationApplication::NotApplied;
+
+        if let Some(suffix_translation) =
+            self.lookup_key_sequence_suffix_translation(map, &translated, prompt)?
+        {
+            translated.truncate(suffix_translation.start);
+            translated.extend(suffix_translation.replacement);
+            application = KeySequenceTranslationApplication::Applied;
+        }
+        has_pending_translation_prefix |=
+            self.translation_map_has_pending_suffix_prefix(map, &translated);
+
+        Ok(CurrentKeySequenceTranslation {
+            translated_events: translated,
+            has_pending_translation_prefix,
+            application,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn translate_upper_case_key_bindings_enabled(&self) -> bool {
+        self.eval_symbol_by_id(TRANSLATE_UPPER_CASE_KEY_BINDINGS.id())
+            .is_ok_and(|value| !value.is_nil())
+    }
+
+    /// Fetch the effective value of `echo-keystrokes` as seconds.
+    /// Returns `None` when the variable is nil/unbound or of a
+    /// wrong type. Mirrors GNU `keyboard.c` consumers which call
+    /// `FIXNUMP` / `FLOATP` before using the value.
+    #[doc(hidden)]
+    pub fn lisp_echo_keystrokes_seconds(&self) -> Option<f64> {
+        let value = self.eval_symbol_by_id(ECHO_KEYSTROKES.id()).ok()?;
+        if value.is_nil() {
+            return None;
+        }
+        value.as_number_f64()
+    }
+
+    /// Whether GNU's keyboard reader considers the input interactive enough
+    /// to display a prompt or pending key sequence.
+    ///
+    /// GNU `INTERACTIVE` is false in batch mode and while replaying a keyboard
+    /// macro (`commands.h`).  Its delayed prefix-echo path separately rejects
+    /// `noninteractive` (`keyboard.c:2854-2863`).  Neomacs currently renders a
+    /// positive `echo-keystrokes` value immediately, so applying the stronger
+    /// `INTERACTIVE` gate here also prevents a fast keyboard macro from
+    /// spuriously materializing echo-area buffers.
+    #[doc(hidden)]
+    pub fn keyboard_input_is_interactive(&self) -> bool {
+        !self.noninteractive()
+            && self
+                .eval_symbol_by_id(EXECUTING_KBD_MACRO.id())
+                .is_ok_and(|value| value.is_nil())
+    }
+
+    /// Return true if EVENT matches `help-char` (default `Ctrl-h`
+    /// == 8) or any entry in `help-event-list`.
+    ///
+    /// Mirrors GNU `keyboard.c:3014-3031` (`help_char_p`): the
+    /// predicate used by `read_key_sequence` to decide whether an
+    /// incoming event is a "help event" for the purposes of
+    /// dispatching `prefix-help-command`.
+    #[doc(hidden)]
+    pub fn event_matches_help_char(&self, event: &Value) -> bool {
+        let help_char = self.eval_symbol_by_id(HELP_CHAR.id()).unwrap_or(Value::NIL);
+        if !help_char.is_nil()
+            && self.symbol_mode().unwrap(*event) == self.symbol_mode().unwrap(help_char)
+        {
+            return true;
+        }
+        let help_event_list = self
+            .eval_symbol_by_id(HELP_EVENT_LIST.id())
+            .unwrap_or(Value::NIL);
+        if help_event_list.is_nil() {
+            return false;
+        }
+        let mut cursor = help_event_list;
+        while cursor.is_cons() {
+            if self.symbol_mode().unwrap(cursor.cons_car()) == self.symbol_mode().unwrap(*event) {
+                return true;
+            }
+            cursor = cursor.cons_cdr();
+        }
+        false
+    }
+
+    /// GNU's key string for a pending sequence in the shape it has when an
+    /// echo starts: the key description plus `echo_dash`'s decorations.
+    #[doc(hidden)]
+    pub fn prefix_echo_message(&mut self, translated_events: &[Value]) -> Option<LispString> {
+        self.key_echo_message(translated_events, KeyEchoDecoration::Start)
+    }
+
+    /// The key string as GNU `echo_update` rebuilds it when a key arrives
+    /// while echoing: the pending keys alone.  The dash and the keystroke-help
+    /// hint are `echo_now`'s decorations, not part of the string, so a new key
+    /// clears them until the next idle period starts a fresh echo.
+    #[doc(hidden)]
+    pub fn prefix_echo_plain_message(&mut self, translated_events: &[Value]) -> Option<LispString> {
+        self.key_echo_message(translated_events, KeyEchoDecoration::Refresh)
+    }
+
+    #[doc(hidden)]
+    pub fn key_echo_message(
+        &mut self,
+        translated_events: &[Value],
+        decoration: KeyEchoDecoration,
+    ) -> Option<LispString> {
+        let key_vec = Value::vector(translated_events.to_vec());
+        let desc = crate::emacs_core::builtins::keymaps::builtin_key_description(
+            vec![key_vec],
+            self.symbol_mode(),
+        )
+        .ok()?;
+        let mut message = desc.as_lisp_string()?.clone();
+        if translated_events.len() == 1
+            && translated_events
+                .first()
+                .is_some_and(|event| self.event_matches_help_char(event))
+        {
+            // GNU keyboard.c::echo_add_key appends this when a help event is
+            // the first echoed key, while waiting for the following help-map
+            // key.  A rebuild starts from an empty echo string, so it re-adds
+            // the hint as well.
+            message = message.concat(&help_event_echo_suffix());
+        } else if decoration == KeyEchoDecoration::Start {
+            // GNU keyboard.c::echo_dash turns a pending prefix into a
+            // mini-prompt for the next key, then help.el appends the default
+            // keystroke-help hint when `echo-keystrokes-help' is enabled.
+            message = message.concat(&LispString::from_utf8("-"));
+            if self
+                .eval_symbol_by_id(ECHO_KEYSTROKES_HELP.id())
+                .unwrap_or(Value::NIL)
+                .is_truthy()
+            {
+                // GNU `echo_dash` delegates this decision to Lisp.  That
+                // function walks `help-event-list` (not merely `help-char`),
+                // rejects help keys shadowed by the pending binding, and adds
+                // the `help-key-binding` face.  `read-quoted-char` dynamically
+                // binds `help-char` to nil, so this is what selects <f1>.
+                let function = Value::symbol("help--append-keystrokes-help");
+                if self.function_value_is_callable(&function)
+                    && let Ok(appended) =
+                        self.funcall_general(function, vec![Value::heap_string(message.clone())])
+                    && let Some(appended) = appended.as_lisp_string()
+                {
+                    message = appended.clone();
+                } else if let Some(help_desc) = self.first_key_echo_help_description() {
+                    message =
+                        message.concat(&LispString::from_utf8(&format!(" ({help_desc} for help)")));
+                }
+            }
+        }
+        Some(message)
+    }
+
+    /// Source-bootstrap fallback for contexts where `help.el` has not defined
+    /// `help--append-keystrokes-help` yet. Full runtimes always take the Lisp
+    /// path above, which owns active-map filtering and text properties.
+    #[doc(hidden)]
+    pub fn first_key_echo_help_description(&self) -> Option<String> {
+        let help_char = self.eval_symbol_by_id(HELP_CHAR.id()).unwrap_or(Value::NIL);
+        let mut events = self.eval_symbol("help-event-list").unwrap_or(Value::NIL);
+        while events.is_cons() {
+            let mut event = events.cons_car();
+            events = events.cons_cdr();
+            if event.is_symbol_named("help", self.symbol_mode()) {
+                event = help_char;
+            }
+            if event.is_nil() {
+                continue;
+            }
+            let desc = crate::emacs_core::builtins::keymaps::builtin_key_description(
+                vec![Value::vector(vec![event])],
+                self.symbol_mode(),
+            )
+            .ok()?;
+            return desc.as_utf8_str().map(ToOwned::to_owned);
+        }
+        None
+    }
+
+    /// Publish a keyboard-owned echo message and remember enough typed state
+    /// to rebuild it when the next input event arrives.  `set_current_message`
+    /// deliberately cancels any previous keyboard ownership, so ownership is
+    /// installed only after the new message has been committed.
+    #[doc(hidden)]
+    pub fn publish_key_echo_message(
+        &mut self,
+        events: &[Value],
+        prompt: Option<LispString>,
+        decoration: KeyEchoDecoration,
+    ) {
+        let Some(echo) = self.key_echo_message(events, decoration) else {
+            return;
+        };
+        let message = match prompt.as_ref() {
+            Some(prompt) => prompt.concat(&echo),
+            None => echo,
+        };
+        self.set_current_message(Some(message));
+        self.command_loop.keyboard.kboard.key_echo_state = KeyEchoState::Immediate { prompt };
+    }
+
+    /// Rebuild the complete pending keyboard echo after GNU `read_char` has
+    /// cleared the previous message and appended a newly read event.  GNU's
+    /// `echo_update` rebuilds the key string without `echo_dash`'s dash and
+    /// help hint, so this uses the `Refresh` shape.
+    #[doc(hidden)]
+    pub fn refresh_immediate_key_echo(&mut self) {
+        let prompt = match &self.command_loop.keyboard.kboard.key_echo_state {
+            KeyEchoState::Inactive => return,
+            KeyEchoState::Immediate { prompt } => prompt.clone(),
+        };
+        let events = self.command_loop.read_command_keys().to_vec();
+        if events.is_empty() {
+            return;
+        }
+        self.publish_key_echo_message(&events, prompt, KeyEchoDecoration::Refresh);
+    }
+
+    /// Re-apply the start decoration when a read begins while the pending
+    /// sequence is still being echoed.
+    ///
+    /// GNU `read_char` starts by calling `echo_dash` whenever the echo area
+    /// still holds this keyboard's echo (keyboard.c:2759-2768): the previous
+    /// key's `echo_update` rebuilt the string without the dash and help hint,
+    /// and the next read puts them back before it starts waiting.  That is why
+    /// a pending sub-read shows `C-q 1 0 1- (<f1> for help)` while the
+    /// completed command keeps the plain `C-q 1 0 1 RET` on screen.
+    #[doc(hidden)]
+    pub fn redecorate_immediate_key_echo(&mut self) {
+        let prompt = match &self.command_loop.keyboard.kboard.key_echo_state {
+            KeyEchoState::Inactive => return,
+            KeyEchoState::Immediate { prompt } => prompt.clone(),
+        };
+        let events = self.command_loop.read_command_keys().to_vec();
+        if events.is_empty() {
+            return;
+        }
+        self.publish_key_echo_message(&events, prompt, KeyEchoDecoration::Start);
+    }
+
+    /// Arm GNU's delayed key echo only for an unbounded interactive read that
+    /// already belongs to a command.  Timed reads, macro playback, ordinary
+    /// messages, and fast input all suppress the delayed echo exactly by
+    /// construction.
+    #[doc(hidden)]
+    pub fn delayed_key_echo_deadline(
+        &self,
+        timeout: Option<std::time::Duration>,
+    ) -> Option<std::time::Instant> {
+        if timeout.is_some()
+            || !self.keyboard_input_is_interactive()
+            || !matches!(
+                self.command_loop.keyboard.kboard.key_echo_state,
+                KeyEchoState::Inactive
+            )
+            || self.current_message_value().is_some()
+            || self.command_loop.read_command_keys().is_empty()
+        {
+            return None;
+        }
+        let seconds = self
+            .lisp_echo_keystrokes_seconds()
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)?;
+        std::time::Instant::now().checked_add(std::time::Duration::from_secs_f64(seconds))
+    }
+
+    #[doc(hidden)]
+    pub fn cancel_key_echo_state(&mut self) {
+        self.command_loop.keyboard.kboard.key_echo_state = KeyEchoState::Inactive;
+    }
+
+    #[doc(hidden)]
+    pub fn prepend_unread_post_input_method_events(
+        &mut self,
+        events: Value,
+    ) -> Result<(), neovm_value::error::Flow> {
+        if events.is_nil() {
+            return Ok(());
+        }
+
+        let current = self
+            .eval_symbol_by_id(UNREAD_POST_INPUT_METHOD_EVENTS.id())
+            .unwrap_or(Value::NIL);
+        let new_list = crate::emacs_core::builtins::builtin_nconc(vec![events, current])?;
+        self.assign_by_id(UNREAD_POST_INPUT_METHOD_EVENTS.id(), new_list);
+        Ok(())
+    }
+
+    /// Invoke `input-method-function` on a just-read character event.
+    ///
+    /// Mirrors GNU `keyboard.c:3237-3311`: when the function returns a cons,
+    /// the car becomes the current event immediately and only the cdr is
+    /// appended ahead of the existing `unread-post-input-method-events`.  Any
+    /// non-cons result means the input method produced no events, so the
+    /// original character is consumed and the caller retries input.
+    ///
+    /// Keyboard audit Finding 10.
+    #[doc(hidden)]
+    pub fn maybe_apply_input_method_function(
+        &mut self,
+        event: Value,
+    ) -> Result<InputMethodEvent, neovm_value::error::Flow> {
+        // Only translate ordinary printable characters. GNU
+        // skips non-character events (function keys, mouse,
+        // etc.) and the NUL byte. We apply the same filter.
+        let Some(c) = event.as_fixnum() else {
+            return Ok(InputMethodEvent::NotApplied);
+        };
+        // GNU keyboard.c::read_char only calls input-method-function for
+        // single-byte printable characters: ' ' <= c < 256 && c != DEL.
+        // Control bytes such as ESC must remain ordinary key-sequence input
+        // so terminal Meta prefixes keep working.
+        if !(i64::from(b' ') <= c && c < 256 && c != 127) {
+            return Ok(InputMethodEvent::NotApplied);
+        }
+
+        let im_fn = self
+            .eval_symbol_by_id(INPUT_METHOD_FUNCTION.id())
+            .unwrap_or(Value::NIL);
+        if im_fn.is_nil() {
+            return Ok(InputMethodEvent::NotApplied);
+        }
+
+        // Retain the existing recursion guard. GNU instead documents that
+        // input methods should bind input-method-function to nil for subreads;
+        // its immediate_echo flag is saved display state, not such a guard.
+        if self.command_loop.keyboard.kboard.in_input_method_function {
+            return Ok(InputMethodEvent::NotApplied);
+        }
+        let result = self.apply_input_method_with_saved_reader(im_fn, event)?;
+
+        if !result.is_cons() {
+            return Ok(InputMethodEvent::Consumed);
+        }
+
+        let first = result.cons_car();
+        self.prepend_unread_post_input_method_events(result.cons_cdr())?;
+        Ok(InputMethodEvent::Translated(first))
+    }
+
+    #[doc(hidden)]
+    pub fn shift_translated_key_sequence_event(event: Value) -> Option<Value> {
+        let key_event = crate::emacs_core::eval::keymap_lookup::emacs_event_to_key_event(&event)?;
+
+        match key_event {
+            crate::emacs_core::eval::keymap_lookup::KeyEvent::Char {
+                code,
+                ctrl,
+                meta,
+                shift,
+                super_,
+                hyper,
+                alt,
+            } => {
+                if shift {
+                    return Some(
+                        crate::emacs_core::eval::keymap_lookup::key_event_to_emacs_event(
+                            &crate::emacs_core::eval::keymap_lookup::KeyEvent::Char {
+                                code,
+                                ctrl,
+                                meta,
+                                shift: false,
+                                super_,
+                                hyper,
+                                alt,
+                            },
+                        ),
+                    );
+                }
+
+                if !code.is_uppercase() {
+                    return None;
+                }
+
+                let lowered = code.to_lowercase().next().unwrap_or(code);
+                if lowered == code {
+                    return None;
+                }
+
+                Some(
+                    crate::emacs_core::eval::keymap_lookup::key_event_to_emacs_event(
+                        &crate::emacs_core::eval::keymap_lookup::KeyEvent::Char {
+                            code: lowered,
+                            ctrl,
+                            meta,
+                            shift,
+                            super_,
+                            hyper,
+                            alt,
+                        },
+                    ),
+                )
+            }
+            crate::emacs_core::eval::keymap_lookup::KeyEvent::Function {
+                name,
+                ctrl,
+                meta,
+                shift,
+                super_,
+                hyper,
+                alt,
+            } => {
+                if !shift {
+                    return None;
+                }
+
+                Some(
+                    crate::emacs_core::eval::keymap_lookup::key_event_to_emacs_event(
+                        &crate::emacs_core::eval::keymap_lookup::KeyEvent::Function {
+                            name,
+                            ctrl,
+                            meta,
+                            shift: false,
+                            super_,
+                            hyper,
+                            alt,
+                        },
+                    ),
+                )
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn apply_shift_translation_to_current_key_sequence(
+        &mut self,
+    ) -> Option<KeySequenceShiftTranslation> {
+        let translated = self
+            .command_loop
+            .keyboard
+            .kboard
+            .current_key_sequence
+            .translated_events()
+            .to_vec();
+        let (index, original_event) = translated
+            .len()
+            .checked_sub(1)
+            .map(|index| (index, translated[index]))?;
+        let translated_event = Self::shift_translated_key_sequence_event(original_event)?;
+        let mut rewritten = translated;
+        rewritten[index] = translated_event;
+        self.command_loop
+            .keyboard
+            .rewrite_key_sequence_translation(rewritten);
+        Some(KeySequenceShiftTranslation {
+            index,
+            original_event,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn finalize_shift_translated_key_sequence(
+        &mut self,
+        sequence_is_undefined: bool,
+        options: ReadKeySequenceOptions,
+        shift_translation: Option<KeySequenceShiftTranslation>,
+    ) {
+        let mut shift_translated = false;
+
+        if let Some(shift_translation) = shift_translation {
+            let current_len = self
+                .command_loop
+                .keyboard
+                .kboard
+                .current_key_sequence
+                .translated_events()
+                .len();
+            let restore_original = (options.dont_downcase_last || sequence_is_undefined)
+                && shift_translation.index + 1 == current_len;
+            if restore_original {
+                let mut translated = self
+                    .command_loop
+                    .keyboard
+                    .kboard
+                    .current_key_sequence
+                    .translated_events()
+                    .to_vec();
+                translated[shift_translation.index] = shift_translation.original_event;
+                self.command_loop
+                    .keyboard
+                    .rewrite_key_sequence_translation(translated);
+            } else {
+                shift_translated = true;
+            }
+        }
+
+        self.assign_by_id(
+            THIS_COMMAND_KEYS_SHIFT_TRANSLATED.id(),
+            if shift_translated {
+                Value::T
+            } else {
+                Value::NIL
+            },
+        );
+    }
+
+    #[doc(hidden)]
+    pub fn apply_resize_input_event(
+        &mut self,
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+        emacs_frame_id: u64,
+        trigger_redisplay: bool,
+    ) -> Result<(), neovm_value::error::Flow> {
+        let trace_frame_geometry = std::env::var("NEOMACS_TRACE_FRAME_GEOMETRY")
+            .ok()
+            .is_some_and(|value| value == "1");
+        let target_fid = if emacs_frame_id == 0 {
+            self.frames.selected_frame().map(|frame| frame.id)
+        } else {
+            Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
+        };
+        let selected_fid = self.frames.selected_frame().map(|selected| selected.id);
+        tracing::debug!(
+            "apply_resize_input_event: {}x{} emacs_frame_id=0x{:x} target_fid={:?}",
+            width,
+            height,
+            emacs_frame_id,
+            target_fid
+        );
+        if let Some(fid) = target_fid {
+            if trace_frame_geometry && let Some(frame) = self.frames.get(fid) {
+                tracing::debug!(
+                    "apply_resize_input_event: before fid={:?} selected={:?} size={}x{} effective_ws={:?} param_ws={:?}",
+                    fid,
+                    selected_fid,
+                    frame.width,
+                    frame.height,
+                    frame.effective_window_system(),
+                    frame
+                        .fixed_parameter(neovm_value::display_vocab::FrameQueryParam::WindowSystem)
+                );
+            }
+            if let Some(frame) = apply_resize_input_event_in_keyboard_runtime(
+                &mut self.frames,
+                &self.edit.buffers,
+                width,
+                height,
+                scale_factor,
+                emacs_frame_id,
+            ) {
+                self.gnu_mark_frame_redisplay(frame);
+                self.gnu_mark_frame_window_change(frame);
+                // A child frame's size lives in its own geometry, which no
+                // parent redisplay signature covers, and a child frame's
+                // pixelwise resize arrives here as a host acknowledgement.
+                // Bump the legacy generation so the new size is published.
+                self.invalidate_redisplay();
+            }
+            if let Some(frame) = self.frames.get(fid) {
+                tracing::debug!(
+                    "apply_resize_input_event: resized frame {:?} to {}x{}",
+                    fid,
+                    frame.width,
+                    frame.height
+                );
+                if trace_frame_geometry {
+                    tracing::debug!(
+                        "apply_resize_input_event: after fid={:?} selected={:?} size={}x{} effective_ws={:?} param_ws={:?}",
+                        fid,
+                        selected_fid,
+                        frame.width,
+                        frame.height,
+                        frame.effective_window_system(),
+                        frame.fixed_parameter(
+                            neovm_value::display_vocab::FrameQueryParam::WindowSystem
+                        )
+                    );
+                }
+            }
+        }
+        if trigger_redisplay {
+            self.redisplay()?;
+        }
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn sync_pending_resize_events(&mut self) -> bool {
+        // Per-call Rust IDs only, owned through exclusive &mut Context.
+        let mut publications = Vec::new();
+        let applied_resize = sync_pending_resize_events_in_keyboard_runtime(
+            &mut self.frames,
+            &self.edit.buffers,
+            &mut self.input_rx,
+            &mut self.command_loop.keyboard,
+            &mut publications,
+        );
+        if let Some(frame) = sync_opening_gui_frame_size_from_host_in_keyboard_runtime(
+            &mut self.frames,
+            &self.edit.buffers,
+            self.display_host.as_deref(),
+        ) && crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
+        {
+            publications.push(frame);
+        }
+        for frame in publications {
+            self.gnu_mark_frame_redisplay(frame);
+            self.gnu_mark_frame_window_change(frame);
+        }
+        if applied_resize {
+            // Same reason as `apply_resize_input_event`: the legacy policy
+            // has no publication queue, and a child's geometry is not part
+            // of the parent's redisplay signature.
+            self.invalidate_redisplay();
+        }
+        applied_resize
+    }
+
+    #[doc(hidden)]
+    pub fn wait_for_pending_resize_events(&mut self, timeout: Duration) -> bool {
+        let resize_acknowledged =
+            crate::emacs_core::eval::hooks_proof::wait::wait_for_resize_ack_until(
+                self,
+                Instant::now() + timeout,
+            )
+            .unwrap_or(false);
+        if let Some(frame) = sync_opening_gui_frame_size_from_host_in_keyboard_runtime(
+            &mut self.frames,
+            &self.edit.buffers,
+            self.display_host.as_deref(),
+        ) {
+            self.gnu_mark_frame_redisplay(frame);
+            self.gnu_mark_frame_window_change(frame);
+        }
+        resize_acknowledged
+    }
+
+    /// Whether `event` should be drained here by the wait-request special-input
+    /// service. Uses the frontend-event policy, except a
+    /// `MouseMove` counts as special only when track-mouse is OFF.
+    ///
+    /// GNU keeps a pending mouse motion as readable command input while
+    /// track-mouse is on (keyboard.c `some_mouse_moved` / `readable_events`):
+    /// the motion must stay queued so the pending-input query (and the
+    /// `read_char` path) can see it, rather than being silently consumed as a
+    /// bare cursor-position update here. With track-mouse off it is a pure
+    /// position update and is consumed as before.
+    #[doc(hidden)]
+    pub fn input_event_is_wait_request_special_now(&self, event: &InputEvent) -> bool {
+        super::frontend_events::is_wait_special(event, self.track_mouse_enabled())
+    }
+
+    #[doc(hidden)]
+    pub fn take_next_wait_request_special_input_event(
+        &mut self,
+        internal_effects: &mut super::frontend_events::InternalEventEffects,
+        idle_policy: IdleTransitionPolicy,
+    ) -> Result<Option<InputEvent>, neovm_value::error::Flow> {
+        *internal_effects =
+            (*internal_effects).merge(self.service_leading_internal_frontend_events());
+        if let Some(event) = self
+            .command_loop
+            .keyboard
+            .pending_input_events
+            .front()
+            .cloned()
+        {
+            if self.input_event_is_wait_request_special_now(&event) {
+                self.command_loop
+                    .keyboard
+                    .pending_input_events
+                    .pop_visible_front();
+                idle_policy.stop_idle(self);
+                return Ok(Some(event));
+            }
+            return Ok(None);
+        }
+
+        if self.stage_next_host_input_event_if_available()? {
+            *internal_effects =
+                (*internal_effects).merge(self.service_leading_internal_frontend_events());
+            if let Some(event) = self
+                .command_loop
+                .keyboard
+                .pending_input_events
+                .front()
+                .cloned()
+                && self.input_event_is_wait_request_special_now(&event)
+            {
+                self.command_loop
+                    .keyboard
+                    .pending_input_events
+                    .pop_visible_front();
+                idle_policy.stop_idle(self);
+                return Ok(Some(event));
+            }
+            return Ok(None);
+        }
+
+        Ok(None)
+    }
+
+    #[doc(hidden)]
+    pub fn stage_next_host_input_event_if_available(
+        &mut self,
+    ) -> Result<bool, neovm_value::error::Flow> {
+        let Some(rx) = self.input_rx.as_ref() else {
+            return Ok(false);
+        };
+        match rx.try_recv() {
+            Ok(event) => {
+                self.command_loop
+                    .keyboard
+                    .pending_input_events
+                    .push_back(event);
+                Ok(true)
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => Ok(false),
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                if std::env::var_os("NEOVM_DEBUG_QUIT").is_some() {
+                    eprintln!(
+                        "[quit-debug] input channel Disconnected -> quit; backtrace:\n{}",
+                        std::backtrace::Backtrace::force_capture()
+                    );
+                }
+                self.handle_display_terminal_disconnect();
+                Err(neovm_value::error::signal(LispCondition::Quit, vec![]))
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn wait_for_next_host_input_event(
+        &mut self,
+        timeout: Duration,
+        waiting_for_user_input: bool,
+    ) -> Result<bool, neovm_value::error::Flow> {
+        let Some(rx) = self.input_rx.as_ref().cloned() else {
+            if !timeout.is_zero() {
+                std::thread::sleep(timeout);
+            }
+            return Ok(false);
+        };
+
+        let previous_waiting_for_input = self.waiting_for_user_input;
+        self.waiting_for_user_input = waiting_for_user_input;
+        let wait_result = if timeout.is_zero() {
+            rx.try_recv().map_err(|err| match err {
+                crossbeam_channel::TryRecvError::Empty => {
+                    crossbeam_channel::RecvTimeoutError::Timeout
+                }
+                crossbeam_channel::TryRecvError::Disconnected => {
+                    crossbeam_channel::RecvTimeoutError::Disconnected
+                }
+            })
+        } else {
+            rx.recv_timeout(timeout)
+        };
+        self.waiting_for_user_input = previous_waiting_for_input;
+
+        match wait_result {
+            Ok(event) => {
+                self.command_loop
+                    .keyboard
+                    .pending_input_events
+                    .push_back(event);
+                Ok(true)
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => Ok(false),
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                self.handle_display_terminal_disconnect();
+                Err(neovm_value::error::signal(LispCondition::Quit, vec![]))
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn stage_pending_command_input_for_wait_request(
+        &mut self,
+        query: super::frontend_events::FrontendInputQuery,
+    ) -> Result<bool, neovm_value::error::Flow> {
+        self.service_leading_internal_frontend_events();
+        if self.command_loop.keyboard.has_pending_kboard_input() || self.has_frontend_input(query) {
+            return Ok(true);
+        }
+
+        while self.stage_next_host_input_event_if_available()? {
+            self.service_leading_internal_frontend_events();
+            if self.command_loop.keyboard.has_pending_kboard_input()
+                || self.has_frontend_input(query)
+            {
+                return Ok(true);
+            }
+        }
+
+        if self.command_loop.keyboard.has_pending_kboard_input() {
+            return Ok(true);
+        }
+
+        Ok(self.has_frontend_input(query))
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn service_wait_request_special_input_events(
+        &mut self,
+    ) -> Result<SpecialInputServiceOutcome, neovm_value::error::Flow> {
+        self.service_wait_request_special_input_events_with_idle_policy(
+            IdleTransitionPolicy::Manage,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn service_wait_request_special_input_events_with_idle_policy(
+        &mut self,
+        idle_policy: IdleTransitionPolicy,
+    ) -> Result<SpecialInputServiceOutcome, neovm_value::error::Flow> {
+        let mut outcome = SpecialInputServiceOutcome::default();
+        let mut internal_effects = super::frontend_events::InternalEventEffects::default();
+
+        crate::emacs_core::builtins::drain_file_notify_events(self)?;
+        crate::emacs_core::eval::lifecycle::dbusbind_drain_events(self)?;
+
+        if self.sync_pending_resize_events() {
+            outcome = outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
+        }
+
+        while let Some(event) =
+            self.take_next_wait_request_special_input_event(&mut internal_effects, idle_policy)?
+        {
+            if super::frontend_events::interrupts(&event)
+                && crate::emacs_core::eval::input_hooks::interrupt_for_input_event_if_requested(
+                    self,
+                    event.clone(),
+                )?
+            {
+                continue;
+            }
+
+            match event {
+                InputEvent::Resize {
+                    width,
+                    height,
+                    scale_factor,
+                    emacs_frame_id,
+                } => {
+                    outcome = outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
+                    self.apply_resize_input_event(
+                        width,
+                        height,
+                        scale_factor,
+                        emacs_frame_id,
+                        false,
+                    )?;
+                }
+                InputEvent::MonitorsChanged { monitors } => {
+                    outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
+                    crate::emacs_core::builtins::set_neomacs_monitor_info(monitors);
+                    let hook_sym = crate::emacs_core::hook_runtime::hook_symbol_by_name(
+                        self,
+                        "display-monitors-changed-functions",
+                    );
+                    let terminal = crate::emacs_core::eval::lifecycle::terminal_handle_value();
+                    let _ = crate::emacs_core::hook_runtime::run_named_hook(
+                        self,
+                        hook_sym,
+                        &[terminal],
+                    )?;
+                }
+                InputEvent::SystemFontsChanged { fonts, display } => {
+                    if self.handle_system_fonts_input_event(fonts, display)? {
+                        outcome =
+                            outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
+                    }
+                }
+                InputEvent::MouseMove {
+                    x,
+                    y,
+                    target_frame_id,
+                    ..
+                } => {
+                    outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
+                    self.note_mouse_move_input_event(x, y, target_frame_id);
+                    idle_policy.resume_idle(self);
+                }
+                InputEvent::WindowClose { emacs_frame_id } => {
+                    outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
+                    self.handle_window_close_input_event(emacs_frame_id, idle_policy)?;
+                }
+                InputEvent::TtyHangup { terminal_id } => {
+                    outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
+                    self.delete_input_terminal_noelisp(terminal_id)?;
+                }
+                InputEvent::DisplayReset => {
+                    // Like Resize: apply here, let the outcome trigger the
+                    // redisplay after servicing.
+                    outcome = outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
+                    self.handle_display_reset_input_event();
+                }
+                InputEvent::WebView(event) => {
+                    if crate::emacs_core::eval::hooks_proof::frontend::apply_xwidget_frontend_event(
+                        self, &event,
+                    )? {
+                        outcome =
+                            outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
+                    }
+                }
+                InputEvent::SurfaceCreateFailed { id, error } => {
+                    // Not user activity and needs no redisplay — just run the
+                    // hook (mirrors MonitorsChanged running its hook here).
+                    self.handle_surface_create_failed_input_event(id, &error)?;
+                }
+                InputEvent::FrameShaderFailed { error } => {
+                    let effects =
+                        super::frontend_events::report_frame_shader_failure(self, &error)?;
+                    outcome =
+                        outcome.merge(SpecialInputServiceOutcome::from_internal_effects(effects));
+                }
+                InputEvent::TerminalCreateFailed { id, error } => {
+                    self.handle_terminal_create_failed_input_event(id, &error)?;
+                }
+                InputEvent::TerminalExited { id } => {
+                    self.handle_terminal_exited_input_event(id)?;
+                }
+                InputEvent::TerminalTitleChanged { id, title } => {
+                    self.handle_terminal_title_changed_input_event(id, &title)?;
+                }
+                _ => {}
+            }
+        }
+
+        outcome = outcome.merge(SpecialInputServiceOutcome::from_internal_effects(
+            internal_effects,
+        ));
+
+        Ok(outcome)
+    }
+
+    #[doc(hidden)]
+    pub fn handle_system_fonts_input_event(
+        &mut self,
+        fonts: crate::emacs_core::eval::protocol::SystemFonts,
+        display: neomacs_display_protocol::GraphicalDisplayIdentity,
+    ) -> Result<bool, neovm_value::error::Flow> {
+        use crate::emacs_core::eval::protocol::SystemFontRole;
+
+        let Some(host) = self.display_host.as_mut() else {
+            return Ok(false);
+        };
+        let changes = [SystemFontRole::Monospace, SystemFontRole::Application]
+            .map(|role| (role, host.system_font(role) != fonts.get(role)));
+        // Queries must see the new facts even when font-use-system-font is nil.
+        host.update_system_fonts(fonts);
+        let mut font_event = false;
+        for (role, changed) in changes {
+            if !changed {
+                continue;
+            }
+            let setting = match role {
+                SystemFontRole::Monospace => {
+                    if self.eval_symbol("font-use-system-font")?.is_nil() {
+                        continue;
+                    }
+                    "monospace-font-name"
+                }
+                SystemFontRole::Application => "font-name",
+            };
+            let event = Value::list(vec![
+                Value::symbol("config-changed-event"),
+                Value::symbol(setting),
+                Value::string(display.terminal_name()),
+            ]);
+            // The existing Lisp handler checks opt-in again and applies via
+            // set-frame-font, including its current/future-frame semantics.
+            let handled = self.execute_special_event_if_bound(event)?;
+            font_event |= handled && role == SystemFontRole::Monospace;
+        }
+        Ok(font_event)
+    }
+
+    /// The display lost its GPU device and rebuilt from scratch
+    /// (`InputEvent::DisplayReset`). Ask the display host to re-resolve
+    /// everything renderer-resident (media memos, images, the frame
+    /// shader), then bust the redisplay signature: nothing in buffer or
+    /// window state changed, so without this the next redisplay would
+    /// early-return on an unchanged signature and never republish the
+    /// frame. (The WindowResize path gets the signature change for free
+    /// from the geometry update.)
+    #[doc(hidden)]
+    pub fn handle_display_reset_input_event(&mut self) {
+        tracing::warn!(
+            "display reset: re-resolving GPU-resident media and forcing a full redisplay"
+        );
+        if let Some(host) = self.display_host.as_deref() {
+            host.display_reset();
+        }
+        self.invalidate_redisplay();
+    }
+
+    /// A shader surface failed to build on the render thread past naga
+    /// pre-validation (a device-specific wgpu rejection). Run
+    /// `neomacs-surface-error-functions` with the surface id and the error
+    /// string so Lisp can report it (the default member messages the user);
+    /// without this the failure only appears in a log line while the quad
+    /// renders blank. Mirrors `MonitorsChanged` running its hook here.
+    #[doc(hidden)]
+    pub fn handle_surface_create_failed_input_event(
+        &mut self,
+        id: u32,
+        error: &str,
+    ) -> neovm_value::error::EvalResult {
+        let args = [
+            Value::symbol("neomacs-surface-error-functions"),
+            Value::fixnum(i64::from(id)),
+            Value::string(error),
+        ];
+        crate::emacs_core::hook_runtime::run_named_hook_with_args(self, &args)
+    }
+
+    #[doc(hidden)]
+    pub fn handle_terminal_exited_input_event(
+        &mut self,
+        id: crate::emacs_core::eval::protocol::TerminalId,
+    ) -> neovm_value::error::EvalResult {
+        let args = [
+            Value::symbol("neo-term-exit-functions"),
+            Value::fixnum(i64::from(id.get())),
+        ];
+        crate::emacs_core::hook_runtime::run_named_hook_with_args(self, &args)
+    }
+
+    #[doc(hidden)]
+    pub fn handle_terminal_create_failed_input_event(
+        &mut self,
+        id: crate::emacs_core::eval::protocol::TerminalId,
+        error: &str,
+    ) -> neovm_value::error::EvalResult {
+        let args = [
+            Value::symbol("neo-term-create-failed-functions"),
+            Value::fixnum(i64::from(id.get())),
+            Value::string(error),
+        ];
+        crate::emacs_core::hook_runtime::run_named_hook_with_args(self, &args)
+    }
+
+    #[doc(hidden)]
+    pub fn handle_terminal_title_changed_input_event(
+        &mut self,
+        id: crate::emacs_core::eval::protocol::TerminalId,
+        title: &str,
+    ) -> neovm_value::error::EvalResult {
+        let args = [
+            Value::symbol("neo-term-title-changed-functions"),
+            Value::fixnum(i64::from(id.get())),
+            Value::string(title),
+        ];
+        crate::emacs_core::hook_runtime::run_named_hook_with_args(self, &args)
+    }
+
+    #[doc(hidden)]
+    pub fn handle_window_close_input_event(
+        &mut self,
+        emacs_frame_id: u64,
+        idle_policy: IdleTransitionPolicy,
+    ) -> Result<(), neovm_value::error::Flow> {
+        idle_policy.resume_idle(self);
+        if let Some(event) = self.make_lispy_delete_frame_event(emacs_frame_id)
+            && self.execute_special_event_if_bound(event)?
+        {
+            return Ok(());
+        }
+        self.command_loop.running = false;
+        Err(neovm_value::error::signal(LispCondition::Quit, vec![]))
+    }
+
+    fn delete_input_terminal_noelisp(
+        &mut self,
+        terminal_id: u64,
+    ) -> Result<(), neovm_value::error::Flow> {
+        // Do not turn a terminal read failure into a public frame-close
+        // event. The existing noelisp terminal deletion removes every
+        // attached frame newest-first and queues its hooks; the timer
+        // boundary drains those calls LIFO, after all objects are dead.
+        // GNU keyboard.c:8113-8124. The last terminal
+        // (`!terminal_list->next_terminal`) calls
+        // `terminate_due_to_signal(SIGHUP, 10)` before `Fdelete_terminal`.
+        // emacs.c:441-462 turns that into `Fkill_emacs(make_fixnum(sig))`
+        // while the frame and terminal are still live. Another live
+        // terminal only queues the noelisp delete. The decision and the
+        // absent-slot skip live in `delete_terminal_noelisp_owned`.
+        // RESOLVED: this shared helper is the one facade call. It passes
+        // the typed Hangup request. The facade shuts down only when this
+        // is the last live display terminal, so a non-last terminal never
+        // shuts down.
+        crate::emacs_core::eval::lifecycle::delete_terminal_noelisp_owned(
+            self,
+            terminal_id,
+            crate::emacs_core::eval::ShutdownRequest::fatal_signal(FatalSignal::Hangup),
+        )
+        .map(|_| ())
+    }
+
+    /// Read a complete key sequence through keymaps.
+    ///
+    /// Mirrors GNU Emacs `read_key_sequence()` (keyboard.c:10098). Reads keys
+    /// one at a time, following prefix keymaps until a complete binding or
+    /// undefined key is found. Accepting fresh input also clears a previous
+    /// logical echo-area message; GNU's `read_menu_command` deliberately uses
+    /// this same reader.
+    ///
+    /// After each key, checks translation maps in order:
+    /// 1. `input-decode-map` — terminal-specific key decoding
+    /// 2. `local-function-key-map` (inherits `function-key-map`) — function
+    ///    key translation
+    /// 3. `key-translation-map` — user-defined key translations
+    ///
+    /// Returns `(key_events_as_emacs_values, binding)`; binding is nil if the
+    /// key sequence is undefined.
+    #[doc(hidden)]
+    pub fn read_key_sequence(&mut self) -> Result<(Vec<Value>, Value), neovm_value::error::Flow> {
+        let (keys, binding) =
+            self.read_key_sequence_with_options(ReadKeySequenceOptions::default())?;
+        Ok((keys, binding.executed()))
+    }
+
+    /// Read one command-loop key sequence, preserving GNU's typed distinction
+    /// between a command and the zero-length result that ends a macro
+    /// iteration.  Lisp-facing key readers continue to use
+    /// `read_key_sequence_with_options`, because an exhausted macro is only a
+    /// control boundary for `command_loop_1` (GNU keyboard.c/macros.c).
+    #[doc(hidden)]
+    pub fn read_command_key_sequence_with_options(
+        &mut self,
+        options: ReadKeySequenceOptions,
+    ) -> Result<CommandKeySequenceRead, neovm_value::error::Flow> {
+        if self.command_input_kbd_macro_iteration_is_exhausted() {
+            // GNU's `read_key_sequence` reaches its common `done` label and
+            // calls `echo_update` before returning zero.  Neomacs does not yet
+            // retain GNU's separate immediate-echo string, so the equivalent
+            // terminal-cell effect is to finish the transient echo-area
+            // message at this reader boundary.
+            self.begin_key_sequence_read(options.continue_echo);
+            self.command_loop
+                .set_command_key_sequences(Vec::new(), Vec::new());
+            self.clear_key_echo_message();
+            return Ok(CommandKeySequenceRead::End(
+                CommandKeySequenceEnd::KeyboardMacroIteration,
+            ));
+        }
+
+        let (keys, binding) = self.read_key_sequence_with_options(options)?;
+        if keys.is_empty() && binding.executed().is_nil() {
+            // The zero-length result is a macro-iteration boundary when the
+            // macro is (still) exhausted -- GNU's `at_end_of_macro_p` check
+            // ran mid-read -- and an ordinary EOF from command input
+            // otherwise.  Keeping the typed distinction lets `command_loop_1`
+            // end the iteration instead of dispatching an undefined sequence.
+            let end = if self.command_input_kbd_macro_iteration_is_exhausted() {
+                CommandKeySequenceEnd::KeyboardMacroIteration
+            } else {
+                CommandKeySequenceEnd::Input
+            };
+            Ok(CommandKeySequenceRead::End(end))
+        } else {
+            Ok(CommandKeySequenceRead::Command { keys, binding })
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn command_input_kbd_macro_iteration_is_exhausted(&self) -> bool {
+        // GNU `at_end_of_macro_p` treats Lisp-visible
+        // `executing-kbd-macro == t` as an explicit early-termination request.
+        //
+        // Only REQUEUED events defer the boundary: GNU's mid-read check is
+        // `at_end_of_macro_p () && !requeued_events_pending_p ()`
+        // (keyboard.c:11204-11212), and `requeued_events_pending_p`
+        // (keyboard.c:10847) covers just `unread-command-events` and the two
+        // input-method queues.  Low-level special events still sitting in the
+        // keyboard buffer (dbus, file-notify, selection) do NOT defer it --
+        // `read_key_sequence` returns zero with the event left queued for the
+        // next read.  Requiring those queues to drain pinned the boundary open
+        // forever whenever a special event no read ever consumes was pending,
+        // which is what stalled the helm batch sessions.
+        let visible_macro_forces_end = self
+            .visible_variable_value_or_nil_by_id(EXECUTING_KBD_MACRO.id())
+            .is_t();
+        let runtime_macro_at_end = matches!(
+            self.command_loop.keyboard.kboard.executing_kbd_macro.as_ref(),
+            Some(events) if self.command_loop.keyboard.kboard.kbd_macro_index >= events.len()
+        );
+        let macro_at_end = visible_macro_forces_end || runtime_macro_at_end;
+        macro_at_end && !self.has_pending_requeued_events()
+    }
+
+    /// The prologue GNU `read_key_sequence` runs before it reads anything, at
+    /// and after its `replay_sequence:` label (keyboard.c:11038-11054).
+    ///
+    /// Every key-sequence read starts here, including the zero-length read that
+    /// discovers an exhausted keyboard macro, so the effects below are stated
+    /// once above that dispatch rather than repeated in each branch.
+    ///
+    /// * `reset_key_sequence` clears the in-progress accumulator (GNU `t = 0`).
+    /// * CONTINUE-ECHO nil also clears the COMMITTED `this-command-keys`
+    ///   (`this_command_key_count = 0; this_single_command_key_start = 0;`,
+    ///   keyboard.c:11919-11923), so the sequence starts fresh.  neomacs's
+    ///   `reset_key_sequence` alone would leave `command_keys`/`raw_command_keys`
+    ///   in place, and a command's internal `read-key` (subr.el) — which reads
+    ///   with CONTINUE-ECHO nil and arms an idle timer that throws as soon as
+    ///   `(this-command-keys-vector)` is non-empty (subr.el:3648-3665) — would
+    ///   observe the STALE invoking sequence and return that key immediately
+    ///   instead of waiting for the next keystroke (neomacs#187).
+    /// * `last_nonmenu_event = Qnil` (keyboard.c:11054).  The variable holds the
+    ///   key of the sequence CURRENTLY being read, assigned further down
+    ///   (keyboard.c:11668-11673); it is not a durable record of the last key
+    ///   pressed.  Lisp reads the cleared value after a keyboard macro finishes,
+    ///   and code branches on its type: `imenu-choose-buffer-index`
+    ///   (lisp/imenu.el:915) picks the mouse menu over the completing-read
+    ///   prompt when `(listp last-nonmenu-event)`, so a leftover integer turns a
+    ///   silent GNU `imenu` into a minibuffer prompt.
+    #[doc(hidden)]
+    pub fn begin_key_sequence_read(&mut self, continue_echo: bool) {
+        self.command_loop.reset_key_sequence();
+        if !continue_echo {
+            self.clear_read_command_keys();
+        }
+        self.assign_by_id(LAST_NONMENU_EVENT.id(), Value::NIL);
+    }
+
+    /// Returns the key events and the command pair GNU's `done` label
+    /// publishes: the keymaps' binding plus its one-level remapping.  The
+    /// command loop executes the latter and records the former, so it must
+    /// not run `command-remapping` again.
+    #[doc(hidden)]
+    pub fn read_key_sequence_with_options(
+        &mut self,
+        options: ReadKeySequenceOptions,
+    ) -> Result<(Vec<Value>, ReadCommandBinding), neovm_value::error::Flow> {
+        use super::keymap_lookup::resolve_active_key_binding;
+        use crate::emacs_core::eval::keymap_lookup::{
+            DefaultBindingMode, resolve_prefix_keymap_binding_in_obarray,
+        };
+
+        self.sync_keyboard_terminal_owner();
+        self.begin_key_sequence_read(options.continue_echo);
+
+        // GNU `read_key_sequence` stashes the PROMPT in
+        // `current_kboard->echo_prompt` (keyboard.c:10990) and the echo
+        // machinery shows it while reading, so an explicit prompt such as
+        // `describe-key`'s "Describe the following key…" is visible before and
+        // while the user types the key to describe (neomacs#187). Show it now
+        // and prepend it to the typed-key echo below.
+        let key_sequence_prompt: Option<LispString> = options
+            .prompt
+            .as_lisp_string()
+            .filter(|prompt| !prompt.is_empty())
+            .cloned();
+        if self.keyboard_input_is_interactive()
+            && let Some(prompt) = key_sequence_prompt.as_ref()
+        {
+            self.set_current_message(Some(prompt.clone()));
+            self.command_loop.keyboard.kboard.key_echo_state = KeyEchoState::Immediate {
+                prompt: key_sequence_prompt.clone(),
+            };
+        }
+
+        self.assign_by_id(THIS_COMMAND_KEYS_SHIFT_TRANSLATED.id(), Value::NIL);
+        let mut shift_translation: Option<KeySequenceShiftTranslation> = None;
+        let mut delayed_selection_event: Option<Value> = None;
+        let mut saved_current_buffer: Option<neovm_edit::buffer::BufferId> = None;
+        let mut replay_current_sequence = false;
+
+        loop {
+            if replay_current_sequence {
+                replay_current_sequence = false;
+                tracing::debug!("read_key_sequence: replaying buffered sequence");
+            } else {
+                // GNU `read_key_sequence` (keyboard.c:11204-11212): at the end
+                // of a macro iteration with no requeued events pending, return
+                // zero instead of reading.  `executing-kbd-macro` bound to t
+                // is the documented "force an early exit" value
+                // (macros.c:403), which is how the batch helm probes drive a
+                // session to completion; without this check the reader blocks
+                // on terminal input the harness never sends.  The requeued
+                // events are drained first, so this fires only once the queue
+                // is empty.
+                if self.command_input_kbd_macro_iteration_is_exhausted() {
+                    self.restore_delayed_selection_event(&mut delayed_selection_event);
+                    self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+                    self.command_loop
+                        .set_command_key_sequences(Vec::new(), Vec::new());
+                    return Ok((Vec::new(), ReadCommandBinding::unremapped(Value::NIL)));
+                }
+                let read_event = match self.read_char_event_with_timeout_for_key_sequence() {
+                    Ok(Some(event)) => event,
+                    Ok(None) => {
+                        // GNU command_loop_2 treats EOF from command input as
+                        // a nil return from command_loop_1. In a no-receiver
+                        // context, looping here just retries the same EOF
+                        // forever after queued events are exhausted.
+                        self.restore_delayed_selection_event(&mut delayed_selection_event);
+                        self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+                        self.command_loop
+                            .set_command_key_sequences(Vec::new(), Vec::new());
+                        return Ok((Vec::new(), ReadCommandBinding::unremapped(Value::NIL)));
+                    }
+                    Err(err) => {
+                        self.restore_delayed_selection_event(&mut delayed_selection_event);
+                        self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+                        return Err(err);
+                    }
+                };
+                let mut emacs_event = read_event.event;
+                self.clear_quit_flag_after_read_key_sequence_event(&emacs_event);
+                if Self::has_switch_frame_event_kind(&emacs_event, self.symbol_mode())
+                    && (!self
+                        .command_loop
+                        .keyboard
+                        .kboard
+                        .current_key_sequence
+                        .raw_events()
+                        .is_empty()
+                        || !options.can_return_switch_frame)
+                {
+                    delayed_selection_event = Some(emacs_event);
+                    tracing::debug!("read_key_sequence: deferring selection event");
+                    continue;
+                }
+
+                // GNU records the original input before invoking Quail.
+                // Its no-record rereads must still enter key lookup, but must
+                // not duplicate recent-keys or the macro being defined.
+                match read_event.input_history {
+                    InputHistoryRecording::BeforeInputMethod => {
+                        self.record_input_event_history(emacs_event);
+                    }
+                    InputHistoryRecording::AfterInputMethod
+                    | InputHistoryRecording::AlreadyRecorded => {}
+                }
+
+                // Keyboard audit Finding 10: input-method-function.
+                // GNU `keyboard.c:3237-3311` applies the input method only to
+                // the first printable character in a key sequence, replaces
+                // that current event with the returned car, and queues the
+                // returned cdr in `unread-post-input-method-events`.  Events
+                // read from that post-input-method queue explicitly bypass
+                // this call on their second pass.
+                if read_event.allow_input_method
+                    && self
+                        .command_loop
+                        .keyboard
+                        .kboard
+                        .current_key_sequence
+                        .raw_events()
+                        .is_empty()
+                {
+                    match self.maybe_apply_input_method_function(emacs_event)? {
+                        InputMethodEvent::NotApplied => {}
+                        InputMethodEvent::Consumed => {
+                            replay_current_sequence = false;
+                            shift_translation = None;
+                            continue;
+                        }
+                        InputMethodEvent::Translated(event) => {
+                            emacs_event = event;
+                        }
+                    }
+                }
+
+                // Timers/process filters can display another buffer during
+                // the input wait while restoring the previously current one.
+                // GNU reconciles it at the first event, before consulting maps
+                // (keyboard.c, `if (NILP (first_event))`). Do not do this for
+                // Lisp-facing reads or after a mouse event selected its buffer.
+                if options.buffer_selection == KeySequenceBufferSelection::SelectedWindow
+                    && self
+                        .command_loop
+                        .keyboard
+                        .kboard
+                        .current_key_sequence
+                        .raw_events()
+                        .is_empty()
+                {
+                    self.sync_current_buffer_to_selected_window();
+                }
+                self.command_loop
+                    .keyboard
+                    .push_key_sequence_input_event(emacs_event);
+                self.publish_current_key_sequence_as_command_keys();
+
+                // GNU `read_char` updates `last-input-event` for every accepted
+                // event before keymap lookup, including keyboard-macro events.
+                // The recording layer independently suppresses macro playback
+                // from recent-keys and the non-macro input counter.
+                match read_event.input_history {
+                    InputHistoryRecording::AfterInputMethod => self.record_input_event(emacs_event),
+                    InputHistoryRecording::BeforeInputMethod
+                    | InputHistoryRecording::AlreadyRecorded => {
+                        self.assign_by_id(LAST_INPUT_EVENT.id(), emacs_event);
+                    }
+                }
+
+                tracing::debug!(
+                    "read_key_sequence: event={} starting translation",
+                    crate::emacs_core::print::print_value(&emacs_event)
+                );
+            }
+
+            let mut translated_events = self
+                .command_loop
+                .keyboard
+                .kboard
+                .current_key_sequence
+                .translated_events()
+                .to_vec();
+
+            let input_decode_translation = match self.apply_translation_map_to_events(
+                self.command_loop.keyboard.input_decode_map(),
+                translated_events,
+                options.prompt,
+            ) {
+                Ok(translation) => translation,
+                Err(err) => {
+                    self.restore_delayed_selection_event(&mut delayed_selection_event);
+                    return Err(err);
+                }
+            };
+            translated_events = input_decode_translation.translated_events;
+            self.command_loop
+                .keyboard
+                .rewrite_key_sequence_translation(translated_events.clone());
+            self.publish_current_key_sequence_as_command_keys();
+
+            if self
+                .command_loop
+                .keyboard
+                .kboard
+                .current_key_sequence
+                .raw_events()
+                .len()
+                == 1
+                && let Some(prefixed) =
+                    Self::maybe_prefix_mouse_area(self, &translated_events, self.symbol_mode())
+            {
+                self.command_loop
+                    .keyboard
+                    .rewrite_key_sequence_translation(prefixed.clone());
+                translated_events = prefixed;
+                self.publish_current_key_sequence_as_command_keys();
+            }
+
+            let lookup_position =
+                Self::key_sequence_lookup_position(&translated_events, self.symbol_mode());
+            let pre_function_key_resolution = match resolve_active_key_binding(
+                self,
+                &translated_events,
+                DefaultBindingMode::Accept,
+                false,
+                lookup_position.as_ref(),
+            ) {
+                Ok(resolved) => resolved,
+                Err(err) => {
+                    self.restore_delayed_selection_event(&mut delayed_selection_event);
+                    self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+                    return Err(err);
+                }
+            };
+            let pre_function_key_binding = pre_function_key_resolution.binding;
+            let pre_function_key_undefined = pre_function_key_resolution.lookup.is_nil()
+                || self
+                    .symbol_mode()
+                    .unwrap(pre_function_key_resolution.lookup)
+                    == Value::symbol(&UNDEFINED_SYMBOL)
+                || pre_function_key_binding.is_nil()
+                || self.symbol_mode().unwrap(pre_function_key_binding)
+                    == Value::symbol(&UNDEFINED_SYMBOL);
+            let pre_function_key_is_prefix = resolve_prefix_keymap_binding_in_obarray(
+                &self.obarray,
+                &pre_function_key_resolution.lookup,
+                self.symbol_mode(),
+            )
+            .is_some();
+            let mut command_binding_resolution =
+                CommandBindingResolution::Current(pre_function_key_resolution);
+
+            let mut has_pending_translation_prefix =
+                input_decode_translation.has_pending_translation_prefix;
+            if pre_function_key_undefined || pre_function_key_is_prefix {
+                let function_key_translation = match self.apply_translation_map_to_events(
+                    self.command_loop.keyboard.local_function_key_map(),
+                    translated_events,
+                    options.prompt,
+                ) {
+                    Ok(translation) => translation,
+                    Err(err) => {
+                        self.restore_delayed_selection_event(&mut delayed_selection_event);
+                        return Err(err);
+                    }
+                };
+                translated_events = function_key_translation.translated_events;
+                has_pending_translation_prefix |=
+                    function_key_translation.has_pending_translation_prefix;
+                command_binding_resolution
+                    .invalidate_if_applied(function_key_translation.application);
+                self.command_loop
+                    .keyboard
+                    .rewrite_key_sequence_translation(translated_events.clone());
+                self.publish_current_key_sequence_as_command_keys();
+            }
+
+            let key_translation = match self.apply_translation_map_to_events(
+                self.eval_symbol_by_id(KEY_TRANSLATION_MAP.id())
+                    .unwrap_or(Value::NIL),
+                translated_events,
+                options.prompt,
+            ) {
+                Ok(translation) => translation,
+                Err(err) => {
+                    self.restore_delayed_selection_event(&mut delayed_selection_event);
+                    return Err(err);
+                }
+            };
+            translated_events = key_translation.translated_events;
+            has_pending_translation_prefix |= key_translation.has_pending_translation_prefix;
+            command_binding_resolution.invalidate_if_applied(key_translation.application);
+            self.command_loop
+                .keyboard
+                .rewrite_key_sequence_translation(translated_events.clone());
+            self.publish_current_key_sequence_as_command_keys();
+
+            // GNU `keyboard.c:11668-11673`: after keyremap / function-key-map
+            // translation, `last_nonmenu_event = key` holds the TRANSLATED key
+            // (e.g. the GUI `<return>` becomes RET/13), not the raw event, unless
+            // a mouse popup menu was used to read it (neomacs does not synthesize
+            // those yet). `last-input-event` (recorded raw above) is unchanged;
+            // only `last-nonmenu-event` takes the translated event -- matching
+            // GNU, where reading an unbound `<return>` yields
+            // last-input-event=return but last-nonmenu-event=13.
+            if let Some(translated_last) = translated_events.last() {
+                self.record_nonmenu_input_event(*translated_last);
+            }
+
+            if self
+                .command_loop
+                .keyboard
+                .kboard
+                .current_key_sequence
+                .raw_events()
+                .len()
+                == 1
+                && saved_current_buffer.is_none()
+                && let Some(target_buffer_id) = Self::key_sequence_target_buffer_id(
+                    &translated_events,
+                    &self.frames,
+                    self.symbol_mode(),
+                )
+                && self.edit.buffers.current_buffer_id() != Some(target_buffer_id)
+            {
+                saved_current_buffer = self.edit.buffers.current_buffer_id();
+                if let Err(err) = self.switch_current_buffer(target_buffer_id) {
+                    self.restore_delayed_selection_event(&mut delayed_selection_event);
+                    self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+                    return Err(err);
+                }
+                command_binding_resolution.invalidate();
+            }
+            let lookup_position =
+                Self::key_sequence_lookup_position(&translated_events, self.symbol_mode());
+
+            tracing::debug!(
+                "read_key_sequence: looking up binding for {:?}",
+                translated_events
+                    .iter()
+                    .map(crate::emacs_core::print::print_value)
+                    .collect::<Vec<_>>()
+            );
+            let mut resolved = match command_binding_resolution {
+                CommandBindingResolution::Current(resolved) => resolved,
+                CommandBindingResolution::Stale => {
+                    match resolve_active_key_binding(
+                        self,
+                        &translated_events,
+                        DefaultBindingMode::Accept,
+                        false,
+                        lookup_position.as_ref(),
+                    ) {
+                        Ok(resolved) => resolved,
+                        Err(err) => {
+                            self.restore_delayed_selection_event(&mut delayed_selection_event);
+                            self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+                            return Err(err);
+                        }
+                    }
+                }
+            };
+            let mut binding = ReadCommandBinding::from_resolution(resolved);
+            let mut lookup_is_undefined = resolved.lookup.is_nil()
+                || self.symbol_mode().unwrap(resolved.lookup) == Value::symbol(&UNDEFINED_SYMBOL);
+            let mut binding_is_undefined = binding.executed().is_nil()
+                || self.symbol_mode().unwrap(binding.executed())
+                    == Value::symbol(&UNDEFINED_SYMBOL);
+            let mut sequence_is_undefined = lookup_is_undefined || binding_is_undefined;
+            tracing::debug!(
+                "read_key_sequence: binding={}",
+                crate::emacs_core::print::print_value(&binding.executed())
+            );
+
+            if sequence_is_undefined {
+                if has_pending_translation_prefix {
+                    tracing::debug!(
+                        "read_key_sequence: continuing because translation suffix is still a prefix"
+                    );
+                    continue;
+                }
+                if let Some(fallback) = self.resolve_undefined_mouse_sequence_fallback(
+                    &translated_events,
+                    lookup_position.as_ref(),
+                )? {
+                    match fallback {
+                        UndefinedMouseSequenceFallback::Rewrite {
+                            events,
+                            resolved: rewritten_resolution,
+                        } => {
+                            tracing::debug!(
+                                "read_key_sequence: simplifying undefined mouse event to {:?}",
+                                events
+                                    .iter()
+                                    .map(crate::emacs_core::print::print_value)
+                                    .collect::<Vec<_>>()
+                            );
+                            self.command_loop
+                                .keyboard
+                                .rewrite_key_sequence_translation(events.clone());
+                            translated_events = events;
+                            resolved = rewritten_resolution;
+                            binding = ReadCommandBinding::from_resolution(resolved);
+                            lookup_is_undefined = resolved.lookup.is_nil()
+                                || self.symbol_mode().unwrap(resolved.lookup)
+                                    == Value::symbol(&UNDEFINED_SYMBOL);
+                            binding_is_undefined = binding.executed().is_nil()
+                                || self.symbol_mode().unwrap(binding.executed())
+                                    == Value::symbol(&UNDEFINED_SYMBOL);
+                            sequence_is_undefined = lookup_is_undefined || binding_is_undefined;
+                        }
+                        UndefinedMouseSequenceFallback::Drop { retained_events } => {
+                            tracing::debug!(
+                                "read_key_sequence: dropping undefined mouse event and retaining {:?}",
+                                retained_events
+                                    .iter()
+                                    .map(crate::emacs_core::print::print_value)
+                                    .collect::<Vec<_>>()
+                            );
+                            self.command_loop
+                                .keyboard
+                                .rewrite_key_sequence_events(retained_events);
+                            shift_translation = None;
+                            continue;
+                        }
+                    }
+                }
+                if sequence_is_undefined {
+                    // GNU `keyboard.c:11799-11812` dispatches
+                    // `prefix-help-command` only after normal keymap
+                    // lookup fails.  This matters for `C-h C-h`: the
+                    // second `C-h` is a real `help-map` binding for
+                    // `help-for-help`, not generic prefix help.
+                    if self
+                        .command_loop
+                        .keyboard
+                        .kboard
+                        .current_key_sequence
+                        .raw_events()
+                        .len()
+                        > 1
+                        && let Some(last_raw) = self
+                            .command_loop
+                            .keyboard
+                            .kboard
+                            .current_key_sequence
+                            .raw_events()
+                            .last()
+                            .copied()
+                        && self.event_matches_help_char(&last_raw)
+                    {
+                        // GNU keyboard.c::read_key_sequence selects the help
+                        // command without executing it. Preserve the complete
+                        // sequence: describe-prefix-bindings removes the final
+                        // help event itself, and command_loop_1 owns dispatch
+                        // and its pre/post-command hooks. An empty sequence is
+                        // reserved for end of input, never a handled command.
+                        // The `done` label remaps this command like any other
+                        // read_key_sequence_cmd (keyboard.c:11863-11868).
+                        let help_command = self
+                            .eval_symbol_by_id(PREFIX_HELP_COMMAND.id())
+                            .unwrap_or(Value::NIL);
+                        let help_remap = super::keymap_lookup::command_remapping_in_active_maps(
+                            &*self,
+                            help_command,
+                        )?;
+                        binding = ReadCommandBinding::remapped(help_command, help_remap);
+                        self.finalize_shift_translated_key_sequence(
+                            sequence_is_undefined,
+                            options,
+                            shift_translation.take(),
+                        );
+                        self.restore_delayed_selection_event(&mut delayed_selection_event);
+                        self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+                        let (translated, raw) = self.command_loop.keyboard.key_sequence_snapshot();
+                        self.command_loop
+                            .set_command_key_sequences(translated.clone(), raw);
+                        return Ok((translated, binding));
+                    }
+                    if self.translate_upper_case_key_bindings_enabled()
+                        && let Some(applied_shift_translation) =
+                            self.apply_shift_translation_to_current_key_sequence()
+                    {
+                        shift_translation = Some(applied_shift_translation);
+                        replay_current_sequence = true;
+                        tracing::debug!(
+                            "read_key_sequence: replaying after shift/downcase translation"
+                        );
+                        continue;
+                    }
+                    self.finalize_shift_translated_key_sequence(
+                        sequence_is_undefined,
+                        options,
+                        shift_translation.take(),
+                    );
+                    self.restore_delayed_selection_event(&mut delayed_selection_event);
+                    self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+                    let (translated, raw) = self.command_loop.keyboard.key_sequence_snapshot();
+                    self.command_loop
+                        .set_command_key_sequences(translated.clone(), raw);
+                    return Ok((translated, binding));
+                }
+            }
+
+            let is_prefix = resolve_prefix_keymap_binding_in_obarray(
+                &self.obarray,
+                &resolved.lookup,
+                self.symbol_mode(),
+            )
+            .is_some();
+
+            if is_prefix {
+                // GNU doesn't publish a prefix merely because lookup found a
+                // prefix map.  The following unbounded `read_char` owns the
+                // delay: it waits `echo-keystrokes`, verifies that no input or
+                // pre-existing echo-area message intervened, and only then
+                // calls `echo_now` (keyboard.c:2850-2892).  Keeping that
+                // transition solely in `delayed_key_echo_deadline` prevents
+                // fast sequences and a pending startup message from flashing
+                // an eager `C-x- (C-h for help)` prompt.
+                continue;
+            }
+
+            self.finalize_shift_translated_key_sequence(
+                sequence_is_undefined,
+                options,
+                shift_translation.take(),
+            );
+            self.restore_delayed_selection_event(&mut delayed_selection_event);
+            self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+            let (translated, raw) = self.command_loop.keyboard.key_sequence_snapshot();
+            self.command_loop
+                .set_command_key_sequences(translated.clone(), raw);
+            return Ok((translated, binding));
+        }
+    }
+
+    /// Read a single input event, blocking if necessary.
+    ///
+    /// Mirrors GNU Emacs `read_char()` (keyboard.c:2489).
+    /// This is THE blocking point in the command loop.
+    /// Before blocking, triggers redisplay.
+    #[doc(hidden)]
+    pub fn drain_ready_input_event_for_read_char(
+        &mut self,
+        idle_policy: IdleTransitionPolicy,
+    ) -> Result<Option<InputEvent>, neovm_value::error::Flow> {
+        loop {
+            self.service_leading_internal_frontend_events();
+            self.stage_pending_thread_events()?;
+            if let Some(event) = self
+                .command_loop
+                .keyboard
+                .pending_input_events
+                .pop_visible_front()
+            {
+                idle_policy.stop_idle(self);
+                return Ok(Some(event));
+            }
+
+            let Some(rx) = self.input_rx.as_ref() else {
+                return Ok(None);
+            };
+            match rx.try_recv() {
+                Ok(event) => self
+                    .command_loop
+                    .keyboard
+                    .pending_input_events
+                    .push_back(event),
+                Err(crossbeam_channel::TryRecvError::Empty) => return Ok(None),
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    self.handle_display_terminal_disconnect();
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn pop_lisp_event_queue_unrecorded(&mut self, symbol: &WellKnown) -> Option<Value> {
+        let symbol = symbol.id();
+        let current = self.eval_symbol_by_id(symbol).unwrap_or(Value::NIL);
+        if !current.is_cons() {
+            return None;
+        }
+
+        let mut head = current.cons_car();
+        self.assign_by_id(symbol, current.cons_cdr());
+
+        // GNU read_char undoes the x-popup-menu one-element event wrapping
+        // when reading the input-method queues.
+        if head.is_cons() && head.cons_cdr().is_nil() {
+            let car = head.cons_car();
+            if car.as_fixnum().is_some() || car.is_symbol(self.symbol_mode()) {
+                head = car;
+            }
+        }
+        Some(head)
+    }
+
+    #[doc(hidden)]
+    pub fn pop_unread_post_input_method_event_unrecorded(&mut self) -> Option<Value> {
+        self.pop_lisp_event_queue_unrecorded(&UNREAD_POST_INPUT_METHOD_EVENTS)
+    }
+
+    #[doc(hidden)]
+    pub fn pop_unread_input_method_event_unrecorded(&mut self) -> Option<Value> {
+        self.pop_lisp_event_queue_unrecorded(&UNREAD_INPUT_METHOD_EVENTS)
+    }
+
+    #[doc(hidden)]
+    pub fn pop_queued_read_char_event(
+        &mut self,
+        idle_policy: IdleTransitionPolicy,
+    ) -> Result<QueuedReadCharEvent, neovm_value::error::Flow> {
+        if let Some(event) = self.pop_unread_post_input_method_event_unrecorded() {
+            return Ok(QueuedReadCharEvent::Event(
+                ReadCharEvent::post_input_method(event),
+            ));
+        }
+        if let Some(event) = self.take_unread_command_event() {
+            return Ok(QueuedReadCharEvent::Event(ReadCharEvent::unread_command(
+                event,
+            )));
+        }
+        if let Some(event) = self.pop_unread_input_method_event_unrecorded() {
+            return Ok(QueuedReadCharEvent::Event(
+                ReadCharEvent::reread_input_method_candidate(event),
+            ));
+        }
+        if let Some(event) = self.command_loop.keyboard.take_unread_selection_event() {
+            return Ok(QueuedReadCharEvent::Event(
+                ReadCharEvent::fresh_input_method_candidate(event),
+            ));
+        }
+
+        if let Some(event) = self.command_loop.keyboard.pop_unread_event() {
+            if self.handle_help_echo_event(event, idle_policy)? {
+                return Ok(QueuedReadCharEvent::HandledInternally);
+            }
+            if self.execute_special_event_if_bound(event)? {
+                return Ok(QueuedReadCharEvent::HandledInternally);
+            }
+            return Ok(QueuedReadCharEvent::Event(
+                ReadCharEvent::fresh_input_method_candidate(event),
+            ));
+        }
+
+        if let Some(event) = self.command_loop.keyboard.next_executing_kbd_macro_event() {
+            self.assign(
+                "executing-kbd-macro-index",
+                Value::fixnum(self.command_loop.keyboard.kboard.kbd_macro_index as i64),
+            );
+            return Ok(QueuedReadCharEvent::Event(
+                ReadCharEvent::fresh_input_method_candidate(event),
+            ));
+        }
+
+        Ok(QueuedReadCharEvent::None)
+    }
+
+    #[doc(hidden)]
+    pub fn handle_display_terminal_disconnect(&mut self) {
+        self.input_rx.clear();
+        let _ = self.delete_input_terminal_noelisp(
+            crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID,
+        );
+    }
+
+    /// Translate a freshly read character event through
+    /// `keyboard-translate-table`.
+    ///
+    /// Mirrors GNU `read_char' (src/keyboard.c:3142-3176), the "Handle things
+    /// that only apply to characters" block: a fixnum event is looked up in
+    /// the table when the index is in range (any character for a char-table,
+    /// below the length for a string or vector), and a non-nil entry replaces
+    /// the event. GNU applies this only to events that just came out of
+    /// `kbd_buffer_get_event', not to rereads from `unread-command-events' or
+    /// a keyboard macro, which jump past this block to `reread_for_input_method'
+    /// (src/keyboard.c:3252) -- so this runs at the host-input conversion sites
+    /// only.
+    ///
+    /// This is what makes `normal-erase-is-backspace-mode' work on a ^H-erase
+    /// terminal: it `key-translate's C-h to DEL (lisp/simple.el:11178), so the
+    /// 0x08 the Backspace key sends must arrive at the key-sequence layer as
+    /// 127 (DIVERGENCES.md entry 67).
+    #[doc(hidden)]
+    pub fn translate_fresh_character_event(&mut self, event: Value) -> Value {
+        if event.as_fixnum().is_none() {
+            return event;
+        }
+        let table = self
+            .eval_symbol_by_id(KEYBOARD_TRANSLATE_TABLE.id())
+            .unwrap_or(Value::NIL);
+        let indexable = match table.kind() {
+            // A char-table is indexed by any character; GNU's guard is
+            // CHARACTERP, so modifier-bearing events (meta bit set) fall
+            // through untranslated.
+            ValueKind::Veclike(VecLikeType::CharTable) => event.is_char(),
+            // GNU also accepts a string or vector table, bounded by its
+            // length -- `aref' reports that bound by signalling, and an
+            // out-of-range event stays untranslated either way.
+            ValueKind::Veclike(VecLikeType::Vector) | ValueKind::String => true,
+            _ => false,
+        };
+        if !indexable {
+            return event;
+        }
+        match crate::emacs_core::builtins::collections::builtin_aref_2(self, table, event) {
+            // nil in keyboard-translate-table means no translation.
+            Ok(translated) if !translated.is_nil() => translated,
+            _ => event,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn handle_read_char_input_event(
+        &mut self,
+        event: InputEvent,
+        tty_input_decoding: TtyInputDecoding,
+    ) -> Result<Option<Value>, neovm_value::error::Flow> {
+        self.handle_read_char_input_event_with_idle_policy(
+            event,
+            tty_input_decoding,
+            IdleTransitionPolicy::Manage,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn handle_read_char_input_event_with_idle_policy(
+        &mut self,
+        event: InputEvent,
+        tty_input_decoding: TtyInputDecoding,
+        idle_policy: IdleTransitionPolicy,
+    ) -> Result<Option<Value>, neovm_value::error::Flow> {
+        if super::frontend_events::interrupts(&event)
+            && crate::emacs_core::eval::input_hooks::interrupt_for_input_event_if_requested(
+                self,
+                event.clone(),
+            )?
+        {
+            return Ok(None);
+        }
+
+        match event {
+            InputEvent::Tracked { receipt, event } => {
+                self.input_progress.consumed(receipt);
+                self.handle_read_char_input_event_with_idle_policy(
+                    *event,
+                    tty_input_decoding,
+                    idle_policy,
+                )
+            }
+            InputEvent::Observed { token, event } => {
+                neomacs_display_protocol::input_latency::consumed(token);
+                self.handle_read_char_input_event_with_idle_policy(
+                    *event,
+                    tty_input_decoding,
+                    idle_policy,
+                )
+            }
+            InputEvent::RawTtyBytes { bytes, target } => {
+                self.route_tty_keyboard_input(target);
+                for byte in bytes.into_iter().rev() {
+                    self.command_loop
+                        .keyboard
+                        .pending_input_events
+                        .push_front(InputEvent::TtyByte { byte, target });
+                }
+                Ok(None)
+            }
+            InputEvent::TtyByte { byte, target } => {
+                self.route_tty_keyboard_input(target);
+                match tty_input_decoding {
+                    TtyInputDecoding::RawBytes => {
+                        self.clear_current_message_for_keyboard_input();
+                        let raw_event = Value::fixnum(i64::from(byte));
+                        if self.event_is_quit_char(&raw_event) {
+                            self.request_quit_from_keyboard_input();
+                        }
+                        let emacs_event = self.translate_fresh_character_event(raw_event);
+                        self.command_loop.store_kbd_macro_event(emacs_event);
+                        Ok(Some(emacs_event))
+                    }
+                    TtyInputDecoding::KeyboardCodingSystem => {
+                        let coding_system = neovm_value::intern::resolve_sym(
+                            self.coding_systems.keyboard_coding_sym(),
+                        )
+                        .to_owned();
+                        let eol_conversion = self.eol_conversion();
+                        let characters = self.command_loop.keyboard.kboard.tty_input_decoder.push(
+                            &[byte],
+                            &coding_system,
+                            eol_conversion,
+                        );
+                        for character in characters.into_iter().rev() {
+                            self.command_loop
+                                .keyboard
+                                .pending_input_events
+                                .push_front(InputEvent::TtyCharacter { character, target });
+                        }
+                        Ok(None)
+                    }
+                }
+            }
+            InputEvent::TtyCharacter { character, target } => {
+                self.route_tty_keyboard_input(target);
+                if self.command_loop.keyboard.has_unread_selection_event() {
+                    self.command_loop
+                        .keyboard
+                        .pending_input_events
+                        .push_front(InputEvent::TtyCharacter { character, target });
+                    return Ok(None);
+                }
+                self.clear_current_message_for_keyboard_input();
+                let raw_event = Value::fixnum(i64::from(character.code()));
+                // GNU compares the quit character against the byte the
+                // terminal delivered (kbd_buffer_store_event, before read_char
+                // translates), so quit detection stays on the raw event.
+                if self.event_is_quit_char(&raw_event) {
+                    self.request_quit_from_keyboard_input();
+                }
+                let emacs_event = self.translate_fresh_character_event(raw_event);
+                self.command_loop.store_kbd_macro_event(emacs_event);
+                Ok(Some(emacs_event))
+            }
+            InputEvent::WindowClose { emacs_frame_id } => {
+                self.handle_window_close_input_event(emacs_frame_id, idle_policy)?;
+                Ok(None)
+            }
+            InputEvent::TtyHangup { terminal_id } => {
+                self.delete_input_terminal_noelisp(terminal_id)?;
+                Ok(None)
+            }
+            InputEvent::ThreadEvent {
+                sender,
+                error_symbol,
+                data,
+            } => {
+                // GNU's Lisp form (`src/thread.c:1011`, `event.arg = list3
+                // (Fcurrent_thread (), error_symbol, data)`): the reader
+                // builds the list, then `read_char` runs the
+                // `special-event-map` binding on its head
+                // (`src/keyboard.c`, THREAD_EVENT).  A bound handler
+                // consumes the event (read-event keeps waiting); an unbound
+                // one surfaces to Lisp like any other input event.
+                //
+                // The roots keep each object alive while this arm runs, so
+                // the local values copied out of them stay valid through
+                // `execute_special_event_if_bound`.
+                let sender = self.thread_event_value(&sender)?;
+                let error_symbol = self.thread_event_value(&error_symbol)?;
+                let data = self.thread_event_value(&data)?;
+                let event = Value::list(vec![
+                    Value::symbol("thread-event"),
+                    sender,
+                    error_symbol,
+                    data,
+                ]);
+                if self.execute_special_event_if_bound(event)? {
+                    return Ok(None);
+                }
+                Ok(Some(event))
+            }
+            InputEvent::Resize {
+                width,
+                height,
+                scale_factor,
+                emacs_frame_id,
+            } => {
+                self.apply_resize_input_event(width, height, scale_factor, emacs_frame_id, true)?;
+                if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+                    self.redisplay()?;
+                }
+                idle_policy.resume_idle(self);
+                Ok(None)
+            }
+            InputEvent::DisplayReset => {
+                // Mirrors the WindowResize shape: apply, redisplay, resume
+                // idle. The reset handler busts the redisplay signature
+                // itself since no buffer/geometry state changed.
+                self.handle_display_reset_input_event();
+                self.redisplay()?;
+                idle_policy.resume_idle(self);
+                Ok(None)
+            }
+            InputEvent::WebView(event) => {
+                if crate::emacs_core::eval::hooks_proof::frontend::apply_xwidget_frontend_event(
+                    self, &event,
+                )? {
+                    self.redisplay()?;
+                }
+                Ok(None)
+            }
+            InputEvent::SurfaceCreateFailed { id, error } => {
+                self.handle_surface_create_failed_input_event(id, &error)?;
+                Ok(None)
+            }
+            InputEvent::FrameShaderFailed { error } => {
+                let effects = super::frontend_events::report_frame_shader_failure(self, &error)?;
+                if effects.redisplay_needed {
+                    self.redisplay()?;
+                }
+                Ok(None)
+            }
+            InputEvent::TerminalCreateFailed { id, error } => {
+                self.handle_terminal_create_failed_input_event(id, &error)?;
+                Ok(None)
+            }
+            InputEvent::TerminalExited { id } => {
+                self.handle_terminal_exited_input_event(id)?;
+                Ok(None)
+            }
+            InputEvent::TerminalTitleChanged { id, title } => {
+                self.handle_terminal_title_changed_input_event(id, &title)?;
+                Ok(None)
+            }
+            InputEvent::Focus {
+                focused,
+                emacs_frame_id,
+            } => {
+                if !focused {
+                    // A frame that loses focus mid-drag never sees the button
+                    // come up, and a session nothing closes would suppress
+                    // motion for the rest of the session.
+                    self.window_edge_drag.abandoned();
+                }
+                idle_policy.resume_idle(self);
+                if let Some(event) = self.make_lispy_focus_event(focused, emacs_frame_id) {
+                    if self.execute_special_event_if_bound(event)? {
+                        return Ok(None);
+                    }
+                    if focused {
+                        // GNU `frame.el` routes `handle-focus-in` through the
+                        // C primitive `internal-handle-focus-in`. In source
+                        // bootstrap contexts that Lisp wrapper is not loaded
+                        // yet, but focus-in still should not surface as a
+                        // user event and must preserve the switch-frame side
+                        // effect for other frames.
+                        crate::emacs_core::builtins::symbols::builtin_internal_handle_focus_in(
+                            self,
+                            vec![event],
+                        )?;
+                    }
+                    return Ok(None);
+                }
+                Ok(None)
+            }
+            InputEvent::MonitorsChanged { monitors } => {
+                idle_policy.resume_idle(self);
+                crate::emacs_core::builtins::set_neomacs_monitor_info(monitors);
+                let hook_sym = crate::emacs_core::hook_runtime::hook_symbol_by_name(
+                    self,
+                    "display-monitors-changed-functions",
+                );
+                let terminal = crate::emacs_core::eval::lifecycle::terminal_handle_value();
+                let _ =
+                    crate::emacs_core::hook_runtime::run_named_hook(self, hook_sym, &[terminal])?;
+                Ok(None)
+            }
+            InputEvent::SystemFontsChanged { fonts, display } => {
+                if self.handle_system_fonts_input_event(fonts, display)? {
+                    self.redisplay()?;
+                }
+                Ok(None)
+            }
+            InputEvent::SelectWindow { window_id } => {
+                idle_policy.resume_idle(self);
+                Ok(self.make_lispy_select_window_event(window_id))
+            }
+            InputEvent::KeyPress {
+                key,
+                emacs_frame_id,
+            } => {
+                self.route_keyboard_input_to_frame(emacs_frame_id);
+                if self.command_loop.keyboard.has_unread_selection_event() {
+                    // GNU kbd_buffer_get_event returns switch-frame first and
+                    // leaves the original key in the queue. Do not translate,
+                    // record or feed this key to an input method twice.
+                    self.command_loop.keyboard.pending_input_events.push_front(
+                        InputEvent::KeyPress {
+                            key,
+                            emacs_frame_id,
+                        },
+                    );
+                    return Ok(None);
+                }
+                tracing::debug!("read_char: received KeyPress {:?}", key);
+                self.clear_current_message_for_keyboard_input();
+                let raw_event = key.to_emacs_event_value();
+                if self.event_is_quit_char(&raw_event) {
+                    self.request_quit_from_keyboard_input();
+                }
+                let emacs_event = self.translate_fresh_character_event(raw_event);
+                self.command_loop.store_kbd_macro_event(emacs_event);
+                Ok(Some(emacs_event))
+            }
+            InputEvent::MousePress {
+                button,
+                x,
+                y,
+                modifiers,
+                target_frame_id,
+            } => {
+                self.clear_current_message_for_keyboard_input();
+                // A drag of a window edge begins here, at the moment the
+                // command loop consumes the press rather than the moment the
+                // render thread saw it. Redisplay runs between two of these
+                // reads, so a session opened here covers exactly the
+                // presentations the drag goes on to cause. Deciding it on the
+                // render thread instead would race the drag's own frames: the
+                // release is observed there while the last commits are still
+                // in flight on the frame channel, and they would animate.
+                if let Some(grab) = self.grabbed_window_edge(button, x, y, target_frame_id) {
+                    self.window_edge_drag.grabbed(grab);
+                }
+                // Keyboard audit Finding 12: compute the click
+                // count for this press based on the previous
+                // click state and update `last_mouse_click` so
+                // the matching release can read the same count.
+                // Mirrors GNU `keyboard.c:6041-6130`.
+                let position = Self::make_mouse_position(x, y, target_frame_id, self);
+                let click_count = self.classify_mouse_click_on_press(button, x, y, target_frame_id);
+                self.command_loop.keyboard.kboard.button_down[mouse_button_slot(button)] =
+                    Some(MousePressState {
+                        x,
+                        y,
+                        frame_id: target_frame_id,
+                        click_count,
+                        position,
+                    });
+                let prefix = Self::mouse_event_prefix_for_click_count("down-mouse", click_count);
+                let payload = if click_count >= 2 {
+                    MouseEventPayload::WithClickCount {
+                        position,
+                        count: click_count,
+                    }
+                } else {
+                    MouseEventPayload::Position(position)
+                };
+                let event = Self::make_mouse_event(self, &button, &modifiers, &prefix, payload);
+                self.command_loop.store_kbd_macro_event(event);
+                Ok(Some(event))
+            }
+            InputEvent::MouseRelease {
+                button,
+                x,
+                y,
+                target_frame_id,
+            } => {
+                self.clear_current_message_for_keyboard_input();
+                self.window_edge_drag.released(button);
+                // GNU keeps one down position per button and clears it on
+                // release, so an up event with no matching down is dropped
+                // (`src/keyboard.c:6564-6566`, `6628-6632`).
+                let Some(press) =
+                    self.command_loop.keyboard.kboard.button_down[mouse_button_slot(button)].take()
+                else {
+                    return Ok(None);
+                };
+                // GNU `keyboard.c:6610-6710`: an up event is a drag, not a
+                // click, when the frame-relative pointer moved outside
+                // `double-click-fuzz` (`0 < fuzz`) or landed in another
+                // window. `[drag-mouse-1]` is bound to `mouse-set-region`,
+                // which keeps the dragged region active; a plain `mouse-1`
+                // runs `mouse-set-point`, and the drag transient map then
+                // deactivates and pops the mark.
+                let position = Self::make_mouse_position(x, y, target_frame_id, self);
+                let fuzz = self.double_click_fuzz();
+                let drag = press.frame_id != target_frame_id
+                    || !(fuzz > 0.0 && (x - press.x).abs() < fuzz && (y - press.y).abs() < fuzz);
+                let base = if drag { "drag-mouse" } else { "mouse" };
+                let prefix = Self::mouse_event_prefix_for_click_count(base, press.click_count);
+                let payload = if drag {
+                    MouseEventPayload::Drag {
+                        start: press.position,
+                        end: position,
+                    }
+                } else if press.click_count >= 2 {
+                    MouseEventPayload::WithClickCount {
+                        position,
+                        count: press.click_count,
+                    }
+                } else {
+                    MouseEventPayload::Position(position)
+                };
+                let event =
+                    Self::make_mouse_event(self, &button, &Modifiers::none(), &prefix, payload);
+                self.command_loop.store_kbd_macro_event(event);
+                Ok(Some(event))
+            }
+            InputEvent::MouseScroll {
+                delta_x,
+                delta_y,
+                x,
+                y,
+                modifiers,
+                target_frame_id,
+            } => {
+                if !delta_x.is_finite()
+                    || !delta_y.is_finite()
+                    || (delta_x == 0.0 && delta_y == 0.0)
+                {
+                    return Ok(None);
+                }
+                let dir = if delta_x.abs() > delta_y.abs() {
+                    if delta_x > 0.0 {
+                        "wheel-left"
+                    } else {
+                        "wheel-right"
+                    }
+                } else if delta_y > 0.0 {
+                    "wheel-up"
+                } else {
+                    "wheel-down"
+                };
+                let mut sym = String::new();
+                Self::append_modifier_prefix(&modifiers, &mut sym);
+                sym.push_str(dir);
+                Self::mark_event_head_kind(self, dir, "mouse-click");
+                Self::mark_event_head_kind(self, &sym, "mouse-click");
+                let position = Self::make_mouse_position(x, y, target_frame_id, self);
+                // Frontends accumulate fractional wheel units before this
+                // integral command boundary. Preserve multiple steps in GNU's
+                // LINE-COUNT field, keeping custom wheel bindings in control.
+                let count = delta_x.abs().max(delta_y.abs()).round().max(1.0) as i64;
+                let event = Value::list(vec![
+                    Value::symbol(&sym),
+                    position,
+                    Value::fixnum(1),
+                    Value::fixnum(count),
+                ]);
+                self.command_loop.store_kbd_macro_event(event);
+                Ok(Some(event))
+            }
+            InputEvent::PixelScroll {
+                delta_x,
+                delta_y,
+                x,
+                y,
+                modifiers,
+                target_frame_id,
+            } => {
+                if !delta_x.is_finite()
+                    || !delta_y.is_finite()
+                    || (delta_x == 0.0 && delta_y == 0.0)
+                {
+                    return Ok(None);
+                }
+                let direction = if delta_x.abs() > delta_y.abs() {
+                    if delta_x > 0.0 {
+                        "wheel-left"
+                    } else {
+                        "wheel-right"
+                    }
+                } else if delta_y > 0.0 {
+                    "wheel-up"
+                } else {
+                    "wheel-down"
+                };
+                let mut symbol = String::new();
+                Self::append_modifier_prefix(&modifiers, &mut symbol);
+                symbol.push_str(direction);
+                Self::mark_event_head_kind(self, direction, "mouse-click");
+                Self::mark_event_head_kind(self, &symbol, "mouse-click");
+                let position = Self::make_mouse_position(x, y, target_frame_id, self);
+                // GNU keyboard.c make_lispy_event: (HEAD POS CLICK-COUNT
+                // LINE-COUNT (PIXEL-X . PIXEL-Y)). Normal command dispatch owns
+                // scrolling, point preservation, hooks and redisplay; layout
+                // must not consume a second, hidden input queue.
+                let event = Value::list(vec![
+                    Value::symbol(&symbol),
+                    position,
+                    Value::fixnum(1),
+                    Value::fixnum(1),
+                    Value::cons(
+                        Value::make_float(delta_x as f64),
+                        Value::make_float(delta_y as f64),
+                    ),
+                ]);
+                self.command_loop.store_kbd_macro_event(event);
+                Ok(Some(event))
+            }
+            InputEvent::PresentedRegion { .. }
+            | InputEvent::LayoutInvalidated
+            | InputEvent::ImageStateChanged { .. } => {
+                unreachable!("internal frontend events are serviced before read_char")
+            }
+            InputEvent::MenuSelection { index, token } => {
+                // A native-menu selection is fresh user input, like the event
+                // returned by GNU Emacs's read_menu_command/read_char path.
+                // Clear only the logical echo-area message here; redisplay may
+                // remain inhibited by the modal native-menu session.
+                self.clear_current_message_for_keyboard_input();
+                let mut parts = vec![Value::symbol("menu-selection"), Value::fixnum(index as i64)];
+                if let Some(token) = token {
+                    parts.push(Value::fixnum(token.session as i64));
+                    parts.push(Value::fixnum(token.revision as i64));
+                }
+                let event = Value::list(parts);
+                Ok(Some(event))
+            }
+            InputEvent::ToolBarClick {
+                index,
+                emacs_frame_id,
+            } => {
+                let Some(key) = self.tool_bar_key_at_index(index, emacs_frame_id) else {
+                    return Ok(None);
+                };
+                let frame = self.event_frame_value(emacs_frame_id);
+                let event = Value::list(vec![
+                    key,
+                    Value::list(vec![frame, Value::symbol("tool-bar")]),
+                ]);
+                self.command_loop.store_kbd_macro_event(event);
+                Ok(Some(event))
+            }
+            InputEvent::PresentedPointer {
+                presentation,
+                interaction,
+                pressed,
+                button,
+                x,
+                y,
+                emacs_frame_id,
+            } => {
+                let Some(target) = self.resolve_presented_mouse_target(presentation, interaction)
+                else {
+                    return Ok(None);
+                };
+                let Some(frame_id) = self.event_frame_id(emacs_frame_id) else {
+                    return Ok(None);
+                };
+                if self.frames.get(frame_id).is_none() || button == 0 {
+                    return Ok(None);
+                }
+                let area = match target.area {
+                    PresentedMouseArea::TabBar => "tab-bar",
+                };
+                let position = Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                    window_or_frame: Value::make_frame(frame_id.0),
+                    area: Some(area),
+                    x: x.round() as i64,
+                    y: y.round() as i64,
+                    metrics: MousePosnMetrics {
+                        point: None,
+                        col: None,
+                        row: None,
+                        width: None,
+                        height: None,
+                        anchor_x: None,
+                        anchor_y: None,
+                    },
+                });
+                let Some(mut position_parts) = neovm_value::value::list_to_vec(&position) else {
+                    return Ok(None);
+                };
+                position_parts[4] = target.posn_string;
+                let symbol = if pressed {
+                    format!("down-mouse-{button}")
+                } else {
+                    format!("mouse-{button}")
+                };
+                let event = Value::list(vec![Value::symbol(&symbol), Value::list(position_parts)]);
+                self.command_loop.store_kbd_macro_event(event);
+                Ok(Some(event))
+            }
+            InputEvent::PresentationActivated { .. }
+            | InputEvent::PresentationDiscarded { .. }
+            | InputEvent::PresentationRetired { .. } => {
+                unreachable!("internal frontend events are serviced before read_char")
+            }
+            InputEvent::MenuBarClick {
+                request_id,
+                index,
+                key,
+                menu_x,
+                menu_y,
+                anchor_x,
+                anchor_y,
+                anchor_width,
+                anchor_height,
+                emacs_frame_id,
+            } => {
+                if index < 0 {
+                    return Ok(None);
+                }
+                let Some(frame_id) = self.event_frame_id(emacs_frame_id) else {
+                    return Ok(None);
+                };
+                if self.frames.get(frame_id).is_none() {
+                    return Ok(None);
+                }
+                self.pending_menu_bar_popup_anchor = Some(crate::emacs_core::MenuBarPopupAnchor {
+                    request_id,
+                    frame_id,
+                    menu_key: Some(key.clone()),
+                    menu_x: menu_x.round() as i64,
+                    x: anchor_x.round() as i64,
+                    y: anchor_y.round() as i64,
+                    width: anchor_width.round() as i64,
+                    height: anchor_height.round() as i64,
+                });
+                let Some(event) = self.chrome_mouse_click_event(
+                    "menu-bar",
+                    index,
+                    menu_x,
+                    menu_y,
+                    Some((anchor_x, anchor_y)),
+                    anchor_width,
+                    anchor_height,
+                    emacs_frame_id,
+                ) else {
+                    return Ok(None);
+                };
+                self.command_loop.store_kbd_macro_event(event);
+                Ok(Some(event))
+            }
+            InputEvent::MouseMove {
+                x,
+                y,
+                modifiers: _,
+                target_frame_id,
+            } => {
+                self.note_mouse_move_input_event(x, y, target_frame_id);
+                idle_policy.resume_idle(self);
+                if !self.track_mouse_enabled() {
+                    return Ok(None);
+                }
+                self.clear_current_message_for_keyboard_input();
+                let event = self.make_lispy_movement(x, y, target_frame_id);
+                self.command_loop.store_kbd_macro_event(event);
+                Ok(Some(event))
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn read_char_event_with_timeout(
+        &mut self,
+        timeout: Option<std::time::Duration>,
+        tty_input_decoding: TtyInputDecoding,
+    ) -> Result<Option<ReadCharEvent>, neovm_value::error::Flow> {
+        self.read_char_event_with_timeout_policy(timeout, false, tty_input_decoding)
+    }
+
+    #[doc(hidden)]
+    pub fn read_char_event_with_timeout_for_key_sequence(
+        &mut self,
+    ) -> Result<Option<ReadCharEvent>, neovm_value::error::Flow> {
+        self.read_char_event_with_timeout_policy(None, true, TtyInputDecoding::KeyboardCodingSystem)
+    }
+
+    #[doc(hidden)]
+    pub fn read_char_event_with_timeout_policy(
+        &mut self,
+        timeout: Option<std::time::Duration>,
+        command_input: bool,
+        tty_input_decoding: TtyInputDecoding,
+    ) -> Result<Option<ReadCharEvent>, neovm_value::error::Flow> {
+        let wait_mode = ReadCharWaitMode::from_timeout(timeout);
+        let deadline = wait_mode.deadline();
+        let idle_policy = wait_mode.idle_policy();
+        // GNU read_char re-decorates an echo that is already up before it
+        // starts waiting (keyboard.c:2759-2768).
+        self.redecorate_immediate_key_echo();
+        let mut idle_auto_save_deadline = None;
+        let mut key_echo_deadline = self.delayed_key_echo_deadline(timeout);
+
+        loop {
+            self.sync_keyboard_terminal_owner();
+            // Service cross-thread tasks (e.g. diagnostics profile capture) at
+            // this Lisp-safe point — between forms, never mid-primitive. Runs on
+            // every idle wake, so a request is handled within one iteration.
+            self.drain_eval_tasks();
+            crate::emacs_core::builtins::drain_file_notify_events(self)?;
+            crate::emacs_core::eval::lifecycle::dbusbind_drain_events(self)?;
+            match self.pop_queued_read_char_event(idle_policy)? {
+                QueuedReadCharEvent::Event(event) => return Ok(Some(event)),
+                QueuedReadCharEvent::HandledInternally => continue,
+                QueuedReadCharEvent::None => {}
+            }
+
+            if self.sync_pending_resize_events() {
+                self.redisplay()?;
+            }
+            if let Some(event) = self.drain_ready_input_event_for_read_char(idle_policy)? {
+                if let Some(value) = self.handle_read_char_input_event_with_idle_policy(
+                    event,
+                    tty_input_decoding,
+                    idle_policy,
+                )? {
+                    return Ok(Some(ReadCharEvent::fresh_input_method_candidate(value)));
+                }
+                continue;
+            }
+            if self.shutdown_request.is_some() {
+                return Err(neovm_value::error::signal(LispCondition::Quit, vec![]));
+            }
+
+            crate::emacs_core::eval::hooks_proof::wait::service_read_char_preliminary_redisplay(
+                self,
+                idle_policy,
+            )?;
+
+            // GNU read_char re-checks Vunread_command_events after idle
+            // timers/sit-for/read-event can requeue input, before consulting
+            // the terminal queue.  Keep that priority so `M-x` replay from
+            // sit-for cannot be overtaken by the next host byte.
+            match self.pop_queued_read_char_event(idle_policy)? {
+                QueuedReadCharEvent::Event(event) => return Ok(Some(event)),
+                QueuedReadCharEvent::HandledInternally => continue,
+                QueuedReadCharEvent::None => {}
+            }
+
+            // GNU read_char performs preliminary redisplay and timer/input
+            // service, then rechecks unread events, before the main queue's
+            // deadline check (keyboard.c:2693-2721, 2992-3010, 2336-2337).
+            // Even a deadline consumed by the initial drain must reach that
+            // service pass; the deadline still prevents any further wait.
+            if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+                idle_policy.stop_idle(self);
+                return Ok(None);
+            }
+
+            tracing::debug!(
+                "read_char: blocking on input (input_rx={})...",
+                self.input_rx.as_ref().is_some()
+            );
+
+            if self.sync_pending_resize_events() {
+                self.redisplay()?;
+            }
+
+            if let Some(event) = self.drain_ready_input_event_for_read_char(idle_policy)? {
+                if let Some(value) = self.handle_read_char_input_event_with_idle_policy(
+                    event,
+                    tty_input_decoding,
+                    idle_policy,
+                )? {
+                    return Ok(Some(ReadCharEvent::fresh_input_method_candidate(value)));
+                }
+                continue;
+            }
+            if self.shutdown_request.is_some() {
+                return Err(neovm_value::error::signal(LispCondition::Quit, vec![]));
+            }
+
+            if deadline.is_none()
+                && self.input_rx.as_ref().is_none()
+                && !crate::emacs_core::builtins::has_active_file_notify_watches()
+                && !crate::emacs_core::eval::lifecycle::dbusbind_has_active_watches()
+                && self.processes.live_process_ids().is_empty()
+            {
+                // With no host input, file-notify watch, or live process, this
+                // evaluator has no external source to keep an unbounded read
+                // alive. A pending ordinary timer can still become due and
+                // throw - GNU blocks in select with the timer deadline as its
+                // timeout, which is how
+                //   (with-timeout (0.01) (read-key-sequence "p"))
+                // returns nil in batch: the timer fires mid-wait and its
+                // handler throws out of the read. Wait out the earliest
+                // pending timer and service it (a thrown Flow propagates);
+                // report EOF only when no timer can ever fire.
+                //
+                // IDLE timers count too: GNU `read_char` starts the idle epoch
+                // before it waits for an unbounded read (keyboard.c:2869-2875)
+                // and services `timer-idle-list` from the same `timer_check`
+                // pass, so `(run-with-idle-timer 0 nil F)` runs F while the
+                // read blocks.  Helm's `helm--reset-update-flag` clears its
+                // update flag from a zero-delay idle timer, so a read that
+                // reported EOF here without servicing idle timers stalled the
+                // whole helm session.
+                idle_policy.start_idle(self);
+                let next_timer_timeout = [
+                    crate::emacs_core::eval::hooks_proof::timer::next_ordinary_gnu_timer_timeout_before(self),
+                    crate::emacs_core::eval::hooks_proof::timer::next_idle_gnu_timer_timeout(self),
+                ]
+                .into_iter()
+                .flatten()
+                .min();
+                if let Some(timer_timeout) = next_timer_timeout {
+                    if !timer_timeout.is_zero() {
+                        let timeout = timer_timeout.min(std::time::Duration::from_millis(50));
+                        match self.green_select_switch(timeout)? {
+                            crate::host_effect::wake::SelectTurn::Switched => {}
+                            crate::host_effect::wake::SelectTurn::Block(timeout) => {
+                                std::thread::sleep(timeout);
+                            }
+                        }
+                    }
+                    crate::emacs_core::eval::hooks_proof::wait::service_timers_without_redisplay(
+                        self,
+                    )?;
+                    continue;
+                }
+                idle_policy.stop_idle(self);
+                return Ok(None);
+            }
+
+            // GNU starts the idle epoch only for an unbounded read. A timed
+            // Lisp `read-char` must not recursively activate idle timers, but
+            // the command loop's unbounded read does (`keyboard.c:2869-2875`).
+            idle_policy.start_idle(self);
+
+            // `auto-save-timeout` is not a Lisp idle timer. GNU computes it
+            // inside `read_char`, then folds the resulting `sit_for` deadline
+            // into the same input/process/timer wait. Keep one fixed deadline
+            // across ordinary timer and process wakeups so background activity
+            // cannot postpone auto-save forever.
+            if command_input && idle_auto_save_deadline.is_none() {
+                idle_auto_save_deadline = self
+                    .command_idle_auto_save_delay()
+                    .and_then(|delay| std::time::Instant::now().checked_add(delay));
+            }
+            let display_idle_deadline =
+                self.display_idle_maintenance_deadline(command_input, timeout.is_some())?;
+            let wait_deadline = [
+                deadline,
+                idle_auto_save_deadline,
+                key_echo_deadline,
+                display_idle_deadline,
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            let wait_result =
+                crate::emacs_core::eval::hooks_proof::wait::wait_for_command_input_with_idle_policy(
+                    self,
+                    wait_deadline,
+                    idle_policy,
+                );
+
+            match wait_result? {
+                CommandInputWaitOutcome::InputPending => {
+                    idle_policy.stop_idle(self);
+                    continue;
+                }
+                CommandInputWaitOutcome::DeadlineElapsed => {
+                    let now = std::time::Instant::now();
+                    if deadline.is_some_and(|deadline| now >= deadline) {
+                        idle_policy.stop_idle(self);
+                        return Ok(None);
+                    }
+                    if key_echo_deadline.is_some_and(|deadline| now >= deadline) {
+                        key_echo_deadline = None;
+                        if self.current_message_value().is_none()
+                            && matches!(
+                                self.command_loop.keyboard.kboard.key_echo_state,
+                                KeyEchoState::Inactive
+                            )
+                        {
+                            let events = self.command_loop.read_command_keys().to_vec();
+                            if !events.is_empty() {
+                                self.publish_key_echo_message(
+                                    &events,
+                                    None,
+                                    KeyEchoDecoration::Start,
+                                );
+                                self.redisplay()?;
+                            }
+                        }
+                    }
+                    if idle_auto_save_deadline.is_some_and(|deadline| now >= deadline) {
+                        idle_auto_save_deadline = None;
+                        self.run_command_loop_auto_save("idle timeout");
+                        self.redisplay()?;
+                    }
+                    continue;
+                }
+                CommandInputWaitOutcome::Interrupted => {
+                    // Resize/focus/display maintenance is not user input. Its
+                    // handlers preserve the idle epoch; do not start a fresh
+                    // epoch (and re-arm repeating idle timers) merely because
+                    // the unified wait was interrupted.
+                    idle_policy.resume_idle(self);
+                    continue;
+                }
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn display_idle_maintenance_deadline(
+        &mut self,
+        command_input: bool,
+        timed_read: bool,
+    ) -> Result<Option<std::time::Instant>, neovm_value::error::Flow> {
+        if !command_input
+            || timed_read
+            || self.command_loop.keyboard.has_pending_low_level_input()
+            || self.has_pending_command_input_for_query()
+            || self.input_rx.as_ref().is_some_and(|rx| !rx.is_empty())
+        {
+            return Ok(None);
+        }
+        let Some(mut maintenance) = self.display_idle_maintenance_fn.take() else {
+            return Ok(None);
+        };
+        let (next, publish) = maintenance(self);
+        self.display_idle_maintenance_fn = Some(maintenance);
+        if publish {
+            // Drop the engine borrow before redisplay re-enters layout. This
+            // publishes newly available coverage without changing the buffer.
+            self.invalidate_redisplay();
+            self.redisplay()?;
+        }
+        Ok(next.and_then(|delay| std::time::Instant::now().checked_add(delay)))
+    }
+
+    /// GNU's buffer-size-scaled delay for `auto-save-timeout`.
+    ///
+    /// This is command-input policy, not general timer policy: ordinary Lisp
+    /// `read-char` calls must never cause automatic saves. Returning `None`
+    /// means there has been no input since the last auto-save or the user has
+    /// disabled idle auto-saving.
+    #[doc(hidden)]
+    pub fn command_idle_auto_save_delay(&mut self) -> Option<std::time::Duration> {
+        if self.num_nonmacro_input_events() <= self.command_loop.last_auto_save_input_events {
+            return None;
+        }
+
+        let timeout = self
+            .eval_symbol_by_id(AUTO_SAVE_TIMEOUT.id())
+            .ok()
+            .and_then(|value| value.as_fixnum())
+            .filter(|timeout| *timeout > 0)? as u64;
+
+        let selected = self.frames.selected_frame().and_then(|frame| {
+            frame.selected_window().map(|window| {
+                (
+                    frame.minibuffer_window == Some(window.id()),
+                    window.buffer_id(),
+                )
+            })
+        });
+        if let Some((false, Some(buffer_id))) = selected
+            && let Some(buffer) = self.edit.buffers.get(buffer_id)
+        {
+            self.command_loop.last_non_minibuffer_size = buffer.accessible_char_len().get();
+        }
+
+        let mut scaled_size = (self.command_loop.last_non_minibuffer_size >> 8) + 1;
+        let mut delay_level = 0_u64;
+        while scaled_size > 64 {
+            delay_level += 1;
+            scaled_size -= scaled_size >> 2;
+        }
+        delay_level = delay_level.max(4);
+
+        Some(std::time::Duration::from_secs(
+            timeout.saturating_mul(delay_level) / 4,
+        ))
+    }
+
+    #[doc(hidden)]
+    pub fn read_char_with_timeout(
+        &mut self,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<Option<Value>, neovm_value::error::Flow> {
+        self.read_char_with_timeout_decoding(timeout, TtyInputDecoding::KeyboardCodingSystem)
+    }
+
+    #[doc(hidden)]
+    pub fn read_char_with_timeout_decoding(
+        &mut self,
+        timeout: Option<std::time::Duration>,
+        tty_input_decoding: TtyInputDecoding,
+    ) -> Result<Option<Value>, neovm_value::error::Flow> {
+        let Some(read_event) = self.read_char_event_with_timeout(timeout, tty_input_decoding)?
+        else {
+            return Ok(None);
+        };
+        if timeout.is_none() {
+            match read_event.command_key_recording {
+                CommandKeyRecording::Append => self
+                    .command_loop
+                    .keyboard
+                    .kboard
+                    .append_read_command_key(read_event.event),
+                CommandKeyRecording::AppendIfEmpty
+                    if self.command_loop.read_command_keys().is_empty() =>
+                {
+                    self.command_loop
+                        .set_read_command_keys(vec![read_event.event]);
+                }
+                CommandKeyRecording::AppendIfEmpty => {}
+            }
+            self.refresh_immediate_key_echo();
+        }
+        Ok(Some(read_event.event))
+    }
+
+    #[doc(hidden)]
+    pub fn read_char(&mut self) -> Result<Value, neovm_value::error::Flow> {
+        Ok(self.read_char_with_timeout(None)?.unwrap_or(Value::NIL))
+    }
+
+    #[doc(hidden)]
+    pub fn resolve_input_frame_id(
+        &self,
+        emacs_frame_id: u64,
+    ) -> Option<neovm_value::display_vocab::FrameId> {
+        if emacs_frame_id == 0 {
+            self.frames.selected_frame().map(|frame| frame.id)
+        } else {
+            let frame_id = neovm_value::display_vocab::FrameId(emacs_frame_id);
+            self.frames.get(frame_id).map(|frame| frame.id)
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn record_mouse_pixel_position(
+        &mut self,
+        frame_id: Option<neovm_value::display_vocab::FrameId>,
+        x: i64,
+        y: i64,
+    ) {
+        self.command_loop
+            .keyboard
+            .set_mouse_pixel_position(frame_id, x, y);
+    }
+
+    #[doc(hidden)]
+    pub fn make_help_echo_event(
+        frame: Value,
+        help: Value,
+        window: Value,
+        object: Value,
+        pos: Value,
+    ) -> Value {
+        Value::list(vec![
+            Value::symbol("help-echo"),
+            frame,
+            help,
+            window,
+            object,
+            pos,
+        ])
+    }
+
+    #[doc(hidden)]
+    pub fn resolve_text_area_help_echo_event(
+        &mut self,
+        frame_id: neovm_value::display_vocab::FrameId,
+        x: i64,
+        y: i64,
+    ) -> Option<Value> {
+        let frame = self.frames.get(frame_id)?;
+        let observation = self
+            .command_loop
+            .keyboard
+            .kboard
+            .presented_mouse_observation
+            .filter(|observation| {
+                observation.frame_id == frame_id.0
+                    && observation.x.round() as i64 == x
+                    && observation.y.round() as i64 == y
+                    && frame.active_presentation().map(|id| id.get())
+                        == Some(observation.presentation)
+            });
+        let (window_id, buffer_position) = if let Some(observation) = observation {
+            let hit = observation.hit?;
+            if hit.region().kind() != neomacs_display_protocol::PresentedRegionKind::TextBody {
+                return None;
+            }
+            let window = hit.region().window()?;
+            let window_id = neovm_edit::emacs_core::display_metrics::WindowId(window.get() as u64);
+            match frame.active_window_presentation(window_id)? {
+                crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::LiveWindow(_) => {}
+                crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::GeometryOnly(_) => return None,
+            }
+            let position = hit.text_position()?;
+            (window_id, position.buffer_position())
+        } else if frame.effective_window_system().is_some() && frame.active_presentation().is_some()
+        {
+            // GUI pointer observations are delivered from the renderer's exact
+            // presentation. Missing/mismatched observations must not silently
+            // fall back to mutable live-window arithmetic.
+            return None;
+        } else {
+            // GNU's `note_mouse_highlight` asks `window_from_coordinates` for
+            // the window and the part before it looks anything up
+            // (src/xdisp.c), and a mode-line or header-line `help-echo` comes
+            // from `mode_line_string`'s glyph rather than from a buffer
+            // position. Only a coordinate the classifier placed outside the
+            // chrome lines has a position to read a text property at.
+            let hit = frame.coordinate_hit(x, y)?;
+            let crate::emacs_core::eval::data::window_state::WindowCoordinate::Buffer {
+                at, ..
+            } = hit.coordinate
+            else {
+                return None;
+            };
+            let snapshot = frame.redisplay_snapshot(hit.window)?;
+            let point = snapshot.point_at_coords(at)?;
+            (hit.window, point.buffer_pos.as_i64())
+        };
+        let window = frame.find_window(window_id)?;
+        let buffer_id = window.buffer_id()?;
+
+        let pair =
+            neovm_edit::emacs_core::textprop::builtin_get_char_property_and_overlay_in_state(
+                self.variables(),
+                &self.edit.buffers,
+                vec![
+                    Value::fixnum(buffer_position),
+                    Value::symbol("help-echo"),
+                    Value::make_buffer(buffer_id),
+                ],
+            )
+            .ok()?;
+        if !pair.is_cons() {
+            return None;
+        };
+        let pair_car = pair.cons_car();
+        let pair_cdr = pair.cons_cdr();
+        if pair_car.is_nil() {
+            return None;
+        }
+        let object = if pair_cdr.is_nil() {
+            Value::make_buffer(buffer_id)
+        } else {
+            pair_cdr
+        };
+        Some(Self::make_help_echo_event(
+            Value::make_frame(frame_id.0),
+            pair_car,
+            Value::make_window(window_id.0),
+            object,
+            Value::fixnum(buffer_position),
+        ))
+    }
+
+    #[doc(hidden)]
+    pub fn queue_mouse_help_echo_update(
+        &mut self,
+        frame_id: Option<neovm_value::display_vocab::FrameId>,
+        x: i64,
+        y: i64,
+    ) {
+        let next = frame_id.and_then(|fid| self.resolve_text_area_help_echo_event(fid, x, y));
+        let previous = self.command_loop.keyboard.kboard.last_help_echo_event;
+        let changed = match (previous, next) {
+            (Some(prev), Some(next)) => !neovm_value::value::equal_value(&prev, &next, 0),
+            (None, None) => false,
+            _ => true,
+        };
+        if !changed {
+            return;
+        }
+
+        match next {
+            Some(event) => {
+                self.command_loop.keyboard.unread_event(event);
+                self.command_loop.keyboard.kboard.last_help_echo_event = Some(event);
+            }
+            None => {
+                if let Some(fid) = frame_id {
+                    self.command_loop
+                        .keyboard
+                        .unread_event(Self::make_help_echo_event(
+                            Value::make_frame(fid.0),
+                            Value::NIL,
+                            Value::NIL,
+                            Value::NIL,
+                            Value::fixnum(0),
+                        ));
+                }
+                self.command_loop.keyboard.kboard.last_help_echo_event = None;
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn note_mouse_move_for_frame(
+        &mut self,
+        frame_id: Option<neovm_value::display_vocab::FrameId>,
+        x: i64,
+        y: i64,
+    ) {
+        self.record_mouse_pixel_position(frame_id, x, y);
+        self.queue_mouse_help_echo_update(frame_id, x, y);
+    }
+
+    #[doc(hidden)]
+    pub fn note_mouse_move_input_event(&mut self, x: f32, y: f32, target_frame_id: u64) {
+        self.note_mouse_move_for_frame(
+            self.resolve_input_frame_id(target_frame_id),
+            x.round() as i64,
+            y.round() as i64,
+        );
+    }
+
+    #[doc(hidden)]
+    pub fn handle_help_echo_event(
+        &mut self,
+        event: Value,
+        idle_policy: IdleTransitionPolicy,
+    ) -> Result<bool, neovm_value::error::Flow> {
+        let Some(parts) = neovm_value::value::list_to_vec(&event) else {
+            return Ok(false);
+        };
+        if parts.len() != 6 {
+            return Ok(false);
+        }
+        let head = parts[0];
+        if !head.is_symbol_named("help-echo", self.symbol_mode()) {
+            return Ok(false);
+        }
+
+        self.show_help_echo_with_idle_policy(parts[2], parts[3], parts[4], parts[5], idle_policy)?;
+        Ok(true)
+    }
+
+    /// Resolve and publish GNU `show_help_echo` state for mouse regions and
+    /// native menus through one path.
+    #[doc(hidden)]
+    pub fn show_help_echo(
+        &mut self,
+        help: Value,
+        window: Value,
+        object: Value,
+        pos: Value,
+    ) -> Result<(), neovm_value::error::Flow> {
+        self.show_help_echo_with_idle_policy(
+            help,
+            window,
+            object,
+            pos,
+            IdleTransitionPolicy::Manage,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn show_help_echo_with_idle_policy(
+        &mut self,
+        mut help: Value,
+        window: Value,
+        object: Value,
+        pos: Value,
+        idle_policy: IdleTransitionPolicy,
+    ) -> Result<(), neovm_value::error::Flow> {
+        // User help callbacks may run while the GUI invalidates this intent.
+        // Preserve the starting context, not the callback-completion context.
+        let tooltip_generation = self
+            .display_host
+            .as_ref()
+            .and_then(|host| host.tooltip_generation());
+        if !help.is_nil() && !help.is_string() {
+            help = if self.function_value_is_callable(&help) {
+                self.funcall_general(help, vec![window, object, pos])?
+            } else {
+                self.eval_value(&help)?
+            };
+            if !help.is_nil() && !help.is_string() {
+                return Ok(());
+            }
+        }
+
+        help = self.fixup_help_echo_message(help)?;
+
+        if help.is_string() {
+            help = self.substitute_help_echo_command_keys(help)?;
+            // Carry the originating native input context through Lisp's timer,
+            // not the context that happens to be current when the timer fires.
+            if let Some(generation) = tooltip_generation {
+                let copied = Value::heap_string(help.as_lisp_string().unwrap().clone());
+                if let Some(properties) =
+                    neovm_value::value::get_string_text_properties_for_value(help)
+                {
+                    neovm_value::value::set_string_text_properties_for_value(copied, properties);
+                }
+                let len = copied.as_lisp_string().unwrap().schars();
+                if len > 0 {
+                    neovm_edit::emacs_core::textprop::builtin_put_text_property_5(
+                        self,
+                        Value::fixnum(0),
+                        Value::fixnum(len as i64),
+                        Value::symbol("neomacs-tooltip-generation"),
+                        Value::fixnum(generation.raw() as i64),
+                        copied,
+                    )?;
+                }
+                help = copied;
+            }
+        }
+
+        let show_help_function = self
+            .builtin_var_value_by_name("show-help-function")
+            .unwrap_or(Value::NIL);
+        if self.function_value_is_callable(&show_help_function) {
+            let _ = self.funcall_general(show_help_function, vec![help])?;
+        } else if let Some(message) = help.as_lisp_string() {
+            self.set_current_message(Some(message.clone()));
+            self.redisplay()?;
+        } else {
+            self.clear_current_message();
+        }
+
+        idle_policy.resume_idle(self);
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn fixup_help_echo_message(
+        &mut self,
+        help: Value,
+    ) -> Result<Value, neovm_value::error::Flow> {
+        // GNU `show_help_echo` applies `mouse-fixup-help-message` whenever the
+        // resolved help text is a string; it is not conditional on whether the
+        // current runtime is actively polling host input.
+        if help.as_utf8_str().is_none() {
+            return Ok(help);
+        }
+
+        match self.obarray.symbol_function("mouse-fixup-help-message") {
+            Some(function)
+                if !crate::emacs_core::autoload::is_autoload_value(
+                    &function,
+                    self.symbol_mode(),
+                ) =>
+            {
+                self.funcall_general(Value::symbol("mouse-fixup-help-message"), vec![help])
+            }
+            _ => Ok(help),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn substitute_help_echo_command_keys(
+        &mut self,
+        help: Value,
+    ) -> Result<Value, neovm_value::error::Flow> {
+        if help.is_nil() || help.as_utf8_str().is_none() {
+            return Ok(help);
+        }
+
+        // GNU keyboard.c:2221-2226 inspects only the first character,
+        // and skips the property lookup for an empty help string.
+        if help
+            .as_lisp_string()
+            .is_some_and(|string| string.schars() > 0)
+        {
+            let inhibit = neovm_edit::emacs_core::textprop::builtin_get_text_property_in_state(
+                self.variables(),
+                &self.edit.buffers,
+                &[
+                    Value::fixnum(0),
+                    Value::symbol("help-echo-inhibit-substitution"),
+                    help,
+                ],
+            )?;
+            if inhibit.is_truthy() {
+                return Ok(help);
+            }
+        }
+
+        match self.obarray.symbol_function("substitute-command-keys") {
+            Some(function)
+                if !crate::emacs_core::autoload::is_autoload_value(
+                    &function,
+                    self.symbol_mode(),
+                ) =>
+            {
+                self.funcall_general(Value::symbol("substitute-command-keys"), vec![help])
+            }
+            _ => Ok(help),
+        }
+    }
+
+    /// Build an Emacs mouse event value.
+    ///
+    /// Returns `(EVENT-SYMBOL POSITION)` where EVENT-SYMBOL is e.g.
+    /// `mouse-1`, `down-mouse-2`, `C-mouse-1`, etc.
+    /// Compute the click-count for a just-received
+    /// MousePress event and update `KBoard.last_mouse_click`.
+    /// Returns the 1-based click count (1 = single, 2 = double,
+    /// 3 = triple). Subsequent clicks beyond triple saturate at
+    /// 3, matching GNU `keyboard.c:6120-6128` where the count
+    /// wraps via `min (3, ...)`. Keyboard audit Finding 12.
+    /// GNU `double-click-fuzz` as a frame-relative pixel tolerance.
+    /// `keyboard.c` uses the same value for click counts and for deciding
+    /// whether a button release is a drag (`0 < fuzz` and both deltas inside
+    /// it).
+    #[doc(hidden)]
+    pub fn double_click_fuzz(&self) -> f32 {
+        self.eval_symbol("double-click-fuzz")
+            .ok()
+            .and_then(|v| v.as_fixnum())
+            .filter(|&n| n >= 0)
+            .map(|n| n as f32)
+            .unwrap_or(3.0)
+    }
+
+    #[doc(hidden)]
+    pub fn classify_mouse_click_on_press(
+        &mut self,
+        button: MouseButton,
+        x: f32,
+        y: f32,
+        frame_id: u64,
+    ) -> u32 {
+        let now = std::time::Instant::now();
+        let double_click_time_ms = self
+            .eval_symbol("double-click-time")
+            .ok()
+            .and_then(|v| v.as_fixnum())
+            .filter(|&n| n > 0)
+            .map(|n| n as u64)
+            .unwrap_or(500);
+        let fuzz = self.double_click_fuzz();
+
+        let count = match self.command_loop.keyboard.kboard.last_mouse_click {
+            Some(prev)
+                if prev.button == button
+                    && prev.frame_id == frame_id
+                    && (prev.x - x).abs() <= fuzz
+                    && (prev.y - y).abs() <= fuzz
+                    && now.saturating_duration_since(prev.timestamp).as_millis()
+                        <= double_click_time_ms as u128 =>
+            {
+                (prev.click_count + 1).min(3)
+            }
+            _ => 1,
+        };
+
+        self.command_loop.keyboard.kboard.last_mouse_click = Some(LastMouseClick {
+            button,
+            x,
+            y,
+            frame_id,
+            timestamp: now,
+            click_count: count,
+        });
+        count
+    }
+
+    /// Build the event symbol prefix for a mouse click, taking
+    /// the click count into account. `base` is either
+    /// `down-mouse` (for presses) or `mouse` (for releases).
+    /// For `count == 1`, returns `base` unchanged. For 2, prefix
+    /// with `double-`; for 3, `triple-`. Keyboard audit Finding
+    /// 12.
+    #[doc(hidden)]
+    pub fn mouse_event_prefix_for_click_count(base: &str, count: u32) -> String {
+        match count {
+            0 | 1 => base.to_string(),
+            2 => format!("double-{}", base),
+            _ => format!("triple-{}", base),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn make_mouse_event(
+        eval: &mut Self,
+        button: &MouseButton,
+        modifiers: &Modifiers,
+        prefix: &str,
+        payload: MouseEventPayload,
+    ) -> Value {
+        let button_num = match button {
+            MouseButton::Left => 1,
+            MouseButton::Middle => 2,
+            MouseButton::Right => 3,
+            MouseButton::Button4 => 4,
+            MouseButton::Button5 => 5,
+        };
+        let mut sym = String::new();
+        Self::append_modifier_prefix(modifiers, &mut sym);
+        sym.push_str(&format!("{}-{}", prefix, button_num));
+        // GNU `modify_event_symbol` marks the base stem as `mouse-click` and
+        // `apply_modifiers` copies that kind to every derived head
+        // (`src/keyboard.c:7806-7823`, `7653-7670`).  The area-prefix gate
+        // reads it (`src/keyboard.c:11403-11406`).
+        Self::mark_event_head_kind(eval, &format!("mouse-{button_num}"), "mouse-click");
+        Self::mark_event_head_kind(eval, &sym, "mouse-click");
+        let head = Value::symbol(&sym);
+
+        match payload {
+            MouseEventPayload::Position(position) => Value::list(vec![head, position]),
+            MouseEventPayload::Drag { start, end } => Value::list(vec![head, start, end]),
+            MouseEventPayload::WithClickCount { position, count } => {
+                Value::list(vec![head, position, Value::fixnum(count as i64)])
+            }
+        }
+    }
+
+    /// GNU `Fput (symbol, Qevent_kind, kind)` for a mouse event head.
+    #[doc(hidden)]
+    pub fn mark_event_head_kind(eval: &mut Self, head: &str, kind: &str) {
+        let key = intern("event-kind");
+        let _ = eval
+            .obarray_mut()
+            .put_property_id(intern(head), key, Value::symbol(kind));
+    }
+
+    #[doc(hidden)]
+    pub fn event_position(event: &Value, mode: SymbolMode) -> Option<Value> {
+        let event_slots = neovm_value::value::list_to_vec(event)?;
+        let position = *event_slots.get(1)?;
+        let position_slots = neovm_value::value::list_to_vec(&position)?;
+        if position_slots.len() >= 4 || Self::event_position_area(&position, mode).is_some() {
+            Some(position)
+        } else {
+            None
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn key_sequence_lookup_position(events: &[Value], mode: SymbolMode) -> Option<Value> {
+        events
+            .iter()
+            .find_map(|event| Self::event_position(event, mode))
+    }
+
+    #[doc(hidden)]
+    pub fn key_sequence_target_buffer_id(
+        events: &[Value],
+        frames: &crate::emacs_core::eval::data::window_state::FrameManager,
+        mode: SymbolMode,
+    ) -> Option<neovm_edit::buffer::BufferId> {
+        let position = Self::key_sequence_lookup_position(events, mode)?;
+        let slots = neovm_value::value::list_to_vec(&position)?;
+        let first = *slots.first()?;
+        let wid = first.as_window_id()?;
+        let window_id = neovm_edit::emacs_core::display_metrics::WindowId(wid);
+
+        for frame_id in frames.frame_list() {
+            let Some(frame) = frames.get(frame_id) else {
+                continue;
+            };
+            let Some(window) = frame.find_window(window_id) else {
+                continue;
+            };
+            if let Some(buffer_id) = window.buffer_id() {
+                return Some(buffer_id);
+            }
+        }
+
+        None
+    }
+
+    /// Element `index` of a proper Lisp list; `None` for a shorter or
+    /// improper list (the `list_to_vec` contract).
+    #[doc(hidden)]
+    pub fn list_slot(list: &Value, index: usize) -> Option<Value> {
+        neovm_value::value::list_to_vec(list)?.get(index).copied()
+    }
+
+    #[doc(hidden)]
+    pub fn event_position_area(position: &Value, mode: SymbolMode) -> Option<Value> {
+        let area_or_pos = Self::list_slot(position, 1)?;
+        match mode.unwrap(area_or_pos).kind() {
+            ValueKind::Symbol(_) => Some(area_or_pos),
+            ValueKind::Cons => {
+                let head = area_or_pos.cons_car();
+                head.as_symbol_name(mode).map(|_| head)
+            }
+            _ => None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn maybe_prefix_mouse_area(
+        eval: &Self,
+        events: &[Value],
+        mode: SymbolMode,
+    ) -> Option<Vec<Value>> {
+        let first = events.first()?;
+        // GNU's first branch turns a posn area into a leading key element
+        // only when the event head's `event-kind` is `mouse-click` or
+        // `touchscreen` (`src/keyboard.c:11403-11406`).  Movement heads have
+        // kind `mouse-movement` and keep their area inside the posn.
+        if !first.is_cons() {
+            return None;
+        }
+        let kind_name = first
+            .cons_car()
+            .as_symbol_name(mode)
+            .and_then(|name| {
+                eval.obarray()
+                    .get_property_id(intern(name), intern("event-kind"))
+            })
+            .and_then(|kind| kind.as_symbol_name(mode));
+        if let Some(kind_name) = kind_name
+            && (kind_name == "mouse-click" || kind_name == "touchscreen")
+        {
+            let position = Self::event_position(first, mode)?;
+            let area = Self::event_position_area(&position, mode)?;
+            return Some(Self::prepend_mouse_area(area, events));
+        }
+        // GNU's second branch is independent of `event-kind`: menu-bar,
+        // tool-bar and tab-bar events carry their area as the fake prefix
+        // whenever they come directly from the keyboard buffer
+        // (`src/keyboard.c:11445-11482`, and the `read_char` split at
+        // `:3171-3184`).
+        let position = Self::list_slot(first, 1)?;
+        let area = Self::list_slot(&position, 1)?;
+        let area_name = area.as_symbol_name(mode)?;
+        if area_name == "menu-bar" || area_name == "tool-bar" || area_name == "tab-bar" {
+            return Some(Self::prepend_mouse_area(area, events));
+        }
+        None
+    }
+
+    #[doc(hidden)]
+    pub fn prepend_mouse_area(area: Value, events: &[Value]) -> Vec<Value> {
+        let mut prefixed = Vec::with_capacity(events.len() + 1);
+        prefixed.push(area);
+        prefixed.extend_from_slice(events);
+        prefixed
+    }
+
+    #[doc(hidden)]
+    pub fn mouse_event_symbol_name(event: &Value, mode: SymbolMode) -> Option<String> {
+        match mode.unwrap(*event).kind() {
+            ValueKind::Symbol(_) => event.as_symbol_name(mode).map(str::to_owned),
+            ValueKind::Cons => {
+                let slots = neovm_value::value::list_to_vec(event)?;
+                slots.first()?.as_symbol_name(mode).map(str::to_owned)
+            }
+            _ => None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn rewrite_mouse_event_symbol(
+        event: Value,
+        symbol_name: &str,
+        mode: SymbolMode,
+    ) -> Option<Value> {
+        match mode.unwrap(event).kind() {
+            ValueKind::Symbol(_) => Some(Value::symbol(symbol_name)),
+            ValueKind::Cons => {
+                let mut slots = neovm_value::value::list_to_vec(&event)?;
+                let head = slots.first_mut()?;
+                head.as_symbol_name(mode)?;
+                *head = Value::symbol(symbol_name);
+                Some(Value::list(slots))
+            }
+            _ => None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn simplify_mouse_event_once(
+        event: Value,
+        mode: SymbolMode,
+    ) -> Option<(MouseEventFallbackStep, Option<Value>)> {
+        let symbol_name = Self::mouse_event_symbol_name(&event, mode)?;
+        let (modifier_prefix, base) =
+            neovm_value::keyboard_pure::split_symbol_modifiers(&symbol_name);
+        let mut rewritten_name = modifier_prefix;
+
+        let rewritten_base = if let Some(rest) = base.strip_prefix("triple-") {
+            rewritten_name.push_str("double-");
+            rewritten_name.push_str(rest);
+            return Some((
+                MouseEventFallbackStep::Rewrite,
+                Self::rewrite_mouse_event_symbol(event, &rewritten_name, mode),
+            ));
+        } else if let Some(rest) = base.strip_prefix("double-") {
+            rest
+        } else if let Some(rest) = base.strip_prefix("drag-") {
+            rest
+        } else if base.starts_with("down-") || base.starts_with("up-") {
+            return Some((MouseEventFallbackStep::Drop, None));
+        } else {
+            return None;
+        };
+
+        rewritten_name.push_str(rewritten_base);
+        Some((
+            MouseEventFallbackStep::Rewrite,
+            Self::rewrite_mouse_event_symbol(event, &rewritten_name, mode),
+        ))
+    }
+
+    #[doc(hidden)]
+    pub fn retained_key_sequence_len_after_mouse_drop(events: &[Value], mode: SymbolMode) -> usize {
+        let Some(last_event) = events.last() else {
+            return 0;
+        };
+
+        let mut retained_len = events.len().saturating_sub(1);
+        if retained_len > 0
+            && let Some(position) = Self::event_position(last_event, mode)
+            && let Some(area) = Self::event_position_area(&position, mode)
+            && mode.unwrap(events[retained_len - 1]) == mode.unwrap(area)
+        {
+            retained_len -= 1;
+        }
+        retained_len
+    }
+
+    #[doc(hidden)]
+    pub fn resolve_undefined_mouse_sequence_fallback(
+        &mut self,
+        events: &[Value],
+        lookup_position: Option<&Value>,
+    ) -> Result<Option<UndefinedMouseSequenceFallback>, neovm_value::error::Flow> {
+        use super::keymap_lookup::resolve_active_key_binding;
+        use crate::emacs_core::eval::keymap_lookup::DefaultBindingMode;
+
+        let Some(last_index) = events.len().checked_sub(1) else {
+            return Ok(None);
+        };
+        let mut rewritten_events = events.to_vec();
+
+        loop {
+            let Some((step, rewritten_event)) =
+                Self::simplify_mouse_event_once(rewritten_events[last_index], self.symbol_mode())
+            else {
+                return Ok(None);
+            };
+
+            match step {
+                MouseEventFallbackStep::Rewrite => {
+                    let Some(rewritten_event) = rewritten_event else {
+                        return Ok(None);
+                    };
+                    rewritten_events[last_index] = rewritten_event;
+                    let resolved = resolve_active_key_binding(
+                        self,
+                        &rewritten_events,
+                        DefaultBindingMode::Accept,
+                        false,
+                        lookup_position,
+                    )?;
+                    let lookup_is_undefined = resolved.lookup.is_nil()
+                        || self.symbol_mode().unwrap(resolved.lookup)
+                            == Value::symbol(&UNDEFINED_SYMBOL);
+                    let binding_is_undefined = resolved.binding.is_nil()
+                        || self.symbol_mode().unwrap(resolved.binding)
+                            == Value::symbol(&UNDEFINED_SYMBOL);
+                    if !(lookup_is_undefined || binding_is_undefined) {
+                        return Ok(Some(UndefinedMouseSequenceFallback::Rewrite {
+                            events: rewritten_events,
+                            resolved,
+                        }));
+                    }
+                }
+                MouseEventFallbackStep::Drop => {
+                    let retained_len = Self::retained_key_sequence_len_after_mouse_drop(
+                        &rewritten_events,
+                        self.symbol_mode(),
+                    );
+                    rewritten_events.truncate(retained_len);
+                    return Ok(Some(UndefinedMouseSequenceFallback::Drop {
+                        retained_events: rewritten_events,
+                    }));
+                }
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn window_point(
+        window: &crate::emacs_core::eval::data::window_state::Window,
+    ) -> Option<i64> {
+        match window {
+            crate::emacs_core::eval::data::window_state::Window::Leaf { point, .. } => {
+                Some(point.as_i64())
+            }
+            crate::emacs_core::eval::data::window_state::Window::Internal { .. } => None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn mouse_posn_descriptor_value(desc: MousePosnDescriptor) -> Value {
+        let area_or_pos = match desc.area {
+            Some(area) => Value::symbol(area),
+            None => desc.metrics.point.map(Value::fixnum).unwrap_or(Value::NIL),
+        };
+        let pos = desc.metrics.point.map(Value::fixnum).unwrap_or(Value::NIL);
+        let col_row = match (desc.metrics.col, desc.metrics.row) {
+            (Some(col), Some(row)) => Value::cons(Value::fixnum(col), Value::fixnum(row)),
+            _ => Value::NIL,
+        };
+        let width_height = match (desc.metrics.width, desc.metrics.height) {
+            (Some(width), Some(height)) => Value::cons(Value::fixnum(width), Value::fixnum(height)),
+            _ => Value::NIL,
+        };
+
+        Value::list(vec![
+            desc.window_or_frame,
+            area_or_pos,
+            Value::cons(Value::fixnum(desc.x), Value::fixnum(desc.y)),
+            Value::fixnum(0),
+            Value::NIL,
+            pos,
+            col_row,
+            Value::NIL,
+            Value::cons(
+                Value::fixnum(desc.metrics.anchor_x.unwrap_or(0)),
+                Value::fixnum(desc.metrics.anchor_y.unwrap_or(0)),
+            ),
+            width_height,
+        ])
+    }
+
+    #[doc(hidden)]
+    pub fn event_frame_id(
+        &self,
+        emacs_frame_id: u64,
+    ) -> Option<neovm_value::display_vocab::FrameId> {
+        if emacs_frame_id == 0 {
+            self.frames.selected_frame().map(|frame| frame.id)
+        } else {
+            Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn event_frame_value(&self, emacs_frame_id: u64) -> Value {
+        self.event_frame_id(emacs_frame_id)
+            .map(|frame_id| Value::make_frame(frame_id.0))
+            .unwrap_or(Value::NIL)
+    }
+
+    #[allow(clippy::too_many_arguments)] // event geometry mirrors the Lisp mouse-event payload
+    #[doc(hidden)]
+    pub fn chrome_mouse_click_event(
+        &self,
+        area: &'static str,
+        index: i32,
+        x: f32,
+        y: f32,
+        anchor: Option<(f32, f32)>,
+        width: f32,
+        height: f32,
+        emacs_frame_id: u64,
+    ) -> Option<Value> {
+        if index < 0 {
+            return None;
+        }
+        let frame_id = self.event_frame_id(emacs_frame_id)?;
+        self.frames.get(frame_id)?;
+        let window_or_frame = if area == "menu-bar" {
+            Value::NIL
+        } else {
+            Value::make_frame(frame_id.0)
+        };
+        let position = Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+            window_or_frame,
+            area: Some(area),
+            x: x.round() as i64,
+            y: y.round() as i64,
+            metrics: MousePosnMetrics {
+                point: None,
+                col: None,
+                row: None,
+                width: Some(width.round() as i64),
+                height: Some(height.round() as i64),
+                anchor_x: anchor.map(|(x, _)| x.round() as i64),
+                anchor_y: anchor.map(|(_, y)| y.round() as i64),
+            },
+        });
+        Some(Value::list(vec![Value::symbol("mouse-1"), position]))
+    }
+
+    #[doc(hidden)]
+    pub fn tool_bar_key_at_index(&self, index: i32, emacs_frame_id: u64) -> Option<Value> {
+        if index < 0 {
+            return None;
+        }
+        let raw_map = self.tool_bar_map_for_frame(emacs_frame_id);
+        let keymap = crate::emacs_core::eval::keymap_lookup::maybe_keymap_in_obarray(
+            self.obarray(),
+            &raw_map,
+            self.symbol_mode(),
+        )?;
+        let mut remaining = index as usize;
+        let mut found = None;
+        crate::emacs_core::eval::keymap_lookup::list_keymap_for_each_binding(
+            &keymap,
+            Some(self.obarray()),
+            |key, def| {
+                if found.is_some() {
+                    return;
+                }
+                if !Self::is_rendered_tool_bar_item(&key, &def, self.symbol_mode()) {
+                    return;
+                }
+                if remaining == 0 {
+                    found = Some(key);
+                } else {
+                    remaining -= 1;
+                }
+            },
+            self.symbol_mode(),
+        );
+        found
+    }
+
+    #[doc(hidden)]
+    pub fn tool_bar_map_for_frame(&self, emacs_frame_id: u64) -> Value {
+        if emacs_frame_id == 0 {
+            return self.current_tool_bar_map();
+        }
+        if let Some(frame_id) = self.event_frame_id(emacs_frame_id)
+            && let Some(buffer_id) = self
+                .frames
+                .get(frame_id)
+                .and_then(|frame| frame.selected_window())
+                .and_then(|window| window.buffer_id())
+            && let Some(buffer) = self.edit.buffers.get(buffer_id)
+            && let Some(local) = buffer.buffer_local_value("tool-bar-map")
+        {
+            return local;
+        }
+        self.default_tool_bar_map()
+    }
+
+    #[doc(hidden)]
+    pub fn default_tool_bar_map(&self) -> Value {
+        self.variables()
+            .default_value(intern("tool-bar-map"))
+            .unwrap_or(Value::NIL)
+    }
+
+    #[doc(hidden)]
+    pub fn current_tool_bar_map(&self) -> Value {
+        if let Some(buffer) = self.edit.buffers.current_buffer()
+            && let Some(local) = buffer.buffer_local_value("tool-bar-map")
+        {
+            return local;
+        }
+        self.default_tool_bar_map()
+    }
+
+    #[doc(hidden)]
+    pub fn is_rendered_tool_bar_item(key: &Value, def: &Value, mode: SymbolMode) -> bool {
+        let key_name = key.as_symbol_name(mode).unwrap_or_default();
+        if key_name.starts_with("separator") {
+            return true;
+        }
+        let def = if def.is_cons() && def.cons_cdr().is_nil() {
+            def.cons_car()
+        } else {
+            *def
+        };
+        if !def.is_cons() {
+            return def.as_symbol_name(mode) == Some("menu-bar-separator");
+        }
+        let car = def.cons_car();
+        KeymapMarker::MenuItem.is_value(car, mode) || car.is_string()
+    }
+
+    /// GNU make_lispy_movement emits an unmodified event head. The constructor
+    /// deliberately has no modifier argument: motion is not a button gesture.
+    #[doc(hidden)]
+    pub fn make_lispy_movement(&self, x: f32, y: f32, target_frame_id: u64) -> Value {
+        let position = Self::make_mouse_position(x, y, target_frame_id, self);
+        Value::list(vec![Value::symbol("mouse-movement"), position])
+    }
+
+    #[doc(hidden)]
+    pub fn make_mouse_position(x: f32, y: f32, target_frame_id: u64, eval: &Self) -> Value {
+        let frame_id = if target_frame_id == 0 {
+            match eval.frames.selected_frame() {
+                Some(frame) => frame.id.0,
+                None => 0,
+            }
+        } else {
+            target_frame_id
+        };
+
+        let Some(frame) = (if frame_id == 0 {
+            eval.frames.selected_frame()
+        } else {
+            eval.frames
+                .get(neovm_value::display_vocab::FrameId(frame_id))
+        }) else {
+            return Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                window_or_frame: Value::NIL,
+                area: None,
+                x: x.round() as i64,
+                y: y.round() as i64,
+                metrics: MousePosnMetrics {
+                    point: None,
+                    col: None,
+                    row: None,
+                    width: None,
+                    height: None,
+                    anchor_x: None,
+                    anchor_y: None,
+                },
+            });
+        };
+
+        if let Some(position) = Self::make_presented_mouse_position(frame, frame_id, x, y, eval) {
+            return position;
+        }
+
+        let frame_x = x.round() as i64;
+        let frame_y = y.round() as i64;
+        if frame.effective_window_system().is_some() && frame.active_presentation().is_some() {
+            return Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                window_or_frame: Value::make_frame(frame.id.0),
+                area: None,
+                x: frame_x,
+                y: frame_y,
+                metrics: MousePosnMetrics {
+                    point: None,
+                    col: None,
+                    row: None,
+                    width: None,
+                    height: None,
+                    anchor_x: None,
+                    anchor_y: None,
+                },
+            });
+        }
+        let frame_height = frame.height as i64;
+        let menu_bar_height = frame.menu_bar_height as i64;
+        let tool_bar_height = frame.tool_bar_height as i64;
+        let tab_bar_height = frame.tab_bar_height as i64;
+
+        if menu_bar_height > 0 && frame_y < menu_bar_height {
+            let menu_bar_x = (x / frame.char_width.max(1.0)).floor() as i64;
+            return Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                window_or_frame: Value::NIL,
+                area: Some("menu-bar"),
+                x: menu_bar_x,
+                y: frame_y,
+                metrics: MousePosnMetrics {
+                    point: None,
+                    col: None,
+                    row: None,
+                    width: None,
+                    height: None,
+                    anchor_x: None,
+                    anchor_y: None,
+                },
+            });
+        }
+        if tool_bar_height > 0 && frame_y < menu_bar_height + tool_bar_height {
+            return Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                window_or_frame: Value::NIL,
+                area: Some("tool-bar"),
+                x: frame_x,
+                y: frame_y - menu_bar_height,
+                metrics: MousePosnMetrics {
+                    point: None,
+                    col: None,
+                    row: None,
+                    width: None,
+                    height: None,
+                    anchor_x: None,
+                    anchor_y: None,
+                },
+            });
+        }
+        if tab_bar_height > 0 && frame_y < menu_bar_height + tool_bar_height + tab_bar_height {
+            return Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                window_or_frame: Value::NIL,
+                area: Some("tab-bar"),
+                x: frame_x,
+                y: frame_y - menu_bar_height - tool_bar_height,
+                metrics: MousePosnMetrics {
+                    point: None,
+                    col: None,
+                    row: None,
+                    width: None,
+                    height: None,
+                    anchor_x: None,
+                    anchor_y: None,
+                },
+            });
+        }
+
+        // GNU asks this question ONCE, in `window_from_coordinates`, and
+        // `make_lispy_position` branches on the part it answers before any
+        // buffer position is looked up (src/keyboard.c:5793 and 5862-5975).
+        // `posn-at-x-y` reaches the same classifier, so the two cannot disagree
+        // about the same coordinate.
+        let Some(hit) = frame.coordinate_hit(frame_x, frame_y) else {
+            return Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                window_or_frame: Value::make_frame(frame.id.0),
+                area: None,
+                x: frame_x,
+                y: frame_y.min(frame_height.saturating_sub(1)),
+                metrics: MousePosnMetrics {
+                    point: None,
+                    col: None,
+                    row: None,
+                    width: None,
+                    height: None,
+                    anchor_x: None,
+                    anchor_y: None,
+                },
+            });
+        };
+        let window_id = hit.window;
+        let Some(window) = frame.find_window(window_id) else {
+            return Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                window_or_frame: Value::make_frame(frame.id.0),
+                area: None,
+                x: frame_x,
+                y: frame_y,
+                metrics: MousePosnMetrics {
+                    point: None,
+                    col: None,
+                    row: None,
+                    width: None,
+                    height: None,
+                    anchor_x: None,
+                    anchor_y: None,
+                },
+            });
+        };
+
+        let fallback_metrics = MousePosnMetrics {
+            point: Self::window_point(window),
+            col: None,
+            row: None,
+            width: None,
+            height: None,
+            anchor_x: None,
+            anchor_y: None,
+        };
+        let column_width = frame.char_width.max(1.0).round() as i64;
+
+        match hit.coordinate {
+            crate::emacs_core::eval::data::window_state::WindowCoordinate::ChromeLine {
+                line,
+                window_x,
+                window_y,
+            } => {
+                // `mode_line_string` reads the window's current matrix and
+                // never re-runs a walk (src/dispnew.c:6444-6519), and GNU sets
+                // `textpos = -1` for this branch (src/keyboard.c:5900) -- so a
+                // chrome posn has no buffer position at all.
+                let unfilled =
+                    crate::emacs_core::eval::data::window_state::WindowDisplaySnapshot::default();
+                let retained = frame.redisplay_snapshot(window_id).unwrap_or(&unfilled);
+                let chrome = retained.chrome_line_hit(
+                    line,
+                    window_x,
+                    window_y,
+                    hit.geometry.bottom_y - hit.geometry.top_y,
+                    frame.char_height.max(1.0).round() as i64,
+                    column_width,
+                );
+                Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                    window_or_frame: Value::make_window(window_id.0),
+                    area: line.part().area_symbol(),
+                    x: window_x,
+                    y: window_y,
+                    metrics: MousePosnMetrics {
+                        point: None,
+                        col: Some(chrome.col),
+                        row: Some(chrome.row),
+                        width: Some(chrome.width),
+                        height: Some(chrome.height),
+                        anchor_x: Some(chrome.dx),
+                        anchor_y: Some(chrome.dy),
+                    },
+                })
+            }
+            crate::emacs_core::eval::data::window_state::WindowCoordinate::Buffer {
+                part,
+                window_x,
+                window_y,
+                at,
+            } => {
+                // Which click the posn reports depends on the part: the text
+                // area, the margins and the fringes report Y relative to the
+                // top of the TEXT area, everything else relative to the
+                // window's own corner (src/keyboard.c:5878-5975).
+                let (report_x, report_y) = match part {
+                    crate::emacs_core::eval::data::window_state::WindowPart::Text => {
+                        (at.text_area_x(), at.text_area_y())
+                    }
+                    crate::emacs_core::eval::data::window_state::WindowPart::LeftMargin
+                    | crate::emacs_core::eval::data::window_state::WindowPart::RightMargin
+                    | crate::emacs_core::eval::data::window_state::WindowPart::LeftFringe
+                    | crate::emacs_core::eval::data::window_state::WindowPart::RightFringe => {
+                        (window_x, at.text_area_y())
+                    }
+                    _ => (window_x, window_y),
+                };
+                if let Some(snapshot) = frame.redisplay_snapshot(window_id)
+                    && let Some(point) = snapshot.point_at_coords(at)
+                {
+                    let (object_width, object_height) = if part
+                        == crate::emacs_core::eval::data::window_state::WindowPart::Text
+                        && frame.effective_window_system().is_none()
+                        && frame.posn_object_extent_mode().enabled()
+                    {
+                        crate::emacs_core::eval::data::posn_object_extent::retained_posn_extent(
+                            Some(snapshot),
+                            point.row,
+                            point.col,
+                            neomacs_display_protocol::glyph_matrix::GlyphArea::Text,
+                        )
+                        .dimensions()
+                    } else {
+                        (point.width.max(1), point.height.max(1))
+                    };
+                    return Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                        window_or_frame: Value::make_window(window_id.0),
+                        area: part.area_symbol(),
+                        x: report_x,
+                        y: report_y,
+                        metrics: MousePosnMetrics {
+                            point: Some(point.buffer_pos.as_i64()),
+                            // GNU has ONE function here: `make_lispy_position`
+                            // builds the posn for a real mouse event and for
+                            // `posn-at-x-y` alike, and
+                            // `buffer_posn_from_coords` counts the columns past
+                            // the end of a line for both
+                            // (src/dispnew.c:6428-6430). Share the rule so the
+                            // two cannot drift apart.
+                            col: Some(point.column_for_click(report_x, column_width)),
+                            row: Some(point.row),
+                            width: Some(object_width),
+                            height: Some(object_height),
+                            anchor_x: None,
+                            anchor_y: None,
+                        },
+                    });
+                }
+                Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                    window_or_frame: Value::make_window(window_id.0),
+                    area: part.area_symbol(),
+                    x: report_x,
+                    y: report_y,
+                    metrics: fallback_metrics,
+                })
+            }
+        }
+    }
+
+    /// The window edge this press took hold of, if it landed on one.
+    ///
+    /// Guarded exactly as `make_presented_mouse_position` guards: an
+    /// observation belongs to this press only if it names the same frame, the
+    /// same coordinates and the presentation still on screen. Without that a
+    /// stale observation left by an earlier pointer event would open a drag on
+    /// a press that landed in the text body.
+    #[doc(hidden)]
+    pub fn grabbed_window_edge(
+        &self,
+        button: MouseButton,
+        x: f32,
+        y: f32,
+        target_frame_id: u64,
+    ) -> Option<crate::emacs_core::eval::data::window_edge_drag::WindowEdgeGrab> {
+        let observation = self
+            .command_loop
+            .keyboard
+            .kboard
+            .presented_mouse_observation?;
+        let frame_id = self.event_frame_id(target_frame_id)?;
+        let frame = self.frames.get(frame_id)?;
+        if observation.frame_id != frame_id.0
+            || observation.x.to_bits() != x.to_bits()
+            || observation.y.to_bits() != y.to_bits()
+            || frame.active_presentation().map(|id| id.get()) != Some(observation.presentation)
+        {
+            return None;
+        }
+        crate::emacs_core::eval::data::window_edge_drag::WindowEdgeGrab::of(
+            button,
+            observation.hit?.region().kind(),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn make_presented_mouse_position(
+        frame: &crate::emacs_core::eval::data::window_state::Frame,
+        frame_id: u64,
+        x: f32,
+        y: f32,
+        eval: &Self,
+    ) -> Option<Value> {
+        let observation = eval
+            .command_loop
+            .keyboard
+            .kboard
+            .presented_mouse_observation?;
+        if observation.frame_id != frame_id
+            || observation.x.to_bits() != x.to_bits()
+            || observation.y.to_bits() != y.to_bits()
+            || frame.active_presentation().map(|id| id.get()) != Some(observation.presentation)
+        {
+            return None;
+        }
+        let hit = observation.hit?;
+        let region = hit.region();
+        // Delegated, not re-derived: `WindowPart::posn` is GNU's own table
+        // (src/keyboard.c:5900-5990), and the hand-written copy that used to
+        // live here had drifted from it on both dividers.
+        let area = match crate::emacs_core::eval::data::posn_object_extent::window_part_of_region(
+            region.kind(),
+        ) {
+            Some(part) => part.area_symbol(),
+            // Not part of a window at all — the frame bars replace the window
+            // in GNU's posn, so they name themselves.
+            None => match region.kind() {
+                neomacs_display_protocol::PresentedRegionKind::ToolBar => Some("tool-bar"),
+                neomacs_display_protocol::PresentedRegionKind::TabBar => Some("tab-bar"),
+                // A compact bar is a menu bar that has swallowed the tab bar,
+                // and GNU has no posn for the combination.
+                neomacs_display_protocol::PresentedRegionKind::MenuBar
+                | neomacs_display_protocol::PresentedRegionKind::CompactBar => Some("menu-bar"),
+                _ => None,
+            },
+        };
+        let Some(window_id) = region.window() else {
+            return Some(Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+                window_or_frame: Value::make_frame(frame.id.0),
+                area,
+                x: x.round() as i64,
+                y: y.round() as i64,
+                metrics: MousePosnMetrics {
+                    point: None,
+                    col: None,
+                    row: None,
+                    width: None,
+                    height: None,
+                    anchor_x: None,
+                    anchor_y: None,
+                },
+            }));
+        };
+        let window_id = neovm_edit::emacs_core::display_metrics::WindowId(window_id.get() as u64);
+        let publication = frame.active_presentation_geometry()?;
+        let regions = crate::emacs_core::eval::display_query_hooks::window_regions_at(
+            &publication,
+            crate::emacs_core::eval::data::window_state::PresentationId::new(
+                observation.presentation,
+            ),
+            window_id,
+        )?;
+        let outer = regions.outer();
+        let coordinate_origin =
+            if region.kind() == neomacs_display_protocol::PresentedRegionKind::TextBody {
+                regions.text_body().origin()
+            } else {
+                outer.origin()
+            };
+        let fallback_point = frame.find_window(window_id).and_then(Self::window_point);
+        // A presented text position is only a position in the window's own
+        // buffer for the `LiveWindow` variant. An inactive mini-window's
+        // geometry describes an echo buffer, not `w->contents`; matching the
+        // publication enum keeps that semantic permission attached to the
+        // snapshot instead of reconstructing it with a separate boolean.
+        let metrics = match (
+            frame.active_window_presentation(window_id)?,
+            hit.text_position(),
+        ) {
+            (crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::LiveWindow(_), Some(point)) => {
+                let bounds = point.bounds();
+                let mut object_dimensions = (
+                    bounds.width().round().max(1.0) as i64,
+                    bounds.height().round().max(1.0) as i64,
+                );
+                if region.kind() == neomacs_display_protocol::PresentedRegionKind::TextBody
+                    && frame.effective_window_system().is_none()
+                    && frame.posn_object_extent_mode().enabled()
+                {
+                    let snapshot = frame
+                        .active_window_presentation(window_id)?
+                        .display_snapshot();
+                    let output_row = snapshot
+                        .body_rows
+                        .iter()
+                        .find(|row| row.body_row == point.row())
+                        .map(|row| row.output_row)
+                        .unwrap_or(point.row());
+                    let mut matrix_position = (output_row, point.column());
+                    if point.point_role() == neomacs_display_protocol::posn_object_extent::PosnPointRole::SyntheticBoundary {
+                        if let Some(at) = crate::emacs_core::eval::data::window_state::WindowPart::Text.text_area_coordinate(
+                            (x - regions.text_body().origin().x().get()).round() as i64,
+                            (y - outer.origin().y().get()).round() as i64,
+                            snapshot.header_line_height + snapshot.tab_line_height)
+                            && let Some(walked) = snapshot.point_at_coords(at)
+                        { matrix_position = (walked.row, walked.col); }
+                    }
+                    object_dimensions = crate::emacs_core::eval::data::posn_object_extent::retained_posn_extent(
+                        Some(snapshot),
+                        matrix_position.0,
+                        matrix_position.1,
+                        neomacs_display_protocol::glyph_matrix::GlyphArea::Text,
+                    )
+                    .dimensions();
+                }
+                MousePosnMetrics {
+                    point: Some(point.buffer_position()),
+                    col: Some(point.column()),
+                    row: Some(point.row()),
+                    width: Some(object_dimensions.0),
+                    height: Some(object_dimensions.1),
+                    anchor_x: None,
+                    anchor_y: None,
+                }
+            }
+            (crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::LiveWindow(snapshot), None)
+                if region.kind() == neomacs_display_protocol::PresentedRegionKind::TextBody
+                    && frame.effective_window_system().is_none()
+                    && frame.posn_object_extent_mode().enabled() =>
+            {
+                let extent = crate::emacs_core::eval::data::window_state::WindowPart::Text
+                    .text_area_coordinate(
+                        (x - regions.text_body().origin().x().get()).round() as i64,
+                        (y - outer.origin().y().get()).round() as i64,
+                        snapshot.header_line_height + snapshot.tab_line_height,
+                    )
+                    .and_then(|at| snapshot.point_at_coords(at))
+                    .map_or(
+                        neomacs_display_protocol::posn_object_extent::PosnObjectExtent::Undrawn,
+                        |point| {
+                            crate::emacs_core::eval::data::posn_object_extent::retained_posn_extent(
+                                Some(snapshot),
+                                point.row,
+                                point.col,
+                                neomacs_display_protocol::glyph_matrix::GlyphArea::Text,
+                            )
+                        },
+                    );
+                let (width, height) = extent.dimensions();
+                MousePosnMetrics {
+                    point: fallback_point,
+                    col: None,
+                    row: None,
+                    width: Some(width),
+                    height: Some(height),
+                    anchor_x: None,
+                    anchor_y: None,
+                }
+            }
+            (crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::LiveWindow(_), None)
+            | (crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::GeometryOnly(_), _) => MousePosnMetrics {
+                point: fallback_point,
+                col: None,
+                row: None,
+                width: None,
+                height: None,
+                anchor_x: None,
+                anchor_y: None,
+            },
+        };
+        let position = Self::mouse_posn_descriptor_value(MousePosnDescriptor {
+            window_or_frame: Value::make_window(window_id.0),
+            area,
+            x: (x - coordinate_origin.x().get()).round() as i64,
+            y: (y - coordinate_origin.y().get()).round() as i64,
+            metrics,
+        });
+        let Some(posn_string) = Self::presented_string_position_value(eval, frame, window_id, hit)
+        else {
+            return Some(position);
+        };
+        let Some(mut parts) = neovm_value::value::list_to_vec(&position) else {
+            return Some(position);
+        };
+        parts[4] = posn_string;
+        Some(Value::list(parts))
+    }
+
+    #[doc(hidden)]
+    pub fn presented_string_position_value(
+        eval: &Self,
+        frame: &crate::emacs_core::eval::data::window_state::Frame,
+        window: neovm_edit::emacs_core::display_metrics::WindowId,
+        hit: neomacs_display_protocol::PresentedHit,
+    ) -> Option<Value> {
+        let position = hit.string_position()?;
+        let area = position.area();
+        let snapshot = frame.active_window_presentation(window)?.display_snapshot();
+        let source = snapshot
+            .chrome_strings
+            .iter()
+            .find(|source| source.area() == area && source.string_id() == position.string())?;
+        let object = eval.materialize(source.object()).ok()?.value();
+        Some(Value::cons(
+            object,
+            Value::fixnum(position.char_index().min(i64::MAX as u64) as i64),
+        ))
+    }
+
+    /// Append modifier prefix characters to a symbol name string.
+    #[doc(hidden)]
+    pub fn append_modifier_prefix(modifiers: &Modifiers, out: &mut String) {
+        if modifiers.ctrl {
+            out.push_str("C-");
+        }
+        if modifiers.meta {
+            out.push_str("M-");
+        }
+        if modifiers.shift {
+            out.push_str("S-");
+        }
+        if modifiers.super_ {
+            out.push_str("s-");
+        }
+        if modifiers.hyper {
+            out.push_str("H-");
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn current_idle_duration(&self) -> Option<std::time::Duration> {
+        self.command_loop
+            .idle_start_time
+            .map(|start| start.elapsed())
+    }
+
+    #[doc(hidden)]
+    pub fn current_idle_time_value(&self) -> Value {
+        let Some(idle_duration) = self.current_idle_duration() else {
+            return Value::NIL;
+        };
+        let secs = idle_duration.as_secs() as i64;
+        let usecs = idle_duration.subsec_micros() as i64;
+        Value::list(vec![
+            Value::fixnum((secs >> 16) & 0xFFFF_FFFF),
+            Value::fixnum(secs & 0xFFFF),
+            Value::fixnum(usecs),
+            Value::fixnum(0),
+        ])
+    }
+
+    #[doc(hidden)]
+    pub fn timer_start_idle(&mut self) {
+        if self.command_loop.idle_start_time.is_some() {
+            return;
+        }
+        // Install the background compiles that finished (P2.4): a leaf whose
+        // function is not called again would otherwise stay pending.
+        #[cfg(feature = "jit")]
+        crate::emacs_core::jit::cache::drain_ready_pending(Some(self));
+        let now = std::time::Instant::now();
+        self.command_loop.idle_start_time = Some(now);
+        self.command_loop.last_idle_start_time = Some(now);
+
+        if self.obarray.fboundp_id(INTERNAL_TIMER_START_IDLE.id())
+            && let Err(err) = self.apply(Value::symbol(&INTERNAL_TIMER_START_IDLE), vec![])
+        {
+            tracing::warn!("internal-timer-start-idle failed: {:?}", err);
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn idle_timer_running(&self) -> bool {
+        self.command_loop.idle_start_time.is_some()
+    }
+
+    #[doc(hidden)]
+    pub fn timer_stop_idle(&mut self) {
+        if let Some(start) = self.command_loop.idle_start_time.take() {
+            self.command_loop.last_idle_start_time = Some(start);
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn timer_resume_idle(&mut self) {
+        if self.command_loop.idle_start_time.is_none() {
+            self.command_loop.idle_start_time = self.command_loop.last_idle_start_time;
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn record_input_event(&mut self, event: Value) {
+        self.assign_by_id(LAST_INPUT_EVENT.id(), event);
+        self.record_input_event_history(event);
+    }
+
+    /// GNU `record_char` does not publish `last_input_event`. Input methods
+    /// observe the newly recorded physical key and the previously accepted
+    /// last-input-event until `read_char` accepts their translated result.
+    #[doc(hidden)]
+    pub fn record_input_event_history(&mut self, event: Value) {
+        match self.command_loop.record_input_event(event) {
+            NonmacroInputEvent::Counted => self.advance_num_nonmacro_input_events(),
+            NonmacroInputEvent::SuppressedByMacroPlayback => {}
+        }
+    }
+
+    /// GNU's `num_nonmacro_input_events` (`src/keyboard.c:106`), which is the
+    /// `DEFVAR_INT` `num-nonmacro-input-events` (`src/keyboard.c:13903`) and
+    /// not a separate global: `record_char` increments the same `intmax_t`
+    /// Lisp reads, and `maybe_call_debugger` compares it against
+    /// `when_entered_debugger` (`src/eval.c:2212`).
+    ///
+    /// Reading it through the forwarder rather than from a Rust field is the
+    /// whole point -- a `setq` of the Lisp name has to move the counter, and
+    /// before ledger 183 it did not, because there were two slots.
+    #[doc(hidden)]
+    pub fn num_nonmacro_input_events(&self) -> i64 {
+        self.obarray
+            .int_forwarder(num_nonmacro_input_events_symbol())
+            .map_or(0, neovm_value::forward::LispIntFwd::get_i64)
+    }
+
+    /// GNU `record_char`'s `num_nonmacro_input_events++` (`src/keyboard.c:3576`).
+    #[doc(hidden)]
+    pub fn advance_num_nonmacro_input_events(&mut self) {
+        let next = self.num_nonmacro_input_events().saturating_add(1);
+        if let Some(fwd) = self
+            .obarray
+            .int_forwarder(num_nonmacro_input_events_symbol())
+        {
+            fwd.set(neovm_value::forward::LispInteger::from_i64(next));
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn record_recent_command(&mut self, command: Value) {
+        self.command_loop.record_recent_command(command);
+    }
+
+    #[doc(hidden)]
+    pub fn record_nonmenu_input_event(&mut self, event: Value) {
+        self.assign_by_id(LAST_NONMENU_EVENT.id(), event);
+    }
+
+    #[doc(hidden)]
+    pub fn recent_input_events(&self) -> &[Value] {
+        self.command_loop.recent_input_events()
+    }
+
+    #[doc(hidden)]
+    pub fn clear_recent_input_events(&mut self) {
+        self.command_loop.clear_recent_input_events();
+    }
+
+    #[doc(hidden)]
+    pub fn set_command_key_sequences(&mut self, translated: Vec<Value>, raw: Vec<Value>) {
+        self.command_loop.set_command_key_sequences(translated, raw);
+    }
+
+    #[doc(hidden)]
+    pub fn set_translated_command_keys(&mut self, keys: Vec<Value>) {
+        self.command_loop.set_translated_command_keys(keys);
+    }
+
+    #[doc(hidden)]
+    pub fn set_read_command_keys(&mut self, keys: Vec<Value>) {
+        self.command_loop.set_read_command_keys(keys);
+    }
+
+    #[doc(hidden)]
+    pub fn clear_read_command_keys(&mut self) {
+        self.command_loop.clear_read_command_keys();
+    }
+
+    #[doc(hidden)]
+    pub fn read_command_keys(&self) -> &[Value] {
+        self.command_loop.read_command_keys()
+    }
+
+    #[doc(hidden)]
+    pub fn read_raw_command_keys(&self) -> &[Value] {
+        self.command_loop.read_raw_command_keys()
+    }
+
+    #[doc(hidden)]
+    pub fn sync_keyboard_macro_runtime_vars(&mut self) {
+        self.assign(
+            "defining-kbd-macro",
+            if self.command_loop.keyboard.kboard.defining_kbd_macro {
+                if self.command_loop.keyboard.kboard.appending_kbd_macro {
+                    Value::symbol("append")
+                } else {
+                    Value::T
+                }
+            } else {
+                Value::NIL
+            },
+        );
+        // GNU stores the recorded macro directly in the variable cell
+        // (KVAR(current_kboard, Vlast_kbd_macro) IS `last-kbd-macro'). Only
+        // publish when a macro was actually recorded; otherwise leave the
+        // variable alone so a user `(setq last-kbd-macro ...)' is preserved
+        // (running a macro must not reset it to nil).
+        if let Some(events) = self.command_loop.last_kbd_macro() {
+            let last_kbd_macro = Value::vector(events.to_vec());
+            self.assign_by_id(LAST_KBD_MACRO.id(), last_kbd_macro);
+        }
+        let executing_kbd_macro = self
+            .command_loop
+            .keyboard
+            .kboard
+            .executing_kbd_macro
+            .as_ref()
+            .map(|events| Value::vector(events.clone()))
+            .unwrap_or(Value::NIL);
+        self.assign_by_id(EXECUTING_KBD_MACRO.id(), executing_kbd_macro);
+        self.assign(
+            "executing-kbd-macro-index",
+            Value::fixnum(self.command_loop.keyboard.kboard.kbd_macro_index as i64),
+        );
+    }
+
+    #[doc(hidden)]
+    pub fn start_kbd_macro_runtime(
+        &mut self,
+        initial_events: Option<&[Value]>,
+        append: bool,
+    ) -> Result<(), neovm_value::error::Flow> {
+        if self.command_loop.keyboard.kboard.defining_kbd_macro {
+            return Err(neovm_value::error::signal(
+                "error",
+                vec![Value::string("Already defining a keyboard macro")],
+            ));
+        }
+        self.command_loop
+            .start_kbd_macro_with_initial(initial_events, append);
+        self.sync_keyboard_macro_runtime_vars();
+        // GNU macros.c raises update_mode_lines at successful recording entry.
+        self.request_mode_line_update(crate::emacs_core::eval::ModeLineUpdateTarget::AllBuffers);
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn store_kbd_macro_runtime_event(&mut self, event: Value) {
+        self.command_loop.store_kbd_macro_event(event);
+    }
+
+    #[doc(hidden)]
+    pub fn finalize_kbd_macro_runtime_chars(&mut self) {
+        self.command_loop.finalize_kbd_macro_chars();
+    }
+
+    #[doc(hidden)]
+    pub fn cancel_kbd_macro_runtime_events(&mut self) {
+        self.command_loop.cancel_kbd_macro_events();
+    }
+
+    #[doc(hidden)]
+    pub fn end_kbd_macro_runtime(&mut self) -> Result<Vec<Value>, neovm_value::error::Flow> {
+        if !self.command_loop.keyboard.kboard.defining_kbd_macro {
+            return Err(neovm_value::error::signal(
+                "error",
+                vec![Value::string("Not defining a keyboard macro")],
+            ));
+        }
+        let previous = self
+            .command_loop
+            .last_kbd_macro()
+            .map(|events| events.to_vec());
+        let recorded = self.command_loop.end_kbd_macro();
+        if let Some(previous) = previous {
+            self.kmacro.macro_ring.push(previous);
+        }
+        self.sync_keyboard_macro_runtime_vars();
+        // GNU end_kbd_macro removes the recording indicator on the next display.
+        self.request_mode_line_update(crate::emacs_core::eval::ModeLineUpdateTarget::AllBuffers);
+        Ok(recorded)
+    }
+
+    #[doc(hidden)]
+    pub fn begin_executing_kbd_macro_runtime(&mut self, events: Vec<Value>) {
+        self.command_loop.begin_executing_kbd_macro(events);
+        self.sync_keyboard_macro_runtime_vars();
+    }
+
+    #[doc(hidden)]
+    pub fn snapshot_executing_kbd_macro_runtime(&self) -> ExecutingKbdMacroRuntimeSnapshot {
+        self.command_loop
+            .keyboard
+            .kboard
+            .snapshot_executing_kbd_macro_runtime()
+    }
+
+    #[doc(hidden)]
+    pub fn restore_executing_kbd_macro_runtime(
+        &mut self,
+        snapshot: ExecutingKbdMacroRuntimeSnapshot,
+    ) {
+        self.command_loop
+            .keyboard
+            .kboard
+            .restore_executing_kbd_macro_runtime(snapshot);
+        self.sync_keyboard_macro_runtime_vars();
+    }
+
+    #[doc(hidden)]
+    pub fn set_executing_kbd_macro_runtime_index(&mut self, index: usize) {
+        self.command_loop
+            .keyboard
+            .kboard
+            .set_executing_kbd_macro_index(index);
+        self.sync_keyboard_macro_runtime_vars();
+    }
+
+    #[doc(hidden)]
+    pub fn note_executing_kbd_macro_iteration(&mut self, success_count: usize) {
+        self.command_loop
+            .keyboard
+            .kboard
+            .note_executing_kbd_macro_iteration(success_count);
+        self.sync_keyboard_macro_runtime_vars();
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[doc(hidden)]
+    pub fn finish_executing_kbd_macro_runtime(&mut self) {
+        self.command_loop.finish_executing_kbd_macro();
+        self.sync_keyboard_macro_runtime_vars();
+    }
+
+    #[doc(hidden)]
+    pub fn clear_command_key_state(&mut self, keep_record: bool) {
+        self.clear_read_command_keys();
+        if !keep_record {
+            self.clear_recent_input_events();
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn set_this_command_keys_from_string(
+        &mut self,
+        keys: &LispString,
+    ) -> Result<(), neovm_value::error::Flow> {
+        let key_bytes = keys.as_bytes();
+        let mut translated = Vec::new();
+        let mut pos = 0;
+        let mut idx = 0;
+        while pos < key_bytes.len() {
+            let (code, len) = neovm_value::emacs_char::string_char(&key_bytes[pos..]);
+            let mut code = code.code();
+            // Match GNU `keyboard.c:12239-12252`: byte8 chars are normalized
+            // back to raw 8-bit bytes before the `M-x` special case runs.
+            if neovm_value::emacs_char::char_byte8_p(code) {
+                code = neovm_value::emacs_char::char_to_byte8(code) as u32;
+            }
+            let event = if idx == 0 && code == 248 {
+                Value::fixnum(('x' as i64) | KEY_CHAR_META)
+            } else {
+                Value::fixnum(code as i64)
+            };
+            translated.push(event);
+            pos += len;
+            idx += 1;
+        }
+        self.set_command_key_sequences(translated, Vec::new());
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Interactive spec parsing
+// ---------------------------------------------------------------------------
+
+/// Parsed interactive argument specification.
+#[derive(Clone, Debug)]
+pub enum InteractiveCode {
+    /// No arguments.
+    None,
+    /// Buffer name (with completion).
+    BufferName(LispString),
+    /// Character.
+    Character(LispString),
+    /// Point (cursor position).
+    Point,
+    /// Mark.
+    Mark,
+    /// Region (point and mark).
+    Region,
+    /// String from minibuffer.
+    StringArg(LispString),
+    /// Number from minibuffer.
+    NumberArg(LispString),
+    /// File name (with completion).
+    FileName(LispString),
+    /// Directory name.
+    DirectoryName(LispString),
+    /// Prefix argument (numeric).
+    PrefixNumeric,
+    /// Raw prefix argument.
+    PrefixRaw,
+    /// Function name (with completion).
+    FunctionName(LispString),
+    /// Variable name (with completion).
+    VariableName(LispString),
+    /// Command name (with completion).
+    CommandName(LispString),
+    /// Key sequence.
+    KeySequenceArg(LispString),
+    /// Lisp expression.
+    Expression(LispString),
+}
+
+fn interactive_prompt_lisp_string(prompt: &str) -> LispString {
+    crate::emacs_core::builtins::plain_str_to_lisp_string(prompt, !prompt.is_ascii())
+}
+
+/// Parse an interactive specification string.
+/// Example: "sSearch for: \nnRepeat count: "
+pub fn parse_interactive_spec(spec: &str) -> Vec<InteractiveCode> {
+    if spec.is_empty() {
+        return vec![InteractiveCode::None];
+    }
+
+    let mut codes = Vec::new();
+    let parts: Vec<&str> = spec.split('\n').collect();
+
+    for part in parts {
+        if part.is_empty() {
+            continue;
+        }
+        let code = part.chars().next().unwrap();
+        let prompt = &part[1..];
+        let prompt = interactive_prompt_lisp_string(prompt);
+
+        codes.push(match code {
+            'b' => InteractiveCode::BufferName(prompt.clone()),
+            'B' => InteractiveCode::BufferName(prompt.clone()),
+            'c' => InteractiveCode::Character(prompt.clone()),
+            'd' => InteractiveCode::Point,
+            'm' => InteractiveCode::Mark,
+            'r' => InteractiveCode::Region,
+            's' => InteractiveCode::StringArg(prompt.clone()),
+            'S' => InteractiveCode::StringArg(prompt.clone()),
+            'n' => InteractiveCode::NumberArg(prompt.clone()),
+            'N' => InteractiveCode::NumberArg(prompt.clone()),
+            'f' => InteractiveCode::FileName(prompt.clone()),
+            'F' => InteractiveCode::FileName(prompt.clone()),
+            'D' => InteractiveCode::DirectoryName(prompt.clone()),
+            'p' => InteractiveCode::PrefixNumeric,
+            'P' => InteractiveCode::PrefixRaw,
+            'a' => InteractiveCode::FunctionName(prompt.clone()),
+            'C' => InteractiveCode::CommandName(prompt.clone()),
+            'v' => InteractiveCode::VariableName(prompt.clone()),
+            'k' => InteractiveCode::KeySequenceArg(prompt.clone()),
+            'x' | 'X' => InteractiveCode::Expression(prompt.clone()),
+            _ => InteractiveCode::StringArg(prompt),
+        });
+    }
+
+    codes
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn key_sequence_translation_events(
+    translation: Value,
+    mode: SymbolMode,
+) -> Option<Vec<Value>> {
+    if translation.is_nil() || translation.is_fixnum() {
+        return None;
+    }
+    if crate::emacs_core::eval::keymap_lookup::is_list_keymap(&translation, mode) {
+        return None;
+    }
+
+    if translation.is_vector() {
+        return Some(translation.as_vector_data()?.to_vec());
+    }
+
+    if let Some(s) = translation.as_utf8_str() {
+        return Some(s.chars().map(|ch| Value::fixnum(ch as i64)).collect());
+    }
+
+    Some(vec![translation])
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+// keyboard_test.rs and its gnu-oracle/extended-keysyms/frame-focus subfiles
+// moved to core moved_eval (option-A re-home); eval keeps no test module here.

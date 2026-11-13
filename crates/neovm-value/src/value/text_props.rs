@@ -1,0 +1,5790 @@
+//! Text-property interval storage for buffers and strings.
+//!
+//! GNU Emacs represents text properties as an interval tree rooted from the
+//! owning string or buffer.  This module keeps the existing Rust API name
+//! (`TextPropertyTable`) for callers while preserving GNU's mutation shape:
+//! split at the edit range, change the affected interval plists, and preserve
+//! raw interval boundaries.  Higher-level property-change queries decide
+//! whether adjacent interval plists are semantically equal.
+//!
+//! | Knob | Default | Values | Effect |
+//! |---|---|---|---|
+//! | `NEOMACS_WATCHED_PROP_DEMAND` | `on` | `off`; `on`/`1`/`true`/`yes` | Advance bounded watched-property scans only after another interval is needed; generic cursors remain eager. |
+
+use crate::intern::SymId;
+use std::collections::HashMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+};
+
+use rustc_hash::FxHashSet;
+
+use super::positions::{CharLen, CharPos0, CharRange};
+use super::scratch_bridge::{
+    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
+};
+use super::{Value, eq_value, equal_value};
+use crate::error::{Flow, LispCondition, signal};
+use crate::gc_trace::GcTrace;
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static INTERVAL_BALANCE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn reset_interval_balance_calls_for_test() {
+    INTERVAL_BALANCE_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn interval_balance_calls_for_test() -> usize {
+    INTERVAL_BALANCE_CALLS.with(std::cell::Cell::get)
+}
+
+// ---------------------------------------------------------------------------
+// PropertyInterval
+// ---------------------------------------------------------------------------
+
+/// Public snapshot of one text-property interval.
+///
+/// Runtime storage uses the same start/end/plist shape.  This type remains the
+/// serialization and inspection shape used by pdump/tests.  Bounds are character
+/// positions, matching GNU intervals; buffer owners convert byte positions at
+/// the boundary.
+#[derive(Clone, Debug)]
+pub struct PropertyInterval {
+    /// Character position where this interval starts (inclusive).
+    pub start: usize,
+    /// Character position where this interval ends (exclusive).
+    pub end: usize,
+    /// Snapshot map for the interval plist.
+    pub properties: HashMap<Value, Value>,
+    /// Property keys in GNU plist order, newest first.
+    #[cfg(feature = "test-support")]
+    pub(crate) key_order: Vec<Value>,
+    #[cfg(not(feature = "test-support"))]
+    pub(crate) key_order: Vec<Value>,
+}
+
+/// GNU `object-intervals` shaped run for the complete object partition.
+///
+/// Bounds are character positions.  Unlike [`PropertyInterval`], this also
+/// represents nil-property gaps once an interval tree exists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjectIntervalRun {
+    start: CharPos0,
+    end: CharPos0,
+    properties: Vec<(Value, Value)>,
+}
+
+impl ObjectIntervalRun {
+    pub fn new(start: CharPos0, end: CharPos0, properties: Vec<(Value, Value)>) -> Self {
+        Self {
+            start,
+            end,
+            properties,
+        }
+    }
+
+    pub fn start(&self) -> CharPos0 {
+        self.start
+    }
+
+    pub fn end(&self) -> CharPos0 {
+        self.end
+    }
+
+    pub fn properties(&self) -> &[(Value, Value)] {
+        &self.properties
+    }
+
+    pub fn into_parts(self) -> (CharPos0, CharPos0, Vec<(Value, Value)>) {
+        (self.start, self.end, self.properties)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObjectIntervalPlistRun {
+    start: CharPos0,
+    end: CharPos0,
+    plist: Value,
+}
+
+impl ObjectIntervalPlistRun {
+    pub fn new(start: CharPos0, end: CharPos0, plist: Value) -> Self {
+        debug_assert!(start.get() <= end.get());
+        Self { start, end, plist }
+    }
+
+    pub fn start(&self) -> CharPos0 {
+        self.start
+    }
+
+    pub fn end(&self) -> CharPos0 {
+        self.end
+    }
+
+    pub fn plist(&self) -> Value {
+        self.plist
+    }
+}
+
+impl PartialEq<(usize, usize, Vec<(Value, Value)>)> for ObjectIntervalRun {
+    fn eq(&self, other: &(usize, usize, Vec<(Value, Value)>)) -> bool {
+        self.start.get() == other.0 && self.end.get() == other.1 && self.properties == other.2
+    }
+}
+
+impl PropertyInterval {
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn new(range: CharRange) -> Self {
+        Self {
+            start: range.start().get(),
+            end: range.end().get(),
+            properties: HashMap::new(),
+            key_order: Vec::new(),
+        }
+    }
+
+    pub fn with_properties(range: CharRange, properties: HashMap<Value, Value>) -> Self {
+        let key_order: Vec<Value> = properties.keys().copied().collect();
+        Self {
+            start: range.start().get(),
+            end: range.end().get(),
+            properties,
+            key_order,
+        }
+    }
+
+    fn from_plist(range: CharRange, plist: &[(Value, Value)]) -> Self {
+        let mut properties = HashMap::new();
+        for (key, value) in plist.iter().rev() {
+            properties.insert(*key, *value);
+        }
+        let mut key_order = Vec::new();
+        for (key, _) in plist {
+            if !key_order.iter().any(|seen| eq_value(seen, key)) {
+                key_order.push(*key);
+            }
+        }
+        Self {
+            start: range.start().get(),
+            end: range.end().get(),
+            properties,
+            key_order,
+        }
+    }
+
+    fn into_plist(self) -> Vec<(Value, Value)> {
+        let mut plist = Vec::new();
+        for key in &self.key_order {
+            if let Some(value) = self.properties.get(key)
+                && !plist.iter().any(|(seen, _)| eq_value(seen, key))
+            {
+                plist.push((*key, *value));
+            }
+        }
+        for (key, value) in self.properties {
+            if !plist.iter().any(|(seen, _)| eq_value(seen, &key)) {
+                plist.push((key, value));
+            }
+        }
+        plist
+    }
+
+    /// Iterate properties in GNU plist order.
+    pub fn ordered_properties(&self) -> impl Iterator<Item = (Value, &Value)> {
+        self.key_order
+            .iter()
+            .filter_map(move |key| self.properties.get(key).map(|value| (*key, value)))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TextPropertyPlistRun {
+    range: CharRange,
+    plist: Vec<(Value, Value)>,
+}
+
+impl TextPropertyPlistRun {
+    pub(crate) fn new(range: CharRange, plist: Vec<(Value, Value)>) -> Self {
+        Self { range, plist }
+    }
+
+    pub(crate) fn range(&self) -> CharRange {
+        self.range
+    }
+
+    fn into_interval_run(self) -> Option<IntervalRun> {
+        (!self.range.is_empty()).then(|| {
+            IntervalRun::new_in_char_range(self.range, plist_value_from_pairs(&self.plist))
+        })
+    }
+}
+
+type IntervalPlist = Value;
+
+fn plist_value_from_pairs(plist: &[(Value, Value)]) -> Value {
+    let mut items = Vec::with_capacity(plist.len() * 2);
+    for (key, value) in plist {
+        crate::symbol::SymbolPropertyRevision::observe_category_property(*key, *value);
+        items.push(*key);
+        items.push(*value);
+    }
+    Value::list(items)
+}
+
+/// Build a fresh plist with new cons cells holding the same keys/values, like
+/// GNU `Fcopy_sequence` of an interval plist.  The (atom-or-not) values are
+/// shared; only the spine cons cells are new, so an in-place value-cell
+/// rewrite of the copy cannot reach the original plist that may have been
+/// handed to Lisp by `text-properties-at`.
+fn copy_plist_value(plist: Value) -> Value {
+    if plist.is_nil() {
+        return Value::NIL;
+    }
+    // One cons walk into a stack buffer, then one list build: every raw
+    // split of a propertied interval lands here, and the pairs `Vec` plus
+    // the flattened `Vec` it used to build were two heap round trips per
+    // copy. Same shape as before -- a dangling odd key is dropped -- and no
+    // rooting is needed: the elements are held by `plist` itself, and cons
+    // allocation cannot collect (`Value::list_from_slice`).
+    let mut items: smallvec::SmallVec<[Value; 16]> = smallvec::SmallVec::new();
+    let mut tail = plist;
+    while tail.is_cons() {
+        let rest = tail.cons_cdr();
+        if !rest.is_cons() {
+            break;
+        }
+        items.push(tail.cons_car());
+        items.push(rest.cons_car());
+        tail = rest.cons_cdr();
+    }
+    Value::list_from_slice(&items)
+}
+
+/// The property symbols `IntervalNode::extract_cached` looks for, interned
+/// once (these are core symbols interned at bootstrap, so their ids are stable
+/// across a pdump load).
+struct PlistFlagSymbols {
+    front_sticky: SymId,
+    rear_nonsticky: SymId,
+    read_only: SymId,
+    invisible: SymId,
+    syntax_table: SymId,
+    category: SymId,
+}
+
+fn cached_plist_flag_symbols() -> &'static PlistFlagSymbols {
+    static SYMS: std::sync::OnceLock<PlistFlagSymbols> = std::sync::OnceLock::new();
+    SYMS.get_or_init(|| PlistFlagSymbols {
+        front_sticky: crate::intern::intern("front-sticky"),
+        rear_nonsticky: crate::intern::intern("rear-nonsticky"),
+        read_only: crate::intern::intern("read-only"),
+        invisible: crate::intern::intern("invisible"),
+        syntax_table: crate::intern::intern("syntax-table"),
+        category: crate::intern::intern("category"),
+    })
+}
+
+/// Where a newly added key lands in an interval plist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NewPropertyPosition {
+    /// GNU `add_properties`: prepend (what most text-property writes do).
+    Prepend,
+    /// GNU `plist_put`: append after the last pair (mode-line attribution).
+    Append,
+}
+
+fn plist_pairs(plist: Value) -> Vec<(Value, Value)> {
+    let mut pairs = Vec::new();
+    let mut tail = plist;
+    while tail.is_cons() {
+        let key = tail.cons_car();
+        let rest = tail.cons_cdr();
+        if !rest.is_cons() {
+            break;
+        }
+        pairs.push((key, rest.cons_car()));
+        tail = rest.cons_cdr();
+    }
+    pairs
+}
+
+fn plist_value_prepend_pair(plist: Value, key: Value, value: Value) -> Value {
+    crate::symbol::SymbolPropertyRevision::observe_category_property(key, value);
+    let saved = save_scratch_gc_roots();
+    push_scratch_gc_root(plist);
+    push_scratch_gc_root(key);
+    push_scratch_gc_root(value);
+
+    let value_cell = Value::cons(value, plist);
+    push_scratch_gc_root(value_cell);
+    let result = Value::cons(key, value_cell);
+
+    restore_scratch_gc_roots(saved);
+    result
+}
+
+fn plist_value_get(plist: Value, key: Value) -> Option<Value> {
+    let mut tail = plist;
+    while tail.is_cons() {
+        let name = tail.cons_car();
+        let rest = tail.cons_cdr();
+        if !rest.is_cons() {
+            return None;
+        }
+        if eq_value(&name, &key) {
+            return Some(rest.cons_car());
+        }
+        tail = rest.cons_cdr();
+    }
+    None
+}
+
+fn plist_value_put_replace(plist: &mut Value, key: Value, value: Value) -> bool {
+    crate::symbol::SymbolPropertyRevision::observe_category_property(key, value);
+    let mut tail = *plist;
+    while tail.is_cons() {
+        let name = tail.cons_car();
+        let rest = tail.cons_cdr();
+        if !rest.is_cons() {
+            break;
+        }
+        if eq_value(&name, &key) {
+            let existing = rest.cons_car();
+            if eq_value(&existing, &value) {
+                return false;
+            }
+            rest.set_car(value);
+            return true;
+        }
+        tail = rest.cons_cdr();
+    }
+
+    // Missing key: prepend the pair onto the EXISTING plist — two new cons
+    // cells sharing the old spine, exactly GNU `add_properties`
+    // (`i->plist = Fcons (sym, Fcons (val, i->plist))`). The interval owns its
+    // plist (splits copy it), so sharing the tail is private. The old code
+    // materialized every pair into a Vec and rebuilt the whole plist — n new
+    // conses + a Vec per added property, 1,269 times in the type-sim window.
+    *plist = plist_value_prepend_pair(*plist, key, value);
+    true
+}
+
+/// GNU `plist_put` order: an existing key keeps its position and takes the
+/// new value; a key that is absent is appended after the last complete pair.
+/// This is the order GNU's mode-line formatter exposes at the END of its
+/// pipeline (xdisp store_mode_line_string computes its property list with
+/// `plist_put`, so `mode-line-elt-no` lands last when the source plist did
+/// not already carry it). `plist_value_put_replace` above mirrors
+/// `add_properties`, which PREPENDS; the two are not interchangeable.
+fn plist_value_put_replace_appending_new(plist: &mut Value, key: Value, value: Value) -> bool {
+    crate::symbol::SymbolPropertyRevision::observe_category_property(key, value);
+    let mut prev = Value::NIL;
+    let mut tail = *plist;
+    while tail.is_cons() {
+        let name = tail.cons_car();
+        let rest = tail.cons_cdr();
+        if !rest.is_cons() {
+            break;
+        }
+        if eq_value(&name, &key) {
+            let existing = rest.cons_car();
+            if eq_value(&existing, &value) {
+                return false;
+            }
+            rest.set_car(value);
+            return true;
+        }
+        prev = tail;
+        tail = rest.cons_cdr();
+    }
+
+    let saved = save_scratch_gc_roots();
+    push_scratch_gc_root(*plist);
+    push_scratch_gc_root(key);
+    push_scratch_gc_root(value);
+
+    if prev.is_nil() {
+        // GNU plist_put's empty/no-complete-pair branch conses in front,
+        // keeping any malformed tail.
+        let value_cell = Value::cons(value, *plist);
+        push_scratch_gc_root(value_cell);
+        *plist = Value::cons(key, value_cell);
+    } else {
+        let value_cell = Value::cons(value, Value::NIL);
+        push_scratch_gc_root(value_cell);
+        let pair = Value::cons(key, value_cell);
+        // `prev` is the last complete pair's key cell; its cdr is the pair's
+        // value cell, whose cdr is the malformed tail or nil.
+        prev.cons_cdr().set_cdr(pair);
+    }
+    restore_scratch_gc_roots(saved);
+    true
+}
+
+/// Remove KEY from a property list IN PLACE, mirroring GNU `remove_properties`
+/// (src/textprop.c). `text-properties-at` returns the live interval plist, so a
+/// captured snapshot aliases these cons cells; rebuilding the plist (the old
+/// behavior) left that snapshot stale. Head matches advance the plist pointer
+/// without mutating the old head cell; body matches are spliced out via
+/// `set_cdr`. Allocates nothing.
+fn plist_value_remove(plist: &mut Value, key: Value) -> bool {
+    let mut changed = false;
+
+    // Phase 1: strip matching pairs at the head (GNU advances
+    // current_plist = XCDR(XCDR(current_plist)) without mutating the old head).
+    let mut current = *plist;
+    while current.is_cons() {
+        let rest = current.cons_cdr();
+        if !rest.is_cons() {
+            break;
+        }
+        if eq_value(&current.cons_car(), &key) {
+            current = rest.cons_cdr();
+            changed = true;
+        } else {
+            break;
+        }
+    }
+
+    // Phase 2: splice out body matches in place
+    // (GNU `Fsetcdr (XCDR (tail2), XCDR (XCDR (this)))`).
+    let mut tail = current;
+    while tail.is_cons() {
+        let val_cell = tail.cons_cdr(); // XCDR(tail2)
+        if !val_cell.is_cons() {
+            break;
+        }
+        let this = val_cell.cons_cdr(); // next key cell
+        if this.is_cons() && eq_value(&this.cons_car(), &key) {
+            let this_val = this.cons_cdr();
+            if this_val.is_cons() {
+                val_cell.set_cdr(this_val.cons_cdr());
+                changed = true;
+                continue; // stay on the same tail; another match may follow
+            }
+        }
+        tail = this;
+    }
+
+    if changed {
+        *plist = current;
+    }
+    changed
+}
+
+// ---------------------------------------------------------------------------
+// IntervalNode — GNU-shaped internal interval tree node
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct IntervalId(pub(crate) usize);
+
+/// Internal interval node.
+///
+/// This mirrors GNU `struct interval`: each node stores subtree
+/// `total_length`, a cached `position`, parent/left/right links, cached bits,
+/// and the Lisp plist.  A node's own length is derived from `total_length`
+/// minus the left and right subtree lengths, just like GNU's `LENGTH` macro.
+#[derive(Clone, Debug)]
+pub(crate) struct IntervalNode {
+    total_length: CharLen,
+    position: CharPos0,
+    left: Option<IntervalId>,
+    right: Option<IntervalId>,
+    parent: Option<IntervalId>,
+    front_sticky: bool,
+    rear_sticky: bool,
+    write_protect: bool,
+    visible: bool,
+    /// Plist contains a `syntax-table` or `category` key (cached like the
+    /// bits above): the syntax scanner's run coalescing races through
+    /// bit-clear intervals with one bool compare instead of plist walks.
+    has_syntax_prop: bool,
+    pub(crate) plist: IntervalPlist,
+}
+
+impl IntervalNode {
+    fn new(length: CharLen, position: CharPos0, plist: IntervalPlist) -> Self {
+        let (front_sticky, rear_sticky, write_protect, visible, has_syntax_prop) =
+            Self::extract_cached(plist);
+        Self {
+            total_length: length,
+            position,
+            left: None,
+            right: None,
+            parent: None,
+            front_sticky,
+            rear_sticky,
+            write_protect,
+            visible,
+            has_syntax_prop,
+            plist,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn with_cached(
+        length: CharLen,
+        position: CharPos0,
+        front_sticky: bool,
+        rear_sticky: bool,
+        write_protect: bool,
+        visible: bool,
+        has_syntax_prop: bool,
+        plist: IntervalPlist,
+    ) -> Self {
+        Self {
+            total_length: length,
+            position,
+            left: None,
+            right: None,
+            parent: None,
+            front_sticky,
+            rear_sticky,
+            write_protect,
+            visible,
+            has_syntax_prop,
+            plist,
+        }
+    }
+
+    fn is_empty_plist(&self) -> bool {
+        self.plist.is_nil()
+    }
+
+    /// Extract cached booleans from a plist (mirrors GNU's cache bits).
+    fn extract_cached(plist: Value) -> (bool, bool, bool, bool, bool) {
+        // A direct cons walk comparing interned ids: this runs on every
+        // interval plist refresh (1,674 times in the type-sim window), and the
+        // previous Vec-of-pairs + symbol-NAME string matches were a measurable
+        // allocation + compare tax for five boolean flags.
+        let ids = cached_plist_flag_symbols();
+        let mut front_sticky = false;
+        let mut rear_sticky = false;
+        let mut write_protect = false;
+        let mut visible = true;
+        let mut has_syntax_prop = false;
+        let mut tail = plist;
+        while tail.is_cons() {
+            let key = tail.cons_car();
+            let rest = tail.cons_cdr();
+            if !rest.is_cons() {
+                break;
+            }
+            let value = rest.cons_car();
+            if let Some(id) = key.as_bare_symbol_id() {
+                if id == ids.front_sticky {
+                    front_sticky = value.is_truthy();
+                } else if id == ids.rear_nonsticky {
+                    rear_sticky = !value.is_truthy();
+                } else if id == ids.read_only {
+                    write_protect = value.is_truthy();
+                } else if id == ids.invisible {
+                    visible = !value.is_truthy();
+                } else if id == ids.syntax_table || id == ids.category {
+                    has_syntax_prop = true;
+                }
+            }
+            tail = rest.cons_cdr();
+        }
+        (
+            front_sticky,
+            rear_sticky,
+            write_protect,
+            visible,
+            has_syntax_prop,
+        )
+    }
+
+    /// Re-extract and update cached booleans from current plist.
+    fn refresh_cache(&mut self) {
+        let (fs, rs, wp, vis, hsp) = Self::extract_cached(self.plist);
+        self.has_syntax_prop = hsp;
+        self.front_sticky = fs;
+        self.rear_sticky = rs;
+        self.write_protect = wp;
+        self.visible = vis;
+    }
+}
+
+#[derive(Clone, Debug)]
+struct IntervalRun {
+    range: CharRange,
+    front_sticky: bool,
+    rear_sticky: bool,
+    write_protect: bool,
+    visible: bool,
+    has_syntax_prop: bool,
+    plist: IntervalPlist,
+}
+
+impl IntervalRun {
+    fn default_in_char_range(range: CharRange) -> Self {
+        Self::new_in_char_range(range, Value::NIL)
+    }
+
+    fn new_in_char_range(range: CharRange, plist: IntervalPlist) -> Self {
+        let (front_sticky, rear_sticky, write_protect, visible, has_syntax_prop) =
+            IntervalNode::extract_cached(plist);
+        Self {
+            range,
+            front_sticky,
+            rear_sticky,
+            write_protect,
+            visible,
+            has_syntax_prop,
+            plist,
+        }
+    }
+
+    fn from_node(start: CharPos0, node: &IntervalNode, length: CharLen) -> Self {
+        Self {
+            range: CharRange::from_start_len(start, length),
+            front_sticky: node.front_sticky,
+            rear_sticky: node.rear_sticky,
+            write_protect: node.write_protect,
+            visible: node.visible,
+            has_syntax_prop: node.has_syntax_prop,
+            plist: node.plist,
+        }
+    }
+
+    fn start(&self) -> CharPos0 {
+        self.range.start()
+    }
+
+    fn end(&self) -> CharPos0 {
+        self.range.end()
+    }
+
+    fn set_start(&mut self, start: CharPos0) {
+        self.range = CharRange::new(start, self.end());
+    }
+
+    fn set_end(&mut self, end: CharPos0) {
+        self.range = CharRange::new(self.start(), end);
+    }
+
+    fn shift_by(&mut self, offset: CharLen) {
+        self.range = CharRange::new(self.start().add_len(offset), self.end().add_len(offset));
+    }
+
+    fn len(&self) -> CharLen {
+        self.range.len()
+    }
+
+    fn is_empty_plist(&self) -> bool {
+        self.plist.is_nil()
+    }
+
+    fn refresh_cache(&mut self) {
+        let (fs, rs, wp, vis, hsp) = IntervalNode::extract_cached(self.plist);
+        self.has_syntax_prop = hsp;
+        self.front_sticky = fs;
+        self.rear_sticky = rs;
+        self.write_protect = wp;
+        self.visible = vis;
+    }
+
+    fn to_node(&self) -> IntervalNode {
+        IntervalNode::with_cached(
+            self.len(),
+            self.range.start(),
+            self.front_sticky,
+            self.rear_sticky,
+            self.write_protect,
+            self.visible,
+            self.has_syntax_prop,
+            self.plist,
+        )
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct IntervalTree {
+    root: Option<IntervalId>,
+    pub(crate) nodes: Vec<IntervalNode>,
+    /// Positional last-descent memo for `find_id`: `(start, end, id)` of the most
+    /// recently located interval, tagged with the tree version it was valid for.
+    /// A lookup that lands inside `[start, end)` returns in O(1) instead of
+    /// re-descending the order-statistic tree O(log n). font-lock reads text
+    /// properties at adjacent positions, so consecutive lookups overwhelmingly hit
+    /// the same interval. GNU's `find_interval` re-descends from the root on every
+    /// call, so this beats it.
+    ///
+    /// Stored as plain atomics (not a `Cell`) because `TextPropertyTable` once
+    /// backed a process-wide empty sentinel; it holds Lisp values and is now
+    /// confined to its mutator thread like them. `version` is bumped by the
+    /// three in-place structural/positional mutators (`push_node`,
+    /// `add_length_to_ancestors`, `delete_node`); a lookup trusts the memo only
+    /// when `cache_gen == gen`, so any such mutation invalidates it. Plist-value
+    /// changes (`set_node_plist`) deliberately do NOT bump `version`: they move no
+    /// interval boundary, the `pos -> interval` mapping is unchanged, and the
+    /// caller reads the node's plist fresh via the returned id. Access is
+    /// cooperatively single-threaded, so `Relaxed` ordering suffices and the memo
+    /// cannot tear. `find_id_uncached` (test-only) plus a randomized differential
+    /// test prove the memo never disagrees with a fresh descent.
+    version: AtomicU64,
+    cache_gen: MemoGeneration,
+    cache_start: AtomicUsize,
+    cache_end: AtomicUsize,
+    cache_id: AtomicUsize,
+    /// In-order-last node memo for `prune_trailing_empty_intervals`, keyed by
+    /// `version` exactly like the find memo (see `rightmost_id_memo`).
+    rightmost_gen: MemoGeneration,
+    rightmost_id_cache: AtomicUsize,
+}
+
+/// Generation tag pairing a memo with the tree version it was computed for.
+///
+/// A newtype with its own `Default` so that "no memo yet" is the value a
+/// container gets for free. `IntervalTree` previously derived `Default`, which
+/// produced `cache_gen == 0` -- equal to the starting `version` -- so a
+/// brand-new tree reported its memo VALID while `cache_id` still pointed at a
+/// node that did not exist. The containment check masked it (`0 <= pos && pos
+/// < 0` never holds) until the sequential finger's `pos == cache_end` arm,
+/// which IS satisfied at position 0, indexed an empty node vec.
+///
+/// Encoding the empty state here rather than in a hand-written `Default` means
+/// the derive is correct again: adding a field cannot silently reintroduce the
+/// bug, and every construction path gets the sentinel without having to know
+/// about it.
+#[derive(Debug)]
+struct MemoGeneration(AtomicU64);
+
+impl MemoGeneration {
+    /// No memo has been stored. Distinct from every real version, which start
+    /// at 0 and only increment.
+    const EMPTY: u64 = u64::MAX;
+
+    #[inline]
+    fn get(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    fn set(&self, version: u64) {
+        self.0.store(version, Ordering::Relaxed);
+    }
+}
+
+impl Default for MemoGeneration {
+    fn default() -> Self {
+        Self(AtomicU64::new(Self::EMPTY))
+    }
+}
+
+impl Clone for IntervalTree {
+    fn clone(&self) -> Self {
+        // A clone starts with a fresh (empty) memo; it will populate its own.
+        Self {
+            root: self.root,
+            nodes: self.nodes.clone(),
+            version: AtomicU64::new(0),
+            cache_gen: MemoGeneration::default(),
+            cache_start: AtomicUsize::new(0),
+            cache_end: AtomicUsize::new(0),
+            cache_id: AtomicUsize::new(0),
+            rightmost_gen: MemoGeneration::default(),
+            rightmost_id_cache: AtomicUsize::new(0),
+        }
+    }
+}
+
+/// Process policy for bounded watched-property scans. It contains no Lisp
+/// state; `OnceLock` publishes one immutable selector to concurrent readers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WatchedPropDemandMode {
+    Off,
+    On,
+}
+
+fn parse_watched_prop_demand_mode(value: Option<&str>) -> WatchedPropDemandMode {
+    if value.is_none_or(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "on" | "1" | "true" | "yes"
+        )
+    }) {
+        WatchedPropDemandMode::On
+    } else {
+        WatchedPropDemandMode::Off
+    }
+}
+
+/// Only an absent setting selects the default; a present non-Unicode
+/// setting keeps the explicit OFF path. This pure parser retains no state and
+/// can be called concurrently.
+fn parse_watched_prop_demand_os_mode(value: Option<&std::ffi::OsStr>) -> WatchedPropDemandMode {
+    match value {
+        None => parse_watched_prop_demand_mode(None),
+        Some(value) => value.to_str().map_or(WatchedPropDemandMode::Off, |value| {
+            parse_watched_prop_demand_mode(Some(value))
+        }),
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static WATCHED_PROP_DEMAND_OVERRIDE: std::cell::Cell<Option<WatchedPropDemandMode>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn with_watched_prop_demand_mode_for_test<T>(
+    mode: WatchedPropDemandMode,
+    body: impl FnOnce() -> T,
+) -> T {
+    let restore = crate::tls_scope::TlsScope::new(&WATCHED_PROP_DEMAND_OVERRIDE, Some(mode));
+    let result = body();
+    drop(restore);
+    result
+}
+
+#[inline]
+fn watched_prop_demand_mode() -> WatchedPropDemandMode {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(mode) = WATCHED_PROP_DEMAND_OVERRIDE.with(std::cell::Cell::get) {
+        return mode;
+    }
+    static MODE: std::sync::OnceLock<WatchedPropDemandMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        parse_watched_prop_demand_os_mode(
+            std::env::var_os("NEOMACS_WATCHED_PROP_DEMAND").as_deref(),
+        )
+    })
+}
+
+/// Forward in-order iterator over a tree's intervals (see [`IntervalTree::cursor_at`]).
+/// Yields `(start, end, &node)` per interval; `start` is carried via `interval_end`
+/// so no `find_id` re-descent (or stale per-node position) is ever needed after the
+/// initial seat.
+struct IntervalCursor<'a> {
+    tree: &'a IntervalTree,
+    next: Option<(CharPos0, IntervalId)>,
+}
+
+impl<'a> Iterator for IntervalCursor<'a> {
+    type Item = (CharPos0, CharPos0, &'a IntervalNode);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (start, id) = self.next?;
+        let end = self.tree.interval_end(start, id);
+        let node = &self.tree.nodes[id.0];
+        self.next = self.tree.next_id(id).map(|next_id| (end, next_id));
+        Some((start, end, node))
+    }
+}
+
+/// Backward in-order iterator over a tree's intervals (see
+/// [`IntervalTree::reverse_cursor_at`]). Yields `(start, end, &node)` for the
+/// interval containing the seed position, then each preceding interval; the
+/// predecessor's start is derived as `start - node_len(prev)`, never from the
+/// dead per-node position.
+struct ReverseIntervalCursor<'a> {
+    tree: &'a IntervalTree,
+    next: Option<(CharPos0, IntervalId)>,
+}
+
+impl<'a> Iterator for ReverseIntervalCursor<'a> {
+    type Item = (CharPos0, CharPos0, &'a IntervalNode);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (start, id) = self.next?;
+        let end = self.tree.interval_end(start, id);
+        let node = &self.tree.nodes[id.0];
+        self.next = self.tree.prev_id(id).map(|prev_id| {
+            let prev_start = start.saturating_sub_len(self.tree.node_len(prev_id));
+            (prev_start, prev_id)
+        });
+        Some((start, end, node))
+    }
+}
+
+impl IntervalTree {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn from_runs(runs: Vec<IntervalRun>) -> Self {
+        let runs = Self::normalize_runs(runs);
+        Self::from_normalized_runs(runs)
+    }
+
+    fn from_runs_preserving_shape(runs: Vec<IntervalRun>) -> Self {
+        let runs = Self::normalize_runs_preserving_shape(runs);
+        Self::from_normalized_runs(runs)
+    }
+
+    fn from_normalized_runs(runs: Vec<IntervalRun>) -> Self {
+        let mut tree = Self {
+            root: None,
+            nodes: Vec::with_capacity(runs.len()),
+            ..Self::default()
+        };
+        tree.root = tree.build_balanced(&runs, 0, runs.len(), None);
+        tree
+    }
+
+    fn normalize_runs(mut runs: Vec<IntervalRun>) -> Vec<IntervalRun> {
+        Self::normalize_runs_impl(&mut runs, false)
+    }
+
+    fn normalize_runs_preserving_shape(mut runs: Vec<IntervalRun>) -> Vec<IntervalRun> {
+        Self::normalize_runs_impl(&mut runs, true)
+    }
+
+    fn normalize_runs_impl(runs: &mut Vec<IntervalRun>, preserve_empty: bool) -> Vec<IntervalRun> {
+        runs.retain(|run| run.start() < run.end());
+        runs.sort_by_key(|run| run.start());
+
+        let mut normalized = Vec::new();
+        let mut cursor = CharPos0::ZERO;
+        for mut run in runs.drain(..) {
+            if run.end() <= cursor {
+                continue;
+            }
+            if run.start() < cursor {
+                run.set_start(cursor);
+            }
+            if cursor < run.start() {
+                normalized.push(IntervalRun::default_in_char_range(CharRange::new(
+                    cursor,
+                    run.start(),
+                )));
+            }
+            cursor = run.end();
+            normalized.push(run);
+        }
+
+        if normalized.iter().all(IntervalRun::is_empty_plist) {
+            return Vec::new();
+        }
+        if !preserve_empty {
+            while normalized.last().is_some_and(IntervalRun::is_empty_plist) {
+                normalized.pop();
+            }
+        }
+        normalized
+    }
+
+    fn build_balanced(
+        &mut self,
+        runs: &[IntervalRun],
+        start: usize,
+        end: usize,
+        parent: Option<IntervalId>,
+    ) -> Option<IntervalId> {
+        if start >= end {
+            return None;
+        }
+
+        let mid = start + (end - start) / 2;
+        let id = IntervalId(self.nodes.len());
+        self.nodes.push(runs[mid].to_node());
+
+        let left = self.build_balanced(runs, start, mid, Some(id));
+        let right = self.build_balanced(runs, mid + 1, end, Some(id));
+
+        let left_len = self.subtree_len(left);
+        let right_len = self.subtree_len(right);
+        let node_len = runs[mid].len().get();
+        let node = &mut self.nodes[id.0];
+        node.left = left;
+        node.right = right;
+        node.parent = parent;
+        node.total_length = CharLen::new(left_len.get() + node_len + right_len.get());
+        node.position = runs[mid].start();
+
+        Some(id)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.root.is_none()
+    }
+
+    fn len(&self) -> CharLen {
+        self.root
+            .map(|root| self.nodes[root.0].total_length)
+            .unwrap_or(CharLen::ZERO)
+    }
+
+    fn subtree_len(&self, id: Option<IntervalId>) -> CharLen {
+        id.map(|id| self.nodes[id.0].total_length)
+            .unwrap_or(CharLen::ZERO)
+    }
+
+    fn node_len(&self, id: IntervalId) -> CharLen {
+        let node = &self.nodes[id.0];
+        CharLen::new(
+            node.total_length.get()
+                - self.subtree_len(node.left).get()
+                - self.subtree_len(node.right).get(),
+        )
+    }
+
+    fn push_node(&mut self, node: IntervalNode) -> IntervalId {
+        self.invalidate_find_cache();
+        let id = IntervalId(self.nodes.len());
+        self.nodes.push(node);
+        id
+    }
+
+    fn leftmost_id(&self, mut id: IntervalId) -> IntervalId {
+        while let Some(left) = self.nodes[id.0].left {
+            id = left;
+        }
+        id
+    }
+
+    /// In-order predecessor of `id` -- the mirror of [`IntervalTree::next_id`]
+    /// (rightmost of the left subtree, else climb to the first right-child
+    /// ancestor). O(1) amortized over a full reverse walk.
+    fn prev_id(&self, id: IntervalId) -> Option<IntervalId> {
+        if let Some(left) = self.nodes[id.0].left {
+            return Some(self.rightmost_id(left));
+        }
+
+        let mut child = id;
+        while let Some(parent) = self.nodes[child.0].parent {
+            if self.nodes[parent.0].right == Some(child) {
+                return Some(parent);
+            }
+            child = parent;
+        }
+        None
+    }
+
+    fn rightmost_id(&self, mut id: IntervalId) -> IntervalId {
+        while let Some(right) = self.nodes[id.0].right {
+            id = right;
+        }
+        id
+    }
+
+    fn next_id(&self, id: IntervalId) -> Option<IntervalId> {
+        if let Some(right) = self.nodes[id.0].right {
+            return Some(self.leftmost_id(right));
+        }
+
+        let mut child = id;
+        while let Some(parent) = self.nodes[child.0].parent {
+            if self.nodes[parent.0].left == Some(child) {
+                return Some(parent);
+            }
+            child = parent;
+        }
+        None
+    }
+
+    /// A forward in-order walk over intervals, seated at the interval containing
+    /// `pos` (or empty when `pos` is past the last interval). Mirrors GNU's
+    /// `find_interval` + `next_interval` access pattern: ONE `find_id` descent to
+    /// seat, then O(1) amortized `next_id` steps, with each interval's start
+    /// carried forward via `interval_end` (contiguous partition). Property scans
+    /// use this instead of re-descending the tree (`find_id`) per boundary, which
+    /// was the O(N log n) hotspot. Encapsulating the walk in an iterator is also
+    /// the misuse guard: callers get correct `(start, end)` for free and cannot
+    /// accidentally re-search or read the stale per-node position.
+    fn cursor_at(&self, pos: CharPos0) -> IntervalCursor<'_> {
+        IntervalCursor {
+            tree: self,
+            next: self.find_id(pos),
+        }
+    }
+
+    /// Seat a [`ReverseIntervalCursor`] at an explicit `(start, id)` so callers
+    /// can begin the backward walk at a chosen interval (e.g. the one *before* a
+    /// boundary, or the last interval when a position is past the tree end).
+    fn reverse_cursor_from(
+        &self,
+        seat: Option<(CharPos0, IntervalId)>,
+    ) -> ReverseIntervalCursor<'_> {
+        ReverseIntervalCursor {
+            tree: self,
+            next: seat,
+        }
+    }
+
+    /// `(start, id)` of the last interval, or None when the tree is empty.
+    fn last_interval(&self) -> Option<(CharPos0, IntervalId)> {
+        let root = self.root?;
+        let id = self.rightmost_id(root);
+        let end = CharPos0::ZERO.add_len(self.len());
+        Some((end.saturating_sub_len(self.node_len(id)), id))
+    }
+
+    fn interval_end(&self, start: CharPos0, id: IntervalId) -> CharPos0 {
+        start.add_len(self.node_len(id))
+    }
+
+    pub(crate) fn add_length_to_ancestors(&mut self, mut id: Option<IntervalId>, delta: isize) {
+        self.invalidate_find_cache();
+        while let Some(current) = id {
+            let total = &mut self.nodes[current.0].total_length;
+            if delta >= 0 {
+                *total = CharLen::new(total.get() + delta as usize);
+            } else {
+                *total = CharLen::new(total.get() - (-delta) as usize);
+            }
+            id = self.nodes[current.0].parent;
+        }
+    }
+
+    /// Node `id`, reached through `root` or another node's link, without
+    /// the bounds check. Every id a tree holds was minted by `push_node` as
+    /// the index it pushed at, and `nodes` only grows -- `delete_node`
+    /// unlinks a node and leaves its slot in place, and a rebuilt tree comes
+    /// with its own `nodes` -- so a linked id is always in bounds. The
+    /// balancing code below is the one user: it reads and rewrites a handful
+    /// of neighbouring nodes per step, and the checks were over a quarter of
+    /// its instructions on org's put path.
+    #[inline(always)]
+    fn linked(&self, id: IntervalId) -> &IntervalNode {
+        debug_assert!(id.0 < self.nodes.len(), "unlinked interval id {}", id.0);
+        // SAFETY: a linked id is in bounds (see above).
+        unsafe { self.nodes.get_unchecked(id.0) }
+    }
+
+    /// [`Self::linked`], mutably.
+    #[inline(always)]
+    fn linked_mut(&mut self, id: IntervalId) -> &mut IntervalNode {
+        debug_assert!(id.0 < self.nodes.len(), "unlinked interval id {}", id.0);
+        // SAFETY: a linked id is in bounds (see `linked`).
+        unsafe { self.nodes.get_unchecked_mut(id.0) }
+    }
+
+    /// `subtree_len` of a linked child.
+    #[inline(always)]
+    fn linked_len(&self, id: Option<IntervalId>) -> usize {
+        match id {
+            Some(id) => self.linked(id).total_length.get(),
+            None => 0,
+        }
+    }
+
+    fn rotate_right(&mut self, a: IntervalId) -> IntervalId {
+        let b = self
+            .linked(a)
+            .left
+            .expect("rotate_right requires a left child");
+        let c = self.linked(b).right;
+        let a_parent = self.linked(a).parent;
+        let a_was_left = a_parent.is_some_and(|parent| self.linked(parent).left == Some(a));
+        let old_total = self.linked(a).total_length;
+        let b_old_total = self.linked(b).total_length.get();
+        let c_total = self.linked_len(c);
+
+        if let Some(parent) = a_parent {
+            if a_was_left {
+                self.linked_mut(parent).left = Some(b);
+            } else {
+                self.linked_mut(parent).right = Some(b);
+            }
+        } else {
+            self.root = Some(b);
+        }
+        let b_node = self.linked_mut(b);
+        b_node.parent = a_parent;
+        b_node.right = Some(a);
+        b_node.total_length = old_total;
+
+        let a_node = self.linked_mut(a);
+        a_node.parent = Some(b);
+        a_node.left = c;
+        a_node.total_length = CharLen::new(old_total.get() - (b_old_total - c_total));
+        if let Some(c) = c {
+            self.linked_mut(c).parent = Some(a);
+        }
+        b
+    }
+
+    fn rotate_left(&mut self, a: IntervalId) -> IntervalId {
+        let b = self
+            .linked(a)
+            .right
+            .expect("rotate_left requires a right child");
+        let c = self.linked(b).left;
+        let a_parent = self.linked(a).parent;
+        let a_was_left = a_parent.is_some_and(|parent| self.linked(parent).left == Some(a));
+        let old_total = self.linked(a).total_length;
+        let b_old_total = self.linked(b).total_length.get();
+        let c_total = self.linked_len(c);
+
+        if let Some(parent) = a_parent {
+            if a_was_left {
+                self.linked_mut(parent).left = Some(b);
+            } else {
+                self.linked_mut(parent).right = Some(b);
+            }
+        } else {
+            self.root = Some(b);
+        }
+        let b_node = self.linked_mut(b);
+        b_node.parent = a_parent;
+        b_node.left = Some(a);
+        b_node.total_length = old_total;
+
+        let a_node = self.linked_mut(a);
+        a_node.parent = Some(b);
+        a_node.right = c;
+        a_node.total_length = CharLen::new(old_total.get() - (b_old_total - c_total));
+        if let Some(c) = c {
+            self.linked_mut(c).parent = Some(a);
+        }
+        b
+    }
+
+    fn balance_an_interval(&mut self, mut id: IntervalId) -> IntervalId {
+        #[cfg(any(test, feature = "test-support"))]
+        INTERVAL_BALANCE_CALLS.with(|calls| calls.set(calls.get() + 1));
+        loop {
+            let node = self.linked(id);
+            let (left, right, total) = (node.left, node.right, node.total_length.get() as isize);
+            let old_diff = self.linked_len(left) as isize - self.linked_len(right) as isize;
+            if old_diff > 0 {
+                let left = left.expect("positive left/right diff requires left child");
+                let left_node = self.linked(left);
+                let new_diff = total - left_node.total_length.get() as isize
+                    + self.linked_len(left_node.right) as isize
+                    - self.linked_len(left_node.left) as isize;
+                if new_diff.abs() >= old_diff {
+                    break;
+                }
+                id = self.rotate_right(id);
+                if let Some(right) = self.linked(id).right {
+                    self.balance_an_interval(right);
+                }
+            } else if old_diff < 0 {
+                let right = right.expect("negative left/right diff requires right child");
+                let right_node = self.linked(right);
+                let new_diff = total - right_node.total_length.get() as isize
+                    + self.linked_len(right_node.left) as isize
+                    - self.linked_len(right_node.right) as isize;
+                if new_diff.abs() >= -old_diff {
+                    break;
+                }
+                id = self.rotate_left(id);
+                if let Some(left) = self.linked(id).left {
+                    self.balance_an_interval(left);
+                }
+            } else {
+                break;
+            }
+        }
+        id
+    }
+
+    fn balance_upwards(&mut self, mut id: Option<IntervalId>) {
+        while let Some(current) = id {
+            let balanced = self.balance_an_interval(current);
+            id = self.nodes[balanced.0].parent;
+            if id.is_none() {
+                self.root = Some(balanced);
+            }
+        }
+    }
+
+    /// Balance after a raw split of `id`: at the split node, then upward only
+    /// while a rotation actually happened.
+    ///
+    /// A split leaves every ancestor's `total_length` as it was, so an
+    /// ancestor that was in balance before the split still is -- the only
+    /// node whose own condition changed is the one that was split (it lost
+    /// length and gained a child). GNU's `split_interval_right`/`left` balance
+    /// exactly that node (`balance_an_interval (new)`) and nothing above it.
+    /// A rotation there does change what its parent sees as grandchildren,
+    /// so the climb continues one level per rotation and stops at the first
+    /// level that stands pat. `balance_upwards`' unconditional climb to the
+    /// root cost more than the split itself on org's tree (seven levels of
+    /// length compares per split, a quarter of a put) and rotated nowhere
+    /// above the split node.
+    ///
+    /// Balancing only at the root before the descent (GNU's
+    /// `balance_possible_root_interval`) is not enough: font-lock's forward
+    /// walk splits the default tail once per put, and while the tail keeps
+    /// the same weight the root never rotates, so the pieces hung off it one
+    /// level deeper each time (depth 2001 for 4000 intervals in the test).
+    fn balance_after_split(&mut self, mut id: IntervalId) {
+        loop {
+            let balanced = self.balance_an_interval(id);
+            let rotated = balanced != id;
+            match self.nodes[balanced.0].parent {
+                Some(parent) if rotated => id = parent,
+                Some(_) => return,
+                None => {
+                    self.root = Some(balanced);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn append_default_interval(&mut self, range: CharRange) {
+        if range.is_empty() {
+            return;
+        }
+
+        if self.root.is_none() {
+            let root = self.push_node(IntervalNode::new(range.len(), range.start(), Value::NIL));
+            self.root = Some(root);
+            return;
+        }
+
+        let rightmost = self.rightmost_id(self.root.expect("root checked above"));
+        let id = self.push_node(IntervalNode::new(range.len(), range.start(), Value::NIL));
+        self.nodes[id.0].parent = Some(rightmost);
+        self.nodes[rightmost.0].right = Some(id);
+        self.add_length_to_ancestors(Some(rightmost), range.len().get() as isize);
+        self.balance_upwards(Some(rightmost));
+    }
+
+    pub(crate) fn ensure_cover(&mut self, end: CharPos0) {
+        let current_end = CharPos0::ZERO.add_len(self.len());
+        if current_end < end {
+            self.append_default_interval(CharRange::new(current_end, end));
+        }
+    }
+
+    fn insert_default_at(&mut self, pos: CharPos0, len: CharLen) {
+        if len.is_empty() || self.root.is_none() {
+            return;
+        }
+        let tree_len = CharPos0::ZERO.add_len(self.len());
+        // A gap before the insertion (pos past the tree) is rare and not on the
+        // buffer-insert hot path; keep the simple rebuild for it.
+        if pos > tree_len {
+            return self.insert_default_at_slow(pos, len);
+        }
+        if pos == tree_len {
+            // Append a fresh property-free interval at the very end.
+            self.insert_default_node_before(None, len);
+            return;
+        }
+        let Some((start, id)) = self.find_id(pos) else {
+            return;
+        };
+        if pos == start {
+            // At an interval boundary: splice a default interval in front of it.
+            self.insert_default_node_before(Some(id), len);
+        } else if self.nodes[id.0].is_empty_plist() {
+            // Inside an interval with no properties: stretch it (and shift
+            // everything after) by `len` -- O(log n), no new node.
+            self.add_length_to_ancestors(Some(id), len.get() as isize);
+        } else {
+            // Inside a property-bearing interval: split it at `pos` and splice a
+            // default interval between the halves, so the inserted text does not
+            // inherit the surrounding properties (mirrors GNU
+            // `adjust_intervals_for_insertion`).
+            let Some(right) = self.split_at(pos) else {
+                return;
+            };
+            self.insert_default_node_before(Some(right), len);
+        }
+    }
+
+    /// Splice a fresh, property-free interval of `len` chars into the tree as
+    /// the in-order predecessor of `before` (or at the very end when `None`),
+    /// shifting every later interval by `len`.  Local: O(log n), no rebuild.
+    fn insert_default_node_before(&mut self, before: Option<IntervalId>, len: CharLen) {
+        let d_id = self.push_node(IntervalNode::new(len, CharPos0::ZERO, Value::NIL));
+        match before {
+            Some(n) => {
+                if let Some(left) = self.nodes[n.0].left {
+                    let mut cur = left;
+                    while let Some(right) = self.nodes[cur.0].right {
+                        cur = right;
+                    }
+                    self.nodes[cur.0].right = Some(d_id);
+                    self.nodes[d_id.0].parent = Some(cur);
+                } else {
+                    self.nodes[n.0].left = Some(d_id);
+                    self.nodes[d_id.0].parent = Some(n);
+                }
+            }
+            None => {
+                let mut cur = self.root.expect("non-empty tree");
+                while let Some(right) = self.nodes[cur.0].right {
+                    cur = right;
+                }
+                self.nodes[cur.0].right = Some(d_id);
+                self.nodes[d_id.0].parent = Some(cur);
+            }
+        }
+        let parent = self.nodes[d_id.0].parent;
+        self.add_length_to_ancestors(parent, len.get() as isize);
+        self.balance_upwards(parent);
+    }
+
+    fn insert_default_at_slow(&mut self, pos: CharPos0, len: CharLen) {
+        if len.is_empty() || self.root.is_none() {
+            return;
+        }
+
+        let mut runs = self.runs();
+        let tree_len = CharPos0::ZERO.add_len(self.len());
+        if pos >= tree_len {
+            if tree_len < pos {
+                runs.push(IntervalRun::default_in_char_range(CharRange::new(
+                    tree_len, pos,
+                )));
+            }
+            runs.push(IntervalRun::default_in_char_range(
+                CharRange::from_start_len(pos, len),
+            ));
+            *self = Self::from_runs_preserving_shape(runs);
+            return;
+        }
+
+        let mut adjusted = Vec::with_capacity(runs.len() + 2);
+        let mut inserted = false;
+
+        for run in runs {
+            if run.end() <= pos {
+                adjusted.push(run);
+                continue;
+            }
+
+            if run.start() >= pos {
+                if !inserted {
+                    adjusted.push(IntervalRun::default_in_char_range(
+                        CharRange::from_start_len(pos, len),
+                    ));
+                    let mut shifted = run;
+                    shifted.shift_by(len);
+                    adjusted.push(shifted);
+                    inserted = true;
+                } else {
+                    let mut shifted = run;
+                    shifted.shift_by(len);
+                    adjusted.push(shifted);
+                }
+                continue;
+            }
+
+            if run.is_empty_plist() {
+                let mut extended = run;
+                extended.set_end(extended.end().add_len(len));
+                adjusted.push(extended);
+            } else {
+                let right_plist = copy_plist_value(run.plist);
+                let mut left = run.clone();
+                left.set_end(pos);
+                let inserted_run =
+                    IntervalRun::default_in_char_range(CharRange::from_start_len(pos, len));
+                let mut right = run;
+                right.set_start(pos.add_len(len));
+                right.set_end(right.end().add_len(len));
+                right.plist = right_plist;
+                right.refresh_cache();
+                adjusted.push(left);
+                adjusted.push(inserted_run);
+                adjusted.push(right);
+            }
+            inserted = true;
+        }
+
+        *self = Self::from_runs_preserving_shape(adjusted);
+    }
+
+    pub(crate) fn split_at(&mut self, pos: CharPos0) -> Option<IntervalId> {
+        if pos == CharPos0::ZERO {
+            return self.find_id(CharPos0::ZERO).map(|(_, id)| id);
+        }
+
+        let (start, id) = self.find_id(pos)?;
+        let len = self.node_len(id);
+        if pos == start {
+            return Some(id);
+        }
+        if pos >= start.add_len(len) {
+            return self.next_id(id);
+        }
+
+        let offset = pos.saturating_offset_from(start);
+        let new_len = len.saturating_sub(offset);
+        let old_right = self.nodes[id.0].right;
+        let plist = copy_plist_value(self.nodes[id.0].plist);
+        let mut new = IntervalNode::with_cached(
+            new_len,
+            pos,
+            self.nodes[id.0].front_sticky,
+            self.nodes[id.0].rear_sticky,
+            self.nodes[id.0].write_protect,
+            self.nodes[id.0].visible,
+            self.nodes[id.0].has_syntax_prop,
+            plist,
+        );
+        new.parent = Some(id);
+        new.right = old_right;
+        new.total_length = CharLen::new(new.total_length.get() + self.subtree_len(old_right).get());
+        let new_id = self.push_node(new);
+
+        if let Some(old_right) = old_right {
+            self.nodes[old_right.0].parent = Some(new_id);
+        }
+        self.nodes[id.0].right = Some(new_id);
+        self.balance_upwards(Some(id));
+        self.find_id(pos).map(|(_, id)| id)
+    }
+
+    /// Split the interval `id` (which starts at `node_start`) at `pos`, strictly
+    /// inside it, WITHOUT rebalancing: the new right part hangs as `id`'s right
+    /// child above `id`'s former right subtree, so `id`'s `total_length` and
+    /// every ancestor's are unchanged and no upward walk is needed.  GNU
+    /// `split_interval_left`, which likewise leaves balancing to the caller.
+    /// `right` supplies the new node's plist and cached flags; its length and
+    /// links are overwritten here.  Returns the new right node.
+    fn split_node_right_raw(
+        &mut self,
+        id: IntervalId,
+        node_start: CharPos0,
+        pos: CharPos0,
+        mut right: IntervalNode,
+    ) -> IntervalId {
+        let len = self.node_len(id);
+        let offset = pos.saturating_offset_from(node_start);
+        debug_assert!(!offset.is_empty() && offset < len);
+        let new_len = len.saturating_sub(offset);
+        let old_right = self.nodes[id.0].right;
+        right.position = pos;
+        right.parent = Some(id);
+        right.left = None;
+        right.right = old_right;
+        right.total_length = CharLen::new(new_len.get() + self.subtree_len(old_right).get());
+        let new_id = self.push_node(right);
+        if let Some(old_right) = old_right {
+            self.nodes[old_right.0].parent = Some(new_id);
+        }
+        self.nodes[id.0].right = Some(new_id);
+        new_id
+    }
+
+    /// A detached node carrying `id`'s cached flags and `plist` (the shape a
+    /// raw split hands to the remainder that keeps its plist object).
+    fn node_shaped_like(&self, id: IntervalId, plist: IntervalPlist) -> IntervalNode {
+        let node = &self.nodes[id.0];
+        IntervalNode::with_cached(
+            CharLen::ZERO,
+            CharPos0::ZERO,
+            node.front_sticky,
+            node.rear_sticky,
+            node.write_protect,
+            node.visible,
+            node.has_syntax_prop,
+            plist,
+        )
+    }
+
+    /// `copy_properties (over, this)`: node `id` takes `plist` (already a fresh
+    /// copy of `run`'s) and `run`'s cached flags, which depend only on the
+    /// plist's content.
+    fn set_node_plist_from_run(&mut self, id: IntervalId, run: &IntervalRun, plist: IntervalPlist) {
+        let node = &mut self.nodes[id.0];
+        node.plist = plist;
+        node.front_sticky = run.front_sticky;
+        node.rear_sticky = run.rear_sticky;
+        node.write_protect = run.write_protect;
+        node.visible = run.visible;
+        node.has_syntax_prop = run.has_syntax_prop;
+    }
+
+    /// GNU `graft_intervals_into_buffer` (src/intervals.c) over the contiguous
+    /// source `runs` shifted by `offset`; see
+    /// `TextPropertyTable::append_shifted_raw` for the contract.
+    ///
+    /// One descent finds `under`, the target interval at the graft start; if
+    /// the graft begins inside it the unchanged left part is split off and
+    /// re-homed onto a fresh plist (`copy_properties (under, end_unchanged)`)
+    /// while the right part keeps the original plist object.  The runs are then
+    /// walked against the target with the current interval tracked by id: a run
+    /// ending inside the target interval splits it (`split_interval_left`,
+    /// remainder keeps the plist object), a target interval ending at or before
+    /// the run's end takes the run whole (its boundary survives) and the walk
+    /// advances with `next_id`.  Every covered target interval receives a fresh
+    /// copy of the run's plist.  Balancing happens once, climbing from the
+    /// deepest node the splits created.
+    fn graft_shifted_runs(
+        &mut self,
+        runs: &[IntervalRun],
+        offset: CharLen,
+        mut new_root: impl FnMut(Value),
+    ) {
+        let runs: Vec<&IntervalRun> = runs.iter().filter(|run| run.start() < run.end()).collect();
+        let (Some(first), Some(last)) = (runs.first(), runs.last()) else {
+            return;
+        };
+        let start = first.start().add_len(offset);
+        let end = last.end().add_len(offset);
+        self.ensure_cover(end);
+        let Some((seat_start, mut id)) = self.find_id(start) else {
+            return;
+        };
+        let mut node_start = seat_start;
+        // Each node a raw split creates is the right child of the node split
+        // -- the previous split's node while the walk stays on fresh nodes --
+        // so consecutive splits form a right-spine hanging off the first
+        // split node; it is relinked balanced whenever the walk moves on to an
+        // existing node and at the end.
+        let mut spine: Vec<IntervalId> = Vec::new();
+        if seat_start < start {
+            let original = self.nodes[id.0].plist;
+            let right = self.node_shaped_like(id, original);
+            let right_id = self.split_node_right_raw(id, node_start, start, right);
+            if !original.is_nil() {
+                // Same content, so the cached flags stay valid.
+                self.nodes[id.0].plist = copy_plist_value(original);
+                new_root(self.nodes[id.0].plist);
+            }
+            id = right_id;
+            node_start = start;
+            spine.push(right_id);
+        } else if start > CharPos0::ZERO {
+            // Insertion at an interval boundary.  GNU's
+            // `adjust_intervals_for_insertion` would have STRETCHED the
+            // preceding (rear-sticky) interval over the inserted text, so its
+            // graft splits that interval and `copy_properties (under,
+            // end_unchanged)` re-homes the remainder onto a fresh plist; our
+            // insert-adjust splices a default interval instead, so the same
+            // re-home must happen here.  Without it a plist cons already
+            // returned to Lisp by `text-properties-at' stayed attached to the
+            // predecessor and a later in-place `put-text-property' (undo's
+            // property-change entry) mutated the value Lisp held: oracle
+            // cases div_cx19/40/43/46 read `(face nil)' where GNU keeps
+            // `(face bold)'.
+            new_root(self.rehome_predecessor_plist(start));
+        }
+        let mut cursor = start;
+        'runs: for run in runs {
+            let run_end = run.end().add_len(offset);
+            debug_assert_eq!(run.start().add_len(offset), cursor);
+            while cursor < run_end {
+                let node_end = self.interval_end(node_start, id);
+                let fresh = copy_plist_value(run.plist);
+                new_root(fresh);
+                if node_end > run_end {
+                    let original = self.nodes[id.0].plist;
+                    let right = self.node_shaped_like(id, original);
+                    let right_id = self.split_node_right_raw(id, node_start, run_end, right);
+                    self.set_node_plist_from_run(id, run, fresh);
+                    id = right_id;
+                    node_start = run_end;
+                    cursor = run_end;
+                    spine.push(right_id);
+                } else {
+                    self.set_node_plist_from_run(id, run, fresh);
+                    cursor = node_end;
+                    node_start = node_end;
+                    if cursor < end {
+                        // The next split will hang off an existing node, so
+                        // the chain built so far ends here.
+                        self.rebalance_spine(&spine);
+                        spine.clear();
+                        let Some(next) = self.next_id(id) else {
+                            break 'runs;
+                        };
+                        id = next;
+                    }
+                }
+            }
+        }
+        self.invalidate_find_cache();
+        self.rebalance_spine(&spine);
+    }
+
+    /// Relink the right-spine `spine` (each node the right child of the one
+    /// before it; the first hangs off its split parent, the last carries the
+    /// original right subtree) into a balanced subtree in O(k), then climb
+    /// from the anchor once.  Balancing the chain incrementally instead costs
+    /// ~10 `balance_an_interval` calls per node (rotations cascade down a
+    /// degenerate chain).
+    fn rebalance_spine(&mut self, spine: &[IntervalId]) {
+        let (Some(&first), Some(&last)) = (spine.first(), spine.last()) else {
+            return;
+        };
+        let Some(anchor) = self.nodes[first.0].parent else {
+            return;
+        };
+        debug_assert_eq!(self.nodes[anchor.0].right, Some(first));
+        let tail = self.nodes[last.0].right;
+        // Own lengths are derived from `total_length` minus the children's, so
+        // capture them before any link changes.
+        let lens: Vec<usize> = spine.iter().map(|&id| self.node_len(id).get()).collect();
+
+        fn build(
+            tree: &mut IntervalTree,
+            spine: &[IntervalId],
+            lens: &[usize],
+            tail: Option<IntervalId>,
+            lo: usize,
+            hi: usize,
+            parent: Option<IntervalId>,
+        ) -> (Option<IntervalId>, usize) {
+            if lo >= hi {
+                return (None, 0);
+            }
+            let mid = lo + (hi - lo) / 2;
+            let id = spine[mid];
+            let (left, left_total) = build(tree, spine, lens, tail, lo, mid, Some(id));
+            let (right, right_total) = if mid + 1 == spine.len() {
+                if let Some(tail) = tail {
+                    tree.nodes[tail.0].parent = Some(id);
+                }
+                (tail, tree.subtree_len(tail).get())
+            } else {
+                build(tree, spine, lens, tail, mid + 1, hi, Some(id))
+            };
+            let node = &mut tree.nodes[id.0];
+            node.left = left;
+            node.right = right;
+            node.parent = parent;
+            node.total_length = CharLen::new(lens[mid] + left_total + right_total);
+            (Some(id), lens[mid] + left_total + right_total)
+        }
+
+        let (root, total) = build(self, spine, &lens, tail, 0, spine.len(), Some(anchor));
+        debug_assert_eq!(
+            total,
+            lens.iter().sum::<usize>() + self.subtree_len(tail).get()
+        );
+        self.nodes[anchor.0].right = root;
+        self.invalidate_find_cache();
+        self.balance_upwards(Some(anchor));
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn assert_invariants_for_test(&self) {
+        fn walk(tree: &IntervalTree, id: IntervalId, parent: Option<IntervalId>) -> (usize, usize) {
+            let node = &tree.nodes[id.0];
+            assert_eq!(node.parent, parent, "parent link of node {}", id.0);
+            let (left_total, left_depth) = node
+                .left
+                .map(|left| walk(tree, left, Some(id)))
+                .unwrap_or((0, 0));
+            let (right_total, right_depth) = node
+                .right
+                .map(|right| walk(tree, right, Some(id)))
+                .unwrap_or((0, 0));
+            assert!(
+                node.total_length.get() >= left_total + right_total,
+                "total_length of node {} smaller than its subtrees",
+                id.0
+            );
+            (node.total_length.get(), 1 + left_depth.max(right_depth))
+        }
+        if let Some(root) = self.root {
+            walk(self, root, None);
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn max_depth_for_test(&self) -> usize {
+        fn depth(tree: &IntervalTree, id: Option<IntervalId>) -> usize {
+            match id {
+                None => 0,
+                Some(id) => {
+                    1 + depth(tree, tree.nodes[id.0].left).max(depth(tree, tree.nodes[id.0].right))
+                }
+            }
+        }
+        depth(self, self.root)
+    }
+
+    fn intervals_overlapping_after_splits(
+        &mut self,
+        range: CharRange,
+    ) -> Vec<(CharPos0, IntervalId)> {
+        if range.is_empty() {
+            return Vec::new();
+        }
+
+        self.ensure_cover(range.end());
+        let first = self.split_at(range.start());
+        self.split_at(range.end());
+        self.ids_from_split(first, range)
+    }
+
+    fn existing_intervals_overlapping_after_splits(
+        &mut self,
+        range: CharRange,
+    ) -> Vec<(CharPos0, IntervalId)> {
+        if range.is_empty() || self.root.is_none() {
+            return Vec::new();
+        }
+        let first = self.split_at(range.start());
+        self.split_at(range.end());
+        self.ids_from_split(first, range)
+    }
+
+    /// The intervals overlapping `range`, walked forward from `first` — the
+    /// interval `split_at(range.start())` returned, which begins exactly at
+    /// `range.start()`. `split_at(range.end())` cannot move it: a split keeps the
+    /// original node as the LEFT piece and pushes a new node for the right one,
+    /// and rotations preserve in-order with arena-stable ids. Walking from it
+    /// replaces a `find_id` descent that also evicted the position memo the
+    /// caller's next lookup wanted (GNU keeps its interval pointer across the
+    /// split for the same reason: `add_text_properties_1` never re-finds).
+    fn ids_from_split(
+        &self,
+        first: Option<IntervalId>,
+        range: CharRange,
+    ) -> Vec<(CharPos0, IntervalId)> {
+        let mut result = Vec::new();
+        let Some(mut id) = first else {
+            return result;
+        };
+        let mut node_start = range.start();
+        while node_start < range.end() {
+            let node_end = self.interval_end(node_start, id);
+            if node_end > range.start() {
+                result.push((node_start, id));
+            }
+            let Some(next_id) = self.next_id(id) else {
+                break;
+            };
+            node_start = node_end;
+            id = next_id;
+        }
+        result
+    }
+
+    pub(crate) fn set_node_plist(&mut self, id: IntervalId, plist: Value) {
+        let node = &mut self.nodes[id.0];
+        node.plist = plist;
+        node.refresh_cache();
+    }
+
+    /// Re-home the interval ending exactly at `boundary` (the in-order
+    /// predecessor of the interval starting at `boundary`) onto a fresh
+    /// `copy-sequence` of its plist, mirroring GNU
+    /// `graft_intervals_into_buffer`'s `copy_properties (under, end_unchanged)`.
+    ///
+    /// The boundary must already be a clean interval edge (the caller has split
+    /// there).  This detaches the original plist cons -- which may alias a value
+    /// already returned by `text-properties-at` -- from the buffer so a later
+    /// in-place `put-text-property` cannot mutate the value held in Lisp.  Empty
+    /// plists are left alone (GNU's `copy_properties` short-circuits on
+    /// DEFAULT_INTERVAL_P).
+    fn rehome_predecessor_plist(&mut self, boundary: CharPos0) -> Value {
+        if boundary == CharPos0::ZERO {
+            return Value::NIL;
+        }
+        let prev = CharPos0::new(boundary.get() - 1);
+        let Some((_, id)) = self.find_id(prev) else {
+            return Value::NIL;
+        };
+        let node = &self.nodes[id.0];
+        if node.is_empty_plist() {
+            return Value::NIL;
+        }
+        let fresh = copy_plist_value(node.plist);
+        self.set_node_plist(id, fresh);
+        fresh
+    }
+
+    fn delete_node(&mut self, id: IntervalId) -> Option<IntervalId> {
+        self.invalidate_find_cache();
+        let left = self.nodes[id.0].left;
+        let right = self.nodes[id.0].right;
+
+        match (left, right) {
+            (None, None) => None,
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (Some(migrate), Some(right)) => {
+                let migrate_len = self.nodes[migrate.0].total_length;
+                let mut cursor = right;
+                self.nodes[cursor.0].total_length =
+                    self.nodes[cursor.0].total_length.add_len(migrate_len);
+                while let Some(left) = self.nodes[cursor.0].left {
+                    cursor = left;
+                    self.nodes[cursor.0].total_length =
+                        self.nodes[cursor.0].total_length.add_len(migrate_len);
+                }
+                self.nodes[cursor.0].left = Some(migrate);
+                self.nodes[migrate.0].parent = Some(cursor);
+                Some(right)
+            }
+        }
+    }
+
+    /// Fuse every adjacent pair whose shared boundary lies in
+    /// `[range.start, range.end]` and whose plists are `eq`-equal and non-nil,
+    /// each right interval absorbed into its predecessor in place (GNU
+    /// `merge_interval_left`).  Returns whether anything merged.
+    ///
+    /// Only the intervals whose boundary is inside `range` are visited: the
+    /// one containing `range.start` (or the last interval when `range.start`
+    /// is the tree end), its predecessor when `range.start` is itself a
+    /// boundary, then successors while their boundary is at or before
+    /// `range.end`.  A merge widens the left interval, so its new boundary is
+    /// re-examined before moving on — the cascade the whole-buffer restart
+    /// loop used to produce.
+    fn merge_equal_neighbors_in(&mut self, range: CharRange) -> bool {
+        if self.root.is_none() || self.len().is_empty() {
+            return false;
+        }
+        let start = range.start();
+        let end = range.end();
+        let tree_end = CharPos0::ZERO.add_len(self.len());
+        let located = if start < tree_end {
+            self.find_id(start)
+        } else {
+            self.last_interval()
+        };
+        let Some((mut left_start, mut left)) = located else {
+            return false;
+        };
+        let mut merged_any = false;
+        // `start` on a boundary: the pair straddling it qualifies too.
+        if left_start == start
+            && let Some(predecessor) = self.prev_id(left)
+            && self.plists_mergeable(predecessor, left)
+        {
+            let predecessor_start = left_start.saturating_sub_len(self.node_len(predecessor));
+            self.merge_into_predecessor(predecessor, left);
+            left = predecessor;
+            left_start = predecessor_start;
+            merged_any = true;
+        }
+        loop {
+            let boundary = left_start.add_len(self.node_len(left));
+            if boundary > end {
+                break;
+            }
+            let Some(right) = self.next_id(left) else {
+                break;
+            };
+            if self.plists_mergeable(left, right) {
+                self.merge_into_predecessor(left, right);
+                merged_any = true;
+            } else {
+                left_start = boundary;
+                left = right;
+            }
+        }
+        merged_any
+    }
+
+    /// The merge condition: a non-nil left plist `eq`-equal to the right one.
+    /// Two property-free neighbours are deliberately left apart (the
+    /// partition shape is preserved, as `normalize_runs_preserving_shape`
+    /// preserves it).
+    fn plists_mergeable(&self, left: IntervalId, right: IntervalId) -> bool {
+        let left_plist = self.nodes[left.0].plist;
+        if left_plist.is_nil() {
+            return false;
+        }
+        plists_equal_eq(
+            &plist_pairs(left_plist),
+            &plist_pairs(self.nodes[right.0].plist),
+        )
+    }
+
+    /// Absorb `right` into its in-order predecessor `left`: `left` grows by
+    /// `right`'s length, `right` shrinks to zero and is unlinked.  Subtree
+    /// totals stay consistent because both adjustments walk the ancestor
+    /// chain; the unlink may shorten a spine, so balance is restored from the
+    /// unlinked node's former parent.
+    pub(crate) fn merge_into_predecessor(&mut self, left: IntervalId, right: IntervalId) {
+        debug_assert_eq!(self.next_id(left), Some(right));
+        let absorbed = self.node_len(right);
+        let parent = self.nodes[right.0].parent;
+        self.add_length_to_ancestors(Some(left), absorbed.get() as isize);
+        self.add_length_to_ancestors(Some(right), -(absorbed.get() as isize));
+        self.delete_zero_length_interval(right);
+        self.balance_upwards(parent.or(self.root));
+    }
+
+    fn delete_zero_length_interval(&mut self, id: IntervalId) {
+        debug_assert_eq!(self.node_len(id), CharLen::ZERO);
+        let parent = self.nodes[id.0].parent;
+        let replacement = self.delete_node(id);
+
+        if let Some(parent) = parent {
+            if self.nodes[parent.0].left == Some(id) {
+                self.nodes[parent.0].left = replacement;
+            } else {
+                debug_assert_eq!(self.nodes[parent.0].right, Some(id));
+                self.nodes[parent.0].right = replacement;
+            }
+            if let Some(replacement) = replacement {
+                self.nodes[replacement.0].parent = Some(parent);
+            }
+        } else {
+            self.root = replacement;
+            if let Some(replacement) = replacement {
+                self.nodes[replacement.0].parent = None;
+            }
+        }
+
+        let node = &mut self.nodes[id.0];
+        node.left = None;
+        node.right = None;
+        node.parent = None;
+        node.total_length = CharLen::ZERO;
+        node.plist = Value::NIL;
+        node.refresh_cache();
+    }
+
+    fn interval_deletion_adjustment(
+        &mut self,
+        id: IntervalId,
+        from: CharLen,
+        amount: CharLen,
+    ) -> CharLen {
+        if amount.is_empty() {
+            return CharLen::ZERO;
+        }
+
+        let left_len = self.subtree_len(self.nodes[id.0].left);
+        if from < left_len {
+            let left = self.nodes[id.0]
+                .left
+                .expect("left branch length requires a left child");
+            let subtract = self.interval_deletion_adjustment(left, from, amount);
+            self.nodes[id.0].total_length = self.nodes[id.0].total_length.saturating_sub(subtract);
+            return subtract;
+        }
+
+        let total_len = self.nodes[id.0].total_length;
+        let right_len = self.subtree_len(self.nodes[id.0].right);
+        let right_start = total_len.saturating_sub(right_len);
+        if from >= right_start {
+            let right = self.nodes[id.0]
+                .right
+                .expect("right branch length requires a right child");
+            let subtract =
+                self.interval_deletion_adjustment(right, from.saturating_sub(right_start), amount);
+            self.nodes[id.0].total_length = self.nodes[id.0].total_length.saturating_sub(subtract);
+            return subtract;
+        }
+
+        let subtract = right_start.saturating_sub(from).min(amount);
+
+        self.nodes[id.0].total_length = self.nodes[id.0].total_length.saturating_sub(subtract);
+        if self.node_len(id).is_empty() {
+            self.delete_zero_length_interval(id);
+        }
+        subtract
+    }
+
+    fn delete_range(&mut self, range: CharRange) {
+        self.invalidate_find_cache();
+        if range.is_empty() || self.root.is_none() {
+            return;
+        }
+        let start = range.start().saturating_offset_from(CharPos0::ZERO);
+        let end = range.end().saturating_offset_from(CharPos0::ZERO);
+
+        let tree_len = self.len();
+        if start >= tree_len {
+            return;
+        }
+
+        let mut left_to_delete = end.min(tree_len).saturating_sub(start);
+        if left_to_delete == tree_len {
+            self.root = None;
+            return;
+        }
+
+        while !left_to_delete.is_empty() {
+            let Some(root) = self.root else {
+                return;
+            };
+            if left_to_delete == self.nodes[root.0].total_length {
+                self.root = None;
+                return;
+            }
+            let deleted = self.interval_deletion_adjustment(root, start, left_to_delete);
+            if deleted.is_empty() {
+                break;
+            }
+            left_to_delete = left_to_delete.saturating_sub(deleted);
+        }
+    }
+
+    pub(crate) fn merge_interval_left(&mut self, id: IntervalId) -> Option<IntervalId> {
+        self.invalidate_find_cache();
+        let absorb = self.node_len(id);
+        if absorb.is_empty() {
+            return None;
+        }
+
+        if let Some(left) = self.nodes[id.0].left {
+            let mut predecessor = left;
+            while let Some(right) = self.nodes[predecessor.0].right {
+                self.nodes[predecessor.0].total_length =
+                    self.nodes[predecessor.0].total_length.add_len(absorb);
+                predecessor = right;
+            }
+            self.nodes[predecessor.0].total_length =
+                self.nodes[predecessor.0].total_length.add_len(absorb);
+            self.delete_zero_length_interval(id);
+            return Some(predecessor);
+        }
+
+        self.nodes[id.0].total_length = self.nodes[id.0].total_length.saturating_sub(absorb);
+        let mut predecessor = id;
+        while let Some(parent) = self.nodes[predecessor.0].parent {
+            if self.nodes[parent.0].right == Some(predecessor) {
+                self.delete_zero_length_interval(id);
+                return Some(parent);
+            }
+            predecessor = parent;
+            self.nodes[predecessor.0].total_length = self.nodes[predecessor.0]
+                .total_length
+                .saturating_sub(absorb);
+        }
+
+        None
+    }
+
+    fn remove_rightmost_interval(&mut self) -> Option<CharLen> {
+        let root = self.root?;
+        let id = self.rightmost_id(root);
+        let removed_len = self.node_len(id);
+        let left = self.nodes[id.0].left;
+        let parent = self.nodes[id.0].parent;
+
+        if let Some(parent) = parent {
+            debug_assert_eq!(self.nodes[parent.0].right, Some(id));
+            self.nodes[parent.0].right = left;
+            if let Some(left) = left {
+                self.nodes[left.0].parent = Some(parent);
+            }
+            self.add_length_to_ancestors(Some(parent), -(removed_len.get() as isize));
+            self.balance_upwards(Some(parent));
+        } else {
+            self.root = left;
+            if let Some(left) = left {
+                self.nodes[left.0].parent = None;
+            }
+            // The other branch bumps `version` through `add_length_to_ancestors`;
+            // removing the root itself is just as structural.
+            self.invalidate_find_cache();
+        }
+
+        Some(removed_len)
+    }
+
+    /// The in-order-last interval, memoized against the structural `version`.
+    /// Rotations preserve in-order and node ids are arena-stable, so only an
+    /// insertion or deletion — each of which bumps `version` — can change which
+    /// node is rightmost. The per-put trailing prune (an insert can leave a
+    /// default tail that a later put must drop) thus costs one node read in the
+    /// steady state instead of a right-spine walk from the root on every put.
+    fn rightmost_id_memo(&self, root: IntervalId) -> IntervalId {
+        let version = self.version.load(Ordering::Relaxed);
+        if self.rightmost_gen.get() == version {
+            return IntervalId(self.rightmost_id_cache.load(Ordering::Relaxed));
+        }
+        let id = self.rightmost_id(root);
+        self.rightmost_id_cache.store(id.0, Ordering::Relaxed);
+        self.rightmost_gen.set(version);
+        id
+    }
+
+    fn prune_trailing_empty_intervals(&mut self) {
+        while let Some(root) = self.root {
+            let rightmost = self.rightmost_id_memo(root);
+            if !self.nodes[rightmost.0].is_empty_plist() {
+                break;
+            }
+            self.remove_rightmost_interval();
+        }
+    }
+
+    fn live_plists(&self, id: Option<IntervalId>, f: &mut impl FnMut(Value)) {
+        let Some(id) = id else {
+            return;
+        };
+        let node = &self.nodes[id.0];
+        self.live_plists(node.left, f);
+        f(node.plist);
+        self.live_plists(node.right, f);
+    }
+
+    fn runs(&self) -> Vec<IntervalRun> {
+        let mut runs = Vec::new();
+        self.push_runs(self.root, CharPos0::ZERO, &mut runs);
+        runs
+    }
+
+    fn push_runs(
+        &self,
+        id: Option<IntervalId>,
+        base: CharPos0,
+        runs: &mut Vec<IntervalRun>,
+    ) -> CharPos0 {
+        let Some(id) = id else {
+            return base;
+        };
+        let node = &self.nodes[id.0];
+        let after_left = self.push_runs(node.left, base, runs);
+        let length = self.node_len(id);
+        runs.push(IntervalRun::from_node(after_left, node, length));
+        self.push_runs(node.right, after_left.add_len(length), runs)
+    }
+
+    fn find(&self, pos: CharPos0) -> Option<(CharPos0, &IntervalNode)> {
+        let (start, id) = self.find_id(pos)?;
+        Some((start, &self.nodes[id.0]))
+    }
+
+    /// Successor steps the position memo tries before falling back to a root
+    /// descent (see the walk in `find_id`).
+    const FIND_MEMO_WALK_BUDGET: usize = 8;
+
+    pub(crate) fn find_id(&self, pos: CharPos0) -> Option<(CharPos0, IntervalId)> {
+        // Positional last-descent memo (see the `version`/`cache_*` fields): a lookup
+        // that lands inside the previously located interval, at the same tree
+        // version, returns without re-descending.
+        let version = self.version.load(Ordering::Relaxed);
+        if self.cache_gen.get() == version {
+            let start = CharPos0::new(self.cache_start.load(Ordering::Relaxed));
+            let end = CharPos0::new(self.cache_end.load(Ordering::Relaxed));
+            if start <= pos && pos < end {
+                return Some((start, IntervalId(self.cache_id.load(Ordering::Relaxed))));
+            }
+
+            // Sequential-scan finger. The containment memo above cannot serve a
+            // forward property scan: `SyntaxPropRange` caches whole RUNS, so it
+            // only calls back when it has consumed one and wants the position
+            // one PAST it -- never a position inside the cached interval. That
+            // pattern lands here every time, which is why a font-lock scroll
+            // profiled as almost pure root-descent (find_id 8.29% of self time,
+            // its hot instructions all parent/child pointer chasing).
+            //
+            // Such a lookup is asking for the tree-order successor, reachable in
+            // O(1) amortized via `next_id` instead of an O(log n) descent.
+            // Intervals tile the text contiguously (the invariant the forward
+            // walker in `intervals_from` already relies on), so the successor
+            // begins exactly where the cached interval ended. Zero-length nodes
+            // contain no position and are stepped over.
+            //
+            // A position a few intervals PAST the memo is the same shape one
+            // level up: font-lock's next keyword range starts a couple of
+            // intervals after the last one it wrote. Walk up to
+            // `FIND_MEMO_WALK_BUDGET` successors before giving up on the memo
+            // and descending — every step is O(1) and a descent is O(log n).
+            if pos >= end {
+                let mut id = IntervalId(self.cache_id.load(Ordering::Relaxed));
+                let mut start = end;
+                let mut steps = 0usize;
+                while let Some(next) = self.next_id(id) {
+                    steps += 1;
+                    if steps > Self::FIND_MEMO_WALK_BUDGET {
+                        break;
+                    }
+                    let next_end = start.add_len(self.node_len(next));
+                    if pos < next_end {
+                        self.cache_start.store(start.get(), Ordering::Relaxed);
+                        self.cache_end.store(next_end.get(), Ordering::Relaxed);
+                        self.cache_id.store(next.0, Ordering::Relaxed);
+                        self.cache_gen.set(version);
+                        return Some((start, next));
+                    }
+                    id = next;
+                    start = next_end;
+                }
+            }
+        }
+        let mut id = self.root?;
+        let mut base = CharPos0::ZERO;
+        loop {
+            let node = &self.nodes[id.0];
+            let left_len = self.subtree_len(node.left);
+            let node_start = base.add_len(left_len);
+            let node_len = self.node_len(id);
+            if pos < node_start {
+                id = node.left?;
+            } else if pos < node_start.add_len(node_len) {
+                let node_end = node_start.add_len(node_len);
+                self.cache_start.store(node_start.get(), Ordering::Relaxed);
+                self.cache_end.store(node_end.get(), Ordering::Relaxed);
+                self.cache_id.store(id.0, Ordering::Relaxed);
+                self.cache_gen.set(version);
+                return Some((node_start, id));
+            } else {
+                base = node_start.add_len(node_len);
+                id = node.right?;
+            }
+        }
+    }
+
+    /// Invalidate the `find_id` memo by advancing the tree version. Called by the
+    /// three in-place structural/positional mutators.
+    #[inline]
+    fn invalidate_find_cache(&self) {
+        self.version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `find_id` without consulting or updating the memo -- the ground truth used
+    /// by the differential test to prove the cache never goes stale.
+    #[cfg(any(test, feature = "test-support"))]
+    fn find_id_uncached(&self, pos: CharPos0) -> Option<(CharPos0, IntervalId)> {
+        let mut id = self.root?;
+        let mut base = CharPos0::ZERO;
+        loop {
+            let node = &self.nodes[id.0];
+            let left_len = self.subtree_len(node.left);
+            let node_start = base.add_len(left_len);
+            let node_len = self.node_len(id);
+            if pos < node_start {
+                id = node.left?;
+            } else if pos < node_start.add_len(node_len) {
+                return Some((node_start, id));
+            } else {
+                base = node_start.add_len(node_len);
+                id = node.right?;
+            }
+        }
+    }
+
+    fn first_id_after(&self, current: CharPos0) -> Option<(CharPos0, IntervalId)> {
+        let mut best = None;
+        self.find_first_id_after(self.root, CharPos0::ZERO, current, &mut best);
+        best
+    }
+
+    fn first_start_after(&self, current: CharPos0) -> Option<CharPos0> {
+        self.first_id_after(current).map(|(start, _)| start)
+    }
+
+    fn first_id_overlapping(&self, range: CharRange) -> Option<(CharPos0, IntervalId)> {
+        if range.is_empty() {
+            return None;
+        }
+        if let Some((interval_start, id)) = self.find_id(range.start())
+            && self.interval_end(interval_start, id) > range.start()
+        {
+            return Some((interval_start, id));
+        }
+        self.first_id_after(range.start())
+            .filter(|(next_start, _)| *next_start < range.end())
+    }
+
+    fn find_first_id_after(
+        &self,
+        id: Option<IntervalId>,
+        base: CharPos0,
+        current: CharPos0,
+        best: &mut Option<(CharPos0, IntervalId)>,
+    ) {
+        let Some(id) = id else {
+            return;
+        };
+        let node = &self.nodes[id.0];
+        let left_len = self.subtree_len(node.left);
+        let node_start = base.add_len(left_len);
+        let node_len = self.node_len(id);
+        if node_start > current {
+            let replace = best.is_none_or(|(old_start, _)| node_start < old_start);
+            if replace {
+                *best = Some((node_start, id));
+            }
+            self.find_first_id_after(node.left, base, current, best);
+        } else {
+            self.find_first_id_after(node.right, node_start.add_len(node_len), current, best);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plist helpers
+// ---------------------------------------------------------------------------
+
+/// True when `left` and `right` agree (by `eq`) on every property in `keys`,
+/// reading each plist straight off its interval-node `Value` spine (no `Vec`
+/// materialization). An absent key reads as nil, so two plists differing only in
+/// e.g. `face` compare equal for the watched display keys, and passing
+/// `Value::NIL` as `right` tests whether `left`'s watched keys are all nil.
+/// `syntax-table` and `category`, the plist keys syntax resolution reads.
+fn syntax_relevant_names() -> [Value; 2] {
+    static IDS: std::sync::OnceLock<(SymId, SymId)> = std::sync::OnceLock::new();
+    let (syntax_table, category) = *IDS.get_or_init(|| {
+        (
+            crate::intern::intern("syntax-table"),
+            crate::intern::intern("category"),
+        )
+    });
+    [
+        Value::from_sym_id(syntax_table),
+        Value::from_sym_id(category),
+    ]
+}
+
+fn watched_keys_equal_eq_plist(left: Value, right: Value, keys: &[Value]) -> bool {
+    keys.iter().all(|k| {
+        let a = plist_value_get(left, *k).unwrap_or(Value::NIL);
+        let b = plist_value_get(right, *k).unwrap_or(Value::NIL);
+        eq_value(&a, &b)
+    })
+}
+
+/// Like [`watched_keys_equal_eq_plist`], but distinguishes an absent key from
+/// one explicitly present with value nil.  Effective-property scans need that
+/// distinction: an explicit nil `mouse-face` suppresses
+/// `default-text-properties`, while an absent key lets the default apply.
+fn watched_keys_state_equal_eq_plist(left: Value, right: Value, keys: &[Value]) -> bool {
+    keys.iter().all(
+        |key| match (plist_value_get(left, *key), plist_value_get(right, *key)) {
+            (None, None) => true,
+            (Some(left), Some(right)) => eq_value(&left, &right),
+            _ => false,
+        },
+    )
+}
+
+fn plists_equal_eq(left: &[(Value, Value)], right: &[(Value, Value)]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter().all(|(left_key, left_value)| {
+        right.iter().any(|(right_key, right_value)| {
+            eq_value(left_key, right_key) && eq_value(left_value, right_value)
+        })
+    })
+}
+
+fn plists_equal_values_equal(left: &[(Value, Value)], right: &[(Value, Value)]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter().all(|(left_key, left_value)| {
+        right.iter().any(|(right_key, right_value)| {
+            eq_value(left_key, right_key) && equal_value(left_value, right_value, 0)
+        })
+    })
+}
+
+// ---------------------------------------------------------------------------
+// TextPropertyTable
+// ---------------------------------------------------------------------------
+
+/// How an ordered property plist is applied to an interval.
+///
+/// This makes GNU's two distinct ordering policies explicit at call sites,
+/// instead of encoding them as an easy-to-reverse iterator convention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum PropertyPlistApplication {
+    /// Apply pairs in plist order, as GNU `Fadd_text_properties` does.
+    ///
+    /// Each newly added pair is prepended, so a fresh destination observes the
+    /// reverse of the supplied plist order.
+    AddProperties,
+    /// Apply pairs in reverse so the destination retains their supplied order.
+    ///
+    /// GNU `propertize` obtains this effect by reversing its plist before
+    /// calling `add-text-properties`.
+    PreserveSuppliedOrder,
+}
+
+/// One property-bearing string participating in a concatenation.
+///
+/// The offset is a character length, not an untyped byte/character integer:
+/// interval storage and GNU's string-property positions are character based
+/// even when the destination string is multibyte.
+#[doc(hidden)]
+pub struct ShiftedTextPropertySource {
+    table: TextPropertyTable,
+    char_offset: CharLen,
+}
+
+impl ShiftedTextPropertySource {
+    #[doc(hidden)]
+    pub fn new(table: TextPropertyTable, char_offset: CharLen) -> Self {
+        Self { table, char_offset }
+    }
+}
+
+/// Conservative answer to whether a text-property name can occur in a table.
+///
+/// `DefinitelyAbsent` is proof and may be used to skip an interval-tree walk.
+/// `PossiblyPresent` is not proof of presence: removals deliberately need not
+/// recount the whole tree, so it can remain positive after the last occurrence
+/// is removed.  Making the asymmetry an enum prevents a plain `bool` from
+/// inviting callers to infer more than the index guarantees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub enum PropertyNamePresence {
+    DefinitelyAbsent,
+    PossiblyPresent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PropertyNameIdentity(usize);
+
+impl From<Value> for PropertyNameIdentity {
+    fn from(value: Value) -> Self {
+        Self(value.bits())
+    }
+}
+
+/// Property names known to have been assigned since the last exact rebuild.
+///
+/// Identities are raw tagged bits rather than `Value`s so a stale conservative
+/// entry is not a GC root.  While a name is live in an interval its plist is the
+/// real root; after removal, identity reuse can only cause a harmless false
+/// positive (`PossiblyPresent`), never a false `DefinitelyAbsent`.
+#[derive(Clone, Debug, Default)]
+enum ConservativePropertyNames {
+    /// The common no-properties case has no heap allocation.
+    #[default]
+    Empty,
+    /// Snapshots share the summary in O(1); the next mutation detaches it.
+    Assigned(Arc<FxHashSet<PropertyNameIdentity>>),
+}
+
+impl ConservativePropertyNames {
+    fn from_runs(runs: &[IntervalRun]) -> Self {
+        let mut names = Self::default();
+        for run in runs {
+            names.observe_plist(run.plist);
+        }
+        names
+    }
+
+    fn observe(&mut self, name: Value) {
+        let identity = name.into();
+        match self {
+            Self::Empty => {
+                let mut assigned = FxHashSet::default();
+                assigned.insert(identity);
+                *self = Self::Assigned(Arc::new(assigned));
+            }
+            Self::Assigned(assigned) => {
+                // A put of a name already on record is the common case
+                // (font-lock writes the same few names over and over): a
+                // read probe answers it without `make_mut`'s reference-count
+                // check and the insert's write path.
+                if !assigned.contains(&identity) {
+                    Arc::make_mut(assigned).insert(identity);
+                }
+            }
+        }
+    }
+
+    fn observe_plist(&mut self, mut plist: Value) {
+        while plist.is_cons() {
+            let name = plist.cons_car();
+            let rest = plist.cons_cdr();
+            if !rest.is_cons() {
+                break;
+            }
+            self.observe(name);
+            plist = rest.cons_cdr();
+        }
+    }
+
+    fn include(&mut self, other: &Self) {
+        let Self::Assigned(other) = other else {
+            return;
+        };
+        match self {
+            Self::Empty => *self = Self::Assigned(Arc::clone(other)),
+            Self::Assigned(assigned) if !Arc::ptr_eq(assigned, other) => {
+                Arc::make_mut(assigned).extend(other.iter().copied());
+            }
+            Self::Assigned(_) => {}
+        }
+    }
+
+    fn presence(&self, name: Value) -> PropertyNamePresence {
+        let is_known = match self {
+            Self::Empty => false,
+            Self::Assigned(assigned) => assigned.contains(&name.into()),
+        };
+        if is_known {
+            PropertyNamePresence::PossiblyPresent
+        } else {
+            PropertyNamePresence::DefinitelyAbsent
+        }
+    }
+}
+
+/// Effect a wholesale interval-tree replacement can have on property names.
+///
+/// Requiring this at the replacement boundary makes a mutation that can add
+/// names declare its source.  Pure structural rewrites retain the shared
+/// summary without an O(intervals) recount.
+enum ReplacementPropertyNames<'a> {
+    /// Only the test-only shape-merge helper performs a pure structural
+    /// rewrite today; every production replacement can add names.
+    #[cfg(any(test, feature = "test-support"))]
+    Preserve,
+    Include(&'a ConservativePropertyNames),
+}
+
+/// Text-property interval storage.
+///
+/// The backing store is a GNU-shaped augmented interval tree.  Callers still
+/// use absolute character positions; internally node starts are derived from
+/// subtree lengths.
+#[derive(Debug)]
+pub struct TextPropertyTable {
+    pub(crate) intervals: IntervalTree,
+    property_names: ConservativePropertyNames,
+    /// Bumped by every mutating entry point; run-caching scanners key their
+    /// memos on it (together with the buffer content epoch) so a property
+    /// change invalidates them. Monotonic, wraps never (u64).
+    pub(crate) mutation_tick: u64,
+    /// Bumped only by mutations that can change `syntax-table`/`category`
+    /// presence or values: exact for by-name put/remove, conservative for
+    /// bulk plist replacement, and NOT bumped by pure position adjusts
+    /// (those always ride a content-epoch change). The syntax-run memo keys
+    /// on this so font-lock's per-token `face` writes stop invalidating it.
+    pub(crate) syntax_prop_tick: u64,
+    /// Lazy "does ANY interval carry a syntax-relevant key?" memo, packed as
+    /// `((syntax_prop_tick + 1) << 1) | any` — the +1 makes the default `0`
+    /// never match, and the answer self-recomputes on first query after a
+    /// syntax-relevant mutation. One full-tree bit scan per such mutation,
+    /// zero per-mutation bookkeeping. Atomic (not Cell) from when the table
+    /// backed a shared empty static; ordering is Relaxed — a racing recompute
+    /// is just repeated work.
+    pub(crate) syntax_prop_any: std::sync::atomic::AtomicU64,
+    /// Lazy sorted list of the bit-set intervals' `[start, end)` bounds,
+    /// tagged with the `syntax_prop_tick + 1` it was built at (0 = never).
+    /// Sparse in practice (elisp-mode marks ~21 docstring delimiters in a
+    /// 50k-interval fontified buffer), so queries binary-search this instead
+    /// of walking thousands of face intervals. A Mutex from when the table
+    /// backed a shared empty static; the table is thread-confined, so it is
+    /// uncontended — and a failed try_lock just falls back to the cursor walk.
+    #[cfg(not(any(test, feature = "test-support")))]
+    pub(crate) syntax_prop_ranges: std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)>,
+    /// Test-support spelling: same field, `pub` only in the test-support build
+    /// (attribute macros cannot decorate struct fields; see B3 V1 note).
+    #[cfg(any(test, feature = "test-support"))]
+    syntax_prop_ranges: std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)>,
+}
+
+/// Absence of string text properties, with no Lisp values or table storage.
+///
+/// This state can be shared between threads. A real interval table remains
+/// borrowed from its string on the mutator that owns it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub struct EmptyTextProperties {
+    _private: (),
+}
+
+static_assertions::assert_impl_all!(EmptyTextProperties: Send, Sync, Clone, Copy, std::fmt::Debug, Default, Eq, PartialEq, std::hash::Hash);
+const _: () = {
+    assert!(std::mem::size_of::<EmptyTextProperties>() == 0);
+    assert!(std::mem::align_of::<EmptyTextProperties>() == 1);
+};
+
+impl EmptyTextProperties {
+    /// Construct the property-free state without allocating a table.
+    pub const fn new() -> Self {
+        Self { _private: () }
+    }
+
+    /// Read the empty state on the receiving thread.
+    pub const fn view(self) -> TextPropertiesRef<'static> {
+        TextPropertiesRef { table: None }
+    }
+}
+
+/// A read-only string interval view, including the absence of a table.
+///
+/// Copying this view copies its borrow; [`Self::to_owned_table`] explicitly
+/// copies table storage. An attached empty table stays distinguishable from
+/// absence through [`Self::as_table`], including its revision history.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct TextPropertiesRef<'a> {
+    table: Option<&'a TextPropertyTable>,
+}
+
+static_assertions::assert_impl_all!(TextPropertiesRef<'static>: Clone, Copy, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(TextPropertiesRef<'static>: Send, Sync);
+const _: () = {
+    assert!(std::mem::size_of::<TextPropertiesRef<'static>>() == std::mem::size_of::<usize>());
+    assert!(std::mem::align_of::<TextPropertiesRef<'static>>() == std::mem::align_of::<usize>());
+    assert!(std::mem::offset_of!(TextPropertiesRef<'static>, table) == 0);
+};
+
+impl<'a> TextPropertiesRef<'a> {
+    pub(crate) const fn from_table(table: &'a TextPropertyTable) -> Self {
+        Self { table: Some(table) }
+    }
+
+    /// The actual borrowed table, if the string owns one.
+    #[inline]
+    pub const fn as_table(self) -> Option<&'a TextPropertyTable> {
+        self.table
+    }
+
+    #[inline]
+    pub fn is_empty(self) -> bool {
+        self.table.is_none_or(TextPropertyTable::is_empty)
+    }
+
+    #[inline]
+    pub fn mutation_tick(self) -> u64 {
+        self.table.map_or(0, TextPropertyTable::mutation_tick)
+    }
+
+    /// Copy a real table, or create an empty owned table for later mutation.
+    #[inline]
+    pub fn to_owned_table(self) -> TextPropertyTable {
+        self.table.map_or_else(TextPropertyTable::new, Clone::clone)
+    }
+
+    #[inline]
+    pub fn get_property_at_char_pos(self, pos: CharPos0, name: Value) -> Option<Value> {
+        self.table
+            .and_then(|table| table.get_property_at_char_pos(pos, name))
+    }
+
+    #[inline]
+    pub fn slice_char_range(self, range: CharRange) -> TextPropertyTable {
+        self.table.map_or_else(TextPropertyTable::new, |table| {
+            table.slice_char_range(range)
+        })
+    }
+
+    #[inline]
+    pub fn object_interval_runs_for_char_len(self, len: CharLen) -> Vec<ObjectIntervalRun> {
+        self.table.map_or_else(Vec::new, |table| {
+            table.object_interval_runs_for_char_len(len)
+        })
+    }
+
+    #[inline]
+    pub fn object_interval_plist_runs_for_char_len(
+        self,
+        len: CharLen,
+    ) -> Vec<ObjectIntervalPlistRun> {
+        self.table.map_or_else(Vec::new, |table| {
+            table.object_interval_plist_runs_for_char_len(len)
+        })
+    }
+
+    #[inline]
+    pub fn for_each_interval_from_char_pos(
+        self,
+        pos: CharPos0,
+        f: impl FnMut(CharPos0, CharPos0, Value) -> bool,
+    ) {
+        if let Some(table) = self.table {
+            table.for_each_interval_from_char_pos(pos, f);
+        }
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn for_each_root(self, f: impl FnMut(Value)) {
+        if let Some(table) = self.table {
+            table.for_each_root(f);
+        }
+    }
+
+    #[cfg(feature = "gc-memory-telemetry")]
+    #[inline]
+    pub(crate) fn memory_telemetry_storage(self) -> TextPropertyMemoryStorage {
+        self.table.map_or_else(
+            TextPropertyMemoryStorage::default,
+            TextPropertyTable::memory_telemetry_storage,
+        )
+    }
+}
+
+/// Clip a cached-range endpoint for a deletion of `range` (length
+/// `del_len`): positions past the deletion shift down, positions inside
+/// clamp to its start.
+fn clip_char_pos_for_delete(pos: CharPos0, range: CharRange, del_len: CharLen) -> CharPos0 {
+    if pos >= range.end() {
+        CharPos0::new(pos.get() - del_len.get())
+    } else if pos > range.start() {
+        range.start()
+    } else {
+        pos
+    }
+}
+
+// How many whole interval trees have been copied, for tests.
+//
+// A copy is invisible to every correctness assertion -- the copy holds the
+// same intervals -- so the only way to pin "this primitive reads the tree
+// instead of duplicating it" is to count the duplications.
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static TABLE_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn reset_text_property_table_clones_for_test() {
+    TABLE_CLONES.with(|c| c.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn text_property_table_clones_for_test() -> usize {
+    TABLE_CLONES.with(std::cell::Cell::get)
+}
+
+impl Clone for TextPropertyTable {
+    fn clone(&self) -> Self {
+        use std::sync::atomic::Ordering;
+        #[cfg(any(test, feature = "test-support"))]
+        TABLE_CLONES.with(|c| c.set(c.get() + 1));
+        Self {
+            intervals: self.intervals.clone(),
+            property_names: self.property_names.clone(),
+            mutation_tick: self.mutation_tick,
+            syntax_prop_tick: self.syntax_prop_tick,
+            syntax_prop_any: std::sync::atomic::AtomicU64::new(
+                self.syntax_prop_any.load(Ordering::Relaxed),
+            ),
+            syntax_prop_ranges: std::sync::Mutex::new(
+                self.syntax_prop_ranges
+                    .lock()
+                    .map(|g| g.clone())
+                    .unwrap_or((0, Vec::new())),
+            ),
+        }
+    }
+}
+
+/// `(start, end, plist pairs)` of one interval, as
+/// [`TextPropertyTable::interval_plist_runs_for_test`] reports it.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) type IntervalPlistRun = (usize, usize, Vec<(Value, Value)>);
+
+#[cfg(feature = "gc-memory-telemetry")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TextPropertyMemoryStorage {
+    /// LispString owns the table in a unique Box. An inline buffer table's
+    /// struct must instead be counted by its owner; callers choose correctly.
+    pub(crate) table_struct_bytes: usize,
+    pub(crate) node_logical_bytes: usize,
+    pub(crate) node_capacity_bytes: usize,
+    pub(crate) cached_range_logical_bytes: Option<usize>,
+    pub(crate) cached_range_capacity_bytes: Option<usize>,
+    /// Property-name summaries are Arc-shared. Usable hash capacity does not
+    /// reveal bucket-allocation bytes, so these are reference counts only.
+    pub(crate) shared_property_names: usize,
+    pub(crate) shared_property_name_capacity_entries: usize,
+    pub(crate) shared_property_name_owners: usize,
+}
+
+#[cfg(feature = "gc-memory-telemetry")]
+impl TextPropertyMemoryStorage {
+    pub(crate) fn known_boxed_owned_capacity_bytes(self) -> usize {
+        self.table_struct_bytes
+            .saturating_add(self.node_capacity_bytes)
+            .saturating_add(self.cached_range_capacity_bytes.unwrap_or(0))
+    }
+}
+
+#[cfg(feature = "gc-memory-telemetry")]
+impl TextPropertyTable {
+    pub(crate) fn memory_telemetry_storage(&self) -> TextPropertyMemoryStorage {
+        use std::mem::size_of;
+        let (
+            shared_property_names,
+            shared_property_name_capacity_entries,
+            shared_property_name_owners,
+        ) = match &self.property_names {
+            ConservativePropertyNames::Empty => (0, 0, 0),
+            ConservativePropertyNames::Assigned(names) => {
+                (names.len(), names.capacity(), Arc::strong_count(names))
+            }
+        };
+        let cached_ranges = self.syntax_prop_ranges.try_lock().ok().map(|guard| {
+            (
+                guard
+                    .1
+                    .len()
+                    .saturating_mul(size_of::<(CharPos0, CharPos0)>()),
+                guard
+                    .1
+                    .capacity()
+                    .saturating_mul(size_of::<(CharPos0, CharPos0)>()),
+            )
+        });
+        TextPropertyMemoryStorage {
+            table_struct_bytes: size_of::<Self>(),
+            node_logical_bytes: self
+                .intervals
+                .nodes
+                .len()
+                .saturating_mul(size_of::<IntervalNode>()),
+            node_capacity_bytes: self
+                .intervals
+                .nodes
+                .capacity()
+                .saturating_mul(size_of::<IntervalNode>()),
+            cached_range_logical_bytes: cached_ranges.map(|(logical, _)| logical),
+            cached_range_capacity_bytes: cached_ranges.map(|(_, capacity)| capacity),
+            shared_property_names,
+            shared_property_name_capacity_entries,
+            shared_property_name_owners,
+        }
+    }
+}
+
+impl TextPropertyTable {
+    pub fn new() -> Self {
+        Self {
+            intervals: IntervalTree::new(),
+            property_names: ConservativePropertyNames::default(),
+            mutation_tick: 0,
+            syntax_prop_tick: 0,
+            syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
+            syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
+        }
+    }
+
+    /// Current mutation tick — see the field doc.
+    pub fn mutation_tick(&self) -> u64 {
+        self.mutation_tick
+    }
+
+    /// Current syntax-relevant mutation tick — see the field doc.
+    pub fn syntax_prop_tick(&self) -> u64 {
+        self.syntax_prop_tick
+    }
+
+    /// Whether a property NAME can influence syntax resolution.
+    /// Whether `name` is `syntax-table` or `category`, the two properties
+    /// the syntax scanner reads. Compared by symbol id, as GNU compares
+    /// against `Qsyntax_table`/`Qcategory`: the scanner never reads an
+    /// uninterned symbol of the same name, and comparing names resolved the
+    /// symbol's string twice on every put.
+    fn name_is_syntax_relevant(name: Value) -> bool {
+        let ids = cached_plist_flag_symbols();
+        name.as_bare_symbol_id()
+            .is_some_and(|id| id == ids.syntax_table || id == ids.category)
+    }
+
+    /// Return the conservative presence state for `name` without descending the
+    /// interval tree.
+    pub fn property_name_presence(&self, name: Value) -> PropertyNamePresence {
+        self.property_names.presence(name)
+    }
+
+    /// True when `name` is not provably absent from every interval. Used by
+    /// display scans to skip boundary walks when a watched key cannot occur.
+    pub fn has_property_anywhere(&self, name: Value) -> bool {
+        self.property_name_presence(name) != PropertyNamePresence::DefinitelyAbsent
+    }
+
+    /// Copy interval nodes and plist cons spines, while preserving plist
+    /// values by reference.  GNU `copy_intervals` copies intervals and
+    /// `copy_properties` copies `interval->plist` with `copy-sequence`.
+    pub fn copy_interval_plist_spines(&self) -> Self {
+        let mut runs = self.intervals.runs();
+        for run in &mut runs {
+            run.plist = copy_plist_value(run.plist);
+            run.refresh_cache();
+        }
+        Self::from_interval_runs_preserving_shape(runs)
+    }
+
+    // -- Query helpers -------------------------------------------------------
+
+    /// Find the interval containing `pos`, returning its (start, node) pair.
+    fn find_interval(&self, pos: CharPos0) -> Option<(CharPos0, &IntervalNode)> {
+        self.intervals.find(pos)
+    }
+
+    /// Find the first stored interval that overlaps `[start, end)`.
+    ///
+    /// GNU interval users first locate the interval at START and then advance
+    /// with `next_interval`; they don't scan from the beginning of the object.
+    /// Keep that traversal shape centralized so callers follow GNU's
+    /// interval-access path instead of depending on the tree representation.
+    fn first_interval_overlapping(&self, range: CharRange) -> Option<(CharPos0, IntervalId)> {
+        self.intervals.first_id_overlapping(range)
+    }
+
+    fn for_each_interval_overlapping(
+        &self,
+        range: CharRange,
+        mut f: impl FnMut(usize, usize, &IntervalNode),
+    ) {
+        let Some((mut node_start, mut id)) = self.first_interval_overlapping(range) else {
+            return;
+        };
+        loop {
+            if node_start >= range.end() {
+                break;
+            }
+            let node_end = self.intervals.interval_end(node_start, id);
+            if node_end > range.start() {
+                let node = &self.intervals.nodes[id.0];
+                f(node_start.get(), node_end.get(), node);
+            }
+            let Some(next_id) = self.intervals.next_id(id) else {
+                break;
+            };
+            node_start = node_end;
+            id = next_id;
+        }
+    }
+
+    fn any_interval_overlapping(
+        &self,
+        range: CharRange,
+        mut predicate: impl FnMut(usize, &IntervalNode) -> bool,
+    ) -> bool {
+        let Some((mut node_start, mut id)) = self.first_interval_overlapping(range) else {
+            return false;
+        };
+        loop {
+            if node_start >= range.end() {
+                return false;
+            }
+            let node_end = self.intervals.interval_end(node_start, id);
+            let node = &self.intervals.nodes[id.0];
+            if node_end > range.start() && predicate(node_start.get(), node) {
+                return true;
+            }
+            let Some(next_id) = self.intervals.next_id(id) else {
+                return false;
+            };
+            node_start = node_end;
+            id = next_id;
+        }
+    }
+
+    fn try_for_each_interval_overlapping<E>(
+        &self,
+        range: CharRange,
+        mut f: impl FnMut(CharRange, &IntervalNode) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let Some((mut node_start, mut id)) = self.first_interval_overlapping(range) else {
+            return Ok(());
+        };
+        loop {
+            if node_start >= range.end() {
+                break;
+            }
+            let node_end = self.intervals.interval_end(node_start, id);
+            if node_end > range.start() {
+                let node = &self.intervals.nodes[id.0];
+                f(CharRange::new(node_start, node_end), node)?;
+            }
+            let Some(next_id) = self.intervals.next_id(id) else {
+                break;
+            };
+            node_start = node_end;
+            id = next_id;
+        }
+        Ok(())
+    }
+
+    fn from_interval_runs(runs: Vec<IntervalRun>) -> Self {
+        let property_names = ConservativePropertyNames::from_runs(&runs);
+        Self {
+            intervals: IntervalTree::from_runs(runs),
+            property_names,
+            mutation_tick: 0,
+            syntax_prop_tick: 0,
+            syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
+            syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
+        }
+    }
+
+    fn from_interval_runs_preserving_shape(runs: Vec<IntervalRun>) -> Self {
+        let property_names = ConservativePropertyNames::from_runs(&runs);
+        Self::with_runs_and_names(runs, property_names)
+    }
+
+    /// A fresh table over `runs` (shape preserved) with an already-known
+    /// conservative name summary.
+    fn with_runs_and_names(
+        runs: Vec<IntervalRun>,
+        property_names: ConservativePropertyNames,
+    ) -> Self {
+        Self {
+            intervals: IntervalTree::from_runs_preserving_shape(runs),
+            property_names,
+            mutation_tick: 0,
+            syntax_prop_tick: 0,
+            syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
+            syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
+        }
+    }
+
+    /// Compose disjoint, shifted source tables into one balanced interval tree.
+    ///
+    /// GNU `concat_to_string` first owns the complete result and then applies
+    /// each source interval through `add-text-properties`.  Replaying those
+    /// writes against a growing tree is unnecessarily quadratic in NeoMacs:
+    /// every property can split, search, and rebalance the interval tree.  This
+    /// constructor performs the same ordered-plist transformation in memory,
+    /// then builds the destination tree once from all known runs.
+    #[doc(hidden)]
+    pub fn from_shifted_sources(
+        sources: Vec<ShiftedTextPropertySource>,
+        application: PropertyPlistApplication,
+    ) -> Self {
+        fn applied_to_empty_destination(
+            properties: Vec<(Value, Value)>,
+            application: PropertyPlistApplication,
+        ) -> Vec<(Value, Value)> {
+            let mut destination = Vec::with_capacity(properties.len());
+            let mut apply = |(name, value): (Value, Value)| {
+                if let Some((_, existing)) = destination
+                    .iter_mut()
+                    .find(|(existing_name, _)| eq_value(existing_name, &name))
+                {
+                    *existing = value;
+                } else {
+                    destination.insert(0, (name, value));
+                }
+            };
+
+            match application {
+                PropertyPlistApplication::AddProperties => {
+                    properties.into_iter().for_each(&mut apply);
+                }
+                PropertyPlistApplication::PreserveSuppliedOrder => {
+                    properties.into_iter().rev().for_each(&mut apply);
+                }
+            }
+            destination
+        }
+
+        let saved_roots = save_scratch_gc_roots();
+        let mut runs = Vec::new();
+        for source in sources {
+            for run in source.table.intervals.runs() {
+                if run.is_empty_plist() {
+                    continue;
+                }
+                let properties = applied_to_empty_destination(plist_pairs(run.plist), application);
+                let plist = plist_value_from_pairs(&properties);
+                // Later plist construction may collect.  Keep every fresh
+                // destination spine alive until the finished tree owns it.
+                push_scratch_gc_root(plist);
+                runs.push(IntervalRun::new_in_char_range(
+                    CharRange::new(
+                        run.start().add_len(source.char_offset),
+                        run.end().add_len(source.char_offset),
+                    ),
+                    plist,
+                ));
+            }
+        }
+        let table = Self::from_interval_runs_preserving_shape(runs);
+        restore_scratch_gc_roots(saved_roots);
+        table
+    }
+
+    fn replace_runs_preserving_shape(
+        &mut self,
+        runs: Vec<IntervalRun>,
+        property_names: ReplacementPropertyNames<'_>,
+    ) {
+        self.mutation_tick += 1;
+        match property_names {
+            #[cfg(any(test, feature = "test-support"))]
+            ReplacementPropertyNames::Preserve => {}
+            ReplacementPropertyNames::Include(names) => self.property_names.include(names),
+        }
+        self.intervals = IntervalTree::from_runs_preserving_shape(runs);
+    }
+
+    fn split_runs_at(runs: &mut Vec<IntervalRun>, pos: CharPos0) {
+        if pos == CharPos0::ZERO {
+            return;
+        }
+        let Some(index) = runs
+            .iter()
+            .position(|run| run.start() < pos && pos < run.end())
+        else {
+            return;
+        };
+
+        let right_plist = copy_plist_value(runs[index].plist);
+        let mut right = runs[index].clone();
+        right.set_start(pos);
+        right.plist = right_plist;
+        right.refresh_cache();
+        runs[index].set_end(pos);
+        runs.insert(index + 1, right);
+    }
+
+    fn ensure_runs_cover(runs: &mut Vec<IntervalRun>, end: CharPos0) {
+        let current_end = runs.last().map(IntervalRun::end).unwrap_or(CharPos0::ZERO);
+        if current_end < end {
+            runs.push(IntervalRun::default_in_char_range(CharRange::new(
+                current_end,
+                end,
+            )));
+        }
+    }
+
+    // -- Public API ----------------------------------------------------------
+
+    pub fn put_property_in_char_range(
+        &mut self,
+        range: CharRange,
+        name: Value,
+        value: Value,
+    ) -> bool {
+        self.put_property_raw(range, name, value, NewPropertyPosition::Prepend)
+    }
+
+    /// Add NAME/VALUE with GNU `plist_put` order: an existing key keeps its
+    /// position; a new key is appended at the end of each interval's plist.
+    /// Mode-line element attribution uses this because GNU's final observable
+    /// order appends `mode-line-elt-no` after the source plist.
+    pub fn put_property_appending_new_in_char_range(
+        &mut self,
+        range: CharRange,
+        name: Value,
+        value: Value,
+    ) -> bool {
+        self.put_property_raw(range, name, value, NewPropertyPosition::Append)
+    }
+
+    fn put_property_raw(
+        &mut self,
+        range: CharRange,
+        name: Value,
+        value: Value,
+        new_position: NewPropertyPosition,
+    ) -> bool {
+        self.mutation_tick += 1;
+        if Self::name_is_syntax_relevant(name) {
+            self.syntax_prop_tick += 1;
+            self.syntax_ranges_note_put(range);
+        }
+        if range.is_empty() {
+            return false;
+        }
+        self.property_names.observe(name);
+        let mut changed = false;
+
+        let affected = self.intervals.intervals_overlapping_after_splits(range);
+        for (_, id) in affected {
+            let node = &mut self.intervals.nodes[id.0];
+            let updated = match new_position {
+                NewPropertyPosition::Prepend => {
+                    plist_value_put_replace(&mut node.plist, name, value)
+                }
+                NewPropertyPosition::Append => {
+                    plist_value_put_replace_appending_new(&mut node.plist, name, value)
+                }
+            };
+            if updated {
+                node.refresh_cache();
+                changed = true;
+            }
+        }
+        self.intervals.prune_trailing_empty_intervals();
+        changed
+    }
+
+    pub fn put_property_for_object_char_len(
+        &mut self,
+        range: CharRange,
+        object_len: CharLen,
+        name: Value,
+        value: Value,
+    ) -> bool {
+        self.put_property_for_object_len_raw(range, object_len, name, value)
+    }
+
+    #[doc(hidden)]
+    pub fn apply_property_plist_for_object_char_len(
+        &mut self,
+        range: CharRange,
+        object_len: CharLen,
+        properties: &[(Value, Value)],
+        application: PropertyPlistApplication,
+    ) -> bool {
+        let mut changed = false;
+        let mut apply = |&(name, value): &(Value, Value)| {
+            changed |= self.put_property_for_object_len_raw(range, object_len, name, value);
+        };
+        match application {
+            PropertyPlistApplication::AddProperties => properties.iter().for_each(&mut apply),
+            PropertyPlistApplication::PreserveSuppliedOrder => {
+                properties.iter().rev().for_each(&mut apply);
+            }
+        }
+        changed
+    }
+
+    fn put_property_for_object_len_raw(
+        &mut self,
+        range: CharRange,
+        object_len: CharLen,
+        name: Value,
+        value: Value,
+    ) -> bool {
+        self.mutation_tick += 1;
+        let syntax_relevant = Self::name_is_syntax_relevant(name);
+        if syntax_relevant {
+            self.syntax_prop_tick += 1;
+        }
+        let (changed, written) = self.put_property_walk(range, object_len, name, value);
+        if syntax_relevant {
+            // Keep the cached bit-set ranges truthful, exactly as
+            // `put_property_raw` does. Its absence here was not a
+            // string-only concession: `text_props_put_property_in_emacs_byte_range`
+            // -- the BUFFER put -- routes through this function, so every
+            // `put-text-property` of `syntax-table`/`category` on a buffer
+            // bumped the tick and left the list stale, and the next
+            // `syntax_prop_free_run_end` query rebuilt it by walking the whole
+            // interval tree. `org-editing-heavy` did that ~192 times per
+            // operation.
+            //
+            // The list's entries mirror interval boundaries, so it is told
+            // the span the walk actually WROTE, not the span it was asked
+            // for: an interval that already carried the property is left
+            // whole (GNU's rule, below), and noting the requested range
+            // would cut its entry at a position that is no boundary.
+            let noted = written.unwrap_or_else(|| CharRange::new(range.start(), range.start()));
+            self.syntax_ranges_note_put(noted);
+        }
+        changed
+    }
+
+    /// The buffer put's tree walk. Returns whether any plist changed and the
+    /// span of intervals that received the property (`None` when every
+    /// interval in `range` already had it): its ends are interval boundaries.
+    fn put_property_walk(
+        &mut self,
+        range: CharRange,
+        object_len: CharLen,
+        name: Value,
+        value: Value,
+    ) -> (bool, Option<CharRange>) {
+        if range.is_empty() {
+            return (false, None);
+        }
+        self.property_names.observe(name);
+
+        self.intervals
+            .ensure_cover(CharPos0::ZERO.add_len(object_len).max(range.end()));
+
+        // GNU `add_text_properties_1`: ONE descent seats the walk at the
+        // interval holding START, and the walk itself decides where a
+        // boundary is missing. The old shape -- `split_at (start)`,
+        // `split_at (end)`, then `first_id_overlapping` -- descended the tree
+        // up to five times per put (each `split_at` descends once, and again
+        // after a real split to re-seat) for a result the walk already had in
+        // hand; on org font-lock, at ~10K intervals, those descents were
+        // most of a put.
+        //
+        // Two GNU rules ride along. An interval that already carries the
+        // property is never split, so a put whose ends fall inside such
+        // intervals adds no boundaries (GNU's leading "we can skip it" loop
+        // and its `interval_has_all_properties` test on the last interval).
+        // And when a split is made, the part that receives the property takes
+        // the fresh plist copy (`copy_properties`) while the untouched
+        // remainder keeps the original object -- so a plist cons Lisp already
+        // holds from `text-properties-at` stays with the text whose
+        // properties did not change. `put_property_raw` is the string path
+        // and keeps its own shape.
+        //
+        // Balancing is GNU's too: at the split node, climbing only while a
+        // rotation happened (`balance_after_split`); `split_at`'s climb to
+        // the root cost more than the split itself here.
+        let Some((seat_start, mut id)) = self.intervals.find_id(range.start()) else {
+            return (false, None);
+        };
+        let has_property = |plist: Value| {
+            plist_value_get(plist, name).is_some_and(|existing| eq_value(&existing, &value))
+        };
+        let mut node_start = seat_start;
+        let mut node_end = self.intervals.interval_end(node_start, id);
+        if has_property(self.intervals.nodes[id.0].plist) {
+            // Skip the leading intervals that already have it; the first one
+            // that does not begins on a boundary, so no split is needed.
+            loop {
+                if node_end >= range.end() {
+                    return (false, None);
+                }
+                let Some(next) = self.intervals.next_id(id) else {
+                    return (false, None);
+                };
+                id = next;
+                node_start = node_end;
+                node_end = self.intervals.interval_end(node_start, id);
+                if !has_property(self.intervals.nodes[id.0].plist) {
+                    break;
+                }
+            }
+        } else if seat_start < range.start() {
+            // `split_interval_right` + `copy_properties (unchanged, i)`: the
+            // remainder [start, node_end) is written below, so it takes the
+            // copy; [seat_start, start) keeps the plist object.
+            let original = self.intervals.nodes[id.0].plist;
+            let right = self
+                .intervals
+                .node_shaped_like(id, copy_plist_value(original));
+            let right_id =
+                self.intervals
+                    .split_node_right_raw(id, node_start, range.start(), right);
+            self.intervals.balance_after_split(id);
+            id = right_id;
+            node_start = range.start();
+        }
+
+        let written_start = node_start;
+        let mut changed = false;
+        loop {
+            if node_end >= range.end() {
+                if has_property(self.intervals.nodes[id.0].plist) {
+                    // Not written: the span ends at this interval's start.
+                    let written = (written_start < node_start)
+                        .then(|| CharRange::new(written_start, node_start));
+                    return (changed, written);
+                }
+                if node_end > range.end() {
+                    // `split_interval_left` + `copy_properties`: [node_start,
+                    // end) is written and takes the copy; [end, node_end)
+                    // keeps the plist object.
+                    let original = self.intervals.nodes[id.0].plist;
+                    let right = self.intervals.node_shaped_like(id, original);
+                    self.intervals
+                        .split_node_right_raw(id, node_start, range.end(), right);
+                    self.intervals.nodes[id.0].plist = copy_plist_value(original);
+                    self.intervals.balance_after_split(id);
+                }
+                if plist_value_put_replace(&mut self.intervals.nodes[id.0].plist, name, value) {
+                    self.intervals.nodes[id.0].refresh_cache();
+                    changed = true;
+                }
+                return (changed, Some(CharRange::new(written_start, range.end())));
+            }
+            if plist_value_put_replace(&mut self.intervals.nodes[id.0].plist, name, value) {
+                self.intervals.nodes[id.0].refresh_cache();
+                changed = true;
+            }
+            let Some(next) = self.intervals.next_id(id) else {
+                return (changed, Some(CharRange::new(written_start, node_end)));
+            };
+            id = next;
+            node_start = node_end;
+            node_end = self.intervals.interval_end(node_start, id);
+        }
+    }
+
+    pub(crate) fn from_plist_runs(runs: Vec<TextPropertyPlistRun>) -> Self {
+        Self::from_interval_runs_preserving_shape(
+            runs.into_iter()
+                .filter_map(TextPropertyPlistRun::into_interval_run)
+                .collect(),
+        )
+    }
+
+    pub fn get_property_at_char_pos(&self, pos: CharPos0, name: Value) -> Option<Value> {
+        // A name never written to this table cannot be on any interval:
+        // answer without descending (one set probe instead of a tree walk).
+        // `field`, `invisible`, `display`, `composition` probes from the
+        // motion and column scanners are overwhelmingly this case.
+        if self.property_name_presence(name) == PropertyNamePresence::DefinitelyAbsent {
+            return None;
+        }
+        self.get_property_raw(pos, name)
+    }
+
+    /// The plist of the interval covering `pos`, or `None` when no interval
+    /// does -- GNU `interval_of` (src/textprop.c), whose NULL result means the
+    /// character has no properties at all.
+    ///
+    /// Distinct from [`Self::interval_plist_run_at_char_pos`]: a caller that
+    /// only needs the character's properties must not pay for the run bounds,
+    /// which cost an interval-end computation and, in a gap, a walk to the next
+    /// property change. That walk ran per character on the byte-addressed
+    /// scanners (regexp matching, forward-comment) until this existed.
+    pub fn interval_plist_at_char_pos(&self, pos: CharPos0) -> Option<Value> {
+        self.find_interval(pos).map(|(_, node)| node.plist)
+    }
+
+    fn get_property_raw(&self, pos: CharPos0, name: Value) -> Option<Value> {
+        if self.property_name_presence(name) == PropertyNamePresence::DefinitelyAbsent {
+            return None;
+        }
+        let (_, node) = self.find_interval(pos)?;
+        plist_value_get(node.plist, name)
+    }
+
+    /// Returns property `name` at `pos` together with the `[start, end)` char
+    /// run over which it stays constant (the interval containing `pos`, or the
+    /// gap up to the next property boundary when no interval covers it).
+    ///
+    /// Mirrors GNU `syntax.c` `update_syntax_table`, which loads
+    /// `gl_state.b_property` / `gl_state.e_property` from the interval at the
+    /// position so a scan range-checks per char and only refetches when it
+    /// leaves the run.  `total` bounds the gap run at the buffer end.
+    pub fn get_property_run_at_char_pos(
+        &self,
+        pos: CharPos0,
+        name: Value,
+        total: usize,
+    ) -> (Option<Value>, CharPos0, CharPos0) {
+        match self.intervals.find_id(pos) {
+            Some((start, id)) => {
+                let node = &self.intervals.nodes[id.0];
+                let end = self.intervals.interval_end(start, id);
+                (plist_value_get(node.plist, name), start, end)
+            }
+            None => {
+                let end = self
+                    .next_property_change_raw(pos, None)
+                    .unwrap_or_else(|| CharPos0::new(total));
+                (None, pos, end)
+            }
+        }
+    }
+
+    /// Returns the plist of the interval covering `pos` together with its
+    /// `[start, end)` char run, or `None` for the plist when no interval covers
+    /// `pos` (the run then spans up to the next property boundary).
+    ///
+    /// This is the shape GNU's `update_syntax_table` (src/syntax.c) works in:
+    /// it takes `interval_of (charpos)`, keeps `i->position` /
+    /// `INTERVAL_LAST_POS (i)` as the run, and resolves the property from
+    /// `i->plist` with `textget` -- and returns early with NO property when
+    /// there is no interval, which is why the missing case is distinguished
+    /// from an interval whose plist lacks the property.
+    pub fn interval_plist_run_at_char_pos(
+        &self,
+        pos: CharPos0,
+        total: usize,
+    ) -> (Option<Value>, CharPos0, CharPos0) {
+        match self.intervals.find_id(pos) {
+            Some((start, id)) => {
+                let node = &self.intervals.nodes[id.0];
+                let end = self.intervals.interval_end(start, id);
+                (Some(node.plist), start, end)
+            }
+            None => {
+                let end = self
+                    .next_property_change_raw(pos, None)
+                    .unwrap_or_else(|| CharPos0::new(total));
+                (None, pos, end)
+            }
+        }
+    }
+
+    /// The next char position in `(pos, cap)` where any property in `keys`
+    /// changes VALUE from its value at `pos`, or `cap` if none change first.
+    ///
+    /// Mirrors GNU `compute_stop_pos` (src/xdisp.c): record the watched keys'
+    /// values at `pos`, then step interval boundaries comparing ONLY those keys,
+    /// so a run that is constant in `keys` but split by other properties (e.g.
+    /// dense `face` intervals from font-lock) is coalesced in one walk instead of
+    /// stopping at every boundary. Gaps (no interval) read as all-nil, matching
+    /// `next_property_change_raw`. This lets a per-char display scanner learn the
+    /// span over which invisible/display/composition cannot change and skip the
+    /// expensive per-char property probes across it.
+    pub fn next_watched_property_change(
+        &self,
+        pos: CharPos0,
+        cap: CharPos0,
+        keys: &[Value],
+    ) -> CharPos0 {
+        if cap <= pos {
+            return cap;
+        }
+        if watched_prop_demand_mode() == WatchedPropDemandMode::On {
+            return self.next_watched_property_change_demand(pos, cap, keys);
+        }
+        // Same locate-once-then-step-siblings walk as
+        // `next_single_property_change_after_char_pos`, comparing the watched keys
+        // directly off each node's plist spine and bounded by `cap`.
+        let mut cursor = self.intervals.cursor_at(pos);
+        let Some((_, mut boundary, first_node)) = cursor.next() else {
+            return cap;
+        };
+        let current = first_node.plist;
+        loop {
+            if boundary >= cap {
+                return cap;
+            }
+            match cursor.next() {
+                Some((_, end, node)) => {
+                    if !watched_keys_equal_eq_plist(current, node.plist, keys) {
+                        return boundary;
+                    }
+                    boundary = end;
+                }
+                None => {
+                    // Trailing implicit-nil region at the tree end.
+                    if !watched_keys_equal_eq_plist(current, Value::NIL, keys) {
+                        return boundary;
+                    }
+                    return cap;
+                }
+            }
+        }
+    }
+
+    /// Presence-aware variant of [`Self::next_watched_property_change`].
+    ///
+    /// A key moving between absent and explicitly nil is reported as a change
+    /// even though both read as nil. Layout effective-property scans need this
+    /// to notice when an explicit nil starts (or stops) shadowing a lower
+    /// priority alias, category, or `default-text-properties`.
+    pub fn next_watched_property_state_change(
+        &self,
+        pos: CharPos0,
+        cap: CharPos0,
+        keys: &[Value],
+    ) -> CharPos0 {
+        if cap <= pos {
+            return cap;
+        }
+        let mut cursor = self.intervals.cursor_at(pos);
+        let Some((_, mut boundary, first_node)) = cursor.next() else {
+            return cap;
+        };
+        let current = first_node.plist;
+        loop {
+            if boundary >= cap {
+                return cap;
+            }
+            match cursor.next() {
+                Some((_, end, node)) => {
+                    if !watched_keys_state_equal_eq_plist(current, node.plist, keys) {
+                        return boundary;
+                    }
+                    boundary = end;
+                }
+                None => {
+                    // Trailing implicit-nil region at the tree end.
+                    if !watched_keys_state_equal_eq_plist(current, Value::NIL, keys) {
+                        return boundary;
+                    }
+                    return cap;
+                }
+            }
+        }
+    }
+
+    /// Keep the watched-key comparisons of GNU `compute_stop_pos`, but use
+    /// the carried end to reject an unused lookahead before `next_id`. Only
+    /// this bounded query selects the loop; generic cursors keep their policy.
+    ///
+    /// Each query borrows an immutable tree and keeps its seat and boundary in
+    /// local variables. No Lisp state is cached or published; independent
+    /// queries can read a shared tree concurrently under its existing contract.
+    #[inline]
+    fn next_watched_property_change_demand(
+        &self,
+        pos: CharPos0,
+        cap: CharPos0,
+        keys: &[Value],
+    ) -> CharPos0 {
+        let Some((start, mut id)) = self.intervals.find_id(pos) else {
+            return cap;
+        };
+        let current = self.intervals.nodes[id.0].plist;
+        let mut boundary = self.intervals.interval_end(start, id);
+        loop {
+            if boundary >= cap {
+                return cap;
+            }
+            match self.intervals.next_id(id) {
+                Some(next_id) => {
+                    let node = &self.intervals.nodes[next_id.0];
+                    if !watched_keys_equal_eq_plist(current, node.plist, keys) {
+                        return boundary;
+                    }
+                    boundary = self.intervals.interval_end(boundary, next_id);
+                    id = next_id;
+                }
+                None => {
+                    // The region beyond tree coverage reads as implicit nil.
+                    if !watched_keys_equal_eq_plist(current, Value::NIL, keys) {
+                        return boundary;
+                    }
+                    return cap;
+                }
+            }
+        }
+    }
+
+    /// The end of the run from `pos` (capped at `cap`) over which the
+    /// `syntax-table`/`category` keys are provably constant: from a bit-free
+    /// interval, up to the first interval that carries either key; from a
+    /// bit-set interval, over the following intervals whose two key values
+    /// are `eq` to its own (face-only splits inside one `syntax-table` put).
+    ///
+    /// The cached range list only ever COVERS the bit-set intervals — removals,
+    /// inserts and `category` puts leave entries wider than, and not constant
+    /// over, what they cover — so it answers "prop-free until the next entry"
+    /// and nothing else; a position inside an entry takes the interval walk.
+    pub fn syntax_prop_free_run_end(&self, pos: CharPos0, cap: CharPos0) -> CharPos0 {
+        if cap <= pos {
+            return cap;
+        }
+        // Whole-table fast path: no interval anywhere carries a
+        // syntax-relevant key (the overwhelmingly common buffer), so every
+        // run extends to the cap without walking anything.
+        if !self.has_any_syntax_prop_interval() {
+            return cap;
+        }
+        // Sparse fast path: binary-search the lazily built list of bit-set
+        // intervals instead of stepping every face interval up to the cap.
+        if let Ok(mut guard) = self.syntax_prop_ranges.try_lock() {
+            if guard.0 != self.syntax_prop_tick + 1 {
+                let mut ranges = Vec::new();
+                for (start, end, node) in self.intervals.cursor_at(CharPos0::ZERO) {
+                    if node.has_syntax_prop {
+                        ranges.push((start, end));
+                    }
+                }
+                *guard = (self.syntax_prop_tick + 1, ranges);
+            }
+            let ranges = &guard.1;
+            // First range whose end is beyond `pos`.
+            let idx = ranges.partition_point(|&(_, end)| end <= pos);
+            match ranges.get(idx) {
+                // Prop-free until the next covered range.
+                Some(&(start, _)) if start > pos => return start.min(cap),
+                // Inside a covered range: walk the intervals below.
+                Some(_) => {}
+                None => return cap,
+            }
+        }
+        let mut cursor = self.intervals.cursor_at(pos);
+        let Some((_, mut boundary, first)) = cursor.next() else {
+            return cap; // no intervals at all: implicit-nil to the cap
+        };
+        if first.has_syntax_prop {
+            let keys = syntax_relevant_names();
+            loop {
+                if boundary >= cap {
+                    return cap;
+                }
+                match cursor.next() {
+                    Some((_, end, node))
+                        if node.has_syntax_prop
+                            && watched_keys_state_equal_eq_plist(
+                                first.plist,
+                                node.plist,
+                                &keys,
+                            ) =>
+                    {
+                        boundary = end;
+                    }
+                    _ => return boundary,
+                }
+            }
+        }
+        loop {
+            if boundary >= cap {
+                return cap;
+            }
+            match cursor.next() {
+                Some((_, end, node)) => {
+                    if node.has_syntax_prop {
+                        return boundary;
+                    }
+                    boundary = end;
+                }
+                None => return cap, // trailing implicit-nil region
+            }
+        }
+    }
+
+    /// Start of the run containing `pos` over which `syntax-table` and
+    /// `category` are constant in presence AND value.
+    ///
+    /// Runs are located through the cached syntax-range list, so alternating
+    /// category spans near the end of a long history need only their own
+    /// ranges inspected; a prop-free gap starts at the previous covered
+    /// range's end. This mirrors `syntax_prop_free_run_end` in the backward
+    /// direction and is used by effective-property extents that must walk
+    /// out from the queried position, not from the buffer start.
+    pub fn previous_syntax_prop_state_run_start_at_char_pos(&self, pos: CharPos0) -> CharPos0 {
+        if pos == CharPos0::ZERO || !self.has_any_syntax_prop_interval() {
+            return CharPos0::ZERO;
+        }
+        let keys = syntax_relevant_names();
+        let Some((start, id)) = self.intervals.find_id(pos) else {
+            // A pruned tail is implicitly prop-free, not an empty table.
+            // If the last real interval carries syntax/category, its end is
+            // the gap start. Otherwise extend that interval's prop-free run
+            // backward; this second lookup is inside the tree.
+            let Some((last_start, last_id)) = self.intervals.last_interval() else {
+                return CharPos0::ZERO;
+            };
+            return if self.intervals.nodes[last_id.0].has_syntax_prop {
+                CharPos0::ZERO.add_len(self.intervals.len())
+            } else {
+                self.previous_syntax_prop_state_run_start_at_char_pos(last_start)
+            };
+        };
+        let current = self.intervals.nodes[id.0].plist;
+        if self.intervals.nodes[id.0].has_syntax_prop {
+            // Inside a prop-carrying run: step contiguous real intervals and
+            // stop at the first gap or state change. Ranges are NOT trusted as
+            // constant runs: an incremental put may merge several intervals,
+            // and a later removal can leave stale/wider coverage.
+            let mut run_start = start;
+            let seat = self.intervals.prev_id(id).map(|previous| {
+                let previous_start = start.saturating_sub_len(self.intervals.node_len(previous));
+                (previous_start, previous)
+            });
+            let mut cursor = self.intervals.reverse_cursor_from(seat);
+            while let Some((previous_start, previous_end, previous)) = cursor.next() {
+                if previous_end != run_start || !previous.has_syntax_prop {
+                    break;
+                }
+                if !watched_keys_state_equal_eq_plist(previous.plist, current, &keys) {
+                    break;
+                }
+                run_start = previous_start;
+            }
+            return run_start;
+        }
+
+        // Prop-free gap. The cached ranges are only hints for where a real
+        // prop-carrying interval may live; verify each candidate against the
+        // interval tree before returning its end as the gap start.
+        if let Ok(mut guard) = self.syntax_prop_ranges.try_lock() {
+            if guard.0 != self.syntax_prop_tick + 1 {
+                let mut ranges = Vec::new();
+                for (start, end, node) in self.intervals.cursor_at(CharPos0::ZERO) {
+                    if node.has_syntax_prop {
+                        ranges.push((start, end));
+                    }
+                }
+                *guard = (self.syntax_prop_tick + 1, ranges);
+            }
+            let ranges = &guard.1;
+            let mut index = ranges.partition_point(|&(range_start, _)| range_start < pos);
+            while index > 0 {
+                index -= 1;
+                let (range_start, range_end) = ranges[index];
+                let window_end = range_end.min(pos);
+                if window_end <= range_start {
+                    continue;
+                }
+                let mut probe = window_end.saturating_sub_len(CharLen::new(1));
+                loop {
+                    let Some((interval_start, interval_id)) = self.intervals.find_id(probe) else {
+                        break;
+                    };
+                    let interval_end = self.intervals.interval_end(interval_start, interval_id);
+                    if self.intervals.nodes[interval_id.0].has_syntax_prop {
+                        return interval_end.min(pos);
+                    }
+                    if interval_start <= range_start {
+                        break;
+                    }
+                    probe = interval_start.saturating_sub_len(CharLen::new(1));
+                }
+            }
+            return CharPos0::ZERO;
+        }
+
+        // Lock-free fallback: bool-only scan; it reads no plists, so it cannot
+        // exhaust the layout dependency budget, but it may cross a gap.
+        let mut probe = pos.saturating_sub_len(CharLen::new(1));
+        loop {
+            let Some((interval_start, interval_id)) = self.intervals.find_id(probe) else {
+                return CharPos0::ZERO;
+            };
+            if self.intervals.nodes[interval_id.0].has_syntax_prop {
+                return self
+                    .intervals
+                    .interval_end(interval_start, interval_id)
+                    .min(pos);
+            }
+            if interval_start == CharPos0::ZERO {
+                return CharPos0::ZERO;
+            }
+            probe = interval_start.saturating_sub_len(CharLen::new(1));
+        }
+    }
+
+    /// `put` of a syntax-relevant property over `range`: keep the cached
+    /// range list truthful incrementally (drop overlapped entries, insert the
+    /// put range as one merged entry — the put wrote ONE value across it, so
+    /// treating it as a single constant run is sound), then revalidate the
+    /// guard for the just-bumped tick. Invalidating instead would cost a
+    /// full-tree rebuild scan on the next query — per syntax-propertize
+    /// write, which typing triggers constantly.
+    fn syntax_ranges_note_put(&mut self, range: CharRange) {
+        let Ok(mut guard) = self.syntax_prop_ranges.lock() else {
+            return;
+        };
+        // Valid for the PRE-bump tick (we just incremented)?
+        if guard.0 != self.syntax_prop_tick {
+            *guard = (0, Vec::new());
+            return;
+        }
+        if !range.is_empty() {
+            let (put_start, put_end) = (range.start(), range.end());
+            let mut ranges = Vec::with_capacity(guard.1.len() + 2);
+            for &(start, end) in &guard.1 {
+                if end <= put_start || start >= put_end {
+                    ranges.push((start, end));
+                    continue;
+                }
+                // The parts of an overlapped entry outside the put still
+                // carry their own properties: keep covering them. Dropping the
+                // whole entry left those intervals out of the list, so
+                // `syntax_prop_free_run_end` called them prop-free and scans
+                // ignored their `syntax-table` property.
+                if start < put_start {
+                    ranges.push((start, put_start));
+                }
+                if end > put_end {
+                    ranges.push((put_end, end));
+                }
+            }
+            let idx = ranges.partition_point(|&(s, _)| s < put_start);
+            ranges.insert(idx, (put_start, put_end));
+            guard.1 = ranges;
+        }
+        guard.0 = self.syntax_prop_tick + 1;
+        // The any-flag is monotone under put; refresh it too.
+        self.syntax_prop_any.store(
+            ((self.syntax_prop_tick + 1) << 1) | 1,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Revalidate the cached ranges for the just-bumped tick without
+    /// touching their contents (see `remove_property_raw`).
+    fn syntax_ranges_revalidate(&mut self) {
+        let Ok(mut guard) = self.syntax_prop_ranges.lock() else {
+            return;
+        };
+        if guard.0 == self.syntax_prop_tick {
+            guard.0 = self.syntax_prop_tick + 1;
+            let packed = self
+                .syntax_prop_any
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if packed >> 1 == self.syntax_prop_tick {
+                self.syntax_prop_any.store(
+                    ((self.syntax_prop_tick + 1) << 1) | (packed & 1),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+        } else {
+            *guard = (0, Vec::new());
+        }
+    }
+
+    /// Test hook: every bit-set interval is covered by the cached range list
+    /// when that list is valid, and the any-flag agrees with the tree.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn debug_syntax_caches_consistent(&self) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+        let actual: Vec<(usize, usize)> = self
+            .intervals
+            .cursor_at(CharPos0::ZERO)
+            .filter(|(_, _, node)| node.has_syntax_prop)
+            .map(|(s, e, _)| (s.get(), e.get()))
+            .collect();
+        let packed = self.syntax_prop_any.load(Ordering::Relaxed);
+        if packed >> 1 == self.syntax_prop_tick + 1 && packed & 1 == 0 && !actual.is_empty() {
+            return Err(format!("any flag {} but actual {:?}", packed & 1, actual));
+        }
+        if let Ok(guard) = self.syntax_prop_ranges.try_lock()
+            && guard.0 == self.syntax_prop_tick + 1
+        {
+            for &(s, e) in &actual {
+                let covered = guard
+                    .1
+                    .iter()
+                    .any(|&(rs, re)| rs.get() <= s && e <= re.get());
+                if !covered {
+                    return Err(format!(
+                        "interval [{s}, {e}) not covered by ranges {:?} (tick {})",
+                        guard
+                            .1
+                            .iter()
+                            .map(|(a, b)| (a.get(), b.get()))
+                            .collect::<Vec<_>>(),
+                        self.syntax_prop_tick
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether ANY interval in the table carries a syntax-relevant plist key
+    /// (see the `syntax_prop_any` field doc for the lazy memo contract).
+    fn has_any_syntax_prop_interval(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        let packed = self.syntax_prop_any.load(Ordering::Relaxed);
+        if packed >> 1 == self.syntax_prop_tick + 1 {
+            return packed & 1 == 1;
+        }
+        // The range list answers this question and `syntax_ranges_note_put`
+        // already keeps it truthful across puts -- which is the whole reason
+        // that function exists. Deriving the answer from it turns a put into
+        // O(1) here instead of a full-tree bit scan on the next query.
+        //
+        // This is what made `org-editing-heavy` walk the interval tree ~193
+        // times per operation: org marks emphasis and source blocks with
+        // syntax-table properties, so syntax-relevant writes are CONSTANT
+        // there, and the memo's "one full-tree scan per such mutation"
+        // assumed they were rare.
+        if let Ok(guard) = self.syntax_prop_ranges.try_lock()
+            && guard.0 == self.syntax_prop_tick + 1
+        {
+            let any = !guard.1.is_empty();
+            self.syntax_prop_any.store(
+                ((self.syntax_prop_tick + 1) << 1) | u64::from(any),
+                Ordering::Relaxed,
+            );
+            return any;
+        }
+        let any = self
+            .intervals
+            .cursor_at(CharPos0::ZERO)
+            .any(|(_, _, node)| node.has_syntax_prop);
+        self.syntax_prop_any.store(
+            ((self.syntax_prop_tick + 1) << 1) | u64::from(any),
+            Ordering::Relaxed,
+        );
+        any
+    }
+
+    /// Whether any property in `keys` has a non-nil value on the half-open
+    /// character `range`.
+    ///
+    /// The [`CharRange`] argument makes the scan limit part of the operation's
+    /// type instead of an optional caller convention.  The interval tree is
+    /// located once at `range.start()` and then traversed in order only until
+    /// `range.end()`, matching GNU redisplay's bounded, multi-property walk in
+    /// `compute_stop_pos`.
+    pub fn has_any_non_nil_property_in_char_range(&self, range: CharRange, keys: &[Value]) -> bool {
+        if range.is_empty() || keys.is_empty() {
+            return false;
+        }
+        // Same conservative-name short-circuit as
+        // `range_has_any_property_named_raw`: a never-assigned key is nil in
+        // every interval, so no interval can hold a non-nil value for it.
+        if keys
+            .iter()
+            .all(|key| self.property_names.presence(*key) == PropertyNamePresence::DefinitelyAbsent)
+        {
+            return false;
+        }
+
+        self.intervals
+            .cursor_at(range.start())
+            .take_while(|(start, _, _)| *start < range.end())
+            .any(|(_, _, node)| !watched_keys_equal_eq_plist(node.plist, Value::NIL, keys))
+    }
+
+    pub fn get_properties_at_char_pos(&self, pos: CharPos0) -> HashMap<Value, Value> {
+        self.get_properties_raw(pos)
+    }
+
+    fn get_properties_raw(&self, pos: CharPos0) -> HashMap<Value, Value> {
+        let Some((start, id)) = self.intervals.find_id(pos) else {
+            return HashMap::new();
+        };
+        let node = &self.intervals.nodes[id.0];
+        let end = self.intervals.interval_end(start, id);
+        PropertyInterval::from_plist(CharRange::new(start, end), &plist_pairs(node.plist))
+            .properties
+    }
+
+    pub fn get_properties_ordered_at_char_pos(&self, pos: CharPos0) -> Vec<(Value, Value)> {
+        self.get_properties_ordered_raw(pos)
+    }
+
+    fn get_properties_ordered_raw(&self, pos: CharPos0) -> Vec<(Value, Value)> {
+        let Some((_, node)) = self.find_interval(pos) else {
+            return Vec::new();
+        };
+        plist_pairs(node.plist)
+    }
+
+    pub fn get_properties_plist_value_at_char_pos(&self, pos: CharPos0) -> Value {
+        self.get_properties_plist_value_raw(pos)
+    }
+
+    fn get_properties_plist_value_raw(&self, pos: CharPos0) -> Value {
+        let Some((_, node)) = self.find_interval(pos) else {
+            return Value::NIL;
+        };
+        node.plist
+    }
+
+    pub fn range_has_all_properties_in_char_range(
+        &self,
+        range: CharRange,
+        properties: &[(Value, Value)],
+    ) -> bool {
+        self.range_has_all_properties_raw(range, properties)
+    }
+
+    fn range_has_all_properties_raw(
+        &self,
+        range: CharRange,
+        properties: &[(Value, Value)],
+    ) -> bool {
+        if range.is_empty() || properties.is_empty() {
+            return true;
+        }
+
+        let Some((mut interval_start, mut id)) = self.intervals.find_id(range.start()) else {
+            return false;
+        };
+        let mut cursor = range.start();
+        while cursor < range.end() {
+            let node = &self.intervals.nodes[id.0];
+            for (name, value) in properties {
+                let Some(existing) = plist_value_get(node.plist, *name) else {
+                    return false;
+                };
+                if !eq_value(&existing, value) {
+                    return false;
+                }
+            }
+            let node_end = self.intervals.interval_end(interval_start, id);
+            if node_end <= cursor {
+                return false;
+            }
+            cursor = node_end.min(range.end());
+            if cursor < range.end() {
+                let Some(next_id) = self.intervals.next_id(id) else {
+                    return false;
+                };
+                interval_start = node_end;
+                id = next_id;
+            }
+        }
+
+        true
+    }
+
+    pub fn range_has_any_property_named_in_char_range(
+        &self,
+        range: CharRange,
+        names: &[Value],
+    ) -> bool {
+        self.range_has_any_property_named_raw(range, names)
+    }
+
+    fn range_has_any_property_named_raw(&self, range: CharRange, names: &[Value]) -> bool {
+        if range.is_empty() || names.is_empty() {
+            return false;
+        }
+        // Conservative name summary first: a name never assigned since the
+        // last exact rebuild cannot sit in any interval, so the tree walk is
+        // provably fruitless. This is `syntax-propertize`'s flush probing
+        // `(syntax-table syntax-multiline)` over a buffer holding only
+        // font-lock `face` intervals.
+        if names.iter().all(|name| {
+            self.property_names.presence(*name) == PropertyNamePresence::DefinitelyAbsent
+        }) {
+            return false;
+        }
+
+        self.any_interval_overlapping(range, |_, node| {
+            names
+                .iter()
+                .any(|name| plist_value_get(node.plist, *name).is_some())
+        })
+    }
+
+    pub fn range_has_any_interval_in_char_range(&self, range: CharRange) -> bool {
+        self.range_has_any_interval_raw(range)
+    }
+
+    fn range_has_any_interval_raw(&self, range: CharRange) -> bool {
+        if range.is_empty() {
+            return false;
+        }
+
+        self.any_interval_overlapping(range, |_, node| !node.is_empty_plist())
+    }
+
+    pub fn remove_property_in_char_range(&mut self, range: CharRange, name: Value) -> bool {
+        self.remove_property_raw(range, name)
+    }
+
+    fn remove_property_raw(&mut self, range: CharRange, name: Value) -> bool {
+        self.remove_properties_in_char_range(range, &[name])
+    }
+
+    /// Strip every property in `names` over `range` in one interval walk.
+    ///
+    /// GNU `Fremove_text_properties` (textprop.c:1597-1619, 1646-1670) and
+    /// `Fremove_list_of_text_properties` (1723-1745, 1757-1789) check explicit
+    /// plist membership before splitting either range edge. Intervals without
+    /// any requested name retain their boundaries even when another changes.
+    pub fn remove_properties_in_char_range(&mut self, range: CharRange, names: &[Value]) -> bool {
+        if range.is_empty() || names.is_empty() {
+            return false;
+        }
+        let Some((mut node_start, mut id)) = self.first_interval_overlapping(range) else {
+            return false;
+        };
+        let mut changed = false;
+        while node_start < range.end() {
+            let node_end = self.intervals.interval_end(node_start, id);
+            // GNU removes names directly from whole interior intervals
+            // (textprop.c:1677-1679). Probe only while finding the first
+            // change or before splitting the last interval. Inspect the
+            // live plist: Lisp can add names through `text-properties-at`.
+            let visit = (changed && node_end <= range.end())
+                || names
+                    .iter()
+                    .any(|name| plist_value_get(self.intervals.nodes[id.0].plist, *name).is_some());
+            if visit {
+                if !changed {
+                    self.mutation_tick += 1;
+                    if names
+                        .iter()
+                        .any(|name| Self::name_is_syntax_relevant(*name))
+                    {
+                        self.syntax_prop_tick += 1;
+                        // Presence entries only bound runs; keep them and
+                        // revalidate the guard instead of rebuilding.
+                        self.syntax_ranges_revalidate();
+                    }
+                }
+                if node_start < range.start() {
+                    id = self
+                        .intervals
+                        .split_at(range.start())
+                        .expect("the first changed interval contains the range start");
+                }
+                if node_end > range.end() {
+                    self.intervals.split_at(range.end());
+                }
+                let node = &mut self.intervals.nodes[id.0];
+                let mut node_changed = false;
+                for name in names {
+                    node_changed |= plist_value_remove(&mut node.plist, *name);
+                }
+                if node_changed {
+                    node.refresh_cache();
+                    changed = true;
+                }
+            }
+            if node_end >= range.end() {
+                break;
+            }
+            let Some(next_id) = self.intervals.next_id(id) else {
+                break;
+            };
+            node_start = node_end;
+            id = next_id;
+        }
+        changed
+    }
+
+    pub fn remove_all_properties_in_char_range(&mut self, range: CharRange) {
+        self.remove_all_properties_raw(range);
+    }
+
+    fn remove_all_properties_raw(&mut self, range: CharRange) {
+        self.mutation_tick += 1;
+        self.syntax_prop_tick += 1;
+        // Pure removal: stale-presence entries only shorten runs (values
+        // always resolve fresh) — keep them and revalidate the guard.
+        self.syntax_ranges_revalidate();
+        if range.is_empty() {
+            return;
+        }
+
+        let affected = self
+            .intervals
+            .existing_intervals_overlapping_after_splits(range);
+        for (_, id) in affected {
+            self.intervals.set_node_plist(id, Value::NIL);
+        }
+        self.intervals.prune_trailing_empty_intervals();
+    }
+
+    pub fn set_properties_in_char_range(&mut self, range: CharRange, plist: Vec<(Value, Value)>) {
+        self.set_properties_raw(range, plist);
+    }
+
+    fn set_properties_raw(&mut self, range: CharRange, plist: Vec<(Value, Value)>) {
+        self.mutation_tick += 1;
+        self.syntax_prop_tick += 1;
+        if plist
+            .iter()
+            .any(|&(name, _)| Self::name_is_syntax_relevant(name))
+        {
+            self.syntax_ranges_note_put(range);
+        } else {
+            self.syntax_ranges_revalidate();
+        }
+        if range.is_empty() {
+            return;
+        }
+        if plist.is_empty() && self.intervals.is_empty() {
+            return;
+        }
+        for (name, _) in &plist {
+            self.property_names.observe(*name);
+        }
+
+        self.intervals.ensure_cover(range.end());
+        self.intervals.split_at(range.start());
+        self.intervals.split_at(range.end());
+
+        let mut cursor = range.start();
+        let mut first = true;
+        while cursor < range.end() {
+            let Some((node_start, id)) = self.intervals.find_id(cursor) else {
+                break;
+            };
+            let node_end = self.intervals.interval_end(node_start, id);
+            self.intervals
+                .set_node_plist(id, plist_value_from_pairs(&plist));
+            if first {
+                first = false;
+            } else {
+                self.intervals.merge_interval_left(id);
+            }
+            if node_end <= cursor {
+                break;
+            }
+            cursor = node_end;
+        }
+
+        if plist.is_empty() {
+        } else {
+            self.intervals.prune_trailing_empty_intervals();
+        }
+    }
+
+    pub fn set_properties_for_object_char_len(
+        &mut self,
+        range: CharRange,
+        object_len: CharLen,
+        plist: Vec<(Value, Value)>,
+    ) {
+        self.set_properties_for_object_len_raw(range, object_len, plist);
+    }
+
+    fn set_properties_for_object_len_raw(
+        &mut self,
+        range: CharRange,
+        object_len: CharLen,
+        plist: Vec<(Value, Value)>,
+    ) {
+        self.mutation_tick += 1;
+        self.syntax_prop_tick += 1;
+        if plist
+            .iter()
+            .any(|&(name, _)| Self::name_is_syntax_relevant(name))
+        {
+            self.syntax_ranges_note_put(range);
+        } else {
+            self.syntax_ranges_revalidate();
+        }
+        if range.is_empty() {
+            return;
+        }
+        if plist.is_empty() && self.intervals.is_empty() {
+            return;
+        }
+        for (name, _) in &plist {
+            self.property_names.observe(*name);
+        }
+
+        self.intervals
+            .ensure_cover(CharPos0::ZERO.add_len(object_len).max(range.end()));
+        self.intervals.split_at(range.start());
+        self.intervals.split_at(range.end());
+
+        let new_plist = plist_value_from_pairs(&plist);
+        let mut cursor = range.start();
+        let mut first = true;
+        while cursor < range.end() {
+            let Some((node_start, id)) = self.intervals.find_id(cursor) else {
+                break;
+            };
+            let node_end = self.intervals.interval_end(node_start, id);
+            self.intervals.set_node_plist(id, new_plist);
+            if first {
+                first = false;
+            } else {
+                self.intervals.merge_interval_left(id);
+            }
+            if node_end <= cursor {
+                break;
+            }
+            cursor = node_end;
+        }
+    }
+
+    /// GNU `Ftext_property_not_all`'s walk (src/textprop.c): ONE descent
+    /// seats it at the interval holding `range.start`, then each interval
+    /// overlapping `range` is asked `differs(plist)` in order. Returns the
+    /// first position (clamped to `range.start`) whose interval's plist
+    /// differs. Text past the last interval has no properties and is asked
+    /// about with a nil plist; zero-length intervals hold no text and are
+    /// stepped over.
+    pub fn first_char_pos_where(
+        &self,
+        range: CharRange,
+        mut differs: impl FnMut(Value) -> bool,
+    ) -> Option<CharPos0> {
+        if range.is_empty() {
+            return None;
+        }
+        let Some((mut start, mut id)) = self.intervals.find_id(range.start()) else {
+            return differs(Value::NIL).then_some(range.start());
+        };
+        loop {
+            let end = self.intervals.interval_end(start, id);
+            if end > start && differs(self.intervals.nodes[id.0].plist) {
+                return Some(start.max(range.start()));
+            }
+            if end >= range.end() {
+                return None;
+            }
+            match self.intervals.next_id(id) {
+                Some(next) => {
+                    start = end;
+                    id = next;
+                }
+                None => return differs(Value::NIL).then_some(end),
+            }
+        }
+    }
+
+    pub fn next_property_change_after_char_pos(&self, pos: CharPos0) -> Option<CharPos0> {
+        self.next_property_change_raw(pos, None)
+    }
+
+    /// [`Self::next_property_change_after_char_pos`] that gives up at the
+    /// first interval boundary at or past `bound`: GNU `Fnext_property_change`
+    /// stops its interval walk at LIMIT, so a change beyond it costs nothing.
+    pub fn next_property_change_after_char_pos_before(
+        &self,
+        pos: CharPos0,
+        bound: CharPos0,
+    ) -> Option<CharPos0> {
+        self.next_property_change_raw(pos, Some(bound))
+    }
+
+    /// Like `next_property_change_after_char_pos`, but only reports a change of
+    /// the single property `name` (compared by `eq`), ignoring changes to any
+    /// other property.  Mirrors GNU `next_single_char_property_change`'s
+    /// text-property half: walk interval boundaries and stop when the value of
+    /// `name` differs from its value at `pos`.
+    pub fn next_single_property_change_after_char_pos(
+        &self,
+        pos: CharPos0,
+        name: Value,
+    ) -> Option<CharPos0> {
+        if self.property_name_presence(name) == PropertyNamePresence::DefinitelyAbsent {
+            return None;
+        }
+        self.next_single_property_change_after_char_pos_limited(pos, name, None)
+    }
+
+    /// Display-engine variant of [`Self::next_single_property_change_after_char_pos`]
+    /// that stops scanning at `limit` and reports `Some(limit)` as a soft
+    /// boundary when `name` has not changed by then. Mirrors GNU's
+    /// `TEXT_PROP_DISTANCE_LIMIT` cap in `compute_stop_pos`: the display code
+    /// only needs the next boundary within the visible window, and a boundary
+    /// that is *too small* merely makes the caller re-check sooner -- it never
+    /// changes what is rendered, because the invisible/display status at each
+    /// position is looked up exactly and independently. This turns the layout's
+    /// per-redisplay invisible/display scan from O(buffer) into O(window).
+    /// A definitely absent raw name has no transition and returns `None`
+    /// without a soft stop, as in the unbounded method.
+    ///
+    /// Lisp `next-single-property-change` MUST return the exact boundary, so it
+    /// keeps calling the unbounded method above (the `None` limit path).
+    pub fn next_single_property_change_after_char_pos_bounded(
+        &self,
+        pos: CharPos0,
+        name: Value,
+        limit: CharPos0,
+    ) -> Option<CharPos0> {
+        // This is only the raw text-property half of the display scan. A
+        // never-assigned key cannot change, so no soft stop is needed; callers
+        // still combine overlay stops and resolve the value at each position.
+        if self.property_name_presence(name) == PropertyNamePresence::DefinitelyAbsent {
+            return None;
+        }
+        self.next_single_property_change_after_char_pos_limited(pos, name, Some(limit))
+    }
+
+    fn next_single_property_change_after_char_pos_limited(
+        &self,
+        pos: CharPos0,
+        name: Value,
+        limit: Option<CharPos0>,
+    ) -> Option<CharPos0> {
+        // GNU's Fnext_single_property_change shape: locate the interval at `pos`
+        // once, capture `name`'s value there, then step siblings comparing only
+        // `name` and return the first boundary where it differs -- O(log n + N)
+        // instead of two find_id descents per boundary.
+        let mut cursor = self.intervals.cursor_at(pos);
+        let (_, first_end, first_node) = cursor.next()?;
+        let current = plist_value_get(first_node.plist, name).unwrap_or(Value::NIL);
+        let mut boundary = first_end;
+        for (start, end, node) in cursor {
+            // Soft cap: once the next interval begins at or beyond `limit`, stop
+            // and report `limit` -- `name` has held `current` continuously across
+            // it, so this is a valid (merely early) boundary. Checked on `start`
+            // only: the natural tail below still handles running out of intervals
+            // within `[pos, limit]`, so a `limit` past the tree end reduces to the
+            // exact unbounded answer (never a spurious stop at buffer end).
+            if limit.is_some_and(|limit| start >= limit) {
+                return limit;
+            }
+            let value = plist_value_get(node.plist, name).unwrap_or(Value::NIL);
+            if !eq_value(&current, &value) {
+                return Some(start);
+            }
+            boundary = end;
+        }
+        // Past the last interval the buffer is implicitly nil: report the change
+        // to nil at the tree end (matching the old walk, which read nil there).
+        if !eq_value(&current, &Value::NIL) {
+            return Some(boundary);
+        }
+        None
+    }
+
+    fn next_property_change_raw(&self, pos: CharPos0, bound: Option<CharPos0>) -> Option<CharPos0> {
+        let current = self.plist_at(pos).unwrap_or_default();
+        let mut cursor = pos;
+        while let Some(next) = self.next_interval_boundary_raw(cursor) {
+            if bound.is_some_and(|bound| next >= bound) {
+                return None;
+            }
+            let next_plist = self.plist_at(next).unwrap_or_default();
+            if !plists_equal_eq(&current, &next_plist) {
+                return Some(next);
+            }
+            if next.get() <= cursor.get() {
+                return None;
+            }
+            cursor = next;
+        }
+        None
+    }
+
+    pub fn previous_property_change_before_char_pos(&self, pos: CharPos0) -> Option<CharPos0> {
+        self.previous_property_change_raw(pos)
+    }
+
+    /// Previous boundary where the single property `name` changes, ignoring
+    /// unrelated plist changes. The active value is the one at `pos`.
+    pub fn previous_single_property_change_before_char_pos(
+        &self,
+        pos: CharPos0,
+        name: Value,
+    ) -> Option<CharPos0> {
+        if self.property_name_presence(name) == PropertyNamePresence::DefinitelyAbsent {
+            return None;
+        }
+        // Backward mirror of next_single_property_change_after_char_pos. `current`
+        // is `name`'s value at pos (nil past the tree end); `boundary` is the start
+        // of the run of `current` reached so far. We step the intervals STRICTLY
+        // BEFORE `boundary` via prev_id, comparing `current` to each one's value
+        // (the value just before `boundary`) and returning `boundary` on the first
+        // difference -- the same positions the old two-find_id-per-boundary walk
+        // reported, with one seat + O(1) steps.
+        let (current, mut boundary, seat) = match self.intervals.find_id(pos) {
+            Some((start, id)) => {
+                let current = plist_value_get(self.intervals.nodes[id.0].plist, name);
+                let seat = self.intervals.prev_id(id).map(|prev| {
+                    let prev_start = start.saturating_sub_len(self.intervals.node_len(prev));
+                    (prev_start, prev)
+                });
+                (current, start, seat)
+            }
+            None => {
+                // pos is past the last interval: the value there is nil, and the
+                // nearest change back is at the tree end (last interval's value vs
+                // the implicit trailing nil).
+                let last = self.intervals.last_interval()?;
+                let tree_len = CharPos0::ZERO.add_len(self.intervals.len());
+                (None, tree_len, Some(last))
+            }
+        };
+        let current_norm = current.unwrap_or(Value::NIL);
+        let mut cursor = self.intervals.reverse_cursor_from(seat);
+        loop {
+            if boundary == CharPos0::ZERO {
+                return current.is_some().then_some(CharPos0::ZERO);
+            }
+            match cursor.next() {
+                Some((start, _, node)) => {
+                    let value_before = plist_value_get(node.plist, name).unwrap_or(Value::NIL);
+                    if !eq_value(&current_norm, &value_before) {
+                        return Some(boundary);
+                    }
+                    boundary = start;
+                }
+                None => return current.is_some().then_some(CharPos0::ZERO),
+            }
+        }
+    }
+
+    /// Presence-aware mirror of
+    /// [`Self::previous_single_property_change_before_char_pos`] for several
+    /// keys.  The active state is the one at `pos`.
+    pub fn previous_watched_property_state_change_before_char_pos(
+        &self,
+        pos: CharPos0,
+        keys: &[Value],
+    ) -> Option<CharPos0> {
+        let (current_plist, mut boundary, seat) = match self.intervals.find_id(pos) {
+            Some((start, id)) => {
+                let current = self.intervals.nodes[id.0].plist;
+                let seat = self.intervals.prev_id(id).map(|prev| {
+                    let prev_start = start.saturating_sub_len(self.intervals.node_len(prev));
+                    (prev_start, prev)
+                });
+                (current, start, seat)
+            }
+            None => {
+                // Past the tree end every key is absent.
+                let last = self.intervals.last_interval()?;
+                let tree_len = CharPos0::ZERO.add_len(self.intervals.len());
+                (Value::NIL, tree_len, Some(last))
+            }
+        };
+        let mut cursor = self.intervals.reverse_cursor_from(seat);
+        loop {
+            if boundary == CharPos0::ZERO {
+                return (!watched_keys_state_equal_eq_plist(current_plist, Value::NIL, keys))
+                    .then_some(CharPos0::ZERO);
+            }
+            match cursor.next() {
+                Some((start, _, node)) => {
+                    if !watched_keys_state_equal_eq_plist(current_plist, node.plist, keys) {
+                        return Some(boundary);
+                    }
+                    boundary = start;
+                }
+                None => {
+                    return (!watched_keys_state_equal_eq_plist(current_plist, Value::NIL, keys))
+                        .then_some(CharPos0::ZERO);
+                }
+            }
+        }
+    }
+
+    fn previous_property_change_raw(&self, pos: CharPos0) -> Option<CharPos0> {
+        if pos == CharPos0::ZERO {
+            return None;
+        }
+
+        let current = self
+            .plist_at(pos.saturating_sub_len(CharLen::new(1)))
+            .unwrap_or_default();
+        let mut cursor = pos;
+        while let Some(prev) = self.previous_interval_boundary_raw(cursor) {
+            if prev == CharPos0::ZERO {
+                return None;
+            }
+            let previous_plist = self
+                .plist_at(prev.saturating_sub_len(CharLen::new(1)))
+                .unwrap_or_default();
+            if !plists_equal_eq(&current, &previous_plist) {
+                return Some(prev);
+            }
+            if prev.get() >= cursor.get() {
+                return None;
+            }
+            cursor = prev;
+        }
+
+        None
+    }
+
+    /// Return the next raw interval boundary after `pos`, even when adjacent
+    /// interval plists are equal.  This matches GNU's `next_interval` path used
+    /// by `(next-property-change POS OBJECT t)`.
+    /// Walk the intervals forward from the one containing `pos`, in tree
+    /// order, calling `f(start, end, plist)` for each until it returns
+    /// `false`.  O(1) amortized per step (`next_id`), no per-step descent or
+    /// position conversion -- the shape of GNU's `next_interval` loops.
+    /// Positions past the tree's cover yield nothing: the trailing
+    /// property-free text has no interval.
+    pub fn for_each_interval_from_char_pos<F>(&self, pos: CharPos0, mut f: F)
+    where
+        F: FnMut(CharPos0, CharPos0, Value) -> bool,
+    {
+        for (start, end, node) in self.intervals.cursor_at(pos) {
+            if !f(start, end, node.plist) {
+                return;
+            }
+        }
+    }
+
+    pub fn next_interval_boundary_after_char_pos(&self, pos: CharPos0) -> Option<CharPos0> {
+        self.next_interval_boundary_raw(pos)
+    }
+
+    fn next_interval_boundary_raw(&self, pos: CharPos0) -> Option<CharPos0> {
+        if let Some((start, id)) = self.intervals.find_id(pos) {
+            return Some(self.intervals.interval_end(start, id));
+        }
+
+        self.intervals.first_start_after(pos)
+    }
+
+    /// Return the previous raw interval boundary before `pos`.
+    pub fn previous_interval_boundary_before_char_pos(&self, pos: CharPos0) -> Option<CharPos0> {
+        self.previous_interval_boundary_raw(pos)
+    }
+
+    fn previous_interval_boundary_raw(&self, pos: CharPos0) -> Option<CharPos0> {
+        if pos == CharPos0::ZERO {
+            return None;
+        }
+
+        let scan_pos = pos.saturating_sub_len(CharLen::new(1));
+        if let Some((start, _)) = self.intervals.find_id(scan_pos) {
+            return Some(start);
+        }
+
+        let tree_len = CharPos0::ZERO.add_len(self.intervals.len());
+        (tree_len > CharPos0::ZERO && tree_len < pos).then_some(tree_len)
+    }
+
+    pub fn adjust_for_insert_at_char_pos(&mut self, pos: CharPos0, len: CharLen) {
+        self.adjust_for_insert_raw(pos, len);
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn adjust_for_insert_raw(&mut self, pos: CharPos0, len: CharLen) {
+        self.mutation_tick += 1;
+        if len.is_empty() {
+            return;
+        }
+        // Position shifts don't bump syntax_prop_tick (values are unchanged),
+        // but the cached bit-set-interval RANGES hold positions — shift them
+        // in place so they stay truthful. (Serving stale positions here was a
+        // real bug: the interactive sim's typing phase doubled and could
+        // misclassify syntax runs near shifted properties.)
+        if let Ok(mut guard) = self.syntax_prop_ranges.lock()
+            && guard.0 == self.syntax_prop_tick + 1
+        {
+            for (start, end) in guard.1.iter_mut() {
+                if *start >= pos {
+                    *start = start.add_len(len);
+                    *end = end.add_len(len);
+                } else if *end > pos {
+                    *end = end.add_len(len);
+                }
+            }
+        }
+
+        self.intervals.insert_default_at(pos, len);
+    }
+
+    pub fn adjust_for_delete_char_range(&mut self, range: CharRange) {
+        self.adjust_for_delete_raw(range);
+    }
+
+    fn adjust_for_delete_raw(&mut self, range: CharRange) {
+        self.mutation_tick += 1;
+        if range.is_empty() {
+            return;
+        }
+        // See adjust_for_insert_raw: keep the cached ranges positionally
+        // truthful. Deletion clips; an entry emptied by the clip is removed.
+        if let Ok(mut guard) = self.syntax_prop_ranges.lock()
+            && guard.0 == self.syntax_prop_tick + 1
+        {
+            let del_len = range.len();
+            for (start, end) in guard.1.iter_mut() {
+                *start = clip_char_pos_for_delete(*start, range, del_len);
+                *end = clip_char_pos_for_delete(*end, range, del_len);
+            }
+            guard.1.retain(|(start, end)| end > start);
+        }
+
+        self.intervals.delete_range(range);
+    }
+
+    pub fn adjust_for_replace_at_char_pos(
+        &mut self,
+        start: CharPos0,
+        old_len: CharLen,
+        new_len: CharLen,
+    ) {
+        self.adjust_for_replace_raw(start, old_len, new_len);
+    }
+
+    fn adjust_for_replace_raw(&mut self, start: CharPos0, old_len: CharLen, new_len: CharLen) {
+        self.mutation_tick += 1;
+        // A replace is a position adjustment, and this function performs it by
+        // delegating to exactly the insert/delete adjusters below -- the same
+        // calls that transform the interval tree. Those already keep the
+        // cached bit-set ranges positionally truthful, so the ranges follow
+        // the tree for free.
+        //
+        // Dropping them here instead DEFEATED that: the delegates only touch
+        // the list when it is valid for the current tick, so clearing it first
+        // made them no-ops and left every later query to rebuild by walking
+        // the whole tree. The old comment justified the drop as "rare relative
+        // to plain inserts/deletes", which is not true of a buffer being
+        // edited: `org-todo` rewriting TODO to DONE and `org-table-align`
+        // rewriting a row are both replaces, and `org-editing-heavy` did about
+        // 192 whole-tree rebuilds per operation because of it.
+        //
+        // `Equal` moves nothing, so the ranges stay valid untouched.
+        match new_len.cmp(&old_len) {
+            std::cmp::Ordering::Greater => {
+                self.adjust_for_insert_raw(start, CharLen::new(new_len.get() - old_len.get()));
+            }
+            std::cmp::Ordering::Less => {
+                self.adjust_for_delete_raw(CharRange::from_start_len(
+                    start,
+                    CharLen::new(old_len.get() - new_len.get()),
+                ));
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+
+    pub fn intervals_snapshot(&self) -> Vec<PropertyInterval> {
+        self.intervals
+            .runs()
+            .into_iter()
+            .filter(|run| !run.is_empty_plist())
+            .map(|run| PropertyInterval::from_plist(run.range, &plist_pairs(run.plist)))
+            .collect()
+    }
+
+    /// Return GNU `object-intervals' shaped runs for a string of `len' chars.
+    ///
+    /// Unlike `intervals_snapshot', this keeps nil-property gaps once an
+    /// interval tree exists.  GNU reports those gaps so callers can observe the
+    /// complete interval partition of the string.
+    pub fn object_interval_runs_for_char_len(&self, len: CharLen) -> Vec<ObjectIntervalRun> {
+        self.object_interval_runs_raw(len)
+    }
+
+    fn object_interval_runs_raw(&self, len: CharLen) -> Vec<ObjectIntervalRun> {
+        self.object_interval_plist_runs_raw(len)
+            .into_iter()
+            .map(|run| ObjectIntervalRun::new(run.start(), run.end(), plist_pairs(run.plist())))
+            .collect()
+    }
+
+    /// Return GNU `object-intervals' shaped runs with the live interval plist.
+    ///
+    /// GNU `collect_interval' stores `interval->plist' directly in the
+    /// returned structure, so later property replacement can be visible through
+    /// that plist object.
+    pub fn object_interval_plist_runs_for_char_len(
+        &self,
+        len: CharLen,
+    ) -> Vec<ObjectIntervalPlistRun> {
+        self.object_interval_plist_runs_raw(len)
+    }
+
+    fn object_interval_plist_runs_raw(&self, len: CharLen) -> Vec<ObjectIntervalPlistRun> {
+        if self.intervals.is_empty() {
+            return Vec::new();
+        }
+
+        let len_pos = CharPos0::ZERO.add_len(len);
+        let mut runs = Vec::new();
+        let mut cursor = CharPos0::ZERO;
+        for run in self.intervals.runs() {
+            let start = run.start().min(len_pos);
+            let end = run.end().min(len_pos);
+            if cursor < start {
+                runs.push(ObjectIntervalPlistRun::new(cursor, start, Value::NIL));
+            }
+            if start < end {
+                runs.push(ObjectIntervalPlistRun::new(start, end, run.plist));
+                cursor = end;
+            }
+        }
+        if cursor < len_pos {
+            runs.push(ObjectIntervalPlistRun::new(cursor, len_pos, Value::NIL));
+        }
+        runs
+    }
+
+    pub fn first_interval_pos_with_property_eq_in_char_range(
+        &self,
+        range: CharRange,
+        name: Value,
+        value: Value,
+    ) -> Option<CharPos0> {
+        self.first_interval_pos_with_property_eq_raw(range, name, value)
+    }
+
+    fn first_interval_pos_with_property_eq_raw(
+        &self,
+        range: CharRange,
+        name: Value,
+        value: Value,
+    ) -> Option<CharPos0> {
+        if range.is_empty() {
+            return None;
+        }
+        let (mut key, mut id) = self.first_interval_overlapping(range)?;
+        loop {
+            if key >= range.end() {
+                return None;
+            }
+            let node = &self.intervals.nodes[id.0];
+            if plist_value_get(node.plist, name).is_some_and(|found| eq_value(&found, &value)) {
+                return Some(key.max(range.start()));
+            }
+            let next_key = self.intervals.interval_end(key, id);
+            let next_id = self.intervals.next_id(id)?;
+            key = next_key;
+            id = next_id;
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn try_for_each_interval_in_char_range<E>(
+        &self,
+        range: CharRange,
+        f: impl FnMut(CharRange, &[(Value, Value)]) -> Result<(), E>,
+    ) -> Result<(), E> {
+        self.try_for_each_interval_in_range_raw(range, f)
+    }
+
+    /// Like [`Self::try_for_each_interval_in_char_range`] but hands the
+    /// closure each interval's plist VALUE instead of materializing a
+    /// `Vec<(Value, Value)>` pair slice per interval — that per-interval
+    /// allocation dominated read-only verification over large ranges.
+    #[doc(hidden)]
+    pub fn try_for_each_interval_plist_in_char_range<E>(
+        &self,
+        range: CharRange,
+        mut f: impl FnMut(CharRange, Value) -> Result<(), E>,
+    ) -> Result<(), E> {
+        if range.is_empty() {
+            return Ok(());
+        }
+        self.try_for_each_interval_overlapping(range, |interval_range, node| {
+            f(interval_range, node.plist)
+        })
+    }
+
+    fn try_for_each_interval_in_range_raw<E>(
+        &self,
+        range: CharRange,
+        mut f: impl FnMut(CharRange, &[(Value, Value)]) -> Result<(), E>,
+    ) -> Result<(), E> {
+        if range.is_empty() {
+            return Ok(());
+        }
+        self.try_for_each_interval_overlapping(range, |interval_range, node| {
+            let pairs = plist_pairs(node.plist);
+            f(interval_range, &pairs)
+        })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.intervals.is_empty()
+    }
+
+    pub(crate) fn plist_at(&self, pos: CharPos0) -> Option<Vec<(Value, Value)>> {
+        let (_, node) = self.find_interval(pos)?;
+        Some(plist_pairs(node.plist))
+    }
+
+    fn next_interval_boundary_after(&self, pos: CharPos0, end: CharPos0) -> CharPos0 {
+        let containing_end = self
+            .intervals
+            .find_id(pos)
+            .map(|(start, id)| self.intervals.interval_end(start, id))
+            .or_else(|| self.intervals.first_start_after(pos))
+            .unwrap_or(end);
+        let next_start = self.intervals.first_start_after(pos).unwrap_or(end);
+        containing_end.min(next_start).min(end)
+    }
+
+    /// Compare string text-property intervals the way GNU
+    /// `compare_string_intervals` does for `equal-including-properties`.
+    ///
+    /// Missing intervals are default intervals.  Property names compare by
+    /// `eq`, while property values compare by ordinary `equal`.
+    pub fn equal_including_property_values(
+        left: Option<&TextPropertyTable>,
+        right: Option<&TextPropertyTable>,
+        len: usize,
+    ) -> bool {
+        let end = CharPos0::new(len);
+        let mut pos = CharPos0::ZERO;
+        while pos.get() < len {
+            let left_plist = left
+                .and_then(|table| table.plist_at(pos))
+                .unwrap_or_default();
+            let right_plist = right
+                .and_then(|table| table.plist_at(pos))
+                .unwrap_or_default();
+            if !plists_equal_values_equal(&left_plist, &right_plist) {
+                return false;
+            }
+
+            let left_next = left
+                .map(|table| table.next_interval_boundary_after(pos, end))
+                .unwrap_or(end);
+            let right_next = right
+                .map(|table| table.next_interval_boundary_after(pos, end))
+                .unwrap_or(end);
+            let next = left_next.min(right_next).max(pos.add_len(CharLen::new(1)));
+            pos = next;
+        }
+        true
+    }
+
+    pub fn slice_char_range(&self, range: CharRange) -> TextPropertyTable {
+        self.slice_raw(range)
+    }
+
+    fn slice_raw(&self, range: CharRange) -> TextPropertyTable {
+        if range.is_empty() {
+            return TextPropertyTable::new();
+        }
+        let start = range.start().get();
+        let end = range.end().get();
+        // GNU `copy_intervals` (src/intervals.c): one interval per source
+        // interval overlapping the range, each carrying `copy_properties` -- a
+        // `Fcopy_sequence` of the plist -- with the cached flags carried over
+        // (they depend only on the plist).  The intervals arrive in order and
+        // tile the range, so the tree is built straight from them.
+        //
+        // History: this went through plist pairs, `TextPropertyPlistRun`, a
+        // second cons walk, a flag re-extraction and a name-summary walk per
+        // interval (~500 Ir each; a 50-line kill slices ~170 of them twice).
+        let mut runs: Vec<IntervalRun> = Vec::new();
+        self.for_each_interval_overlapping(range, |interval_start, node_end, node| {
+            let new_start = interval_start.max(start) - start;
+            let new_end = node_end.min(end) - start;
+            if new_start < new_end {
+                let mut run = IntervalRun::from_node(
+                    CharPos0::new(new_start),
+                    node,
+                    CharLen::new(new_end - new_start),
+                );
+                run.plist = copy_plist_value(node.plist);
+                runs.push(run);
+            }
+        });
+        if runs.is_empty() {
+            return TextPropertyTable::new();
+        }
+        // The slice's names are a subset of the source's: the conservative
+        // summary (false positives allowed) is shared in O(1).
+        Self::with_runs_and_names(runs, self.property_names.clone())
+    }
+
+    pub fn slice_copy_text_properties_char_range(&self, range: CharRange) -> TextPropertyTable {
+        self.slice_copy_text_properties_raw(range)
+    }
+
+    fn slice_copy_text_properties_raw(&self, range: CharRange) -> TextPropertyTable {
+        if range.is_empty() {
+            return TextPropertyTable::new();
+        }
+        let start = range.start().get();
+        let end = range.end().get();
+
+        let mut table = TextPropertyTable::new();
+        self.for_each_interval_overlapping(range, |interval_start, node_end, node| {
+            let new_start = interval_start.max(start) - start;
+            let new_end = node_end.min(end) - start;
+            if new_start >= new_end {
+                return;
+            }
+            for (name, value) in plist_pairs(node.plist) {
+                table.put_property_in_char_range(
+                    CharRange::new(CharPos0::new(new_start), CharPos0::new(new_end)),
+                    name,
+                    value,
+                );
+            }
+        });
+        table
+    }
+
+    /// Append a clipped source range with the exact interval result of
+    /// `append_shifted_at_char_offset(&source.slice_char_range(range), offset)`.
+    ///
+    /// GNU `copy_intervals` clips a source partition, and
+    /// `graft_intervals_into_buffer` copies each source plist into the covered
+    /// target intervals. Here the clipped run descriptors borrow the original
+    /// plists, so the existing graft makes the only spine copy. Raw boundaries,
+    /// plist order and duplicate keys, nil gaps, target splits, and predecessor
+    /// detachment remain those of the two-step operation.
+    ///
+    /// The borrow is synchronous and immutable, and the destination requires
+    /// exclusive access. No borrowed descriptor or original plist spine escapes;
+    /// the destination stores fresh spines with shallow-shared keys/values. There
+    /// is no new shared runtime state or assumption of a single mutator.
+    /// The caller must hold the source at the same capture point as the legacy
+    /// slice, without running Lisp between capture and graft.
+    #[inline]
+    pub fn append_source_slice_at_char_offset(
+        &mut self,
+        source: &TextPropertyTable,
+        range: CharRange,
+        offset: CharLen,
+    ) {
+        self.append_source_slice_at_char_offset_with_roots(source, range, offset, |_| {});
+    }
+
+    /// Publish only freshly grafted plist roots through the enclosing walk's
+    /// incremental root owner. The callback must not evaluate Lisp or collect.
+    #[doc(hidden)]
+    pub fn append_source_slice_at_char_offset_with_roots(
+        &mut self,
+        source: &TextPropertyTable,
+        range: CharRange,
+        offset: CharLen,
+        new_root: impl FnMut(Value),
+    ) {
+        let start = range.start().get();
+        let end = range.end().get();
+        let mut runs = Vec::new();
+        if !range.is_empty() {
+            source.for_each_interval_overlapping(range, |interval_start, node_end, node| {
+                let new_start = interval_start.max(start) - start;
+                let new_end = node_end.min(end) - start;
+                if new_start < new_end {
+                    let mut run = IntervalRun::from_node(
+                        CharPos0::new(new_start),
+                        node,
+                        CharLen::new(new_end - new_start),
+                    );
+                    // `copy_plist_value` drops a dangling odd key or dotted
+                    // tail. A plist with no complete pair therefore becomes
+                    // nil in the legacy slice, BEFORE shape normalization.
+                    // Other plists stay borrowed and are canonicalized by the
+                    // graft's one copy; duplicate complete pairs stay ordered.
+                    if !run.plist.is_cons() || !run.plist.cons_cdr().is_cons() {
+                        run.plist = Value::NIL;
+                    }
+                    runs.push(run);
+                }
+            });
+        }
+        // In particular, an all-nil slice has no intervals, while nil gaps
+        // surrounding a non-nil run survive. Reuse the legacy normalizer so
+        // this method neither extends implicit trailing nil text nor merges
+        // the source's raw interval boundaries.
+        let runs = IntervalTree::normalize_runs_preserving_shape(runs);
+
+        // Append bumps these ticks even when the normalized slice is empty.
+        self.mutation_tick += 1;
+        self.syntax_prop_tick += 1;
+        if runs.iter().any(|run| run.has_syntax_prop) {
+            if let Ok(mut guard) = self.syntax_prop_ranges.lock() {
+                *guard = (0, Vec::new());
+            }
+        } else {
+            self.syntax_ranges_revalidate();
+        }
+        for run in &runs {
+            self.property_names.observe_plist(run.plist);
+        }
+        self.intervals.graft_shifted_runs(&runs, offset, new_root);
+    }
+
+    pub fn append_shifted_at_char_offset(&mut self, other: &TextPropertyTable, offset: CharLen) {
+        self.append_shifted_raw(other, offset);
+    }
+
+    pub fn append_shifted_at_char_pos(&mut self, other: &TextPropertyTable, pos: CharPos0) {
+        self.append_shifted_raw(other, CharLen::new(pos.get()));
+    }
+
+    /// Publish each newly copied plist, including the re-homed predecessor,
+    /// without rewalking the destination interval tree. The callback cannot
+    /// run Lisp or collect while this graft is in progress.
+    #[doc(hidden)]
+    pub fn append_shifted_at_char_offset_with_roots(
+        &mut self,
+        other: &TextPropertyTable,
+        offset: CharLen,
+        new_root: impl FnMut(Value),
+    ) {
+        self.append_shifted_raw_with_roots(other, offset, new_root);
+    }
+
+    fn append_shifted_raw(&mut self, other: &TextPropertyTable, offset: CharLen) {
+        self.append_shifted_raw_with_roots(other, offset, |_| {});
+    }
+
+    fn append_shifted_raw_with_roots(
+        &mut self,
+        other: &TextPropertyTable,
+        offset: CharLen,
+        new_root: impl FnMut(Value),
+    ) {
+        self.mutation_tick += 1;
+        self.syntax_prop_tick += 1;
+        if other.has_any_syntax_prop_interval() {
+            if let Ok(mut guard) = self.syntax_prop_ranges.lock() {
+                *guard = (0, Vec::new());
+            }
+        } else {
+            self.syntax_ranges_revalidate();
+        }
+        // GNU `graft_intervals_into_buffer` (src/intervals.c): the source's
+        // intervals are walked ONCE against the target interval under the
+        // insertion.  Each source run edge splits the target interval it falls
+        // inside (`split_interval_left`, no rebalancing), every covered target
+        // interval takes `copy_properties` -- a `Fcopy_sequence` -- of the
+        // run's plist, and target boundaries that already lie inside a run
+        // survive.  The tree is balanced once afterwards
+        // (`buffer_balance_intervals`).
+        //
+        // This REPLACES the range's properties with the run's plist, preserving
+        // the plist ORDER (set, not per-property put which prepends) and NOT
+        // merging adjacent intervals, so the insert boundaries that
+        // text-property stickiness relies on survive.
+        //
+        // The grafted buffer intervals never alias the source string's plist
+        // cons, and the target interval split at the graft's start re-homes
+        // its preceding remainder onto a fresh plist (`copy_properties (under,
+        // end_unchanged)`), so a cons already returned to Lisp by
+        // `text-properties-at' is detached from the buffer and never mutated
+        // in place by a later `put-text-property'.
+        //
+        // History: this used to split, re-find and re-home PER RUN, each split
+        // with a full rebalance climb -- ~3.4K Ir per face run, a third of a
+        // 50-line yank in the kill/yank sim window (GNU: ~0.4K per interval).
+        let runs = other.intervals.runs();
+        for run in &runs {
+            self.property_names.observe_plist(run.plist);
+        }
+        self.intervals.graft_shifted_runs(&runs, offset, new_root);
+    }
+
+    /// The pre-graft algorithm (split, re-find and re-home per run), kept as
+    /// the reference oracle for `graft_shifted_runs`: the two must leave the
+    /// same interval partition and plist values.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn append_shifted_reference_for_test(
+        &mut self,
+        other: &TextPropertyTable,
+        offset: CharLen,
+    ) {
+        self.mutation_tick += 1;
+        self.syntax_prop_tick += 1;
+        for run in other.intervals.runs() {
+            self.property_names.observe_plist(run.plist);
+            let start = run.start().add_len(offset);
+            let end = run.end().add_len(offset);
+            if start >= end {
+                continue;
+            }
+            self.intervals.ensure_cover(end);
+            self.intervals.split_at(start);
+            self.intervals.split_at(end);
+            if !run.is_empty_plist() {
+                self.intervals.rehome_predecessor_plist(start);
+            }
+            let mut cursor = start;
+            while cursor < end {
+                let Some((node_start, id)) = self.intervals.find_id(cursor) else {
+                    break;
+                };
+                let node_end = self.intervals.interval_end(node_start, id);
+                let fresh = copy_plist_value(run.plist);
+                self.intervals.set_node_plist(id, fresh);
+                if node_end <= cursor {
+                    break;
+                }
+                cursor = node_end;
+            }
+        }
+    }
+
+    /// The raw plist object stored on the interval containing `pos` (identity
+    /// matters for the `copy_properties` aliasing rules).
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn raw_plist_at_for_test(&self, pos: CharPos0) -> Option<Value> {
+        self.intervals
+            .find_id(pos)
+            .map(|(_, id)| self.intervals.nodes[id.0].plist)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn assert_tree_invariants_for_test(&self) {
+        self.intervals.assert_invariants_for_test();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn tree_max_depth_for_test(&self) -> usize {
+        self.intervals.max_depth_for_test()
+    }
+
+    /// `(start, end, plist pairs)` of every interval, empty ones included.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn interval_plist_runs_for_test(&self) -> Vec<IntervalPlistRun> {
+        self.intervals
+            .runs()
+            .into_iter()
+            .map(|run| (run.start().get(), run.end().get(), plist_pairs(run.plist)))
+            .collect()
+    }
+
+    pub fn merge_missing_shifted_at_char_offset(
+        &mut self,
+        other: &TextPropertyTable,
+        offset: CharLen,
+    ) {
+        self.merge_missing_shifted_raw(other, offset);
+    }
+
+    fn merge_missing_shifted_raw(&mut self, other: &TextPropertyTable, offset: CharLen) {
+        self.mutation_tick += 1;
+        self.syntax_prop_tick += 1;
+        if other.has_any_syntax_prop_interval() {
+            if let Ok(mut guard) = self.syntax_prop_ranges.lock() {
+                *guard = (0, Vec::new());
+            }
+        } else {
+            self.syntax_ranges_revalidate();
+        }
+        let mut target_runs = self.intervals.runs();
+        for source in other.intervals.runs() {
+            if source.is_empty_plist() {
+                continue;
+            }
+            let shifted_start = source.start().add_len(offset);
+            let shifted_end = source.end().add_len(offset);
+
+            Self::ensure_runs_cover(&mut target_runs, shifted_end);
+            Self::split_runs_at(&mut target_runs, shifted_start);
+            Self::split_runs_at(&mut target_runs, shifted_end);
+
+            for target in &mut target_runs {
+                if target.start() < shifted_end && target.end() > shifted_start {
+                    for (name, value) in plist_pairs(source.plist) {
+                        if plist_value_get(target.plist, name).is_none() {
+                            target.plist = plist_value_prepend_pair(target.plist, name, value);
+                        }
+                    }
+                    target.refresh_cache();
+                }
+            }
+        }
+        self.replace_runs_preserving_shape(
+            target_runs,
+            ReplacementPropertyNames::Include(&other.property_names),
+        );
+    }
+
+    pub fn merge_adjacent_equal_properties_around_char_range(&mut self, range: CharRange) {
+        self.merge_adjacent_equal_properties_around(range);
+    }
+
+    /// Fuse adjacent intervals with `eq`-equal, non-nil plists whose shared
+    /// boundary lies in `[range.start, range.end]` — GNU `merge_interval_left`
+    /// applied at the boundaries an edit just created.
+    ///
+    /// Runs after every inherited-property insert, so it is on the
+    /// `self-insert-command` path.  It works on the tree in place, touching
+    /// only the intervals whose boundary is inside `range`: O(k log n) for
+    /// the k intervals examined.  The algorithm it replaces
+    /// ([`Self::merge_adjacent_equal_properties_around_reference_for_test`])
+    /// collected every run in the buffer, compared every adjacent pair with
+    /// freshly allocated plist vectors, and rebuilt the balanced tree — a
+    /// per-keystroke cost proportional to the number of property runs in the
+    /// buffer (8% of the Lisp thread on the GUI typing profile of a 258 KB
+    /// fontified file).
+    fn merge_adjacent_equal_properties_around(&mut self, range: CharRange) {
+        self.mutation_tick += 1;
+        if range.start() > range.end() {
+            return;
+        }
+        self.intervals.merge_equal_neighbors_in(range);
+    }
+
+    /// The pre-local algorithm, kept as the reference oracle for
+    /// [`Self::merge_adjacent_equal_properties_around`]: the two must leave
+    /// the same interval partition and plist values.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn merge_adjacent_equal_properties_around_reference_for_test(
+        &mut self,
+        range: CharRange,
+    ) {
+        self.mutation_tick += 1;
+        let mut runs = self.intervals.runs();
+        let start = range.start();
+        let end = range.end();
+        if start > end || runs.len() < 2 {
+            return;
+        }
+
+        loop {
+            let mut merged = false;
+            let mut idx = 0;
+            while idx + 1 < runs.len() {
+                let left_end = runs[idx].end();
+                let right_start = runs[idx + 1].start();
+                if left_end != right_start
+                    || runs[idx].plist.is_nil()
+                    || !plists_equal_eq(
+                        &plist_pairs(runs[idx].plist),
+                        &plist_pairs(runs[idx + 1].plist),
+                    )
+                    || left_end < start
+                    || right_start > end
+                {
+                    idx += 1;
+                    continue;
+                }
+
+                let right_end = runs[idx + 1].end();
+                runs[idx].set_end(right_end);
+                runs[idx].refresh_cache();
+                runs.remove(idx + 1);
+                merged = true;
+                break;
+            }
+
+            if !merged {
+                break;
+            }
+        }
+        self.replace_runs_preserving_shape(runs, ReplacementPropertyNames::Preserve);
+    }
+
+    #[doc(hidden)]
+    pub fn dump_intervals(&self) -> Vec<PropertyInterval> {
+        self.intervals_snapshot()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn debug_interval_bounds(&self) -> Vec<(usize, usize, bool)> {
+        self.intervals
+            .runs()
+            .into_iter()
+            .map(|run| (run.start().get(), run.end().get(), run.is_empty_plist()))
+            .collect()
+    }
+
+    #[doc(hidden)]
+    pub fn from_dump(intervals: Vec<PropertyInterval>) -> Self {
+        Self::from_interval_runs(
+            intervals
+                .into_iter()
+                .filter(|interval| interval.start < interval.end)
+                .map(|interval| {
+                    IntervalRun::new_in_char_range(
+                        CharRange::new(CharPos0::new(interval.start), CharPos0::new(interval.end)),
+                        plist_value_from_pairs(&interval.into_plist()),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn for_each_root(&self, mut f: impl FnMut(Value)) {
+        self.intervals.live_plists(self.intervals.root, &mut f);
+    }
+}
+
+impl Default for TextPropertyTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GcTrace for TextPropertyTable {
+    fn trace_roots(&self, roots: &mut Vec<Value>) {
+        self.for_each_root(|value| roots.push(value));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Casing insertion: the lower storage transaction and its policy seam
+// ---------------------------------------------------------------------------
+
+/// Scratch roots belong to this Lisp mutator and must be restored on its
+/// thread, after the prepared table is published or abandoned.
+#[derive(Debug)]
+#[must_use = "retain casing roots until the prepared table is published or abandoned"]
+pub struct CasingPropertyRoots {
+    saved: usize,
+    mutator: std::marker::PhantomData<*const ()>,
+}
+
+impl CasingPropertyRoots {
+    pub fn new() -> Self {
+        Self {
+            saved: save_scratch_gc_roots(),
+            mutator: std::marker::PhantomData,
+        }
+    }
+
+    pub fn root(&self, value: Value) {
+        push_scratch_gc_root(value);
+    }
+}
+
+impl Drop for CasingPropertyRoots {
+    fn drop(&mut self) {
+        restore_scratch_gc_roots(self.saved);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InsertionSite {
+    Interior,
+    Boundary,
+}
+
+#[derive(Debug)]
+pub enum InsertionInheritance {
+    InteriorStretch,
+    Boundary(Vec<(Value, Value)>),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BoundaryInheritanceTarget {
+    Predecessor,
+    Successor,
+    Inserted,
+}
+
+/// Upper-owned inheritance policy for casing growth.
+///
+/// The buffer layer resolves sticky/category properties against the
+/// evaluator and implements this trait; the storage transaction stays in the
+/// value layer so it can mutate the interval tree's private fields after the
+/// type moves to neovm-value.
+pub trait CasingInsertionPolicy {
+    fn same_properties(&self, left: &[(Value, Value)], right: &[(Value, Value)]) -> bool;
+
+    fn inherited(
+        &self,
+        left: &[(Value, Value)],
+        right: &[(Value, Value)],
+        site: InsertionSite,
+        roots: &CasingPropertyRoots,
+    ) -> Result<InsertionInheritance, Flow>;
+}
+
+#[cold]
+#[inline(never)]
+fn invalid_interval_plan() -> Flow {
+    signal(
+        LispCondition::Error,
+        vec![Value::string("Invalid casing interval plan")],
+    )
+}
+
+impl TextPropertyTable {
+    /// No syntax reader runs between the detached casing interval offsets
+    /// (GNU intervals.c:1358-1365) and publication. Invalidate these positional
+    /// caches once instead of shifting every cached range for every expansion.
+    pub fn invalidate_casify_syntax_caches(&mut self) {
+        let ranges = self
+            .syntax_prop_ranges
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *ranges = (0, Vec::new());
+        self.syntax_prop_any
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Casing calls offset_intervals at the expanded source character, with
+    /// positive net growth (insdel.c:1800; intervals.c:1358-1365). Coordinates
+    /// refer to physical text, independent of the buffer's narrowed bounds.
+    pub fn adjust_for_casify_insertion<P: CasingInsertionPolicy>(
+        &mut self,
+        pos: CharPos0,
+        len: CharLen,
+        old_object_len: CharLen,
+        context: &P,
+        roots: &CasingPropertyRoots,
+    ) -> Result<(), Flow> {
+        if len.is_empty() || self.is_empty() {
+            return Ok(());
+        }
+        if pos > CharPos0::ZERO.add_len(old_object_len) {
+            return Err(invalid_interval_plan());
+        }
+        self.intervals
+            .ensure_cover(CharPos0::ZERO.add_len(old_object_len));
+        let located = self.intervals.find_id(pos);
+        let site = located.map_or(InsertionSite::Boundary, |(start, _interval)| {
+            if pos > start {
+                InsertionSite::Interior
+            } else {
+                InsertionSite::Boundary
+            }
+        });
+        let left = if pos == CharPos0::ZERO {
+            Vec::new()
+        } else {
+            self.plist_at(pos.saturating_sub_len(CharLen::new(1)))
+                .unwrap_or_default()
+        };
+        let right = self.plist_at(pos).unwrap_or_default();
+        let inherited = match context.inherited(&left, &right, site, roots)? {
+            InsertionInheritance::InteriorStretch => {
+                let interval = located
+                    .map(|(_, interval)| interval)
+                    .ok_or_else(invalid_interval_plan)?;
+                // GNU intervals.c:971-978 stretches the original interval;
+                // neither its plist identity nor its partition changes.
+                self.mutation_tick += 1;
+                if let Ok(mut guard) = self.syntax_prop_ranges.lock()
+                    && guard.0 == self.syntax_prop_tick + 1
+                {
+                    for (start, end) in guard.1.iter_mut() {
+                        if *start >= pos {
+                            *start = start.add_len(len);
+                            *end = end.add_len(len);
+                        } else if *end > pos {
+                            *end = end.add_len(len);
+                        }
+                    }
+                }
+                self.intervals.add_length_to_ancestors(
+                    Some(interval),
+                    isize::try_from(len.get()).map_err(|_| invalid_interval_plan())?,
+                );
+                return Ok(());
+            }
+            InsertionInheritance::Boundary(properties) => properties,
+        };
+        let target = if pos > CharPos0::ZERO && context.same_properties(&left, &inherited) {
+            BoundaryInheritanceTarget::Predecessor
+        } else if located.is_some() && context.same_properties(&right, &inherited) {
+            BoundaryInheritanceTarget::Successor
+        } else {
+            BoundaryInheritanceTarget::Inserted
+        };
+        // A forced boundary must split even a property-free interval. The
+        // ordinary insert helper may otherwise stretch such an interval.
+        if let Some(interval) = self.intervals.split_at(pos) {
+            roots.root(self.intervals.nodes[interval.0].plist);
+        }
+        self.adjust_for_insert_raw(pos, len);
+        if !inherited.is_empty() {
+            self.set_properties_for_object_char_len(
+                CharRange::from_start_len(pos, len),
+                old_object_len.add_len(len),
+                inherited,
+            );
+        }
+        let (_, inserted) = self
+            .intervals
+            .find_id(pos)
+            .ok_or_else(invalid_interval_plan)?;
+        roots.root(self.intervals.nodes[inserted.0].plist);
+        match target {
+            BoundaryInheritanceTarget::Predecessor => {
+                // GNU extends the predecessor when its properties match. Do
+                // not remove an already-existing equal boundary on the right.
+                self.intervals
+                    .merge_interval_left(inserted)
+                    .ok_or_else(invalid_interval_plan)?;
+            }
+            BoundaryInheritanceTarget::Successor => {
+                // GNU intervals.c:949-958,1380-1417 absorbs into the successor,
+                // retaining its plist, including its cons identity.
+                let (_, successor) = self
+                    .intervals
+                    .find_id(pos.add_len(len))
+                    .ok_or_else(invalid_interval_plan)?;
+                let plist = self.intervals.nodes[successor.0].plist;
+                self.intervals.set_node_plist(inserted, plist);
+                self.intervals.merge_into_predecessor(inserted, successor);
+            }
+            BoundaryInheritanceTarget::Inserted => {}
+        }
+        Ok(())
+    }
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+#[cfg(test)]
+#[path = "text_props/tests/text_props_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "text_props/tests/bounded_absent_property_test.rs"]
+mod bounded_absent_property_test;
+
+impl PropertyInterval {
+    #[inline]
+    #[doc(hidden)]
+    pub fn key_order(&self) -> &Vec<Value> {
+        &self.key_order
+    }
+}
+
+impl PropertyInterval {
+    #[doc(hidden)]
+    pub fn from_parts(
+        range: CharRange,
+        properties: HashMap<Value, Value>,
+        key_order: Vec<Value>,
+    ) -> Self {
+        debug_assert_eq!(
+            key_order.len(),
+            properties.len(),
+            "key_order must cover every property key exactly once"
+        );
+        debug_assert!(
+            key_order
+                .iter()
+                .all(|key| properties.keys().any(|candidate| eq_value(candidate, key))),
+            "key_order must be a permutation of the property keys"
+        );
+        debug_assert!(
+            !key_order
+                .iter()
+                .enumerate()
+                .any(|(index, key)| key_order[..index].iter().any(|seen| eq_value(seen, key))),
+            "key_order must not repeat a property key"
+        );
+        Self {
+            start: range.start().get(),
+            end: range.end().get(),
+            properties,
+            key_order,
+        }
+    }
+}
+
+/// VIS read row (lead #1052): the syntax-property cache tick, copied out so
+/// the consumer cannot take the Mutex guard and write through the table.  The
+/// test-support arm is private; the production arm keeps pub(crate) for this
+/// file's own code.
+#[cfg(any(test, feature = "test-support"))]
+impl TextPropertyTable {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn syntax_prop_ranges_tick(&self) -> u64 {
+        self.syntax_prop_ranges
+            .lock()
+            .map(|guard| guard.0)
+            .unwrap_or(0)
+    }
+}

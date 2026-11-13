@@ -14,30 +14,24 @@
 //! The in-place writers (`setcar`/`setcdr`/`plist-put` on an existing key/
 //! `nconc`) are deliberately not seams: the P10 live walk observes them.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use super::architecture_production_source_roots::production_source_files;
 
 #[path = "keeper_world_designator_seam_guard_test.rs"]
 mod keeper_world_designator_seam_guard_test;
 
+#[path = "mint_seal_guard_test.rs"]
+mod mint_seal_guard_test;
+
 const STORE: &str = "plist.store_atomic(";
 const SEAM: &str = "fn store_plist_head";
-
-fn source_files(directory: &Path, files: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(directory).expect("read source directory") {
-        let path = entry.expect("source entry").path();
-        if path.is_dir() {
-            source_files(&path, files);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            files.push(path);
-        }
-    }
-}
 
 /// Keep code tokens only: comments and string/char/raw-string literals are
 /// dropped while every newline is preserved, so the scan matches declarations
 /// rather than docs or test data quoting the forbidden shape, and reported
 /// line numbers stay exact.  Rust block comments nest.
-fn code_only(source: &str) -> String {
+pub(crate) fn code_only(source: &str) -> String {
     #[derive(Clone, Copy, PartialEq)]
     enum State {
         Normal,
@@ -303,26 +297,23 @@ fn violations_in(source: &str) -> Vec<usize> {
 
 #[test]
 fn plist_head_stores_have_exactly_one_production_site() {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let root = manifest.join("src");
-    let mut files = Vec::new();
-    source_files(&root, &mut files);
+    let files = production_source_files();
     assert!(
         files.len() > 100,
-        "the guard must scan the whole crate source tree, saw {} files",
+        "the guard must scan every production source tree, saw {} files",
         files.len()
     );
     let mut production_sites = Vec::new();
     let mut seam_seen = false;
-    for path in &files {
-        let relative = path.strip_prefix(&manifest).unwrap_or(path);
+    for file in &files {
+        let relative = PathBuf::from(file.legacy());
         if relative
             .components()
             .any(|component| component.as_os_str() == "tests")
         {
             continue;
         }
-        let source = std::fs::read_to_string(path).expect("read source file");
+        let source = std::fs::read_to_string(&file.path).expect("read source file");
         let code = code_only(&source);
         if code.contains(SEAM) {
             seam_seen = true;

@@ -167,6 +167,7 @@ pub(super) fn capture_automatic_composition_spans(
     let Some(table) = active_composition_table(
         vars[LayoutVar::AutoCompositionMode as usize],
         vars[LayoutVar::AutoCompositionFunction as usize],
+        buffer,
         variables,
         symbol_mode,
     ) else {
@@ -202,6 +203,7 @@ pub(super) fn capture_string_composition_rules(
     let table = active_composition_table(
         value(LayoutVar::AutoCompositionMode),
         value(LayoutVar::AutoCompositionFunction),
+        buffer,
         vars,
         symbol_mode,
     )?;
@@ -212,9 +214,10 @@ pub(super) fn capture_string_composition_rules(
     )
 }
 
-fn active_composition_table(
+pub(super) fn active_composition_table(
     mode: Option<Value>,
     function: Option<Value>,
+    buffer: &Buffer,
     vars: VariableView<'_>,
     symbol_mode: SymbolMode,
 ) -> Option<Value> {
@@ -223,7 +226,15 @@ fn active_composition_table(
     {
         return None;
     }
-    vars.value(crate::fixed_symbols::COMPOSITION_FUNCTION_TABLE.id())
+    // GNU composite.c reads Vcomposition_function_table (1105-1189) while
+    // computing compositions for the buffer being redisplayed, so the
+    // buffer-local binding (set by ligature/auto-composition setups) applies
+    // to that buffer only; the old `vars.value` read answered the default
+    // cell for every buffer.
+    vars.value_in_buffer(
+        Some(buffer),
+        crate::fixed_symbols::COMPOSITION_FUNCTION_TABLE.id(),
+    )
 }
 
 fn capture_layout_category_symbol_plists(
@@ -281,7 +292,7 @@ mod category_capture_tests {
 
     #[test]
     fn absent_categories_do_not_observe_unrelated_property_plists() {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let id = eval.buffer_manager().current_buffer().unwrap().id();
         let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
         buffer.insert("history\n");
@@ -309,7 +320,7 @@ mod category_capture_tests {
 
     #[test]
     fn sparse_categories_in_long_history_preserve_capture_budget() {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let id = eval.buffer_manager().current_buffer().unwrap().id();
         let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
         let count = 9_000;
@@ -344,7 +355,7 @@ mod category_capture_tests {
 
     #[test]
     fn category_capture_keeps_text_and_overlay_symbol_properties() {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         eval.eval_str(
             "(progn (insert \"abc\")
                (put 'text-category 'face 'bold)
@@ -400,7 +411,7 @@ mod category_capture_tests {
 
     #[test]
     fn category_runs_follow_multibyte_edits_and_syntax_boundaries() {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         eval.eval_str(
             "(progn (insert \"历史输出abc\")
                (put-text-property 2 4 'category 'first-category)
@@ -464,9 +475,13 @@ pub(super) fn resolve_layout_vars(
             buffer.buffer_local_value_id(var.sym_id())
         };
         vars[*var as usize] = local.or_else(|| {
-            info.captures_default
-                .then(|| variables?.default_value(var.sym_id()))
-                .flatten()
+            if !info.captures_default {
+                return None;
+            }
+            // The fallback is GNU's visible read with this buffer current,
+            // not the default-only cell: a dynamic binding of a display
+            // variable must reach the captured value (LD-1).
+            variables?.value_in_buffer(Some(buffer), var.sym_id())
         });
     }
     vars
@@ -546,6 +561,10 @@ impl LayoutBufferView for LayoutBufferSnapshot {
     fn layout_indexed_newline_count(&self, range: EmacsByteRange) -> Option<usize> {
         self.text_snapshot
             .indexed_newline_count(range, neovm_core::buffer::LineIndexBuild::IfLarge)
+    }
+
+    fn layout_text_props_is_empty(&self) -> bool {
+        self.text_snapshot.text_props_is_empty()
     }
 
     fn layout_text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {

@@ -63,9 +63,9 @@ use neovm_core::emacs_core::image_catalog::{
     ImageSizeLimit, ImageSpecIdentity, ResolvedImageMetadata,
 };
 use neovm_core::emacs_core::intern::intern;
-use neovm_core::emacs_core::load::{
-    LoadupDumpMode, LoadupInvocation, create_bootstrap_evaluator_cached_with_features,
-    create_bootstrap_evaluator_with_features,
+use neovm_core::emacs_core::load::{LoadupDumpMode, LoadupInvocation};
+use neovm_core::emacs_core::load_boot::{
+    create_bootstrap_evaluator_cached_with_features, create_bootstrap_evaluator_with_features,
 };
 use neovm_core::emacs_core::print_value_with_eval;
 use neovm_core::emacs_core::terminal::pure::TerminalHost;
@@ -73,6 +73,8 @@ use neovm_core::emacs_core::terminal::pure::{TerminalRuntimeConfig, configure_te
 use neovm_core::emacs_core::value::list_to_vec;
 use neovm_core::face::FaceHeight;
 use neovm_core::heap_types::LispString;
+use neovm_core::window::display::WindowDisplayContextExt;
+use neovm_core::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use neovm_core::window::{
     FrameFullscreen, FrameId, FrameParam, FrameVisibility, GuiFrameGeometryHints, WindowId,
     default_gui_tool_bar_line_height,
@@ -122,7 +124,7 @@ fn shared_primary_window_size(width: u32, height: u32) -> Arc<Mutex<PrimaryWindo
 }
 
 thread_local! {
-    static IMAGE_SPEC_TEST_CONTEXT: Context = Context::new();
+    static IMAGE_SPEC_TEST_CONTEXT: Context = neovm_core::emacs_core::eval_hook_installers::new_context();
 }
 
 /// The declared type and subject GNU would use for a test image source.
@@ -165,7 +167,7 @@ fn initialized_redisplay_test_frame(
     line: &str,
     line_count: usize,
 ) -> (Context, neovm_core::buffer::BufferId, FrameId, WindowId) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.set_variable("noninteractive", Value::NIL);
     let buffer_id = eval
         .buffer_manager()
@@ -1390,7 +1392,8 @@ fn current_fresh_window_end_does_not_reenter_the_layout_adapter() {
         neovm_core::window::WindowLayoutQueryOutcome::Failed(
             neovm_core::window::WindowLayoutQueryFailure::DidNotConverge,
         )
-    });
+    })
+    .expect("install the layout-query handler");
     let updated = eval
         .eval_form(Value::list(vec![
             Value::symbol("window-end"),
@@ -2008,6 +2011,144 @@ fn parse_startup_options_consumes_script_flag_with_rewrite() {
         Some("/tmp/foo.el"),
         "FILE should follow -scriptload"
     );
+}
+
+#[test]
+fn parse_startup_options_quick_precedes_rewritten_script_action() {
+    // GNU emacs.c:1708-1717 re-sorts after --script (priority 100) becomes
+    // -scriptload (priority 0), leaving quick (55) for Lisp's early scan.
+    let program = "owned-neomacs-parser-probe";
+    let file = "owned-script.el";
+    for quick in ["-Q", "--quick", "-quick"] {
+        for args in [
+            [quick, "--batch", "--script", file, "a", "b"],
+            ["--batch", quick, "--script", file, "a", "b"],
+        ] {
+            let startup =
+                parse_startup_options(std::iter::once(program).chain(args).map(str::to_owned))
+                    .expect("quick/script options should parse");
+            assert_eq!(
+                startup.forwarded_args,
+                [program, quick, "-scriptload", file, "a", "b"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>(),
+                "quick flag must reach Lisp before its script action: {args:?}",
+            );
+            assert!(startup.noninteractive);
+            assert_eq!(startup.frontend, FrontendKind::Tty);
+            assert!(startup.no_site_lisp);
+        }
+    }
+}
+
+#[test]
+fn parse_startup_options_script_keeps_option_looking_operands() {
+    // Script file names and --eval operands are data, even when spelled like
+    // options. Reordering must preserve both pairs and the terminator region.
+    let startup = parse_startup_options(
+        [
+            "owned-neomacs-parser-probe",
+            "--quick",
+            "--batch",
+            "--script",
+            "-Q",
+            "--eval",
+            "--script",
+            "--",
+            "-Q",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    )
+    .expect("option-looking operands should remain attached");
+    assert_eq!(
+        startup.forwarded_args,
+        [
+            "owned-neomacs-parser-probe",
+            "--quick",
+            "-scriptload",
+            "-Q",
+            "--eval",
+            "--script",
+            "--",
+            "-Q",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn parse_startup_options_script_preserves_quick_after_terminator() {
+    // The paired CLI control sees ("--" "-Q") inside the script. A blanket
+    // removal of quick-looking arguments would incorrectly consume this data.
+    let startup = parse_startup_options(
+        [
+            "owned-neomacs-parser-probe",
+            "--script",
+            "owned-script.el",
+            "--",
+            "-Q",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    )
+    .expect("script terminator data should parse");
+    assert_eq!(
+        startup.forwarded_args,
+        [
+            "owned-neomacs-parser-probe",
+            "-scriptload",
+            "owned-script.el",
+            "--",
+            "-Q"
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn parse_startup_options_quick_precedes_rewritten_scripteval_action() {
+    // GNU emacs.c:2132-2140 also re-sorts the -x -> -scripteval rewrite.
+    // This checks ordinary file operands, not GNU's undocumented inline forms.
+    let program = "owned-neomacs-parser-probe";
+    for args in [
+        ["-Q", "-x", "owned-script.el", "a"],
+        ["-x", "owned-script.el", "-Q", "a"],
+    ] {
+        let startup =
+            parse_startup_options(std::iter::once(program).chain(args).map(str::to_owned))
+                .expect("quick/scripteval options should parse");
+        assert_eq!(
+            startup.forwarded_args,
+            [program, "-Q", "-scripteval", "owned-script.el", "a"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+            "quick must precede the rewritten script evaluator: {args:?}",
+        );
+        assert!(startup.noninteractive);
+        assert!(startup.no_site_lisp);
+        assert_eq!(startup.frontend, FrontendKind::Tty);
+    }
+}
+
+#[test]
+fn parse_startup_options_accepts_display_shaped_eval_operand() {
+    // This is a valid native option/value pair; any Lisp evaluation error
+    // belongs to the later phase, rather than a second native arity check.
+    let startup = parse_startup_options(
+        ["neomacs", "--batch", "--eval", "-d"]
+            .into_iter()
+            .map(str::to_owned),
+    )
+    .expect("native parsing accepts an option-shaped Elisp operand");
+    assert!(startup.noninteractive);
+    assert_eq!(startup.frontend, FrontendKind::Tty);
 }
 
 #[test]
@@ -4027,7 +4168,7 @@ fn tty_terminal_host_delete_terminal_sends_shutdown() {
 
 #[test]
 fn current_layout_frame_follows_selected_frame() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let b1 = eval.buffer_manager_mut().create_buffer("*one*");
     let b2 = eval.buffer_manager_mut().create_buffer("*two*");
     let f1 = eval.frame_manager_mut().create_frame("F1", 80, 24, b1);
@@ -4040,7 +4181,7 @@ fn current_layout_frame_follows_selected_frame() {
 
 #[test]
 fn current_layout_frame_tracks_surrogate_after_bootstrap_frame_deletion() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let b1 = eval.buffer_manager_mut().create_buffer("*one*");
     let b2 = eval.buffer_manager_mut().create_buffer("*two*");
     let f1 = eval.frame_manager_mut().create_frame("F1", 80, 24, b1);
@@ -4312,7 +4453,7 @@ fn batch_tty_mode_does_not_spawn_input_reader() {
 #[test]
 fn batch_tty_mode_leaves_redisplay_callback_unset() {
     let batch = tty_batch_startup_with_args(&["-Q"]);
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     maybe_install_tty_redisplay_callback(&mut eval, &batch);
     assert!(
         eval.redisplay_fn.is_none(),
@@ -4324,7 +4465,7 @@ fn batch_tty_mode_leaves_redisplay_callback_unset() {
         noninteractive: false,
         ..batch
     };
-    let mut interactive_eval = Context::new();
+    let mut interactive_eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     maybe_install_tty_redisplay_callback(&mut interactive_eval, &interactive);
     assert!(
         interactive_eval.redisplay_fn.is_some(),
@@ -4339,7 +4480,7 @@ fn configure_gnu_startup_state_marks_bootstrap_gui_frame_as_initial_frame() {
     let frame_id = bootstrap_runtime_gui_startup(&mut eval);
 
     let terminal_frame = eval
-        .variable_value_by_name("terminal-frame")
+        .default_value_only_by_name("terminal-frame")
         .expect("terminal-frame");
     let Some(terminal_frame_id) = terminal_frame.as_frame_id() else {
         panic!("GUI startup should seed a hidden terminal frame, got {terminal_frame:?}");
@@ -4370,19 +4511,19 @@ fn configure_gnu_startup_state_marks_bootstrap_gui_frame_as_initial_frame() {
         "hidden startup terminal frame should use TTY background classification"
     );
     assert_eq!(
-        eval.variable_value_by_name("frame-initial-frame")
+        eval.default_value_only_by_name("frame-initial-frame")
             .and_then(|value| value.as_frame_id()),
         Some(frame_id.0)
     );
     assert_eq!(
-        eval.variable_value_by_name("frame-initial-frame-alist"),
+        eval.default_value_only_by_name("frame-initial-frame-alist"),
         Some(Value::list(vec![Value::cons(
             Value::symbol("window-system"),
             Value::symbol("neo"),
         )]))
     );
     assert_eq!(
-        eval.variable_value_by_name("default-minibuffer-frame")
+        eval.default_value_only_by_name("default-minibuffer-frame")
             .and_then(|value| value.as_frame_id()),
         Some(frame_id.0)
     );
@@ -4390,23 +4531,23 @@ fn configure_gnu_startup_state_marks_bootstrap_gui_frame_as_initial_frame() {
 
 #[test]
 fn configure_gnu_startup_state_defers_current_window_system_until_gui_creation() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let terminal_frame = super::super::bootstrap_gui_startup_terminal(&mut eval);
     configure_gnu_startup_state(&mut eval, terminal_frame, &gui_startup());
 
     assert_eq!(
-        eval.variable_value_by_name("window-system"),
+        eval.default_value_only_by_name("window-system"),
         Some(Value::NIL)
     );
     assert_eq!(
-        eval.variable_value_by_name("initial-window-system"),
+        eval.default_value_only_by_name("initial-window-system"),
         Some(Value::symbol("neo"))
     );
 }
 
 #[test]
 fn gui_startup_terminal_frame_uses_separate_terminal_owner() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager_mut().create_buffer("*scratch*");
     let gui_frame_id = eval
         .frame_manager_mut()
@@ -4602,6 +4743,32 @@ fn pdump_preserves_neo_term_generic_methods() {
 }
 
 #[test]
+fn neo_preload_binds_command_q_like_gnu_on_darwin() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+
+    let rendered = eval
+        .eval_str(
+            r#"
+        ;; GNU's NS port installs this binding in the dump
+        ;; (lisp/term/ns-win.el:141). The AppKit Quit redirect feeds s-q
+        ;; into the input transport, so the darwin branch must bind it.
+        (let ((system-type 'darwin)
+              (original (lookup-key global-map [?\s-q])))
+          (unwind-protect
+              (progn
+                (load "term/neo-preload.el" nil t)
+                (list (eq (key-binding [?\s-q]) #'save-buffers-kill-emacs)))
+            (define-key global-map [?\s-q] original)))
+        "#,
+        )
+        .map(|value| print_value_with_eval(&eval, &value))
+        .unwrap_or_else(|err| format!("{err:?}"));
+
+    assert_eq!(rendered, "(t)");
+}
+
+#[test]
 fn neo_win_registers_neo_display_format() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
@@ -4763,7 +4930,7 @@ fn neo_selection_backend_treats_an_owned_empty_primary_as_existing() {
 
 #[test]
 fn configure_gnu_startup_state_clears_window_system_for_tty_boots() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let scratch = eval.buffer_manager_mut().create_buffer("*scratch*");
     let frame_id = eval.frame_manager_mut().create_frame("F1", 80, 25, scratch);
     let startup = StartupOptions {
@@ -4783,22 +4950,22 @@ fn configure_gnu_startup_state_clears_window_system_for_tty_boots() {
     configure_gnu_startup_state(&mut eval, frame_id, &startup);
 
     assert_eq!(
-        eval.variable_value_by_name("window-system"),
+        eval.default_value_only_by_name("window-system"),
         Some(Value::NIL)
     );
     assert_eq!(
-        eval.variable_value_by_name("initial-window-system"),
+        eval.default_value_only_by_name("initial-window-system"),
         Some(Value::NIL)
     );
     assert_eq!(
-        eval.variable_value_by_name("command-line-args"),
+        eval.default_value_only_by_name("command-line-args"),
         Some(Value::list(vec![
             Value::string("neomacs"),
             Value::string("-q")
         ]))
     );
     assert_eq!(
-        eval.variable_value_by_name("command-line-args-left"),
+        eval.default_value_only_by_name("command-line-args-left"),
         Some(Value::list(vec![Value::string("-q")]))
     );
     let frame = eval
@@ -4808,7 +4975,7 @@ fn configure_gnu_startup_state_clears_window_system_for_tty_boots() {
     // NEITHER display-derived parameter may be invented in Rust.  GNU's
     // `make_initial_frame' (src/frame.c:1423) sets neither, and both are
     // computed by `frame-set-background-mode' (lisp/frame.el:1526), which this
-    // bare `Context::new()' -- GNU before loadup -- has not loaded.  Seeding
+    // bare `neovm_core::emacs_core::eval_hook_installers::new_context()' -- GNU before loadup -- has not loaded.  Seeding
     // them here is DIVERGENCES.md 157's bug, and this row is the guard.
     assert_eq!(
         frame.parameter("display-type"),
@@ -4949,7 +5116,7 @@ fn live_tty_defface_keeps_dark_color_parent_attributes_through_inverse_video() {
 
 #[test]
 fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let startup = StartupOptions {
         frontend: FrontendKind::Tty,
         forwarded_args: vec![
@@ -4972,22 +5139,22 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
     configure_gnu_startup_state(&mut eval, FrameId(9), &startup);
 
     assert_eq!(
-        eval.variable_value_by_name("noninteractive"),
+        eval.default_value_only_by_name("noninteractive"),
         Some(Value::T)
     );
     assert_eq!(
-        eval.variable_value_by_name("gc-cons-percentage"),
+        eval.default_value_only_by_name("gc-cons-percentage"),
         Some(Value::make_float(1.0))
     );
     // A noninteractive startup never activates the startup GC ceiling: the
     // batch script runs inside `normal-top-level` and the settling timer that
     // releases the ceiling cannot fire, so GNU semantics (no ceiling) apply.
     assert_eq!(
-        eval.variable_value_by_name("neomacs--startup-gc-ceiling-active"),
+        eval.default_value_only_by_name("neomacs--startup-gc-ceiling-active"),
         Some(Value::NIL)
     );
     assert_eq!(
-        eval.variable_value_by_name("command-line-args"),
+        eval.default_value_only_by_name("command-line-args"),
         Some(Value::list(vec![
             Value::string("neomacs"),
             Value::string("-Q"),
@@ -4999,12 +5166,12 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
 
 #[test]
 fn configure_gnu_startup_state_seeds_command_line_args_left_for_gnu_startup() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let startup = gui_startup_with_args(&["-Q", "-l", "/tmp/demo.el"]);
     configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
 
     assert_eq!(
-        eval.variable_value_by_name("command-line-args-left"),
+        eval.default_value_only_by_name("command-line-args-left"),
         Some(Value::list(vec![
             Value::string("-Q"),
             Value::string("-l"),
@@ -5500,7 +5667,7 @@ fn bootstrap_gui_state_allows_gnu_frame_initialize_to_delete_terminal_frame() {
     let frame_ids: Vec<_> = eval.frame_manager().frame_list().into_iter().collect();
     assert_eq!(frame_ids, vec![frame_id]);
     assert_eq!(
-        eval.variable_value_by_name("terminal-frame"),
+        eval.default_value_only_by_name("terminal-frame"),
         Some(Value::NIL)
     );
 }
@@ -5807,7 +5974,7 @@ fn sync_selected_gui_chrome_state_defers_lisp_setup_during_throw_on_input() {
 
     sync_selected_gui_chrome_state(&mut eval);
     assert_eq!(
-        eval.variable_value_by_name("neo-tool-bar-setup-count")
+        eval.default_value_only_by_name("neo-tool-bar-setup-count")
             .expect("setup count while throw-on-input is active"),
         Value::fixnum(0)
     );
@@ -5815,7 +5982,7 @@ fn sync_selected_gui_chrome_state_defers_lisp_setup_during_throw_on_input() {
     eval.set_variable("throw-on-input", Value::NIL);
     sync_selected_gui_chrome_state(&mut eval);
     assert_eq!(
-        eval.variable_value_by_name("neo-tool-bar-setup-count")
+        eval.default_value_only_by_name("neo-tool-bar-setup-count")
             .expect("setup count after throw-on-input"),
         Value::fixnum(1)
     );
@@ -6238,7 +6405,7 @@ fn recursive_edit_processes_load_option_from_forwarded_args_before_first_input()
     drop(tx);
     eval.init_input_system();
 
-    let result = eval.recursive_edit();
+    let result = neovm_core::emacs_core::keyboard::recursive_edit(&mut eval);
     result.expect("close request should let the outer recursive edit exit cleanly");
 
     let result = eval
@@ -6279,7 +6446,7 @@ fn bootstrap_batch_eval_exits_outer_command_loop_like_gnu() {
     let _tx = neovm_core::host_input::HostInputPublisher::install(&mut eval);
     eval.init_input_system();
 
-    let result = eval.recursive_edit();
+    let result = neovm_core::emacs_core::keyboard::recursive_edit(&mut eval);
     result.expect("batch recursive edit should exit cleanly");
 
     assert_eq!(
@@ -6290,11 +6457,11 @@ fn bootstrap_batch_eval_exits_outer_command_loop_like_gnu() {
         })
     );
     assert_eq!(
-        eval.variable_value_by_name("neomacs--batch-probe"),
+        eval.default_value_only_by_name("neomacs--batch-probe"),
         Some(Value::fixnum(42))
     );
     assert_eq!(
-        eval.variable_value_by_name("command-line-processed"),
+        eval.default_value_only_by_name("command-line-processed"),
         Some(Value::T)
     );
 }
@@ -6320,7 +6487,7 @@ fn bootstrap_batch_kill_emacs_is_silent_shutdown() {
     let _tx = neovm_core::host_input::HostInputPublisher::install(&mut eval);
     eval.init_input_system();
 
-    let result = eval.recursive_edit();
+    let result = neovm_core::emacs_core::keyboard::recursive_edit(&mut eval);
     result.expect("batch kill-emacs should exit cleanly");
 
     assert_eq!(
@@ -6354,7 +6521,7 @@ fn bootstrap_batch_startup_error_exits_nonzero_like_gnu() {
     let _tx = neovm_core::host_input::HostInputPublisher::install(&mut eval);
     eval.init_input_system();
 
-    let result = eval.recursive_edit();
+    let result = neovm_core::emacs_core::keyboard::recursive_edit(&mut eval);
     result.expect("batch startup error should leave through kill-emacs");
 
     assert_eq!(
@@ -6844,7 +7011,7 @@ fn gnu_startup_clears_terminal_frame_without_deselecting_opening_gui_frame() {
     .expect("queue close request");
     drop(tx);
     eval.init_input_system();
-    let result = eval.recursive_edit();
+    let result = neovm_core::emacs_core::keyboard::recursive_edit(&mut eval);
     result.expect("close request should let recursive edit exit cleanly");
 
     assert_eq!(
@@ -6853,7 +7020,7 @@ fn gnu_startup_clears_terminal_frame_without_deselecting_opening_gui_frame() {
         "GUI startup should keep the opening frame selected through the first recursive edit"
     );
     assert_eq!(
-        eval.variable_value_by_name("terminal-frame"),
+        eval.default_value_only_by_name("terminal-frame"),
         Some(Value::NIL),
         "GUI startup should clear terminal-frame after the first recursive edit enters the command loop"
     );
@@ -7432,12 +7599,12 @@ fn raw_dump_loadup_invocation_carries_explicit_build_details_policy() {
 
 #[test]
 fn configure_gnu_startup_state_applies_explicit_no_build_details() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut startup = gui_startup();
     startup.no_build_details = true;
     configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
     assert_eq!(
-        eval.variable_value_by_name("build-details"),
+        eval.default_value_only_by_name("build-details"),
         Some(Value::NIL)
     );
     assert!(

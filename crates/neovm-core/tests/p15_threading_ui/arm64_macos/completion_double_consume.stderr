@@ -1,3 +1,11 @@
+warning: unused import: `emacs_core`
+ --> tests/p15_threading_ui/arm64_macos/../completion_double_consume.rs
+  |
+  | use actual_payload::{emacs_core, tagged, threading, value};
+  |                      ^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
 error[E0382]: use of moved value: `completion`
  --> tests/p15_threading_ui/arm64_macos/../completion_double_consume.rs
   |
@@ -9,15 +17,15 @@ error[E0382]: use of moved value: `completion`
   |                                                    ^^^^^^^^^^ value used here after move
   |
 note: consider changing this parameter type in method `retire_thread_completion` to borrow instead if owning the value isn't necessary
- --> tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../src/emacs_core/runtime/threads/completion.rs
+ --> tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../../neovm-eval/src/emacs_core/runtime/threads/completion.rs
   |
-  |     pub(crate) fn retire_thread_completion(
-  |                   ------------------------ in this method
+  |     pub fn retire_thread_completion(
+  |            ------------------------ in this method
   |         &mut self,
   |         mut completion: CompletingThread,
   |                         ^^^^^^^^^^^^^^^^ this parameter takes ownership of the value
 note: if `CompletingThread` implemented `Clone`, you could clone the value
- --> tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../src/emacs_core/runtime/threads/completion.rs
+ --> tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../../neovm-eval/src/emacs_core/runtime/threads/completion.rs
   |
   | pub(crate) struct CompletingThread {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type

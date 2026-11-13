@@ -1,0 +1,10 @@
+error[E0624]: associated function `mint` is private
+ --> tests/mint_seal_ui/eval_hooks_installed_mint_is_not_public.rs:6:33
+  |
+6 |     let _ = EvalHooksInstalled::mint();
+  |                                 ^^^^ private associated function
+  |
+ ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs
+  |
+  |     fn mint() -> Self {
+  |     ----------------- private associated function defined here

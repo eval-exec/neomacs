@@ -4,7 +4,7 @@ use neovm_core::window::{
 };
 
 fn emitter() -> (Context, WindowOutputEmitter) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)

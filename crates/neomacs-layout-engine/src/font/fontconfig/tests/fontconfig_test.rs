@@ -899,3 +899,37 @@ fn isolated_native_catalogues_keep_query_and_foundry_caches_with_their_owner() {
         "clearing one owner cannot invalidate another"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn named_listing_native_weight_projection_matches_gnu_nearest_table_and_lower_ties() {
+    // font.c:font_style_to_value rounds a native numeric value to the
+    // nearest weight-table row, choosing the lower row on an equal distance.
+    for (native, css) in [
+        (0, 100),
+        (40, 200),
+        (50, 300),
+        (52, 300),
+        (53, 350),
+        (55, 350),
+        (67, 350),
+        (68, 400),
+        (80, 400),
+        (100, 500),
+        (140, 500),
+        (141, 600),
+        (180, 600),
+        (190, 600),
+        (191, 700),
+        (200, 700),
+        (205, 800),
+        (210, 900),
+        (250, 950),
+    ] {
+        assert_eq!(
+            super::map_fontconfig_weight_raw(native),
+            css,
+            "native weight {native}"
+        );
+    }
+}

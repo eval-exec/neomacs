@@ -1,0 +1,1341 @@
+//! Concurrent marking: the start handshake, launching and joining the background marker, SATB root feeding, and the first-partition-cycle policy.
+//!
+//! Moved out of `gc.rs` unchanged; a child module so it keeps the
+//! parent's view of its private items (`use super::*`).
+
+use super::*;
+
+#[cfg(test)]
+#[path = "tests/mark_phase_test.rs"]
+mod mark_phase_tests;
+
+/// The coordinator's view of the existing phase flags, not an admission proof.
+/// Eager STW collection still relies on its exclusive driver/collector loan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum MarkPhase {
+    Idle,
+    ConcurrentRunning,
+    /// Marking remains after a worker join or an unpublished capture. The
+    /// flags cannot distinguish those histories; recovery retains its roots.
+    StoppedMarking,
+    /// Internal to incremental_finish: sweep work is published before the
+    /// mark flag clears. No Context driver may reenter in this interval.
+    PublishingSweep,
+    Sweeping,
+}
+
+/// Explicit marker finish or resource shutdown could not complete.
+/// A failed marker handoff preserves active state; facade retention refuses
+/// resource reclamation while its publication or reader obligations remain.
+#[derive(Debug, thiserror::Error)]
+pub enum MarkFinishError {
+    #[error("facade roots still retain heap {0:?}; resource shutdown is excluded")]
+    FacadeRetained(HeapIdentity),
+    #[error("heap {0:?} still has outstanding young-mutator loans")]
+    MutatorsNotStopped(HeapIdentity),
+    #[error("active GC marker has no completion receiver")]
+    MissingCompletion,
+    #[error("GC marker disconnected before its completion handoff")]
+    Disconnected(#[source] std::sync::mpsc::RecvError),
+    #[error("GC collector queues are poisoned; collection cannot resume")]
+    PoisonedCollectorState,
+}
+
+static_assertions::assert_impl_all!(MarkFinishError: Send, Sync, std::fmt::Debug);
+
+impl TaggedHeap {
+    /// Classify without a new stored discriminant or an atomic gc_done load.
+    /// gc_done is a tentative work-queue observation, not worker termination.
+    #[inline]
+    #[doc(hidden)]
+    pub fn mark_phase(&self) -> MarkPhase {
+        debug_assert!(
+            !self.concurrent_mark_running || (self.mark_in_progress && !self.sweep_in_progress),
+            "a concurrent worker requires marking and excludes sweep"
+        );
+        match (self.sweep_in_progress, self.mark_in_progress) {
+            (false, false) => MarkPhase::Idle,
+            (false, true) => {
+                if self.concurrent_mark_running {
+                    MarkPhase::ConcurrentRunning
+                } else {
+                    MarkPhase::StoppedMarking
+                }
+            }
+            (true, true) => MarkPhase::PublishingSweep,
+            (true, false) => MarkPhase::Sweeping,
+        }
+    }
+
+    /// True if a concurrent mark should drive THIS collection.
+    ///
+    /// Dump heaps: a partitioned post-dump heap whose first partition cycle
+    /// has promoted + blackened the image (the young/old split bounds what is
+    /// traced); that first cycle falls to the STW full path.
+    ///
+    /// Dump-less heaps: after the first completed STW collection — the same
+    /// one-STW-bootstrap-then-concurrent shape as the dump path. Nothing
+    /// tenures without a dump, so every cycle re-clears and re-marks the whole
+    /// young heap (correct, just unpartitioned), and the concurrent job's dump
+    /// checks never match (`dump_addr_lo/hi` stay MAX/0) while the
+    /// remembered-set seeding is skipped entirely (`partition_dump` is false).
+    ///
+    /// A heap that registers a dump AFTER dump-less cycles switches back to
+    /// the dump rule: the first partition cycle must be the STW full trace
+    /// that promotes + blackens the image, regardless of earlier bootstraps.
+    pub fn should_run_concurrent(&self) -> bool {
+        if self.partition_dump {
+            self.dump_blackened
+        } else {
+            self.bootstrap_collected
+        }
+    }
+
+    /// True when the NEXT collection would be the first partition cycle (a
+    /// registered dump not yet promoted+blackened). The driver runs it
+    /// concurrently via [`ConcurrentMarkPermit::arm_first_cycle`] and its
+    /// closed begin/capture/launch extent instead of the STW
+    /// bootstrap.
+    pub fn is_partition_first_cycle(&self) -> bool {
+        self.partition_dump && !self.dump_blackened
+    }
+
+    /// Arm the concurrent first partition cycle (see the field doc).
+    pub(super) fn raw_arm_first_cycle_concurrent(
+        &mut self,
+        proof: &facade_mark::ConcurrentMarkStageProof,
+    ) {
+        debug_assert!(proof.matches(self));
+        self.first_cycle_concurrent = true;
+    }
+
+    /// Legacy unit-test adapter; production enters through the exclusive loan.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn arm_first_cycle_concurrent(&mut self) {
+        // SAFETY: these direct GC fixtures own the heap and admit their
+        // serialized start before spawning any worker or publishing a job.
+        let mut permit = unsafe { self.permit_concurrent_mark() }
+            .expect("unit-test first-cycle admission must be idle and unexcluded");
+        permit.arm_first_cycle();
+    }
+
+    /// Complete the first partition cycle once its (possibly deferred) sweep
+    /// has drained: promote survivors, blacken the image, build the initial
+    /// remembered set — exactly `complete_collection`'s end-of-first-cycle
+    /// block, run at the concurrent cycle's completion point instead. Also
+    /// restores the mapped contribution to `live_bytes`, which the
+    /// termination's accounting undercounted (mapped objects are never marked
+    /// during the concurrent first cycle; blackening makes the marked-based
+    /// sums whole). No-op on every later cycle and on dump-less heaps.
+    ///
+    /// Acts only on an ARMED concurrent first cycle: with nothing armed there
+    /// is no trace and sweep behind the call, and promoting then would tenure
+    /// every load transient (the stop-the-world first cycle promotes inside
+    /// `complete_collection`).
+    pub fn finish_first_partition_cycle(&mut self) {
+        if !self.partition_dump || self.dump_blackened || !self.first_cycle_concurrent {
+            self.first_cycle_concurrent = false;
+            return;
+        }
+        self.promote_and_blacken();
+        self.dump_blackened = true;
+        self.recompute_old_bytes_world_stopped();
+        if self.generational.enabled {
+            self.refresh_generation_major_baseline_world_stopped();
+        }
+        self.first_cycle_concurrent = false;
+        let mapped_cons_bytes: usize = self
+            .mapped_cons_ranges
+            .iter()
+            .map(|range| range.live_count().saturating_mul(size_of::<ConsCell>()))
+            .sum();
+        self.live_bytes = self
+            .live_bytes
+            .saturating_add(self.mapped_non_cons_live_bytes())
+            .saturating_add(mapped_cons_bytes);
+    }
+
+    /// Stop-the-world cycle entry: `collect_exact`, and the driver's forced
+    /// (`garbage-collect`) and dump-less paths.
+    ///
+    /// An armed concurrent FIRST partition cycle that has fully traced and
+    /// swept by now (the forced path terminates the mark and drains the sweep
+    /// first) is disarmed: this cycle becomes the stop-the-world first cycle,
+    /// which pre-marks the image, seeds every image child
+    /// (`seed_all_mapped_children`) and promotes in `complete_collection`
+    /// after its own mark. Left armed, this
+    /// cycle's `begin_collection` took the concurrent STAGING branch, whose
+    /// staged image lists only the GC thread consumes: the stop-the-world mark
+    /// never seeded the heap children of image objects the roots do not
+    /// reach, swept them, and then blackened the image around the dangling
+    /// pointers, which every later cycle traced again through the remembered
+    /// set. Finishing the armed cycle here instead (promote, then trace) would
+    /// tenure the objects it allocated black during its mark, dead or not, so
+    /// the explicit collection could never free them.
+    #[doc(hidden)]
+    pub fn begin_stw_collection(&mut self) {
+        assert!(
+            !self.concurrent_mark_running,
+            "collection requires an explicit successful marker finish"
+        );
+        // Collector code never sees an open allocation region
+        // (`alloc_region.rs`, invariant I2).
+        self.close_alloc_regions();
+        if self.first_cycle_concurrent {
+            debug_assert!(
+                !self.concurrent_mark_running && !self.sweep_in_progress,
+                "a stop-the-world cycle may only follow a finished concurrent cycle"
+            );
+            // The drained first cycle kept its births for the permanent
+            // splice. This explicit entry cancels that splice; its fresh
+            // full trace must decide liveness without the previous logs.
+            self.clear_black_births_world_stopped();
+            self.first_cycle_concurrent = false;
+            self.staged_mapped_cons_scan = None;
+            self.staged_mapped_veclikes = None;
+        }
+        // A stop-the-world first partition cycle pre-marks the image before
+        // its flat seed (`premark_mapped_image`).
+        self.begin_collection_with(true);
+    }
+
+    /// True while the background GC thread is marking (between the start and
+    /// termination handshakes) — the mutator is running concurrently.
+    pub fn concurrent_mark_running(&self) -> bool {
+        self.concurrent_mark_running
+    }
+
+    /// The marker has tentatively drained gray + SATB, or the inline fallback
+    /// has already handed off its residual work (Acquire pairs with Release).
+    /// The mutator polls this at safe points to terminate and finish tracing.
+    pub fn concurrent_mark_done(&self) -> bool {
+        self.gc_done.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Start-of-cycle setup for a concurrent mark: clear young marks + seed the
+    /// collector-internal and remembered roots (`begin_collection`), arm
+    /// `mark_in_progress`. The caller then seeds context roots and calls
+    /// `launch_concurrent_mark`. No Steele owner-tracking: the concurrent SATB
+    /// barrier (keyed on `concurrent_mark_running`) preserves the snapshot.
+    pub(super) fn raw_concurrent_begin(&mut self, proof: &facade_mark::ConcurrentMarkStageProof) {
+        debug_assert!(proof.matches(self));
+        if tagged_heap_is_current(self) {
+            TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.set(false));
+        }
+        // Zero the seeding scratch so a skipped `seed_mapped_remembered`
+        // (non-partitioned heap) does not leave a stale previous value in the
+        // start slots filled below.
+        self.last_remembered_seed_us = 0;
+        self.last_remembered_seed_roots = 0;
+        // SAFETY: this entry point is the stop-the-world start; the caller
+        // holds the stopped world and no concurrent marker runs.
+        unsafe { self.begin_collection() };
+        // Route this handshake's `begin_collection` phase costs to the START
+        // slots (this entry point is exclusively the concurrent start).
+        self.handshake.start_count += 1;
+        self.handshake.last_start_clear_us = self.last_clear_us;
+        self.handshake.last_start_clear_cons_us = self.last_clear_cons_us;
+        self.handshake.last_start_clear_noncons_us = self.last_clear_noncons_us;
+        self.handshake.last_start_clear_mapped_us = self.last_clear_mapped_us;
+        self.handshake.last_start_runtime_us = self.last_runtime_seed_us;
+        self.handshake.last_start_runtime_roots = self.last_runtime_seed_roots;
+        self.handshake.last_start_remembered_us = self.last_remembered_seed_us;
+        self.handshake.last_start_remembered_roots = self.last_remembered_seed_roots;
+        self.mark_in_progress = true;
+        self.incremental_mark_us = 0;
+    }
+
+    /// Direct unit-test starts release the loan between seeding statements.
+    /// The matching launch adapter validates this heap's begun phase again.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn concurrent_begin(&mut self) {
+        // SAFETY: the unit-test owner excludes all heap/obarray/TLS writers
+        // at this start. Tests that install TLS retain that same owner until
+        // the real job's publication; no callback or safepoint runs here.
+        let permit = unsafe { self.permit_concurrent_mark() }
+            .expect("unit-test start admission must be idle and unexcluded");
+        drop(permit.begin());
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn launch_concurrent_mark(&mut self) {
+        // SAFETY: this is the same direct-fixture serialized owner admitted
+        // by concurrent_begin, after its root seeding and before any worker
+        // can read the new snapshots. Resume is test-only and revalidates the
+        // started phase and exclusion; it cannot forge an idle admission.
+        let capture = unsafe { ConcurrentMarkCapture::resume_for_test(self) }
+            .expect("unit-test launch must resume an unexcluded begun cycle");
+        capture
+            .launch()
+            .expect("validated unit-test capture must launch");
+    }
+
+    /// Hand the seeded gray queue (the full root snapshot) to the GC thread and
+    /// start non-blocking concurrent marking. Returns immediately; the mutator
+    /// resumes while the GC thread marks. Allocate-black turns on so new objects
+    /// survive this cycle's sweep, and the SATB barrier starts logging.
+    /// Stage 1b: stash the start-captured obarray scan snapshot for the next
+    /// `launch_concurrent_mark` to move into the job. Called from
+    /// `start_concurrent_mark` at the world-stopped start handshake (once per
+    /// concurrent mark).
+    #[doc(hidden)]
+    pub fn set_pending_obarray_scan(&mut self, snap: crate::symbol::ObarrayScanSnapshot) {
+        assert_eq!(
+            snap.heap_identity(),
+            self.tagged_heap_identity(),
+            "snapshot belongs to another heap"
+        );
+        // Retain the start slot count for the termination residual re-seed before
+        // the snapshot is moved into the GC job at `launch_concurrent_mark`.
+        self.concurrent_obarray_start_slots = Some(snap.n_slots());
+        self.pending_obarray_scan = Some(snap);
+    }
+
+    /// Stage 1b: take the start-of-cycle obarray slot count (set at the start
+    /// handshake) for the termination residual re-seed. `None` for a cycle with
+    /// no concurrent mark (e.g. a stop-the-world full collection).
+    #[doc(hidden)]
+    pub fn take_concurrent_obarray_start_slots(&mut self) -> Option<usize> {
+        self.concurrent_obarray_start_slots.take()
+    }
+
+    pub(super) fn raw_launch_concurrent_mark(
+        &mut self,
+        proof: &facade_mark::ConcurrentMarkStageProof,
+    ) {
+        debug_assert!(proof.matches(self));
+        assert!(
+            !self.concurrent_mark_running,
+            "an unfinished or failed marker cannot be replaced"
+        );
+        // SAFETY: the admitted start excludes all mutators and TLS writers;
+        // no worker has launched. A prior epoch must have folded every log.
+        let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(self) };
+        debug_assert!(
+            world.ensure_satb_empty().is_ok(),
+            "launch cannot discard residual SATB"
+        );
+        drop(world);
+        debug_assert!(self.concurrent_hash_snapshot().is_none());
+        // The GC thread's ownership snapshot of this world-stopped instant:
+        // the cons blocks and the string, float, vector and bytecode pages
+        // that exist now (retired pages included — their tenured objects are
+        // claim-benign). Blocks and pages created during the mark are absent,
+        // which is fail-safe: their objects allocate black and whatever the
+        // marker meets there defers to the termination.
+        let mut pages = self.page_snapshot_for_mark();
+        let leaves = self
+            .concurrent_claims()
+            .then(|| self.leaf_page_snapshot_for_mark(&mut pages));
+        let vecsnap_t0 = std::time::Instant::now();
+        // Stage 2 Tier B CONCURRENT VECTOR SCAN: snapshot every
+        // OWNED/Mapped vector backing AT THIS world-stopped point (same instant the
+        // page snapshot is taken and the roots are seeded), so the GC
+        // thread can trace vectors concurrently instead of deferring them to the STW
+        // termination. Vectors are heap-side, so capture directly here (no eval.rs
+        // seam, unlike the Context-side obarray). Task #7 stage 2a (Fix A): iterate
+        // the INCREMENTAL VECTOR REGISTRY (`vector_object_addrs`, maintained at
+        // `link_veclike` + the sweep free sites) instead of filtering the whole
+        // `non_cons_object_addrs` set — the filter walk was 11-32% of this
+        // world-stopped start handshake. Vectors allocated mid-cycle are absent from
+        // this capture and are covered by allocate-black.
+        if (cfg!(any(test, feature = "test-support")) && cfg!(debug_assertions))
+            || std::env::var("NEOVM_GC_VERIFY_PARTITION").as_deref() == Ok("1")
+        {
+            // Fix A INVARIANT, stage-3 form: the registry equals the live
+            // owned Vector population = ALLOCATED VECTOR-ARENA PAGE SLOTS ∪
+            // the residual Box Vector subset of `non_cons_object_addrs`.
+            // (The pre-stage-3 form — registry == Vector∩addr-set — would
+            // fire on the first page vector; worse, if the registry were
+            // silently EMPTY the old 0==0 check would pass and the Tier-B
+            // vecsnap below would disable concurrent vector marking without
+            // any test noticing.) Cross-check both directions: counts match
+            // the union of the two disjoint sources, and every registry
+            // address is page-owned xor addr-set-resident. Debug test builds
+            // only (or explicit VERIFY_PARTITION): the release drain
+            // profilers are themselves cfg(test) binaries, and this walk
+            // would re-add cost inside the timed vecsnap region.
+            // SAFETY: the closed start loan retains the admitted heap and
+            // its authoritative non-cons inventory; no sweep, writer or
+            // callback can remove a Box while this header filter reads it.
+            let box_filter_count = self
+                .non_cons_object_addrs
+                .iter()
+                .filter(|&&addr| unsafe {
+                    (*(addr as *const GcHeader)).kind == HeapObjectKind::VecLike
+                        && (*(addr as *const VecLikeHeader)).type_tag == VecLikeType::Vector
+                })
+                .count();
+            let page_vector_count: usize =
+                self.vector_arena.pages.iter().map(|p| p.allocated).sum();
+            assert_eq!(
+                self.vector_object_addrs.len(),
+                box_filter_count + page_vector_count,
+                "vector registry diverged from page slots ∪ residual Box vectors",
+            );
+            for &addr in &self.vector_object_addrs {
+                let page_owned = self.vector_arena.owns(addr as *const u8);
+                let box_owned = self.non_cons_object_addrs.contains(&addr);
+                assert!(
+                    page_owned ^ box_owned,
+                    "vector registry address must be page-owned xor Box-owned",
+                );
+            }
+            // Task 01 vector-claim inclusion, asserted from the CLAIM ARM's
+            // perspective: every ALLOCATED vector-arena page slot must be
+            // Tier-B-registered ({page vectors} ⊆ `vector_object_addrs`), so
+            // a `vector_page_bases` HIT at `concurrent_try_mark_owned`
+            // implies the claimed vector's backing is in the Tier-B snapshot
+            // built below — its children trace concurrently, which is what
+            // makes the header claim (and the removed termination re-trace)
+            // sound. Retired pages included: their tenured slots drop at the
+            // arm before any children question arises, but keeping them
+            // registered is the standing registry invariant.
+            for slot in self.vector_arena.collect_allocated_slots() {
+                assert!(
+                    self.vector_object_addrs.contains(&(slot as usize)),
+                    "allocated vector page slot missing from the Tier-B \
+                     registry — the claim arm would orphan its children",
+                );
+            }
+        }
+        let vectors = if self.vec_scan == knobs::VecScanMode::Defer {
+            // F-G measurement: no Tier-B snapshot; the page snapshot has no
+            // vector pages either, so every page vector defers.
+            None
+        } else {
+            // SAFETY: this exclusive owner captures without Lisp callbacks at
+            // the legacy single-writer start handshake. The cycle's barriers,
+            // retirement and explicit finish/abandonment retain its storage.
+            let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(self) };
+            let heap = world.heap();
+            let mut snap = crate::tagged::header::VectorScanSnapshot::with_capacity(
+                heap.vector_object_addrs.len(),
+                &world,
+            );
+            for &addr in &heap.vector_object_addrs {
+                // SAFETY: `addr` is a live owned Vector's `GcHeader` addr (the
+                // registry invariant above); a VecLike header begins with its
+                // `GcHeader`, so casting to `*const VectorObj` and reading its
+                // backing is valid.
+                let obj = unsafe { &*(addr as *const VectorObj) };
+                // SAFETY: the registry proves this backing belongs to the
+                // admitted heap; retirement/abandonment retain it until the
+                // marker finishes, and slots follow atomic publication.
+                unsafe { snap.push(obj.data.scan_entry()) };
+            }
+            debug_assert_eq!(snap.heap_identity(), heap.tagged_heap_identity());
+            Some(snap)
+        };
+        self.handshake.last_start_vecsnap_us = vecsnap_t0.elapsed().as_micros() as u64;
+        self.handshake.probe_vector_snapshot_len =
+            vectors.as_ref().map(|snap| snap.len()).unwrap_or(0);
+        // Tier-H capture is admitted like the vector snapshot: exact owned Box
+        // membership is its ownership proof; weak, pending and
+        // generation-black owners refuse.
+        let hashes = if self.concurrent_claims() {
+            let t0 = std::time::Instant::now();
+            let policy = self
+                .concurrent_claims_state()
+                .expect("claims enabled")
+                .scan_policy;
+            let scope = self.collection_scope();
+            for entry in self.concurrent_hash_mutators() {
+                let mutator = entry.lock().unwrap();
+                debug_assert!(mutator.retired_hash_buffers.is_empty());
+                debug_assert!(mutator.written_hash_owners.is_empty());
+            }
+            // SAFETY: this exclusive owner captures without Lisp callbacks at
+            // the legacy single-writer start handshake. Writers lock each
+            // captured entry before borrowing its table, and the cycle's
+            // retirement and explicit finish/abandonment retain originals.
+            let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(self) };
+            let heap = world.heap();
+            // The coordinator's existing exact Box inventory includes every
+            // mutator's allocations, including ordinary-old major owners.
+            // SAFETY: inventory addresses are live owned non-cons headers.
+            let is_hash = |addr: usize| unsafe {
+                (*(addr as *const GcHeader)).kind == HeapObjectKind::VecLike
+                    && (*(addr as *const VecLikeHeader)).type_tag == VecLikeType::HashTable
+            };
+            let tables = heap
+                .non_cons_object_addrs
+                .iter()
+                .filter(|&&addr| is_hash(addr))
+                .count();
+            let mut snapshot =
+                concurrent_hash::HashTableScanSnapshot::with_policy(tables, policy, &world);
+            for &addr in &heap.non_cons_object_addrs {
+                if is_hash(addr) {
+                    // SAFETY: the authoritative live-Box inventory of the
+                    // admitted heap, not a borrowed or mapped header address.
+                    unsafe { snapshot.capture_owned(addr, scope) };
+                }
+            }
+            debug_assert_eq!(snapshot.heap_identity(), heap.tagged_heap_identity());
+            if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+                eprintln!(
+                    "NEOVM_GC hash_snapshot capture={}us tables={} slots={} entries={} descriptor_bytes={}",
+                    t0.elapsed().as_micros(),
+                    snapshot.len(),
+                    snapshot.slot_count(),
+                    snapshot.initialized_entry_count(),
+                    snapshot.descriptor_bytes()
+                );
+            }
+            Some(std::sync::Arc::new(snapshot))
+        } else {
+            None
+        };
+        self.set_concurrent_hash_snapshot(hashes.clone());
+        let jobasm_t0 = std::time::Instant::now();
+        let gray = std::mem::take(&mut self.gray_queue);
+        let (exited_tx, exited_rx) = std::sync::mpsc::channel();
+        self.gc_done
+            .store(false, std::sync::atomic::Ordering::Release);
+        // Fresh per-cycle concurrent claim/drop counters.
+        self.concurrent_str_claimed.store(0, Ordering::Relaxed);
+        self.concurrent_float_claimed.store(0, Ordering::Relaxed);
+        self.concurrent_subr_dropped.store(0, Ordering::Relaxed);
+        self.concurrent_vec_claimed.store(0, Ordering::Relaxed);
+        self.concurrent_bc_claimed.store(0, Ordering::Relaxed);
+        if let Some(claimed) = self.concurrent_leaf_claimed() {
+            claimed.store(0, Ordering::Relaxed);
+        }
+        if let Some(claimed) = self.concurrent_hash_claimed() {
+            claimed.store(0, Ordering::Relaxed);
+        }
+        self.gc_stop
+            .store(false, std::sync::atomic::Ordering::Release);
+        self.gc_exited = Some(exited_rx);
+        // A region granted white must not stay open into the black window
+        // (I1).
+        self.close_alloc_regions();
+        self.concurrent_mark_running = true;
+        // Keep the write-barrier fast path reaching `record_heap_write` so the
+        // SATB log fires even with owner-tracking Disabled / no partition:
+        // the window becomes ALL.
+        TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(true));
+        if tagged_heap_is_current(self) {
+            TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| {
+                active.set(self.concurrent_claims() && self.concurrent_hash_snapshot().is_some());
+            });
+        }
+        // SAFETY: the collector thread is not started until after this
+        // publication (the job is constructed below); the executing mutator
+        // is the only publisher.
+        unsafe { self.publish_barrier_window() };
+        let job = ConcurrentMarkJob {
+            gray: MarkStack::from_values(gray),
+            claims: ConcurrentClaimJob {
+                // Mandated carry: the GC thread claims at THIS cycle's parity.
+                parity: self.mark_parity,
+                major: self.generational.major_in_progress,
+                pages,
+                dump_lo: self.dump_addr_lo,
+                dump_hi: self.dump_addr_hi,
+                drop_dump_children: self.first_cycle_concurrent,
+                str_claimed: self.concurrent_str_claimed.clone(),
+                float_claimed: self.concurrent_float_claimed.clone(),
+                subr_dropped: self.concurrent_subr_dropped.clone(),
+                vec_claimed: self.concurrent_vec_claimed.clone(),
+                bc_claimed: self.concurrent_bc_claimed.clone(),
+            },
+            satb: self.satb_handoff.clone(),
+            done: self.gc_done.clone(),
+            stop: self.gc_stop.clone(),
+            wake: self.gc_wake.clone(),
+            exited: exited_tx,
+            // Stage 1b: consume the obarray snapshot the start handshake staged.
+            // Take it so it is not left dangling for a later cycle.
+            obarray: self.pending_obarray_scan.take(),
+            // Stage 2 Tier B: the vector-backing snapshot captured just above.
+            vectors,
+            // First partition cycle: the staged mapped cons ranges (else None).
+            mapped_cons_ranges: self.staged_mapped_cons_scan.take(),
+            mapped_veclikes: self.staged_mapped_veclikes.take(),
+        };
+        let request = if let Some(leaves) = leaves {
+            GcRequest::ConcurrentMarkEnabled(Box::new(EnabledConcurrentMarkJob {
+                job,
+                claims: EnabledClaims {
+                    leaves,
+                    leaf_claimed: self.concurrent_leaf_claimed().cloned(),
+                    hashes,
+                    hash_claimed: self.concurrent_hash_claimed().cloned(),
+                },
+            }))
+        } else {
+            GcRequest::ConcurrentMark(job)
+        };
+        send_to_collector(self.heap_identity(), request);
+        self.handshake.last_start_jobasm_us = jobasm_t0.elapsed().as_micros() as u64;
+        // Pacer: open this cycle's mark window (closed by `incremental_finish`).
+        self.pace_mark_start = Some(std::time::Instant::now());
+        self.pace_mark_start_bytes = self.bytes_since_gc();
+    }
+
+    /// The ownership snapshot a concurrent mark starting now hands the GC
+    /// thread (`chunk_map::PageSnapshot`). Without the chunk map: the base
+    /// addresses of every cons block and string, float, vector and bytecode
+    /// page, each class timed into its handshake slot. With it: the map and
+    /// each class's count, O(1).
+    pub(super) fn page_snapshot_for_mark(&mut self) -> PageSnapshot {
+        if let Some(map) = self.chunk_map.as_ref() {
+            let mut start_count = [0usize; CHUNK_CLASS_COUNT];
+            start_count[ChunkClass::Cons as usize] = self.cons_blocks.len();
+            start_count[ChunkClass::String as usize] = self.string_arena.pages.len();
+            start_count[ChunkClass::Float as usize] = self.float_arena.pages.len();
+            start_count[ChunkClass::Vector as usize] = match self.vec_scan {
+                knobs::VecScanMode::Snapshot => self.vector_arena.pages.len(),
+                knobs::VecScanMode::Defer => 0,
+            };
+            start_count[ChunkClass::ByteCode as usize] = self.bytecode_arena.pages.len();
+            self.handshake.last_start_conssnap_us = 0;
+            self.handshake.last_start_floatsnap_us = 0;
+            self.handshake.last_start_vecbasesnap_us = 0;
+            self.handshake.last_start_bcsnap_us = 0;
+            self.handshake.probe_cons_blocks = self.cons_blocks.len();
+            return PageSnapshot::ChunkMap {
+                map: map.shared().clone(),
+                start_count,
+            };
+        }
+        fn bases<T: PagedObject>(arena: &ObjectArena<T>) -> FxHashSet<usize> {
+            let mut set =
+                FxHashSet::with_capacity_and_hasher(arena.pages.len(), Default::default());
+            for page in &arena.pages {
+                set.insert(page.base_addr());
+            }
+            set
+        }
+        let conssnap_t0 = std::time::Instant::now();
+        let mut cons =
+            FxHashSet::with_capacity_and_hasher(self.cons_blocks.len(), Default::default());
+        for block in &self.cons_blocks {
+            cons.insert(block.base_addr());
+        }
+        let string = bases(&self.string_arena);
+        self.handshake.last_start_conssnap_us = conssnap_t0.elapsed().as_micros() as u64;
+        self.handshake.probe_cons_blocks = self.cons_blocks.len();
+        let floatsnap_t0 = std::time::Instant::now();
+        let float = bases(&self.float_arena);
+        self.handshake.last_start_floatsnap_us = floatsnap_t0.elapsed().as_micros() as u64;
+        let vecbasesnap_t0 = std::time::Instant::now();
+        let vector = match self.vec_scan {
+            knobs::VecScanMode::Snapshot => bases(&self.vector_arena),
+            knobs::VecScanMode::Defer => FxHashSet::default(),
+        };
+        self.handshake.last_start_vecbasesnap_us = vecbasesnap_t0.elapsed().as_micros() as u64;
+        let bcsnap_t0 = std::time::Instant::now();
+        let bytecode = bases(&self.bytecode_arena);
+        self.handshake.last_start_bcsnap_us = bcsnap_t0.elapsed().as_micros() as u64;
+        PageSnapshot::BaseSets {
+            cons,
+            string,
+            float,
+            vector,
+            bytecode,
+        }
+    }
+
+    /// Add enabled leaf ownership to a start-captured legacy snapshot.
+    /// Only the stopped-world launcher calls this; live allocator registries
+    /// never cross to the worker.
+    pub(super) fn leaf_page_snapshot_for_mark(
+        &self,
+        pages: &mut PageSnapshot,
+    ) -> chunk_map::LeafPageSnapshot {
+        if let PageSnapshot::ChunkMap { start_count, .. } = pages {
+            start_count[ChunkClass::Marker as usize] = self.marker_arena.pages.len();
+            start_count[ChunkClass::Bignum as usize] = self.bignum_arena.pages.len();
+            start_count[ChunkClass::SymbolWithPos as usize] =
+                self.symbol_with_pos_arena.pages.len();
+            return chunk_map::LeafPageSnapshot::default();
+        }
+        fn bases<T: PagedObject>(arena: &ObjectArena<T>) -> FxHashSet<usize> {
+            let mut set =
+                FxHashSet::with_capacity_and_hasher(arena.pages.len(), Default::default());
+            for page in &arena.pages {
+                set.insert(page.base_addr());
+            }
+            set
+        }
+        chunk_map::LeafPageSnapshot::new(
+            bases(&self.marker_arena),
+            bases(&self.bignum_arena),
+            bases(&self.symbol_with_pos_arena),
+        )
+    }
+
+    /// Stop the GC thread and fold its residual work back into the gray queue so
+    /// the caller can finish marking stop-the-world. After this, the heap is
+    /// owned exclusively by the mutator again (the GC thread has exited its loop).
+    #[doc(hidden)]
+    pub fn join_concurrent_mark(&mut self) {
+        // Collector callers require a completed handoff before tracing or
+        // sweeping. Failure is a terminal collector invariant failure, never
+        // an empty result that would discard live promotion records.
+        if let Err(error) = self.finish_concurrent_mark() {
+            panic!("cannot resume collection after marker failure: {error}");
+        }
+    }
+
+    /// Stop and wait for the background marker, then fold its residual work.
+    ///
+    /// This is the explicit blocking alternative to Drop. It is idempotent
+    /// when no mark is active. On error, the heap remains active: no completion
+    /// was proved, so subsequent collection cannot sweep it, and Drop retains
+    /// the allocations instead of reclaiming marker-readable storage.
+    pub fn finish_concurrent_mark(&mut self) -> Result<(), MarkFinishError> {
+        if !self.concurrent_mark_running {
+            return Ok(());
+        }
+        let join_t0 = std::time::Instant::now();
+        self.gc_stop
+            .store(true, std::sync::atomic::Ordering::Release);
+        // Task #7 stage 2a (Fix B): wake the GC thread out of its idle nap
+        // NOW. Store-then-lock+notify pairs with the GC thread's
+        // check-under-lock before waiting, so the notify cannot fall between
+        // its flag check and its wait (no lost wakeup, no full-nap latency).
+        {
+            let (lock, cvar) = &*self.gc_wake;
+            let _guard = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cvar.notify_all();
+        }
+        let rx = self
+            .gc_exited
+            .take()
+            .ok_or(MarkFinishError::MissingCompletion)?;
+        let result = rx.recv().map_err(MarkFinishError::Disconnected)?;
+        // Poison in the SATB queue invalidates collector invariants. The
+        // deferred log is owned by the worker until the completion handoff.
+        self.satb_handoff
+            .check_poisoned()
+            .map_err(|_| MarkFinishError::PoisonedCollectorState)?;
+        let deferred = result.deferred;
+        // Tier-H's mutation protocol and dirty-owner logs are correctness
+        // state too: prove them before changing active state. Poison means a
+        // mutation escaped mid-protocol; do not terminate or sweep it.
+        let hash_owners = if self.concurrent_claims() {
+            self.take_concurrent_hash_finish_logs()?
+        } else {
+            Vec::new()
+        };
+        // The GC thread has exited, so nothing reads the bitmaps while the
+        // black regions granted during the mark give their tails back (I1).
+        self.close_alloc_regions();
+        self.concurrent_mark_running = false;
+        TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
+        if tagged_heap_is_current(self) {
+            TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.set(false));
+        }
+        // SAFETY: the GC thread has exited before this publication, so the
+        // executing mutator is the only remaining publisher.
+        unsafe { self.publish_barrier_window() };
+        // New snapshot kinds hand bare symbols back in legacy full cycles
+        // too: weak-symbol liveness still consults mutator-side mark_symbol.
+        // Existing knob-off legacy scans produce no symbol result.
+        for id in result.symbols {
+            self.mark_symbol(id);
+        }
+        if self.generational.enabled {
+            let mut symbols = Vec::new();
+            for mutator in self.mutators_mut() {
+                symbols.append(&mut mutator.major_symbol_preimages);
+            }
+            for id in symbols {
+                self.mark_symbol(id);
+            }
+            let mut cons_owners = Vec::new();
+            for mutator in self.mutators_mut() {
+                cons_owners.append(&mut mutator.major_cons_writes);
+            }
+            // Every owner is still live storage: the worker has joined, no
+            // mutator can append and no sweep/free has begun. Enumeration
+            // performs no Lisp allocation or safepoint before this is consumed.
+            let mut seen_cons_owners = FxHashSet::default();
+            for owner in cons_owners {
+                if seen_cons_owners.insert(owner.bits()) {
+                    self.push_value_children_to_gray(owner, "major-cons-written-retrace");
+                }
+            }
+            if !self.is_partition_first_cycle() {
+                self.generational
+                    .promo
+                    .extend(result.promo.into_iter().map(|addr| addr as *mut GcHeader));
+            }
+            self.publish_persistent_remembered_world_stopped();
+        }
+        // Residual SATB (children overwritten after the GC's last drain) +
+        // deferred (every non-cons + non-owned cons the GC parked) become gray;
+        // the caller reseeds roots, then drains to a fixpoint stop-the-world.
+        // The fold is timed (`last_termination_fold_us`) so the termination's
+        // cheap push half is attributable separately from the mark fixpoint.
+        let fold_t0 = std::time::Instant::now();
+        // SAFETY: recv joined the marker, every mutator is parked, active
+        // TLS admission is disabled above, and this fold executes no Lisp.
+        let mut world = unsafe { scan_contract::SingleMutatorWorld::from_heap(self) };
+        let satb_words = world
+            .fold_satb_for_termination()
+            .map_err(|_| MarkFinishError::PoisonedCollectorState)?;
+        drop(world);
+        self.last_termination_satb = satb_words;
+        self.last_termination_deferred = deferred.len();
+        self.max_termination_deferred = self.max_termination_deferred.max(deferred.len());
+        // Strings/floats the GC thread claimed concurrently and subrs it
+        // dropped (they never reached `deferred`); the exit handshake above
+        // (`rx.recv()`) established the happens-before, so a Relaxed read
+        // sees the final counts.
+        self.last_concurrent_str_claimed = self.concurrent_str_claimed.load(Ordering::Relaxed);
+        self.last_concurrent_float_claimed = self.concurrent_float_claimed.load(Ordering::Relaxed);
+        self.last_concurrent_subr_dropped = self.concurrent_subr_dropped.load(Ordering::Relaxed);
+        self.last_concurrent_vec_claimed = self.concurrent_vec_claimed.load(Ordering::Relaxed);
+        self.last_concurrent_bc_claimed = self.concurrent_bc_claimed.load(Ordering::Relaxed);
+        if let Some(state) = self.concurrent_claims_state_mut() {
+            state.last_leaf_claimed = state.leaf_claimed.load(Ordering::Relaxed);
+            state.last_hash_claimed = state.hash_claimed.load(Ordering::Relaxed);
+        }
+        // Insertion coverage cannot rely on the snapshot's old children or
+        // mark_value of an already claimed header. Merge every mutator's dirty
+        // log and enumerate current children directly, including weak registry
+        // handling if a captured strong table was replaced with a weak one.
+        for owner in hash_owners {
+            self.push_value_children_to_gray(owner, "hash-written-retrace");
+        }
+        if self.concurrent_claims() && std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+            let (mut buffers, mut slots, mut bytes) = (0, 0, 0);
+            for entry in self.concurrent_hash_mutators() {
+                let mutator = entry.lock().unwrap();
+                buffers += mutator.retired_hash_buffers.len();
+                slots += mutator
+                    .retired_hash_buffers
+                    .iter()
+                    .map(Vec::len)
+                    .sum::<usize>();
+                bytes += mutator
+                    .retired_hash_buffers
+                    .iter()
+                    .map(|v| {
+                        v.capacity() * std::mem::size_of::<Option<crate::value::HashTableEntry>>()
+                    })
+                    .sum::<usize>();
+            }
+            eprintln!("NEOVM_GC hash_retired buffers={buffers} slots={slots} bytes={bytes}");
+        }
+        // Task 01 INSERTION-COVERAGE RE-TRACE (the load-bearing companion of
+        // the vector-header claims): re-gray the CURRENT children of every
+        // multi-child owner mutated this cycle (`satb_snapshotted_owners` —
+        // populated by the write barrier's first-mutation dedup, so it is
+        // exactly the mutated-owner set). The SATB deletion barrier preserves
+        // only SNAPSHOT-time children; a value INSERTED mid-cycle (stored
+        // from a mutator register — root→heap motion) into an
+        // already-CLAIMED owner is otherwise invisible: the claimed mark bit
+        // makes the termination's `mark_value` early-return, so the old
+        // "every deferred veclike is re-traced on its CURRENT backing"
+        // backstop no longer covers it. Bounded by mutation volume (each
+        // owner once), not by the live vector population — which is the
+        // whole point of claiming. Also covers claimed STRINGS that gained
+        // interval tables mid-cycle (their wrapper barriers land the owner
+        // in the same set).
+        // SAFETY: the marker is joined and all mutators remain parked through
+        // insertion repair; retired registrations retain their dirty-owner log.
+        let mut world = unsafe { scan_contract::SingleMutatorWorld::from_heap(self) };
+        let written = world.take_satb_written_owners();
+        drop(world);
+        clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
+        for bits in written {
+            self.push_value_children_to_gray(
+                unsafe {
+                    /* SAFETY: value-internal construction from a real Value */
+                    TaggedValue::from_bits(bits)
+                },
+                "satb-written-retrace",
+            );
+        }
+        // Classify what the drain is about to trace, per kind — the measurement
+        // that decides which kinds a concurrent-tracing extension should take
+        // on. Pure counting (marking behavior is unchanged), but the header
+        // reads cost real STW time on a large buffer (~20ns/entry), so outside
+        // the crate's own tests it only runs when the trace that prints it is
+        // on; the kind buckets stay zero otherwise.
+        if cfg!(any(test, feature = "test-support"))
+            || std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1")
+        {
+            let mut kinds = DrainKinds::default();
+            for &word in &deferred {
+                // SAFETY: parked entries are live heap values; nothing has been
+                // swept since they were parked (see `DrainKinds::note`).
+                unsafe { kinds.note(word.value()) };
+            }
+            self.last_termination_kinds = kinds;
+            self.max_termination_kinds.merge_max(&kinds);
+        }
+        self.termination_count += 1;
+        self.gray_queue
+            .extend(deferred.into_iter().map(MarkWord::value));
+        self.last_termination_fold_us = fold_t0.elapsed().as_micros() as u64;
+        // Stage 2 Tier B CONCURRENT VECTOR SCAN: the GC thread has provably exited its
+        // mark loop (the `rx.recv()` above), so its snapshot pointers into the retired
+        // vector backings are no longer in use — this is the ONLY safe free point.
+        // Drain + drop the retired originals and clear the per-cycle clone-dedup set.
+        // Both are empty unless a clone-on-write fired this cycle.
+        let retired = std::mem::take(&mut self.retired_vector_buffers);
+        drop(retired);
+        self.concurrent_cloned_vectors.clear();
+        // Whole join cost (stop signal + GC-thread exit wait + the fold above);
+        // the fold alone stays separately visible as `last_termination_fold_us`.
+        self.handshake.last_term_join_us = join_t0.elapsed().as_micros() as u64;
+        // Inventory the owned work after handoff: the marker's result buffers
+        // have now moved into heap-visible gray storage, and retired snapshot
+        // backing has been released. No shared capacity counter is needed.
+        #[cfg(feature = "gc-memory-telemetry")]
+        memory_telemetry::observe(self, memory_telemetry::Phase::ConcurrentJoined);
+        Ok(())
+    }
+
+    /// Finish the marker and explicitly reclaim native resources before
+    /// releasing this heap's ownership. Module finalizers and SQLite teardown
+    /// may block or fail; automatic Drop never invokes those operations.
+    /// On marker error or retained facade obligations, Drop abandons the
+    /// backing allocations instead of reclaiming them.
+    pub fn shutdown(mut self) -> Result<(), MarkFinishError> {
+        // The by-value receiver may have moved; resolve the inline bytes
+        // through this legitimate loan before observing or retiring the heap.
+        self.detach_store_protocol();
+        // SAFETY: shutdown consumes this heap, and its only remaining access
+        // is automatic destruction after the explicit resource teardown.
+        unsafe { self.shutdown_owned_resources() }
+    }
+
+    /// Explicit preparation for an enclosing stationary owner's destruction.
+    ///
+    /// # Safety
+    /// The enclosing owner is consumed and may perform no further object or
+    /// Lisp Value access, including through legacy TLS aliases. Its only
+    /// remaining operation is automatic destruction after this returns.
+    #[doc(hidden)]
+    pub unsafe fn shutdown_owned_resources(&mut self) -> Result<(), MarkFinishError> {
+        // Check ALL canonical owners before finish can consume residual work
+        // or resource teardown can begin. Current-owner retirement alone does
+        // not cover a worker holding another registration's young payload.
+        self.shutdown_admission()?;
+        self.finish_concurrent_mark()?;
+        // The enclosing owner is consumed by this explicit shutdown extent.
+        // Retire before unregistration/native teardown; Drop itself never
+        // publishes, locks, or waits. A failed retirement forbids teardown.
+        let (mutator, handoff) = self.satb_parts();
+        mutator
+            .retire(handoff)
+            .map_err(|_| MarkFinishError::PoisonedCollectorState)?
+            .acknowledge();
+        crate::tagged::gc::clear_tagged_heap_if_installed(&self);
+        self.reclaim_intrusive_objects(ReclamationMode::Explicit);
+        Ok(())
+    }
+
+    /// Read-only shutdown refusal, shared with retained-era regression checks.
+    #[inline(always)]
+    pub(super) fn shutdown_admission(&self) -> Result<(), MarkFinishError> {
+        if self._satb_layout_reserve.has_outstanding_young_loans() {
+            return Err(MarkFinishError::MutatorsNotStopped(self.heap_identity()));
+        }
+        if self.facade_mark_is_excluded() {
+            return Err(MarkFinishError::FacadeRetained(self.heap_identity()));
+        }
+        Ok(())
+    }
+
+    /// Request stop without waiting, then retain every allocation the marker
+    /// can reach. The global worker may still be scanning its start snapshots.
+    pub(super) fn abandon_concurrent_mark(&mut self) {
+        self.gc_stop.store(true, Ordering::Release);
+        // Drop cannot acquire the wake mutex. A notify missed before the
+        // worker waits is bounded by its existing 100us timeout; stop remains
+        // visible until it exits. No storage is reclaimed during that delay.
+        self.gc_wake.1.notify_all();
+        std::mem::forget(std::mem::take(&mut self.cons_blocks));
+        std::mem::forget(std::mem::take(&mut self.float_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.string_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.vector_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.bytecode_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.lambda_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.macro_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.record_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.symbol_with_pos_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.marker_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.bignum_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.retired_vector_buffers));
+        if self.concurrent_claims() {
+            self.retain_concurrent_hash_storage_for_abandonment();
+        }
+        self._satb_layout_reserve.abandon();
+        // Intrusive lists own raw allocations; the Drop body skips their free
+        // walks. Job-owned Arcs retain mark queues, counters and page metadata.
+    }
+
+    /// Feed owner-local live roots, then publish the partial for prompt pickup.
+    /// This is pacing only: termination still reseeds all external roots.
+    pub(crate) fn feed_satb_roots(&mut self, values: &[TaggedValue]) {
+        let major = self.generational.major_in_progress;
+        let (mutator, handoff) = self.satb_parts();
+        for &value in values {
+            if value.is_heap_object()
+                || (major && matches!(value.gc_kind(), crate::tagged::value::ValueKind::Symbol(_)))
+            {
+                mutator.satb.push(MarkWord::of(value), handoff);
+            }
+        }
+        mutator
+            .satb
+            .publish_partial(handoff)
+            .expect("cannot continue root feed after SATB poison");
+    }
+
+    /// Preserve the old child classifier's symbol side effects while sending
+    /// heap children directly to the owner's log, never through gray scratch.
+    #[inline(always)]
+    fn push_satb_child(&mut self, value: TaggedValue) {
+        match value.gc_kind() {
+            crate::tagged::value::ValueKind::Symbol(id) => self.mark_symbol(id),
+            _ if value.is_heap_object() => {
+                self.debug_assert_heap_tag_matches_header(value, "satb-concurrent");
+                let (mutator, handoff) = self.satb_parts();
+                mutator.satb.push(MarkWord::of(value), handoff);
+            }
+            _ => {}
+        }
+    }
+
+    /// First-write pre-image snapshot belongs to the writing mutator. Conses
+    /// bypass owner dedup; every other owner logs its full pre-image once per
+    /// owner per epoch. The stopped union also supplies insertion repair.
+    pub(super) fn push_value_children_to_satb(&mut self, owner: TaggedValue) {
+        if !owner.is_cons() {
+            let bits = owner.bits();
+            TAGGED_HEAP_SATB_CACHE.with(|slots| slots[barrier_cache_slot(bits)].set(bits));
+            if !self
+                .current_mutator_satb_mut()
+                .satb_snapshotted_owners
+                .insert(bits)
+            {
+                return;
+            }
+        }
+        if owner.is_cons() {
+            let ptr = owner.gc_cons_ptr();
+            // SAFETY: the pre-store barrier retains this owner's allocation;
+            // the marker reads the same slots atomically and no sweep can run.
+            let (car, cdr) = unsafe { ((*ptr).load_car(), (*ptr).load_cdr()) };
+            self.push_satb_child(car);
+            self.push_satb_child(cdr);
+        } else if let Some(ptr) = owner.gc_veclike_ptr() {
+            // Match ordinary gray enumeration: register weak tables, strongly
+            // log only their custom closures, and let weak fixpoint handle KV.
+            if let Some(children) = self.register_weak_hash_table_for_sweep(ptr) {
+                for child in children {
+                    self.push_satb_child(child);
+                }
+            } else {
+                Self::for_each_veclike_child(
+                    self.collector_tables(),
+                    ptr as *mut VecLikeHeader,
+                    &mut mark_sweep::VisitChild(|child| {
+                        self.push_satb_child(child);
+                    }),
+                );
+            }
+        } else if let Some(ptr) = owner.gc_string_ptr() {
+            // SAFETY: this is the owner's pre-store interval table, retained
+            // until this barrier returns; enumeration performs no Lisp GC.
+            let intervals = unsafe { (*ptr).data.intervals() };
+            intervals.for_each_root(|child| self.push_satb_child(child));
+        }
+    }
+
+    /// Log the old root-cell VALUE before its store. Bare symbols retain the
+    /// existing major-symbol preimage protocol; heap values enter this owner's
+    /// bounded buffer. The caller already admitted the concurrent TLS gate.
+    pub(super) fn note_root_overwrite_value(&mut self, pre_image: TaggedValue) {
+        if let crate::tagged::value::ValueKind::Symbol(id) = pre_image.gc_kind() {
+            if self.generational.major_in_progress && self.concurrent_mark_running {
+                self.current_mutator_gc_mut()
+                    .major_symbol_preimages
+                    .push(id);
+            }
+            return;
+        }
+        if pre_image.is_heap_object() {
+            let (mutator, handoff) = self.satb_parts();
+            mutator.satb.push(MarkWord::of(pre_image), handoff);
+        }
+    }
+
+    /// Stage 2 Tier B CONCURRENT VECTOR SCAN clone-on-write hook. Called from
+    /// `with_vector_data_mut` BEFORE a vector's OWNED backing is bulk-mutated, while a
+    /// concurrent mark is active. On the owner's FIRST such
+    /// mutation this cycle, if the backing is currently OWNED, replace it with a clone
+    /// and RETIRE the original (kept alive to join) so the GC thread's start-of-cycle
+    /// snapshot pointer keeps addressing an immutable, live buffer; the closure then
+    /// mutates the clone. Idempotent per owner per cycle (dedup set), and a no-op when
+    /// the backing is MAPPED (the snapshot points at the immutable dump; `ensure_owned`
+    /// will promote it to a fresh OWNED the snapshot never reads, so no clone needed).
+    ///
+    /// Reachability of the pre-image children is handled separately by the
+    /// `note_heap_write(VectorBulk)` SATB barrier the caller fires first; this hook
+    /// only preserves the snapshot pointer's buffer for the concurrent READ.
+    ///
+    /// Safety: `owner` must be a live `VecLikeType::Vector` value on this heap.
+    pub(crate) fn concurrent_clone_on_write_vector(&mut self, owner: TaggedValue) {
+        // No snapshot to protect under the F-G deferral measurement.
+        if self.vec_scan == knobs::VecScanMode::Defer {
+            return;
+        }
+        // First mutation of this owner this cycle? `insert` returns false if already
+        // present, so later mutations of the same owner skip the clone (they touch the
+        // already-cloned live backing the snapshot does not point at).
+        if !self.concurrent_cloned_vectors.insert(owner.bits()) {
+            return;
+        }
+        let Some(header) = owner.gc_veclike_ptr() else {
+            return;
+        };
+        let obj = unsafe { &mut *(header as *mut VectorObj) };
+        // Only OWNED backings need cloning: a MAPPED backing reads the immutable dump
+        // span the snapshot captured; `ensure_owned` (run by the caller next) promotes
+        // it to a brand-new OWNED buffer the snapshot never addresses.
+        if !obj.data.is_owned() {
+            return;
+        }
+        // Replace the backing with a clone; retire the original so the GC's snapshot
+        // pointer keeps addressing it (immutable + alive) until the join free point.
+        if let Some(original) = obj.data.clone_owned_backing() {
+            self.retired_vector_buffers.push(original);
+        }
+    }
+
+    /// Called only after reader join, at the end of termination or teardown.
+    pub(super) fn release_concurrent_hash_storage(&mut self) {
+        debug_assert!(
+            !self.concurrent_mark_running,
+            "Tier-H storage released before reader join"
+        );
+        self.set_concurrent_hash_snapshot(None);
+        for entry in self.concurrent_hash_mutators() {
+            // The reader has joined; clearing inert logs is valid even after
+            // a poisoning panic, which finish has already reported.
+            let mut mutator = entry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            mutator.retired_hash_buffers.clear();
+            mutator.written_hash_owners.clear();
+        }
+    }
+}
+
+/// Retain the snapshot without retaining a mutable heap borrow across the
+/// same-table lock or caller closure. The caller has already tested the
+/// installed mutator's Tier-H TLS gate; this activation does not reload it.
+#[cold]
+#[inline(never)]
+#[doc(hidden)]
+pub fn concurrent_hash_snapshot(
+    owner: TaggedValue,
+) -> Option<std::sync::Arc<concurrent_hash::HashTableScanSnapshot>> {
+    with_tagged_heap(|heap| {
+        debug_assert!(heap.concurrent_mark_running && heap.concurrent_claims());
+        let snapshot = heap.concurrent_hash_snapshot()?;
+        // Most P5 writes initialize post-start tables. A map miss needs no
+        // shared lifetime guard, avoiding two Arc RMWs on that common path.
+        snapshot.get(owner.gc_veclike_ptr()? as usize)?;
+        Some(snapshot.clone())
+    })
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn prepare_concurrent_hash_write(
+    owner: TaggedValue,
+    guard: &mut concurrent_hash::HashTableMutationGuard<'_>,
+) {
+    // The descriptor lease serializes this election with first-write COW and
+    // the caller's mutation. Only its winner needs a per-mutator log lease;
+    // the existing owner retrace covers every later inserted child. A panic
+    // before retirement/log handoff poisons the descriptor and fails closed.
+    if !guard.claim_dirty() {
+        return;
+    }
+    with_tagged_heap(|heap| {
+        debug_assert!(heap.concurrent_mark_running);
+        let entry = heap.current_concurrent_hash_mutator();
+        let mut state = entry.lock().unwrap();
+        // The entry guard covers this payload access, barrier enumeration and
+        // the caller's subsequent &mut. It either preserves unread storage,
+        // defers admission, or waits until the admitted reader has completed.
+        let object = owner.gc_veclike_ptr().unwrap() as *mut HashTableObj;
+        guard.clone_on_first_write(
+            unsafe { &mut (*object).table.data },
+            &mut state.retired_hash_buffers,
+        );
+        state.written_hash_owners.push(owner);
+    });
+}
+
+impl TaggedHeap {
+    fn record_threading_payload_write(&mut self, owner: TaggedValue) {
+        let record = HeapWriteRecord::bulk(owner, HeapWriteKind::ThreadingPayload);
+        if census_remset_probe_on() {
+            self.census_note_write(record);
+        }
+        self.record_heap_write(record);
+    }
+
+    /// Mutate an owned thread under the caller's serial authority. The closure
+    /// must not collect, yield, run Lisp, or retain a reference to the child view.
+    /// Pre-store SATB and persistent remembered-owner logging use exactly the
+    /// same child schema as marking; later capacity growth is charged once.
+    ///
+    /// # Safety
+    /// `value` must remain rooted and live throughout this call. The caller
+    /// holds this World's serial authority; no alias reads or mutates the
+    /// payload until the closure returns. The closure must not reach a safe
+    /// point, run Lisp, yield, or retain any payload reference.
+    #[doc(hidden)]
+    pub unsafe fn with_thread_payload_mut<R>(
+        &mut self,
+        value: TaggedValue,
+        update: impl FnOnce(&mut crate::heap_types::threading::ThreadChildren) -> R,
+    ) -> Option<R> {
+        if value.veclike_type()? != VecLikeType::Thread {
+            return None;
+        }
+        let ptr = value.gc_veclike_ptr()? as *mut ThreadObj;
+        // SAFETY: the rooted live value has the Thread tag; serial authority
+        // excludes writers. Workers defer EVERY ThreadObj payload read: even
+        // an immutable &ThreadPayload would alias a concurrent &mut native.
+        // A future concurrent reader must project only &ThreadChildren through
+        // the raw pointer, never borrow the enclosing ThreadPayload.
+        if unsafe { (*ptr).payload.id().heap_identity() } != self.heap_identity() {
+            return None;
+        }
+        self.record_threading_payload_write(value);
+        // SAFETY: preimage enumeration has ended; exclusive payload access is
+        // retained by the caller until this non-yielding closure returns.
+        let object = unsafe { &mut *ptr };
+        let before = object.owned_bytes();
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
+        let result = update(&mut object.payload.children);
+        self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
+        Some(result)
+    }
+
+    /// Mutate only non-Lisp state under the same rooted serial authority as
+    /// `with_thread_payload_mut`. This view contains no GC edges or owned
+    /// backing storage, so it performs no heap-write record or charge.
+    ///
+    /// # Safety
+    /// `value` must remain rooted and live throughout this call. The caller
+    /// holds this World's serial authority; no alias reads or mutates the
+    /// payload until the closure returns. The closure must not reach a safe
+    /// point, run Lisp, yield, or retain any payload reference.
+    #[doc(hidden)]
+    pub unsafe fn with_thread_native_mut<R>(
+        &mut self,
+        value: TaggedValue,
+        update: impl FnOnce(&mut crate::heap_types::threading::ThreadNativeState) -> R,
+    ) -> Option<R> {
+        if value.veclike_type()? != VecLikeType::Thread {
+            return None;
+        }
+        let ptr = value.gc_veclike_ptr()? as *mut ThreadObj;
+        // SAFETY: the rooted live value has the Thread tag; serial authority
+        // excludes writers. Workers defer EVERY ThreadObj payload read: an
+        // immutable &ThreadPayload cannot coexist with this &mut native.
+        // A future concurrent reader must project only &ThreadChildren through
+        // the raw pointer, never borrow the enclosing ThreadPayload.
+        if unsafe { (*ptr).payload.id().heap_identity() } != self.heap_identity() {
+            return None;
+        }
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
+        // SAFETY: the validated live object is exclusively borrowed only for
+        // the non-yielding closure; this view cannot introduce Lisp children.
+        Some(update(unsafe { &mut (*ptr).payload.native }))
+    }
+
+    /// Mutex counterpart of `with_thread_payload_mut`, with identical authority
+    /// and no-safe-point requirements. Lock ownership creates no extra GC edge.
+    ///
+    /// # Safety
+    /// `value` must remain rooted and live throughout this call. The caller
+    /// holds this World's serial authority; no alias reads or mutates the
+    /// payload until the closure returns. The closure must not reach a safe
+    /// point, run Lisp, yield, or retain any payload reference.
+    #[doc(hidden)]
+    pub unsafe fn with_mutex_payload_mut<R>(
+        &mut self,
+        value: TaggedValue,
+        update: impl FnOnce(&mut crate::heap_types::threading::MutexPayload) -> R,
+    ) -> Option<R> {
+        if value.veclike_type()? != VecLikeType::Mutex {
+            return None;
+        }
+        let ptr = value.gc_veclike_ptr()? as *mut MutexObj;
+        // SAFETY: the rooted live value has the Mutex tag; serial authority
+        // excludes writers and the concurrent worker defers this payload.
+        if unsafe { (*ptr).payload.id.heap_identity() } != self.heap_identity() {
+            return None;
+        }
+        self.record_threading_payload_write(value);
+        // SAFETY: preimage enumeration has ended; exclusive payload access is
+        // retained by the caller until this non-yielding closure returns.
+        let object = unsafe { &mut *ptr };
+        let before = object.owned_bytes();
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
+        let result = update(&mut object.payload);
+        self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
+        Some(result)
+    }
+
+    /// Condition-variable counterpart of `with_thread_payload_mut`. In
+    /// particular, replacing the mutex child is covered by the pre-store scan.
+    ///
+    /// # Safety
+    /// `value` must remain rooted and live throughout this call. The caller
+    /// holds this World's serial authority; no alias reads or mutates the
+    /// payload until the closure returns. The closure must not reach a safe
+    /// point, run Lisp, yield, or retain any payload reference.
+    pub(crate) unsafe fn with_condvar_payload_mut<R>(
+        &mut self,
+        value: TaggedValue,
+        update: impl FnOnce(&mut crate::heap_types::threading::CondVarPayload) -> R,
+    ) -> Option<R> {
+        if value.veclike_type()? != VecLikeType::CondVar {
+            return None;
+        }
+        let ptr = value.gc_veclike_ptr()? as *mut CondVarObj;
+        // SAFETY: the rooted live value has the CondVar tag; serial authority
+        // excludes writers and the concurrent worker defers this payload.
+        if unsafe { (*ptr).payload.id.heap_identity() } != self.heap_identity() {
+            return None;
+        }
+        self.record_threading_payload_write(value);
+        // SAFETY: preimage enumeration has ended; exclusive payload access is
+        // retained by the caller until this non-yielding closure returns.
+        let object = unsafe { &mut *ptr };
+        let before = object.owned_bytes();
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
+        let result = update(&mut object.payload);
+        self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
+        Some(result)
+    }
+}

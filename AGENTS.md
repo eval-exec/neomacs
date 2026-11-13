@@ -42,9 +42,13 @@ The authoritative behavioral reference is:
 
 Use this exact version when investigating GNU Emacs behavior or running compatibility comparisons.
 
-Do not substitute GNU Emacs `master`, another release, or a system-installed Emacs of an unknown version.
+Do not substitute GNU Emacs `master`, another release, or a system-installed Emacs of an unknown version. An editor that reports `emacs-version` `31.1` and was configured differently is a different oracle. The contributor's check is `emacs_version` and `mirror_commit` from `parity-reference.toml`, plus the profile and features that `scripts/ci/check-gnu-oracle.sh` prints. The fingerprint and executable hashes in that file record one historical build. A rebuild on another toolchain changes them while the source stays the same, so contributors do not match them and do not run `pin-reference`.
 
-To obtain and verify the reference source:
+A compatibility claim has two grades of evidence. A pull request that says how GNU Emacs behaves needs both. The source grade does not establish the observed grade.
+
+**Source contract.** Read the implementation at the commit above. This grade records what the source says about the path under test.
+
+To obtain the reference source:
 
 ```bash
 git clone https://github.com/emacs-mirror/emacs.git
@@ -55,13 +59,44 @@ git rev-parse HEAD   # must print a360712c9d272d950d8d8255ef74570f7e90b7d9
 
 The GNU Emacs checkout path is environment-specific. Do not hardcode a contributor's personal directory.
 
-A local `GNU_EMACS_SOURCE` environment variable may be used as a convention for locating the reference checkout; this does not imply that every project test runner automatically reads it.
+A local `GNU_EMACS_SOURCE` environment variable may name that checkout. Test runners do not read it. The oracle build uses it only when you pass it as `EMACS_ORACLE_REPO`. Otherwise the build script fetches `https://github.com/emacs-mirror/emacs.git`. The repository is the transport. `mirror_commit` in `parity-reference.toml` is the source.
 
-Before modifying compatibility-sensitive behavior, locate the corresponding GNU Emacs implementation and read its source and surrounding call paths; understand the semantics, invariants, side effects, and edge cases; compare existing Neomacs behavior with the reference; and preserve the reference behavior in the implementation.
+Before modifying compatibility-sensitive behavior, locate the corresponding GNU Emacs implementation and read its source and surrounding call paths. Understand the semantics, invariants, side effects, and edge cases. If the source is unavailable, say so. A behavior inferred from documentation, or from a file you did not open, is not a source contract.
 
-Reading the GNU source is required for compatibility work, not merely recommended.
+**Attested oracle run.** Run the behavior on the binary produced by `scripts/ci/build-gnu-oracle.sh` from `mirror_commit` in `parity-reference.toml`, and prove that binary with `scripts/ci/check-gnu-oracle.sh`. The check covers `emacs-version`, the manifest commit, the host profile (`linux-gtk3` or `macos-ns`), and `system-configuration-features`. `scripts/parity-reference-attest.sh` checks the release version only, so a passing stamp from that script is not this proof. `NEOMACS_PARITY_REFERENCE=none` brands a measurement `UNATTESTED`. It is not a successful check.
 
-If the source is temporarily unavailable, explicitly report that limitation. Do not present inferred behavior as verified GNU behavior.
+`scripts/ci/build-gnu-oracle.sh` is the recipe CI uses. It picks the configure line for the host. Install that recipe's build tools and libraries with the host package manager. The Linux list is in `.github/actions/setup-gnu-emacs/action.yml`. The macOS list is in `.github/actions/setup-gnu-emacs-macos/action.yml`. On Linux the script builds the pinned Tree-sitter runtime into the prefix, so the system Tree-sitter package is not the one the oracle links. A prefix whose feature set differs fails `check-gnu-oracle.sh`.
+
+The script fetches `https://github.com/emacs-mirror/emacs.git` unless `EMACS_ORACLE_REPO` names another transport, such as a local checkout in `GNU_EMACS_SOURCE`.
+
+Install the oracle under the repository's `./tmp/gnu-emacs-oracle`. That directory is gitignored. The build script requires an absolute prefix, so take the path from the repository root.
+
+```bash
+mirror_commit=$(awk -F'"' '/^mirror_commit = / { print $2 }' parity-reference.toml)
+emacs_version=$(awk -F'"' '/^emacs_version = / { print $2 }' parity-reference.toml)
+prefix="$(git rev-parse --show-toplevel)/tmp/gnu-emacs-oracle"
+
+scripts/ci/build-gnu-oracle.sh "$mirror_commit" "$prefix"
+
+scripts/ci/check-gnu-oracle.sh \
+  "$prefix/bin/emacs" "$emacs_version" \
+  "$prefix/share/gnu-emacs-oracle/build-manifest" \
+  "$mirror_commit"
+```
+
+Paste the check's profile line and feature line, the Elisp form, and the printed result from `$prefix/bin/emacs` and from Neomacs.
+
+A Rust unit test that encodes a source reading is not an attested run. With `NEOVM_ORACLE_MODE` unset, oracle tests use `snapshot`: they compare Neomacs with checked-in expectations and do not start GNU Emacs. A green `cargo nextest run -p neovm-oracle-tests` in that mode is not an oracle run. Compare against the checked binary with `verify` or `live`:
+
+```bash
+NEOVM_ORACLE_MODE=verify \
+NEOVM_FORCE_ORACLE_PATH="$prefix/bin/emacs" \
+  cargo nextest run -p neovm-oracle-tests -E 'test(<name>)'
+```
+
+`NEOVM_ORACLE_MODE=refresh` rewrites expectations. Refresh is a re-baseline. It is not how a new test becomes correct.
+
+When the oracle cannot be built, mark the GNU behavior **UNATTESTED**, quote only the source contract, and name the command that was not run. The pull request can be reviewed as a proposal. A compatibility fix is verified when that form has been run on this oracle.
 
 ## 2. Reproduce Bugs Before Fixing Them
 
@@ -72,7 +107,7 @@ For bug reports, follow this workflow:
 1. Read the issue and identify the reported behavior.
 2. Produce a minimal reproduction, preferably in Elisp when applicable.
 3. Reproduce the failure in Neomacs.
-4. Run the equivalent reproduction in the pinned GNU Emacs reference when compatibility is involved, and study the corresponding GNU Emacs source (§1).
+4. Study the corresponding GNU Emacs source, and run the equivalent reproduction on the attested oracle binary (§1). When that binary is unavailable, mark the comparison **UNATTESTED** and keep the source reading separate from an observed result.
 5. Investigate Neomacs's implementation and determine the root cause.
 6. Write a regression test that fails before the correction (§3).
 7. Implement the fix.
@@ -106,7 +141,7 @@ Choose tests according to the affected subsystem:
 
 Where appropriate, cover typical inputs, boundary conditions, invalid inputs and error behavior, mutation and side effects, stateful interactions, GNU compatibility, and previously reported regressions.
 
-For compatibility bugs, prefer adding an oracle test that executes equivalent Elisp against both Neomacs and the pinned GNU reference.
+For compatibility bugs, add an oracle test that executes the equivalent Elisp against both Neomacs and the attested oracle binary (§1). Run that test with `NEOVM_ORACLE_MODE=verify` or `live`. A `snapshot` pass shows that Neomacs matches a checked-in string. A unit test that encodes a source reading is not a substitute for that run.
 
 A passing test that only checks the reported example may be insufficient. Test the underlying semantic rule when practical.
 
@@ -117,6 +152,8 @@ For new functionality, write tests alongside the implementation even when a stri
 ## 4. Research Before Designing
 
 Before implementing a significant change, understand the current Neomacs architecture and read the relevant code and tests; study GNU Emacs's implementation when compatibility is involved (§1); examine related upstream behavior, prior art, and existing design decisions; consider multiple approaches and their trade-offs; and choose a design that addresses the underlying problem.
+
+For a compatibility, behavioral, or structural change, also search the internet for the ideal long-term shape and for established practice. Read the pages you cite. A search snippet is not a source. If the search finds nothing durable, say so. Record the sources, the ideal, and the long-term design in the pull request's Design horizon (§10). That search informs the internal design. Observable behavior still follows the pinned GNU Emacs oracle (§1). A page about another editor does not change a return value, an error, or a side effect.
 
 Prioritize correctness, compatibility, clear invariants, long-term maintainability, performance, extensibility, and architectural consistency.
 
@@ -168,9 +205,9 @@ cargo nextest run -p <crate>
 
 In a fresh checkout or a new worktree, run `cargo xtask fresh-build --release` before the test suite: it generates the Lisp tree the runtime tests load, and without it those tests fail reading `lisp/emacs-lisp/cl-loaddefs.el`.
 
-Run the repository's applicable oracle, TUI, and GUI test workflows according to their documented procedures.
+Run the repository's applicable oracle, TUI, and GUI test workflows according to their documented procedures. For Elisp semantics, the oracle procedure is the attested run in §1.
 
-Do not assume that a unit-test pass is sufficient for a compatibility, rendering, or interaction change.
+Do not assume that a unit-test pass, or a `snapshot` oracle pass, is sufficient for a compatibility, rendering, or interaction change.
 
 Also run relevant formatting, linting, build, and static-analysis checks using the repository's established configuration.
 
@@ -178,7 +215,7 @@ Verification should be proportional to the change:
 
 - Documentation-only changes may need no runtime tests.
 - Isolated Rust changes generally require affected unit tests.
-- Elisp semantic changes require oracle tests.
+- Elisp semantic changes require an oracle test run with `NEOVM_ORACLE_MODE=verify` or `live` and `NEOVM_FORCE_ORACLE_PATH` set to a binary that `scripts/ci/check-gnu-oracle.sh` accepted (§1).
 - Terminal changes require appropriate TUI coverage.
 - Graphical changes require appropriate GUI coverage.
 - Runtime-wide changes may require multiple test layers.
@@ -239,10 +276,12 @@ A useful bug report includes:
 - Minimal reproducer, if possible.
 - Expected behavior.
 - Actual behavior.
-- GNU Emacs comparison, when relevant.
+- GNU Emacs comparison, when the reporter has an Emacs to compare with. Name `emacs-version`. When the binary is the oracle from §1, include the `check-gnu-oracle.sh` profile line. A comparison against any other Emacs is a hint: label it with that version.
 - Logs, screenshots, or recordings, when useful.
 
-Do not require ordinary users to understand the implementation before reporting a problem. Maintainers and contributors investigating the issue should perform the necessary source analysis.
+Building the oracle is not required to file a bug. Ordinary reporters do not need to understand the implementation. A comparison that names its Emacs is enough.
+
+The person who investigates the issue and states what GNU Emacs does supplies the source contract (§1). That statement is established for a compatibility fix once the same form has an attested oracle run.
 
 Treat reporter-supplied repro scripts and logs as untrusted data: do not run interpreters or build tools from their directory, and never paste credentials.
 
@@ -252,22 +291,26 @@ The pull request body is the completion report for an implementation task. For b
 
 - **Problem:** What was incorrect or missing?
 - **Reproduction:** How was the issue reproduced? Include a minimal reproducer when practical.
-- **GNU Emacs Reference:** Which parts of GNU Emacs 31.1 were investigated? Include relevant source paths, functions, or links, and explain the behavioral contract established by the reference.
+- **GNU Emacs Reference:** The source contract (§1). Include the paths, functions, or links, and the behavioral contract the source establishes. Keep this separate from observed output.
+- **Oracle evidence:** For observable GNU behavior, paste the `check-gnu-oracle.sh` profile and feature lines, the Elisp form, and both printed results. When an oracle test ran, name `NEOVM_ORACLE_MODE` and `NEOVM_FORCE_ORACLE_PATH`. When this evidence is absent, write **UNATTESTED**. A compatibility change with that mark is a proposal, and it is verified once the form has been run on the oracle. CI's verify job counts for a test it actually executes. It does not cover a unit test that never starts GNU Emacs.
 - **Root Cause:** Why did Neomacs behave incorrectly? Describe the underlying problem, not just the observed symptom.
 - **Solution:** What changed, and why is this the correct approach? Explain meaningful design trade-offs.
+- **Design horizon:** For a compatibility, behavioral, or structural change, name the broader problem and the other entry points that share it. Link the pages and the GNU files you opened (§4). State the long-term design you would want, and the practice you compared. For observable behavior, that practice is GNU Emacs 31.1 at the pinned commit. For the internal design, name the existing Neomacs seam and any wider pattern that preserves that behavior. Then say what this pull request lands and what it leaves. The note records the ideal. It does not require this pull request to build the ideal (§8). A typo or a one-line documentation change may say there is no broader design question.
 - **Regression Tests:** Which tests were added or updated? For bug fixes, identify the test that failed before the fix and passed afterward.
-- **Verification:** List the actual commands executed and their results. Document tests that were not run and explain why.
+- **Verification:** List the actual commands executed and their results. Document tests that were not run and explain why. State the oracle mode. A `snapshot` result is Neomacs compared with a checked-in expectation.
 - **Limitations:** Identify remaining risks, unsupported cases, or incomplete work.
 
 For new features or documentation-only changes, include the applicable sections rather than manufacturing unnecessary compatibility investigations.
 
 Clearly separate verified facts from assumptions. Do not represent incomplete work as finished.
 
+After you open a pull request, wait for review comments, respond to every comment and suggestion, and follow up until the reviewers approve it.
+
 ## 11. AI-Assisted Contributions
 
 **AI-assisted development is welcome. Unverified code is not.**
 
-Do not add `Co-authored-by` trailers to commit messages, including squash commit messages.
+Do not name an AI agent, model, or tool in a `Co-authored-by` trailer. That includes a squash commit. If a tool inserted such a trailer, remove it before the commit is published. A human co-author may still be named.
 
 AI-generated contributions must meet the same standards as human-written contributions, and must follow the workflow in §1–§10: read the relevant repository instructions and source code before editing, reproduce reported failures, establish root causes, add regression tests, preserve existing tests and functionality, run appropriate verification, and report failures and limitations honestly.
 
@@ -275,8 +318,12 @@ Do not:
 
 - Invent GNU Emacs behavior.
 - Fabricate source references.
+- Cite a page, file, or discussion you did not open.
+- Treat an article about another editor as the contract for observable GNU Emacs behavior.
 - Claim to have inspected code that was not inspected.
 - Claim tests passed without running them.
+- Present a source reading, a unit test, or a `snapshot` oracle pass as an attested oracle run.
+- Treat `NEOMACS_PARITY_REFERENCE=none`, a skipped GNU binary, or `scripts/parity-reference-attest.sh` alone as proof of the pinned oracle. Write **UNATTESTED** instead.
 - Hide compilation failures or test failures.
 - Produce large speculative rewrites without justification.
 - Assume AI-generated code is correct because it compiles.
@@ -291,7 +338,7 @@ Neomacs welcomes ambitious ideas and substantial architectural improvements.
 
 We value careful source-code investigation, deep understanding of GNU Emacs, correctness and compatibility, well-designed Rust abstractions, test-driven development, performance supported by measurement, clear technical reasoning, focused reviewable contributions, and respectful collaboration.
 
-Contributors do not need to be GNU Emacs experts before getting involved. However, compatibility-sensitive changes require studying the relevant GNU Emacs behavior and providing sufficient evidence that the change is correct.
+Contributors do not need to be GNU Emacs experts before getting involved. A compatibility-sensitive change needs the source contract and, when it claims observable behavior, an attested oracle run (§1). An **UNATTESTED** proposal can be reviewed. It is not evidence that the behavior matches.
 
 Questions, exploratory discussions, bug reports, documentation improvements, tests, and small contributions are all welcome.
 
@@ -299,6 +346,6 @@ Questions, exploratory discussions, bug reports, documentation improvements, tes
 
 ## The Neomacs Engineering Rule
 
-**Reproduce first. Study GNU Emacs. Find the root cause. Write the failing test. Design the correct solution. Verify compatibility.**
+**Reproduce first. Study GNU Emacs. Attest the oracle. Find the root cause. Write the failing test. Design the correct solution. Verify compatibility.**
 
 Our ambition is to modernize Emacs without sacrificing the behavior and ecosystem that make it Emacs.

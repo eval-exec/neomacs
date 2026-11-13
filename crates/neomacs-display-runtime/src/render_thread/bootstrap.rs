@@ -37,19 +37,14 @@ impl RenderApp {
             }
         };
 
-        let adapter =
-            match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: crate::gpu_power_preference(),
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-                apply_limit_buckets: false,
-            })) {
-                Ok(a) => a,
-                Err(e) => {
-                    tracing::error!("Failed to find suitable GPU adapter: {:?}", e);
-                    return;
-                }
-            };
+        let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+        let Some(adapter) = super::gpu_startup::select_adapter(adapters, &surface, window.as_ref())
+        else {
+            tracing::error!(
+                "Failed to find suitable GPU adapter: none supports the native surface"
+            );
+            return;
+        };
 
         let (device, queue) =
             match pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
@@ -86,12 +81,14 @@ impl RenderApp {
         let backend_profile =
             super::render_quality::RenderBackendProfile::from_device_type(adapter_info.device_type);
         tracing::info!(
-            "wgpu adapter: {} (vendor={:04x}, device={:04x}, type={:?}, backend={:?})",
+            "wgpu adapter: {} (vendor={:04x}, device={:04x}, type={:?}, backend={:?}, driver={}, driver_info={})",
             adapter_info.name,
             adapter_info.vendor,
             adapter_info.device,
             adapter_info.device_type,
-            adapter_info.backend
+            adapter_info.backend,
+            adapter_info.driver,
+            adapter_info.driver_info
         );
         let device = Arc::new(device);
         let queue = Arc::new(queue);

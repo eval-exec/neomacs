@@ -6,6 +6,8 @@ use super::super::{LayoutEngine, LayoutPurpose};
 use neovm_core::buffer::{EmacsBytePos, EmacsByteRange, LispCharPos1};
 use neovm_core::emacs_core::{Context, Value};
 use neovm_core::heap_types::LispString;
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::window::WindowLayoutQueryScope;
 
 #[derive(Debug)]
@@ -23,7 +25,7 @@ fn measure(
     query_presentation: bool,
 ) -> Measurement {
     let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     assert!(eval.gnu_redisplay_hooks_policy_enabled());
     eval.store_variable_by_name("resize-mini-windows", Value::T);
     eval.store_variable_by_name("max-mini-window-height", Value::fixnum(3));
