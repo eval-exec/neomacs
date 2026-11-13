@@ -722,3 +722,7 @@ mod emacs_core_runtime_eval_tests_owner_bindings_round2_runtime_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/builtins/leaves/tests/equivalence_round2_runtime_test.rs"]
 mod emacs_core_lisp_native_builtins_leaves_tests_equivalence_round2_runtime_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/subr/tests/leaf_contract_round2_runtime_test.rs"]
+mod emacs_core_lisp_native_subr_tests_leaf_contract_round2_runtime_test_rs;

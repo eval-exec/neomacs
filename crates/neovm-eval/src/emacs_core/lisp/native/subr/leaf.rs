@@ -626,3 +626,8 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(h, LEAF_BY_SUBR.with(|slot| slot.borrow().len() as u64));
 }
 
+#[cfg(feature = "test-support")]
+#[path = "tests/leaf_contract_round2_runtime_fixture.rs"]
+mod leaf_contract_round2_runtime_fixture;
+#[cfg(feature = "test-support")]
+pub(crate) use leaf_contract_round2_runtime_fixture::run_every_bcall_leaf_is_attached_to_its_registered_subr_fixture;
