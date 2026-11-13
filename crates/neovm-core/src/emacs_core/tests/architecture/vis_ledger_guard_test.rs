@@ -1995,14 +1995,15 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 /// 22:54:30Z H2/H2a, peer 00:15:30Z T1-T4).
 ///
 /// The signed table lives as one macro_rules body: `eval_absent_layer_slots!`
-/// expands a fixed `absent_layer_slots` module of 140 slot functions (102
+/// expands a fixed `absent_layer_slots` module of 140 slot functions (101
 /// marker PANICs, 17 absent-by-construction UNLINKED slots — fourteen unit no-ops
 /// plus three valued T7 slots: the signal self-pipe and the terminal
 /// print-handle return `None`, and the case-table sync returns
-/// `CASE_TABLES_SYNC_OK` — 10 ASSERT-EMPTY contracts (2 structural
+/// `CASE_TABLES_SYNC_OK` — 11 ASSERT-EMPTY contracts (2 structural
 /// checks, 4 exact state bodies from peers 5687/5708, and the zero-identity
 /// fingerprint fold from peer 5711, the 2 exact folds from peer 5714,
-/// and the absent perf-counter fold from peer 5717), 2 T2 per-thread
+/// the absent perf-counter fold from peer 5717, and the exact absent
+/// fontset generation from peer 5719), 2 T2 per-thread
 /// handle slots, 1 T3 marker slot, and 8 typed empty carried-state slots
 /// (peer 5685/5690)). This
 /// guard parses that body and proves, statically:
@@ -2011,7 +2012,7 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 ///   plain path such as `None` or the const `CASE_TABLES_SYNC_OK`), a single
 ///   marker-carrying assert-empty check, or the signed
 ///   handle/marker wrapper shape (a bare empty/default body is red);
-/// - the 17 UNLINKED names, markers and honest values, the 10 ASSERT-EMPTY
+/// - the 17 UNLINKED names, markers and honest values, the 11 ASSERT-EMPTY
 ///   names and markers, and the 2+1 handle/marker slots are exactly the
 ///   signed ones; every marker is unique and carries the `ABSENT-LAYER `
 ///   prefix;
@@ -2238,7 +2239,7 @@ fn validate_carried_function(function: &syn::ItemFn, expected: &str) -> Result<(
     validate_signed_state_function(function, expected, "carried-state")
 }
 
-/// Exact upper-state contracts signed in peers 5687/5708/5711/5714/5717. The signal writer,
+/// Exact upper-state contracts signed in peers 5687/5708/5711/5714/5717/5719. The signal writer,
 /// fontset registry, and module-call environments are absent from eval's
 /// dependency graph while the load/apply behavior hooks refuse. Their signed
 /// absence is a value contract, not permission for arbitrary default bodies.
@@ -2281,6 +2282,11 @@ const ABSENT_LAYER_EMPTY_STATE_SLOTS: &[(&str, &str, &str)] = &[
         "input_take_termination_signal",
         "ABSENT-LAYER system::input.take_termination_signal",
         "pub(crate) fn input_take_termination_signal() -> Option<i32> { None }",
+    ),
+    (
+        "display_window_fontset_generation",
+        "ABSENT-LAYER display::display_window.fontset_generation",
+        "pub(crate) fn display_window_fontset_generation() -> u64 { 0 }",
     ),
     (
         "fontset_snapshot",
@@ -2488,15 +2494,15 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
 }
 
 fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Result<(), String> {
-    if summary.panic.len() != 102
+    if summary.panic.len() != 101
         || summary.unlinked.len() != 17
-        || summary.assert_empty.len() != 10
+        || summary.assert_empty.len() != 11
         || summary.handle.len() != 2
         || summary.marker.len() != 1
         || summary.carried.len() != 8
     {
         return Err(format!(
-            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 102/17/10/2/1/8)",
+            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 101/17/11/2/1/8)",
             summary.panic.len(),
             summary.unlinked.len(),
             summary.assert_empty.len(),
@@ -6823,6 +6829,9 @@ mod tests {
         let snapshot = signed("fontset_snapshot");
         let restore = signed("fontset_restore");
         let mut mutations = vec![
+            // Linked registries start at 1; the unlinked fontset state is exactly 0.
+            signed("display_window_fontset_generation").replace("{ 0 }", "{ 1 }"),
+            "pub(crate) fn display_window_fontset_generation() -> u64 {}".to_owned(),
             signed("perf_fingerprint").replace("neovm_value::tls_fingerprint::mix(acc, 0);", ""),
             signed("perf_fingerprint").replace("mix(acc, 0)", "mix(acc, 1)"),
             signed("perf_fingerprint").replace("#[cfg(debug_assertions)]", "#[cfg(test)]"),

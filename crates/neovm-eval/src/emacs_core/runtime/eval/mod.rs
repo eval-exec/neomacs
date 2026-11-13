@@ -7559,6 +7559,10 @@ mod sort_predicate;
 #[doc(hidden)]
 pub mod command_loop;
 
+#[cfg(test)]
+#[path = "tests/absent_fontset_generation_test.rs"]
+mod absent_fontset_generation_tests;
+
 #[doc(hidden)]
 pub mod redisplay_hooks;
 #[cfg(any(test, feature = "redisplay-test-policy", feature = "test-support"))]

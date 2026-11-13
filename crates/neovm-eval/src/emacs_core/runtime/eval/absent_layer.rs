@@ -757,8 +757,12 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER display::display_window.update_auto_hscroll");
             }
 
+            /// ASSERT-EMPTY (peer 5719): no display dependency means no fontset
+            /// registry can be observed or changed here. Fontset subrs still
+            /// refuse; fontset_snapshot() therefore has the same generation 0.
+            /// The linked registry's initial generation 1 is not an absent state.
             pub(crate) fn display_window_fontset_generation() -> u64 {
-                absent_layer_panic("ABSENT-LAYER display::display_window.fontset_generation");
+                0
             }
 
             pub(crate) fn display_window_window_domain_frame_of(domain: WindowDomain, frames: &FrameManager, window: WindowId) -> Option<FrameId> {
