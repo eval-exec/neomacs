@@ -543,6 +543,26 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
         args.next();
         return run_workspace_cli("neomacs-infra", &[], args);
     }
+    // Fill the shared sha-verified font cache once. Tests still download on a
+    // miss, and a miss panics with FIXTURE-FETCH rather than an assertion.
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("font-fixtures")
+    ) {
+        args.next();
+        if let Some(unexpected) = args.next() {
+            return Err(format!(
+                "font-fixtures does not accept arguments; found `{}`",
+                unexpected.to_string_lossy()
+            )
+            .into());
+        }
+        return run_workspace_cli(
+            "neomacs-test-fonts",
+            &["--bin", "prefetch-font-fixtures"],
+            std::iter::empty::<OsString>(),
+        );
+    }
     let options = FreshBuildOptions::parse(repo_root, args)?;
     run_fresh_build(&options)
 }
@@ -4662,6 +4682,7 @@ fn usage_text() -> &'static str {
 Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload|--no-aot-preload]
        cargo xtask build-info --binary PATH [--runtime-root DIR] [--dry-run]
        cargo xtask check-dependency-coherence
+       cargo xtask font-fixtures
        cargo xtask render-window-icon --out-dir DIR [--source PATH]
        cargo xtask perf list
        cargo xtask perf run SCENARIO [--editor PATH] [--iterations N] [--frontend batch|tui|gui]
