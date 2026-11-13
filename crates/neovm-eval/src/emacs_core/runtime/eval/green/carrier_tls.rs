@@ -697,7 +697,10 @@ mod lifecycle_carrier_protocol_tests {
         for (cycle, owner) in [false, true].into_iter().enumerate() {
             restore_after(&mut context, owner, |_| {
                 super::park_carrier_tls();
-                assert_eq!(neovm_value::tagged::gc::current_tagged_heap_identity(), None);
+                assert_eq!(
+                    neovm_value::tagged::gc::current_tagged_heap_identity(),
+                    None
+                );
                 assert_eq!(dynamic_module_registry_heap_identity(), None);
                 assert_eq!(PROBE_RESETS.load(Ordering::SeqCst), cycle);
                 super::carrier_tls_idle_state_and_check();
@@ -706,7 +709,10 @@ mod lifecycle_carrier_protocol_tests {
                 super::reset_carrier_tls();
                 // Check before snapshot's test-only fallback-heap cleanup can
                 // hide a stale or newly installed heap from the observer.
-                assert_eq!(neovm_value::tagged::gc::current_tagged_heap_identity(), None);
+                assert_eq!(
+                    neovm_value::tagged::gc::current_tagged_heap_identity(),
+                    None
+                );
                 assert_eq!(PROBE_RESETS.load(Ordering::SeqCst), cycle + 1);
                 super::carrier_tls_reset_and_check();
                 assert_eq!(super::snapshot_carrier_tls(), reference);
