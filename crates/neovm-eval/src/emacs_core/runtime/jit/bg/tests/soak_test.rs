@@ -29,6 +29,9 @@ fn jit_bg_worker_installs_under_a_collection_per_allocation() {
     force_mode_for_test(Some(BgMode::Threaded));
     force_stress_for_test(Some(true));
     force_deopt_for_test(false);
+    // These tiny bodies normally compile in line. Keep them unchanged while
+    // exercising worker installs, and restore the enclosing knob on unwind.
+    let _worker_route = neovm_value::tls_scope::TlsScope::new(&INLINE_INSTS_TEST, Some(0));
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let mut functions = Vec::new();
@@ -60,6 +63,22 @@ fn jit_bg_worker_installs_under_a_collection_per_allocation() {
             let bits =
                 unsafe { crate::emacs_core::jit::try_run_compiled(ctx, bc, Value::NIL, &[]) }
                     .expect("no signal");
+            if round == 0 {
+                let (insts, _) = crate::emacs_core::jit::compile::clif_size_now();
+                let insts = u64::from(insts);
+                assert!(
+                    insts > 0 && insts <= INLINE_INSTS,
+                    "{symbol}: tiny body stays within the production inline limit: {insts}"
+                );
+                assert!(!backend_in_line(JobClass::Entry, insts));
+                {
+                    let _default_route = neovm_value::tls_scope::TlsScope::new(
+                        &INLINE_INSTS_TEST,
+                        Some(INLINE_INSTS),
+                    );
+                    assert!(backend_in_line(JobClass::Entry, insts));
+                }
+            }
             let value = match bits {
                 Some(bits) => unsafe {
                     /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
