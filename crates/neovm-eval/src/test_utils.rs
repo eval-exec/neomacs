@@ -482,6 +482,7 @@ mod unit_runtime {
                         if let Some(spec) = buffer_family_subr(row.name)
                             .or_else(|| arithmetic_family_subr(row.name))
                             .or_else(|| symbols_family_subr(row.name))
+                            .or_else(|| strings_family_subr(row.name))
                         {
                             let arity = spec.arity();
                             assert_eq!(
@@ -780,6 +781,36 @@ mod unit_runtime {
         &DISPLAY_SERVICE,
         &FILE_NOTIFY,
     );
+
+    /// String subrs whose bodies live in this crate. The unit runtime binds
+    /// the same entry shape production registers in `subrs.rs`.
+    fn strings_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
+        use crate::emacs_core::builtins::{builtin_concat_slice, builtin_unibyte_string};
+        use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+        use neovm_value::error::EvalResult;
+        use neovm_value::value::Value;
+
+        fn bind_concat(_ctx: &mut Context, args: &[Value]) -> EvalResult {
+            builtin_concat_slice(args)
+        }
+        fn bind_unibyte_string(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_unibyte_string(args)
+        }
+
+        Some(match name {
+            "concat" => SubrSpec::new(
+                "concat",
+                NativeFn::ContextSlice(bind_concat),
+                SubrArity::new(0, None),
+            ),
+            "unibyte-string" => SubrSpec::new(
+                "unibyte-string",
+                NativeFn::ContextVec(bind_unibyte_string),
+                SubrArity::new(0, None),
+            ),
+            _ => return None,
+        })
+    }
 
     /// Symbol and closure subrs whose bodies live in this crate. The unit
     /// runtime binds the same entry shape production registers in `subrs.rs`.
