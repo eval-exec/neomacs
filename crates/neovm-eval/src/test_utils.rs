@@ -817,8 +817,8 @@ mod unit_runtime {
         })
     }
 
-    /// Misc subrs whose bodies live in this crate. The unit runtime binds
-    /// the same entry shape production registers in `subrs.rs`.
+    /// Misc descriptors owned by this crate, including lower host-generic bodies.
+    /// The unit runtime uses the same production descriptor or entry shape.
     fn misc_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
         use crate::emacs_core::builtins::{
             builtin_current_time_in_context, builtin_this_single_command_keys,
@@ -867,6 +867,7 @@ mod unit_runtime {
                 NativeFn::ContextVec(builtin_waiting_for_user_input_p_ctx),
                 SubrArity::new(0, Some(0)),
             ),
+            "make-char-table" => crate::emacs_core::builtins::misc_eval::MAKE_CHAR_TABLE_SUBR,
             "make-list" => SubrSpec::new(
                 "make-list",
                 NativeFn::ContextVec(bind_make_list),
@@ -1270,6 +1271,87 @@ mod unit_runtime {
                 .unwrap(),
             neovm_value::value::Value::T
         );
+    }
+
+    #[test]
+    fn unit_make_char_table_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::misc_eval::MAKE_CHAR_TABLE_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        use neovm_value::chartab::{
+            builtin_char_table_subtype, char_table_default, char_table_extra_slot_value, ct_ref,
+            is_char_table,
+        };
+        use neovm_value::intern::intern;
+        use neovm_value::value::Value;
+
+        let expected = MAKE_CHAR_TABLE_SUBR;
+        let descriptor = misc_family_subr("make-char-table")
+            .expect("unit runtime uses the production descriptor");
+        assert_eq!(expected.name(), "make-char-table");
+        assert_eq!(descriptor.name(), expected.name());
+        assert_eq!(descriptor.arity(), expected.arity());
+        assert_eq!(expected.arity(), SubrArity::new(1, Some(2)));
+        assert_eq!(descriptor.dispatch_kind(), expected.dispatch_kind());
+        assert!(descriptor.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(descriptor.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(descriptor.command_default(), expected.command_default());
+        assert!(descriptor.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(descriptor_fn))) =
+            (expected.function(), descriptor.function())
+        else {
+            panic!("make-char-table retains the ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(descriptor_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let id = intern("make-char-table");
+        let actual = crate::emacs_core::eval::lookup_global_subr_entry(id)
+            .expect("registered unit make-char-table");
+        let Some(SubrFn::Many(actual_fn)) = actual.function else {
+            panic!("registered make-char-table ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+        assert_eq!((actual.min_args, actual.max_args), (1, Some(2)));
+        assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+        assert!(actual.interactive_spec.is_none());
+        assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(
+            context
+                .obarray_view()
+                .get_property("make-char-table", "disabled")
+                .is_none_or(|value| value.is_nil())
+        );
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+
+        let purpose = Value::symbol("unit-make-char-table-purpose");
+        context
+            .obarray
+            .put_property_id(
+                purpose.as_bare_symbol_id().expect("purpose symbol"),
+                intern("char-table-extra-slots"),
+                Value::fixnum(2),
+            )
+            .expect("real extra-slot property");
+        let init = Value::fixnum(29);
+        let table =
+            actual_fn(&mut context, vec![purpose, init]).expect("registered constructor body");
+        assert!(is_char_table(&table));
+        assert_eq!(builtin_char_table_subtype(vec![table]).unwrap(), purpose);
+        assert_eq!(char_table_default(&table), init);
+        assert_eq!(ct_ref(&table, 65), init);
+        assert_eq!(char_table_extra_slot_value(&table, 0), Some(init));
+        assert_eq!(char_table_extra_slot_value(&table, 1), Some(init));
+        assert_eq!(char_table_extra_slot_value(&table, 2), None);
+        let defaulted = actual_fn(&mut context, vec![purpose])
+            .expect("registered constructor optional initializer");
+        assert!(is_char_table(&defaulted));
+        assert_eq!(char_table_default(&defaulted), Value::NIL);
+        assert_eq!(char_table_extra_slot_value(&defaulted, 0), Some(Value::NIL));
     }
 
     /// String subrs whose bodies live in this crate. The unit runtime binds

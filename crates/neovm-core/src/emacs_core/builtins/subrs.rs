@@ -4264,11 +4264,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(2, Some(2)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "make-char-table",
-        NativeFn::ContextVec(crate::emacs_core::chartable::builtin_make_char_table),
-        SubrArity::new(1, Some(2)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::MAKE_CHAR_TABLE_SUBR);
 
     // -- Charset --
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

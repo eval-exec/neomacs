@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 use neovm_edit::buffer::text_props::PropertyPlistApplication;
 use neovm_edit::buffer::{CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, LispCharPos1};
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
@@ -143,6 +144,15 @@ mod current_time_tests {
         );
     }
 }
+
+/// The shared production/unit descriptor for the existing text-owned constructor.
+/// Keep the existing ContextVec ABI and GNU chartab.c's optional initializer.
+#[doc(hidden)]
+pub static MAKE_CHAR_TABLE_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "make-char-table",
+    NativeFn::ContextVec(neovm_text::emacs_core::chartable::builtin_make_char_table),
+    SubrArity::new(1, Some(2)),
+));
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_pos_property(
