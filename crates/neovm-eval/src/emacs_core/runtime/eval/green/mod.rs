@@ -425,3 +425,12 @@ mod jit_inline2_tests;
 #[cfg(test)]
 #[path = "../tests/green_signal_depth_test.rs"]
 mod signal_depth_tests;
+
+// Approved private fixtures; core supplies the canonical runtime factory.
+#[cfg(feature = "test-support")]
+#[path = "../tests/green_switch_class_b_driver.rs"]
+mod green_switch_class_b_driver;
+#[cfg(feature = "test-support")]
+pub(crate) use green_switch_class_b_driver::run_a_sim_worlds_waits_never_slice_fixture;
+#[cfg(feature = "test-support")]
+pub(crate) use green_switch_class_b_driver::run_fd_readiness_wakes_a_green_select_while_a_peer_yields_fixture;

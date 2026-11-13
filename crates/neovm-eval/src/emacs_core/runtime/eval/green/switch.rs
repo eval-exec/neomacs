@@ -38,7 +38,7 @@ enum DeadlockVerdict {
 }
 
 /// Waits that gave the Baton up (tests read it).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static SELECT_PARKS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
@@ -1018,7 +1018,7 @@ impl Context {
                     signal(LispCondition::Error, vec![Value::string(error.to_string())])
                 })
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         SELECT_PARKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if self.green_key() == Some(ThreadKey::Main) {
             let control = Arc::clone(&self.green_seat().expect("seated").control);

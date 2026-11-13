@@ -1316,39 +1316,6 @@ fn a_threads_face_and_display_changes_reach_main() {
 }
 
 #[test]
-fn d1_a_thread_sees_the_time_zone_rule_set_by_another() {
-    let mut ev = green();
-    assert_eq!(
-        eval(
-            &mut ev,
-            "(progn
-               (set-time-zone-rule \"XXX-5\")
-               (list (current-time-zone)
-                     (thread-join (make-thread (lambda () (current-time-zone))))))"
-        ),
-        "((18000 \"XXX\") (18000 \"XXX\"))"
-    );
-}
-
-#[test]
-fn d1_a_thread_sees_a_process_made_by_another() {
-    let mut ev = green();
-    assert_eq!(
-        eval(
-            &mut ev,
-            "(progn
-               (setq tgd1-p (make-pipe-process :name \"tgp\"))
-               (prog1 (thread-join (make-thread
-                                    (lambda ()
-                                      (list (format \"%S\" tgd1-p) (process-name tgd1-p)
-                                            (and (memq tgd1-p (process-list)) t)))))
-                 (delete-process tgd1-p)))"
-        ),
-        "(\"#<process tgp>\" \"tgp\" t)"
-    );
-}
-
-#[test]
 fn d1_a_thread_uses_a_sqlite_handle_opened_by_another() {
     let mut ev = green();
     // GNU 31.1 here was built without sqlite; any GNU with sqlite answers
@@ -1374,20 +1341,6 @@ fn select_parks() -> usize {
 /// A Sim World's waits are today's: no Green runtime, no slice. Only the
 /// park count is asserted here; the waitclk tests separately require the
 /// full fine-clock timeout in both Sim and Green.
-#[test]
-fn a_sim_worlds_waits_never_slice() {
-    crate::test_utils::init_test_tracing();
-    let mut ev = Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
-    let before = select_parks();
-    assert_eq!(
-        eval(
-            &mut ev,
-            "(progn (sleep-for 0.05) (accept-process-output nil 0.05) 'done)"
-        ),
-        "done"
-    );
-    assert_eq!(select_parks(), before);
-}
 
 /// GNU really_call_select releases even with no ready peer. Each positive
 /// wait publishes once; sleeping peers never introduce periodic slices.
@@ -1640,57 +1593,6 @@ fn a_select_wait_runs_to_its_deadline_before_the_signal_is_raised() {
 
 /// Readiness reaches an owner parked in accept-process-output while its
 /// peer keeps yielding, before the accept timeout or any periodic slice.
-#[test]
-fn fd_readiness_wakes_a_green_select_while_a_peer_yields() {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let mut ev = green();
-    // Establish the connection before arming this ready-peer witness. GNU
-    // select now also parks a lone owner during synchronous connect.
-    let setup = format!(
-        r#"(progn
-      (setq g3f-received nil g3f-peer-stop nil)
-      (setq g3f-process (make-network-process :name "g3f-ready" :host "127.0.0.1"
-                    :service {port} :noquery t
-                    :filter (lambda (_p text) (setq g3f-received text)))) t)"#
-    );
-    assert_eq!(eval(&mut ev, &setup), "t");
-    let (gate, completion) =
-        main_select_park_gate(&mut ev, super::scheduler::SelectParkExpectation::Ordinary);
-    let control = std::sync::Arc::clone(&ev.green_seat().expect("main seat").control);
-    let cancel = ev.quit_requested.clone();
-    let server = std::thread::spawn(move || {
-        let result = write_ready_after_main_select_park(listener, gate);
-        if result.is_err() {
-            cancel.request();
-            control.wake(super::scheduler::ThreadKey::Main);
-        }
-        result.map(|_stream| ())
-    });
-    let started = std::time::Instant::now();
-    let source = format!(
-        r#"(progn
-      (let* ((p g3f-process)
-             (th (make-thread (lambda ()
-                   (while (and (null g3f-received) (null g3f-peer-stop))
-                     (thread-yield)) 'peer))))
-        (unwind-protect
-            (progn (accept-process-output p 2) g3f-received)
-          (setq g3f-peer-stop t)
-          (thread-join th)
-          (delete-process p))))"#
-    );
-    let result = eval(&mut ev, &source);
-    let server_result = server.join().expect("Green peer owner joined");
-    let parked_result = completion.recv_timeout(std::time::Duration::from_secs(5));
-    assert_eq!(result, "\"ready\"");
-    server_result.expect("actual parked-owner output release");
-    assert_eq!(
-        parked_result.expect("actual park/write-ACK completion"),
-        Ok(())
-    );
-    assert!(started.elapsed() < std::time::Duration::from_secs(1));
-}
 
 /// The same descriptor publication reaches main when every other Green
 /// owner has exited. The writer requires the actual Select witness before

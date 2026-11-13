@@ -75,6 +75,26 @@ pub mod authority {
         crate::emacs_core::builtins::hooks::run_gc_tls_ownership_window_snapshot_reset_discards_a_dropped_heap_fixture(make_context);
     }
 
+    /// Peer 5699: run the private-state fixture with core's real Context factory.
+    /// The driver retains the original assertions; no private handle escapes.
+    #[cfg(feature = "test-support")]
+    pub fn run_a_sim_worlds_waits_never_slice_for_test(
+        make_context: fn() -> crate::emacs_core::eval::Context,
+    ) {
+        crate::emacs_core::eval::run_a_sim_worlds_waits_never_slice_fixture(make_context);
+    }
+
+    /// Peer 5699: run the private-state fixture with core's real Context factory.
+    /// The driver retains the original assertions; no private handle escapes.
+    #[cfg(feature = "test-support")]
+    pub fn run_fd_readiness_wakes_a_green_select_while_a_peer_yields_for_test(
+        make_context: fn() -> crate::emacs_core::eval::Context,
+    ) {
+        crate::emacs_core::eval::run_fd_readiness_wakes_a_green_select_while_a_peer_yields_fixture(
+            make_context,
+        );
+    }
+
     /// P1-CLASSES-ALL-CRATES FENCE: reset the symbol writer thread-locals.
     /// A reset is a write (N2), so the fence is the only cross-crate route.
     pub fn reset_symbols_thread_locals_for_test() {
