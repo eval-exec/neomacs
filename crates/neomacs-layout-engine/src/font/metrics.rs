@@ -2458,6 +2458,12 @@ impl FontMetricsService {
     /// Read glyph heights without copying the cached font's owned names,
     /// identity and replay assets on every ASCII glyph. Cache misses and
     /// non-ASCII selection keep the canonical primary/fontset policy below.
+    ///
+    /// `#[inline(always)]` is load-bearing. The per-glyph measurer is the hot
+    /// caller. A second ordinary call site makes LLVM outline this body, and
+    /// that outline is paid on every glyph. The face probe must call
+    /// [`Self::vertical_metrics_for_face_probe`] instead.
+    #[inline(always)]
     pub(crate) fn vertical_metrics_for_realized_face_char(
         &mut self,
         ch: char,
@@ -2479,6 +2485,19 @@ impl FontMetricsService {
         self.materialized_font_for_realized_face_char(ch, selection)
             .as_ref()
             .map(|handle| FontVerticalMetrics::from_resolved_font(&handle.font))
+    }
+
+    /// Line box for the window-start face probe. Out of line so the hot
+    /// measurer keeps the inlined body of
+    /// [`Self::vertical_metrics_for_realized_face_char`].
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn vertical_metrics_for_face_probe(
+        &mut self,
+        ch: char,
+        selection: RealizedFaceFontSelection<'_>,
+    ) -> Option<FontVerticalMetrics> {
+        self.vertical_metrics_for_realized_face_char(ch, selection)
     }
 
     fn materialized_font_for_realized_face_char(

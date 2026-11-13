@@ -121,6 +121,57 @@ fn hscroll_faces_remain_distinct_across_scaled_and_unscaled_windows() {
     }
 }
 
+/// A face spec that contains `(make-symbol ":foo-probe-unique")` must not put
+/// that name in the obarray. `Value::keyword` interns; the window-start probe
+/// looks the name up and must leave `(intern-soft ":foo-probe-unique")` nil.
+#[test]
+fn layout_of_uninterned_face_keyword_does_not_intern_the_name() {
+    let (mut eval, frame, _, window) = incr_editing_frame("probe line\n", 800, 600);
+    realize_test_gui_frame(&mut eval, frame);
+    let before = eval
+        .eval_str(r#"(intern-soft ":foo-probe-unique")"#)
+        .unwrap();
+    assert!(
+        before.is_nil(),
+        "name must start uninterned, got {before:?}"
+    );
+    eval.eval_str(
+        r#"(put-text-property (point-min) (point-max) 'face
+             (list (make-symbol ":foo-probe-unique") :weight 'bold))"#,
+    )
+    .unwrap();
+    let installed = eval
+        .eval_str(r#"(intern-soft ":foo-probe-unique")"#)
+        .unwrap();
+    assert!(
+        installed.is_nil(),
+        "installing the face spec interned the name: {installed:?}"
+    );
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    engine.layout_frame_rust(&mut eval, frame);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("window-system layout");
+    let laid_out = state.window_matrices.iter().any(|entry| {
+        entry.window_id.get() == window.0 as i64
+            && entry
+                .matrix
+                .rows
+                .iter()
+                .any(|row| row.enabled && row.role == GlyphRowRole::Text)
+    });
+    assert!(laid_out, "selected window must lay out a text row");
+    let after = eval
+        .eval_str(r#"(intern-soft ":foo-probe-unique")"#)
+        .unwrap();
+    assert!(
+        after.is_nil(),
+        "redisplay interned :foo-probe-unique from the face spec: {after:?}"
+    );
+}
+
 fn marker_and_body(
     state: &neomacs_display_protocol::glyph_matrix::FrameDisplayState,
     window_id: neovm_core::window::WindowId,

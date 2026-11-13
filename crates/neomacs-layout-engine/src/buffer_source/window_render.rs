@@ -750,7 +750,7 @@ fn shorter_face_line_at_window_start<B: crate::neovm_bridge::LayoutBufferView>(
     )?;
     let font_size = face_spec_font_size(&spec, default_face.font_size)?;
     metrics
-        .vertical_metrics_for_realized_face_char(
+        .vertical_metrics_for_face_probe(
             'X',
             crate::font::metrics::RealizedFaceFontSelection::new(
                 default_face.font_family.as_ref(),
@@ -807,15 +807,63 @@ fn height_in_face_plist(spec: &neovm_core::emacs_core::Value, inherited_px: f32)
     None
 }
 
+/// Probe-only keyword test. Out of line, and it does not call
+/// `is_bare_keyword`, `is_keyword_id`, or `intern`. A second caller of
+/// `is_keyword_id` outlines that body out of `face_spec_is_plist`, and
+/// interning from redisplay would make `intern-soft` observe a new symbol.
+/// Identity is an already-interned keyword id via `lookup_interned`.
+#[cold]
+#[inline(never)]
 fn is_face_keyword(value: neovm_core::emacs_core::Value) -> bool {
-    value.is_bare_keyword()
-        || value
-            .as_bare_symbol_name()
-            .is_some_and(|name| name.starts_with(':'))
+    let Some(id) = value.as_bare_symbol_id() else {
+        return false;
+    };
+    let Some(name) = value.as_bare_symbol_name() else {
+        return false;
+    };
+    if !name.starts_with(':') {
+        return false;
+    }
+    neovm_core::emacs_core::intern::lookup_interned(name) == Some(id)
 }
 
+/// Probe-only `:height` test. Symbol id equality with the interned keyword,
+/// not a name compare, and out of line for the same reason as
+/// [`is_face_keyword`].
+#[cold]
+#[inline(never)]
 fn is_height_keyword(value: neovm_core::emacs_core::Value) -> bool {
-    value
-        .as_bare_symbol_name()
-        .is_some_and(|name| name == ":height" || name == "height")
+    let Some(id) = value.as_bare_symbol_id() else {
+        return false;
+    };
+    neovm_core::emacs_core::intern::lookup_interned(":height") == Some(id)
+}
+
+#[cfg(test)]
+mod face_keyword_identity_tests {
+    use super::{is_face_keyword, is_height_keyword};
+    use neovm_core::emacs_core::Value;
+    use neovm_core::emacs_core::intern::intern_uninterned;
+
+    /// An uninterned symbol named `:height` does not take the short-face path.
+    /// The probe only grows the body-matrix slot count; face realization
+    /// already matches keywords by id, so the drawn row is unchanged and a
+    /// GNU redisplay pair would not observe this gate.
+    #[test]
+    fn uninterned_colon_height_does_not_open_the_short_face_path() {
+        let uninterned = Value::from_sym_id(intern_uninterned(":height"));
+        assert!(!uninterned.is_bare_keyword());
+        assert!(!is_face_keyword(uninterned));
+        assert!(!is_height_keyword(uninterned));
+
+        let height = Value::keyword(":height");
+        assert!(is_face_keyword(height));
+        assert!(is_height_keyword(height));
+        assert!(is_face_keyword(Value::keyword(":weight")));
+        assert!(!is_height_keyword(Value::keyword(":weight")));
+
+        let unique = Value::from_sym_id(intern_uninterned(":foo-probe-unique"));
+        assert!(!is_face_keyword(unique));
+        assert!(neovm_core::emacs_core::intern::lookup_interned(":foo-probe-unique").is_none());
+    }
 }
