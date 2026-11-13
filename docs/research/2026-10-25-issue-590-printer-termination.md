@@ -34,7 +34,7 @@ The probe required the existing development-library environment (`source tmp/iss
 
 `PrintState` currently combines `PrintOptions`, an optional internal `PrintCircleState`, the evaluator/standalone context, callback table state, depth, and two traversal stacks. There are two numbering implementations: an internal Rust map and an externally visible Lisp `print-number-table`. In particular, `print_circle == true` with `state.circle == None` is intentional when the external table is selected; that combination alone does not prove missing bookkeeping. [State and modes](../../crates/neovm-eval/src/emacs_core/lisp/print/mod.rs).
 
-The circle-candidate predicate included obarrays while `object_identity_key` had no obarray identity. Actual obarray emission is opaque, as in GNU, and GNU's predicate excludes obarrays entirely. The predicate is now aligned (Font added, Obarray removed, dead obarray traversal deleted) as parity hardening; that alone is not evidence that the ETAF hang is explained.
+The circle-candidate predicate included obarrays while `object_identity_key` had no obarray identity. Actual obarray emission is opaque, as in GNU, and GNU's predicate excludes obarrays entirely. The predicate alignment (Font added, Obarray removed, dead obarray traversal deleted) is parity hardening carried by a separate change, #766; it is not part of this branch and is not evidence that the ETAF hang is explained.
 
 Preprocessing is iterative, while the emission path recursively calls `write_value_stateful` for children. It must preserve mutable callback behavior: the callback can change printing options or the live number table; child reads and root ownership already have dedicated guards. There is no explicit quit-check call in this printer module at the baseline. The main investigation must determine which graph, options, entry point and callback state are active in the failing application, rather than infer a cause from repeated stack frames alone.
 
@@ -104,7 +104,7 @@ SIGTERM failures above independently establish the original RED evidence.
 
 The focused implementation dispatches exhaustively on the existing `PrinterContext`: evaluator printing calls `Context::maybe_quit`, while standalone formatting has no evaluator and retains its behavior. A nonlocal result is stored as the existing typed `Flow` failure, stopping traversal and preserving inhibit-quit, shutdown-hook, and normal unwind policy. It introduces neither a new output-size cap nor different circle/depth formatting rules.
 
-The initial fix passed all 125 selected printer unit tests (`tmp/issue590-printer-green.log`). Safety review then identified that the new poll can enter Lisp shutdown hooks even with no unreadable-object callback. Root ownership must therefore cover evaluator-held current values, list cursors, and hash keys unconditionally, rather than depend on `print-unreadable-function` being configured. All 125 printer tests also passed after that root-guard adjustment (`tmp/issue590-printer-final.log`). Ordinary SIGUSR bookkeeping currently arms debugger state or queues counters; this note does not claim it directly runs arbitrary Lisp signal hooks.
+The initial fix passed all 125 selected printer unit tests. Safety review then identified that the new poll can enter Lisp shutdown hooks even with no unreadable-object callback. Root ownership must therefore cover evaluator-held current values, list cursors, and hash keys unconditionally, rather than depend on `print-unreadable-function` being configured. All 125 printer tests also passed after that root-guard adjustment. Ordinary SIGUSR bookkeeping currently arms debugger state or queues counters; this note does not claim it directly runs arbitrary Lisp signal hooks.
 
 The result so far addresses **printer interruptibility**, including the independently reproduced ignored-SIGTERM symptom. It does not justify claiming that the original ETAF value's expansion or the separate teardown/layout observations are resolved. No GNU source files were modified.
 
@@ -112,17 +112,19 @@ The result so far addresses **printer interruptibility**, including the independ
 
 The final implementation was verified with the rebuilt development executable
 and matching generated runtime image. All Rust test runs used `cargo nextest`;
-temporary fixtures, isolated state, and investigation logs stayed in `./tmp/`.
+investigation logs and isolated state stayed in `./tmp/`, which is ignored, so
+this note records the runs and their results rather than linking to files that
+do not travel with the checkout.
 
-| Check | Result | Local evidence |
-| --- | --- | --- |
-| Printer unit suite, including callback/GC and GNU parity controls | 125 passed | `tmp/issue590-printer-final.log` |
-| Live GNU oracle: quit matrix, print/read, prin1, circle integration cases | 48 unique tests passed | `tmp/issue590-oracle-{print,circle-prin1}-green.log` |
-| TUI printer quit plus interactive evaluation controls | 3 passed | `tmp/issue590-printer-quit-tui-green.log` |
-| Corrected GUI fixture: X11 and Wayland | Both passed; snapshots contain caught quit and subsequent `(t 42)` | `tmp/issue590-printer-quit-gui-{x11,wayland}-green.log` |
-| External SIGTERM during expanded DAG printing | Clean exit 15 and shutdown hook within the five-second bound | `tmp/issue590-etaf/neo-dag-sigterm-green.json` |
-| Same SIGTERM with `inhibit-quit=t` | Clean exit 15 and shutdown hook | `tmp/issue590-etaf/neo-dag-sigterm-inhibit-green.json` |
-| Shutdown hook detaches the active graph and forces GC | Clean exit; NeoMacs retains the active printer value | `tmp/issue590-etaf/neo-dag-sigterm-gc-root-green.json` |
+- Printer unit suite, including callback/GC and GNU parity controls: 125 passed.
+- Live GNU oracle: quit matrix, print/read, prin1, and circle integration
+  cases: 48 unique tests passed.
+- TUI printer quit plus interactive evaluation controls: 3 passed.
+- Corrected GUI fixture on X11 and Wayland: both passed, with snapshots
+  containing the caught quit and the subsequent `(t 42)`.
+- External SIGTERM during expanded DAG printing: clean exit 15 and the shutdown
+  hook ran within the five-second bound, including with `inhibit-quit=t` and
+  when the hook detaches the active graph and forces GC.
 
 The GC variant checks NeoMacs' conservative lifetime invariant, not exact weak
 reference retention parity: GNU also exits cleanly but collects that weakly
@@ -131,16 +133,15 @@ tested. Preprocessing, standalone formatting, and large atomic formatting loops
 retain their existing behavior; this change introduces evaluator attention
 checks between stateful object visits.
 
-## Rebase onto current main
+## Review follow-up
 
-The printer moved from `neovm-core` to `neovm-eval` after this branch was opened,
-and its tests were re-homed into
-`neovm-core/.../moved_eval/emacs_core/lisp/print/tests`. The port applies the same
-two production changes at the new location (`PrintValueRootsGuard::new` roots on
-every evaluator path; `write_value_stateful_rooted` polls `Context::maybe_quit`
-before each object). The unit test now lives in `printer_quit_units.rs` in the
-re-homed tree.
-
-The GUI regression needed a `tests/gui.rs` registration to run at all: the
-original branch added `tests/printer_quit.rs` but the target has
-`autotests = false`, so the file was never compiled. It is registered now.
+- The accumulator is flushed before the slow quit path can run Lisp (shutdown
+  hooks, `throw-on-input`), so a hook never sees a stale accumulator; the cheap
+  `maybe_quit_hot_ok` predicate keeps the per-object fast path unchanged.
+- The unit and oracle fixtures now print two unreadable markers and count the
+  callback visits. GNU reports `(caught 1)` uninhibited and
+  `("[Q Q]" t 2)` with `inhibit-quit`; a printer that polls only after the
+  whole traversal, or not at all, fails the visit count.
+- The GUI scenario asserts the scenario exit status instead of the harness's
+  `Passed`, which additionally requires a surface-readback PNG that macOS does
+  not produce; the frame snapshots remain the behavioral assertions.
