@@ -479,12 +479,14 @@ mod unit_runtime {
                             "{}: plan arity",
                             row.name
                         );
-                        if let Some(spec) = buffer_family_subr(row.name) {
+                        if let Some(spec) = buffer_family_subr(row.name)
+                            .or_else(|| arithmetic_family_subr(row.name))
+                        {
                             let arity = spec.arity();
                             assert_eq!(
                                 (arity.min(), arity.max()),
                                 (upper_min, upper_max),
-                                "{}: buffer family arity",
+                                "{}: bound subr arity",
                                 row.name
                             );
                             ctx.register_subr(spec);
@@ -777,6 +779,71 @@ mod unit_runtime {
         &DISPLAY_SERVICE,
         &FILE_NOTIFY,
     );
+
+    /// Arithmetic subrs whose bodies live in this crate. The unit runtime
+    /// binds the same entry shape production registers in `subrs.rs`.
+    fn arithmetic_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
+        use crate::emacs_core::builtins::{
+            builtin_ash_slice, builtin_div, builtin_expt, builtin_float, builtin_logand_slice,
+            builtin_mul,
+        };
+        use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+        use neovm_value::error::EvalResult;
+        use neovm_value::value::Value;
+
+        fn bind_mul(_ctx: &mut Context, args: &[Value]) -> EvalResult {
+            builtin_mul(args)
+        }
+        fn bind_div(_ctx: &mut Context, args: &[Value]) -> EvalResult {
+            builtin_div(args)
+        }
+        fn bind_expt(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+            builtin_expt(args)
+        }
+        fn bind_logand(_ctx: &mut Context, args: &[Value]) -> EvalResult {
+            builtin_logand_slice(args)
+        }
+        fn bind_ash(_ctx: &mut Context, args: &[Value]) -> EvalResult {
+            builtin_ash_slice(args)
+        }
+        fn bind_float(_ctx: &mut Context, args: &[Value]) -> EvalResult {
+            builtin_float(args)
+        }
+
+        Some(match name {
+            "*" => SubrSpec::new(
+                "*",
+                NativeFn::ContextSlice(bind_mul),
+                SubrArity::new(0, None),
+            ),
+            "/" => SubrSpec::new(
+                "/",
+                NativeFn::ContextSlice(bind_div),
+                SubrArity::new(1, None),
+            ),
+            "expt" => SubrSpec::new(
+                "expt",
+                NativeFn::ContextVec(bind_expt),
+                SubrArity::new(2, Some(2)),
+            ),
+            "logand" => SubrSpec::new(
+                "logand",
+                NativeFn::ContextSlice(bind_logand),
+                SubrArity::new(0, None),
+            ),
+            "ash" => SubrSpec::new(
+                "ash",
+                NativeFn::ContextSlice(bind_ash),
+                SubrArity::new(2, Some(2)),
+            ),
+            "float" => SubrSpec::new(
+                "float",
+                NativeFn::ContextSlice(bind_float),
+                SubrArity::new(1, Some(1)),
+            ),
+            _ => return None,
+        })
+    }
 
     /// Buffer subrs whose bodies live in `neovm-edit`. The unit runtime
     /// binds the same entry shape production registers in `subrs.rs`.
