@@ -2174,7 +2174,7 @@ fn windows_file_truename_accepts_backslash_drive_paths() {
 #[test]
 fn windows_drive_root_is_file_truename_recursion_root() {
     crate::test_utils::init_test_tracing();
-    let filename = LispString::from_utf8("D:/");
+    let filename = neovm_value::heap_types::LispString::from_utf8("D:/");
     let dirfile = lisp_directory_file_name(&filename);
     assert_eq!(dirfile.as_utf8_str(), Some("D:/"));
 
@@ -7483,6 +7483,9 @@ fn do_auto_save_warns_about_a_buffer_it_cannot_auto_save() {
 /// A context that reaches `auto_save_error` (src/fileio.c:6234-6245): a
 /// remote visited file whose `file-modes` handler signals, so `auto_save_1`
 /// fails before it writes anything.
+///
+/// Every caller is unix-gated with `prepare_buffer_for_auto_save`.
+#[cfg(unix)]
 fn auto_save_error_fixture() -> (tempfile::TempDir, Context, std::path::PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");

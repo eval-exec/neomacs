@@ -1,4 +1,6 @@
 use neovm_system::emacs_core::w32::shell::rewrite_file_url_document;
+#[cfg(windows)]
+use neovm_system::emacs_core::w32::shell::w32_shell_execute;
 use neovm_system::emacs_core::w32::*;
 use neovm_value::symbol::Obarray;
 use neovm_value::value::Value;
@@ -81,7 +83,7 @@ fn shell_execute_rewrites_only_drive_letter_file_urls() {
 fn shell_execute_requires_a_string_document() {
     use crate::emacs_core::error::FlowKind;
 
-    let mut eval = Context::new();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     // (OPERATION DOCUMENT ...): DOCUMENT is the second argument and is the
     // only one GNU type-checks.
     let error = w32_shell_execute(&mut eval, vec![Value::string("open"), Value::fixnum(1)])
@@ -106,7 +108,7 @@ fn shell_execute_missing_local_file_signals_gnu_error() {
     ));
     let _ = std::fs::remove_file(&missing);
 
-    let mut eval = Context::new();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     let error = w32_shell_execute(
         &mut eval,
         vec![
@@ -141,7 +143,7 @@ fn shell_execute_reads_operation_from_the_first_argument() {
     ));
     let _ = std::fs::remove_file(&missing);
 
-    let mut eval = Context::new();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     // OPERATION is not type-checked; only DOCUMENT is. A non-string first
     // argument must therefore reach ShellExecute instead of signalling
     // wrong-type-argument, proving the first slot is read as OPERATION.

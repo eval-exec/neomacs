@@ -2471,27 +2471,30 @@ fn module_pipe_service_polling_is_nonblocking_before_write_and_services_data() {
 
     let worker = std::thread::spawn(move || {
         let mut ev = crate::emacs_core::eval_hook_installers::new_context();
-        let buffer_id = ev.edit.buffers.create_buffer(" *module-service-idle*");
-        let process = builtin_make_pipe_process_impl(
-            &mut ev.processes,
-            &mut ev.edit.buffers,
-            &ev.threads,
-            None,
-            ConnectionProcessCodingVariables::unbound(),
-            vec![
-                Value::keyword(":name"),
-                Value::string("module-service-idle"),
-                Value::keyword(":buffer"),
-                Value::make_buffer(buffer_id),
-            ],
-            neovm_value::tagged::value::SymbolMode::Bare,
-        )
-        .expect("make-pipe-process");
-        let id = process.as_process_id().expect("pipe process id");
-        let fd = ev
-            .processes
-            .open_channel_for_module(process)
-            .expect("open module channel");
+        let (buffer_id, id, fd) = {
+            let (processes, threads, buffers) = ev.processes_threads_and_buffers_mut();
+            let buffer_id = buffers.create_buffer(" *module-service-idle*");
+            let process = builtin_make_pipe_process_impl(
+                processes,
+                buffers,
+                threads,
+                None,
+                ConnectionProcessCodingVariables::unbound(),
+                vec![
+                    Value::keyword(":name"),
+                    Value::string("module-service-idle"),
+                    Value::keyword(":buffer"),
+                    Value::make_buffer(buffer_id),
+                ],
+                neovm_value::tagged::value::SymbolMode::Bare,
+            )
+            .expect("make-pipe-process");
+            let id = process.as_process_id().expect("pipe process id");
+            let fd = processes
+                .open_channel_for_module(process)
+                .expect("open module channel");
+            (buffer_id, id, fd)
+        };
         fd_tx.send(fd).expect("send module fd");
 
         let request = ProcessOutputServiceRequest::target_only(id);
