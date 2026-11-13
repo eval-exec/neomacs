@@ -6807,8 +6807,8 @@ fn fuzz_varset_bodies_match_interpreter_state() {
     let mut ev = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
 
-    // Seeded special variables at constant indices 0..VARS; every stored
-    // value in the op soup is an immediate, so state compares exactly by bits.
+    // Seeded special variables at constant indices 0..VARS. Arithmetic can
+    // promote their values to bignums, allocated independently by each run.
     const VARS: usize = 3;
     let var_vals: Vec<Value> = ["fuzz-jit-var-a", "fuzz-jit-var-b", "fuzz-jit-var-c"]
         .iter()
@@ -6839,9 +6839,25 @@ fn fuzz_varset_bodies_match_interpreter_state() {
             ev.obarray.set_symbol_value_id(*id, *v);
         }
     }
-    fn snap(ev: &Context, ids: &[SymId]) -> Vec<Option<usize>> {
+    #[derive(Debug, PartialEq, Eq)]
+    enum ObservedValue {
+        Bits(usize),
+        Bignum(malachite::Integer),
+    }
+
+    fn observe(value: Value) -> ObservedValue {
+        match value.as_bignum() {
+            // Keep both the bignum type and its exact immutable contents.
+            // Owning the snapshot also survives later resets and collections.
+            Some(integer) => ObservedValue::Bignum(integer.clone()),
+            // Preserve every bit for immediates and every other heap identity.
+            None => ObservedValue::Bits(value.bits()),
+        }
+    }
+
+    fn snap(ev: &Context, ids: &[SymId]) -> Vec<Option<ObservedValue>> {
         ids.iter()
-            .map(|id| ev.obarray.symbol_value_id_copied(*id).map(|v| v.bits()))
+            .map(|id| ev.obarray.symbol_value_id_copied(*id).map(observe))
             .collect()
     }
 
@@ -6926,7 +6942,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
         reset(&mut ev, &var_ids, &init);
         let interp = {
             let mut vm = Vm::from_context(&mut ev);
-            vm.execute(&f, vec![])
+            vm.execute(&f, vec![]).map(observe)
         };
         let want_state = snap(&ev, &var_ids);
 
@@ -6979,8 +6995,8 @@ fn fuzz_varset_bodies_match_interpreter_state() {
         leaf: &CompiledLeaf,
         f: &ByteCodeFunction,
         ops: &[Op],
-        interp: &Result<Value, E>,
-        want_state: &[Option<usize>],
+        interp: &Result<ObservedValue, E>,
+        want_state: &[Option<ObservedValue>],
         var_ids: &[SymId],
         init: &[Value],
         seed: u64,
@@ -6993,9 +7009,10 @@ fn fuzz_varset_bodies_match_interpreter_state() {
                 let want = interp.as_ref().unwrap_or_else(|e| {
                     panic!("seed {seed} [{tier}]: JIT Ok but interpreter erred ({e:?}): {ops:?}")
                 });
+                // SAFETY: NativeRun::Ok carries a real Value's tagged bits.
+                let got = observe(unsafe { Value::from_bits(bits) });
                 assert_eq!(
-                    bits,
-                    want.bits(),
+                    &got, want,
                     "seed {seed} [{tier}]: result mismatch on {ops:?}"
                 );
                 assert_eq!(
@@ -7018,7 +7035,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
                 };
                 match (&rerun, interp) {
                     (Ok(got), Ok(want)) => {
-                        assert_eq!(got.bits(), want.bits(), "seed {seed} [{tier}]: {ops:?}");
+                        assert_eq!(&observe(*got), want, "seed {seed} [{tier}]: {ops:?}");
                         assert_eq!(
                             snap(ev, var_ids),
                             want_state,
@@ -7063,7 +7080,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
                 };
                 match (&resumed, interp) {
                     (Ok(got), Ok(want)) => {
-                        assert_eq!(got.bits(), want.bits(), "seed {seed} [{tier}]: {ops:?}");
+                        assert_eq!(&observe(*got), want, "seed {seed} [{tier}]: {ops:?}");
                         assert_eq!(
                             snap(ev, var_ids),
                             want_state,
