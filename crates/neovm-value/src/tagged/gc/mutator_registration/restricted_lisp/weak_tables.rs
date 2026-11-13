@@ -16,16 +16,54 @@ fn every_stop(_: usize, _: usize) -> Option<Go> {
     Some(Go::Forced)
 }
 
+/// `Session::round` and `finish_owners` take the World walk explicitly. The
+/// B8 call text does not: this shell stores the host's walk and passes it.
+struct WeakSession<'body, 'heap, K, R>
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+{
+    inner: Session<'body, 'heap, K>,
+    roots: R,
+}
+
+impl<'body, 'heap, K, R> WeakSession<'body, 'heap, K, R>
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    R: Copy + WorldRoots<K>,
+{
+    fn pauses(&self) -> Vec<Snap> {
+        self.inner.pauses()
+    }
+
+    fn round(
+        &mut self,
+        kind: Go,
+        resume: bool,
+        after: impl FnOnce(&ParallelHeapEra<'heap, K>, &AllStopped<'_>),
+    ) {
+        let roots = self.roots;
+        self.inner.round(kind, resume, after, roots);
+    }
+
+    fn finish_owners(
+        &mut self,
+        after: impl FnOnce(&ParallelHeapEra<'heap, K>, &AllStopped<'_>),
+    ) -> Vec<EndState> {
+        let roots = self.roots;
+        self.inner.finish_owners(after, roots)
+    }
+}
+
 /// Serial transport roots retain TABLES ONLY. All weak payloads are actual
 /// owner allocations; the snapshots below contain inert bits, not GC roots.
-fn session(
+fn session<H: WeakTableHost>(
+    context: &mut H,
     setup: &str,
     programs: Vec<Vec<Op>>,
     env: &HtEnv<'_>,
-    body: impl FnOnce(&mut Session<'_, '_>, &Overlap, &[usize]),
+    body: impl FnOnce(&mut WeakSession<'_, '_, H::Keeper, H::Roots>, &Overlap, &[usize]),
 ) {
     let n = programs.len();
-    let mut context = Context::new();
     let mut cursor = context.eval_str(setup).expect("B8 serial weakness setup");
     let mut tables = Vec::new();
     while cursor.is_cons() {
@@ -43,80 +81,81 @@ fn session(
     }
     // SAFETY: serial Context owns these table shells and nil. Payloads are
     // deliberately absent from transport roots and frozen legacy variables.
-    let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };
+    let roots = context.world_roots();
+    let nil = unsafe { SharedRoot::new(context.tagged_heap(), TaggedValue::NIL) };
     let mut planted = vec![None; NSLOTS];
     for (index, &table) in tables.iter().enumerate() {
-        planted[index] = Some(unsafe { SharedRoot::new(&context.tagged_heap, table) });
+        planted[index] = Some(unsafe { SharedRoot::new(context.tagged_heap(), table) });
     }
     let abort = AtomicBool::new(false);
     let overlap = Overlap::new(n, true);
-    context
-        .admit_owned_parallel_with_weak_tables_for_test(&tables, |projection| {
-            {
-                let era = projection.era();
-                era.start_cons_storage().unwrap();
-                thread::scope(|scope| {
-                    let _panic = PanicFlag {
+    admit_weak_tables(context, &tables, |AdmitIn { projection, .. }| {
+        {
+            let era = projection.era();
+            era.start_cons_storage().unwrap();
+            thread::scope(|scope| {
+                let _panic = PanicFlag {
+                    registry: era.registry(),
+                    abort: &abort,
+                };
+                let (pause_tx, pause_rx) = channel();
+                let (end_tx, end_rx) = channel();
+                let (ready_tx, ready_rx) = channel();
+                let (retired_tx, retired_rx) = channel();
+                let permits: Vec<_> = (0..n)
+                    .map(|index| retry_reg(|| era.register(9800 + index as u64, NSLOTS)))
+                    .collect();
+                let mut go_txs = Vec::new();
+                let mut done_txs = Vec::new();
+                for (index, permit) in permits.into_iter().enumerate() {
+                    let (go_tx, go_rx) = channel();
+                    let (done_tx, done_rx) = channel();
+                    go_txs.push(go_tx);
+                    done_txs.push(done_tx);
+                    let launch = OwnerLaunch {
+                        permit,
+                        heap: era.heap_identity(),
+                        id: 9800 + index as u64,
+                        nil: &nil,
+                        programs: vec![programs[index].clone()],
+                        nslots: NSLOTS,
+                        bound: 0,
+                        line_slot: usize::from(NIL),
+                        stop_at: every_stop,
+                        overlap: Some(&overlap),
+                        index,
+                        pause_tx: pause_tx.clone(),
+                        go_rx,
+                        end_tx: end_tx.clone(),
+                        ready_tx: ready_tx.clone(),
+                        done_rx,
+                        retired_tx: retired_tx.clone(),
                         registry: era.registry(),
                         abort: &abort,
+                        planted: &planted,
+                        ht: Some(env),
                     };
-                    let (pause_tx, pause_rx) = channel();
-                    let (end_tx, end_rx) = channel();
-                    let (ready_tx, ready_rx) = channel();
-                    let (retired_tx, retired_rx) = channel();
-                    let permits: Vec<_> = (0..n)
-                        .map(|index| retry_reg(|| era.register(9800 + index as u64, NSLOTS)))
-                        .collect();
-                    let mut go_txs = Vec::new();
-                    let mut done_txs = Vec::new();
-                    for (index, permit) in permits.into_iter().enumerate() {
-                        let (go_tx, go_rx) = channel();
-                        let (done_tx, done_rx) = channel();
-                        go_txs.push(go_tx);
-                        done_txs.push(done_tx);
-                        let launch = OwnerLaunch {
-                            permit,
-                            heap: era.heap_identity(),
-                            id: 9800 + index as u64,
-                            nil: &nil,
-                            programs: vec![programs[index].clone()],
-                            nslots: NSLOTS,
-                            bound: 0,
-                            line_slot: usize::from(NIL),
-                            stop_at: every_stop,
-                            overlap: Some(&overlap),
-                            index,
-                            pause_tx: pause_tx.clone(),
-                            go_rx,
-                            end_tx: end_tx.clone(),
-                            ready_tx: ready_tx.clone(),
-                            done_rx,
-                            retired_tx: retired_tx.clone(),
-                            registry: era.registry(),
-                            abort: &abort,
-                            planted: &planted,
-                            ht: Some(env),
-                        };
-                        scope.spawn(move || launch.run());
-                    }
-                    drop((pause_tx, end_tx, ready_tx, retired_tx));
-                    let mut session = Session {
-                        era,
-                        go_txs,
-                        done_txs,
-                        pause_rx,
-                        end_rx,
-                        ready_rx,
-                        retired_rx,
-                        next_epoch: 1,
-                    };
-                    body(&mut session, &overlap, &bits);
-                });
-            }
-            let (collector, keeper) = projection.finish().expect("B8 finish");
-            (collector, keeper, ())
-        })
-        .unwrap_or_else(|error| panic!("B8 weak admission: {error:?}"));
+                    scope.spawn(move || launch.run());
+                }
+                drop((pause_tx, end_tx, ready_tx, retired_tx));
+                let inner = Session {
+                    era,
+                    go_txs,
+                    done_txs,
+                    pause_rx,
+                    end_rx,
+                    ready_rx,
+                    retired_rx,
+                    next_epoch: 1,
+                };
+                let mut session = WeakSession { inner, roots };
+                body(&mut session, &overlap, &bits);
+            });
+        }
+        let (collector, keeper) = projection.finish().expect("B8 finish");
+        (collector, keeper, ())
+    })
+    .unwrap_or_else(|error| panic!("B8 weak admission: {error:?}"));
 }
 
 fn counts(stopped: &AllStopped<'_>, tables: &[usize]) -> Vec<usize> {
@@ -130,7 +169,11 @@ fn counts(stopped: &AllStopped<'_>, tables: &[usize]) -> Vec<usize> {
         .collect()
 }
 
-fn live_payloads(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>, snaps: &[Snap]) -> usize {
+fn live_payloads<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    stopped: &AllStopped<'_>,
+    snaps: &[Snap],
+) -> usize {
     // Freed slots may be reused by the next allocation batch. Count current
     // addresses once rather than counting every historical birth at that slot.
     let words: HashSet<_> = snaps
@@ -140,8 +183,8 @@ fn live_payloads(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>, snaps: &[S
     live_words(era, stopped, words.iter().copied())
 }
 
-fn live_words(
-    era: &ParallelHeapEra<'_>,
+fn live_words<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     stopped: &AllStopped<'_>,
     words: impl IntoIterator<Item = usize>,
 ) -> usize {
@@ -149,7 +192,10 @@ fn live_words(
     on_heap(era, stopped, |heap| {
         words
             .iter()
-            .filter(|&&bits| heap.owns_heap_value_for_test(TaggedValue::from_bits(bits)))
+            .filter(|&&bits| {
+                // SAFETY: each word is a cons address the harness recorded.
+                heap.owns_heap_value_for_test(unsafe { TaggedValue::from_bits(bits) })
+            })
             .count()
     })
 }
@@ -211,11 +257,13 @@ fn matrix_program(owner: usize) -> Vec<Op> {
     ops
 }
 
-#[test]
-fn a6_ht_b8_four_weaknesses_shared_root_union_and_reclamation() {
+pub(crate) fn a6_ht_b8_four_weaknesses_shared_root_union_and_reclamation(
+    context: &mut impl WeakTableHost,
+) {
     for n in 2..=4 {
         let env = HtEnv::new(&[], 60, 61, 62);
         session(
+            context,
             MATRIX_SETUP,
             (0..n).map(matrix_program).collect(),
             &env,
@@ -315,11 +363,11 @@ fn chain_program(owner: usize, owners: usize) -> Vec<Op> {
     ops
 }
 
-#[test]
-fn a6_ht_b8_cross_table_fixpoint_and_unrooted_cycles() {
+pub(crate) fn a6_ht_b8_cross_table_fixpoint_and_unrooted_cycles(context: &mut impl WeakTableHost) {
     const N: usize = 3;
     let env = HtEnv::new(&[], 60, 61, 62);
     session(
+        context,
         CHAIN_SETUP,
         (0..N).map(|owner| chain_program(owner, N)).collect(),
         &env,
@@ -451,8 +499,9 @@ fn exact_memos(stopped: &AllStopped<'_>, table: usize, expected: usize) {
     });
 }
 
-#[test]
-fn a6_ht_b8_removal_heavy_custom_hash_memos_and_slot_reuse() {
+pub(crate) fn a6_ht_b8_removal_heavy_custom_hash_memos_and_slot_reuse(
+    context: &mut impl WeakTableHost,
+) {
     const N: usize = 4;
     let hash_ops = [Op::ConstFixnum { dst: 62, value: 7 }];
     let cmp_ops = [Op::Eq {
@@ -469,6 +518,7 @@ fn a6_ht_b8_removal_heavy_custom_hash_memos_and_slot_reuse() {
         .collect();
     let env = HtEnv::new(&users, 60, 61, 62);
     session(
+        context,
         MEMO_SETUP,
         (0..N).map(memo_program).collect(),
         &env,

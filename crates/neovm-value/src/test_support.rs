@@ -25,3 +25,43 @@ use crate::heap_types::LispString;
 pub fn heap_types__LispString__has_owned_storage(s: &LispString) -> bool {
     crate::heap_types::__test_support::lisp_string_has_owned_storage(s)
 }
+
+/// Value-4 re-home. The B8 bodies stay in `restricted_lisp` and name no
+/// evaluator type. Eval's `#[test]` wrappers implement these traits for
+/// `Context`. Absent under gc-memory-telemetry, where `restricted_lisp` is.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+pub use crate::tagged::gc::mutator_registration::restricted_lisp::{
+    WeakAdmit, WeakProjection, WeakTableHost,
+};
+
+#[cfg(not(feature = "gc-memory-telemetry"))]
+pub fn a6_ht_b8_weak_copy_refuses_before_allocation_or_root_publication(
+    context: &mut impl WeakTableHost,
+) {
+    crate::tagged::gc::mutator_registration::restricted_lisp::a6_ht_b8_weak_copy_refuses_before_allocation_or_root_publication(
+        context,
+    );
+}
+
+#[cfg(not(feature = "gc-memory-telemetry"))]
+pub fn a6_ht_b8_four_weaknesses_shared_root_union_and_reclamation(
+    context: &mut impl WeakTableHost,
+) {
+    crate::tagged::gc::mutator_registration::restricted_lisp::a6_ht_b8_four_weaknesses_shared_root_union_and_reclamation(
+        context,
+    );
+}
+
+#[cfg(not(feature = "gc-memory-telemetry"))]
+pub fn a6_ht_b8_cross_table_fixpoint_and_unrooted_cycles(context: &mut impl WeakTableHost) {
+    crate::tagged::gc::mutator_registration::restricted_lisp::a6_ht_b8_cross_table_fixpoint_and_unrooted_cycles(
+        context,
+    );
+}
+
+#[cfg(not(feature = "gc-memory-telemetry"))]
+pub fn a6_ht_b8_removal_heavy_custom_hash_memos_and_slot_reuse(context: &mut impl WeakTableHost) {
+    crate::tagged::gc::mutator_registration::restricted_lisp::a6_ht_b8_removal_heavy_custom_hash_memos_and_slot_reuse(
+        context,
+    );
+}

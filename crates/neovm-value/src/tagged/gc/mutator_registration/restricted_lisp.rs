@@ -2,9 +2,10 @@
 //! call into this module. Evaluator boot, eval, and admit for the re-homed
 //! shells come from the core shell through `HostParts`.
 //!
-//! `weak_copy` and `weak_tables` stay the `7a7d474cd8` `#[test]` bodies.
-//! They are mounted only under `cfg(test)`, which is also when this module
-//! imports `Context`. A `test-support` dependency build does not compile them.
+//! `weak_copy` and `weak_tables` keep the `7a7d474cd8` bodies. They name no
+//! `Context`: `WeakTableHost`, implemented by eval's `Context`, supplies
+//! eval, the tagged heap, weak-table admission, and the World root walk.
+//! The `#[test]` entry points live in neovm-eval.
 //!
 //! Owners allocate conses through `RunSlice::cons_into` inside `with_slice`,
 //! and tables through the rooted `RunAccess` make/copy operations.
@@ -36,8 +37,6 @@ pub(crate) mod globals;
 #[cfg(feature = "test-support")]
 pub(crate) use globals::run_globals_executor_test;
 mod intern;
-#[cfg(test)]
-use crate::emacs_core::eval::Context;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::{Fixnum, TaggedValue};
@@ -78,6 +77,114 @@ impl<K, F> WorldRoots<K> for F where
             RendezvousError,
         >
 {
+}
+
+/// Names `'heap` on the closure argument. A bare `FnOnce(H::Proj<'heap>)`
+/// return that borrows `'heap` is rejected: the GAT does not count as the
+/// lifetime appearing in `FnOnce`'s input types.
+struct AdmitIn<'heap, P> {
+    projection: P,
+    _lt: std::marker::PhantomData<&'heap ()>,
+}
+
+/// Closed proof projection. Value names `ProofEra`; eval's `Context` supplies
+/// the concrete projection (`OwnedProofProjection`).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) trait WeakProjection<'heap> {
+    type Keeper: crate::tagged::gc::mutator_registration::EraKeeper;
+    type FinishError: std::fmt::Debug;
+    // Name the crate-internal route in both builds. The underlying type is
+    // public; only this re-export is crate-private. Dependency fixtures name
+    // the same type through the signed authority alias.
+    fn era(&self) -> &crate::tagged::gc::ProofEra<'heap, Self::Keeper>;
+    fn finish(
+        self,
+    ) -> Result<(crate::tagged::gc::QuiescentCollector<'heap>, Self::Keeper), Self::FinishError>;
+}
+
+/// Serial weak-table host. The four B8 bodies keep their call text; eval's
+/// `#[test]` wrappers pass a `Context`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) trait WeakTableHost {
+    type EvalError: std::fmt::Debug;
+    type AdmitError: std::fmt::Debug;
+    type Keeper: crate::tagged::gc::mutator_registration::EraKeeper;
+    type Roots: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k Self::Keeper,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >;
+    type Proj<'heap>: WeakProjection<'heap, Keeper = Self::Keeper, FinishError = Self::AdmitError>
+    where
+        Self: 'heap;
+
+    fn eval_str(&mut self, source: &str) -> Result<TaggedValue, Self::EvalError>;
+    fn tagged_heap(&self) -> &crate::tagged::gc::TaggedHeap;
+    fn world_roots(&self) -> Self::Roots;
+    fn admit_owned_parallel_with_weak_tables_for_test<R>(
+        &mut self,
+        tables: &[TaggedValue],
+        body: impl WeakAdmit<Self, Out = R>,
+    ) -> Result<R, Self::AdmitError>
+    where
+        Self: Sized;
+}
+
+/// Lending admit callback. The heap lifetime sits on `call`: a
+/// `for<'heap> WeakAdmit<'heap>` impl cannot be proved from one
+/// higher-ranked `FnOnce`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) trait WeakAdmit<H: WeakTableHost> {
+    type Out;
+    fn call<'heap>(
+        self,
+        projection: H::Proj<'heap>,
+    ) -> (
+        crate::tagged::gc::QuiescentCollector<'heap>,
+        H::Keeper,
+        Self::Out,
+    )
+    where
+        H: 'heap;
+}
+
+impl<H, R, F> WeakAdmit<H> for F
+where
+    H: WeakTableHost,
+    F: for<'heap> FnOnce(
+        AdmitIn<'heap, H::Proj<'heap>>,
+    ) -> (crate::tagged::gc::QuiescentCollector<'heap>, H::Keeper, R),
+{
+    type Out = R;
+    fn call<'heap>(
+        self,
+        projection: H::Proj<'heap>,
+    ) -> (crate::tagged::gc::QuiescentCollector<'heap>, H::Keeper, R)
+    where
+        H: 'heap,
+    {
+        self(AdmitIn {
+            projection,
+            _lt: std::marker::PhantomData,
+        })
+    }
+}
+
+fn admit_weak_tables<H, R>(
+    host: &mut H,
+    tables: &[TaggedValue],
+    body: impl for<'heap> FnOnce(
+        AdmitIn<'heap, H::Proj<'heap>>,
+    ) -> (crate::tagged::gc::QuiescentCollector<'heap>, H::Keeper, R),
+) -> Result<R, H::AdmitError>
+where
+    H: WeakTableHost,
+{
+    host.admit_owned_parallel_with_weak_tables_for_test(tables, body)
 }
 
 /// Native switch answer. `Other` is the `Debug` text of the evaluator's
@@ -6605,8 +6712,8 @@ pub(crate) fn run_restricted_lisp_test<K, W>(
                 &mut host,
             )
         }
-        // The four b8 weak tests stay #[test] in weak_copy and weak_tables,
-        // the 7a7d474cd8 bodies. They are not dispatcher arms.
+        // The four b8 weak tests are not dispatcher arms. Their bodies stay in
+        // weak_copy and weak_tables; eval's cfg(test) wrappers are the #[test] home.
         other => panic!("unknown restricted lisp test {other}"),
     }
 }
@@ -6620,8 +6727,14 @@ mod allocation_tables;
 #[path = "restricted_lisp/copy_oracle.rs"]
 mod copy_oracle;
 
-#[cfg(test)]
 mod weak_copy;
-
-#[cfg(test)]
 mod weak_tables;
+
+#[cfg(feature = "test-support")]
+pub(crate) use weak_copy::a6_ht_b8_weak_copy_refuses_before_allocation_or_root_publication;
+#[cfg(feature = "test-support")]
+pub(crate) use weak_tables::{
+    a6_ht_b8_cross_table_fixpoint_and_unrooted_cycles,
+    a6_ht_b8_four_weaknesses_shared_root_union_and_reclamation,
+    a6_ht_b8_removal_heavy_custom_hash_memos_and_slot_reuse,
+};

@@ -7591,6 +7591,12 @@ pub(crate) use form_head_cache::FormHeadCache;
 #[path = "tests/saved_state_scope_test.rs"]
 mod saved_state_scope_test;
 
+// Value-4: the B8 bodies stay in neovm-value. Telemetry builds omit
+// restricted_lisp, so this #[test] home is omitted with them.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "tests/weak_table_b8.rs"]
+mod weak_table_b8;
+
 #[cfg(test)]
 #[path = "tests/admission_header_test.rs"]
 mod admission_header_tests;
