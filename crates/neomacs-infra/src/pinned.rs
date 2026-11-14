@@ -1,4 +1,4 @@
-//! Pinned upstream fixtures, fetched at test time and verified on every use.
+//! Pinned upstream fixtures, fetched explicitly or on demand and verified on every use.
 //!
 //! A test that needs an upstream artifact pins it by URL and SHA-256 and asks
 //! [`pinned_file`] for it: the bytes land in `tmp/pinned-fixtures` under the
@@ -10,6 +10,9 @@
 //! `neomacs-test-fonts` applies the same convention to its fonts -- including
 //! its archives, via [`pinned_file_with_limit`]; unpacking an archive stays
 //! with the caller.
+//!
+//! Fixtures prepared before a test run use [`cached_pinned_file`], which
+//! only reads and verifies the cache and never attempts a download.
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -29,13 +32,17 @@ fn cache_root() -> PathBuf {
 /// [`pinned_file_with_limit`].
 const MAX_PINNED_FIXTURE_BYTES: u64 = 32 * 1024 * 1024;
 
-/// What a pinned-fixture fetch can fail with.
+/// What pinned-fixture access can fail with.
 ///
 /// Typed rather than a string so a caller can keep the cause chain and name
 /// the fixture it asked for: this type knows URLs, cache paths and hashes, but
 /// not which test wanted the bytes.
 #[derive(Debug, Error)]
 pub enum PinnedError {
+    #[error(
+        "pinned fixture missing from cache at {path}; prefetch the fixture before running tests"
+    )]
+    CacheMiss { path: PathBuf },
     #[error("create the fixture cache at {path}: {source}")]
     CacheRoot {
         path: PathBuf,
@@ -102,6 +109,25 @@ pub enum PinnedError {
 /// and must not quietly skip either.
 pub fn pinned_file(name: &str, url: &str, sha256: &str) -> Result<PathBuf, PinnedError> {
     pinned_file_with_limit(name, url, sha256, MAX_PINNED_FIXTURE_BYTES)
+}
+
+/// Read an already-prefetched fixture and verify its SHA-256.
+///
+/// This cache-only path never creates directories, locks, or network requests.
+/// A missing entry is [`PinnedError::CacheMiss`]; corrupt bytes remain a
+/// [`PinnedError::CachedHash`] error. The caller names its prefetch command.
+pub fn cached_pinned_file(name: &str, sha256: &str) -> Result<PathBuf, PinnedError> {
+    cached_pinned_file_in(&cache_root(), name, sha256)
+}
+
+fn cached_pinned_file_in(root: &Path, name: &str, sha256: &str) -> Result<PathBuf, PinnedError> {
+    let destination = root.join(name);
+    match verify(&destination, sha256) {
+        Err(PinnedError::Read { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Err(PinnedError::CacheMiss { path: destination })
+        }
+        result => result.map(|()| destination),
+    }
 }
 
 /// [`pinned_file`] with the fetch's size cap named by the caller: a font

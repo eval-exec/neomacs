@@ -20,6 +20,7 @@
 
 pub mod config_env;
 pub mod display;
+pub mod image_fixtures;
 pub mod inventory;
 pub mod packages;
 pub mod pinned;

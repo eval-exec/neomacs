@@ -72,3 +72,61 @@ fn a_verified_cache_entry_needs_no_network() {
     assert_eq!(resolved, path);
     std::fs::remove_file(&path).ok();
 }
+
+/// A test-runtime miss stays offline and does not materialize the cache.
+#[test]
+fn cache_only_missing_fixture_is_a_typed_miss_without_writes() {
+    let temporary = tempfile::tempdir().expect("temporary fixture directory");
+    let root = temporary.path().join("not-created");
+    let expected = crate::inventory::sha256_hex(b"pinned bytes");
+    match cached_pinned_file_in(&root, "fixture.xpm", &expected) {
+        Err(PinnedError::CacheMiss { path }) => assert_eq!(path, root.join("fixture.xpm")),
+        other => panic!("expected a cache-only miss, got {other:?}"),
+    }
+    assert!(
+        !root.exists(),
+        "reading a missing fixture must not create the cache"
+    );
+}
+
+/// Bad cached bytes fail integrity checking and are never repaired by a read.
+#[test]
+fn cache_only_corrupt_fixture_is_rejected_without_replacement() {
+    let temporary = tempfile::tempdir().expect("temporary fixture directory");
+    let path = temporary.path().join("fixture.xpm");
+    std::fs::write(&path, b"corrupt bytes").unwrap();
+    let expected = crate::inventory::sha256_hex(b"pinned bytes");
+    match cached_pinned_file_in(temporary.path(), "fixture.xpm", &expected) {
+        Err(PinnedError::CachedHash {
+            path: actual_path,
+            expected: pin,
+            actual,
+        }) => {
+            assert_eq!(actual_path, path);
+            assert_eq!(pin, expected);
+            assert_eq!(actual, crate::inventory::sha256_hex(b"corrupt bytes"));
+        }
+        other => panic!("expected a corrupt cache error, got {other:?}"),
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), b"corrupt bytes");
+    assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 1);
+}
+
+/// A valid fixture resolves offline, and every later read re-verifies the pin.
+#[test]
+fn cache_only_valid_fixture_is_reverified_on_every_read() {
+    let temporary = tempfile::tempdir().expect("temporary fixture directory");
+    let path = temporary.path().join("fixture.xpm");
+    std::fs::write(&path, b"pinned bytes").unwrap();
+    let expected = crate::inventory::sha256_hex(b"pinned bytes");
+    assert_eq!(
+        cached_pinned_file_in(temporary.path(), "fixture.xpm", &expected).unwrap(),
+        path
+    );
+    std::fs::write(&path, b"changed after verification").unwrap();
+    assert!(matches!(
+        cached_pinned_file_in(temporary.path(), "fixture.xpm", &expected),
+        Err(PinnedError::CachedHash { .. })
+    ));
+    assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 1);
+}

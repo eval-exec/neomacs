@@ -1,16 +1,17 @@
-//! The issue's upstream artwork, fetched at test time rather than vendored.
+//! The issue's upstream artwork, prefetched explicitly rather than vendored.
 //!
 //! `nyan.xpm` is TeMPOraL/nyan-mode's, so a copy in this tree would be a fork
 //! of it: the pin is the URL plus the SHA-256, and `neomacs-infra`'s
-//! `pinned_file` verifies the bytes on every use. The report's claim was that
+//! cache-only reader verifies the bytes on every use. Prepare it with
+//! `cargo xtask image-fixtures`; this test never downloads. The report claimed that
 //! "gray details turn black" in this file, and its palette is where the
 //! ladder lives -- fourteen `grayNN` names, nine of which the pixel data paints.
 
 use super::*;
 
-const NYAN_MODE_COMMIT: &str = "09904af23adb839c6a9c1175349a1fb67f5b4370";
-const NYAN_MODE_URL: &str = "https://raw.githubusercontent.com/TeMPOraL/nyan-mode/09904af23adb839c6a9c1175349a1fb67f5b4370/img/nyan.xpm";
-const NYAN_MODE_SHA256: &str = "d80164170278176347b1c01abc70c552ca2fcb655e279bea9f369206eb2d415e";
+use neomacs_infra::image_fixtures::{
+    NYAN_MODE_COMMIT, NYAN_MODE_NAME, NYAN_MODE_SHA256, NYAN_MODE_URL,
+};
 
 /// The named entries this file's own pixel data paints, in the order X11's
 /// `grayNN` ladder defines them: `grayNN` is `255 * N / 100`, rounded.
@@ -25,9 +26,13 @@ const FALLBACK: [u8; 3] = [0xff, 0x00, 0xff];
 
 #[test]
 fn nyan_mode_xpm_keeps_its_gray_ladder() {
-    let path =
-        neomacs_infra::pinned::pinned_file("nyan-mode-nyan.xpm", NYAN_MODE_URL, NYAN_MODE_SHA256)
-            .unwrap_or_else(|error| panic!("pinned nyan.xpm at {NYAN_MODE_COMMIT}: {error}"));
+    let path = neomacs_infra::pinned::cached_pinned_file(NYAN_MODE_NAME, NYAN_MODE_SHA256)
+        .unwrap_or_else(|error| {
+            panic!(
+                "FIXTURE-CACHE: pinned nyan.xpm at {NYAN_MODE_COMMIT}; url={NYAN_MODE_URL} \
+                 sha256={NYAN_MODE_SHA256}; {error}; run `cargo xtask image-fixtures`"
+            )
+        });
     let data = std::fs::read(&path).expect("the pinned file is readable");
     let (width, height, rgba) = decode_xpm_data(&data, FALLBACK).expect("nyan.xpm decodes");
     assert_eq!((width, height), (25, 15));

@@ -563,6 +563,25 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
             std::iter::empty::<OsString>(),
         );
     }
+    // Image tests consume the sha-verified cache without downloading on a miss.
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("image-fixtures")
+    ) {
+        args.next();
+        if let Some(unexpected) = args.next() {
+            return Err(format!(
+                "image-fixtures does not accept arguments; found `{}`",
+                unexpected.to_string_lossy()
+            )
+            .into());
+        }
+        return run_workspace_cli(
+            "neomacs-infra",
+            &["--bin", "prefetch-image-fixtures"],
+            std::iter::empty::<OsString>(),
+        );
+    }
     let options = FreshBuildOptions::parse(repo_root, args)?;
     run_fresh_build(&options)
 }
@@ -4683,6 +4702,7 @@ Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [-
        cargo xtask build-info --binary PATH [--runtime-root DIR] [--dry-run]
        cargo xtask check-dependency-coherence
        cargo xtask font-fixtures
+       cargo xtask image-fixtures
        cargo xtask render-window-icon --out-dir DIR [--source PATH]
        cargo xtask perf list
        cargo xtask perf run SCENARIO [--editor PATH] [--iterations N] [--frontend batch|tui|gui]

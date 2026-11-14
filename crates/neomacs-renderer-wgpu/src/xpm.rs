@@ -360,8 +360,8 @@ mod tests;
 #[path = "xpm/tests/corpus_test.rs"]
 mod corpus_tests;
 
-/// The issue's own upstream artwork, pinned by URL and SHA-256 and fetched at
-/// test time rather than vendored (nyan-mode, issue #545).
+/// The issue's upstream artwork, prefetched by `cargo xtask image-fixtures`
+/// and verified from the cache at test time (nyan-mode, issue #545).
 #[cfg(test)]
 #[path = "xpm/tests/nyan_mode_test.rs"]
 mod nyan_mode_tests;

@@ -1,5 +1,6 @@
 [package]
 name = "neomacs-infra"
+default-run = "infra"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
