@@ -14,7 +14,7 @@ use crate::emacs_core::terminal::pure::{
     builtin_terminal_parameter, builtin_terminal_parameters, builtin_tty_top_frame,
     builtin_tty_type, reset_terminal_thread_locals, terminal_handle_value,
 };
-use neomacs_display_protocol::SelectionOwner;
+use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity, SelectionOwner};
 use neovm_eval::emacs_core::eval::{DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
 use neovm_value::error::EvalError;
 use neovm_value::intern::resolve_sym;
@@ -999,6 +999,129 @@ fn resume_tty_signals_non_text_terminal_error() {
     }
 }
 
+// This models only the existing display-host admission seam. It does not open
+// a native connection or establish actual GUI startup coverage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum XOpenConnectionHostEvent {
+    Admission(Option<String>),
+    Resources(String),
+    RealizeFrame,
+    ResizeFrame,
+}
+
+#[derive(Debug)]
+struct XOpenConnectionHostState {
+    events: Vec<XOpenConnectionHostEvent>,
+    resources: String,
+}
+
+struct XOpenConnectionDisplayHost {
+    identity: Option<GraphicalDisplayIdentity>,
+    state: Arc<Mutex<XOpenConnectionHostState>>,
+}
+
+impl DisplayHost for XOpenConnectionDisplayHost {
+    fn graphical_connection_identity(
+        &self,
+        display: Option<&str>,
+    ) -> Result<Option<GraphicalDisplayIdentity>, String> {
+        self.state
+            .lock()
+            .unwrap()
+            .events
+            .push(XOpenConnectionHostEvent::Admission(
+                display.map(str::to_owned),
+            ));
+        let Some(identity) = &self.identity else {
+            return Ok(None);
+        };
+        if display.is_some_and(|display| display != identity.terminal_name()) {
+            return Err("private native connection refusal; do not expose to Lisp".to_owned());
+        }
+        Ok(Some(identity.clone()))
+    }
+
+    fn set_gui_resource_database(&mut self, resources: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.resources = resources.to_owned();
+        state
+            .events
+            .push(XOpenConnectionHostEvent::Resources(resources.to_owned()));
+    }
+
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        self.state
+            .lock()
+            .unwrap()
+            .events
+            .push(XOpenConnectionHostEvent::RealizeFrame);
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        self.state
+            .lock()
+            .unwrap()
+            .events
+            .push(XOpenConnectionHostEvent::ResizeFrame);
+        Ok(())
+    }
+}
+
+fn x_open_connection_test_context() -> neovm_eval::emacs_core::eval::Context {
+    reset_terminal_thread_locals();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    eval.set_variable("initial-window-system", Value::symbol("neo"));
+    assert!(eval.daemon().is_none());
+    assert!(x_window_system_active(&eval));
+    eval
+}
+
+fn install_x_open_connection_host(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    identity: Option<GraphicalDisplayIdentity>,
+) -> Arc<Mutex<XOpenConnectionHostState>> {
+    let state = Arc::new(Mutex::new(XOpenConnectionHostState {
+        events: Vec::new(),
+        resources: "original resources".to_owned(),
+    }));
+    eval.set_display_host(Box::new(XOpenConnectionDisplayHost {
+        identity,
+        state: Arc::clone(&state),
+    }));
+    state
+}
+
+fn x_open_connection_registry_counts(
+    eval: &neovm_eval::emacs_core::eval::Context,
+) -> (usize, usize) {
+    let terminals = builtin_terminal_list(vec![]).unwrap();
+    (
+        neovm_value::value::list_to_vec(&terminals).unwrap().len(),
+        eval.frame_manager().frame_list().len(),
+    )
+}
+
+fn assert_x_open_connection_error(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+    expected: &str,
+) {
+    match builtin_x_open_connection(eval, args).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "error");
+            // Exact data also rejects leaking the host's private refusal reason
+            // or changing U+2019 to an ASCII apostrophe.
+            assert_eq!(sig.data, vec![Value::string(expected)]);
+            assert_eq!(
+                sig.data[0].as_utf8_str().unwrap().as_bytes(),
+                expected.as_bytes()
+            );
+        }
+        other => panic!("expected exact x-open-connection error, got {other:?}"),
+    }
+}
+
 fn assert_x_open_connection_stringp(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -1047,15 +1170,177 @@ fn x_open_connection_active_arm_rejects_non_string_display() {
 }
 
 #[test]
-fn x_open_connection_active_arm_returns_nil_for_string_display() {
+fn x_open_connection_reuses_owned_x11_and_wayland_connections_before_setting_resources() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    eval.set_variable("initial-window-system", Value::symbol("x"));
-    assert!(
-        builtin_x_open_connection(&mut eval, vec![Value::string(":987")])
-            .unwrap()
-            .is_nil()
+    for identity in [
+        GraphicalDisplayIdentity::named(GraphicalBackend::X11, ":42").unwrap(),
+        GraphicalDisplayIdentity::named(GraphicalBackend::Wayland, "wayland-7").unwrap(),
+        GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland),
+    ] {
+        for resources in [None, Some("new resources")] {
+            for must_succeed in [Value::NIL, Value::T] {
+                let mut eval = x_open_connection_test_context();
+                let display = identity.terminal_name().to_owned();
+                let state = install_x_open_connection_host(&mut eval, Some(identity.clone()));
+                let before = x_open_connection_registry_counts(&eval);
+                let mut args = vec![Value::string(&display)];
+                // Cover the one-argument startup call and explicit nil XRM.
+                if resources.is_some() || !must_succeed.is_nil() {
+                    args.push(resources.map(Value::string).unwrap_or(Value::NIL));
+                    args.push(must_succeed);
+                }
+                assert!(builtin_x_open_connection(&mut eval, args).unwrap().is_nil());
+                assert_eq!(x_open_connection_registry_counts(&eval), before);
+                let state = state.lock().unwrap();
+                assert_eq!(state.resources, resources.unwrap_or("original resources"));
+                let mut expected = vec![XOpenConnectionHostEvent::Admission(Some(display))];
+                if let Some(resources) = resources {
+                    expected.push(XOpenConnectionHostEvent::Resources(resources.to_owned()));
+                }
+                assert_eq!(state.events, expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn x_open_connection_refuses_missing_host_for_nil_and_true_must_succeed() {
+    crate::test_utils::init_test_tracing();
+    for must_succeed in [Value::NIL, Value::T] {
+        let mut eval = x_open_connection_test_context();
+        let before = x_open_connection_registry_counts(&eval);
+        assert_x_open_connection_error(
+            &mut eval,
+            vec![
+                Value::string(":987"),
+                Value::string("unadmitted resources"),
+                must_succeed,
+            ],
+            "Display :987 can’t be opened",
+        );
+        assert_eq!(x_open_connection_registry_counts(&eval), before);
+    }
+}
+
+#[test]
+fn x_open_connection_refuses_unavailable_host_without_resource_or_terminal_changes() {
+    crate::test_utils::init_test_tracing();
+    for must_succeed in [Value::NIL, Value::T] {
+        let mut eval = x_open_connection_test_context();
+        let state = install_x_open_connection_host(&mut eval, None);
+        let before = x_open_connection_registry_counts(&eval);
+        assert_x_open_connection_error(
+            &mut eval,
+            vec![
+                Value::string(":42"),
+                Value::string("unadmitted resources"),
+                must_succeed,
+            ],
+            "Display :42 can’t be opened",
+        );
+        assert_eq!(x_open_connection_registry_counts(&eval), before);
+        let state = state.lock().unwrap();
+        assert_eq!(state.resources, "original resources");
+        assert_eq!(
+            state.events,
+            [XOpenConnectionHostEvent::Admission(Some(":42".to_owned()))]
+        );
+    }
+}
+
+#[test]
+fn x_open_connection_masks_foreign_host_reason_for_nil_and_true_must_succeed() {
+    crate::test_utils::init_test_tracing();
+    for (display, expected) in [
+        (":987", "Display :987 can’t be opened"),
+        ("", "Display  can’t be opened"),
+        ("bad\0display", "Display bad\0display can’t be opened"),
+        (
+            "initial_terminal",
+            "Display initial_terminal can’t be opened",
+        ),
+    ] {
+        for must_succeed in [Value::NIL, Value::T] {
+            let mut eval = x_open_connection_test_context();
+            let state = install_x_open_connection_host(
+                &mut eval,
+                Some(GraphicalDisplayIdentity::named(GraphicalBackend::X11, ":42").unwrap()),
+            );
+            let before = x_open_connection_registry_counts(&eval);
+            assert_x_open_connection_error(
+                &mut eval,
+                vec![
+                    Value::string(display),
+                    Value::string("unadmitted resources"),
+                    must_succeed,
+                ],
+                expected,
+            );
+            assert_eq!(x_open_connection_registry_counts(&eval), before);
+            let state = state.lock().unwrap();
+            assert_eq!(state.resources, "original resources");
+            assert_eq!(
+                state.events,
+                [XOpenConnectionHostEvent::Admission(Some(
+                    display.to_owned()
+                ))]
+            );
+        }
+    }
+}
+
+#[test]
+fn x_open_connection_checks_display_then_xrm_before_requesting_host_admission() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = x_open_connection_test_context();
+    let state = install_x_open_connection_host(
+        &mut eval,
+        Some(GraphicalDisplayIdentity::named(GraphicalBackend::X11, ":42").unwrap()),
     );
+    let before = x_open_connection_registry_counts(&eval);
+    for (display, resources, invalid) in [
+        (Value::NIL, Value::fixnum(42), Value::NIL),
+        (Value::fixnum(41), Value::fixnum(42), Value::fixnum(41)),
+        (Value::string(":42"), Value::fixnum(42), Value::fixnum(42)),
+    ] {
+        assert_x_open_connection_stringp(&mut eval, vec![display, resources, Value::T], invalid);
+        assert_eq!(x_open_connection_registry_counts(&eval), before);
+        let state = state.lock().unwrap();
+        assert!(state.events.is_empty());
+        assert_eq!(state.resources, "original resources");
+    }
+}
+
+#[test]
+fn x_open_connection_rejects_xwayland_name_despite_native_display_seed() {
+    crate::test_utils::init_test_tracing();
+    for must_succeed in [Value::NIL, Value::T] {
+        let mut eval = x_open_connection_test_context();
+        let state = install_x_open_connection_host(
+            &mut eval,
+            Some(GraphicalDisplayIdentity::named(GraphicalBackend::Wayland, "wayland-7").unwrap()),
+        );
+        // Model conflicting Lisp startup inputs without changing process env.
+        // This checks primitive admission, not neo-win's fallback selection.
+        eval.set_variable("x-display-name", Value::string("wayland-7"));
+        eval.set_variable(
+            "process-environment",
+            Value::list(vec![Value::string("DISPLAY=:987")]),
+        );
+        let before = x_open_connection_registry_counts(&eval);
+        assert_x_open_connection_error(
+            &mut eval,
+            vec![Value::string(":987"), Value::NIL, must_succeed],
+            "Display :987 can’t be opened",
+        );
+        assert_eq!(x_open_connection_registry_counts(&eval), before);
+        let state = state.lock().unwrap();
+        assert_eq!(state.resources, "original resources");
+        assert_eq!(
+            state.events,
+            [XOpenConnectionHostEvent::Admission(Some(":987".to_owned()))]
+        );
+    }
 }
 
 /// A native Wayland launch has no DISPLAY, so the `neo` frontend passes nil
