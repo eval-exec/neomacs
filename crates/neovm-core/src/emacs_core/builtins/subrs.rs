@@ -3772,13 +3772,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "string-to-multibyte",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::misc::builtin_string_to_multibyte(args)
-        }),
-        SubrArity::new(1, Some(1)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::strings::STRING_TO_MULTIBYTE_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "string-to-unibyte",
         NativeFn::ContextVec(|_ctx, args| crate::emacs_core::misc::builtin_string_to_unibyte(args)),

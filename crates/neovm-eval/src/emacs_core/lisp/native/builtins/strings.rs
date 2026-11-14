@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::eval::AllocationFailureContextExt;
+use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 use malachite::base::num::arithmetic::traits::Abs;
 use malachite::base::num::basic::traits::Zero;
 use malachite::base::num::conversion::traits::{FromStringBase, RoundingFrom, ToStringBase};
@@ -17,6 +18,17 @@ use neovm_value::value::{
     set_string_text_properties_table_for_value,
 };
 use std::sync::LazyLock;
+
+/// Canonical production/unit descriptor; retain the original Core closure and metadata.
+#[doc(hidden)]
+pub static STRING_TO_MULTIBYTE_SUBR: SubrSpec =
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "string-to-multibyte",
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::misc::builtin_string_to_multibyte(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    ));
 
 // ===========================================================================
 // String operations

@@ -2631,4 +2631,46 @@ mod provider_tests {
             (1, Some(1), "always")
         );
     }
+
+    #[test]
+    fn core_string_to_multibyte_source_resolves_the_single_production_descriptor() {
+        const CALL: &str = "neovm_eval::emacs_core::builtins::strings::STRING_TO_MULTIBYTE_SUBR";
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = read(&root, CORE_MANIFEST).unwrap();
+        assert_eq!(
+            source
+                .matches(&format!("ctx.register_subr({CALL});"))
+                .count(),
+            1
+        );
+        let (events, _) = manifest_events(&root).unwrap();
+        let direct: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Direct { spec, .. } => Some(spec),
+                _ => None,
+            })
+            .collect();
+        let index = direct
+            .iter()
+            .position(|spec| spec.name == "string-to-multibyte")
+            .unwrap();
+        assert_eq!(
+            direct
+                .iter()
+                .filter(|spec| spec.name == "string-to-multibyte")
+                .count(),
+            1
+        );
+        assert_eq!(direct[index - 1].name, "string-make-unibyte");
+        assert_eq!(direct[index + 1].name, "string-to-unibyte");
+        assert_eq!(
+            (
+                direct[index].min,
+                direct[index].max,
+                direct[index].cfg.as_str()
+            ),
+            (1, Some(1), "always")
+        );
+    }
 }

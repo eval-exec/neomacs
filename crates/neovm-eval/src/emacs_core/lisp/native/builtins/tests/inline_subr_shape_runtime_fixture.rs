@@ -45,6 +45,7 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_reverse_matches_canonical_descriptor(&mut eval);
     assert_core_subrp_matches_canonical_descriptor(&mut eval);
     assert_core_hash_table_count_matches_canonical_descriptor(&mut eval);
+    assert_core_string_to_multibyte_matches_canonical_descriptor(&mut eval);
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
@@ -456,5 +457,72 @@ fn assert_core_hash_table_count_matches_canonical_descriptor(context: &mut Conte
     assert_eq!(
         signal.data,
         vec![Value::symbol("hash-table-p"), Value::fixnum(7)]
+    );
+}
+
+fn assert_core_string_to_multibyte_matches_canonical_descriptor(context: &mut Context) {
+    use crate::emacs_core::builtins::strings::STRING_TO_MULTIBYTE_SUBR;
+    use crate::emacs_core::eval::lookup_global_subr_entry;
+    use crate::emacs_core::eval::subr_abi::SubrFn;
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+    use neovm_value::error::FlowRef;
+    use neovm_value::heap_types::LispString;
+    use neovm_value::value::Value;
+
+    let expected = STRING_TO_MULTIBYTE_SUBR;
+    let id = intern("string-to-multibyte");
+    let actual = lookup_global_subr_entry(id).expect("core registered string-to-multibyte");
+    let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(actual_fn))) =
+        (expected.function(), actual.function)
+    else {
+        panic!("string-to-multibyte retains the production Many ABI");
+    };
+    assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+    assert_eq!(expected.name(), "string-to-multibyte");
+    assert_eq!(expected.arity(), SubrArity::new(1, Some(1)));
+    assert_eq!(
+        (actual.min_args, actual.max_args),
+        (expected.arity().min(), expected.arity().max())
+    );
+    assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+    assert!(actual.interactive_spec.is_none());
+    assert!(expected.interactive_spec().is_none());
+    assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+    assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(
+        context
+            .obarray_view()
+            .get_property("string-to-multibyte", "disabled")
+            .unwrap_or(Value::NIL)
+            .is_nil()
+    );
+    assert!(expected.leaf_spec().is_none());
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+
+    let unicode = Value::string("λ🙂");
+    let unchanged = actual_fn(context, vec![unicode]).expect("core Unicode conversion");
+    assert_eq!(unchanged.bits(), unicode.bits());
+    let byte_cases: [(&[u8], &[u8]); 2] = [
+        (&[0x80, 0xff], &[0xc0, 0x80, 0xc1, 0xbf]),
+        (&[0xc3, 0xa9], &[0xc1, 0x83, 0xc0, 0xa9]),
+    ];
+    for (bytes, expected_bytes) in byte_cases {
+        let input = Value::heap_string(LispString::from_unibyte_slice(bytes));
+        let converted = actual_fn(context, vec![input]).expect("core byte8 conversion");
+        assert_ne!(converted.bits(), input.bits());
+        let string = converted.as_lisp_string().expect("multibyte string");
+        assert!(string.is_multibyte());
+        assert_eq!(string.as_bytes(), expected_bytes);
+    }
+    let error = actual_fn(context, vec![Value::fixnum(7)])
+        .expect_err("string-to-multibyte rejects a non-string");
+    let FlowRef::Signal(signal) = error.kind() else {
+        panic!("string-to-multibyte wrong type is a signal");
+    };
+    assert_eq!(signal.symbol, intern("wrong-type-argument"));
+    assert_eq!(
+        signal.data,
+        vec![Value::symbol("stringp"), Value::fixnum(7)]
     );
 }

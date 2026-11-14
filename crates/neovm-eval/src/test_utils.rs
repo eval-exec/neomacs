@@ -1288,6 +1288,7 @@ mod unit_runtime {
         }
 
         Some(match name {
+            "string-to-multibyte" => crate::emacs_core::builtins::strings::STRING_TO_MULTIBYTE_SUBR,
             "concat" => SubrSpec::new(
                 "concat",
                 NativeFn::ContextSlice(bind_concat),
@@ -1300,6 +1301,83 @@ mod unit_runtime {
             ),
             _ => return None,
         })
+    }
+
+    #[test]
+    fn unit_string_to_multibyte_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::strings::STRING_TO_MULTIBYTE_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity};
+        use neovm_value::heap_types::LispString;
+        let expected = STRING_TO_MULTIBYTE_SUBR;
+        let actual = strings_family_subr("string-to-multibyte")
+            .expect("real unit string-to-multibyte descriptor");
+        assert_eq!(actual.name(), expected.name());
+        assert_eq!(expected.name(), "string-to-multibyte");
+        assert_eq!(actual.name(), "string-to-multibyte");
+        assert_eq!(actual.arity(), expected.arity());
+        assert_eq!(actual.arity(), SubrArity::new(1, Some(1)));
+        assert_eq!(actual.dispatch_kind(), expected.dispatch_kind());
+        assert!(actual.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(actual.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(actual.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(actual.command_default(), expected.command_default());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert_eq!(actual.command_default(), CommandDefault::Enabled);
+        assert!(actual.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let Some(SubrFn::Many(expected_fn)) = expected.function() else {
+            panic!("ContextVec ABI");
+        };
+        let Some(SubrFn::Many(actual_fn)) = actual.function() else {
+            panic!("unit ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let entry = crate::emacs_core::eval::lookup_global_subr_entry(neovm_value::intern::intern(
+            "string-to-multibyte",
+        ))
+        .expect("registered unit string-to-multibyte");
+        let Some(SubrFn::Many(registered_fn)) = entry.function else {
+            panic!("registered ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(registered_fn, expected_fn));
+        assert_eq!(
+            (entry.min_args, entry.max_args),
+            (expected.arity().min(), expected.arity().max())
+        );
+        assert_eq!(entry.dispatch_kind, expected.dispatch_kind());
+        assert!(entry.interactive_spec.is_none());
+        let id = neovm_value::intern::intern(expected.name());
+        assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert!(
+            context
+                .obarray_view()
+                .get_property("string-to-multibyte", "disabled")
+                .unwrap_or(Value::NIL)
+                .is_nil()
+        );
+
+        let unicode = Value::string("λ🙂");
+        let unchanged = registered_fn(&mut context, vec![unicode]).unwrap();
+        assert_eq!(unchanged.bits(), unicode.bits());
+        let byte_cases: [(&[u8], &[u8]); 4] = [
+            (b"", b""),
+            (b"ASCII", b"ASCII"),
+            (&[0x80, 0xff], &[0xc0, 0x80, 0xc1, 0xbf]),
+            (&[0xc3, 0xa9], &[0xc1, 0x83, 0xc0, 0xa9]),
+        ];
+        for (bytes, expected_bytes) in byte_cases {
+            let input = Value::heap_string(LispString::from_unibyte_slice(bytes));
+            let converted = registered_fn(&mut context, vec![input]).unwrap();
+            assert_ne!(converted.bits(), input.bits());
+            let string = converted.as_lisp_string().unwrap();
+            assert!(string.is_multibyte());
+            assert_eq!(string.as_bytes(), expected_bytes);
+        }
     }
 
     /// Symbol and closure subrs whose bodies live in this crate. The unit
