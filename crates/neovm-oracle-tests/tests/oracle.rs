@@ -16,6 +16,9 @@ mod oracle_backtrace_local_remake;
 #[path = "oracle_backtrace_locals.rs"]
 mod oracle_backtrace_locals;
 
+#[path = "oracle_buffer_copy_consumers.rs"]
+mod oracle_buffer_copy_consumers;
+
 #[path = "oracle_buffer_local_completion.rs"]
 mod oracle_buffer_local_completion;
 
