@@ -1608,13 +1608,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "copy-marker",
-        NativeFn::ContextSlice(|ctx: &mut crate::emacs_core::eval::Context, args| {
-            crate::emacs_core::marker::builtin_copy_marker_in_buffers(&mut ctx.edit.buffers, args)
-        }),
-        SubrArity::new(0, Some(2)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::COPY_MARKER_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "point-marker",
         NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {

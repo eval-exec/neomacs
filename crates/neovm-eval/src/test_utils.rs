@@ -871,6 +871,7 @@ mod unit_runtime {
             "standard-syntax-table" => {
                 crate::emacs_core::builtins::misc_pure::STANDARD_SYNTAX_TABLE_SUBR
             }
+            "copy-marker" => crate::emacs_core::builtins::misc_eval::COPY_MARKER_SUBR,
             "make-list" => SubrSpec::new(
                 "make-list",
                 NativeFn::ContextVec(bind_make_list),
@@ -1424,6 +1425,144 @@ mod unit_runtime {
             again.bits(),
             table.bits(),
             "the standard table is canonical"
+        );
+    }
+
+    #[test]
+    fn unit_copy_marker_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::misc_eval::COPY_MARKER_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        use neovm_edit::buffer::{EmacsBytePos, LispCharPos1};
+        use neovm_edit::emacs_core::marker::{
+            make_registered_buffer_marker, marker_logical_fields,
+        };
+        use neovm_value::intern::intern;
+        use neovm_value::value::Value;
+
+        let expected = COPY_MARKER_SUBR;
+        let descriptor = misc_family_subr("copy-marker")
+            .expect("unit runtime uses the production marker descriptor");
+        assert_eq!(expected.name(), "copy-marker");
+        assert_eq!(descriptor.name(), expected.name());
+        assert_eq!(descriptor.arity(), expected.arity());
+        assert_eq!(expected.arity(), SubrArity::new(0, Some(2)));
+        assert_eq!(descriptor.dispatch_kind(), expected.dispatch_kind());
+        assert_eq!(
+            expected.dispatch_kind(),
+            neovm_value::tagged::header::SubrDispatchKind::Builtin
+        );
+        assert!(descriptor.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(descriptor.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(descriptor.command_default(), expected.command_default());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(descriptor.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let (Some(SubrFn::ManySlice(expected_fn)), Some(SubrFn::ManySlice(descriptor_fn))) =
+            (expected.function(), descriptor.function())
+        else {
+            panic!("copy-marker retains the ContextSlice ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(descriptor_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let id = intern("copy-marker");
+        let actual = crate::emacs_core::eval::lookup_global_subr_entry(id)
+            .expect("registered unit copy-marker");
+        let Some(SubrFn::ManySlice(actual_fn)) = actual.function else {
+            panic!("registered copy-marker ContextSlice ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+        assert_eq!((actual.min_args, actual.max_args), (0, Some(2)));
+        assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+        assert!(actual.interactive_spec.is_none());
+        assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert!(
+            context
+                .obarray_view()
+                .get_property("copy-marker", "disabled")
+                .is_none_or(|value| value.is_nil())
+        );
+        let context = &mut context;
+        let detached = actual_fn(context, &[]).expect("registered no-argument marker copy");
+        let second = actual_fn(context, &[Value::NIL]).expect("registered nil marker copy");
+        assert!(detached.is_marker() && second.is_marker());
+        assert_ne!(
+            detached.bits(),
+            second.bits(),
+            "each copy allocates a fresh marker"
+        );
+        assert_eq!(marker_logical_fields(&detached), Some((None, None, false)));
+        let advancing = actual_fn(context, &[Value::NIL, Value::T])
+            .expect("registered detached marker with insertion type");
+        assert_eq!(marker_logical_fields(&advancing), Some((None, None, true)));
+
+        let current = context
+            .edit
+            .buffers
+            .current_buffer_id()
+            .expect("current buffer");
+        let source_buffer = context
+            .edit
+            .buffers
+            .create_buffer("*registered-copy-marker-source*");
+        assert_ne!(
+            source_buffer, current,
+            "copy must keep a noncurrent source buffer"
+        );
+        context
+            .edit
+            .buffers
+            .get_mut(source_buffer)
+            .unwrap()
+            .insert("a中b");
+        let source = make_registered_buffer_marker(
+            &mut context.edit.buffers,
+            source_buffer,
+            LispCharPos1::new(2),
+            true,
+        );
+        let copied = actual_fn(context, &[source]).expect("registered marker source copy");
+        let typed = actual_fn(context, &[source, Value::T]).expect("registered typed marker copy");
+        assert_ne!(copied.bits(), source.bits());
+        assert_ne!(typed.bits(), source.bits());
+        assert_ne!(typed.bits(), copied.bits());
+        assert_eq!(
+            marker_logical_fields(&copied),
+            Some((Some(source_buffer), Some(LispCharPos1::new(2)), false)),
+            "an omitted insertion type is nil, not inherited from the source"
+        );
+        assert_eq!(
+            marker_logical_fields(&typed),
+            Some((Some(source_buffer), Some(LispCharPos1::new(2)), true))
+        );
+        // All three marker objects must be on the actual source buffer's chain.
+        let buffer = context.edit.buffers.get_mut(source_buffer).unwrap();
+        buffer.goto_emacs_byte_pos(EmacsBytePos::new(1));
+        buffer.insert("X");
+        assert_eq!(
+            marker_logical_fields(&source).unwrap().1,
+            Some(LispCharPos1::new(3))
+        );
+        assert_eq!(
+            marker_logical_fields(&copied).unwrap().1,
+            Some(LispCharPos1::new(2))
+        );
+        assert_eq!(
+            marker_logical_fields(&typed).unwrap().1,
+            Some(LispCharPos1::new(3))
+        );
+
+        assert_eq!(context.edit.buffers.current_buffer_id(), Some(current));
+        let full_end = context.edit.buffers.get(current).unwrap().z_lisp_char_pos();
+        let numeric = actual_fn(context, &[Value::fixnum(Value::MOST_POSITIVE_FIXNUM)])
+            .expect("registered numeric copy in the current buffer");
+        assert_eq!(
+            marker_logical_fields(&numeric),
+            Some((Some(current), Some(full_end), false))
         );
     }
 

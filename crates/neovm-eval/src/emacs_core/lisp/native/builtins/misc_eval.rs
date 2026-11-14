@@ -154,6 +154,17 @@ pub static MAKE_CHAR_TABLE_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!
     SubrArity::new(1, Some(2)),
 ));
 
+/// The shared production/unit descriptor for the existing edit-owned marker copy.
+/// Keep GNU marker.c's optional source/type and the existing ContextSlice ABI.
+#[doc(hidden)]
+pub static COPY_MARKER_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "copy-marker",
+    NativeFn::ContextSlice(|ctx: &mut crate::emacs_core::eval::Context, args| {
+        neovm_edit::emacs_core::marker::builtin_copy_marker_in_buffers(&mut ctx.edit.buffers, args)
+    }),
+    SubrArity::new(0, Some(2)),
+));
+
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_pos_property(
     eval: &mut super::eval::Context,
