@@ -49,6 +49,7 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_bufferp_matches_canonical_descriptor(&mut eval);
     assert_core_number_to_string_matches_canonical_descriptor(&mut eval);
     assert_core_make_char_table_matches_canonical_descriptor(&mut eval);
+    assert_core_standard_syntax_table_matches_canonical_descriptor(&mut eval);
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
@@ -702,4 +703,59 @@ fn assert_core_make_char_table_matches_canonical_descriptor(context: &mut Contex
     let defaulted = actual_fn(context, vec![purpose]).expect("core optional initializer");
     assert!(is_char_table(&defaulted));
     assert_eq!(char_table_default(&defaulted), Value::NIL);
+}
+
+fn assert_core_standard_syntax_table_matches_canonical_descriptor(context: &mut Context) {
+    use crate::emacs_core::builtins::misc_pure::STANDARD_SYNTAX_TABLE_SUBR;
+    use crate::emacs_core::eval::lookup_global_subr_entry;
+    use crate::emacs_core::eval::subr_abi::SubrFn;
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+    use neovm_value::chartab::{builtin_char_table_subtype, is_char_table};
+    use neovm_value::tagged::header::SubrDispatchKind;
+    use neovm_value::value::Value;
+
+    let expected = STANDARD_SYNTAX_TABLE_SUBR;
+    let id = intern("standard-syntax-table");
+    let actual = lookup_global_subr_entry(id).expect("core registered standard-syntax-table");
+    let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(actual_fn))) =
+        (expected.function(), actual.function)
+    else {
+        panic!("standard-syntax-table retains the production ContextVec ABI");
+    };
+    assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+    assert_eq!(expected.name(), "standard-syntax-table");
+    assert_eq!(expected.arity(), SubrArity::new(0, Some(0)));
+    assert_eq!(
+        (actual.min_args, actual.max_args),
+        (expected.arity().min(), expected.arity().max())
+    );
+    assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+    assert_eq!(expected.dispatch_kind(), SubrDispatchKind::Builtin);
+    assert!(actual.interactive_spec.is_none());
+    assert!(expected.interactive_spec().is_none());
+    assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+    assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(expected.leaf_spec().is_none());
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+    assert_eq!(
+        context
+            .obarray_view()
+            .get_property("standard-syntax-table", "disabled")
+            .unwrap_or(Value::NIL),
+        Value::NIL
+    );
+
+    let table = actual_fn(context, vec![]).expect("core standard syntax body");
+    assert!(is_char_table(&table));
+    assert_eq!(
+        builtin_char_table_subtype(vec![table]).unwrap(),
+        Value::symbol("syntax-table")
+    );
+    let again = actual_fn(context, vec![]).expect("core cached standard syntax");
+    assert_eq!(
+        again.bits(),
+        table.bits(),
+        "the standard table is canonical"
+    );
 }

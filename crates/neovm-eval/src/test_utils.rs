@@ -868,6 +868,9 @@ mod unit_runtime {
                 SubrArity::new(0, Some(0)),
             ),
             "make-char-table" => crate::emacs_core::builtins::misc_eval::MAKE_CHAR_TABLE_SUBR,
+            "standard-syntax-table" => {
+                crate::emacs_core::builtins::misc_pure::STANDARD_SYNTAX_TABLE_SUBR
+            }
             "make-list" => SubrSpec::new(
                 "make-list",
                 NativeFn::ContextVec(bind_make_list),
@@ -1352,6 +1355,76 @@ mod unit_runtime {
         assert!(is_char_table(&defaulted));
         assert_eq!(char_table_default(&defaulted), Value::NIL);
         assert_eq!(char_table_extra_slot_value(&defaulted, 0), Some(Value::NIL));
+    }
+
+    #[test]
+    fn unit_standard_syntax_table_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::misc_pure::STANDARD_SYNTAX_TABLE_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        use neovm_value::chartab::{builtin_char_table_subtype, is_char_table};
+        use neovm_value::intern::intern;
+        use neovm_value::tagged::header::SubrDispatchKind;
+        use neovm_value::value::Value;
+
+        let expected = STANDARD_SYNTAX_TABLE_SUBR;
+        let descriptor = misc_family_subr("standard-syntax-table")
+            .expect("unit runtime uses the production descriptor");
+        assert_eq!(expected.name(), "standard-syntax-table");
+        assert_eq!(descriptor.name(), expected.name());
+        assert_eq!(descriptor.arity(), expected.arity());
+        assert_eq!(expected.arity(), SubrArity::new(0, Some(0)));
+        assert_eq!(descriptor.dispatch_kind(), expected.dispatch_kind());
+        assert_eq!(expected.dispatch_kind(), SubrDispatchKind::Builtin);
+        assert!(descriptor.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(descriptor.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(descriptor.command_default(), expected.command_default());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(descriptor.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(descriptor_fn))) =
+            (expected.function(), descriptor.function())
+        else {
+            panic!("standard-syntax-table retains the ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(descriptor_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let id = intern("standard-syntax-table");
+        let actual = crate::emacs_core::eval::lookup_global_subr_entry(id)
+            .expect("registered unit standard-syntax-table");
+        let Some(SubrFn::Many(actual_fn)) = actual.function else {
+            panic!("registered standard-syntax-table ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+        assert_eq!((actual.min_args, actual.max_args), (0, Some(0)));
+        assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+        assert!(actual.interactive_spec.is_none());
+        assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+        assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert_eq!(
+            context
+                .obarray_view()
+                .get_property("standard-syntax-table", "disabled")
+                .unwrap_or(Value::NIL),
+            Value::NIL
+        );
+
+        let table = actual_fn(&mut context, vec![]).expect("registered standard syntax body");
+        assert!(is_char_table(&table));
+        assert_eq!(
+            builtin_char_table_subtype(vec![table]).unwrap(),
+            Value::symbol("syntax-table")
+        );
+        let again = actual_fn(&mut context, vec![]).expect("registered cached standard syntax");
+        assert_eq!(
+            again.bits(),
+            table.bits(),
+            "the standard table is canonical"
+        );
     }
 
     /// String subrs whose bodies live in this crate. The unit runtime binds

@@ -37,6 +37,18 @@ fn identity_entry(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     builtin_identity(args)
 }
 
+/// The shared zero-argument, noninteractive standard syntax table descriptor.
+/// Keep the original ContextVec closure and cached lower constructor unchanged.
+#[doc(hidden)]
+pub static STANDARD_SYNTAX_TABLE_SUBR: SubrSpec =
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "standard-syntax-table",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::syntax::builtin_standard_syntax_table(args)
+        }),
+        SubrArity::new(0, Some(0)),
+    ));
+
 #[doc(hidden)]
 pub fn builtin_identity(args: Vec<Value>) -> EvalResult {
     expect_args("identity", &args, 1)?;

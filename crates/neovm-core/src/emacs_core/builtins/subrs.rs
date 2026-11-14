@@ -2138,13 +2138,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::syntax::builtin_syntax_table_p_in_state),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "standard-syntax-table",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::syntax::builtin_standard_syntax_table(args)
-        }),
-        SubrArity::new(0, Some(0)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_pure::STANDARD_SYNTAX_TABLE_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "current-time",
         NativeFn::ContextVec(crate::emacs_core::timefns::builtin_current_time_in_context),
