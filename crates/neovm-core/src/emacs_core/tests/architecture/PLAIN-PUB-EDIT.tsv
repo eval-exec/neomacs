@@ -796,6 +796,7 @@ crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::new
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::next_boundary_after_emacs_byte_pos
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::next_boundary_after_until_emacs_byte_pos
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_applies_to_window
+crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_creation_serial
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_effective_property_values_ascending_at_emacs_byte_pos
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_end_emacs_byte_pos
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_get
