@@ -1674,7 +1674,7 @@ impl RetainedWindowMatrix {
         let damage = self
             .key
             .face_overlay_coverage
-            .damage(curr.face_overlay_coverage)?;
+            .damage(curr.face_overlay_coverage, self.key.window_start)?;
         self.scroll_replay_for_placement(curr, None, Some(damage))
     }
 
@@ -1994,7 +1994,7 @@ impl RetainedWindowMatrix {
         let (start, end) = self
             .key
             .face_overlay_coverage
-            .damage(curr.face_overlay_coverage)?;
+            .damage(curr.face_overlay_coverage, self.key.window_start)?;
         self.localized_replay_with_source_proof(
             curr,
             EditReplayPositions::new(start, end, 0),

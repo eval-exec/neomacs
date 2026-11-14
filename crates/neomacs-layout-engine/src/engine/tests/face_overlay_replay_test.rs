@@ -890,3 +890,229 @@ fn face_change_does_not_admit_stale_retained_faces_on_gui_frames() {
 fn face_change_does_not_admit_stale_retained_faces_on_tty_frames() {
     mode_line_face_change_matches_full_layout(FaceChangeFrame::Tty);
 }
+
+#[test]
+fn face_overlay_alias_gate_accepts_benign_configurations() {
+    let (mut eval, _, _, _) = incr_editing_frame("x\n", 320, 240);
+    for form in [
+        "'((face font-lock-face))",
+        "'((face highlight font-lock-face))",
+        "'((invisible org-fold-invisible) (face font-lock-face))",
+        // A cycle that never reaches face cannot let a face overlay supply a
+        // structural property.
+        "'((a b) (b a))",
+    ] {
+        let aliases = eval.eval_str(form).expect("alias alist");
+        assert!(
+            crate::incremental_layout::face_overlay_aliases_supported(Some(aliases)),
+            "{form} must keep the replay eligible"
+        );
+    }
+    assert!(crate::incremental_layout::face_overlay_aliases_supported(
+        None
+    ));
+    let nil = eval.eval_str("nil").expect("nil");
+    assert!(crate::incremental_layout::face_overlay_aliases_supported(
+        Some(nil)
+    ));
+}
+
+#[test]
+fn face_overlay_alias_gate_rejects_structural_properties_that_reach_face() {
+    let (mut eval, _, _, _) = incr_editing_frame("x\n", 320, 240);
+    for form in [
+        // A face-only overlay must not be able to supply `display`.
+        "'((display face))",
+        // …including through an alias chain.
+        "'((display bar) (bar face))",
+    ] {
+        let aliases = eval.eval_str(form).expect("alias alist");
+        assert!(
+            !crate::incremental_layout::face_overlay_aliases_supported(Some(aliases)),
+            "{form} must keep the canonical full walk"
+        );
+    }
+}
+
+/// Issue #609: damage is per-overlay, not the bounding box of every face
+/// overlay. A static highlight on the first line must not widen the rewalk of
+/// a highlight moving eight lines below it.
+#[test]
+fn face_overlay_damage_stays_local_to_the_moved_highlight() {
+    let text = "line 000 ready\n".repeat(200);
+    let (mut eval, frame, _, _) = incr_editing_frame(&text, 800, 600);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str(
+        r##"(progn
+          (setq truncate-lines t char-property-alias-alist '((face font-lock-face)))
+          (let ((static-highlight (make-overlay 1 9)))
+            (overlay-put static-highlight 'face '(:background "#654321")))
+          (goto-char (point-min)) (forward-line 8)
+          (setq moving-highlight (make-overlay (point) (line-beginning-position 2)))
+          (overlay-put moving-highlight 'priority -50)
+          (overlay-put moving-highlight 'face '(:background "#123456" :extend t)))"##,
+    )
+    .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    eval.eval_str(
+        "(progn (forward-line 1) (move-overlay moving-highlight (point) (line-beginning-position 2)))",
+    )
+    .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    let stats = engine.last_layout_stats();
+    assert!(stats.edit_windows > 0, "localized edit replay: {stats:?}");
+    assert!(
+        stats.reused_rows + stats.reused_shifted_rows >= 10,
+        "a change on line 9 must not rewalk from the first-line overlay: {stats:?}"
+    );
+    assert_matches_full_layout(&mut eval, &mut engine, frame, "static overlay one");
+}
+
+/// Issue #609: a highlight crossing a continuation row must still match the
+/// canonical layout when `truncate-lines` is nil.
+#[test]
+fn face_overlay_damage_across_a_continuation_row_matches_full_layout() {
+    let text = format!("{}tail\n", "wide ".repeat(160)).repeat(20);
+    let (mut eval, frame, _, _) = incr_editing_frame(&text, 800, 600);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str(
+        r##"(progn
+          (setq truncate-lines nil char-property-alias-alist '((face font-lock-face)))
+          (goto-char (point-min))
+          (setq moving-highlight (make-overlay (point) (min (point-max) (+ (point) 600))))
+          (overlay-put moving-highlight 'priority -50)
+          (overlay-put moving-highlight 'face '(:background "#123456")))"##,
+    )
+    .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    eval.eval_str(
+        "(progn (move-overlay moving-highlight (+ (point-min) 40) (min (point-max) (+ (point-min) 640))))",
+    )
+    .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    assert_matches_full_layout(&mut eval, &mut engine, frame, "continuation row");
+}
+
+/// Issue #609: an overlay that starts above the viewport and continues into it
+/// is clamped to the body start, and a change entirely above it declines the
+/// replay.
+#[test]
+fn face_overlay_damage_crossing_the_viewport_top_matches_full_layout() {
+    let text = "line 000 ready\n".repeat(200);
+    let (mut eval, frame, _, _) = incr_editing_frame(&text, 800, 600);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str(
+        r##"(progn
+          (setq truncate-lines t char-property-alias-alist '((face font-lock-face)))
+          (let ((crossing (make-overlay 1 120)))
+            (overlay-put crossing 'face '(:background "#654321"))
+            (setq crossing-highlight crossing))
+          (set-window-start nil (save-excursion (goto-char (point-min)) (forward-line 5) (point)) t))"##,
+    )
+    .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    eval.eval_str("(move-overlay crossing-highlight 240 360)")
+        .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    assert_matches_full_layout(&mut eval, &mut engine, frame, "viewport top crossing");
+}
+
+/// Issue #609 review: a face plist carrying a string longer than the
+/// fingerprint bound must keep the canonical full walk rather than reuse rows
+/// with a possibly stale face.
+#[test]
+fn face_overlay_with_an_unhashable_long_string_declines_replay() {
+    let text = "line 000 ready\n".repeat(120);
+    let (mut eval, frame, _, _) = incr_editing_frame(&text, 800, 600);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str(
+        r##"(progn
+          (setq truncate-lines t char-property-alias-alist '((face font-lock-face)))
+          (setq long-face-string (make-string 80 ?x))
+          (goto-char (point-min)) (forward-line 3)
+          (setq moving-highlight (make-overlay (point) (line-beginning-position 2)))
+          (overlay-put moving-highlight 'priority -50)
+          (overlay-put moving-highlight 'face '(:background "#123456" :family "unused")))"##,
+    )
+    .unwrap();
+    // Install the long string as part of the face plist itself.
+    eval.eval_str("(overlay-put moving-highlight 'face (list :background long-face-string))")
+        .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    eval.eval_str(
+        "(progn (forward-line 1) (move-overlay moving-highlight (point) (line-beginning-position 2)))",
+    )
+    .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    assert_matches_full_layout(&mut eval, &mut engine, frame, "long face string");
+}
+
+/// Issue #609 review: `overlay_priority` treats `t` as 0, so changing a
+/// priority from `1` to `t` changes which overlapping overlay wins. The
+/// fingerprint must not let `t` collide with fixnum `1`.
+#[test]
+fn face_overlay_priority_t_and_one_are_distinct_damage() {
+    let text = "line 000 ready\n".repeat(200);
+    let (mut eval, frame, _, _) = incr_editing_frame(&text, 800, 600);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str(
+        r##"(progn
+          (setq truncate-lines t char-property-alias-alist '((face font-lock-face)))
+          (goto-char (point-min)) (forward-line 2)
+          (setq first-highlight (make-overlay (point) (line-beginning-position 2)))
+          (overlay-put first-highlight 'priority 1)
+          (overlay-put first-highlight 'face '(:background "#111111"))
+          (setq later-highlight (make-overlay (point) (line-beginning-position 2)))
+          (overlay-put later-highlight 'priority 0)
+          (overlay-put later-highlight 'face '(:background "#222222"))
+          (goto-char (point-min)) (forward-line 8)
+          (setq moving-highlight (make-overlay (point) (line-beginning-position 2)))
+          (overlay-put moving-highlight 'priority -50)
+          (overlay-put moving-highlight 'face '(:background "#123456" :extend t)))"##,
+    )
+    .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    // `t` counts as priority 0: the later-created overlay now wins the tie.
+    eval.eval_str(
+        "(progn (overlay-put first-highlight 'priority t) (forward-line 1) (move-overlay moving-highlight (point) (line-beginning-position 2)))",
+    )
+    .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    assert_matches_full_layout(&mut eval, &mut engine, frame, "priority t versus one");
+}
+
+/// Issue #609 review: a font-spec is mutable in place (`font-put`), so its
+/// identity bits cannot prove the face is unchanged; capture declines and the
+/// canonical walk runs.
+#[test]
+fn face_overlay_with_a_mutable_font_spec_declines_replay() {
+    let text = "line 000 ready\n".repeat(120);
+    let (mut eval, frame, _, _) = incr_editing_frame(&text, 800, 600);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str(
+        r##"(progn
+          (setq truncate-lines t char-property-alias-alist '((face font-lock-face)))
+          (setq face-font-spec (font-spec :family "Monospace"))
+          (goto-char (point-min)) (forward-line 3)
+          (setq highlight (make-overlay (point) (line-beginning-position 2)))
+          (overlay-put highlight 'face (list :font face-font-spec))
+          (goto-char (point-min)) (forward-line 8)
+          (setq moving-highlight (make-overlay (point) (line-beginning-position 2)))
+          (overlay-put moving-highlight 'priority -50)
+          (overlay-put moving-highlight 'face '(:background "#123456" :extend t)))"##,
+    )
+    .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    eval.eval_str(
+        "(progn (font-put face-font-spec :weight 'bold) (forward-line 1) (move-overlay moving-highlight (point) (line-beginning-position 2)))",
+    )
+    .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    assert_matches_full_layout(&mut eval, &mut engine, frame, "mutable font-spec");
+}
