@@ -244,3 +244,30 @@ fn expansion_superroot_equal_bytes_fresh_value() {
         None,
     );
 }
+
+#[test]
+fn write_region_explicit_lockname() {
+    compare_filename_identity(
+        "write_region_explicit_lockname",
+        include_str!("fixtures/filelock_identity/write-region-explicit-lockname.el"),
+        None,
+    );
+}
+
+#[test]
+fn write_region_default_lockname() {
+    compare_filename_identity(
+        "write_region_default_lockname",
+        include_str!("fixtures/filelock_identity/write-region-default-lockname.el"),
+        None,
+    );
+}
+
+#[test]
+fn encode_file_norecord_control() {
+    compare_filename_identity(
+        "encode_file_norecord_control",
+        include_str!("fixtures/filelock_identity/encode-file-norecord-control.el"),
+        None,
+    );
+}
