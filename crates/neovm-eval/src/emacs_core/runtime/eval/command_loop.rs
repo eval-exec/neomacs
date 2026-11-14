@@ -299,11 +299,61 @@ impl Context {
                 vec![Value::symbol(&DO_AUTO_SAVE)],
             )
         })??;
+        // GNU emacs.c:3157-3159: auto-save, then unlock_all_files. An
+        // escaping unlock handler keeps Dying but leaves before publishing;
+        // a later deliberate kill repeats both operations. The deliberate
+        // auto-save-list unlink belongs after this walk, never before it.
+        self.unlock_all_files_for_shutdown()?;
         self.log_cconv_memo_report();
         self.log_tier_i_report();
         self.shutdown_request = Some(request);
         self.command_loop.running = false;
         Err(Flow::shutdown(request))
+    }
+
+    /// GNU filelock.c:663-678, including the cons-tail mutation semantics of
+    /// FOR_EACH_LIVE_BUFFER (buffer.h:1326, lisp.h:5897). A callback may append,
+    /// reorder or kill buffers; the next step follows the edited retained
+    /// link, so neither an ID snapshot nor a seen set implements this walk.
+    fn unlock_all_files_for_shutdown(&mut self) -> Result<(), Flow> {
+        let cursor = self.edit.buffers.buffer_list_cursor();
+        for id in cursor {
+            let filename = self.edit.buffers.get_any(id).and_then(|buffer| {
+                // Removed cons nodes can still name killed buffers. Inspect
+                // their OWN retained truename, not a filename captured before
+                // a previous handler ran or their base buffer's filename.
+                let filename = buffer.buffer_local_value("buffer-file-truename")?;
+                if !filename.is_string() {
+                    return None;
+                }
+                // GNU BUF_MODIFF/BUF_SAVE_MODIFF follow the text owner even
+                // after an indirect dies. Owner construction flattens the
+                // base link; re-fetch its live or retained ticks EACH visit,
+                // since an earlier handler may have edited the surviving base.
+                // This is a shutdown predicate, not a claim that the global
+                // dead-indirect Buffer tick API has been changed.
+                let text_owner = match buffer.base_buffer() {
+                    Some(base) => self.edit.buffers.get_any(base)?,
+                    None => buffer,
+                };
+                (text_owner.save_modified_tick() < text_owner.modified_tick()).then_some(filename)
+            });
+            // Every buffer/manager borrow has ended before dispatch. Root the
+            // original Value so string interval Values survive arbitrary Lisp
+            // and GC; a standalone LispString clone is not a root owner.
+            if let Some(filename) = filename
+                && let Some(string) = filename.as_lisp_string()
+            {
+                let roots = self.save_specpdl_roots();
+                self.push_specpdl_root(filename);
+                let result = lifecycle::unlock_file(self, string);
+                self.restore_specpdl_roots(roots);
+                // Restore before propagating every Flow. Handler values are
+                // discarded by the canonical Funlock_file-compatible seam.
+                result?;
+            }
+        }
+        Ok(())
     }
 
     pub fn shutdown_request(&self) -> Option<ShutdownRequest> {

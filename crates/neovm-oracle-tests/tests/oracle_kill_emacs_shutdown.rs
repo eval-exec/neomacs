@@ -55,6 +55,7 @@ enum Probe {
     HookError,
     SafeHookDebugger,
     SafeHookDebugOnSignal,
+    UnlockMutation(&'static str),
     KillBufferUnlock(&'static str),
     PipeServerSentinels,
     DaemonUnixListener,
@@ -116,6 +117,9 @@ impl Probe {
     fn script(self) -> &'static str {
         match self {
             Self::Unlock => include_str!("fixtures/kill_emacs_shutdown/lock-release.el"),
+            Self::UnlockMutation(_) => {
+                include_str!("fixtures/kill_emacs_shutdown/unlock-mutation.el")
+            }
             Self::KillBufferUnlock("real-hup") => {
                 include_str!("fixtures/kill_emacs_shutdown/kill-buffer-unlock-real-hup.el")
             }
@@ -168,13 +172,55 @@ impl Probe {
     fn checkpoint(self) -> bool {
         matches!(
             self,
-            Self::Unlock | Self::AutoSaveList | Self::DaemonUnixListener
+            Self::Unlock
+                | Self::AutoSaveList
+                | Self::DaemonUnixListener
+                | Self::UnlockMutation("unlock-throw" | "post-dying-state")
         )
     }
 
     fn expected(self) -> Observation {
         let events: &[&str] = match self {
             Self::Unlock | Self::AutoSaveList => &[],
+            Self::UnlockMutation(kind) => match kind {
+                "append" => &["unlock:a", "unlock:b", "unlock:c"],
+                "rename-later" => &["unlock:a", "unlock:b-renamed"],
+                "clear-later" => &["unlock:a"],
+                "bury-current" => &["unlock:a"],
+                "kill-current" => &["unlock:a", "unlock:a", "unlock:b"],
+                "move-then-kill" => &["unlock:a", "unlock:a"],
+                "kill-then-move" => &["unlock:a", "unlock:a", "unlock:b"],
+                "kill-a-then-b" => &[
+                    "unlock:a",
+                    "unlock:a",
+                    "unlock:b",
+                    "unlock:b:dead",
+                    "unlock:c",
+                ],
+                "kill-b-then-a" => &["unlock:a", "unlock:b", "unlock:a", "unlock:c"],
+                "indirect-modify-after" => &["unlock:a", "unlock:a", "unlock:b:dead", "unlock:c"],
+                "indirect-clear-after" => &["unlock:a", "unlock:a", "unlock:b", "unlock:c"],
+                "unlock-throw" => &[
+                    "list-before:t",
+                    "kill-hook:1",
+                    "unlock:a:hooks=1",
+                    "after-catch:escaped:list=t:hooks=1",
+                    "second-kill",
+                    "unlock:a:hooks=1",
+                ],
+                "post-dying-state" => &[
+                    "sentinel:positive",
+                    "positive:sentinels=1",
+                    "list-before:t",
+                    "kill-hook:1",
+                    "unlock:a:hooks=1:sentinels=1:pending-live=nil",
+                    "after-catch:escaped:list=t:hooks=1:sentinels=1",
+                    "after-escape:sentinels=1",
+                    "second-kill",
+                    "unlock:a:hooks=1:sentinels=1:pending-live=nil",
+                ],
+                _ => panic!("unknown shutdown unlock mutation case: {kind}"),
+            },
             Self::DaemonUnixListener => &["user-unix-listener-created"],
             #[cfg(target_os = "linux")]
             Self::IgnoredChildHangup(_) => &[],
@@ -425,7 +471,10 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
         _ => root.join("auto-save-list"),
     };
     fs::write(&target, "initial saved content\n").unwrap();
-    if matches!(probe, Probe::AutoSaveList) {
+    if matches!(
+        probe,
+        Probe::AutoSaveList | Probe::UnlockMutation("unlock-throw" | "post-dying-state")
+    ) {
         fs::write(&artifact, "preexisting auto-save session list\n").unwrap();
     }
     let script = root.join("probe.el");
@@ -510,6 +559,9 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
     }
     if let Probe::KillBufferUnlock(kind) = probe {
         command.env("KILL_BUFFER_UNLOCK_CASE", kind);
+    }
+    if let Probe::UnlockMutation(kind) = probe {
+        command.env("SHUTDOWN_UNLOCK_CASE", kind);
     }
     let mut editor = RunningEditor {
         child: command.spawn().unwrap(),
@@ -796,4 +848,70 @@ fn kill_buffer_base_with_current_indirect_keeps_live_selection() {
 #[test]
 fn kill_buffer_current_indirect_keeps_native_frame_preference() {
     assert_shutdown_parity(Probe::KillBufferUnlock("current-indirect-frame-preference"));
+}
+
+// Each case reuses the same bounded external editor supervisor.
+#[test]
+fn shutdown_unlock_append() {
+    assert_shutdown_parity(Probe::UnlockMutation("append"));
+}
+
+#[test]
+fn shutdown_unlock_rename_later() {
+    assert_shutdown_parity(Probe::UnlockMutation("rename-later"));
+}
+
+#[test]
+fn shutdown_unlock_clear_later() {
+    assert_shutdown_parity(Probe::UnlockMutation("clear-later"));
+}
+
+#[test]
+fn shutdown_unlock_bury_current() {
+    assert_shutdown_parity(Probe::UnlockMutation("bury-current"));
+}
+
+#[test]
+fn shutdown_unlock_kill_current() {
+    assert_shutdown_parity(Probe::UnlockMutation("kill-current"));
+}
+
+#[test]
+fn shutdown_unlock_move_then_kill() {
+    assert_shutdown_parity(Probe::UnlockMutation("move-then-kill"));
+}
+
+#[test]
+fn shutdown_unlock_kill_then_move() {
+    assert_shutdown_parity(Probe::UnlockMutation("kill-then-move"));
+}
+
+#[test]
+fn shutdown_unlock_kill_a_then_b() {
+    assert_shutdown_parity(Probe::UnlockMutation("kill-a-then-b"));
+}
+
+#[test]
+fn shutdown_unlock_kill_b_then_a() {
+    assert_shutdown_parity(Probe::UnlockMutation("kill-b-then-a"));
+}
+
+#[test]
+fn shutdown_unlock_indirect_modify_after() {
+    assert_shutdown_parity(Probe::UnlockMutation("indirect-modify-after"));
+}
+
+#[test]
+fn shutdown_unlock_indirect_clear_after() {
+    assert_shutdown_parity(Probe::UnlockMutation("indirect-clear-after"));
+}
+
+#[test]
+fn shutdown_unlock_unlock_throw() {
+    assert_shutdown_parity(Probe::UnlockMutation("unlock-throw"));
+}
+
+#[test]
+fn shutdown_unlock_post_dying_state() {
+    assert_shutdown_parity(Probe::UnlockMutation("post-dying-state"));
 }

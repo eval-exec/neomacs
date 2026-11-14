@@ -51,6 +51,7 @@ cached_word_wrap_policy	method	pub(crate)	crates/neovm-edit/src/buffer/buffer.rs
 casify_replace_buffer_region_with_expansions	method	pub(crate)	crates/neovm-edit/src/buffer/insdel.rs:581	buffer::insdel	stage-3 edit split: K1 core-used method (bulk pub + doc(hidden)); reason=BULK (PC11-M)
 char_pos_to_emacs_byte_pos_clamped_no_alloc	method	pub(crate)	crates/neovm-edit/src/buffer/buffer.rs:3310	buffer::buffer	stage-3 edit split: K1 core-used method (bulk pub + doc(hidden)); reason=BULK (PC11-M)
 clear_inserted_plain_text_properties_in_char_range	method	pub(crate)	crates/neovm-edit/src/buffer/buffer.rs:7697	buffer::buffer	stage-3 edit split: K1 core-used method (bulk pub + doc(hidden)); reason=BULK (PC11-M)
+BufferManager::buffer_list_cursor	method	pub(crate)	crates/neovm-edit/src/buffer/buffer.rs:7520	buffer::buffer	lead #4542 peer5715-approved scoped native cons-tail cursor; consumer=neovm-eval runtime/eval/command_loop.rs unlock walk; no callback under owner borrow
 collect_killed_buffer_ids	method	pub(crate)	crates/neovm-edit/src/buffer/buffer.rs:7134	buffer::buffer	stage-3 edit split: K1 core-used method (bulk pub + doc(hidden)); reason=BULK (PC11-M)
 convert_text_backend_kind	method	pub(crate)	crates/neovm-edit/src/buffer/buffer.rs:3233	buffer::buffer	stage-3 edit split: K1 core-used method (bulk pub + doc(hidden)); reason=BULK (PC11-M)
 count_newlines_emacs_byte	method	pub(crate)	crates/neovm-edit/src/buffer/buffer.rs:4070	buffer::buffer	stage-3 edit split: K1 core-used method (bulk pub + doc(hidden)); reason=BULK (PC11-M)

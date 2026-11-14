@@ -7,6 +7,11 @@
 #[path = "insdel.rs"]
 mod insdel;
 
+#[path = "buffer_list_cursor.rs"]
+mod buffer_list_cursor;
+
+use buffer_list_cursor::{BufferListCursor, BufferListLinks, BufferOrderChange};
+
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -14,6 +19,7 @@ use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
 use std::ptr::NonNull;
+use std::rc::{Rc, Weak};
 use std::sync::OnceLock;
 
 use super::buffer_text::BufferText;
@@ -3048,7 +3054,19 @@ impl Buffer {
         self.local_flags = 0;
         self.keymap = Value::NIL;
         self.overlays.delete_all_overlays();
+        // GNU free_buffer_text releases bytes, not MODIFF/SAVE_MODIFF.
+        // Removed cons nodes can still be visited by an active buffer walk.
+        let modification_state = (
+            self.text.modified_tick(),
+            self.text.chars_modified_tick(),
+            self.text.save_modified_tick(),
+        );
         self.text = BufferText::new();
+        self.text.set_modification_state(
+            modification_state.0,
+            modification_state.1,
+            modification_state.2,
+        );
         self.mark_marker = MarkerRef::NONE;
         self.state_markers = None;
         self.undo_state = SharedUndoState::new();
@@ -6236,6 +6254,8 @@ pub struct BufferStorage {
     /// `last_name` and `filename` queryable.
     dead_buffers: FxHashMap<BufferId, Buffer>,
     buffer_order: Vec<BufferId>,
+    // Native links exist only while an owned cursor observes this storage.
+    buffer_order_observer: Option<Weak<RefCell<BufferListLinks>>>,
     next_id: u64,
     labeled_restrictions: FxHashMap<BufferId, Vec<LabeledRestriction>>,
     default_text_backend_kind: ImplementedBufferTextBackendKind,
@@ -6434,6 +6454,23 @@ impl Deref for BufferManager {
 }
 
 impl BufferStorage {
+    #[inline]
+    fn observe_buffer_order(&mut self, change: BufferOrderChange) {
+        if self.buffer_order_observer.is_some() {
+            self.observe_buffer_order_active(change);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn observe_buffer_order_active(&mut self, change: BufferOrderChange) {
+        if let Some(links) = self.buffer_order_observer.as_ref().and_then(Weak::upgrade) {
+            links.borrow_mut().apply(change);
+        } else {
+            self.buffer_order_observer = None;
+        }
+    }
+
     fn create_buffer(
         &mut self,
         current: Option<BufferId>,
@@ -6478,6 +6515,7 @@ impl BufferStorage {
         }
         self.buffers.insert(id, buf);
         self.buffer_order.push(id);
+        self.observe_buffer_order(BufferOrderChange::Append(id));
         id
     }
 
@@ -6486,6 +6524,7 @@ impl BufferStorage {
             buffers: self.buffers.clone(),
             dead_buffers: self.dead_buffers.clone(),
             buffer_order: self.buffer_order.clone(),
+            buffer_order_observer: None,
             next_id: self.next_id,
             labeled_restrictions: self.labeled_restrictions.clone(),
             default_text_backend_kind: self.default_text_backend_kind,
@@ -6815,6 +6854,7 @@ impl BufferManager {
             buffers: LiveBuffers::default(),
             dead_buffers: FxHashMap::default(),
             buffer_order: Vec::new(),
+            buffer_order_observer: None,
             next_id: 1,
             labeled_restrictions: FxHashMap::default(),
             default_text_backend_kind: ImplementedBufferTextBackendKind::GAP_BUFFER,
@@ -7056,6 +7096,8 @@ impl BufferManager {
 
         self.storage_mut().buffers.insert(id, indirect);
         self.storage_mut().buffer_order.push(id);
+        self.storage_mut()
+            .observe_buffer_order(BufferOrderChange::Append(id));
         // GNU `Fmake_indirect_buffer` runs `reset_buffer` on the new buffer,
         // which clears its own modtime (`src/buffer.c:1092-1093`) whatever
         // CLONE says -- an indirect buffer visits no file -- and sets
@@ -7079,6 +7121,8 @@ impl BufferManager {
             .buffer_order
             .retain(|existing| *existing != id);
         self.storage_mut().buffer_order.insert(0, id);
+        self.storage_mut()
+            .observe_buffer_order(BufferOrderChange::MoveFirst(id));
     }
 
     /// Move a live buffer to the end of buffer-list order.
@@ -7094,6 +7138,8 @@ impl BufferManager {
             .buffer_order
             .retain(|existing| *existing != id);
         self.storage_mut().buffer_order.push(id);
+        self.storage_mut()
+            .observe_buffer_order(BufferOrderChange::MoveLast(id));
         true
     }
 
@@ -7113,6 +7159,8 @@ impl BufferManager {
             .position(|existing| *existing == after)
             .map_or(self.buffer_order.len(), |index| index + 1);
         self.storage_mut().buffer_order.insert(insert_at, id);
+        self.storage_mut()
+            .observe_buffer_order(BufferOrderChange::MoveAfter(id, after));
         true
     }
 
@@ -7437,6 +7485,8 @@ impl BufferManager {
         }
         for killed_id in &killed_ids {
             let mut buf = self.storage_mut().buffers.remove(killed_id)?;
+            self.storage_mut()
+                .observe_buffer_order(BufferOrderChange::Remove(*killed_id));
             buf.mark_killed_after_local_reset();
             self.storage_mut().dead_buffers.insert(*killed_id, buf);
         }
@@ -7457,6 +7507,28 @@ impl BufferManager {
     /// Return the last known name for a dead buffer id, if available.
     pub fn dead_buffer_last_name_value(&self, id: BufferId) -> Option<Value> {
         self.dead_buffers.get(&id).map(Buffer::last_name_value)
+    }
+
+    /// Own a GNU buffer-list cons-tail walk without borrowing the manager.
+    ///
+    /// Each advance reads the preceding node's current successor, including
+    /// links retained after removal. Returned IDs may therefore name killed
+    /// buffers; callers must inspect the appropriate live or retained state.
+    /// Nested walks share the current owner's mutation graph, not a snapshot.
+    #[doc(hidden)]
+    #[cold]
+    pub fn buffer_list_cursor(&mut self) -> impl Iterator<Item = BufferId> + use<> {
+        let storage = self.storage_mut();
+        let links = storage
+            .buffer_order_observer
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .unwrap_or_else(|| {
+                let links = Rc::new(RefCell::new(BufferListLinks::new(&storage.buffer_order)));
+                storage.buffer_order_observer = Some(Rc::downgrade(&links));
+                links
+            });
+        BufferListCursor::new(links)
     }
 
     /// List all live buffer ids in buffer-list order, with the most recently
@@ -8894,6 +8966,7 @@ impl BufferManager {
         let mut manager = Self::with_owned_storage(BufferStorage {
             buffers: LiveBuffers::from_map(buffers),
             buffer_order: Vec::new(),
+            buffer_order_observer: None,
             next_id,
             labeled_restrictions: FxHashMap::default(),
             dead_buffers: FxHashMap::default(),
