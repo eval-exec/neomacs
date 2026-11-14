@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+use crate::emacs_core::subr::{FixedMin1, NativeFn, SubrArity, SubrSpec};
 use neovm_edit::buffer::text_props::PropertyPlistApplication;
 use neovm_edit::buffer::{CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, LispCharPos1};
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
@@ -175,6 +175,15 @@ pub static SET_CHAR_TABLE_RANGE_SUBR: SubrSpec =
             neovm_text::emacs_core::chartable::builtin_set_char_table_range_in_state
         ),
         SubrArity::new(3, Some(3)),
+    ));
+
+/// Share the original fixed-A1 syntax-table installation descriptor.
+#[doc(hidden)]
+pub static SET_SYNTAX_TABLE_SUBR: SubrSpec =
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "set-syntax-table",
+        neovm_text::emacs_core::syntax::builtin_set_syntax_table_1,
+        FixedMin1::One
     ));
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]

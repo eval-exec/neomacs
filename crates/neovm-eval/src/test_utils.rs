@@ -876,6 +876,7 @@ mod unit_runtime {
             "set-char-table-range" => {
                 crate::emacs_core::builtins::misc_eval::SET_CHAR_TABLE_RANGE_SUBR
             }
+            "set-syntax-table" => crate::emacs_core::builtins::misc_eval::SET_SYNTAX_TABLE_SUBR,
             "make-list" => SubrSpec::new(
                 "make-list",
                 NativeFn::ContextVec(bind_make_list),
@@ -1439,6 +1440,192 @@ mod unit_runtime {
             signal.data,
             vec![Value::symbol("char-table-subtype"), Value::fixnum(0)]
         );
+    }
+
+    #[test]
+    fn unit_set_syntax_table_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::misc_eval::SET_SYNTAX_TABLE_SUBR;
+        use crate::emacs_core::eval::lookup_global_subr_entry;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        use neovm_value::intern::intern;
+        use neovm_value::value::Value;
+        let expected = SET_SYNTAX_TABLE_SUBR;
+        assert_eq!(expected.name(), "set-syntax-table");
+        assert_eq!(expected.arity(), SubrArity::new(1, Some(1)));
+        assert_eq!(
+            expected.dispatch_kind(),
+            neovm_value::tagged::header::SubrDispatchKind::Builtin
+        );
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(expected.leaf_spec().is_none());
+        let descriptor = misc_family_subr("set-syntax-table").expect("actual unit family resolver");
+        assert_eq!(descriptor.name(), expected.name());
+        assert_eq!(descriptor.arity(), expected.arity());
+        assert_eq!(descriptor.dispatch_kind(), expected.dispatch_kind());
+        assert!(descriptor.interactive_spec().is_none());
+        assert_eq!(descriptor.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(descriptor.command_default(), expected.command_default());
+        assert!(descriptor.leaf_spec().is_none());
+        let (Some(SubrFn::A1(descriptor_fn)), Some(SubrFn::A1(expected_fn))) =
+            (descriptor.function(), expected.function())
+        else {
+            panic!("original A1 ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(descriptor_fn, expected_fn));
+        let mut context = crate::emacs_core::eval::Context::new(unit_runtime());
+        let context = &mut context;
+        let id = intern("set-syntax-table");
+        let actual = lookup_global_subr_entry(id).expect("actual registered set-syntax-table");
+        let (Some(SubrFn::A1(actual_fn)), Some(SubrFn::A1(expected_fn))) =
+            (actual.function, expected.function())
+        else {
+            panic!("original registered A1 ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+        assert_eq!(
+            (actual.min_args, actual.max_args),
+            (expected.arity().min(), expected.arity().max())
+        );
+        assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+        assert!(actual.interactive_spec.is_none());
+        assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert!(
+            context
+                .obarray_view()
+                .get_property("set-syntax-table", "disabled")
+                .is_none_or(|value| value.is_nil())
+        );
+        use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
+        use neovm_value::chartab::make_char_table_value;
+        let current = context
+            .edit
+            .buffers
+            .current_buffer_id()
+            .expect("current buffer");
+        let original =
+            context.edit.buffers.get(current).unwrap().slots()[BUFFER_SLOT_SYNTAX_TABLE.index()];
+        let original_local = context
+            .edit
+            .buffers
+            .get(current)
+            .unwrap()
+            .slot_local_flag(BUFFER_SLOT_SYNTAX_TABLE);
+        let other = context
+            .edit
+            .buffers
+            .create_buffer("*round4-set-syntax-other*");
+        let other_original =
+            context.edit.buffers.get(other).unwrap().slots()[BUFFER_SLOT_SYNTAX_TABLE.index()];
+        let other_original_local = context
+            .edit
+            .buffers
+            .get(other)
+            .unwrap()
+            .slot_local_flag(BUFFER_SLOT_SYNTAX_TABLE);
+        let table = make_char_table_value(Value::symbol("syntax-table"), Value::NIL);
+        assert_eq!(actual_fn(context, table).unwrap().bits(), table.bits());
+        assert_eq!(
+            context.edit.buffers.get(current).unwrap().slots()[BUFFER_SLOT_SYNTAX_TABLE.index()]
+                .bits(),
+            table.bits()
+        );
+        assert!(
+            context
+                .edit
+                .buffers
+                .get(current)
+                .unwrap()
+                .slot_local_flag(BUFFER_SLOT_SYNTAX_TABLE)
+        );
+        assert_eq!(
+            context.edit.buffers.get(other).unwrap().slots()[BUFFER_SLOT_SYNTAX_TABLE.index()],
+            other_original
+        );
+        assert_eq!(
+            context
+                .edit
+                .buffers
+                .get(other)
+                .unwrap()
+                .slot_local_flag(BUFFER_SLOT_SYNTAX_TABLE),
+            other_original_local
+        );
+        let other_table = make_char_table_value(Value::symbol("syntax-table"), Value::NIL);
+        context.edit.buffers.set_current(other);
+        assert_eq!(
+            actual_fn(context, other_table).unwrap().bits(),
+            other_table.bits()
+        );
+        assert_eq!(
+            context.edit.buffers.get(other).unwrap().slots()[BUFFER_SLOT_SYNTAX_TABLE.index()]
+                .bits(),
+            other_table.bits()
+        );
+        assert_eq!(
+            context.edit.buffers.get(current).unwrap().slots()[BUFFER_SLOT_SYNTAX_TABLE.index()]
+                .bits(),
+            table.bits()
+        );
+        context.edit.buffers.set_current(current);
+        for bad in [
+            Value::fixnum(9),
+            make_char_table_value(Value::symbol("not-syntax-table"), Value::NIL),
+        ] {
+            let error = actual_fn(context, bad).unwrap_err();
+            let signal = error.as_signal().expect("wrong type");
+            assert_eq!(signal.symbol, intern("wrong-type-argument"));
+            assert_eq!(signal.data, vec![Value::symbol("syntax-table-p"), bad]);
+            assert_eq!(
+                context.edit.buffers.get(current).unwrap().slots()
+                    [BUFFER_SLOT_SYNTAX_TABLE.index()]
+                .bits(),
+                table.bits()
+            );
+        }
+        // Existing public policy field: exercise the exact selected generic method read.
+        let original_mode = context.symbols_with_pos_enabled;
+        let positioned_purpose = context
+            .tagged_heap
+            .alloc_symbol_with_pos(Value::symbol("syntax-table"), Value::fixnum(17));
+        let positioned = make_char_table_value(positioned_purpose, Value::NIL);
+        context.symbols_with_pos_enabled = false;
+        let error = actual_fn(context, positioned).unwrap_err();
+        let signal = error
+            .as_signal()
+            .expect("bare policy rejects positioned purpose");
+        assert_eq!(signal.symbol, intern("wrong-type-argument"));
+        assert_eq!(
+            signal.data,
+            vec![Value::symbol("syntax-table-p"), positioned]
+        );
+        context.symbols_with_pos_enabled = true;
+        assert_eq!(
+            actual_fn(context, positioned).unwrap().bits(),
+            positioned.bits()
+        );
+        context.symbols_with_pos_enabled = original_mode;
+        // Keep later existing R0 helpers independent of this body fixture's slot writes.
+        context.edit.buffers.get_mut(current).unwrap().slots_mut()
+            [BUFFER_SLOT_SYNTAX_TABLE.index()] = original;
+        context
+            .edit
+            .buffers
+            .get_mut(current)
+            .unwrap()
+            .set_slot_local_flag(BUFFER_SLOT_SYNTAX_TABLE, original_local);
+        context.edit.buffers.get_mut(other).unwrap().slots_mut()
+            [BUFFER_SLOT_SYNTAX_TABLE.index()] = other_original;
+        context
+            .edit
+            .buffers
+            .get_mut(other)
+            .unwrap()
+            .set_slot_local_flag(BUFFER_SLOT_SYNTAX_TABLE, other_original_local);
+        assert_eq!(context.edit.buffers.current_buffer_id(), Some(current));
     }
 
     #[test]

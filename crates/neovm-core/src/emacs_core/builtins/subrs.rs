@@ -918,11 +918,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         "syntax-table",
         crate::emacs_core::syntax::builtin_syntax_table_0,
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
-        "set-syntax-table",
-        crate::emacs_core::syntax::builtin_set_syntax_table_1,
-        FixedMin1::One,
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::SET_SYNTAX_TABLE_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
         "char-syntax",
         crate::emacs_core::syntax::builtin_char_syntax_1,
