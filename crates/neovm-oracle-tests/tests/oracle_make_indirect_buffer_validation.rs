@@ -63,3 +63,24 @@ fn make_indirect_buffer_duplicate_name_precedes_bad_base() {
         ]],
     );
 }
+
+#[test]
+fn make_indirect_buffer_duplicate_name_quotes_follow_style_without_requoting_name() {
+    assert_oracle_parity_expect(
+        r#"(mapcar
+             (lambda (name)
+               (let ((existing (get-buffer-create name)))
+                 (unwind-protect
+                     (mapcar
+                      (lambda (style)
+                        (let ((text-quoting-style style))
+                          (condition-case err
+                              (make-indirect-buffer 23 name)
+                            (error (list (car err) (cdr err))))))
+                      '(curve straight grave))
+                   (kill-buffer existing))))
+             (list "neovm--indirect-`quote'%s-tail"
+                   (concat "neovm--indirect-`quote'%s-" (string 0) "-tail")))"#,
+        expect_test::expect![[""]],
+    );
+}
