@@ -11,13 +11,11 @@ use neovm_value::intern::WellKnown;
 /// Canonical production/unit descriptor. GNU fns.c Fidentity is 1..1 and
 /// noninteractive; retain the existing ContextVec entry shape.
 #[doc(hidden)]
-pub const fn identity_subr_spec() -> SubrSpec {
-    crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "identity",
-        NativeFn::ContextVec(identity_entry),
-        SubrArity::new(1, Some(1)),
-    ))
-}
+pub static IDENTITY_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "identity",
+    NativeFn::ContextVec(identity_entry),
+    SubrArity::new(1, Some(1)),
+));
 
 fn identity_entry(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     builtin_identity(args)

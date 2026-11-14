@@ -43,13 +43,13 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
-    use crate::emacs_core::builtins::misc_pure::identity_subr_spec;
+    use crate::emacs_core::builtins::misc_pure::IDENTITY_SUBR;
     use crate::emacs_core::eval::lookup_global_subr_entry;
     use crate::emacs_core::eval::subr_abi::SubrFn;
-    use crate::emacs_core::subr::{NoEvalPolicy, SubrArity, no_eval_policy};
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
     use neovm_value::value::Value;
 
-    let expected = identity_subr_spec();
+    let expected = IDENTITY_SUBR;
     let id = intern("identity");
     let actual = lookup_global_subr_entry(id).expect("core registered identity");
     let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(actual_fn))) =
@@ -69,6 +69,16 @@ fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
     assert!(expected.interactive_spec().is_none());
     assert_eq!(no_eval_policy(id), expected.no_eval_policy());
     assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(
+        context
+            .obarray_view()
+            .get_property("identity", "disabled")
+            .unwrap_or(Value::NIL)
+            .is_nil()
+    );
+    assert!(expected.leaf_spec().is_none());
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
 
     let object = Value::vector(vec![Value::fixnum(17)]);
     let returned = actual_fn(context, vec![object]).expect("core identity body");

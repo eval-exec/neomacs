@@ -2059,7 +2059,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextSlice(|_ctx, args| builtin_string_slice(args)),
         SubrArity::new(0, None),
     )));
-    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_pure::identity_subr_spec());
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_pure::IDENTITY_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "ngettext",
         NativeFn::ContextVec(|_ctx, args| builtin_ngettext(args)),

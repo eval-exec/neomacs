@@ -119,7 +119,7 @@ inotify.workspace = true
 
 [dev-dependencies]
 # The shared canonical-plan parser resolves production descriptor providers as Rust items.
-syn = { version = "3.0.3", features = ["full"] }
+syn = { version = "3.0.3", features = ["full", "visit"] }
 # Downward-only: shared value test helpers for this crate's own unit tests.
 neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support", "test-thread-fallback-heap"] }
 # Downward-only: eval's own tests call text items whose visibility widens

@@ -838,7 +838,7 @@ mod unit_runtime {
         }
 
         Some(match name {
-            "identity" => crate::emacs_core::builtins::misc_pure::identity_subr_spec(),
+            "identity" => crate::emacs_core::builtins::misc_pure::IDENTITY_SUBR,
             "current-time" => SubrSpec::new(
                 "current-time",
                 NativeFn::ContextVec(builtin_current_time_in_context),
@@ -875,12 +875,13 @@ mod unit_runtime {
 
     #[test]
     fn unit_identity_uses_canonical_descriptor_and_registered_entry() {
-        use crate::emacs_core::builtins::misc_pure::identity_subr_spec;
+        use crate::emacs_core::builtins::misc_pure::IDENTITY_SUBR;
         use crate::emacs_core::eval::subr_abi::SubrFn;
-        use crate::emacs_core::subr::{NoEvalPolicy, SubrArity};
-        let expected = identity_subr_spec();
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        let expected = IDENTITY_SUBR;
         let actual = misc_family_subr("identity").expect("real unit identity descriptor");
         assert_eq!(actual.name(), expected.name());
+        assert_eq!(expected.name(), "identity");
         assert_eq!(actual.arity(), expected.arity());
         assert_eq!(actual.arity(), SubrArity::new(1, Some(1)));
         assert_eq!(actual.dispatch_kind(), expected.dispatch_kind());
@@ -889,6 +890,7 @@ mod unit_runtime {
         assert_eq!(actual.no_eval_policy(), expected.no_eval_policy());
         assert_eq!(actual.no_eval_policy(), NoEvalPolicy::Native);
         assert_eq!(actual.command_default(), expected.command_default());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
         assert!(actual.leaf_spec().is_none());
         assert!(expected.leaf_spec().is_none());
         let Some(SubrFn::Many(expected_fn)) = expected.function() else {
@@ -908,9 +910,22 @@ mod unit_runtime {
             panic!("registered ContextVec ABI");
         };
         assert!(std::ptr::fn_addr_eq(registered_fn, expected_fn));
-        assert_eq!((entry.min_args, entry.max_args), (1, Some(1)));
+        assert_eq!(
+            (entry.min_args, entry.max_args),
+            (expected.arity().min(), expected.arity().max())
+        );
         assert_eq!(entry.dispatch_kind, expected.dispatch_kind());
         assert!(entry.interactive_spec.is_none());
+        let id = neovm_value::intern::intern(expected.name());
+        assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert!(
+            context
+                .obarray_view()
+                .get_property("identity", "disabled")
+                .unwrap_or(Value::NIL)
+                .is_nil()
+        );
         assert_eq!(
             context
                 .eval_str("(let ((x (list 1))) (eq x (identity x)))")

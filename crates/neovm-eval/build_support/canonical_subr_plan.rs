@@ -234,6 +234,23 @@ pub struct PlanStep {
     pub marker: &'static str,
 }
 
+#[path = "canonical_subr_static_guard.rs"]
+mod static_guard;
+
+/// One resolved, immutable descriptor home. This source record also feeds
+/// the fail-closed Core/unit single-home guard; it is not a runtime catalog.
+#[derive(Clone, Debug)]
+struct StaticHome {
+    module: String,
+    static_ident: String,
+    file: String,
+    initializer_factory: Option<String>,
+    name: String,
+    min: u16,
+    max: Option<u16>,
+    cfg: String,
+}
+
 /// A parsed `SubrSpec`/`EvaluatorSubr` entry.
 #[derive(Clone)]
 struct ParsedSpec {
@@ -241,6 +258,7 @@ struct ParsedSpec {
     min: u16,
     max: Option<u16>,
     cfg: String,
+    static_home: Option<StaticHome>,
 }
 
 /// Where a registration row came from: the core manifest itself, one of the
@@ -513,6 +531,7 @@ fn parse_subr_spec_at(
             min,
             max,
             cfg: item_cfg(&text[chunk_start..at], base_cfg),
+            static_home: None,
         },
         parsed_end,
     ))
@@ -773,6 +792,7 @@ fn public_eval_specs(text: &str) -> Result<Vec<ParsedSpec>, String> {
             min,
             max,
             cfg: "always".to_owned(),
+            static_home: None,
         });
         search_from = at + "EvaluatorSubr::".len() + 1;
     }
@@ -802,7 +822,7 @@ enum Event {
 }
 
 /// A direct registration is either its existing literal descriptor expression
-/// or a literal zero-argument provider path. Bound the argument first: never
+/// or a canonical immutable-static path. Bound the argument first: never
 /// borrow a constructor from the following statement/registration.
 fn registration_spec(repo_root: &Path, argument: &str) -> Result<ParsedSpec, String> {
     use syn::parse::Parser;
@@ -852,27 +872,38 @@ fn registration_spec(repo_root: &Path, argument: &str) -> Result<ParsedSpec, Str
             .map_err(|error| format!("inline descriptor: {error}"))?;
         return literal_spec(&literal, "inline descriptor");
     }
-    provider_spec(repo_root, argument)
+    static_spec(repo_root, &expressions[0])
 }
 
-/// Closed provider grammar: one flat, eval-owned builtin module, one public
-/// const zero-argument function, and one world-marked literal descriptor as
-/// its entire tail expression. There is no provider/name/metadata catalog:
-/// the same actual descriptor definition is read here and called at runtime.
-fn provider_spec(repo_root: &Path, call: &str) -> Result<ParsedSpec, String> {
-    let path = call
-        .strip_suffix("()")
-        .and_then(|path| path.strip_prefix("neovm_eval::emacs_core::builtins::"))
-        .ok_or_else(|| format!("unsupported descriptor expression `{call}`"))?;
-    let parts: Vec<_> = path.split("::").collect();
-    let identifier = |part: &str| {
-        let mut bytes = part.bytes();
-        matches!(bytes.next(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'))
-            && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+/// Closed static grammar: one immutable, eval-owned descriptor in an
+/// unconditional flat builtin file module. Core and unit copy that actual
+/// static. Its initializer may use one same-file private const factory;
+/// callable providers are never registration expressions.
+fn static_spec(repo_root: &Path, expression: &syn::Expr) -> Result<ParsedSpec, String> {
+    let syn::Expr::Path(reference) = expression else {
+        return Err("descriptor reference must be one canonical static path".to_owned());
     };
-    if parts.len() != 2 || !parts.iter().all(|part| identifier(part)) {
-        return Err(format!("unsupported descriptor provider path `{call}`"));
+    let path = &reference.path;
+    let prefix = ["neovm_eval", "emacs_core", "builtins"];
+    if !reference.attrs.is_empty()
+        || reference.qself.is_some()
+        || path.leading_colon.is_some()
+        || path.segments.len() != 5
+        || path
+            .segments
+            .iter()
+            .any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
+        || !path
+            .segments
+            .iter()
+            .take(3)
+            .zip(prefix)
+            .all(|(segment, name)| segment.ident == name)
+    {
+        return Err("unsupported canonical static descriptor path".to_owned());
     }
+    let module_name = path.segments[3].ident.to_string();
+    let static_ident = path.segments[4].ident.to_string();
     let modules = read(
         repo_root,
         "crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs",
@@ -883,15 +914,13 @@ fn provider_spec(repo_root: &Path, call: &str) -> Result<ParsedSpec, String> {
         .iter()
         .any(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
     {
-        return Err(format!(
-            "{call}: cfg-gated builtin module file is unsupported"
-        ));
+        return Err("cfg-gated builtin module file is unsupported".to_owned());
     }
     let declarations: Vec<_> = modules
         .items
         .iter()
         .filter_map(|item| match item {
-            syn::Item::Mod(module) if module.ident == parts[0] => Some(module),
+            syn::Item::Mod(module) if module.ident == module_name => Some(module),
             _ => None,
         })
         .collect();
@@ -904,14 +933,10 @@ fn provider_spec(repo_root: &Path, call: &str) -> Result<ParsedSpec, String> {
             .iter()
             .any(|attr| !attr.path().is_ident("doc"))
     {
-        return Err(format!(
-            "{call}: provider module must be an unconditional public file module"
-        ));
+        return Err("descriptor module must be one unconditional public file module".to_owned());
     }
-    let relative = format!(
-        "crates/neovm-eval/src/emacs_core/lisp/native/builtins/{}.rs",
-        parts[0]
-    );
+    let relative =
+        format!("crates/neovm-eval/src/emacs_core/lisp/native/builtins/{module_name}.rs");
     let source = read(repo_root, &relative)?;
     let file = syn::parse_file(&source).map_err(|error| format!("{relative}: {error}"))?;
     if file
@@ -919,62 +944,127 @@ fn provider_spec(repo_root: &Path, call: &str) -> Result<ParsedSpec, String> {
         .iter()
         .any(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
     {
-        return Err(format!("{call}: cfg-gated provider file is unsupported"));
+        return Err("cfg-gated descriptor file is unsupported".to_owned());
     }
-    let providers: Vec<_> = file
+    let definitions: Vec<_> = file
         .items
         .iter()
         .filter_map(|item| match item {
-            syn::Item::Fn(function) if function.sig.ident == parts[1] => Some(function),
+            syn::Item::Static(item) if item.ident == static_ident => Some(item),
             _ => None,
         })
         .collect();
-    if providers.len() != 1 {
+    if definitions.len() != 1 {
         return Err(format!(
-            "{call}: expected exactly one provider definition in {relative}"
+            "{relative}: expected exactly one static {static_ident}"
         ));
     }
-    let provider = providers[0];
-    let signature = &provider.sig;
-    if !matches!(provider.vis, syn::Visibility::Public(_))
-        || provider.modifiers.defaultness.is_some()
-        || signature.constness.is_none()
-        || signature.asyncness.is_some()
-        || !matches!(signature.safety, syn::Safety::Default)
-        || signature.abi.is_some()
-        || !signature.generics.params.is_empty()
-        || signature.generics.where_clause.is_some()
-        || !signature.inputs.is_empty()
-        || signature.variadic.is_some()
-        || !matches!(&signature.output,
-            syn::ReturnType::Type(_, ty) if matches!(ty.as_ref(),
-                syn::Type::Path(path) if path.qself.is_none() && path.path.is_ident("SubrSpec")))
-        || provider
+    let definition = definitions[0];
+    if !matches!(definition.vis, syn::Visibility::Public(_))
+        || !matches!(definition.mutability, syn::StaticMutability::None)
+        || definition
             .attrs
             .iter()
             .any(|attr| !attr.path().is_ident("doc"))
+        || !matches!(definition.ty.as_ref(), syn::Type::Path(ty)
+            if ty.qself.is_none() && ty.path.is_ident("SubrSpec"))
     {
         return Err(format!(
-            "{call}: expected unconditional pub const fn () -> SubrSpec"
+            "{relative}: expected unconditional pub immutable static {static_ident}: SubrSpec"
         ));
     }
-    let [syn::Stmt::Expr(syn::Expr::Macro(expression), None)] = provider.block.stmts.as_slice()
-    else {
-        return Err(format!(
-            "{call}: provider must return one world_subr! literal"
-        ));
+    let (initializer, initializer_factory) = match definition.expr.as_ref() {
+        syn::Expr::Macro(_) => (definition.expr.as_ref(), None),
+        syn::Expr::Call(call) if call.attrs.is_empty() && call.args.is_empty() => {
+            let syn::Expr::Path(function) = call.func.as_ref() else {
+                return Err("static factory must be a same-file private const function".to_owned());
+            };
+            if !function.attrs.is_empty()
+                || function.qself.is_some()
+                || function.path.leading_colon.is_some()
+                || function.path.segments.len() != 1
+                || !matches!(
+                    function.path.segments[0].arguments,
+                    syn::PathArguments::None
+                )
+            {
+                return Err("static factory must be one same-file identifier".to_owned());
+            }
+            let name = function.path.segments[0].ident.to_string();
+            let factories: Vec<_> = file
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    syn::Item::Fn(function) if function.sig.ident == name => Some(function),
+                    _ => None,
+                })
+                .collect();
+            if factories.len() != 1 {
+                return Err(format!(
+                    "{relative}: expected exactly one private const factory {name}"
+                ));
+            }
+            let factory = factories[0];
+            let signature = &factory.sig;
+            if !matches!(factory.vis, syn::Visibility::Inherited)
+                || factory.modifiers.defaultness.is_some()
+                || signature.constness.is_none()
+                || signature.asyncness.is_some()
+                || !matches!(signature.safety, syn::Safety::Default)
+                || signature.abi.is_some()
+                || !signature.generics.params.is_empty()
+                || signature.generics.where_clause.is_some()
+                || !signature.inputs.is_empty()
+                || signature.variadic.is_some()
+                || !matches!(&signature.output, syn::ReturnType::Type(_, ty)
+                    if matches!(ty.as_ref(), syn::Type::Path(path)
+                        if path.qself.is_none() && path.path.is_ident("SubrSpec")))
+                || factory
+                    .attrs
+                    .iter()
+                    .any(|attr| !attr.path().is_ident("doc"))
+            {
+                return Err(format!(
+                    "{relative}: factory {name} must be unconditional private const fn () -> SubrSpec"
+                ));
+            }
+            let [syn::Stmt::Expr(tail, None)] = factory.block.stmts.as_slice() else {
+                return Err("static factory requires one world literal tail".to_owned());
+            };
+            (tail, Some(name))
+        }
+        _ => {
+            return Err(
+                "static initializer must be one world literal or private const factory call"
+                    .to_owned(),
+            );
+        }
     };
-    if !expression.attrs.is_empty()
+    let syn::Expr::Macro(world) = initializer else {
+        return Err("static initializer requires one world literal".to_owned());
+    };
+    if !world.attrs.is_empty()
         || !path_is(
-            &expression.mac.path,
+            &world.mac.path,
             &["crate", "emacs_core", "subr", "world_subr"],
         )
     {
-        return Err(format!("{call}: unsupported descriptor macro"));
+        return Err("unsupported static descriptor macro".to_owned());
     }
-    let expression: syn::Expr =
-        syn::parse2(expression.mac.tokens.clone()).map_err(|error| format!("{call}: {error}"))?;
-    literal_spec(&expression, call)
+    let literal = syn::parse2(world.mac.tokens.clone())
+        .map_err(|error| format!("static descriptor: {error}"))?;
+    let mut spec = literal_spec(&literal, &static_ident)?;
+    spec.static_home = Some(StaticHome {
+        module: module_name,
+        static_ident,
+        file: relative,
+        initializer_factory,
+        name: spec.name.clone(),
+        min: spec.min,
+        max: spec.max,
+        cfg: spec.cfg.clone(),
+    });
+    Ok(spec)
 }
 
 /// Read the literal descriptor AST itself, never a later textual constructor.
@@ -1079,6 +1169,7 @@ fn literal_spec(expression: &syn::Expr, call: &str) -> Result<ParsedSpec, String
         min,
         max,
         cfg: "always".to_owned(),
+        static_home: None,
     })
 }
 
@@ -1208,6 +1299,14 @@ fn upper_row(map: &BTreeMap<String, NameRow>, spec: &ParsedSpec) -> Result<NameR
 /// Build the canonical item sequence.
 fn canonical_items(repo_root: &Path) -> Result<Vec<Item>, String> {
     let (events, source) = manifest_events(repo_root)?;
+    let homes: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Direct { spec, .. } => spec.static_home.clone(),
+            _ => None,
+        })
+        .collect();
+    static_guard::validate_static_subr_sources(repo_root, &homes)?;
     let upper = snapshot_map(repo_root)?;
     let eval_source = read(repo_root, EVAL_SUBRS)?;
     let eval_batch = specs_in(&eval_source, "always")?;
@@ -1797,11 +1896,29 @@ mod provider_tests {
         }
     "#;
 
+    const STATIC_REFERENCE: &str = "neovm_eval::emacs_core::builtins::misc_pure::IDENTITY_SUBR";
+    const STATIC_FILE: &str = "crates/neovm-eval/src/emacs_core/lisp/native/builtins/misc_pure.rs";
+    const STATIC_DEFINITION: &str = r#"
+        #[doc(hidden)]
+        pub static IDENTITY_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+            "identity", NativeFn::ContextVec(identity_entry), SubrArity::new(1, Some(1)),
+        ));
+    "#;
+    const PRIVATE_FACTORY: &str = r#"
+        const fn identity_spec() -> SubrSpec {
+            crate::emacs_core::subr::world_subr!(SubrSpec::new(
+                "identity", NativeFn::ContextVec(identity_entry), SubrArity::new(1, Some(1)),
+            ))
+        }
+        #[doc(hidden)]
+        pub static IDENTITY_SUBR: SubrSpec = identity_spec();
+    "#;
+
     fn fixture(manifest: &str, provider: &str) -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         for (relative, text) in [
             (CORE_MANIFEST, manifest),
-            (PROVIDER_FILE, provider),
+            (STATIC_FILE, provider),
             (
                 "crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs",
                 "#[doc(hidden)] pub mod misc_pure;",
@@ -1838,14 +1955,14 @@ mod provider_tests {
             pub(crate) fn register_subrs(ctx: &mut Context) {{
                 ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
                     "before", entry, SubrArity::new(0, None))));
-                ctx.register_subr({PROVIDER_CALL});
-                ctx.register_subr({PROVIDER_CALL});
+                ctx.register_subr({STATIC_REFERENCE});
+                ctx.register_subr({STATIC_REFERENCE});
                 ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
                     "after", entry, SubrArity::new(2, Some(3)))));
             }}
         "#
         );
-        let root = fixture(&manifest, PROVIDER);
+        let root = fixture(&manifest, STATIC_DEFINITION);
         let (events, _) = manifest_events(root.path()).unwrap();
         let resolved: Vec<_> = events
             .into_iter()
@@ -1893,6 +2010,96 @@ mod provider_tests {
         ] {
             assert!(
                 registration_spec(Path::new("unused"), &invalid).is_err(),
+                "accepted {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_inline_metadata_builders_remain_supported() {
+        let argument = r#"crate::emacs_core::subr::world_subr!(SubrSpec::new(
+            "legacy", entry, SubrArity::new(0, Some(2))
+        ))
+        .requires_eval_state()
+        .interactive(interactive_spec)
+        .placeholder(NoEvalPlaceholder::Nil)
+        .disabled_command()
+        .leaf(&LEAF)"#;
+        let spec = registration_spec(Path::new("unused"), argument).unwrap();
+        assert_eq!(
+            (spec.name.as_str(), spec.min, spec.max),
+            ("legacy", 0, Some(2))
+        );
+        assert!(spec.static_home.is_none());
+    }
+
+    #[test]
+    fn callable_public_provider_is_rejected_even_with_valid_literal_body() {
+        let root = fixture("", PROVIDER);
+        assert!(
+            registration_spec(
+                root.path(),
+                "neovm_eval::emacs_core::builtins::misc_pure::identity_subr_spec()"
+            )
+            .is_err(),
+            "callable public descriptor factories must fail closed"
+        );
+    }
+
+    #[test]
+    fn immutable_static_records_its_single_home() {
+        let root = fixture("", STATIC_DEFINITION);
+        let spec = registration_spec(root.path(), STATIC_REFERENCE).unwrap();
+        let home = spec.static_home.expect("actual static source home");
+        assert_eq!(home.module, "misc_pure");
+        assert_eq!(home.static_ident, "IDENTITY_SUBR");
+        assert_eq!(home.file, STATIC_FILE);
+        assert!(home.initializer_factory.is_none());
+        assert_eq!(
+            (home.name.as_str(), home.min, home.max, home.cfg.as_str()),
+            ("identity", 1, Some(1), "always")
+        );
+    }
+
+    #[test]
+    fn static_initializer_accepts_only_same_file_private_const_factory() {
+        let root = fixture("", PRIVATE_FACTORY);
+        let spec = registration_spec(root.path(), STATIC_REFERENCE).unwrap();
+        assert_eq!(
+            (spec.name.as_str(), spec.min, spec.max, spec.cfg.as_str()),
+            ("identity", 1, Some(1), "always")
+        );
+        assert_eq!(
+            spec.static_home.unwrap().initializer_factory.as_deref(),
+            Some("identity_spec")
+        );
+        for invalid in [
+            PRIVATE_FACTORY.replace("const fn", "pub const fn"),
+            PRIVATE_FACTORY.replace("const fn", "pub(crate) const fn"),
+            PRIVATE_FACTORY.replace("const fn", "fn"),
+            PRIVATE_FACTORY.replace("const fn", "const unsafe fn"),
+            PRIVATE_FACTORY.replace("const fn", "#[cfg(unix)] const fn"),
+            PRIVATE_FACTORY.replace("const fn", "#[inline] const fn"),
+            PRIVATE_FACTORY.replace("identity_spec() ->", "identity_spec<T>() ->"),
+            PRIVATE_FACTORY.replace("identity_spec() ->", "identity_spec(x: usize) ->"),
+            PRIVATE_FACTORY.replace("-> SubrSpec", "-> Alias"),
+            PRIVATE_FACTORY.replace(
+                "            crate::",
+                "            let side_effect = 0;\n            crate::",
+            ),
+            PRIVATE_FACTORY.replace("identity_spec();", "self::identity_spec();"),
+            PRIVATE_FACTORY.replace("identity_spec();", "identity_spec::<u8>();"),
+            PRIVATE_FACTORY.replace("identity_spec();", "identity_spec(1);"),
+            PRIVATE_FACTORY.replace("identity_spec();", "elsewhere::identity_spec();"),
+            PRIVATE_FACTORY.replace("crate::emacs_core::subr::world_subr!", "alias!"),
+            "const fn identity_spec() -> SubrSpec { IDENTITY_SUBR }
+             pub static IDENTITY_SUBR: SubrSpec = identity_spec();"
+                .to_owned(),
+            format!("{PRIVATE_FACTORY}\nconst fn identity_spec() -> SubrSpec {{ IDENTITY_SUBR }}"),
+        ] {
+            std::fs::write(root.path().join(STATIC_FILE), &invalid).unwrap();
+            assert!(
+                registration_spec(root.path(), STATIC_REFERENCE).is_err(),
                 "accepted {invalid}"
             );
         }
@@ -1957,12 +2164,81 @@ mod provider_tests {
     }
 
     #[test]
+    fn unsupported_static_references_and_definitions_fail_closed() {
+        let root = fixture("", STATIC_DEFINITION);
+        for reference in [
+            "alias",
+            "neovm_eval::emacs_core::builtins::misc_pure::MISSING",
+            "neovm_eval::emacs_core::builtins::misc_pure::IDENTITY_SUBR()",
+            "neovm_eval::emacs_core::builtins::misc_pure::IDENTITY_SUBR::<u8>",
+            "neovm_eval::emacs_core::builtins::misc_pure::<u8>::IDENTITY_SUBR",
+            "neovm_eval::emacs_core::builtins::misc_pure::nested::IDENTITY_SUBR",
+            "neovm_eval::emacs_core::builtins::misc_pure::IDENTITY_SUBR.requires_eval_state()",
+            "(neovm_eval::emacs_core::builtins::misc_pure::IDENTITY_SUBR)",
+            "&neovm_eval::emacs_core::builtins::misc_pure::IDENTITY_SUBR",
+            "const { neovm_eval::emacs_core::builtins::misc_pure::IDENTITY_SUBR }",
+            "::neovm_eval::emacs_core::builtins::misc_pure::IDENTITY_SUBR",
+        ] {
+            assert!(
+                registration_spec(root.path(), reference).is_err(),
+                "accepted {reference}"
+            );
+        }
+        for definition in [
+            STATIC_DEFINITION.replace("pub static", "pub const"),
+            STATIC_DEFINITION.replace("pub static", "static"),
+            STATIC_DEFINITION.replace("pub static", "pub(crate) static"),
+            STATIC_DEFINITION.replace("pub static", "pub static mut"),
+            STATIC_DEFINITION.replace(": SubrSpec", ": Alias"),
+            STATIC_DEFINITION.replace("#[doc(hidden)]", "#[cfg(unix)]"),
+            STATIC_DEFINITION.replace("crate::emacs_core::subr::world_subr!", "alias!"),
+            STATIC_DEFINITION.replace("SubrSpec::new(", "{ let side_effect = 0; SubrSpec::new("),
+            STATIC_DEFINITION.replace("Some(1)", "Some(MAX)"),
+            STATIC_DEFINITION.replace("Some(1)", "Some(0)"),
+            STATIC_DEFINITION.replace("\"identity\"", "NAME"),
+            format!("{STATIC_DEFINITION}\n{STATIC_DEFINITION}"),
+            format!("// {}", STATIC_DEFINITION.replace('\n', "\n// ")),
+            "pub use elsewhere::IDENTITY_SUBR;".to_owned(),
+            "pub static IDENTITY_SUBR: SubrSpec = ALIAS;".to_owned(),
+            "pub static IDENTITY_SUBR: SubrSpec = { ALIAS };".to_owned(),
+            format!("#![cfg(unix)]\n{STATIC_DEFINITION}"),
+        ] {
+            std::fs::write(root.path().join(STATIC_FILE), &definition).unwrap();
+            assert!(
+                registration_spec(root.path(), STATIC_REFERENCE).is_err(),
+                "accepted {definition}"
+            );
+        }
+        std::fs::write(root.path().join(STATIC_FILE), STATIC_DEFINITION).unwrap();
+        for module in [
+            "#[cfg(unix)] pub mod misc_pure;",
+            "pub use elsewhere as misc_pure;",
+            "#[path = \"elsewhere.rs\"] pub mod misc_pure;",
+            "pub mod misc_pure {}",
+            "pub mod misc_pure; pub mod misc_pure;",
+            "pub(crate) mod misc_pure;",
+            "#![cfg(unix)] pub mod misc_pure;",
+        ] {
+            std::fs::write(
+                root.path()
+                    .join("crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs"),
+                module,
+            )
+            .unwrap();
+            assert!(
+                registration_spec(root.path(), STATIC_REFERENCE).is_err(),
+                "accepted {module}"
+            );
+        }
+    }
+
+    #[test]
     fn core_identity_event_resolves_the_single_production_descriptor() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let source = read(&root, CORE_MANIFEST).unwrap();
         assert_eq!(
             source
-                .matches(&format!("ctx.register_subr({PROVIDER_CALL});"))
+                .matches(&format!("ctx.register_subr({STATIC_REFERENCE});"))
                 .count(),
             1
         );
