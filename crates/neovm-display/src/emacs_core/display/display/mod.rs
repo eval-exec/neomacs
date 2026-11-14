@@ -3242,11 +3242,11 @@ pub fn builtin_x_open_connection(
     expect_args_range("x-open-connection", &args, 1, 3)?;
     // `android-win`, `ns-win` and `w32-win` pass their own non-nil names;
     // only the pgtk-like `neo` arm inherits pgtk's nil-is-empty rule.
-    let neo_nil_display = eval.daemon().is_none()
-        && args[0].is_nil()
+    let neo_frontend = eval.daemon().is_none()
         && active_window_system_symbol(eval)
             .and_then(|value| WindowSystemKind::from_symbol_value(&value))
             == Some(WindowSystemKind::Neo);
+    let neo_nil_display = neo_frontend && args[0].is_nil();
     if !args[0].is_string() && !neo_nil_display {
         return Err(signal(
             LispCondition::WrongTypeArgument,
@@ -3292,10 +3292,18 @@ pub fn builtin_x_open_connection(
     }
     let requested_display = display_string_text(&args[0]).unwrap_or_default();
     if x_window_system_active(eval) {
+        // GNU pgtk opens its empty name as the default display
+        // (src/gtkutil.c:246-250). The host's None selector names its owned
+        // default; an explicit empty X11/daemon name stays a strict request.
+        let host_display = if neo_frontend && requested_display.is_empty() {
+            None
+        } else {
+            Some(requested_display.as_str())
+        };
         let admitted = match eval
             .display_host
             .as_ref()
-            .map(|host| host.graphical_connection_identity(Some(&requested_display)))
+            .map(|host| host.graphical_connection_identity(host_display))
         {
             Some(Ok(Some(_))) => true,
             Some(Err(reason)) => {

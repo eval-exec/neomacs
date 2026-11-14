@@ -1,6 +1,6 @@
-//! `x-open-connection` argument checks, before any arm.
+//! X11/batch `x-open-connection` argument checks.
 //!
-//! GNU `Fx_open_connection` does `CHECK_STRING` on DISPLAY, then
+//! GNU's X11 `Fx_open_connection` does `CHECK_STRING` on DISPLAY, then
 //! `CHECK_STRING` on XRM-STRING when it is non-nil, before `x_term_init`
 //! (`src/xfns.c:7645-7647`, Emacs 31.1 `a360712c9d27`). Both failures are
 //! `(wrong-type-argument stringp VALUE)`.
@@ -8,6 +8,9 @@
 //! The additional display row covers only the attested unopenable name
 //! `:987`, with nil and non-nil MUST-SUCCEED. It establishes neither a
 //! successful batch connection open nor SIGIO behavior.
+//!
+//! Neo's separate pgtk-like nil/empty default admission has source-backed
+//! display unit coverage; this linux-gtk3 oracle does not attest the pgtk arm.
 
 #![cfg(unix)]
 
