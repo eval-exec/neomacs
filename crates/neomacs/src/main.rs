@@ -1476,6 +1476,7 @@ struct PrimaryWindowDisplayHost {
     primary_frame: PrimaryFrame,
     gui_startup: Option<GuiStartupParameters>,
     last_window_titles: Mutex<HashMap<neovm_core::window::FrameId, LispString>>,
+    display_identity: Option<neomacs_display_protocol::GraphicalDisplayIdentity>,
     font_metrics: Option<FontMetricsService>,
     font_entities: FontEntityCatalog,
     primary_window_size: SharedPrimaryWindowSize,
@@ -1757,9 +1758,14 @@ fn record_primary_window_resize(shared: &SharedPrimaryWindowSize, event: &Displa
 
 impl PrimaryWindowDisplayHost {
     fn synchronized_font_metrics(&mut self) -> &mut FontMetricsService {
-        let service = self
-            .font_metrics
-            .get_or_insert_with(FontMetricsService::new);
+        let binding = &self.display_identity;
+        let service = self.font_metrics.get_or_insert_with(|| {
+            let mut service = FontMetricsService::new();
+            if let Some(identity) = binding {
+                service.set_display_identity(identity.clone());
+            }
+            service
+        });
         let _ = service.synchronize_font_catalog();
         service
     }
@@ -4486,13 +4492,11 @@ fn run_gui_evaluator_worker(
             pending_position: None,
         }),
         last_window_titles: Mutex::new(HashMap::new()),
-        font_metrics: Some({
-            let mut service = FontMetricsService::new();
-            if let BootstrapDisplayKind::Gui { identity, .. } = &bootstrap_display.kind {
-                service.set_display_identity(identity.clone());
-            }
-            service
-        }),
+        display_identity: match &bootstrap_display.kind {
+            BootstrapDisplayKind::Gui { identity, .. } => Some(identity.clone()),
+            BootstrapDisplayKind::Tty { .. } => None,
+        },
+        font_metrics: None,
         font_entities: FontEntityCatalog::default(),
         primary_window_size: Arc::clone(&primary_window_size),
         image_catalog: Rc::new(AsyncImageCatalog::new(
