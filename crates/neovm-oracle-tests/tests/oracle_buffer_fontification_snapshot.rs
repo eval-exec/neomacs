@@ -21,7 +21,7 @@ fn divergence_buffer_string_copies_bytes_before_fontification() {
                   (let ((buffer-access-fontify-functions nil))
                     (buffer-substring-no-properties (point-min) (point-max)))
                   (nreverse calls))))))"#;
-    let expect = expect_test::expect![[""]];
+    let expect = expect_test::expect![[r#""OK (\"abc\" done \"zbc\" ((1 4)))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
@@ -46,7 +46,7 @@ fn divergence_buffer_substring_copies_bytes_before_fontification() {
                   (let ((buffer-access-fontify-functions nil))
                     (buffer-substring-no-properties (point-min) (point-max)))
                   (nreverse calls))))))"#;
-    let expect = expect_test::expect![[""]];
+    let expect = expect_test::expect![[r#""OK (\"abc\" done \"zbc\" ((1 4)))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
@@ -75,7 +75,10 @@ fn divergence_buffer_string_properties_follow_post_hook_current_buffer() {
                        (nreverse calls)))))))
      (kill-buffer source)
      (kill-buffer target)))"#;
-    crate::common::assert_oracle_parity_expect(form, expect_test::expect![[""]]);
+    crate::common::assert_oracle_parity_expect(
+        form,
+        expect_test::expect![[r#""OK (\"abc\" target t ((1 4)))""#]],
+    );
 }
 
 #[test]
@@ -89,7 +92,10 @@ fn divergence_buffer_string_validates_positions_after_hook_narrows() {
      (condition-case err
          (list 'value (buffer-string))
        (error (list 'error-symbol (car err) 'error-data (cdr err))))))"#;
-    crate::common::assert_oracle_parity_expect(form, expect_test::expect![[""]]);
+    crate::common::assert_oracle_parity_expect(
+        form,
+        expect_test::expect![[r#""OK (error-symbol args-out-of-range error-data (1 1))""#]],
+    );
 }
 
 #[test]
@@ -111,6 +117,6 @@ fn divergence_buffer_substring_reversed_bounds_fontification() {
                   (let ((buffer-access-fontify-functions nil))
                     (buffer-substring-no-properties (point-min) (point-max)))
                   (nreverse calls))))))"#;
-    let expect = expect_test::expect![[""]];
+    let expect = expect_test::expect![[r#""OK (\"abc\" done \"zbc\" ((1 4)))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
