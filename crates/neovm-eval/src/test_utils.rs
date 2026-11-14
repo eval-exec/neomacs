@@ -838,6 +838,7 @@ mod unit_runtime {
         }
 
         Some(match name {
+            "hash-table-count" => crate::emacs_core::builtins::collections::HASH_TABLE_COUNT_SUBR,
             "subrp" => crate::emacs_core::builtins::misc_pure::SUBRP_SUBR,
             "reverse" => crate::emacs_core::builtins::misc_pure::REVERSE_SUBR,
             "identity" => crate::emacs_core::builtins::misc_pure::IDENTITY_SUBR,
@@ -878,6 +879,74 @@ mod unit_runtime {
             ),
             _ => return None,
         })
+    }
+
+    #[test]
+    fn unit_hash_table_count_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::collections::HASH_TABLE_COUNT_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        let expected = HASH_TABLE_COUNT_SUBR;
+        let actual =
+            misc_family_subr("hash-table-count").expect("real unit hash-table-count descriptor");
+        assert_eq!(actual.name(), expected.name());
+        assert_eq!(expected.name(), "hash-table-count");
+        assert_eq!(actual.arity(), expected.arity());
+        assert_eq!(actual.arity(), SubrArity::new(1, Some(1)));
+        assert_eq!(actual.dispatch_kind(), expected.dispatch_kind());
+        assert!(actual.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(actual.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(actual.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(actual.command_default(), expected.command_default());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(actual.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let Some(SubrFn::Many(expected_fn)) = expected.function() else {
+            panic!("ContextVec ABI");
+        };
+        let Some(SubrFn::Many(actual_fn)) = actual.function() else {
+            panic!("unit ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let entry = crate::emacs_core::eval::lookup_global_subr_entry(neovm_value::intern::intern(
+            "hash-table-count",
+        ))
+        .expect("registered unit hash-table-count");
+        let Some(SubrFn::Many(registered_fn)) = entry.function else {
+            panic!("registered ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(registered_fn, expected_fn));
+        assert_eq!(
+            (entry.min_args, entry.max_args),
+            (expected.arity().min(), expected.arity().max())
+        );
+        assert_eq!(entry.dispatch_kind, expected.dispatch_kind());
+        assert!(entry.interactive_spec.is_none());
+        let id = neovm_value::intern::intern(expected.name());
+        assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert!(
+            context
+                .obarray_view()
+                .get_property("hash-table-count", "disabled")
+                .unwrap_or(Value::NIL)
+                .is_nil()
+        );
+        assert_eq!(
+            context
+                .eval_str("(let ((h (make-hash-table))) (puthash 'a 1 h) (puthash 'b 2 h) (hash-table-count h))")
+                .unwrap(),
+            neovm_value::value::Value::fixnum(2)
+        );
+        assert_eq!(
+            context.eval_str(
+                "(condition-case e (hash-table-count 7) (wrong-type-argument (equal e '(wrong-type-argument hash-table-p 7))))"
+            ).unwrap(),
+            neovm_value::value::Value::T
+        );
     }
 
     #[test]

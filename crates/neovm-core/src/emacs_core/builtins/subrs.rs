@@ -3822,11 +3822,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| builtin_clrhash(args)),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "hash-table-count",
-        NativeFn::ContextVec(|_ctx, args| builtin_hash_table_count(args)),
-        SubrArity::new(1, Some(1)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::collections::HASH_TABLE_COUNT_SUBR);
 
     // -- Float / math / conversion --
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

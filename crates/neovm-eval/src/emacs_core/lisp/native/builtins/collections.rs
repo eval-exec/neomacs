@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::eval::AllocationFailureContextExt;
 use crate::emacs_core::eval::LispArgVec;
+use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 #[doc(hidden)]
 pub use neovm_value::error::{
     expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
@@ -9,6 +10,14 @@ use neovm_value::hashtab::hash_key_to_visible_value;
 use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::value::{HashProbe, HashTableMakeKeyword, ValueKind, VecLikeType};
+
+/// Canonical production/unit descriptor; retain the original Core closure and metadata.
+#[doc(hidden)]
+pub static HASH_TABLE_COUNT_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "hash-table-count",
+    NativeFn::ContextVec(|_ctx, args| builtin_hash_table_count(args)),
+    SubrArity::new(1, Some(1)),
+));
 
 // ===========================================================================
 // Vector operations
