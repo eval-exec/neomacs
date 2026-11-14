@@ -11,13 +11,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::fileio::{
-    find_file_name_handler_lisp_for_eval, lisp_file_name_to_path_buf,
-    resolve_filename_lisp_for_eval,
+    NativeFileRoots, find_file_name_handler_lisp_for_eval, lisp_file_name_to_path_buf,
 };
 use neovm_edit::buffer::BufferId;
 use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_value::error::{EvalResult, Flow, FlowKind, FlowResultExt, signal};
-use neovm_value::heap_types::LispString;
 use neovm_value::value::{Value, ValueKind};
 
 /// GNU reports a lock failure with `report_file_errno` (filelock.c:648, 776),
@@ -26,12 +24,8 @@ use neovm_value::value::{Value, ValueKind};
 /// and STRERROR being the bare libc text.  Reuse that port rather than
 /// re-deriving the shape here — an ad-hoc triple got the order wrong and
 /// leaked Rust's "(os error N)" suffix.
-fn file_lock_error(context: &str, filename: &LispString, err: io::Error) -> Flow {
-    super::fileio::signal_file_action_error_value(
-        err,
-        context,
-        Value::heap_string(filename.clone()),
-    )
+fn file_lock_error(context: &str, filename: Value, err: io::Error) -> Flow {
+    super::fileio::signal_file_action_error_value(err, context, filename)
 }
 
 /// GNU `lock_file_1` takes the user from `Fuser_login_name (Qnil)` — the
@@ -210,37 +204,48 @@ fn fallback_make_lock_file_name(path: &Path) -> Option<PathBuf> {
 /// expanding before the truename lookup makes it miss its own buffer.
 fn make_lock_file_name(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    filename: &LispString,
-) -> Result<Option<PathBuf>, Flow> {
-    let filename = resolve_filename_lisp_for_eval(eval, filename);
+    filename: Value,
+) -> Result<Option<NativeLockFileName>, Flow> {
+    // Call the canonical primitive directly: Fexpand_file_name is not a call
+    // through the replaceable Lisp function cell.  Its returned object is the
+    // actual argument to make-lock-file-name, including properties and aliases.
+    let expanded = super::fileio::builtin_expand_file_name(eval, vec![filename])?;
+    eval.push_specpdl_root(expanded);
     if !eval.obarray().fboundp("make-lock-file-name") {
-        // GNU cannot reach lock_file before loadup defines this function —
-        // filelock.c:589 bails out under will_dump_p — so it has no analogue
-        // for this state.  Use files.el's own ".#NAME" rule rather than
-        // signalling void-function out of an ordinary edit.  This is the ONLY
-        // reason to bypass the Lisp function; an error raised BY the function
-        // is the Lisp layer's answer and must be respected.
-        return Ok(fallback_make_lock_file_name(&lisp_file_name_to_path_buf(
-            &filename,
-        )));
+        // Preserve the existing bootstrap fallback before files.el is loaded.
+        let string = eval.expect_lisp_string(expanded)?;
+        return Ok(
+            fallback_make_lock_file_name(&lisp_file_name_to_path_buf(string))
+                .map(NativeLockFileName::Bootstrap),
+        );
     }
-    // GNU uses calln here (filelock.c:558): whatever make-lock-file-name
-    // signals propagates out of Flock_file.  `?` is the whole point — a
-    // swallowed error used to leave us inventing a ".#NAME" lock the Lisp
-    // layer had just refused to name.
-    let file = Value::heap_string(filename.clone());
-    let lock_file_name = eval.apply(Value::symbol("make-lock-file-name"), vec![file])?;
-    match lock_file_name.kind() {
-        ValueKind::Nil => Ok(None),
-        ValueKind::String => Ok(Some(lisp_file_name_to_path_buf(
-            lock_file_name
-                .as_lisp_string()
-                .expect("ValueKind::String must carry LispString payload"),
-        ))),
-        _ => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("stringp"), lock_file_name],
-        )),
+    let lock_file_name = eval.apply(Value::symbol("make-lock-file-name"), vec![expanded])?;
+    if lock_file_name.is_nil() {
+        return Ok(None);
+    }
+    eval.push_specpdl_root(lock_file_name);
+    let encoded = neovm_text::encoding::encode_file_name_in_context(eval, lock_file_name)?;
+    eval.push_specpdl_root(encoded);
+    Ok(Some(NativeLockFileName::Encoded(encoded)))
+}
+
+/// Keep ENCODE_FILE's actual result alive across later supersession and lock
+/// callbacks.  Only native filesystem consumption takes a byte snapshot.
+enum NativeLockFileName {
+    Encoded(Value),
+    Bootstrap(PathBuf),
+}
+
+impl NativeLockFileName {
+    fn path(&self) -> PathBuf {
+        match self {
+            Self::Encoded(value) => lisp_file_name_to_path_buf(
+                value
+                    .as_lisp_string()
+                    .expect("ENCODE_FILE returned a rooted string"),
+            ),
+            Self::Bootstrap(path) => path.clone(),
+        }
     }
 }
 
@@ -496,12 +501,12 @@ enum LockFileTarget {
     /// GNU returns at once, so not even the threat check happens.
     FileExemptFromLocking,
     /// The lock file to acquire.
-    At(PathBuf),
+    At(NativeLockFileName),
 }
 
 fn lock_file_target(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    filename: &LispString,
+    filename: Value,
 ) -> Result<LockFileTarget, Flow> {
     if !eval
         .visible_variable_value_or_nil("create-lockfiles")
@@ -524,11 +529,11 @@ fn lock_file_target(
 /// error), which is what aborts the modification.  Never swallow it.
 fn check_supersession_threat(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    filename: &LispString,
+    filename: Value,
     target: &LockFileTarget,
     host: &str,
 ) -> Result<(), Flow> {
-    let file = Value::heap_string(filename.clone());
+    let file = filename;
     let subject_buf = eval.apply(Value::symbol("get-truename-buffer"), vec![file])?;
     if subject_buf.is_nil() {
         return Ok(());
@@ -549,7 +554,10 @@ fn check_supersession_threat(
         return Ok(());
     }
     if let LockFileTarget::At(lock_path) = target
-        && matches!(current_lock_owner(lock_path, host), Ok(LockOwner::Current))
+        && matches!(
+            current_lock_owner(&lock_path.path(), host),
+            Ok(LockOwner::Current)
+        )
     {
         return Ok(());
     }
@@ -562,7 +570,7 @@ fn check_supersession_threat(
 
 fn lock_file_resolved(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    filename: &LispString,
+    filename: Value,
 ) -> Result<Value, Flow> {
     let target = lock_file_target(eval, filename)?;
     if matches!(target, LockFileTarget::FileExemptFromLocking) {
@@ -579,7 +587,7 @@ fn lock_file_resolved(
     // rebound it, and GNU reads it afresh inside lock_file_1.
     let host = lock_host_name(eval);
     let lock_info = current_lock_info_string(&lock_user_name(eval), &host);
-    match lock_if_free(&lock_path, &lock_info, &host) {
+    match lock_if_free(&lock_path.path(), &lock_info, &host) {
         LockAttempt::Acquired | LockAttempt::Unavailable => Ok(Value::NIL),
         LockAttempt::OtherOwner(clasher) => {
             // GNU calls ask-user-about-lock with calln: any signal it raises
@@ -587,15 +595,12 @@ fn lock_file_resolved(
             // — propagates and aborts the modification.  Never swallow it.
             let attack = eval.apply(
                 Value::symbol("ask-user-about-lock"),
-                vec![
-                    Value::heap_string(filename.clone()),
-                    Value::string(clasher.opponent()),
-                ],
+                vec![filename, Value::string(clasher.opponent())],
             )?;
             if attack.is_truthy() {
                 // GNU ignores the result of the forced `lock_file_1` too.  The
                 // advisory lock must never mask the operation that requested it.
-                let _ = create_lock_file(&lock_path, &lock_info, true);
+                let _ = create_lock_file(&lock_path.path(), &lock_info, true);
             }
             Ok(Value::NIL)
         }
@@ -604,17 +609,17 @@ fn lock_file_resolved(
 
 fn unlock_file_resolved(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    filename: &LispString,
+    filename: Value,
 ) -> Result<Value, Flow> {
     let Some(lock_path) = make_lock_file_name(eval, filename)? else {
         return Ok(Value::NIL);
     };
 
-    match current_lock_owner(&lock_path, &lock_host_name(eval))
+    match current_lock_owner(&lock_path.path(), &lock_host_name(eval))
         .map_err(|err| file_lock_error("Unlocking file", filename, err))?
     {
         LockOwner::None | LockOwner::Other(_) => Ok(Value::NIL),
-        LockOwner::Current => match fs::remove_file(&lock_path) {
+        LockOwner::Current => match fs::remove_file(lock_path.path()) {
             Ok(()) => Ok(Value::NIL),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Value::NIL),
             Err(err) => Err(file_lock_error("Unlocking file", filename, err)),
@@ -628,18 +633,26 @@ fn unlock_file_resolved(
 #[doc(hidden)]
 pub fn lock_file(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    filename: &LispString,
+    filename: Value,
 ) -> Result<Value, Flow> {
-    let operation = Value::symbol("lock-file");
-    let handler = find_file_name_handler_lisp_for_eval(eval, filename, operation);
-    if !handler.is_nil() {
-        return eval.funcall_general(
-            handler,
-            vec![operation, Value::heap_string(filename.clone())],
-        );
-    }
-
-    lock_file_resolved(eval, filename)
+    let mut roots = NativeFileRoots::enter(eval);
+    let result = {
+        let eval = roots.context();
+        eval.push_specpdl_root(filename);
+        (|| {
+            let operation = Value::symbol("lock-file");
+            let handler = {
+                let string = eval.expect_lisp_string(filename)?;
+                find_file_name_handler_lisp_for_eval(eval, string, operation)
+            };
+            if !handler.is_nil() {
+                return eval.funcall_general(handler, vec![operation, filename]);
+            }
+            lock_file_resolved(eval, filename)
+        })()
+    };
+    drop(roots);
+    result
 }
 
 /// Handler-aware `unlock-file` operation, corresponding to GNU
@@ -653,36 +666,45 @@ pub fn lock_file(
 #[doc(hidden)]
 pub fn unlock_file(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    filename: &LispString,
+    filename: Value,
 ) -> Result<Value, Flow> {
-    let operation = Value::symbol("unlock-file");
-    let handler = find_file_name_handler_lisp_for_eval(eval, filename, operation);
-    if !handler.is_nil() {
-        eval.funcall_general(
-            handler,
-            vec![operation, Value::heap_string(filename.clone())],
-        )?;
-        return Ok(Value::NIL);
-    }
-
-    match unlock_file_resolved(eval, filename).kinded() {
-        Err(FlowKind::Signal(sig))
-            if neovm_value::errors::signal_matches_condition_value_sym(
-                &eval.obarray(),
-                sig.symbol,
-                &Value::symbol("file-error"),
-                eval.symbol_mode(),
-            ) =>
-        {
-            let error_object = Value::cons(Value::symbol(sig.symbol), signal_payload_value(&sig));
-            eval.apply(
-                Value::symbol("userlock--handle-unlock-error"),
-                vec![error_object],
-            )?;
-            Ok(Value::NIL)
-        }
-        other => other.map_err(Flow::from_kind),
-    }
+    let mut roots = NativeFileRoots::enter(eval);
+    let result = {
+        let eval = roots.context();
+        eval.push_specpdl_root(filename);
+        (|| {
+            let operation = Value::symbol("unlock-file");
+            let handler = {
+                let string = eval.expect_lisp_string(filename)?;
+                find_file_name_handler_lisp_for_eval(eval, string, operation)
+            };
+            if !handler.is_nil() {
+                eval.funcall_general(handler, vec![operation, filename])?;
+                return Ok(Value::NIL);
+            }
+            match unlock_file_resolved(eval, filename).kinded() {
+                Err(FlowKind::Signal(sig))
+                    if neovm_value::errors::signal_matches_condition_value_sym(
+                        &eval.obarray(),
+                        sig.symbol,
+                        &Value::symbol("file-error"),
+                        eval.symbol_mode(),
+                    ) =>
+                {
+                    let error_object =
+                        Value::cons(Value::symbol(sig.symbol), signal_payload_value(&sig));
+                    eval.apply(
+                        Value::symbol("userlock--handle-unlock-error"),
+                        vec![error_object],
+                    )?;
+                    Ok(Value::NIL)
+                }
+                other => other.map_err(Flow::from_kind),
+            }
+        })()
+    };
+    drop(roots);
+    result
 }
 
 /// The `(SYMBOL . DATA)` object a `condition-case` variable would be bound to.
@@ -699,29 +721,35 @@ fn signal_payload_value(sig: &neovm_value::error::SignalData) -> Value {
 /// unlocked, t means owned by this Emacs, and a string names another owner.
 fn file_locked_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    filename: &LispString,
+    filename: Value,
 ) -> Result<Value, Flow> {
-    let operation = Value::symbol("file-locked-p");
-    let handler = find_file_name_handler_lisp_for_eval(eval, filename, operation);
-    if !handler.is_nil() {
-        return eval.funcall_general(
-            handler,
-            vec![operation, Value::heap_string(filename.clone())],
-        );
-    }
-
-    let Some(lock_path) = make_lock_file_name(eval, filename)? else {
-        return Ok(Value::NIL);
+    let mut roots = NativeFileRoots::enter(eval);
+    let result = {
+        let eval = roots.context();
+        eval.push_specpdl_root(filename);
+        (|| {
+            let operation = Value::symbol("file-locked-p");
+            let handler = {
+                let string = eval.expect_lisp_string(filename)?;
+                find_file_name_handler_lisp_for_eval(eval, string, operation)
+            };
+            if !handler.is_nil() {
+                return eval.funcall_general(handler, vec![operation, filename]);
+            }
+            let Some(lock_path) = make_lock_file_name(eval, filename)? else {
+                return Ok(Value::NIL);
+            };
+            match current_lock_owner(&lock_path.path(), &lock_host_name(eval))
+                .map_err(|err| file_lock_error("Testing file lock", filename, err))?
+            {
+                LockOwner::None => Ok(Value::NIL),
+                LockOwner::Current => Ok(Value::T),
+                LockOwner::Other(clasher) => Ok(Value::string(clasher.user)),
+            }
+        })()
     };
-
-    match current_lock_owner(&lock_path, &lock_host_name(eval))
-        .map_err(|err| file_lock_error("Testing file lock", filename, err))?
-    {
-        LockOwner::None => Ok(Value::NIL),
-        LockOwner::Current => Ok(Value::T),
-        // GNU Ffile_locked_p reports only the USER part of the clasher.
-        LockOwner::Other(clasher) => Ok(Value::string(clasher.user)),
-    }
+    drop(roots);
+    result
 }
 
 #[doc(hidden)]
@@ -730,9 +758,8 @@ pub fn builtin_lock_file(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("lock-file", &args, 1)?;
-    let filename = eval.expect_lisp_string(args[0])?;
-    let filename = filename.clone();
-    lock_file(eval, &filename)
+    let _ = eval.expect_lisp_string(args[0])?;
+    lock_file(eval, args[0])
 }
 
 #[doc(hidden)]
@@ -741,9 +768,8 @@ pub fn builtin_unlock_file(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("unlock-file", &args, 1)?;
-    let filename = eval.expect_lisp_string(args[0])?;
-    let filename = filename.clone();
-    unlock_file(eval, &filename)
+    let _ = eval.expect_lisp_string(args[0])?;
+    unlock_file(eval, args[0])
 }
 
 #[doc(hidden)]
@@ -752,9 +778,8 @@ pub fn builtin_file_locked_p(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("file-locked-p", &args, 1)?;
-    let filename = eval.expect_lisp_string(args[0])?;
-    let filename = filename.clone();
-    file_locked_p(eval, &filename)
+    let _ = eval.expect_lisp_string(args[0])?;
+    file_locked_p(eval, args[0])
 }
 
 #[doc(hidden)]
@@ -767,7 +792,10 @@ pub fn builtin_lock_buffer(
         if filename.is_nil() {
             None
         } else {
-            Some(neovm_eval::emacs_core::builtins::expect_lisp_string(filename)?.clone())
+            {
+                let _ = neovm_eval::emacs_core::builtins::expect_lisp_string(filename)?;
+                Some(*filename)
+            }
         }
     } else {
         let current = eval
@@ -778,7 +806,7 @@ pub fn builtin_lock_buffer(
         current
             .buffer_local_value("buffer-file-truename")
             .and_then(|value| match value.kind() {
-                ValueKind::String => value.as_lisp_string().cloned(),
+                ValueKind::String => Some(value),
                 _ => None,
             })
     };
@@ -789,7 +817,7 @@ pub fn builtin_lock_buffer(
         .current_buffer()
         .is_some_and(|buffer| buffer.modified_state_value().is_truthy());
     if modified && let Some(filename) = filename {
-        let _ = lock_file(eval, &filename)?;
+        let _ = lock_file(eval, filename)?;
     }
     Ok(Value::NIL)
 }
@@ -807,11 +835,7 @@ pub fn builtin_unlock_buffer(
         && let Some(truename) = current.buffer_local_value("buffer-file-truename")
         && truename.is_string()
     {
-        let filename = truename
-            .as_lisp_string()
-            .expect("ValueKind::String must carry LispString payload")
-            .clone();
-        let _ = unlock_file(eval, &filename)?;
+        let _ = unlock_file(eval, truename)?;
     }
     Ok(Value::NIL)
 }

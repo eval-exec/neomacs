@@ -1687,7 +1687,7 @@ enum CodingDirection {
 /// fast path (src/coding.c:9609-9628) that returns the string WITHOUT running
 /// `decode_coding_object` at all, and records the ARGUMENT's coding system in
 /// `last-coding-system-used` rather than the one the conversion would have
-/// resolved to.  File I/O never reaches that function: `insert-file-contents`
+/// resolved to.  File text I/O has a distinct entry: `insert-file-contents`
 /// calls `decode_coding_gap` / `decode_coding_object` itself (src/fileio.c), so
 /// it always converts and always reports the resolved subsidiary.
 ///
@@ -1710,6 +1710,10 @@ enum CodingEntry {
     /// GNU `code_convert_string` (src/coding.c:9580): the identity fast path is
     /// available, and the flag is raised at :9606 before the conversion.
     CodeConvertString,
+    /// GNU filename conversion uses `code_convert_string` with NOCOPY and
+    /// NORECORD (coding.c:10425-10428). It keeps the identity fast path but
+    /// does not write last-coding-system-used.
+    CodeConvertStringNoRecord,
     /// GNU `code_convert_region` (src/coding.c:9455): no identity fast path,
     /// flag raised at :9480 before the conversion.
     CodeConvertRegion,
@@ -1773,7 +1777,10 @@ impl CodingEntry {
     /// GNU's identity fast path is `code_convert_string`'s alone
     /// (src/coding.c:9609-9628); nothing else has one.
     fn has_identity_fast_path(self) -> bool {
-        matches!(self, Self::CodeConvertString)
+        matches!(
+            self,
+            Self::CodeConvertString | Self::CodeConvertStringNoRecord
+        )
     }
 
     /// `CODING_MODE_LAST_BLOCK` as `detect_coding` sees it at this entry.
@@ -1798,7 +1805,7 @@ impl CodingEntry {
     /// the read boundary.
     fn detection(self) -> EntryDetection {
         match self {
-            Self::CodeConvertString | Self::CodeConvertRegion => {
+            Self::CodeConvertString | Self::CodeConvertStringNoRecord | Self::CodeConvertRegion => {
                 EntryDetection::Here(crate::emacs_core::coding::SourceBlock::Last)
             }
             Self::FileGap => EntryDetection::Here(crate::emacs_core::coding::SourceBlock::More),
@@ -1807,7 +1814,7 @@ impl CodingEntry {
     }
 
     fn reports_coding_result(self) -> bool {
-        !matches!(self, Self::ProcessSend(_))
+        !matches!(self, Self::ProcessSend(_) | Self::CodeConvertStringNoRecord)
     }
 }
 
@@ -5355,6 +5362,66 @@ pub fn builtin_encode_coding_string_in_context<H: TextHost>(
         CodingEntry::CodeConvertString,
         &mut CodingRun::complete_source(),
     )
+}
+
+/// GNU ENCODE_FILE: retain the filename object when conversion is unnecessary,
+/// use the complete runtime coding engine without recording its coding result,
+/// and validate NUL only after encoding (coding.c:10454-10490).
+#[doc(hidden)]
+pub fn encode_file_name_in_context<H: TextHost>(ctx: &mut H, filename: Value) -> EvalResult {
+    let multibyte = filename
+        .as_lisp_string()
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), filename],
+            )
+        })?
+        .is_multibyte();
+    let encoded = if !multibyte {
+        filename
+    } else {
+        #[cfg(windows)]
+        let coding = if ctx.coding_systems().is_known_or_derived("utf-8") {
+            Value::symbol("utf-8")
+        } else {
+            Value::NIL
+        };
+        #[cfg(not(windows))]
+        let coding = {
+            let explicit = ctx.visible_variable_value_or_nil(intern("file-name-coding-system"));
+            if explicit.is_nil() {
+                ctx.visible_variable_value_or_nil(intern("default-file-name-coding-system"))
+            } else {
+                explicit
+            }
+        };
+        if coding.is_nil() {
+            filename
+        } else {
+            builtin_coding_string_in_context(
+                ctx,
+                vec![filename, coding, Value::T],
+                CodingDirection::Encode,
+                EncodingBoundary::CompleteText,
+                CodingEntry::CodeConvertStringNoRecord,
+                &mut CodingRun::complete_source(),
+            )?
+        }
+    };
+    let string = encoded.as_lisp_string().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), encoded],
+        )
+    })?;
+    if string.as_bytes().contains(&0) {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("filenamep"), encoded],
+        ));
+    }
+    Ok(encoded)
 }
 
 #[doc(hidden)]

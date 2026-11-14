@@ -594,44 +594,38 @@ enum FileWriteMode {
 /// distinct prevents the reporting path from being accidentally coupled to
 /// the buffer-visiting path.
 enum WriteRegionVisit {
-    ReportOnly(LispString),
-    Visit(LispString),
-    Quiet(LispString),
+    ReportOnly(Value),
+    Visit(Value),
+    Quiet(Value),
 }
 
 impl WriteRegionVisit {
-    fn from_lisp(
-        eval: &mut Context,
-        argument: Value,
-        output_file: &LispString,
-    ) -> Result<Self, Flow> {
+    fn from_lisp(eval: &mut Context, argument: Value, output_file: Value) -> Result<Self, Flow> {
         Ok(if argument.is_t() {
-            Self::Visit(output_file.clone())
+            Self::Visit(output_file)
         } else if argument.is_string() {
-            // GNU expands a string VISIT before handler dispatch and before
-            // selecting the default lock name, just as it expands FILENAME.
+            // Keep the actual canonical result, including its identity, for
+            // the default lock name and visiting-state completion.
             let expanded = builtin_expand_file_name(eval, vec![argument, Value::NIL])?;
             eval.push_specpdl_root(expanded);
-            let visited =
-                resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(&expanded)?);
-            root_native_string_properties(eval, &visited);
-            Self::Visit(visited)
+            let _ = eval.expect_lisp_string(expanded)?;
+            Self::Visit(expanded)
         } else if argument.is_nil() {
-            Self::ReportOnly(output_file.clone())
+            Self::ReportOnly(output_file)
         } else {
-            Self::Quiet(output_file.clone())
+            Self::Quiet(output_file)
         })
     }
 
-    pub fn file_name(&self) -> &LispString {
+    pub fn file_name(&self) -> Value {
         match self {
-            Self::ReportOnly(file) | Self::Visit(file) | Self::Quiet(file) => file,
+            Self::ReportOnly(file) | Self::Visit(file) | Self::Quiet(file) => *file,
         }
     }
 
-    fn visited_file(&self) -> Option<&LispString> {
+    fn visited_file(&self) -> Option<Value> {
         match self {
-            Self::Visit(file) => Some(file),
+            Self::Visit(file) => Some(*file),
             Self::ReportOnly(_) | Self::Quiet(_) => None,
         }
     }
@@ -1850,6 +1844,41 @@ fn make_temp_name_suffix() -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+// GNU fileio.c:1301-1371 returns the current working NAME only when the
+// absolute spelling needs no normalization. Equal output bytes do not imply
+// this path: Unix /.. is normalized into a fresh string with the same bytes.
+fn expand_file_name_can_return_working_name(bytes: &[u8]) -> bool {
+    #[cfg(windows)]
+    {
+        // DOS_NT additionally handles drive/UNC, /: escape, separator and
+        // downcase rules. Keep the existing allocating Windows native path;
+        // a Unix spelling predicate cannot establish its identity contract.
+        let _ = bytes;
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        if bytes.first() != Some(&b'/') {
+            return false;
+        }
+        for (index, byte) in bytes.iter().enumerate() {
+            if *byte != b'/' {
+                continue;
+            }
+            let rest = &bytes[index + 1..];
+            if rest == b"."
+                || rest.starts_with(b"./")
+                || rest == b".."
+                || rest.starts_with(b"../")
+                || (rest.first() == Some(&b'/') && (index != 0 || rest.get(1) == Some(&b'/')))
+            {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// `(expand-file-name NAME &optional DEFAULT-DIRECTORY)` — falls back
 /// to dynamic `default-directory` when DEFAULT-DIRECTORY is omitted
 /// or nil.
@@ -1865,75 +1894,157 @@ pub fn builtin_expand_file_name(eval: &mut Context, args: Vec<Value>) -> EvalRes
             ],
         ));
     }
-    let name_lisp = expect_lisp_filename_string_strict(&args[0])?;
-    let default_arg = args.get(1).copied().unwrap_or(Value::NIL);
-    let operation = Value::symbol("expand-file-name");
-    let name_handler = find_file_name_handler_lisp_for_eval(eval, &name_lisp, operation);
-    if !name_handler.is_nil() {
-        let result = eval.funcall_general(
-            name_handler,
-            vec![operation, Value::heap_string(name_lisp), default_arg],
-        )?;
-        return file_name_handler_string_or_error(result);
-    }
+    let mut roots = NativeFileRoots::enter(eval);
+    let result = {
+        let eval = roots.context();
+        (|| {
+            let mut name = args[0];
+            let default_arg = args.get(1).copied().unwrap_or(Value::NIL);
+            eval.push_specpdl_root(name);
+            eval.push_specpdl_root(default_arg);
+            // GNU checks the original input before any handler. A handler's
+            // returned string is type-checked, not revalidated as an input.
+            expect_lisp_filename_string_strict(&name)?;
+            let operation = Value::symbol("expand-file-name");
+            eval.push_specpdl_root(operation);
+            let name_handler = {
+                let string = eval.expect_lisp_string(name)?;
+                find_file_name_handler_lisp_for_eval(eval, string, operation)
+            };
+            if !name_handler.is_nil() {
+                eval.push_specpdl_root(name_handler);
+                let result =
+                    eval.funcall_general(name_handler, vec![operation, name, default_arg])?;
+                return file_name_handler_string_or_error(result);
+            }
 
-    let default_dir_value = if let Some(arg) = args.get(1) {
-        match arg.kind() {
-            ValueKind::Nil => implicit_default_directory_value_for_expand_file_name(eval)?,
-            ValueKind::String => *arg,
-            _ => Value::heap_string(fallback_root_default_directory()),
-        }
-    } else {
-        implicit_default_directory_value_for_expand_file_name(eval)?
+            let mut default_dir = if default_arg.is_nil() {
+                implicit_default_directory_value_for_expand_file_name(eval)?
+            } else if default_arg.is_string() {
+                default_arg
+            } else {
+                Value::heap_string(fallback_root_default_directory())
+            };
+            eval.push_specpdl_root(default_dir);
+            expect_lisp_filename_string_strict(&default_dir)?;
+            // GNU's recursion guard compares the selected objects, not their
+            // contents. Keep both Values alive if default expansion calls Lisp.
+            let default_dir_eq_name = eq_value(&default_dir, &name);
+            let default_handler = {
+                let string = eval.expect_lisp_string(default_dir)?;
+                find_file_name_handler_lisp_for_eval(eval, string, operation)
+            };
+            if !default_handler.is_nil() {
+                eval.push_specpdl_root(default_handler);
+                let result =
+                    eval.funcall_general(default_handler, vec![operation, name, default_dir])?;
+                return file_name_handler_string_or_error(result);
+            }
+
+            let default_dir_is_absolute = {
+                let string = eval.expect_lisp_string(default_dir)?;
+                lisp_file_name_absolute_system_p(string)
+            };
+            if !default_dir_is_absolute && !default_dir_eq_name {
+                default_dir = builtin_expand_file_name(eval, vec![default_dir, Value::NIL])?;
+                eval.push_specpdl_root(default_dir);
+                expect_lisp_filename_string_strict(&default_dir)?;
+                let default_handler = {
+                    let string = eval.expect_lisp_string(default_dir)?;
+                    find_file_name_handler_lisp_for_eval(eval, string, operation)
+                };
+                if !default_handler.is_nil() {
+                    eval.push_specpdl_root(default_handler);
+                    let result =
+                        eval.funcall_general(default_handler, vec![operation, name, default_dir])?;
+                    return file_name_handler_string_or_error(result);
+                }
+            }
+
+            // GNU harmonizes storage kinds only after all directory/handler
+            // phases. Re-read live Values: a recursive default handler may
+            // have changed NAME since the original input check.
+            let (name_multibyte, name_ascii, directory_multibyte, directory_ascii) = {
+                let name_string = eval.expect_lisp_string(name)?;
+                let directory_string = eval.expect_lisp_string(default_dir)?;
+                (
+                    name_string.is_multibyte(),
+                    name_string.is_ascii(),
+                    directory_string.is_multibyte(),
+                    directory_string.is_ascii(),
+                )
+            };
+            if name_multibyte != directory_multibyte {
+                if name_multibyte {
+                    if name_ascii || !directory_ascii {
+                        let bytes = eval.expect_lisp_string(name)?.as_bytes().to_vec();
+                        name = Value::heap_string(file_name_lisp_from_bytes(bytes, false));
+                        eval.push_specpdl_root(name);
+                    } else {
+                        let bytes = eval.expect_lisp_string(default_dir)?.as_bytes().to_vec();
+                        default_dir = Value::heap_string(file_name_lisp_from_bytes(bytes, true));
+                        eval.push_specpdl_root(default_dir);
+                    }
+                } else if name_ascii {
+                    let bytes = eval.expect_lisp_string(name)?.as_bytes().to_vec();
+                    name = Value::heap_string(file_name_lisp_from_bytes(bytes, true));
+                    eval.push_specpdl_root(name);
+                } else {
+                    let bytes = eval.expect_lisp_string(default_dir)?.as_bytes().to_vec();
+                    default_dir = Value::heap_string(file_name_lisp_from_bytes(bytes, false));
+                    eval.push_specpdl_root(default_dir);
+                }
+            }
+
+            let (bytes, multibyte) = {
+                let name_string = eval.expect_lisp_string(name)?;
+                let directory_string = eval.expect_lisp_string(default_dir)?;
+                // The input was checked before callbacks. GNU's native scan
+                // stops at a NUL that later callback mutation may introduce;
+                // a fast return still preserves the complete working object.
+                let name_bytes = name_string
+                    .as_bytes()
+                    .split(|byte| *byte == 0)
+                    .next()
+                    .unwrap_or_default();
+                if expand_file_name_can_return_working_name(name_bytes) {
+                    return Ok(name);
+                }
+                let home_dir = home_directory_for_expand_file_name(eval);
+                (
+                    expand_file_name_bytes_with_home(
+                        name_bytes,
+                        Some(directory_string.as_bytes()),
+                        home_dir.as_deref(),
+                        false,
+                    ),
+                    name_string.is_multibyte(),
+                )
+            };
+            let result = Value::heap_string(file_name_lisp_from_bytes(bytes, multibyte));
+            eval.push_specpdl_root(result);
+            #[cfg(not(windows))]
+            {
+                // A newly canonical spelling can acquire a handler even
+                // though NAME and its default directory had none. Windows
+                // retains its old allocating path until its distinct native
+                // fast-return conditions and this dispatch are ported together.
+                let result_handler = {
+                    let string = eval.expect_lisp_string(result)?;
+                    find_file_name_handler_lisp_for_eval(eval, string, operation)
+                };
+                if !result_handler.is_nil() {
+                    eval.push_specpdl_root(result_handler);
+                    let handled =
+                        eval.funcall_general(result_handler, vec![operation, result, default_dir])?;
+                    return file_name_handler_string_or_error(handled);
+                }
+            }
+            Ok(result)
+        })()
     };
-    let default_dir_lisp = expect_lisp_filename_string_strict(&default_dir_value)?;
-    // GNU's `Fexpand_file_name` guards this recursion with object identity.
-    // The allocator canonicalizes empty strings per storage kind just like GNU,
-    // so the ordinary `eq` operation covers the empty-name case too.
-    let default_dir_eq_name = eq_value(&default_dir_value, &args[0]);
-    let default_handler = find_file_name_handler_lisp_for_eval(eval, &default_dir_lisp, operation);
-    if !default_handler.is_nil() {
-        let result = eval.funcall_general(
-            default_handler,
-            vec![operation, Value::heap_string(name_lisp), default_dir_value],
-        )?;
-        return file_name_handler_string_or_error(result);
-    }
-
-    let default_dir_lisp =
-        if !lisp_file_name_absolute_system_p(&default_dir_lisp) && !default_dir_eq_name {
-            let expanded = builtin_expand_file_name(eval, vec![default_dir_value, Value::NIL])?;
-            expect_lisp_filename_string_strict(&expanded)?
-        } else {
-            default_dir_lisp
-        };
-    let default_handler = find_file_name_handler_lisp_for_eval(eval, &default_dir_lisp, operation);
-    if !default_handler.is_nil() {
-        let result = eval.funcall_general(
-            default_handler,
-            vec![
-                operation,
-                Value::heap_string(name_lisp),
-                Value::heap_string(default_dir_lisp),
-            ],
-        )?;
-        return file_name_handler_string_or_error(result);
-    }
-
-    let home_dir = home_directory_for_expand_file_name(eval);
-    // Expand on Emacs-internal-encoding bytes so raw eight-bit file-name bytes
-    // survive byte-exactly (no storage-String round-trip).
-    let result = expand_file_name_bytes_with_home(
-        name_lisp.as_bytes(),
-        Some(default_dir_lisp.as_bytes()),
-        home_dir.as_deref(),
-        false,
-    );
-    let result_multibyte = expand_file_name_result_multibyte(&name_lisp, &default_dir_lisp);
-    Ok(Value::heap_string(file_name_lisp_from_bytes(
-        result,
-        result_multibyte,
-    )))
+    drop(roots);
+    result
 }
 
 /// (make-temp-name PREFIX) -> string
@@ -5551,26 +5662,26 @@ impl PreparedWriteRegion {
     }
 }
 
-// A native write can run arbitrary handlers and annotation callbacks. Keep
-// its root suffix scoped through Flow returns and Rust panic without an
+// A native file operation can run arbitrary handlers and annotation callbacks.
+// Keep its root suffix scoped through Flow returns and Rust panic without an
 // escaping Context pointer or a new evaluator interface.
-struct NativeWriteRoots<'owner> {
+pub(super) struct NativeFileRoots<'owner> {
     eval: &'owner mut Context,
     mark: neovm_eval::emacs_core::eval::SpecpdlRootScopeState,
 }
 
-impl<'owner> NativeWriteRoots<'owner> {
-    fn enter(eval: &'owner mut Context) -> Self {
+impl<'owner> NativeFileRoots<'owner> {
+    pub(super) fn enter(eval: &'owner mut Context) -> Self {
         let mark = eval.save_specpdl_roots();
         Self { eval, mark }
     }
 
-    fn context(&mut self) -> &mut Context {
+    pub(super) fn context(&mut self) -> &mut Context {
         self.eval
     }
 }
 
-impl Drop for NativeWriteRoots<'_> {
+impl Drop for NativeFileRoots<'_> {
     fn drop(&mut self) {
         self.eval.restore_specpdl_roots(self.mark);
     }
@@ -6914,7 +7025,7 @@ pub fn builtin_write_region(
     expect_max_args("write-region", &args, 7)?;
     // The complete native write owns these roots: annotation collection,
     // coding selection and post-annotation cleanup can all call Lisp/GC.
-    let mut roots = NativeWriteRoots::enter(eval);
+    let mut roots = NativeFileRoots::enter(eval);
     let eval = roots.context();
     for argument in &args {
         eval.push_specpdl_root(*argument);
@@ -6934,9 +7045,10 @@ pub fn builtin_write_region(
     let result = write_region_without_handler(
         restriction.context(),
         &args,
+        call.filename,
         call.resolved,
         call.visit,
-        call.default_lock_name,
+        call.lock_name,
         call.mustbenew_is_excl,
     );
     restriction.finish(result)
@@ -6946,9 +7058,10 @@ pub fn builtin_write_region(
 // the canonical file-name-handler boundary without consulting the mutable
 // Lisp write-region function cell. All auto-save targets use this same entry.
 struct WriteRegionCall {
+    filename: Value,
     resolved: LispString,
     visit: WriteRegionVisit,
-    default_lock_name: LispString,
+    lock_name: Value,
     mustbenew_is_excl: bool,
 }
 
@@ -6967,12 +7080,20 @@ fn prepare_write_region_call(eval: &mut Context, args: &[Value]) -> Result<Write
         barf_or_query_if_file_exists(eval, &resolved, false, "overwrite", true, true)?;
     }
     let visit =
-        WriteRegionVisit::from_lisp(eval, args.get(4).copied().unwrap_or(Value::NIL), &resolved)?;
-    let default_lock_name = visit.file_name().clone();
+        WriteRegionVisit::from_lisp(eval, args.get(4).copied().unwrap_or(Value::NIL), expanded)?;
+    // GNU selects LOCKNAME before the handler, annotation and coding phases.
+    // An explicit object is neither expanded nor reconstructed.
+    let lock_name = args
+        .get(5)
+        .copied()
+        .filter(|name| !name.is_nil())
+        .unwrap_or_else(|| visit.file_name());
+    eval.push_specpdl_root(lock_name);
     Ok(WriteRegionCall {
+        filename: expanded,
         resolved,
         visit,
-        default_lock_name,
+        lock_name,
         mustbenew_is_excl,
     })
 }
@@ -7001,10 +7122,8 @@ fn dispatch_write_region_handler(
     full_args.push(operation);
     full_args.extend_from_slice(args);
     full_args.resize(8, Value::NIL);
-    full_args[3] = Value::heap_string(call.resolved.clone());
-    if full_args[6].is_nil() {
-        full_args[6] = Value::heap_string(call.default_lock_name.clone());
-    }
+    full_args[3] = call.filename;
+    full_args[6] = call.lock_name;
     let result = eval.funcall_general(handler, full_args)?;
     // GNU's handled branch still commits visiting state in whatever buffer
     // the handler leaves current. Errors/original throws leave before here.
@@ -7015,16 +7134,13 @@ fn dispatch_write_region_handler(
     Ok(Some(result))
 }
 
-fn finish_write_region_visit(eval: &mut Context, current: BufferId, visited: &LispString) {
+fn finish_write_region_visit(eval: &mut Context, current: BufferId, visited: Value) {
     let _ = eval.edit.buffers.set_buffer_modified_flag(current, false);
     if let Some(buffer) = eval.edit.buffers.get_mut(current) {
         let saved_size = i64::try_from(buffer.total_char_len().get()).unwrap_or(i64::MAX);
         buffer.set_buffer_local("buffer-saved-size", Value::fixnum(saved_size));
     }
-    let _ = eval
-        .edit
-        .buffers
-        .set_buffer_file_name(current, Value::heap_string(visited.clone()));
+    let _ = eval.edit.buffers.set_buffer_file_name(current, visited);
 }
 
 /// The native half of `write-region`, run inside the caller's
@@ -7032,9 +7148,10 @@ fn finish_write_region_visit(eval: &mut Context, current: BufferId, visited: &Li
 fn write_region_without_handler(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
+    filename: Value,
     resolved: LispString,
     visit: WriteRegionVisit,
-    default_lock_name: LispString,
+    lock_name: Value,
     mustbenew_is_excl: bool,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
@@ -7122,7 +7239,7 @@ fn write_region_without_handler(
         prepared.source.coding_buffer(),
         coding_from,
         coding_to,
-        Value::heap_string(resolved.clone()),
+        filename,
     )?;
     let encoded =
         neovm_text::encoding::encode_file_region_in_context(eval, content, coding_system)?;
@@ -7131,17 +7248,10 @@ fn write_region_without_handler(
     // keeps that lock scoped to the native open/write/close operation.  The
     // buffer may already own the lock from its first modification; re-locking
     // our own file is intentionally idempotent.
-    let lock_name = match args.get(5) {
-        Some(value) if !value.is_nil() => {
-            resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(value)?)
-        }
-        _ => default_lock_name,
-    };
-    root_native_string_properties(eval, &lock_name);
     let file_locked = if native_auto_save_active(eval) {
         false
     } else {
-        super::filelock::lock_file(eval, &lock_name)?;
+        super::filelock::lock_file(eval, lock_name)?;
         true
     };
 
@@ -7161,11 +7271,7 @@ fn write_region_without_handler(
             // `get_file_errno_data` then handles errno specially: a MUSTBENEW
             // =`excl` collision is EEXIST -> `(file-already-exists "File exists"
             // FILENAME)` (action omitted), ENOENT -> `file-missing`, etc.
-            signal_file_action_error_value(
-                err,
-                "Opening output file",
-                Value::heap_string(resolved.clone()),
-            )
+            signal_file_action_error_value(err, "Opening output file", filename)
         })?;
 
         // fsync after write unless write-region-inhibit-fsync is non-nil.
@@ -7173,31 +7279,17 @@ fn write_region_without_handler(
             .visible_variable_value_or_nil("write-region-inhibit-fsync")
             .is_truthy();
         if !native_auto_save_active(eval) && !inhibit_fsync {
-            file.sync_all().map_err(|err| {
-                signal_file_action_error_value(
-                    err,
-                    "Writing to",
-                    Value::heap_string(resolved.clone()),
-                )
-            })?;
+            file.sync_all()
+                .map_err(|err| signal_file_action_error_value(err, "Writing to", filename))?;
         }
         drop(file);
 
         let visiting_modtime = if visit.visited_file().is_some() {
-            let meta = std::fs::metadata(&resolved_path).map_err(|err| {
-                signal_file_action_error_value(
-                    err,
-                    "Writing to",
-                    Value::heap_string(resolved.clone()),
-                )
-            })?;
-            let mtime = meta.modified().map_err(|err| {
-                signal_file_action_error_value(
-                    err,
-                    "Writing to",
-                    Value::heap_string(resolved.clone()),
-                )
-            })?;
+            let meta = std::fs::metadata(&resolved_path)
+                .map_err(|err| signal_file_action_error_value(err, "Writing to", filename))?;
+            let mtime = meta
+                .modified()
+                .map_err(|err| signal_file_action_error_value(err, "Writing to", filename))?;
             let timestamp =
                 UnixTimestamp::try_from(mtime).map_err(|TimestampError::OutOfRange| {
                     crate::emacs_core::timefns::time_error_overflow()
@@ -7227,7 +7319,7 @@ fn write_region_without_handler(
     // cleanup errors. Preserve the primary write error first, then the post
     // annotation error, if cleanup also fails.
     let unlock_result = if file_locked {
-        super::filelock::unlock_file(eval, &lock_name)
+        super::filelock::unlock_file(eval, lock_name)
     } else {
         Ok(Value::NIL)
     };
@@ -7241,8 +7333,8 @@ fn write_region_without_handler(
     // GNU5836 reads the flag AFTER annotation/cleanup callbacks.
     let auto_saving_into_visited_file =
         native_auto_save_active(eval) && buffer_file_is_auto_save_file(eval, current_id);
-    if let Some(visit_path) = visit.visited_file().cloned() {
-        finish_write_region_visit(eval, current_id, &visit_path);
+    if let Some(visit_path) = visit.visited_file() {
+        finish_write_region_visit(eval, current_id, visit_path);
         if let Some((sec, nsec, size)) = visiting_modtime
             && let Some(buf) = eval.edit.buffers.get_mut(current_id)
         {
@@ -7260,7 +7352,7 @@ fn write_region_without_handler(
                 .buffers
                 .set_buffer_modified_flag(current_id, false);
         }
-        super::filelock::unlock_file(eval, &lock_name)?;
+        super::filelock::unlock_file(eval, lock_name)?;
     }
 
     eval.set_variable(
@@ -7274,7 +7366,7 @@ fn write_region_without_handler(
             eval,
             &[
                 Value::string(completion.message_format()),
-                Value::heap_string(visit.file_name().clone()),
+                visit.file_name(),
             ],
         )?;
     }
@@ -7563,7 +7655,7 @@ fn auto_save_1(eval: &mut Context) -> Result<(), Flow> {
         Value::NIL,
         Value::NIL,
     ];
-    let mut roots = NativeWriteRoots::enter(eval);
+    let mut roots = NativeFileRoots::enter(eval);
     let eval = roots.context();
     for argument in &args {
         eval.push_specpdl_root(*argument);

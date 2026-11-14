@@ -203,8 +203,8 @@ impl BootHooks {
 pub struct FileIoHooks {
     expand_file_name_entry: fn(&mut Context, Vec<Value>) -> EvalResult,
     dispatch_file_handler: fn(&mut Context, &str, &[Value]) -> Result<Option<Value>, Flow>,
-    lock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
-    unlock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
+    lock_file: fn(&mut Context, Value) -> Result<Value, Flow>,
+    unlock_file: fn(&mut Context, Value) -> Result<Value, Flow>,
     unlink_file_path: fn(&Path) -> std::io::Result<()>,
 }
 
@@ -213,8 +213,8 @@ impl FileIoHooks {
     pub const fn new(
         expand_file_name_entry: fn(&mut Context, Vec<Value>) -> EvalResult,
         dispatch_file_handler: fn(&mut Context, &str, &[Value]) -> Result<Option<Value>, Flow>,
-        lock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
-        unlock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
+        lock_file: fn(&mut Context, Value) -> Result<Value, Flow>,
+        unlock_file: fn(&mut Context, Value) -> Result<Value, Flow>,
         unlink_file_path: fn(&Path) -> std::io::Result<()>,
     ) -> Self {
         Self {
@@ -635,12 +635,12 @@ impl FileIoHooks {
     }
 
     #[doc(hidden)]
-    pub fn lock_file(&self) -> fn(&mut Context, &LispString) -> Result<Value, Flow> {
+    pub fn lock_file(&self) -> fn(&mut Context, Value) -> Result<Value, Flow> {
         self.lock_file
     }
 
     #[doc(hidden)]
-    pub fn unlock_file(&self) -> fn(&mut Context, &LispString) -> Result<Value, Flow> {
+    pub fn unlock_file(&self) -> fn(&mut Context, Value) -> Result<Value, Flow> {
         self.unlock_file
     }
 }
@@ -1124,12 +1124,12 @@ pub fn dispatch_file_handler(
 pub use crate::emacs_core::eval::data::file_name_expand::resolve_filename_lisp_for_eval as resolve_filename;
 
 /// Handler-aware `lock-file` (EditHost seam).
-pub fn lock_file(ctx: &mut Context, filename: &LispString) -> Result<Value, Flow> {
+pub fn lock_file(ctx: &mut Context, filename: Value) -> Result<Value, Flow> {
     (lifecycle_hooks().fileio().lock_file())(ctx, filename)
 }
 
 /// Handler-aware `unlock-file` (EditHost seam).
-pub fn unlock_file(ctx: &mut Context, filename: &LispString) -> Result<Value, Flow> {
+pub fn unlock_file(ctx: &mut Context, filename: Value) -> Result<Value, Flow> {
     (lifecycle_hooks().fileio().unlock_file())(ctx, filename)
 }
 

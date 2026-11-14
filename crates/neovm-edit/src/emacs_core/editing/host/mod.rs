@@ -390,12 +390,14 @@ pub trait EditHost {
     fn resolve_filename(&self, filename: &LispString) -> LispString;
 
     /// Take the file lock for FILENAME through file-name handler
-    /// dispatch and prompting (GNU `Flock_file`). C15.
-    fn lock_file(&mut self, filename: &LispString) -> Result<(), Flow>;
+    /// dispatch and prompting (GNU `Flock_file`). Preserve this original Lisp
+    /// object and root it for the whole host operation. C15.
+    fn lock_file(&mut self, filename: Value) -> Result<(), Flow>;
 
     /// Release the file lock for FILENAME through file-name handler
-    /// dispatch (GNU `Funlock_file`). C15.
-    fn unlock_file(&mut self, filename: &LispString) -> Result<(), Flow>;
+    /// dispatch (GNU `Funlock_file`). Preserve this original Lisp object and
+    /// root it for the whole host operation. C15.
+    fn unlock_file(&mut self, filename: Value) -> Result<(), Flow>;
 
     /// Publish GNU `bset_redisplay` for BUFFER at mutation time: mark the
     /// shared text root and raise the windows scope when a second window

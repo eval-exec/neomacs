@@ -342,12 +342,10 @@ impl Context {
             // Every buffer/manager borrow has ended before dispatch. Root the
             // original Value so string interval Values survive arbitrary Lisp
             // and GC; a standalone LispString clone is not a root owner.
-            if let Some(filename) = filename
-                && let Some(string) = filename.as_lisp_string()
-            {
+            if let Some(filename) = filename {
                 let roots = self.save_specpdl_roots();
                 self.push_specpdl_root(filename);
-                let result = lifecycle::unlock_file(self, string);
+                let result = lifecycle::unlock_file(self, filename);
                 self.restore_specpdl_roots(roots);
                 // Restore before propagating every Flow. Handler values are
                 // discarded by the canonical Funlock_file-compatible seam.

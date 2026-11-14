@@ -658,7 +658,7 @@ fn prepare_buffer_change<H: crate::emacs_core::edit_host::EditHost>(
         super::file_name::clean_current_buffer_file_lock_target(&host.edit_and_vars().0.buffers)
     {
         live.capture_for_callbacks(&host.edit_and_vars().0.buffers);
-        host.lock_file(&filename)?;
+        host.lock_file(filename)?;
     }
     let range = live.refresh(&host.edit_and_vars().0.buffers);
     let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {

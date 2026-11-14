@@ -3989,9 +3989,9 @@ pub fn builtin_set_buffer_modified_p<H: EditHost>(host: &mut H, args: Vec<Value>
         // No expansion here: GNU's restore_buffer_modified_p hands
         // BVAR (b, file_truename) to Flock_file / Funlock_file untouched.
         if !was_modified && !args[0].is_nil() {
-            host.lock_file(&filename)?;
+            host.lock_file(filename)?;
         } else if was_modified && args[0].is_nil() {
-            host.unlock_file(&filename)?;
+            host.unlock_file(filename)?;
         }
     }
     {
@@ -4027,9 +4027,9 @@ pub fn builtin_restore_buffer_modified_p<H: EditHost>(
         // No expansion here: GNU's restore_buffer_modified_p hands
         // BVAR (b, file_truename) to Flock_file / Funlock_file untouched.
         if !was_modified && !args[0].is_nil() {
-            host.lock_file(&filename)?;
+            host.lock_file(filename)?;
         } else if was_modified && args[0].is_nil() {
-            host.unlock_file(&filename)?;
+            host.unlock_file(filename)?;
         }
     }
     let (edit, _) = host.edit_and_vars();

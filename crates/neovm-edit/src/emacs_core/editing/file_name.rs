@@ -9,7 +9,7 @@
 
 use crate::buffer::{BufferId, BufferManager};
 use neovm_value::heap_types::LispString;
-use neovm_value::value::ValueKind;
+use neovm_value::value::{Value, ValueKind};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
@@ -53,13 +53,13 @@ fn lisp_file_name_to_host_path_string(filename: &str) -> String {
 pub(crate) fn buffer_file_lock_target(
     buffers: &BufferManager,
     buffer_id: BufferId,
-) -> Option<LispString> {
+) -> Option<Value> {
     let root_id = buffers.modified_state_root_id(buffer_id)?;
     let buffer = buffers.get(root_id)?;
     let file_name = buffer.buffer_local_value("buffer-file-name")?;
     let file_truename = buffer.buffer_local_value("buffer-file-truename")?;
     match (file_name.kind(), file_truename.kind()) {
-        (ValueKind::String, ValueKind::String) => file_truename.as_lisp_string().cloned(),
+        (ValueKind::String, ValueKind::String) => Some(file_truename),
         _ => None,
     }
 }
@@ -70,7 +70,7 @@ pub(crate) fn buffer_file_lock_target(
 /// buffer. These native checks run before any before-change hook and never
 /// invalidate text geometry; the caller publishes that boundary and then asks
 /// the host to take the lock, which can run Lisp.
-pub(crate) fn clean_current_buffer_file_lock_target(buffers: &BufferManager) -> Option<LispString> {
+pub(crate) fn clean_current_buffer_file_lock_target(buffers: &BufferManager) -> Option<Value> {
     let buffer_id = buffers.current_buffer_id()?;
     let root_id = buffers.modified_state_root_id(buffer_id)?;
     let buffer = buffers.get(root_id)?;

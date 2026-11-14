@@ -391,11 +391,11 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER system::fileio.dispatch_file_handler");
             }
 
-            pub(crate) fn fileio_lock_file(ctx: &mut Context, file: &LispString) -> Result<Value, Flow> {
+            pub(crate) fn fileio_lock_file(ctx: &mut Context, file: Value) -> Result<Value, Flow> {
                 absent_layer_panic("ABSENT-LAYER system::fileio.lock_file");
             }
 
-            pub(crate) fn fileio_unlock_file(ctx: &mut Context, file: &LispString) -> Result<Value, Flow> {
+            pub(crate) fn fileio_unlock_file(ctx: &mut Context, file: Value) -> Result<Value, Flow> {
                 absent_layer_panic("ABSENT-LAYER system::fileio.unlock_file");
             }
 

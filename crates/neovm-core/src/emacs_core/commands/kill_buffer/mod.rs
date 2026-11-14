@@ -136,19 +136,18 @@ fn run_kill_buffer_hooks(
 }
 
 /// Dispatch a modified buffer's string truename without selecting it.
-/// The caller passes the string borrowed from the original rooted Value.
+/// The caller passes the original string Value, rooted through dispatch here.
 #[cold]
 #[inline(never)]
 fn unlock_buffer_file_before_retirement(
     eval: &mut crate::emacs_core::eval::Context,
     filename: Value,
-    string: &neovm_value::heap_types::LispString,
 ) -> Result<(), Flow> {
     // No buffer/manager borrow crosses the callback. Keep the original
     // Lisp string (including interval Values) rooted until dispatch ends.
     let roots = eval.save_specpdl_roots();
     eval.push_specpdl_root(filename);
-    let result = neovm_eval::emacs_core::eval::lifecycle::unlock_file(eval, string);
+    let result = neovm_eval::emacs_core::eval::lifecycle::unlock_file(eval, filename);
     eval.restore_specpdl_roots(roots);
     result.map(|_| ())
 }
@@ -317,9 +316,9 @@ pub(crate) fn builtin_kill_buffer(
             .flatten()
     });
     if let Some(filename) = filename
-        && let Some(string) = filename.as_lisp_string()
+        && filename.is_string()
     {
-        unlock_buffer_file_before_retirement(eval, filename, string)?;
+        unlock_buffer_file_before_retirement(eval, filename)?;
     }
     if eval.edit.buffers.get(id).is_none() {
         // GNU still runs kill_buffer_processes after a reentrant unlock

@@ -400,12 +400,12 @@ impl EditHost for Context {
         )
     }
 
-    fn lock_file(&mut self, filename: &LispString) -> Result<(), Flow> {
+    fn lock_file(&mut self, filename: Value) -> Result<(), Flow> {
         let _ = crate::emacs_core::eval::lifecycle::lock_file(self, filename)?;
         Ok(())
     }
 
-    fn unlock_file(&mut self, filename: &LispString) -> Result<(), Flow> {
+    fn unlock_file(&mut self, filename: Value) -> Result<(), Flow> {
         let _ = crate::emacs_core::eval::lifecycle::unlock_file(self, filename)?;
         Ok(())
     }
