@@ -2673,4 +2673,43 @@ mod provider_tests {
             (1, Some(1), "always")
         );
     }
+
+    #[test]
+    fn core_bufferp_event_resolves_the_single_production_descriptor() {
+        const BUFFERP_PROVIDER_CALL: &str = "neovm_eval::emacs_core::builtins::types::BUFFERP_SUBR";
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = read(&root, CORE_MANIFEST).unwrap();
+        assert_eq!(
+            source
+                .matches(&format!("ctx.register_subr({BUFFERP_PROVIDER_CALL});"))
+                .count(),
+            1
+        );
+        let (events, _) = manifest_events(&root).unwrap();
+        let direct: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Direct { spec, .. } => Some(spec),
+                _ => None,
+            })
+            .collect();
+        let index = direct
+            .iter()
+            .position(|spec| spec.name == "bufferp")
+            .unwrap();
+        assert_eq!(
+            direct.iter().filter(|spec| spec.name == "bufferp").count(),
+            1
+        );
+        assert_eq!(direct[index - 1].name, "hash-table-p");
+        assert_eq!(direct[index + 1].name, "sequencep");
+        assert_eq!(
+            (
+                direct[index].min,
+                direct[index].max,
+                direct[index].cfg.as_str()
+            ),
+            (1, Some(1), "always")
+        );
+    }
 }

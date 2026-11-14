@@ -3681,11 +3681,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| builtin_hash_table_p(args)),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "bufferp",
-        NativeFn::ContextVec(|_ctx, args| builtin_bufferp(args)),
-        SubrArity::new(1, Some(1)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::types::BUFFERP_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "sequencep",
         NativeFn::ContextVec(|_ctx, args| builtin_sequencep(args)),

@@ -1562,6 +1562,7 @@ mod unit_runtime {
         }
 
         Some(match name {
+            "bufferp" => crate::emacs_core::builtins::types::BUFFERP_SUBR,
             "get-buffer-create" => SubrSpec::new(
                 "get-buffer-create",
                 NativeFn::ContextVec(bind_get_buffer_create),
@@ -1620,6 +1621,69 @@ mod unit_runtime {
             ),
             _ => return None,
         })
+    }
+
+    #[test]
+    fn unit_bufferp_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::types::BUFFERP_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        let expected = BUFFERP_SUBR;
+        let actual = buffer_family_subr("bufferp").expect("real unit bufferp descriptor");
+        assert_eq!(actual.name(), expected.name());
+        assert_eq!(expected.name(), "bufferp");
+        assert_eq!(actual.arity(), expected.arity());
+        assert_eq!(actual.arity(), SubrArity::new(1, Some(1)));
+        assert_eq!(actual.dispatch_kind(), expected.dispatch_kind());
+        assert!(actual.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(actual.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(actual.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(actual.command_default(), expected.command_default());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(actual.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let Some(SubrFn::Many(expected_fn)) = expected.function() else {
+            panic!("ContextVec ABI");
+        };
+        let Some(SubrFn::Many(actual_fn)) = actual.function() else {
+            panic!("unit ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let entry = crate::emacs_core::eval::lookup_global_subr_entry(neovm_value::intern::intern(
+            "bufferp",
+        ))
+        .expect("registered unit bufferp");
+        let Some(SubrFn::Many(registered_fn)) = entry.function else {
+            panic!("registered ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(registered_fn, expected_fn));
+        assert_eq!(
+            (entry.min_args, entry.max_args),
+            (expected.arity().min(), expected.arity().max())
+        );
+        assert_eq!(entry.dispatch_kind, expected.dispatch_kind());
+        assert!(entry.interactive_spec.is_none());
+        let id = neovm_value::intern::intern(expected.name());
+        assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert!(
+            context
+                .obarray_view()
+                .get_property("bufferp", "disabled")
+                .unwrap_or(Value::NIL)
+                .is_nil()
+        );
+        assert_eq!(
+            context
+                .eval_str(
+                    "(and (bufferp (current-buffer)) (null (bufferp nil)) (null (bufferp 'bufferp)))"
+                )
+                .unwrap(),
+            neovm_value::value::Value::T
+        );
     }
 
     /// The one cfg(test) unit runtime (H5a). The proof is minted only by the

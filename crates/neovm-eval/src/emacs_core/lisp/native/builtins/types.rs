@@ -1,9 +1,19 @@
 use super::*;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
+use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+use neovm_edit::emacs_core::buffer::builtin_bufferp;
 #[doc(hidden)]
 pub use neovm_value::error::{expect_args, expect_args_range};
 use neovm_value::intern::{NIL_SYM_ID, T_SYM_ID, WellKnown};
 use neovm_value::value::{ValueKind, VecLikeType};
+
+/// Canonical production/unit descriptor; retain the original Core closure and metadata.
+#[doc(hidden)]
+pub static BUFFERP_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "bufferp",
+    NativeFn::ContextVec(|_ctx, args| builtin_bufferp(args)),
+    SubrArity::new(1, Some(1)),
+));
 
 // Fixed spellings compared by the function probes, interned once per registry
 // epoch. GNU holds these as the DEFSYM `Qlambda` and `Qmacro`; each probe

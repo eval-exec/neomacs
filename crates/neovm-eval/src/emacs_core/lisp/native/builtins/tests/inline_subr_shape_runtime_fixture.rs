@@ -46,6 +46,7 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_subrp_matches_canonical_descriptor(&mut eval);
     assert_core_hash_table_count_matches_canonical_descriptor(&mut eval);
     assert_core_string_to_multibyte_matches_canonical_descriptor(&mut eval);
+    assert_core_bufferp_matches_canonical_descriptor(&mut eval);
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
@@ -524,5 +525,57 @@ fn assert_core_string_to_multibyte_matches_canonical_descriptor(context: &mut Co
     assert_eq!(
         signal.data,
         vec![Value::symbol("stringp"), Value::fixnum(7)]
+    );
+}
+
+fn assert_core_bufferp_matches_canonical_descriptor(context: &mut Context) {
+    use crate::emacs_core::builtins::types::BUFFERP_SUBR;
+    use crate::emacs_core::eval::lookup_global_subr_entry;
+    use crate::emacs_core::eval::subr_abi::SubrFn;
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+    use neovm_value::value::Value;
+
+    let expected = BUFFERP_SUBR;
+    let id = intern("bufferp");
+    let actual = lookup_global_subr_entry(id).expect("core registered bufferp");
+    let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(actual_fn))) =
+        (expected.function(), actual.function)
+    else {
+        panic!("bufferp retains the production ContextVec ABI");
+    };
+    assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+    assert_eq!(expected.name(), "bufferp");
+    assert_eq!(expected.arity(), SubrArity::new(1, Some(1)));
+    assert_eq!(
+        (actual.min_args, actual.max_args),
+        (expected.arity().min(), expected.arity().max())
+    );
+    assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+    assert!(actual.interactive_spec.is_none());
+    assert!(expected.interactive_spec().is_none());
+    assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+    assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(
+        context
+            .obarray_view()
+            .get_property("bufferp", "disabled")
+            .unwrap_or(Value::NIL)
+            .is_nil()
+    );
+    assert!(expected.leaf_spec().is_none());
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+
+    let buffer = context
+        .eval_str("(current-buffer)")
+        .expect("core current buffer");
+    assert!(buffer.is_buffer(), "real Context supplies a buffer object");
+    assert_eq!(
+        actual_fn(context, vec![buffer]).expect("core bufferp buffer"),
+        Value::T
+    );
+    assert_eq!(
+        actual_fn(context, vec![Value::NIL]).expect("core bufferp nonbuffer"),
+        Value::NIL
     );
 }
