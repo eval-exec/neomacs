@@ -69,6 +69,8 @@ enum Probe {
     HookUnintern,
     #[cfg(target_os = "linux")]
     ChildHangup,
+    #[cfg(target_os = "linux")]
+    DefaultChildHangup,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -113,6 +115,11 @@ impl Probe {
                     | IgnoredHupProbe::PtyWithStderr => ChildAfterEditor::Alive,
                 },
                 helper: include_str!("fixtures/kill_emacs_shutdown/ignored-hup-child.py"),
+            }),
+            Self::DefaultChildHangup => Some(NativeChildSpec {
+                disposition: HupDisposition::Default,
+                after_editor: ChildAfterEditor::Exited,
+                helper: include_str!("fixtures/kill_emacs_shutdown/child-hangup-default.py"),
             }),
             _ => None,
         }
@@ -171,6 +178,10 @@ impl Probe {
             Self::HookUnintern => include_str!("fixtures/kill_emacs_shutdown/hook-unintern.el"),
             #[cfg(target_os = "linux")]
             Self::ChildHangup => include_str!("fixtures/kill_emacs_shutdown/child-hangup.el"),
+            #[cfg(target_os = "linux")]
+            Self::DefaultChildHangup => {
+                include_str!("fixtures/kill_emacs_shutdown/child-hangup-default.el")
+            }
         }
     }
 
@@ -458,6 +469,8 @@ impl Probe {
                 "KILL-HOOK",
                 "AUTOSAVE-2=(t t)",
             ],
+            #[cfg(target_os = "linux")]
+            Self::DefaultChildHangup => &[],
         };
         Observation {
             exit: match self {
@@ -506,6 +519,11 @@ impl Probe {
                         IgnoredHupProbe::ExplicitDeleteControl
                     ),
                     child_alive_later: !matches!(kind, IgnoredHupProbe::ExplicitDeleteControl),
+                }),
+                Self::DefaultChildHangup => Some(NativeObservation::KilledByHup {
+                    disposition_before_go: true,
+                    exited_by_sighup: true,
+                    eof_observed: false,
                 }),
                 _ => None,
             },
@@ -868,6 +886,17 @@ fn shutdown_batch_hook_error_does_not_skip_the_next_hook() {
 #[cfg(target_os = "linux")]
 fn shutdown_sends_child_sighup_before_the_second_auto_save() {
     assert_shutdown_parity(Probe::ChildHangup);
+}
+
+/// GNU Emacs 31.1 kill_buffer_processes sends SIGHUP to a real pipe child
+/// before Emacs exits and closes its stdin pipe, so a default-disposition
+/// child dies by SIGHUP and never observes the pipe closing.  An editor that
+/// exits without signalling leaves the child alive to read EOF, which this
+/// probe reports as a divergence.
+#[test]
+#[cfg(target_os = "linux")]
+fn shutdown_kills_default_disposition_pipe_child_by_sighup_before_pipe_close() {
+    assert_shutdown_parity(Probe::DefaultChildHangup);
 }
 
 // These extend the observer set; the six original shutdown rows stay intact.

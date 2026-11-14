@@ -13,6 +13,9 @@ use std::{
 pub(super) enum HupDisposition {
     Ignored,
     Caught,
+    /// Neither caught, ignored, nor blocked: the child dies if SIGHUP is
+    /// delivered, exactly like a plain `telega-server` class subprocess.
+    Default,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +35,15 @@ pub(super) enum NativeObservation {
         disposition_before_go: bool,
         hup_acknowledgements: usize,
         child_exited_before_cleanup: bool,
+    },
+    KilledByHup {
+        disposition_before_go: bool,
+        /// The reaped status records death by the delivered SIGHUP itself,
+        /// not SIGKILL, an ordinary exit, or a different signal.
+        exited_by_sighup: bool,
+        /// The child read stdin to EOF; a GNU-faithful shutdown delivers
+        /// SIGHUP before Emacs closes the pipe, so this stays false.
+        eof_observed: bool,
     },
 }
 
@@ -129,6 +141,11 @@ impl NativeChild {
             disposition_before_go: match disposition {
                 HupDisposition::Ignored => bits("SigIgn:")? & 1 != 0,
                 HupDisposition::Caught => bits("SigCgt:")? & 1 != 0 && bits("SigIgn:")? & 1 == 0,
+                HupDisposition::Default => {
+                    bits("SigBlk:")? & 1 == 0
+                        && bits("SigIgn:")? & 1 == 0
+                        && bits("SigCgt:")? & 1 == 0
+                }
             },
         })
     }
@@ -188,6 +205,47 @@ impl NativeChild {
                 disposition_before_go: self.disposition_before_go,
                 child_alive_after_editor_exit,
                 child_alive_later: self.is_alive()?,
+            });
+        }
+        if self.disposition == HupDisposition::Default {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while self.is_alive()? && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            if self.is_alive()? {
+                return Err(io::Error::other(
+                    "default-disposition child still alive after editor exit",
+                ));
+            }
+            // Reap here so the exit status is attributable to this captured
+            // process; cleanup's later reap then only observes ECHILD.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            loop {
+                // SAFETY: zero is a valid initial siginfo_t; the child has
+                // already exited, so this blocking waitid returns at once.
+                let result = unsafe {
+                    libc::waitid(
+                        libc::P_PIDFD,
+                        self.fd.as_raw_fd() as libc::id_t,
+                        &mut info,
+                        libc::WEXITED,
+                    )
+                };
+                if result == 0 {
+                    break;
+                }
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
+            // SAFETY: successful waitid initialized these SIGCHLD members.
+            let exited_by_sighup =
+                info.si_code == libc::CLD_KILLED && unsafe { info.si_status() } == libc::SIGHUP;
+            return Ok(NativeObservation::KilledByHup {
+                disposition_before_go: self.disposition_before_go,
+                exited_by_sighup,
+                eof_observed: root.join("child.eof").exists(),
             });
         }
         let acknowledgements = fs::read_to_string(root.join("hup-acks"))?;
