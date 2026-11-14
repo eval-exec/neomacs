@@ -62,8 +62,7 @@ impl SpacemacsEnvironment {
         // answering None (which callers read as "fixture absent").
         let identity = common::load_sealed_packages(&root)
             .unwrap_or_else(|error| panic!("spacemacs fixture unusable: {error}"));
-        if let Err(error) =
-            common::check_package_pin(spec.packages.as_deref(), "spacemacs", &identity)
+        if let Err(error) = common::check_package_pin(spec.host_packages(), "spacemacs", &identity)
         {
             panic!("spacemacs fixture unusable: {error}");
         }
