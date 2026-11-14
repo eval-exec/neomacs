@@ -217,7 +217,13 @@ pub fn requested_backend() -> Option<GuiBackend> {
         cfg_select! {
             target_os = "macos" => { "macos".to_string() }
             windows => { "windows".to_string() }
-            _ => { "x11".to_string() }
+            _ => {
+                if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+                    "wayland".to_string()
+                } else {
+                    "x11".to_string()
+                }
+            }
         }
     });
     match configured.as_str() {
@@ -230,7 +236,25 @@ pub fn requested_backend() -> Option<GuiBackend> {
 }
 
 /// Capabilities of the host running the test, beyond the backend's own.
+///
+/// The probe touches the OS (a macOS session lock check), so its result is
+/// cached per backend for the process; one run calls this several times.
 fn host_capabilities(backend: GuiBackend) -> CapabilitySet {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<Vec<(GuiBackend, CapabilitySet)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, capabilities)) = cache.iter().find(|(cached, _)| *cached == backend) {
+        return *capabilities;
+    }
+    let capabilities = probe_host_capabilities(backend);
+    cache.push((backend, capabilities));
+    capabilities
+}
+
+fn probe_host_capabilities(backend: GuiBackend) -> CapabilitySet {
     let mut capabilities = backend.capabilities();
     if std::env::var_os("NEOMACS_GUI_TEST_GNU_EMACS").is_some_and(|value| !value.is_empty()) {
         capabilities.insert(Capability::GnuOracle);
@@ -280,12 +304,15 @@ fn macos_screen_locked() -> bool {
 /// The boolean that follows `key` in an XML property list, if any.
 fn plist_bool_after(text: &str, key: &str) -> Option<bool> {
     let tag = format!("<key>{key}</key>");
-    let rest = &text[text.find(&tag)? + tag.len()..];
-    match (rest.find("<true/>"), rest.find("<false/>")) {
-        (Some(yes), Some(no)) => Some(yes < no),
-        (Some(_), None) => Some(true),
-        (None, Some(_)) => Some(false),
-        (None, None) => None,
+    let rest = text[text.find(&tag)? + tag.len()..].trim_start();
+    // Only the element directly following the key describes it; a boolean
+    // belonging to a later key must not be attributed to this one.
+    if rest.starts_with("<true/>") {
+        Some(true)
+    } else if rest.starts_with("<false/>") {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -1048,6 +1075,11 @@ mod capability_probe_tests {
         );
         assert_eq!(
             plist_bool_after("<key>IOConsoleLocked</key>", "IOConsoleLocked"),
+            None
+        );
+        // A boolean belonging to the following key must not be attributed.
+        assert_eq!(
+            plist_bool_after("<key>A</key><key>B</key><true/>", "A"),
             None
         );
     }

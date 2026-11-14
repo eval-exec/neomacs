@@ -118,9 +118,10 @@ impl Spec {
     /// The spec key that carries `host`'s package pin.
     ///
     /// Linux keeps the legacy `packages` line so existing specs retain their
-    /// commitment; every other host uses `packages_<os>`. The parser and the
-    /// writer both route through this helper so a pin written by
-    /// `pin_packages` is always readable by `host_packages`.
+    /// commitment; every other host uses `packages_<os>`. The writer and
+    /// `packages_for` share this default so a pin written by `pin_packages`
+    /// is readable by `host_packages`; the TOML loader recognizes the same
+    /// two prefixes directly.
     pub fn package_pin_key(host: &str) -> String {
         if host == "linux" {
             "packages".to_owned()
@@ -204,7 +205,8 @@ impl Spec {
         // Spacemacs install OS-specific package sets. Rewrite whichever line
         // `packages_for(host)` selects — an explicit `packages_<os>` line,
         // otherwise Linux's legacy `packages` — and add `packages_<os>` for a
-        // host that has no pin at all.
+        // host that has no pin at all (Linux appends the legacy `packages`
+        // line instead).
         let key = Self::existing_package_pin_key(&text, host)
             .unwrap_or_else(|| Self::package_pin_key(host));
         let pin_line = format!("{key} = \"{digest}\"");

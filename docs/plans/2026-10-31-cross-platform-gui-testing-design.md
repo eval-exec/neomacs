@@ -15,10 +15,12 @@ the harness either runs the test or reports exactly which capability is
 missing. macOS is a first-class target for the scenario tier today and for
 the native-input tier on hosts that can grant permissions.
 
-## Current state (measured on 2026-10-31)
+## Current state (measured on 2026-10-31, recounted 2026-11-14)
 
-- `neomacs-gui-tests` has 68 integration-test files; 47 are
-  `#![cfg(target_os = "linux")]`, 21 are not.
+- `neomacs-gui-tests` has 79 integration-test files under `tests/`; 55 are
+  `#![cfg(target_os = "linux")]`, 24 are not. Counted with
+  `ls crates/neomacs-gui-tests/tests/*.rs | wc -l` and
+  `rg -l '^#!\[cfg\(target_os = "linux"\)\]' crates/neomacs-gui-tests/tests/*.rs | wc -l`.
 - `GuiBackend` already names `Macos` and `Windows`; `DisplayHarness` maps
   them to `CurrentDesktopSession`; `requested_backend()` defaults to the
   host platform when `NEOMACS_GUI_TEST_BACKEND` is unset.
@@ -27,10 +29,13 @@ the native-input tier on hosts that can grant permissions.
   Accessibility window fitting, and an explicit permission preflight. The
   native menu contracts already use it.
 - Doom *install* compatibility already runs on macOS in CI. The Doom and
-  Spacemacs GUI boot comparison (`config_env_boot.rs`) is Wayland-only.
+  Spacemacs GUI boot comparison (`config_env_boot.rs`) is X11-only: the GNU
+  comparison runs under Xvfb.
 - Linux CI runs the suite under Xvfb and Weston with a pinned GNU oracle.
-  macOS CI runs core tests, Doom install, and a scratch GUI smoke workflow;
-  it does not run the shared GUI suite.
+  macOS CI ran core tests, Doom install, and a scratch GUI smoke workflow;
+  this PR adds `gui-tests-macos.yml`, which runs the shared scenario tier on
+  the logged-in desktop. Native-input scenarios stay on Linux and on
+  provisioned self-hosted macOS hosts.
 
 ## Why tests are Linux-only
 
@@ -138,16 +143,18 @@ manifest without guessing which platform produced it.
 ### 6. GNU oracle availability
 
 GNU comparisons declare the `gnu_oracle` capability. Linux CI provides the
-pinned GTK3 oracle. macOS CI builds the same pinned commit, but its default
-profile is `--without-x --without-ns`, a batch reference: it can answer batch
-parity questions, not open a GUI frame. GUI comparisons on macOS therefore
-need one of two explicit oracle profiles:
+pinned GTK3 oracle. macOS CI builds the same pinned commit with the action's
+default `macos-ns` profile (`--with-ns --without-x`): it can bootstrap the
+Doom fixture and answer Lisp-visible questions, but it is not a GUI pixel
+reference. GUI comparisons on macOS therefore need one of two explicit oracle
+profiles:
 
 - `macos-x11` (already implemented in `scripts/ci/build-gnu-oracle.sh`):
   window-system Lisp surface without a toolkit, run under XQuartz's Xvfb.
   This is a GNU-X11-vs-Neomacs-AppKit comparison, acceptable for
   Lisp-visible state but not for window-system pixels.
-- a future `macos-ns` profile (`--with-ns`) run in the desktop session,
+- the `macos-ns` profile (now the CI default for the Doom bootstrap) run as a
+  GUI reference in the desktop session,
   which compares GNU AppKit with Neomacs winit/AppKit and is the faithful
   choice for Doom/Spacemacs GUI boot parity.
 
@@ -224,7 +231,7 @@ Isolation is the per-platform `SessionPlan`, not a Wayland assumption.
 ## Implementation status (2026-10-31, branch `gui-tests-cross-platform`)
 
 - Capability contract, `Unsupported` reporting, and the manifest fields are
-  in (`f36002c4ad`, `7b8ba32d46`).
+  in this PR.
 - A scenario's status no longer requires a PNG unless it declared
   `surface-present`; semantic scenarios pass on a host whose windows cannot
   be presented.

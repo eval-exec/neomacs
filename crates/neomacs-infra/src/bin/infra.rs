@@ -149,7 +149,20 @@ fn main() {
                     _ => unreachable!("NAMES and status arms must stay in sync"),
                 };
                 match status {
-                    Ok(()) => println!("{name}: materialized and sealed"),
+                    Ok(()) => {
+                        let host = std::env::consts::OS;
+                        let pinned = neomacs_infra::config_env::common::Spec::load(name.as_ref())
+                            .ok()
+                            .and_then(|spec| spec.host_packages().map(str::to_owned));
+                        match pinned {
+                            Some(digest) => println!(
+                                "{name}: materialized and sealed ({host} package identity pinned = {digest})"
+                            ),
+                            None => println!(
+                                "{name}: materialized and sealed (unpinned on {host}; run `infra pin-packages`)"
+                            ),
+                        }
+                    }
                     Err(reason) => println!("{name}: {reason}"),
                 }
             }

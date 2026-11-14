@@ -22,9 +22,14 @@ on:
       - 'crates/neomacs/**'
       - 'crates/neomacs-display-runtime/**'
       - 'crates/neomacs-display-protocol/**'
+      - 'crates/neomacs-renderer-wgpu/**'
+      - 'crates/neomacs-layout-engine/**'
+      - 'crates/neomacs-display/**'
+      - 'crates/neomacs-test-env/**'
+      - 'lisp/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'scripts/ci/build-gnu-oracle.sh'
+      - 'scripts/ci/**'
       - '.github/actions/install-build-deps/**'
       - '.github/actions/setup-rust/**'
       - '.github/actions/setup-gnu-emacs-macos/**'
@@ -79,16 +84,17 @@ jobs:
       - name: Build the runtime under test
         run: cargo xtask fresh-build --release
 
-      # The pinned macOS oracle is a batch build. It is not a GUI reference,
-      # but it is exactly the pinned `emacs` that bootstraps the Doom fixture
-      # (`bin/doom sync`) for the config-boot probe.
-      - name: Set up the pinned GNU batch reference
+      # The pinned macOS oracle uses the action's default `macos-ns` profile.
+      # It is not the GUI pixel reference, but it is exactly the pinned
+      # `emacs` that bootstraps the Doom fixture (`bin/doom sync`) for the
+      # config-boot probe.
+      - name: Set up the pinned GNU macOS reference
         uses: ./.github/actions/setup-gnu-emacs-macos
 
-      # Best effort: the config-boot test prints the absent-fixture reason and
-      # skips, so a network outage must not fail the rendering tier.
+      # A fixture that fails to materialize must fail the job: the config-boot
+      # test would otherwise skip and the tier would report green without
+      # exercising the Doom boot.
       - name: Materialize the Doom config fixture
-        continue-on-error: true
         run: cargo run -p xtask -- infra materialize doom
 
       # A locked console or a sleeping display makes every window occluded:
