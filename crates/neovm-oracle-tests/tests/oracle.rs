@@ -166,6 +166,9 @@ mod oracle_tty_terminal_output;
 #[path = "tls_fixture_cleanup.rs"]
 mod tls_fixture_cleanup;
 
+#[path = "oracle_treesit_node_type.rs"]
+mod oracle_treesit_node_type;
+
 #[path = "treesit_grammar_loading.rs"]
 mod treesit_grammar_loading;
 
