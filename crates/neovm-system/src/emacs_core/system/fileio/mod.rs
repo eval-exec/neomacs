@@ -7104,7 +7104,13 @@ fn dispatch_write_region_handler(
     call: &WriteRegionCall,
 ) -> Result<Option<Value>, Flow> {
     let operation = Value::symbol("write-region");
-    let mut handler = find_file_name_handler_lisp_for_eval(eval, &call.resolved, operation);
+    // VISIT expansion and overwrite confirmation can mutate FILENAME. GNU
+    // selects its handler from the live Value after those callbacks; the
+    // separate native-path snapshot is not the handler's authority.
+    let mut handler = {
+        let filename = eval.expect_lisp_string(call.filename)?;
+        find_file_name_handler_lisp_for_eval(eval, filename, operation)
+    };
     // GNU's fallback lookup uses the original string VISIT argument; its
     // expanded value is retained separately for LOCKNAME and visiting state.
     if handler.is_nil()
