@@ -2370,7 +2370,7 @@ mod unit_runtime {
         assert_eq!(elements.len(), 2);
         assert_eq!(elements[0], Value::fixnum(2));
         assert_eq!(elements[1], Value::fixnum(3));
-        assert_ne!(result, vector);
+        assert!(!neovm_value::value::eq_value(&result, &vector));
 
         let source = Value::string("abcd");
         let face = Value::symbol("face");
@@ -2391,7 +2391,7 @@ mod unit_runtime {
         assert_eq!((intervals[0].start, intervals[0].end), (0, 2));
         assert_eq!(intervals[0].properties.get(&face), Some(&bold));
         let copied = call(context, vec![source]).unwrap();
-        assert_ne!(copied, source);
+        assert!(!neovm_value::value::eq_value(&copied, &source));
         assert_eq!(copied.as_lisp_string().unwrap().as_bytes(), b"abcd");
 
         let error = call(context, vec![source, Value::fixnum(2), Value::fixnum(1)])
