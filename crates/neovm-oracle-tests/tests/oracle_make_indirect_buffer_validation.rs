@@ -75,7 +75,7 @@ fn make_indirect_buffer_duplicate_name_quotes_follow_style_without_requoting_nam
                       (lambda (style)
                         (let ((text-quoting-style style))
                           (condition-case err
-                              (make-indirect-buffer 23 name)
+                              (make-indirect-buffer (current-buffer) name)
                             (error (list (car err) (cdr err))))))
                       '(curve straight grave))
                    (kill-buffer existing))))
