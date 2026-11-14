@@ -261,10 +261,25 @@ DISPLAY is the name of the display Emacs should connect to."
 	(while (setq i (string-match "[.*]" x-resource-name))
 	  (aset x-resource-name i ?-)))))
 
-  ;; Open the display connection
+  ;; The ordinary GUI's native connection supplies x-display-name before
+  ;; handle-args; an explicit display argument still takes precedence.
+  ;; Daemons start unseeded, and follow the native backend's Wayland-first
+  ;; choice at each environment level. An inherited anonymous socket does
+  ;; not invent a display name for a later direct make-frame request.
   (x-open-connection (or display
-                         (setq x-display-name (or (getenv "DISPLAY" (selected-frame))
-                                                  (getenv "DISPLAY"))))
+                        (and (not (daemonp)) x-display-name)
+                        (setq x-display-name
+                              (if (daemonp)
+                                  (or (cl-loop
+                                       for frame in (list (selected-frame) nil)
+                                       thereis (cl-loop
+                                                for variable in '("WAYLAND_DISPLAY" "DISPLAY")
+                                                for value = (getenv variable frame)
+                                                when (and value (> (length value) 0))
+                                                return value))
+                                      (error "Please specify display"))
+                                (or (getenv "DISPLAY" (selected-frame))
+                                    (getenv "DISPLAY")))))
 		     x-command-line-resources
 		     ;; Exit Emacs with fatal error if this fails and we
                      ;; are the initial display.

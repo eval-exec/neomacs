@@ -23,15 +23,71 @@ enum WaylandConnectionName {
     Environment(Option<String>),
 }
 
+struct DisplayEnvironment {
+    wayland_display: Option<String>,
+    wayland_socket: Option<String>,
+    x11: Option<String>,
+}
+
+impl DisplayEnvironment {
+    fn capture() -> Self {
+        // Match winit's UTF-8, nonempty environment checks for backend choice.
+        let nonempty = |name| std::env::var(name).ok().filter(|value| !value.is_empty());
+        Self {
+            wayland_display: nonempty("WAYLAND_DISPLAY"),
+            wayland_socket: nonempty("WAYLAND_SOCKET"),
+            x11: nonempty("DISPLAY"),
+        }
+    }
+}
+
+/// Whether an interactive daemon should retain a native graphical host.
+///
+/// On Linux, an inherited Wayland descriptor must be a socket before winit
+/// can consume it. This check only borrows the descriptor; refusal leaves it
+/// and its environment entry available to the daemon and its children.
+pub fn should_open_daemon_gui_host() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    {
+        ["WAYLAND_DISPLAY", "DISPLAY"]
+            .iter()
+            .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let environment = DisplayEnvironment::capture();
+        if let Some(socket) = &environment.wayland_socket {
+            let valid = socket.parse::<i32>().ok().is_some_and(|fd| {
+                let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+                // SAFETY: fstat writes into suitably aligned storage without
+                // taking ownership of fd. Read the result only on success.
+                unsafe {
+                    libc::fstat(fd, metadata.as_mut_ptr()) == 0
+                        && metadata.assume_init().st_mode & libc::S_IFMT == libc::S_IFSOCK
+                }
+            });
+            if !valid {
+                tracing::warn!(
+                    "daemon continuing without graphical hosting: invalid WAYLAND_SOCKET; expected an open socket descriptor"
+                );
+                return false;
+            }
+            return true;
+        }
+        environment.wayland_display.is_some() || environment.x11.is_some()
+    }
+}
+
 impl DisplayIdentityResolver {
     pub fn capture_environment() -> Self {
+        let environment = DisplayEnvironment::capture();
         Self {
-            wayland: if std::env::var_os("WAYLAND_SOCKET").is_some() {
+            wayland: if environment.wayland_socket.is_some() {
                 WaylandConnectionName::InheritedSocket
             } else {
-                WaylandConnectionName::Environment(std::env::var("WAYLAND_DISPLAY").ok())
+                WaylandConnectionName::Environment(environment.wayland_display)
             },
-            x11: std::env::var("DISPLAY").ok(),
+            x11: environment.x11,
         }
     }
 

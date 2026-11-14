@@ -4420,6 +4420,9 @@ fn run_gui_evaluator_worker(
     };
     if startup.daemon.is_none() {
         evaluator.initialize_graphical_terminal(identity.clone());
+        // Seed after loading the image, on its Lisp owner thread. GNU's
+        // handle-args can still replace this with an explicit -d/--display.
+        evaluator.set_variable("x-display-name", Value::string(identity.terminal_name()));
     }
     let font_display = identity.clone();
     evaluator.set_variable("dump-mode", Value::NIL);
@@ -5006,9 +5009,6 @@ pub fn run(mode: RuntimeMode) {
     // from a graphical session, retain native hosting on the OS main thread;
     // the existing startup lifecycle waits without creating a window until
     // Lisp receives the first graphical frame request.
-    let inherited_display = ["WAYLAND_DISPLAY", "DISPLAY"]
-        .iter()
-        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
     let gui_connection = if startup.frontend == FrontendKind::Gui {
         let system_name = graphical_system_name();
         Some(
@@ -5026,7 +5026,10 @@ pub fn run(mode: RuntimeMode) {
                 }
             },
         )
-    } else if startup.daemon.is_some() && !startup.noninteractive && inherited_display {
+    } else if startup.daemon.is_some()
+        && !startup.noninteractive
+        && neomacs_display_runtime::display_identity::should_open_daemon_gui_host()
+    {
         let system_name = graphical_system_name();
         match neomacs_display_runtime::render_thread::open_gui_connection_host(&system_name) {
             Ok(host) => match finish_gui_connection(interactivity, &host) {
