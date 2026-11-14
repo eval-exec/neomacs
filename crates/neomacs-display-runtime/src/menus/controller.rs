@@ -298,8 +298,18 @@ impl MenuPresentation {
             .zip(request.session.panels())
             .take_while(|(popup, panel)| popup.items == panel.item_indices)
             .count();
+        let retired = self.panels.len() - common;
         self.truncate(common);
         self.commit_retirements(commit);
+        if retired > 0 && wanted > common {
+            // winit retires a closed popup's native window at the end of the
+            // event-loop iteration that observes the drop, after
+            // `about_to_wait`. Mapping its replacement now would violate
+            // xdg-shell's topmost-popup rule while the retired popup still
+            // holds the grab (#567). The drop wakes the loop; open on the
+            // next pass, after that retirement has reached the compositor.
+            return Ok(());
+        }
         for depth in common..wanted {
             self.dismiss_help();
             self.commit_retirements(commit);

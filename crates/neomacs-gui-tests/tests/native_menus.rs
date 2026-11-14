@@ -122,6 +122,69 @@ fn translated_menu_geometry_survives_control_key_redraw() {
     );
 }
 
+/// #567: two sibling rows each own a submenu. Replacing the open submenu must
+/// not map the replacement while the retired popup still holds the grab: the
+/// xdg-shell topmost-popup rule rejects that, and the protocol error tears the
+/// display connection down.
+#[test]
+fn switching_between_sibling_submenus_keeps_the_display_connection() {
+    with_native_menu(
+        "menu-sibling-submenus.el",
+        |env, window, ready, artifacts, editor, compositor| {
+            thread::sleep(Duration::from_millis(150));
+            input(
+                env,
+                &[
+                    "mousemove",
+                    "--window",
+                    window,
+                    &(ready.char_width * 3).to_string(),
+                    &(ready.char_height / 2).to_string(),
+                    "click",
+                    "1",
+                ],
+            );
+            let root = wait_for("root popup", artifacts, || {
+                alive(editor, "root popup", artifacts);
+                popup_trace::configured(&fs::read_to_string(artifacts.join("wayland.log")).ok()?)
+                    .first()
+                    .copied()
+            });
+            // Panel inset 4px, one text row, then 3px spacing between rows.
+            let row = |index: i32| {
+                root.y + 4 + (ready.char_height as i32 + 3) * index + (ready.char_height as i32) / 2
+            };
+            let x = (root.x + 30).to_string();
+            input(
+                env,
+                &["mousemove", "--window", window, &x, &row(0).to_string()],
+            );
+            wait_for("first submenu", artifacts, || {
+                alive(editor, "first submenu", artifacts);
+                (popup_requests(artifacts) >= 2).then_some(())
+            });
+            input(
+                env,
+                &["mousemove", "--window", window, &x, &row(1).to_string()],
+            );
+            wait_for("sibling submenu", artifacts, || {
+                alive(editor, "sibling submenu", artifacts);
+                (popup_requests(artifacts) >= 3).then_some(())
+            });
+            thread::sleep(Duration::from_millis(200));
+            alive(editor, "after sibling switch", artifacts);
+            alive(compositor, "after sibling switch", artifacts);
+            let trace = fs::read_to_string(artifacts.join("wayland.log")).unwrap_or_default();
+            let trace = popup_trace::strip_ansi(&trace);
+            assert!(
+                !trace.contains("parent not top most surface") && !trace.contains("Protocol error"),
+                "sibling submenu switch broke the xdg-shell popup chain; artifacts: {}",
+                artifacts.display()
+            );
+        },
+    );
+}
+
 #[test]
 fn cjk_menu_bar_last_character_opens_its_own_menu() {
     with_native_menu(
