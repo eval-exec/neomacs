@@ -527,3 +527,4 @@ coding_system	field-accessor	pub(crate)	crates/neovm-text/src/encoding.rs:6268	e
 into_parts	method	pub(crate)	crates/neovm-text/src/encoding.rs:6276	encoding	stage-3b text K1 PC7 row: accessor for a core-read field (no pub fields)
 info	field-accessor	pub(crate)	crates/neovm-text/src/encoding.rs:6292	encoding	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
 eol_type	field-accessor	pub(crate)	crates/neovm-text/src/encoding.rs:6297	encoding	stage-3b text K1 PC7 row: accessor for core-accessed field (no pub fields)
+encode_file_name_in_context	fn	new	crates/neovm-text/src/encoding.rs:5371	encoding	FileIO Value owner: GNU ENCODE_FILE runtime NoRecord/NOCOPY entry; sole System filelock caller
