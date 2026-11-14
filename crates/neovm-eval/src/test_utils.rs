@@ -1288,6 +1288,7 @@ mod unit_runtime {
         }
 
         Some(match name {
+            "number-to-string" => crate::emacs_core::builtins::strings::NUMBER_TO_STRING_SUBR,
             "string-to-multibyte" => crate::emacs_core::builtins::strings::STRING_TO_MULTIBYTE_SUBR,
             "concat" => SubrSpec::new(
                 "concat",
@@ -1301,6 +1302,103 @@ mod unit_runtime {
             ),
             _ => return None,
         })
+    }
+
+    #[test]
+    fn unit_number_to_string_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::strings::NUMBER_TO_STRING_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        let expected = NUMBER_TO_STRING_SUBR;
+        let actual =
+            strings_family_subr("number-to-string").expect("real unit number-to-string descriptor");
+        assert_eq!(actual.name(), expected.name());
+        assert_eq!(expected.name(), "number-to-string");
+        assert_eq!(actual.name(), "number-to-string");
+        assert_eq!(actual.arity(), expected.arity());
+        assert_eq!(actual.arity(), SubrArity::new(1, Some(1)));
+        assert_eq!(actual.dispatch_kind(), expected.dispatch_kind());
+        assert!(actual.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(actual.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(actual.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(actual.command_default(), expected.command_default());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(actual.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let Some(SubrFn::Many(expected_fn)) = expected.function() else {
+            panic!("ContextVec ABI");
+        };
+        let Some(SubrFn::Many(actual_fn)) = actual.function() else {
+            panic!("unit ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let entry = crate::emacs_core::eval::lookup_global_subr_entry(neovm_value::intern::intern(
+            "number-to-string",
+        ))
+        .expect("registered unit number-to-string");
+        let Some(SubrFn::Many(registered_fn)) = entry.function else {
+            panic!("registered ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(registered_fn, expected_fn));
+        assert_eq!(
+            (entry.min_args, entry.max_args),
+            (expected.arity().min(), expected.arity().max())
+        );
+        assert_eq!(entry.dispatch_kind, expected.dispatch_kind());
+        assert!(entry.interactive_spec.is_none());
+        let id = neovm_value::intern::intern(expected.name());
+        assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert!(
+            context
+                .obarray_view()
+                .get_property("number-to-string", "disabled")
+                .unwrap_or(Value::NIL)
+                .is_nil()
+        );
+        let result = registered_fn(&mut context, vec![Value::fixnum(17)]).unwrap();
+        assert_eq!(result.as_lisp_string().unwrap().as_bytes(), b"17");
+    }
+
+    #[test]
+    fn unit_number_to_string_reaches_numeric_and_formatting_body() {
+        use neovm_value::error::FlowRef;
+        let mut context = Context::new(unit_runtime());
+        for (source, expected) in [
+            ("(number-to-string -42)", "-42"),
+            ("(number-to-string 1.25)", "1.25"),
+            (
+                "(number-to-string 18446744073709551616)",
+                "18446744073709551616",
+            ),
+            (
+                "(let ((float-output-format \"%.2f\")) (number-to-string 1.23456789))",
+                "1.23",
+            ),
+            (
+                "(let ((float-output-format \"%.99f\")) (number-to-string 1.25))",
+                "1.25",
+            ),
+        ] {
+            let result = context.eval_str(source).expect(source);
+            let string = result.as_lisp_string().expect("number-to-string result");
+            assert_eq!(string.as_bytes(), expected.as_bytes());
+            assert!(!string.is_multibyte());
+        }
+        let error = context
+            .eval_str("(number-to-string nil)")
+            .expect_err("number-to-string rejects a non-number");
+        let FlowRef::Signal(signal) = error.kind() else {
+            panic!("number-to-string wrong type is a signal");
+        };
+        assert_eq!(
+            signal.symbol,
+            neovm_value::intern::intern("wrong-type-argument")
+        );
+        assert_eq!(signal.data, vec![Value::symbol("numberp"), Value::NIL]);
     }
 
     #[test]

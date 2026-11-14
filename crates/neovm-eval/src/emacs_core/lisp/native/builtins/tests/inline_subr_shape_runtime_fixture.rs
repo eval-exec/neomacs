@@ -47,6 +47,7 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_hash_table_count_matches_canonical_descriptor(&mut eval);
     assert_core_string_to_multibyte_matches_canonical_descriptor(&mut eval);
     assert_core_bufferp_matches_canonical_descriptor(&mut eval);
+    assert_core_number_to_string_matches_canonical_descriptor(&mut eval);
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
@@ -578,4 +579,70 @@ fn assert_core_bufferp_matches_canonical_descriptor(context: &mut Context) {
         actual_fn(context, vec![Value::NIL]).expect("core bufferp nonbuffer"),
         Value::NIL
     );
+}
+
+fn assert_core_number_to_string_matches_canonical_descriptor(context: &mut Context) {
+    use crate::emacs_core::builtins::strings::NUMBER_TO_STRING_SUBR;
+    use crate::emacs_core::eval::lookup_global_subr_entry;
+    use crate::emacs_core::eval::subr_abi::SubrFn;
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+    use neovm_value::error::FlowRef;
+    use neovm_value::value::Value;
+
+    let expected = NUMBER_TO_STRING_SUBR;
+    let id = intern("number-to-string");
+    let actual = lookup_global_subr_entry(id).expect("core registered number-to-string");
+    let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(actual_fn))) =
+        (expected.function(), actual.function)
+    else {
+        panic!("number-to-string retains the production ContextVec ABI");
+    };
+    assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+    assert_eq!(expected.name(), "number-to-string");
+    assert_eq!(expected.arity(), SubrArity::new(1, Some(1)));
+    assert_eq!(
+        (actual.min_args, actual.max_args),
+        (expected.arity().min(), expected.arity().max())
+    );
+    assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+    assert!(actual.interactive_spec.is_none());
+    assert!(expected.interactive_spec().is_none());
+    assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+    assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(
+        context
+            .obarray_view()
+            .get_property("number-to-string", "disabled")
+            .unwrap_or(Value::NIL)
+            .is_nil()
+    );
+    assert!(expected.leaf_spec().is_none());
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+
+    let bignum = context
+        .eval_str("18446744073709551616")
+        .expect("core bignum literal");
+    assert!(bignum.as_bignum().is_some());
+    for (number, expected) in [
+        (Value::fixnum(-42), "-42"),
+        (Value::make_float(1.25), "1.25"),
+        (bignum, "18446744073709551616"),
+    ] {
+        let result = actual_fn(context, vec![number]).expect("actual core number printer");
+        let string = result.as_lisp_string().expect("number-to-string result");
+        assert_eq!(string.as_bytes(), expected.as_bytes());
+        assert!(!string.is_multibyte());
+    }
+    let formatted = context
+        .eval_str("(let ((float-output-format \"%.2f\")) (number-to-string 1.23456789))")
+        .expect("core dynamic float-output-format");
+    assert_eq!(formatted.as_lisp_string().unwrap().as_bytes(), b"1.23");
+    let error =
+        actual_fn(context, vec![Value::NIL]).expect_err("number-to-string rejects a non-number");
+    let FlowRef::Signal(signal) = error.kind() else {
+        panic!("number-to-string wrong type is a signal");
+    };
+    assert_eq!(signal.symbol, intern("wrong-type-argument"));
+    assert_eq!(signal.data, vec![Value::symbol("numberp"), Value::NIL]);
 }

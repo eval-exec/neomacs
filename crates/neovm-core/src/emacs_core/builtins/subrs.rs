@@ -3734,11 +3734,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| builtin_unibyte_string(args)),
         SubrArity::new(0, None),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "number-to-string",
-        NativeFn::ContextVec(|ctx, args| builtin_number_to_string(ctx, args)),
-        SubrArity::new(1, Some(1)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::strings::NUMBER_TO_STRING_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "char-to-string",
         NativeFn::ContextVec(|_ctx, args| builtin_char_to_string(args)),

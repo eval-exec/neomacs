@@ -30,6 +30,14 @@ pub static STRING_TO_MULTIBYTE_SUBR: SubrSpec =
         SubrArity::new(1, Some(1)),
     ));
 
+/// Canonical production/unit descriptor; retain the original Core closure and metadata.
+#[doc(hidden)]
+pub static NUMBER_TO_STRING_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "number-to-string",
+    NativeFn::ContextVec(|ctx, args| builtin_number_to_string(ctx, args)),
+    SubrArity::new(1, Some(1)),
+));
+
 // ===========================================================================
 // String operations
 // ===========================================================================
