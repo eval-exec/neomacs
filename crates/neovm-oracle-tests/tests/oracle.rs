@@ -115,6 +115,9 @@ mod oracle_green_two_owner;
 #[path = "oracle_integer_width.rs"]
 mod oracle_integer_width;
 
+#[path = "oracle_make_indirect_buffer_validation.rs"]
+mod oracle_make_indirect_buffer_validation;
+
 #[path = "oracle_minibuffer_selected_window.rs"]
 mod oracle_minibuffer_selected_window;
 
