@@ -6386,6 +6386,16 @@ fn resolve_runtime_name(mgr: &CodingSystemManager, name: &str) -> Option<String>
     let eol = EolType::from_suffix(normalized)?;
     let base = strip_eol_suffix(normalized);
     let canonical_base = mgr.resolve(base)?;
+    // GNU registers EOL-suffixed names only for coding systems whose
+    // eol-type is undecided; stacking another suffix on a concrete-EOL base
+    // (`utf-8-unix-dos`) is not a coding system at all (coding.c
+    // `Fcoding_system_eol_type` requires CODING_SYSTEM_P).
+    if mgr
+        .get(resolve_sym(canonical_base))
+        .is_some_and(|info| info.eol_type.specified_index().is_some())
+    {
+        return None;
+    }
     let derived = derive_coding_for_eol(resolve_sym(canonical_base), eol.to_int())?;
     if mgr.resolve(&derived).is_some() && derived.ends_with(eol.suffix()) {
         Some(derived)
@@ -6399,6 +6409,14 @@ fn canonical_runtime_name(mgr: &CodingSystemManager, name: &str) -> Option<Strin
     if let Some(eol) = EolType::from_suffix(normalized) {
         let base = strip_eol_suffix(normalized);
         let canonical_base = mgr.resolve(base)?;
+        // As in `resolve_runtime_name`: a concrete-EOL base cannot take
+        // another suffix.
+        if mgr
+            .get(resolve_sym(canonical_base))
+            .is_some_and(|info| info.eol_type.specified_index().is_some())
+        {
+            return None;
+        }
         let derived = derive_coding_for_eol(resolve_sym(canonical_base), eol.to_int())?;
         return mgr.resolve(&derived).map(|id| resolve_sym(id).to_string());
     }

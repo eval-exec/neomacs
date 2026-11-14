@@ -264,3 +264,24 @@ fn oracle_prop_coding_metadata_classification_table() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_stacked_eol_suffixes_are_not_coding_systems() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    // GNU derives `-unix`/`-dos`/`-mac` names only from a base whose eol-type
+    // is undecided. Stacking another suffix on a base that already carries a
+    // concrete EOL (`utf-8-unix-dos`) names no coding system: the predicate
+    // is false, eol-type is nil, and base/decode signal coding-system-error.
+    let form = r#"(let ((probe (lambda (name)
+               (list name
+                     (coding-system-p name)
+                     (coding-system-eol-type name)
+                     (condition-case e (coding-system-base name) (error (car e)))
+                     (condition-case e (decode-coding-string "a" name) (error (car e)))))))
+  (mapcar probe '(utf-8-unix-dos utf-8-dos-unix utf-8-unix utf-8-dos
+                  utf-8-emacs-unix utf-8-emacs-dos undecided-dos latin-1-unix-dos)))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((utf-8-unix-dos nil nil coding-system-error coding-system-error) (utf-8-dos-unix nil nil coding-system-error coding-system-error) (utf-8-unix t 0 utf-8 \"a\") (utf-8-dos t 1 utf-8 \"a\") (utf-8-emacs-unix t 0 utf-8-emacs \"a\") (utf-8-emacs-dos t 1 utf-8-emacs \"a\") (undecided-dos t 1 undecided \"a\") (latin-1-unix-dos nil nil coding-system-error coding-system-error))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
