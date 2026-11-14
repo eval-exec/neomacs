@@ -188,6 +188,46 @@ fn spec_platform_pins_are_independent() {
     );
 }
 
+#[test]
+fn repinning_linux_updates_the_key_packages_for_selects() {
+    let owner = tempfile::tempdir().expect("spec dir");
+    let spec_dir = owner.path();
+    fs::write(
+        spec_dir.join("synthetic-spec.toml"),
+        "repo = \"https://example.invalid/fixture\"\n\
+         revision = \"a1b2c3d4e5f6\"\n\
+         packages = \"legacy-digest\"\n\
+         packages_linux = \"linux-digest\"\n",
+    )
+    .expect("write spec");
+    let spec = super::common::Spec::load_from(spec_dir, "synthetic").expect("load spec");
+    assert_eq!(
+        spec.packages_for("linux"),
+        Some("linux-digest"),
+        "an explicit packages_linux line wins over the legacy packages line"
+    );
+
+    super::common::Spec::pin_packages_for_host(
+        spec_dir,
+        "synthetic",
+        "new-digest",
+        "re-pin",
+        "linux",
+    )
+    .expect("re-pin");
+    let text = fs::read_to_string(spec_dir.join("synthetic-spec.toml")).expect("read spec");
+    assert!(
+        text.contains("packages_linux = \"new-digest\""),
+        "a Linux re-pin must rewrite the line lookup selects: {text}"
+    );
+    assert!(
+        text.contains("packages = \"legacy-digest\""),
+        "the legacy line is not the selected Linux pin here: {text}"
+    );
+    let repinned = super::common::Spec::load_from(spec_dir, "synthetic").expect("reload spec");
+    assert_eq!(repinned.packages_for("linux"), Some("new-digest"));
+}
+
 #[cfg(unix)]
 #[test]
 fn spec_pin_binds_the_recorded_package_identity() {

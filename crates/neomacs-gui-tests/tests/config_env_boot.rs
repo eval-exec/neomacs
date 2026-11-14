@@ -267,9 +267,12 @@ fn assert_config_boot_renders(
     let doc: serde_json::Value =
         serde_json::from_str(&snapshot).expect("frame snapshot JSON parses");
     let frames = doc["frames"].as_array().expect("frames array");
+    // `{value:.800}` only truncates strings; a serde_json::Value's Display
+    // ignores the precision and would dump the whole document.
+    let preview: String = doc.to_string().chars().take(800).collect();
     assert!(
         !frames.is_empty(),
-        "{} boot produced no rendered frame: {doc:.800}",
+        "{} boot produced no rendered frame: {preview}",
         env.name()
     );
     let rows = frames[0]["window_infos"]
@@ -278,7 +281,7 @@ fn assert_config_boot_renders(
         .unwrap_or(0);
     assert!(
         rows > 0,
-        "{} boot rendered a frame with no windows: {doc:.800}",
+        "{} boot rendered a frame with no windows: {preview}",
         env.name()
     );
 }

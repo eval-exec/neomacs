@@ -129,6 +129,28 @@ impl Spec {
         }
     }
 
+    /// The key a spec's existing pin for `host` lives under, following the
+    /// same precedence as [`Self::packages_for`]: an explicit
+    /// `packages_<host>` line wins, and Linux falls back to the legacy
+    /// `packages` line. `None` means the spec has no pin line to rewrite.
+    pub fn existing_package_pin_key(text: &str, host: &str) -> Option<String> {
+        // `packages_<host>` is the explicit key even on Linux, where
+        // `package_pin_key` names the legacy default.
+        let platform_key = format!("packages_{host}");
+        let has_key = |key: &str| {
+            let prefix = format!("{key} =");
+            text.lines()
+                .any(|line| line.trim_start().starts_with(&prefix))
+        };
+        if has_key(&platform_key) {
+            return Some(platform_key);
+        }
+        if host == "linux" && has_key("packages") {
+            return Some("packages".to_owned());
+        }
+        None
+    }
+
     /// The package pin that applies on `host` (a `std::env::consts::OS`
     /// spelling such as `linux`, `macos`, or `windows`).
     ///
@@ -163,14 +185,28 @@ impl Spec {
         digest: &str,
         note: &str,
     ) -> Result<(), String> {
+        Self::pin_packages_for_host(manifest_dir, name, digest, note, std::env::consts::OS)
+    }
+
+    /// [`Self::pin_packages`] with the host named explicitly, so tests can
+    /// exercise a host other than the one running them.
+    pub fn pin_packages_for_host(
+        manifest_dir: &Path,
+        name: &str,
+        digest: &str,
+        note: &str,
+        host: &str,
+    ) -> Result<(), String> {
         let path = manifest_dir.join(format!("{name}-spec.toml"));
         let text = fs::read_to_string(&path)
             .map_err(|error| format!("read {}: {error}", path.display()))?;
         // A package identity belongs to the host that produced it: Doom and
-        // Spacemacs install OS-specific package sets. Linux keeps the legacy
-        // `packages` line; every other host gets its own `packages_<os>`.
-        let host = std::env::consts::OS;
-        let key = Self::package_pin_key(host);
+        // Spacemacs install OS-specific package sets. Rewrite whichever line
+        // `packages_for(host)` selects — an explicit `packages_<os>` line,
+        // otherwise Linux's legacy `packages` — and add `packages_<os>` for a
+        // host that has no pin at all.
+        let key = Self::existing_package_pin_key(&text, host)
+            .unwrap_or_else(|| Self::package_pin_key(host));
         let pin_line = format!("{key} = \"{digest}\"");
         // Rewrite the host's pin line in place if present, else append it;
         // then append the re-baseline log line.
