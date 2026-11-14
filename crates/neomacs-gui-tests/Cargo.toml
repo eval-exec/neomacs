@@ -48,6 +48,10 @@ strum.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation.workspace = true
 
+# The mock's terminal-signal observer needs signal(2) and write(2).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [target.'cfg(unix)'.dev-dependencies]
 libc.workspace = true
 

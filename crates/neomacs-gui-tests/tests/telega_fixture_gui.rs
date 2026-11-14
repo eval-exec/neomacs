@@ -384,8 +384,9 @@ fn telega_frontend_replaces_a_chat_photo_without_restarting() {
 }
 
 /// Teardown contract: a started fixture owns exactly one process group (the
-/// editor plus the mock it spawned) and one private display.  After teardown
-/// neither may survive.
+/// editor; the mock it spawned setsids into its own session, like every GNU
+/// Emacs subprocess) and one private display.  After teardown neither may
+/// survive.
 #[test]
 fn fixture_tears_down_its_owned_process_group_and_display() {
     let fixture = Fixture::start(AvatarAvailability::ReadyOnDisk, "teardown");
@@ -399,11 +400,10 @@ fn fixture_tears_down_its_owned_process_group_and_display() {
     assert!(
         log.lines().any(|line| {
             serde_json::from_str::<LogLine>(line).is_ok_and(|record| {
-                record.record == "ready"
-                    && matches!(record.stage.as_deref(), Some("eof") | Some("stopped"))
+                record.record == "ready" && mock_terminal_stage(record.stage.as_deref())
             })
         }),
-        "the mock must observe the editor's pipe closing or an explicit stop"
+        "the mock must observe the editor's shutdown signal, its pipe closing, or an explicit stop"
     );
 }
 
@@ -519,6 +519,21 @@ fn mock_binary() -> PathBuf {
 fn process_group_alive(pgid: i32) -> bool {
     // Signal 0 probes existence without delivering a signal.
     unsafe { libc::kill(-pgid, 0) == 0 }
+}
+
+/// Terminal mock stages proving the editor's teardown reached the mock.
+///
+/// GNU Emacs 31.1 (`shut_down_emacs` -> `kill_buffer_processes`) sends SIGHUP
+/// to a real pipe child before Emacs exits and closes its stdin pipe, so the
+/// GNU-faithful terminal record is the delivered shutdown signal (`hup` or
+/// `term`, recorded by the mock's signal observer).  `eof` is the pipe-close
+/// record of an editor that exited without signalling, and `stopped` is an
+/// explicit control stop.
+fn mock_terminal_stage(stage: Option<&str>) -> bool {
+    matches!(
+        stage,
+        Some("hup") | Some("term") | Some("eof") | Some("stopped")
+    )
 }
 
 fn signal_process_group(pgid: i32, signal: i32) {
@@ -1113,12 +1128,11 @@ impl Fixture {
     }
 
     /// Whether the mock already recorded a terminal `ready` stage
-    /// (`eof`/`stopped`) for its session.
+    /// (`hup`/`term`/`eof`/`stopped`) for its session.
     fn mock_session_ended(&self) -> bool {
         self.mock_log_text().lines().any(|line| {
             serde_json::from_str::<LogLine>(line).is_ok_and(|record| {
-                record.record == "ready"
-                    && matches!(record.stage.as_deref(), Some("eof") | Some("stopped"))
+                record.record == "ready" && mock_terminal_stage(record.stage.as_deref())
             })
         })
     }
@@ -1298,9 +1312,10 @@ impl Fixture {
         if let Some(mut child) = self.child.take() {
             let _ = child.wait();
         }
-        // Give the mock (a child of the editor in the same group) a moment to
-        // observe the closed pipe and record its terminal stage; then kill
-        // anything left in the recorded group.  Never signal anything else.
+        // Give the mock (a child of the editor, setsid'd into its own
+        // session) a moment to observe the editor's shutdown signal or the
+        // closed pipe and record its terminal stage; then kill anything left
+        // in the recorded group.  Never signal anything else.
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline && !self.mock_session_ended() {
             thread::sleep(Duration::from_millis(25));

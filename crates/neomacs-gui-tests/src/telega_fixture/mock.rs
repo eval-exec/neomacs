@@ -54,6 +54,9 @@ pub fn version_probe_output() -> String {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LogLine {
     /// `ready`, `request`, `event`, `control`, `unsupported`, `note`.
+    /// Terminal `ready` stages: `hup`, `term` (shutdown signal delivered by
+    /// the editor), `eof` (the editor closed its pipe), `stopped` (explicit
+    /// control stop).
     pub record: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
@@ -735,6 +738,85 @@ pub fn run_server(
 
 fn protocol_io(error: ProtocolError) -> io::Error {
     io::Error::other(error.to_string())
+}
+
+#[cfg(unix)]
+pub mod terminal_signal_observer {
+    //! Record the editor-delivered shutdown signal, then die by it.
+    //!
+    //! GNU Emacs 31.1 (`shut_down_emacs` -> `kill_buffer_processes` in
+    //! src/emacs.c / src/process.c) sends SIGHUP to a real pipe child before
+    //! Emacs exits and its stdin pipe closes.  A handler-less child therefore
+    //! dies at kill-emacs and never observes that close; the mock carries this
+    //! observer so the fixture can still verify teardown reached it.  On
+    //! SIGHUP/SIGTERM the handler appends a terminal `ready` record through an
+    //! async-signal-safe `write` on an `O_APPEND` descriptor and then re-raises
+    //! with the default disposition, exiting with the same signal status a
+    //! handler-less `telega-server` would.
+    use std::fs::OpenOptions;
+    use std::os::fd::AsRawFd;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    static LOG_FD: AtomicI32 = AtomicI32::new(-1);
+    static HUP_RECORD: &[u8] = b"{\"record\":\"ready\",\"stage\":\"hup\"}\n";
+    static TERM_RECORD: &[u8] = b"{\"record\":\"ready\",\"stage\":\"term\"}\n";
+
+    unsafe extern "C" fn record_and_die(signal: libc::c_int) {
+        let record = if signal == libc::SIGHUP {
+            HUP_RECORD
+        } else {
+            TERM_RECORD
+        };
+        let fd = LOG_FD.load(Ordering::Relaxed);
+        if fd >= 0 {
+            let mut written = 0;
+            while written < record.len() {
+                // SAFETY: fd refers to the O_APPEND observer descriptor and
+                // record is a static; write(2) is async-signal-safe.
+                let count = unsafe {
+                    libc::write(
+                        fd,
+                        record[written..].as_ptr().cast(),
+                        record.len() - written,
+                    )
+                };
+                if count < 0 && unsafe { *libc::__errno_location() } == libc::EINTR {
+                    continue;
+                }
+                if count <= 0 {
+                    // A torn record fails the fixture loudly instead of
+                    // pretending the signal was observed.
+                    break;
+                }
+                written += count as usize;
+            }
+        }
+        // SAFETY: restoring the default disposition and raising the same
+        // signal is async-signal-safe and terminates this process with the
+        // delivered signal's exit status.
+        unsafe {
+            libc::signal(signal, libc::SIG_DFL);
+            libc::raise(signal);
+        }
+    }
+
+    /// Arm SIGHUP/SIGTERM observation against `log`.  The descriptor is
+    /// intentionally leaked: it must remain valid inside the handler until
+    /// the process dies.
+    pub fn install(log: &Path) {
+        let Ok(file) = OpenOptions::new().create(true).append(true).open(log) else {
+            return;
+        };
+        LOG_FD.store(file.as_raw_fd(), Ordering::Relaxed);
+        std::mem::forget(file);
+        // SAFETY: the handler only touches static storage and leaked
+        // descriptors; storage for signal(2) itself is libc-internal.
+        unsafe {
+            libc::signal(libc::SIGHUP, record_and_die as libc::sighandler_t);
+            libc::signal(libc::SIGTERM, record_and_die as libc::sighandler_t);
+        }
+    }
 }
 
 /// Command-line handling: accept the flags Telega passes (`-v 0`,

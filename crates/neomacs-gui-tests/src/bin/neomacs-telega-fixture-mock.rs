@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use neomacs_gui_tests::telega_fixture::mock::{
     ControlReader, FIXTURE_ROOT_ENV, FIXTURE_SCENARIO_ENV, FixtureLog, FixturePaths, FixtureServer,
-    Invocation, parse_invocation, run_server,
+    Invocation, parse_invocation, run_server, terminal_signal_observer,
 };
 use neomacs_gui_tests::telega_fixture::scenario::{AvatarAvailability, FixtureScenario};
 
@@ -47,6 +47,10 @@ fn serve() -> Result<(), String> {
 
     let paths = FixturePaths::new(root);
     paths.create().map_err(|error| error.to_string())?;
+    // GNU Emacs 31.1 HUPs pipe children at kill-emacs before their stdin
+    // pipe closes, so the mock records the delivered shutdown signal itself
+    // and then dies by it, exactly like a handler-less telega-server.
+    terminal_signal_observer::install(&paths.log);
     let log = FixtureLog::open(&paths.log).map_err(|error| error.to_string())?;
     let scenario = FixtureScenario::new(&paths.photos, availability);
     let server = FixtureServer::new(scenario, log).map_err(|error| error.to_string())?;
