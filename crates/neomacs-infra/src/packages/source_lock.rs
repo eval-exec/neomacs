@@ -476,8 +476,8 @@ enum FetchFailureClass {
     /// the retryable 408/429), DNS failure, timeout, connection reset, or a
     /// truncated transfer. The same request can succeed later.
     Transient,
-    /// The request itself is wrong -- HTTP 4xx, authentication, or an unknown
-    /// ref. Repeating it reproduces the same failure.
+    /// The request itself is wrong -- HTTP 4xx, authentication, certificate
+    /// validation, or an unknown ref. Repeating it reproduces the same failure.
     Permanent,
 }
 
@@ -501,6 +501,10 @@ impl FetchFailureClass {
             "repository not found",
             "does not appear to be a git repository",
             "host key verification failed",
+            "ssl certificate problem",
+            "certificate verify failed",
+            "certificate verification failed",
+            "certificate is not trusted",
             "returned error: 401",
             "returned error: 403",
             "returned error: 404",
@@ -517,12 +521,15 @@ impl FetchFailureClass {
             "could not resolve host",
             "temporary failure in name resolution",
             "timed out",
+            "connection timeout",
+            "timeout was reached",
             "connection reset",
             "connection refused",
             "couldn't connect to server",
             "network is unreachable",
             "no route to host",
             "early eof",
+            "unexpected eof while reading",
             "the remote end hung up unexpectedly",
             "unexpected disconnect while reading sideband packet",
             "empty reply from server",

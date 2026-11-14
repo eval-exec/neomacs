@@ -541,6 +541,9 @@ fn source_unavailable_reports_every_origin_tried() {
 /// the fetch had no tolerance for a transient upstream failure.
 const TRANSIENT_HTTP_500: &str = "fatal: unable to access 'https://git.savannah.gnu.org/git/emacs/elpa.git/': The requested URL returned error: 500";
 
+/// The transport interruption reported while preparing helm-core ab09703e.
+const TRANSIENT_TLS_EOF: &str = "TLS connect error: unexpected eof while reading";
+
 #[test]
 fn fetch_failure_classifier_separates_transient_upstream_failures() {
     for transient in [
@@ -571,6 +574,10 @@ fn fetch_failure_classifier_keeps_request_errors_permanent() {
         "fatal: Authentication failed for 'https://github.com/example/repo/'",
         "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
         "remote: Repository not found.\nfatal: repository 'https://github.com/example/missing/' not found",
+        "fatal: unable to access 'https://example.invalid/repo/': SSL certificate problem: unable to get local issuer certificate",
+        "fatal: unable to access 'https://example.invalid/repo/': TLS connect error: certificate verify failed",
+        "fatal: unable to access 'https://example.invalid/repo/': server certificate verification failed. CAfile: none CRLfile: none",
+        "fatal: unable to access 'https://example.invalid/repo/': gnutls_handshake() failed: The certificate is NOT trusted.",
         "fatal: some unexpected git failure with no retryable marker",
     ] {
         assert_eq!(
@@ -579,6 +586,42 @@ fn fetch_failure_classifier_keeps_request_errors_permanent() {
             "expected a permanent classification for: {permanent}"
         );
     }
+}
+
+#[test]
+fn fetch_failure_classifier_retries_tls_transport_interruptions() {
+    for transient in [
+        TRANSIENT_TLS_EOF,
+        "TLS connect error: Connection reset by peer",
+        "TLS connect error: Connection timed out",
+        "TLS connect error: Connection timeout",
+        "TLS connect error: Timeout was reached",
+    ] {
+        assert_eq!(
+            FetchFailureClass::classify(transient),
+            FetchFailureClass::Transient,
+            "expected a transient classification for: {transient}"
+        );
+    }
+}
+
+#[test]
+fn fetch_retry_retries_tls_eof_before_succeeding() {
+    let no_backoff = [Duration::ZERO; FETCH_MAX_ATTEMPTS - 1];
+    let mut attempts = 0;
+    let result = run_fetch_with_retry(&no_backoff, |index| {
+        attempts += 1;
+        if index + 1 < FETCH_MAX_ATTEMPTS {
+            Err(TRANSIENT_TLS_EOF.to_string())
+        } else {
+            Ok("fetched".to_string())
+        }
+    });
+    assert_eq!(
+        result.expect("TLS EOF can recover on the last attempt"),
+        "fetched"
+    );
+    assert_eq!(attempts, FETCH_MAX_ATTEMPTS);
 }
 
 #[test]
