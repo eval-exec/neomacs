@@ -2403,6 +2403,21 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         )
     }
 
+    fn focus_gui_frame(
+        &mut self,
+        frame_id: neovm_core::window::FrameId,
+        _no_activate: bool,
+    ) -> Result<(), String> {
+        // The native activation request has no non-activating variant on
+        // Windows, where GNU's w32 hook also ignores NOACTIVATE
+        // (`src/w32term.c:7372`).
+        let frame = self.frame_ref_for_gui_frame(frame_id);
+        self.send_render_command(
+            RenderCommand::Window(WindowCommand::FocusWindow { frame }),
+            "failed to focus GUI frame",
+        )
+    }
+
     fn set_gui_frame_alpha_lower_limit(&mut self, limit: f32) {
         self.frame_opacity
             .lock()

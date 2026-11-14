@@ -2173,6 +2173,24 @@ impl GuiFrameWindowManager {
         found
     }
 
+    /// Activate a frame's native window, GNU's `x-focus-frame` host half.
+    ///
+    /// A presented child frame activates the top-level window that owns it.
+    /// A frame whose native window creation is still pending needs no
+    /// request: creation activates the new window. False when the frame is
+    /// unknown.
+    pub(super) fn focus(&mut self, emacs_frame_id: u64) -> bool {
+        if let Some(window_state) = self.get_mut_by_presented_frame(emacs_frame_id) {
+            if let Some(window) = window_state.window() {
+                window.focus_window();
+            }
+            return true;
+        }
+        self.pending_creates
+            .iter()
+            .any(|pending| pending.emacs_frame_id == emacs_frame_id)
+    }
+
     /// Move a frame's outer window, or keep the position for a window whose
     /// native creation is still pending.  False when the frame is unknown.
     pub(super) fn set_outer_position(&mut self, emacs_frame_id: u64, x: i32, y: i32) -> bool {

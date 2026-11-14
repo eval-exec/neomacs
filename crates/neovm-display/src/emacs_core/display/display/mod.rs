@@ -2663,6 +2663,14 @@ pub fn builtin_x_focus_frame(eval: &mut Context, args: Vec<Value>) -> EvalResult
         .and_then(|frame| frame.effective_window_system())
         .is_some_and(gui_window_system_active_value)
     {
+        // GNU calls the terminal's `focus_frame_hook` here; the win32 hook
+        // activates the frame window (`src/w32term.c:7372`). Selection alone
+        // leaves the OS focus where it was, which is what broke `other-frame`.
+        let no_activate = args.get(1).is_some_and(|value| value.is_truthy());
+        if let Some(host) = eval.display_host.as_mut() {
+            host.focus_gui_frame(fid, no_activate)
+                .map_err(|message| signal("error", vec![Value::string(message)]))?;
+        }
         Ok(Value::NIL)
     } else {
         Err(x_window_system_frame_error())

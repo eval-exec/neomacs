@@ -246,6 +246,15 @@ impl RenderApp {
                     window.request_user_attention(attention);
                 }
             }
+            WindowCommand::FocusWindow { frame } => {
+                let emacs_frame_id = frame.raw_id();
+                if !self.frame_windows.focus(emacs_frame_id) {
+                    tracing::warn!(
+                        "FocusWindow requested for unknown frame_id=0x{:x}",
+                        emacs_frame_id
+                    );
+                }
+            }
             WindowCommand::CreateWindow {
                 frame,
                 width,
