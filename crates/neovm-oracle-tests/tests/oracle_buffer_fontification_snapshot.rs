@@ -75,7 +75,7 @@ fn divergence_buffer_string_properties_follow_post_hook_current_buffer() {
                        (nreverse calls)))))))
      (kill-buffer source)
      (kill-buffer target)))"#;
-    crate::common::assert_oracle_parity_expect(form, expect_test::expect![[]]);
+    crate::common::assert_oracle_parity_expect(form, expect_test::expect![[""]]);
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn divergence_buffer_string_validates_positions_after_hook_narrows() {
      (condition-case err
          (list 'value (buffer-string))
        (error (list 'error-symbol (car err) 'error-data (cdr err))))))"#;
-    crate::common::assert_oracle_parity_expect(form, expect_test::expect![[]]);
+    crate::common::assert_oracle_parity_expect(form, expect_test::expect![[""]]);
 }
 
 #[test]
