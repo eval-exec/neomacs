@@ -4674,14 +4674,16 @@ fn split_window_resets_new_leaf_glyph_matrix_row_scale() {
         frame
             .window_layout_inputs(original)
             .unwrap()
-            .glyph_matrix_row_scale,
+            .glyph_matrix_row_scale
+            .row_scale(),
         scale
     );
     assert_eq!(
         frame
             .window_layout_inputs(sibling)
             .unwrap()
-            .glyph_matrix_row_scale,
+            .glyph_matrix_row_scale
+            .row_scale(),
         std::num::NonZeroU32::MIN
     );
 }
