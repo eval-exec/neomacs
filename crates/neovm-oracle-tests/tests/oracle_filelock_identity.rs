@@ -5,14 +5,15 @@
 //! insdel.c supply the buffer's file_truename slot. Recorded expectations
 //! must come from printed, attested GNU results; none are guessed here.
 //!
-//! The GC forms deliberately retain an independent binding to the original
-//! string. They cover identity, mutation and property survival, not exclusive
-//! ownership of a GC root. Native fallback, error routing, canonical expansion
-//! and write-region lockname selection are separate coverage obligations.
+//! The initial GC forms retain independent bindings and establish identity/
+//! mutation rather than exclusive rooting. The post-ENCODE fixtures additionally
+//! remove explicit buffer holders and observe weak keys across real native
+//! callbacks; their outputs must be interpreted with the weak negative control.
+//! No particular hidden-root mechanism is inferred from a passing observation.
 
 use crate::common::{
-    assert_oracle_parity, oracle_mode_runs_live_gnu, return_if_neovm_enable_oracle_proptest_not_set,
-    run_neovm_eval, run_oracle_eval,
+    assert_oracle_parity, oracle_mode_runs_live_gnu,
+    return_if_neovm_enable_oracle_proptest_not_set, run_neovm_eval, run_oracle_eval,
 };
 
 fn compare_filename_identity(name: &str, form: &str, recorded_gnu: Option<&str>) {
@@ -20,7 +21,10 @@ fn compare_filename_identity(name: &str, form: &str, recorded_gnu: Option<&str>)
     if !oracle_mode_runs_live_gnu() {
         if let Some(recorded) = recorded_gnu {
             let neomacs = run_neovm_eval(form).expect("Neomacs filename form should run");
-            assert_eq!(neomacs, recorded, "recorded GNU filename contract in {name}");
+            assert_eq!(
+                neomacs, recorded,
+                "recorded GNU filename contract in {name}"
+            );
         } else {
             // New dependency probes have no guessed expectation. Only an
             // attested verify/live comparison establishes their contract.
@@ -35,7 +39,10 @@ fn compare_filename_identity(name: &str, form: &str, recorded_gnu: Option<&str>)
     let neomacs = run_neovm_eval(form).expect("Neomacs filename form should run");
     eprintln!("{name} GNU -> {oracle}");
     eprintln!("{name} Neomacs -> {neomacs}");
-    assert_eq!(neomacs, oracle, "filename identity mismatch in {name}\n{form}");
+    assert_eq!(
+        neomacs, oracle,
+        "filename identity mismatch in {name}\n{form}"
+    );
 }
 
 #[test]
@@ -142,7 +149,7 @@ fn expansion_absolute_original_value() {
     compare_filename_identity(
         "expansion_absolute_original_value",
         include_str!("fixtures/filelock_identity/expansion/absolute-original-value.el"),
-        None,
+        Some(r#"OK ((t t t nil nil) "/threadsig-expand/leaX" yes)"#),
     );
 }
 
@@ -150,8 +157,10 @@ fn expansion_absolute_original_value() {
 fn expansion_default_handler_original_args_mutation_gc() {
     compare_filename_identity(
         "expansion_default_handler_original_args_mutation_gc",
-        include_str!("fixtures/filelock_identity/expansion/default-handler-original-args-mutation-gc.el"),
-        None,
+        include_str!(
+            "fixtures/filelock_identity/expansion/default-handler-original-args-mutation-gc.el"
+        ),
+        Some(r#"OK ((expand-file-name t t t) t "leaX" "/threadsig-expand-default:dirY" yes)"#),
     );
 }
 
@@ -160,7 +169,7 @@ fn expansion_encode_file_after_make_utf16_nul() {
     compare_filename_identity(
         "expansion_encode_file_after_make_utf16_nul",
         include_str!("fixtures/filelock_identity/expansion/encode-file-after-make-utf16-nul.el"),
-        None,
+        Some(r#"OK (t t (caught wrong-type-argument filenamep))"#),
     );
 }
 
@@ -168,8 +177,10 @@ fn expansion_encode_file_after_make_utf16_nul() {
 fn expansion_encode_file_returned_expanded_alias_nul() {
     compare_filename_identity(
         "expansion_encode_file_returned_expanded_alias_nul",
-        include_str!("fixtures/filelock_identity/expansion/encode-file-returned-expanded-alias-nul.el"),
-        None,
+        include_str!(
+            "fixtures/filelock_identity/expansion/encode-file-returned-expanded-alias-nul.el"
+        ),
+        Some(r#"OK (t t yes (caught wrong-type-argument filenamep))"#),
     );
 }
 
@@ -177,8 +188,10 @@ fn expansion_encode_file_returned_expanded_alias_nul() {
 fn expansion_handler_return_value_identity_control() {
     compare_filename_identity(
         "expansion_handler_return_value_identity_control",
-        include_str!("fixtures/filelock_identity/expansion/handler-return-value-identity-control.el"),
-        None,
+        include_str!(
+            "fixtures/filelock_identity/expansion/handler-return-value-identity-control.el"
+        ),
+        Some(r#"OK (t t)"#),
     );
 }
 
@@ -186,8 +199,10 @@ fn expansion_handler_return_value_identity_control() {
 fn expansion_make_lock_absolute_expanded_alias_return_nil() {
     compare_filename_identity(
         "expansion_make_lock_absolute_expanded_alias_return_nil",
-        include_str!("fixtures/filelock_identity/expansion/make-lock-absolute-expanded-alias-return-nil.el"),
-        None,
+        include_str!(
+            "fixtures/filelock_identity/expansion/make-lock-absolute-expanded-alias-return-nil.el"
+        ),
+        Some(r#"OK (nil (t t) "/threadsig-lock-owner-leaX" yes)"#),
     );
 }
 
@@ -195,8 +210,10 @@ fn expansion_make_lock_absolute_expanded_alias_return_nil() {
 fn expansion_make_lock_canonical_handler_returned_owner() {
     compare_filename_identity(
         "expansion_make_lock_canonical_handler_returned_owner",
-        include_str!("fixtures/filelock_identity/expansion/make-lock-canonical-handler-returned-owner.el"),
-        None,
+        include_str!(
+            "fixtures/filelock_identity/expansion/make-lock-canonical-handler-returned-owner.el"
+        ),
+        Some(r#"OK (nil ((expand expand-file-name t t) (make t nil t)) yes)"#),
     );
 }
 
@@ -205,7 +222,9 @@ fn expansion_multibyte_coercion_fresh_value() {
     compare_filename_identity(
         "expansion_multibyte_coercion_fresh_value",
         include_str!("fixtures/filelock_identity/expansion/multibyte-coercion-fresh-value.el"),
-        None,
+        Some(
+            r#"OK (t nil nil nil (47 116 104 114 101 97 100 115 105 103 45 101 120 112 97 110 100 45 206 187) (47 116 104 114 101 97 100 115 105 103 45 101 120 112 97 110 100 45 206 187) nil)"#,
+        ),
     );
 }
 
@@ -213,8 +232,12 @@ fn expansion_multibyte_coercion_fresh_value() {
 fn expansion_name_handler_original_args_mutation_gc() {
     compare_filename_identity(
         "expansion_name_handler_original_args_mutation_gc",
-        include_str!("fixtures/filelock_identity/expansion/name-handler-original-args-mutation-gc.el"),
-        None,
+        include_str!(
+            "fixtures/filelock_identity/expansion/name-handler-original-args-mutation-gc.el"
+        ),
+        Some(
+            r#"OK ((expand-file-name t t t) t "/threadsig-expand-name:leaX" "/threadsig-directoryY" yes)"#,
+        ),
     );
 }
 
@@ -222,8 +245,12 @@ fn expansion_name_handler_original_args_mutation_gc() {
 fn expansion_normalized_result_handler_separate_behavior() {
     compare_filename_identity(
         "expansion_normalized_result_handler_separate_behavior",
-        include_str!("fixtures/filelock_identity/expansion/normalized-result-handler-separate-behavior.el"),
-        None,
+        include_str!(
+            "fixtures/filelock_identity/expansion/normalized-result-handler-separate-behavior.el"
+        ),
+        Some(
+            r#"OK ((expand-file-name nil t "/threadsig-normalized:leaf") t "/threadsig-handled-result" t)"#,
+        ),
     );
 }
 
@@ -231,8 +258,12 @@ fn expansion_normalized_result_handler_separate_behavior() {
 fn expansion_recursive_default_live_name_and_expanded_value() {
     compare_filename_identity(
         "expansion_recursive_default_live_name_and_expanded_value",
-        include_str!("fixtures/filelock_identity/expansion/recursive-default-live-name-and-expanded-value.el"),
-        None,
+        include_str!(
+            "fixtures/filelock_identity/expansion/recursive-default-live-name-and-expanded-value.el"
+        ),
+        Some(
+            r#"OK (((inner expand-file-name t t) (outer expand-file-name t t "leaX" t)) t "leaX" yes)"#,
+        ),
     );
 }
 
@@ -241,7 +272,7 @@ fn expansion_superroot_equal_bytes_fresh_value() {
     compare_filename_identity(
         "expansion_superroot_equal_bytes_fresh_value",
         include_str!("fixtures/filelock_identity/expansion/superroot-equal-bytes-fresh-value.el"),
-        None,
+        Some(r#"OK (nil t "/.." nil t)"#),
     );
 }
 
@@ -250,7 +281,7 @@ fn write_region_explicit_lockname() {
     compare_filename_identity(
         "write_region_explicit_lockname",
         include_str!("fixtures/filelock_identity/write-region-explicit-lockname.el"),
-        None,
+        Some(r#"OK (((lock-file t nil) (unlock-file t nil)) 88 "x")"#),
     );
 }
 
@@ -259,7 +290,7 @@ fn write_region_default_lockname() {
     compare_filename_identity(
         "write_region_default_lockname",
         include_str!("fixtures/filelock_identity/write-region-default-lockname.el"),
-        None,
+        Some(r#"OK ((t t t) (t t t))"#),
     );
 }
 
@@ -268,6 +299,60 @@ fn encode_file_norecord_control() {
     compare_filename_identity(
         "encode_file_norecord_control",
         include_str!("fixtures/filelock_identity/encode-file-norecord-control.el"),
-        None,
+        Some(r#"OK threadsig-sentinel"#),
+    );
+}
+
+#[test]
+fn post_encode_supersession_alias_mutation_gc() {
+    compare_filename_identity(
+        "post_encode_supersession_alias_mutation_gc",
+        include_str!("fixtures/filelock_identity/post_encode/supersession-alias-mutation-gc.el"),
+        Some(r#"OK (((threat t t)) t nil t)"#),
+    );
+}
+
+#[test]
+fn post_encode_lock_clash_alias_mutation_gc() {
+    compare_filename_identity(
+        "post_encode_lock_clash_alias_mutation_gc",
+        include_str!("fixtures/filelock_identity/post_encode/clash-alias-mutation-gc.el"),
+        Some(r#"OK (((ask-lock t t)) t t t)"#),
+    );
+}
+
+#[test]
+fn whole_operation_original_value_survives_slot_clear_gc() {
+    compare_filename_identity(
+        "whole_operation_original_value_survives_slot_clear_gc",
+        include_str!("fixtures/filelock_identity/post_encode/weak-original-slot-clear-gc.el"),
+        Some(r#"OK (t (verify-visited-file-modtime 1 t) "x" t)"#),
+    );
+}
+
+#[test]
+fn whole_operation_encoded_value_survives_holder_clear_kill_gc() {
+    compare_filename_identity(
+        "whole_operation_encoded_value_survives_holder_clear_kill_gc",
+        include_str!("fixtures/filelock_identity/post_encode/weak-encoded-holder-clear-kill-gc.el"),
+        Some(r#"OK ((verify-visited-file-modtime 1 1 nil) nil t)"#),
+    );
+}
+
+#[test]
+fn weak_unowned_string_collection_control() {
+    compare_filename_identity(
+        "weak_unowned_string_collection_control",
+        include_str!("fixtures/filelock_identity/post_encode/weak-unowned-string-control.el"),
+        Some(r#"OK 0"#),
+    );
+}
+
+#[test]
+fn post_encode_lock_clash_alias_nul_mutation_gc() {
+    compare_filename_identity(
+        "post_encode_lock_clash_alias_nul_mutation_gc",
+        include_str!("fixtures/filelock_identity/post_encode/clash-alias-nul-mutation-gc.el"),
+        Some(r#"OK (((ask-lock t t)) t t t)"#),
     );
 }

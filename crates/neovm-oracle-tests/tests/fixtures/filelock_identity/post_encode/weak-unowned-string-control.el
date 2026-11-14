@@ -1,0 +1,6 @@
+(let ((weak (make-hash-table :test 'eq :weakness 'key)))
+  (funcall (lambda ()
+             (let ((unowned (copy-sequence "threadsig-unowned-lock-name")))
+               (puthash unowned 'unowned weak))))
+  (garbage-collect)
+  (hash-table-count weak))

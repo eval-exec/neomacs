@@ -1,0 +1,37 @@
+(let* ((file-name-handler-alist nil)
+       (create-lockfiles t)
+       (file-name-coding-system 'no-conversion)
+       (dir (make-temp-file "threadsig-late-clash-nul-" t))
+       (file (expand-file-name "visited" dir))
+       (prefix (expand-file-name "new-prefix-lock" dir))
+       (original-path (concat prefix "-old-suffix"))
+       (alias (string-as-unibyte (copy-sequence original-path)))
+       (foreign "other-user@threadsig-other-host.invalid.999999:1")
+       (old-make (symbol-function 'make-lock-file-name))
+       (old-ask (symbol-function 'ask-user-about-lock))
+       events)
+  (unwind-protect
+      (progn
+        (write-region "seed" nil file nil 'silent)
+        (make-symbolic-link foreign original-path)
+        (fset 'make-lock-file-name (lambda (_expanded) alias))
+        (fset 'ask-user-about-lock
+              (lambda (received-file owner)
+                (setq events
+                      (cons (list 'ask-lock (string-equal received-file file)
+                                  (and (stringp owner)
+                                       (not (null (string-match-p "threadsig-other-host" owner)))))
+                            events))
+                ;; ENCODE_FILE has already accepted this unibyte alias.  GNU's
+                ;; later native SSDATA consumption observes the inserted NUL.
+                (aset alias (length prefix) 0)
+                (garbage-collect)
+                t))
+        (lock-file file)
+        (unless events (error "Native lock-clash callback was not reached"))
+        (list (nreverse events) (= (aref alias (length prefix)) 0)
+              (equal (file-symlink-p original-path) foreign)
+              (not (null (file-symlink-p prefix)))))
+    (fset 'make-lock-file-name old-make)
+    (fset 'ask-user-about-lock old-ask)
+    (delete-directory dir t)))
