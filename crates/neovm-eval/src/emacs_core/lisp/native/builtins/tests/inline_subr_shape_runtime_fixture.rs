@@ -52,6 +52,7 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_standard_syntax_table_matches_canonical_descriptor(&mut eval);
     assert_core_copy_marker_matches_canonical_descriptor(&mut eval);
     assert_core_char_table_subtype_matches_canonical_descriptor(&mut eval);
+    assert_core_set_char_table_range_matches_canonical_descriptor(&mut eval);
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
@@ -948,4 +949,170 @@ fn assert_core_char_table_subtype_matches_canonical_descriptor(context: &mut Con
         signal.data,
         vec![Value::symbol("char-table-subtype"), Value::fixnum(0)]
     );
+}
+
+fn assert_core_set_char_table_range_matches_canonical_descriptor(context: &mut Context) {
+    use crate::emacs_core::builtins::misc_eval::SET_CHAR_TABLE_RANGE_SUBR;
+    use crate::emacs_core::eval::data::window_state::current_char_table_layout_revision;
+    use crate::emacs_core::eval::lookup_global_subr_entry;
+    use crate::emacs_core::eval::subr_abi::SubrFn;
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+    use neovm_value::chartab::{char_table_default, ct_ref, make_char_table_value};
+    use neovm_value::value::{Value, char_table_write_tick};
+    let expected = SET_CHAR_TABLE_RANGE_SUBR;
+    let id = intern("set-char-table-range");
+    let actual = lookup_global_subr_entry(id).expect("core registered range setter");
+    let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(actual_fn))) =
+        (expected.function(), actual.function)
+    else {
+        panic!("range setter retains ContextVec ABI");
+    };
+    assert!(
+        std::ptr::fn_addr_eq(actual_fn, expected_fn),
+        "actual={actual_fn:p} expected={expected_fn:p} delta={:#x}",
+        (actual_fn as usize).abs_diff(expected_fn as usize)
+    );
+    assert_eq!(expected.name(), "set-char-table-range");
+    assert_eq!(expected.arity(), SubrArity::new(3, Some(3)));
+    assert_eq!(
+        expected.dispatch_kind(),
+        neovm_value::tagged::header::SubrDispatchKind::Builtin
+    );
+    assert_eq!(
+        (actual.min_args, actual.max_args),
+        (expected.arity().min(), expected.arity().max())
+    );
+    assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+    assert!(expected.interactive_spec().is_none());
+    assert!(actual.interactive_spec.is_none());
+    assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+    assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(
+        context
+            .obarray_view()
+            .get_property("set-char-table-range", "disabled")
+            .is_none_or(|value| value.is_nil())
+    );
+    assert!(expected.leaf_spec().is_none());
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+    // These direct lower calls allocate without evaluator safepoints.
+    let table = make_char_table_value(Value::symbol("round4-range-purpose"), Value::fixnum(1));
+    let before_tick = char_table_write_tick();
+    let before_layout = current_char_table_layout_revision();
+    assert_eq!(
+        actual_fn(context, vec![table, Value::NIL, Value::fixnum(42)]).unwrap(),
+        Value::fixnum(42)
+    );
+    assert_eq!(char_table_default(&table), Value::fixnum(42));
+    assert_ne!(char_table_write_tick(), before_tick);
+    assert_ne!(current_char_table_layout_revision(), before_layout);
+    assert_eq!(
+        actual_fn(context, vec![table, Value::T, Value::fixnum(7)]).unwrap(),
+        Value::fixnum(7)
+    );
+    assert_eq!(
+        char_table_default(&table),
+        Value::fixnum(42),
+        "t retains the default slot"
+    );
+    assert_eq!(ct_ref(&table, 65), Value::fixnum(7));
+    assert_eq!(ct_ref(&table, 0x3f_ffff), Value::fixnum(7));
+    assert_eq!(
+        actual_fn(
+            context,
+            vec![table, Value::fixnum(0x4e2d), Value::fixnum(9)]
+        )
+        .unwrap(),
+        Value::fixnum(9)
+    );
+    assert_eq!(ct_ref(&table, 0x4e2d), Value::fixnum(9));
+
+    let payload = Value::vector(vec![Value::fixnum(17)]);
+    let range = Value::cons(Value::fixnum(126), Value::fixnum(129));
+    let returned = actual_fn(context, vec![table, range, payload]).unwrap();
+    assert_eq!(returned.bits(), payload.bits());
+    for ch in 126..=129 {
+        assert_eq!(ct_ref(&table, ch).bits(), payload.bits());
+    }
+    assert_eq!(ct_ref(&table, 125), Value::fixnum(7));
+    assert_eq!(ct_ref(&table, 130), Value::fixnum(7));
+    let reverse = Value::cons(Value::fixnum(90), Value::fixnum(65));
+    assert_eq!(
+        actual_fn(context, vec![table, reverse, Value::fixnum(10)]).unwrap(),
+        Value::fixnum(10)
+    );
+    assert_eq!(ct_ref(&table, 65), Value::fixnum(7));
+
+    let tick = char_table_write_tick();
+    let error = actual_fn(context, vec![]).unwrap_err();
+    let signal = error.as_signal().expect("arity signal");
+    assert_eq!(signal.symbol, intern("wrong-number-of-arguments"));
+    assert_eq!(
+        signal.data,
+        vec![Value::symbol("set-char-table-range"), Value::fixnum(0)]
+    );
+    assert_eq!(
+        char_table_write_tick(),
+        tick,
+        "arity errors precede the write tick"
+    );
+
+    let bad_table = Value::fixnum(9);
+    let bad_range = Value::string("invalid");
+    let tick = char_table_write_tick();
+    let layout = current_char_table_layout_revision();
+    let error = actual_fn(context, vec![bad_table, bad_range, Value::NIL]).unwrap_err();
+    let signal = error.as_signal().expect("table validation signal");
+    assert_eq!(signal.symbol, intern("wrong-type-argument"));
+    assert_eq!(signal.data, vec![Value::symbol("char-table-p"), bad_table]);
+    assert_ne!(
+        char_table_write_tick(),
+        tick,
+        "the original error-side tick is retained"
+    );
+    assert_eq!(current_char_table_layout_revision(), layout);
+
+    for (car, cdr, offending) in [
+        (Value::fixnum(-1), Value::fixnum(65), Value::fixnum(-1)),
+        (Value::fixnum(65), bad_range, bad_range),
+    ] {
+        let pair = Value::cons(car, cdr);
+        let layout = current_char_table_layout_revision();
+        let error = actual_fn(context, vec![table, pair, Value::NIL]).unwrap_err();
+        let signal = error.as_signal().expect("endpoint validation signal");
+        assert_eq!(signal.symbol, intern("wrong-type-argument"));
+        assert_eq!(signal.data, vec![Value::symbol("characterp"), offending]);
+        assert_eq!(current_char_table_layout_revision(), layout);
+    }
+
+    // Exercise the real TextHost variable view, not the no-view style helper.
+    let previous_style = context
+        .variables()
+        .value_by_name("text-quoting-style")
+        .unwrap_or(Value::NIL);
+    for (style, message) in [
+        ("grave", "Invalid RANGE argument to `set-char-table-range'"),
+        (
+            "straight",
+            "Invalid RANGE argument to 'set-char-table-range'",
+        ),
+        (
+            "curve",
+            "Invalid RANGE argument to \u{2018}set-char-table-range\u{2019}",
+        ),
+    ] {
+        context.set_variable("text-quoting-style", Value::symbol(style));
+        let table = make_char_table_value(Value::NIL, Value::NIL);
+        for bad in [Value::fixnum(-1), Value::string("invalid")] {
+            let layout = current_char_table_layout_revision();
+            let error = actual_fn(context, vec![table, bad, Value::NIL]).unwrap_err();
+            let signal = error.as_signal().expect("invalid-range signal");
+            assert_eq!(signal.symbol, intern("error"));
+            assert_eq!(signal.data.len(), 1);
+            assert_eq!(signal.data[0].as_utf8_str(), Some(message));
+            assert_eq!(current_char_table_layout_revision(), layout);
+        }
+    }
+    context.set_variable("text-quoting-style", previous_style);
 }

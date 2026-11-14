@@ -4146,11 +4146,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| crate::emacs_core::chartable::builtin_char_table_p(args)),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-char-table-range",
-        NativeFn::ContextVec(crate::emacs_core::chartable::builtin_set_char_table_range_in_state),
-        SubrArity::new(3, Some(3)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::SET_CHAR_TABLE_RANGE_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "char-table-range",
         NativeFn::ContextVec(crate::emacs_core::chartable::builtin_char_table_range_in_state),

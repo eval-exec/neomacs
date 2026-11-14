@@ -165,6 +165,18 @@ pub static COPY_MARKER_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(Sub
     SubrArity::new(0, Some(2)),
 ));
 
+/// The original host-generic range setter shared by production and unit registration.
+/// Retain its ContextVec ABI, variable-aware errors, and lower mutation hooks.
+#[doc(hidden)]
+pub static SET_CHAR_TABLE_RANGE_SUBR: SubrSpec =
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-char-table-range",
+        NativeFn::ContextVec(
+            neovm_text::emacs_core::chartable::builtin_set_char_table_range_in_state
+        ),
+        SubrArity::new(3, Some(3)),
+    ));
+
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_pos_property(
     eval: &mut super::eval::Context,
