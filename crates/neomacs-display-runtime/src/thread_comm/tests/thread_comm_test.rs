@@ -1248,6 +1248,19 @@ fn render_command_request_attention() {
 }
 
 #[test]
+fn render_command_focus_window() {
+    let cmd = RenderCommand::Window(WindowCommand::FocusWindow {
+        frame: FrameRef::Frame(17),
+    });
+    match cmd {
+        RenderCommand::Window(WindowCommand::FocusWindow { frame }) => {
+            assert_eq!(frame.raw_id(), 17)
+        }
+        other => panic!("Expected FocusWindow, got {:?}", other),
+    }
+}
+
+#[test]
 fn render_command_update_visual_config() {
     let cmd = RenderCommand::Config(ConfigCommand::SetVisualConfig(VisualConfig::default()));
     match cmd {
