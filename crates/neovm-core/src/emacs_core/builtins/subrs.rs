@@ -3710,11 +3710,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(1, Some(1)),
     )));
 
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "reverse",
-        NativeFn::ContextVec(|_ctx, args| builtin_reverse(args)),
-        SubrArity::new(1, Some(1)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_pure::REVERSE_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "copy-alist",
         NativeFn::ContextVec(|_ctx, args| crate::emacs_core::misc::builtin_copy_alist(args)),

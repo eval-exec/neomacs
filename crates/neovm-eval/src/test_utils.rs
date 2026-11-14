@@ -838,6 +838,7 @@ mod unit_runtime {
         }
 
         Some(match name {
+            "reverse" => crate::emacs_core::builtins::misc_pure::REVERSE_SUBR,
             "identity" => crate::emacs_core::builtins::misc_pure::IDENTITY_SUBR,
             "test-completion" => crate::emacs_core::builtins::misc_eval::TEST_COMPLETION_SUBR,
             "all-completions" => crate::emacs_core::builtins::misc_eval::ALL_COMPLETIONS_SUBR,
@@ -876,6 +877,69 @@ mod unit_runtime {
             ),
             _ => return None,
         })
+    }
+
+    #[test]
+    fn unit_reverse_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::misc_pure::REVERSE_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        let expected = REVERSE_SUBR;
+        let actual = misc_family_subr("reverse").expect("real unit reverse descriptor");
+        assert_eq!(actual.name(), expected.name());
+        assert_eq!(expected.name(), "reverse");
+        assert_eq!(actual.arity(), expected.arity());
+        assert_eq!(actual.arity(), SubrArity::new(1, Some(1)));
+        assert_eq!(actual.dispatch_kind(), expected.dispatch_kind());
+        assert!(actual.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(actual.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(actual.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(actual.command_default(), expected.command_default());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(actual.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let Some(SubrFn::Many(expected_fn)) = expected.function() else {
+            panic!("ContextVec ABI");
+        };
+        let Some(SubrFn::Many(actual_fn)) = actual.function() else {
+            panic!("unit ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let entry = crate::emacs_core::eval::lookup_global_subr_entry(neovm_value::intern::intern(
+            "reverse",
+        ))
+        .expect("registered unit reverse");
+        let Some(SubrFn::Many(registered_fn)) = entry.function else {
+            panic!("registered ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(registered_fn, expected_fn));
+        assert_eq!(
+            (entry.min_args, entry.max_args),
+            (expected.arity().min(), expected.arity().max())
+        );
+        assert_eq!(entry.dispatch_kind, expected.dispatch_kind());
+        assert!(entry.interactive_spec.is_none());
+        let id = neovm_value::intern::intern(expected.name());
+        assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+        assert!(
+            context
+                .obarray_view()
+                .get_property("reverse", "disabled")
+                .unwrap_or(Value::NIL)
+                .is_nil()
+        );
+        assert_eq!(
+            context
+                .eval_str(
+                    "(let ((x (list 1 2 3))) (and (equal (reverse x) '(3 2 1)) (equal x '(1 2 3))))"
+                )
+                .unwrap(),
+            neovm_value::value::Value::T
+        );
     }
 
     #[test]

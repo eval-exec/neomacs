@@ -4,6 +4,14 @@ use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_value::intern::WellKnown;
 
+/// Canonical production/unit descriptor; retain the original Core closure and metadata.
+#[doc(hidden)]
+pub static REVERSE_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "reverse",
+    NativeFn::ContextVec(|_ctx, args| builtin_reverse(args)),
+    SubrArity::new(1, Some(1)),
+));
+
 // ===========================================================================
 // Misc
 // ===========================================================================

@@ -42,6 +42,7 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_identity_matches_canonical_descriptor(&mut eval);
     assert_core_classification_matches_canonical_descriptors(&mut eval);
     assert_core_completions_match_canonical_descriptors(&mut eval);
+    assert_core_reverse_matches_canonical_descriptor(&mut eval);
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
@@ -292,4 +293,56 @@ fn assert_core_completions_match_canonical_descriptors(context: &mut Context) {
         );
     }
     context.restore_specpdl_roots(roots);
+}
+
+fn assert_core_reverse_matches_canonical_descriptor(context: &mut Context) {
+    use crate::emacs_core::builtins::misc_pure::REVERSE_SUBR;
+    use crate::emacs_core::eval::lookup_global_subr_entry;
+    use crate::emacs_core::eval::subr_abi::SubrFn;
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+    use neovm_value::value::Value;
+
+    let expected = REVERSE_SUBR;
+    let id = intern("reverse");
+    let actual = lookup_global_subr_entry(id).expect("core registered reverse");
+    let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(actual_fn))) =
+        (expected.function(), actual.function)
+    else {
+        panic!("reverse retains the production ContextVec ABI");
+    };
+    assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+    assert_eq!(expected.name(), "reverse");
+    assert_eq!(expected.arity(), SubrArity::new(1, Some(1)));
+    assert_eq!(
+        (actual.min_args, actual.max_args),
+        (expected.arity().min(), expected.arity().max())
+    );
+    assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+    assert!(actual.interactive_spec.is_none());
+    assert!(expected.interactive_spec().is_none());
+    assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+    assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(
+        context
+            .obarray_view()
+            .get_property("reverse", "disabled")
+            .unwrap_or(Value::NIL)
+            .is_nil()
+    );
+    assert!(expected.leaf_spec().is_none());
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+
+    let elements = vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)];
+    let input = Value::vector(elements.clone());
+    let returned = actual_fn(context, vec![input]).expect("core reverse body");
+    assert_ne!(returned.bits(), input.bits());
+    assert_eq!(
+        returned.as_vector_data().expect("reversed vector").to_vec(),
+        vec![Value::fixnum(3), Value::fixnum(2), Value::fixnum(1)]
+    );
+    assert_eq!(
+        input.as_vector_data().expect("original vector").to_vec(),
+        elements
+    );
 }
