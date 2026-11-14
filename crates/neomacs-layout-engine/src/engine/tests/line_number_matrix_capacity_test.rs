@@ -141,3 +141,140 @@ fn unused_font_open_keeps_width_until_desired_matrix_reallocation() {
         Value::fixnum(3)
     );
 }
+
+#[test]
+fn hidden_basic_tab_line_font_opens_before_gui_matrix_allocation() {
+    // GNU 31.1/a360 xfaces.c:5944 realizes every basic GUI face, including
+    // invisible tab-line faces, with remapping disabled. faces.el's tab-line
+    // inherits variable-pitch at relative height 0.9. Their real font openings
+    // lower the connection minimum before dispnew.c allocates desired rows.
+    let text = "body line\n".repeat(1100);
+    let (mut ctx, frame_id, buffer_id, window_id) = incr_editing_frame(&text, 800, 800);
+    realize_test_gui_frame(&mut ctx, frame_id);
+    let identity = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::X11);
+    ctx.frame_manager_mut()
+        .get_mut(frame_id)
+        .unwrap()
+        .set_display_identity(FrameDisplayIdentity::Graphical(identity.clone()));
+    ctx.eval_str(
+        r#"(progn
+      (setq mode-line-format nil header-line-format nil tab-line-format nil
+            display-line-numbers t display-line-numbers-width nil
+            display-line-numbers-widen nil display-line-numbers-offset 0
+            display-line-numbers-current-absolute t)
+      (modify-frame-parameters nil '((menu-bar-lines . 0) (tool-bar-lines . 0)
+                                     (tab-bar-lines . 0) (compact-bar-lines . 0)))
+      (internal-set-lisp-face-attribute 'default :family "Noto Sans Mono" (selected-frame))
+      (internal-set-lisp-face-attribute 'default :height 120 (selected-frame))
+      (internal-set-lisp-face-attribute 'variable-pitch :family "Noto Sans" (selected-frame))
+      (internal-set-lisp-face-attribute 'tab-line :inherit 'variable-pitch (selected-frame))
+      (internal-set-lisp-face-attribute 'tab-line :height 1.0 (selected-frame))
+      (internal-set-lisp-face-attribute 'tab-line-active :inherit 'tab-line (selected-frame))
+      (internal-set-lisp-face-attribute 'tab-line-inactive :inherit 'tab-line (selected-frame))
+      (goto-char (point-min)))"#,
+    )
+    .unwrap();
+    install_test_gnu_line_number_face_inheritance(&mut ctx);
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.set_display_identity(identity.clone());
+
+    // All font openings in the tested connection must come from ordinary
+    // redisplay: no explicit font probe or observer seeds its minimum.
+    let initial = redisplay(&mut engine, &mut ctx, frame_id);
+    assert!(initial.frame_chrome.bands().is_empty());
+    let initial_rows = initial
+        .window_matrices
+        .iter()
+        .find(|matrix| matrix.window_id.get() == window_id.0 as i64)
+        .expect("selected window has a real desired matrix")
+        .matrix
+        .nrows;
+    assert!(
+        (10..100).contains(&initial_rows),
+        "initial rows: {initial_rows}"
+    );
+    let initial_min = identity.smallest_opened_font_height();
+    assert!(initial_min > 1, "redisplay must open a real GUI font");
+
+    // Pick the last two-digit case using GNU's zero-based max_lnum rule:
+    // (start_line - 1) + desired_nrows - 1 = 99. This selects the stimulus,
+    // while the assertions below use the real matrix and public Lisp getter.
+    let start_line = 101 - initial_rows;
+    ctx.eval_str(&format!(
+        "(progn (goto-char (point-min)) (forward-line {}) \
+         (set-window-start (selected-window) (point)))",
+        start_line - 1
+    ))
+    .unwrap();
+    let baseline = redisplay(&mut engine, &mut ctx, frame_id);
+    assert!(baseline.frame_chrome.bands().is_empty());
+    assert_eq!(identity.smallest_opened_font_height(), initial_min);
+    let baseline_rows = baseline
+        .window_matrices
+        .iter()
+        .find(|matrix| matrix.window_id.get() == window_id.0 as i64)
+        .unwrap()
+        .matrix
+        .nrows;
+    assert_eq!(baseline_rows, initial_rows);
+    assert_eq!(
+        ctx.eval_str("(line-number-display-width)").unwrap(),
+        Value::fixnum(2)
+    );
+    let body_before = ctx.eval_str("(window-body-height nil t)").unwrap();
+    let point_before = ctx.eval_str("(point)").unwrap();
+    let default_before = {
+        let frame = ctx.frame_manager().get(frame_id).unwrap();
+        (frame.font_pixel_size, frame.char_width, frame.char_height)
+    };
+
+    // The changed font is never displayed: tab-line-format and every frame
+    // bar stay nil/zero. Normal GUI basic-face realization must still open it.
+    ctx.eval_str("(internal-set-lisp-face-attribute 'tab-line :height 0.9 (selected-frame))")
+        .unwrap();
+    let smaller = redisplay(&mut engine, &mut ctx, frame_id);
+    let smaller_min = identity.smallest_opened_font_height();
+    assert!(
+        smaller_min < initial_min,
+        "hidden basic-face redisplay must lower the opened-font minimum: before={initial_min}, after={smaller_min}"
+    );
+    let smaller_rows = smaller
+        .window_matrices
+        .iter()
+        .find(|matrix| matrix.window_id.get() == window_id.0 as i64)
+        .unwrap()
+        .matrix
+        .nrows;
+    assert!(
+        smaller_rows > baseline_rows,
+        "hidden basic-face font must grow the real desired matrix: before={baseline_rows}, after={smaller_rows}"
+    );
+    assert_eq!(
+        ctx.eval_str("(line-number-display-width)").unwrap(),
+        Value::fixnum(3)
+    );
+    assert!(smaller.frame_chrome.bands().is_empty());
+    assert_eq!(ctx.eval_str("tab-line-format").unwrap(), Value::NIL);
+    assert_eq!(
+        ctx.eval_str("(window-body-height nil t)").unwrap(),
+        body_before
+    );
+    assert_eq!(ctx.eval_str("(point)").unwrap(), point_before);
+    let frame = ctx.frame_manager().get(frame_id).unwrap();
+    assert_eq!(
+        (frame.font_pixel_size, frame.char_width, frame.char_height),
+        default_before,
+        "opening a hidden basic font cannot replace the frame's default font"
+    );
+    let window = frame.find_window(window_id).unwrap();
+    assert_eq!(window.buffer_id(), Some(buffer_id));
+    assert_eq!(
+        window.window_start(),
+        Some(
+            ctx.buffer_manager()
+                .get(buffer_id)
+                .unwrap()
+                .point_lisp_char_pos()
+        )
+    );
+}
