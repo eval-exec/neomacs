@@ -1,3 +1,6 @@
+#[path = "line_number_matrix_capacity_test.rs"]
+mod line_number_matrix_capacity_test;
+
 #[path = "category_word_wrap_test.rs"]
 mod category_word_wrap_test;
 
