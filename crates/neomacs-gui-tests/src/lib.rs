@@ -420,6 +420,11 @@ pub struct GuiTestPlan {
     args: Option<Vec<String>>,
     extra_env: Vec<(String, String)>,
     required_capabilities: Vec<Capability>,
+    /// Whether a successful run must prove it painted (a non-empty
+    /// surface-readback PNG). True for every scenario that asserts pixels;
+    /// semantic scenarios opt out explicitly with
+    /// [`GuiTestPlan::without_paint_proof`].
+    paint_proof: bool,
 }
 
 impl GuiTestPlan {
@@ -438,7 +443,16 @@ impl GuiTestPlan {
             args: None,
             extra_env: Vec::new(),
             required_capabilities: Vec::new(),
+            paint_proof: true,
         }
+    }
+
+    /// Declare that this scenario asserts semantic artifacts (frame
+    /// snapshots, geometry) rather than painted pixels, so a host whose
+    /// windows cannot be presented still passes it.
+    pub fn without_paint_proof(mut self) -> Self {
+        self.paint_proof = false;
+        self
     }
 
     /// Declare a capability this scenario needs from its host.
@@ -641,9 +655,10 @@ impl GuiTestPlan {
         // can succeed on a host whose windows cannot be presented - a locked
         // macOS console, for instance - and its missing PNG is evidence the
         // paint tier did not run, not a failure of the test's own contract.
-        let paint_required = self
-            .required_capabilities
-            .contains(&Capability::SurfacePresent);
+        let paint_required = self.paint_proof
+            || self
+                .required_capabilities
+                .contains(&Capability::SurfacePresent);
         let status = if paint_required {
             if png_bytes.is_some() && (output.exit_code == Some(0) || output.timed_out) {
                 GuiRunStatus::Passed

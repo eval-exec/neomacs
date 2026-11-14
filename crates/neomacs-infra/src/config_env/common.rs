@@ -64,9 +64,10 @@ pub struct Spec {
     pub repo: String,
     pub revision: String,
     /// The SHA-256 of the sealed fixture's `PACKAGES` record, from the
-    /// legacy `packages = "<digest>"` line, which remains the Linux pin.
-    /// `None` means unpinned: the fixture exists, but no one has committed
-    /// to its package identity on this host yet.
+    /// legacy `packages = "<digest>"` line, which is the Linux pin only.
+    /// `None` means no legacy Linux pin; a host's own pin lives in
+    /// [`Self::platform_packages`] and is read through
+    /// [`Self::host_packages`].
     pub packages: Option<String>,
     /// Host-scoped pins from `packages_<os> = "<digest>"` lines.
     ///

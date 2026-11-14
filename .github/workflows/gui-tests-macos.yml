@@ -99,6 +99,11 @@ jobs:
       - name: Materialize the Doom config fixture
         run: cargo run -p xtask -- infra materialize doom
 
+      # Live archive contents can change a fresh materialization, so the tier
+      # fails closed when the macOS package identity is not pinned.
+      - name: Require the macOS package identity pin
+        run: cargo run -p xtask -- infra status --require-host-pin
+
       # A locked console or a sleeping display makes every window occluded:
       # the suite reports `surface-present` unsupported and the snapshot
       # canary skips with that reason. Print the evidence once per run so a
@@ -117,7 +122,7 @@ jobs:
         run: |
           cargo nextest run -p neomacs-gui-tests --test gui \
             -E 'test(~real_gui_smoke_generates_surface_readback_png) | test(~child_frame_position) | test(~child_frame_sizing) | test(~compact_frame_geometry) | test(~display_window_geometry::pixelwise_window_resize) | test(~integer_width) | test(~doom_gui_boot_renders_on_the_host_backend)' \
-            --test-threads 1 --no-fail-fast
+            --test-threads 1 --no-fail-fast --success-output final
 
       - name: Upload GUI artifacts
         if: always()

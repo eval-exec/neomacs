@@ -30,6 +30,7 @@ fn integer_width_overflow_returns_to_interactive_evaluation() {
             root.join("crates/neomacs-gui-tests/fixtures/integer-width.el"),
         ),
     )
+    .without_paint_proof()
     .with_program(binary)
     // Keep readbacks enabled through the post-overflow redisplay, so the PNG
     // records recovery as well as initial native startup.

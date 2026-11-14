@@ -84,11 +84,18 @@ fn run_config_boot(
             &scenario_script,
         ),
     )
+    .without_paint_proof()
     .with_program(program)
     .with_env("NEOMACS_GUI_CONFIG_HOME_NEEDLE", needle)
     .with_env("RUST_LOG", "warn")
     .require(Capability::Display)
     .require(Capability::ScenarioDriver);
+    if matches!(variant, BootVariant::Gnu) {
+        // The harness reports `Unsupported` (with the reason) when the host
+        // has no pinned GNU oracle, instead of the comparison passing as a
+        // no-op before a plan is even built.
+        plan = plan.require(Capability::GnuOracle);
+    }
     // No -Q: the config framework must load from the pinned HOME / mount
     // args.  The harness's default args assume -Q, so set ours explicitly,
     // mount args first so the fixture probes a fully-booted config.
@@ -134,16 +141,13 @@ fn compare_config_boot(env: &dyn neomacs_infra::config_env::ConfigEnvironment, n
         .unwrap_or_else(|| root.join("target/release/neomacs"));
 
     // The oracle must be the pinned GNU, never whatever `emacs` is on PATH.
-    let Some(gnu_program) = std::env::var_os("NEOMACS_GUI_TEST_GNU_EMACS")
+    // When the variable is absent the plan declares `GnuOracle`, so the
+    // harness refuses to launch and reports the missing capability; the
+    // fallback program is never executed.
+    let gnu_program = std::env::var_os("NEOMACS_GUI_TEST_GNU_EMACS")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-    else {
-        eprintln!(
-            "skipping GNU comparison for {}: set NEOMACS_GUI_TEST_GNU_EMACS to the pinned GNU Emacs",
-            env.name()
-        );
-        return;
-    };
+        .unwrap_or_else(|| PathBuf::from("emacs"));
     let gnu = run_config_boot(
         env,
         &gnu_state,
@@ -153,6 +157,16 @@ fn compare_config_boot(env: &dyn neomacs_infra::config_env::ConfigEnvironment, n
         BootVariant::Gnu,
         "gnu",
     );
+    if gnu.status == GuiRunStatus::Unsupported {
+        eprintln!(
+            "skipping GNU comparison for {}: {}",
+            env.name(),
+            gnu.failure_reason
+                .as_deref()
+                .unwrap_or("host lacks the GNU oracle capability")
+        );
+        return;
+    }
     assert!(
         !gnu.timed_out,
         "GNU {} boot timed out: {gnu:#?}",

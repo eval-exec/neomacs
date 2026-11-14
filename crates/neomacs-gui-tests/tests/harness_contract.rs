@@ -11,12 +11,19 @@ use neomacs_gui_tests::{
 #[test]
 fn a_full_capability_set_names_every_capability() {
     let set = CapabilitySet::from_capabilities(&Capability::all());
+    // Literal slugs, not `Capability::slug`: the names are the manifest/CI
+    // contract, so a typo or a collision must fail here.
     assert_eq!(
         set.names(),
-        Capability::all()
-            .into_iter()
-            .map(Capability::slug)
-            .collect::<Vec<_>>()
+        vec![
+            "display",
+            "scenario-driver",
+            "native-input",
+            "screen-capture",
+            "compositor-control",
+            "gnu-oracle",
+            "surface-present",
+        ]
     );
 }
 
@@ -740,7 +747,8 @@ fn a_semantic_plan_succeeds_without_a_paint_readback() {
         &workspace_root,
         &artifact_root,
         GuiScenario::new(scenario, "fixture.el"),
-    );
+    )
+    .without_paint_proof();
     let mut runner = FakeRunner {
         output: GuiCommandOutput {
             exit_code: Some(0),
@@ -767,6 +775,51 @@ fn a_semantic_plan_succeeds_without_a_paint_readback() {
     assert_eq!(result.png_bytes, None);
     assert!(result.frame_snapshot_json_bytes.is_some());
     assert!(result.failure_reason.is_none());
+}
+
+#[test]
+fn a_plan_without_an_opt_out_still_requires_a_paint_readback() {
+    let workspace_root = workspace_root();
+    let artifact_root = workspace_root.join("target/neomacs-gui-tests");
+    let scenario = "paint-default";
+    let artifacts = GuiArtifactSet::new(&artifact_root, GuiBackend::Macos, scenario);
+    let _ = std::fs::remove_file(&artifacts.json);
+    let _ = std::fs::remove_file(&artifacts.png);
+    let _ = std::fs::remove_file(&artifacts.stderr);
+
+    let plan = GuiTestPlan::new(
+        GuiBackend::Macos,
+        &workspace_root,
+        &artifact_root,
+        GuiScenario::new(scenario, "fixture.el"),
+    );
+    let mut runner = FakeRunner {
+        output: GuiCommandOutput {
+            exit_code: Some(0),
+            timed_out: false,
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        create_png: false,
+        gui_state: None,
+        frame_snapshot: Some((
+            r#"{"frames":[{"frame_id":1}]}"#.to_string(),
+            "=== frame 1 ===\n".to_string(),
+        )),
+    };
+
+    let result = plan
+        .run_with(
+            &mut runner,
+            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+        )
+        .expect("the run records its status even when the paint proof is absent");
+
+    assert_eq!(result.status, GuiRunStatus::Failed, "{result:#?}");
+    assert_eq!(
+        result.failure_reason.as_deref(),
+        Some("PNG artifact was not generated")
+    );
 }
 
 #[test]

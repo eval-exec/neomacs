@@ -135,10 +135,13 @@ runtime dirs, locale, display) and each backend implements it:
 
 ### 5. Artifact manifest
 
-Every run records backend, OS/arch, scale, renderer/GPU, font set,
-capabilities, the resolved backend, the test binary and git revision, and
-any Unsupported reason. A failure on one host is reproducible from its
-manifest without guessing which platform produced it.
+Every run records its backend, runner kind, capabilities (available,
+required, missing), the command and environment it launched, the expected
+artifacts, the final status, and any Unsupported reason. A failure on one
+host is identifiable from its manifest without guessing which platform
+produced it. Host OS/arch, scale, renderer/GPU and font set are not recorded
+yet; until they are, the uploaded artifacts and the workflow's desktop-state
+log remain the environment record.
 
 ### 6. GNU oracle availability
 
@@ -163,8 +166,10 @@ marked Unsupported rather than comparing against an unpinned editor.
 
 ### 7. Doom and Spacemacs config environments
 
-The sealed config fixtures are platform-neutral (clone + `doom sync`). The
-GUI boot splits into two tests with different contracts:
+The fixture's clone and `doom sync` step are shared, but the sealed package
+identity is host-scoped (`packages_<os>`), because Doom installs a different
+package set on Darwin than on Linux. The GUI boot splits into two tests with
+different contracts:
 
 - **Host-backend boot (all scenario-tier backends).** Boot the config on the
   requested backend, require the fixture's finish line, and require the frame
@@ -247,9 +252,9 @@ Isolation is the per-platform `SessionPlan`, not a Wayland assumption.
   Config-fixture package pins are now host-scoped (`packages_<os>`): Doom
   installs a different package set on Darwin than on Linux, and the
   single Linux digest correctly refused to mount the macOS fixture. The
-  macOS digest is deliberately not recorded yet; fresh CI materializations
-  are unpinned until the fixture is cached and re-pinned as its own
-  ceremony.
+  macOS digest is not recorded yet: the CI tier fails closed
+  (`infra status --require-host-pin`) until the fixture is cached and
+  re-pinned with its own ceremony.
 - Not yet verified: an actual paint readback on macOS (needs an unlocked,
   awake console), the macOS CI runner's session state, Spacemacs GUI boot
   (fixture not materialized), a macOS GUI GNU oracle profile, and the

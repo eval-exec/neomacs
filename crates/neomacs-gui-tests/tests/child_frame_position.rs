@@ -31,6 +31,7 @@ fn child_frame_position_apis_preserve_coordinate_intent_in_rendered_placement() 
             root.join("crates/neomacs-gui-tests/fixtures/child-frame-position.el"),
         ),
     )
+    .without_paint_proof()
     .with_program(binary);
     for (key, value) in session.env() {
         plan = plan.with_env(key.clone(), value.clone());
