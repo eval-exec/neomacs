@@ -1142,6 +1142,7 @@ crates/neovm-edit/src/emacs_core/editing/display_metrics.rs	field	GuiFrameGeomet
 crates/neovm-edit/src/emacs_core/editing/display_metrics.rs	field	LineNumberDisplayTarget field buffer
 crates/neovm-edit/src/emacs_core/editing/display_metrics.rs	field	LineNumberDisplayTarget field char_width
 crates/neovm-edit/src/emacs_core/editing/display_metrics.rs	field	LineNumberDisplayTarget field visible_lines
+crates/neovm-edit/src/emacs_core/editing/display_metrics.rs	field	LineNumberDisplayTarget field window_start
 crates/neovm-edit/src/emacs_core/editing/display_metrics.rs	field	MeasuredMotion field moved
 crates/neovm-edit/src/emacs_core/editing/display_metrics.rs	field	MeasuredMotion field target
 crates/neovm-edit/src/emacs_core/editing/display_metrics.rs	field	MotionRequest field buffer

@@ -473,8 +473,8 @@ pub trait EditHost {
     fn word_wrap_mode(&self, buffer: BufferId) -> Option<WordWrapMode>;
 
     /// The selected window's line-number measurement: its buffer, the frame's
-    /// character cell width, and its visible row count, or `None` when no live
-    /// window has a buffer. C5.
+    /// character cell width, visible row count and start position, or `None`
+    /// when no live window has a buffer. C5.
     fn line_number_display_target(&self) -> Option<LineNumberDisplayTarget>;
 
     /// GNU `force-mode-line-update` with a nil argument: mark the current

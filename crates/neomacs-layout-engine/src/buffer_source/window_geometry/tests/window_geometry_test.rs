@@ -482,3 +482,212 @@ fn local_display_policy_builds_row_prelude_context() {
     assert_eq!(context.prefix_values(), prefix_values);
     assert_eq!(context.char_width(), 8.0);
 }
+
+fn gutter_buffer() -> neovm_core::buffer::Buffer {
+    use neovm_core::buffer::{Buffer, BufferId};
+    use neovm_core::emacs_core::Value;
+
+    let mut buffer = Buffer::new_standalone(BufferId(42), Value::string("*gutter-geometry*"));
+    buffer.insert(&"row\n".repeat(1200));
+    buffer.set_buffer_local("display-line-numbers-current-absolute", Value::T);
+    buffer.set_buffer_local("display-line-numbers-width", Value::NIL);
+    buffer
+}
+
+fn gutter_params() -> WindowParams {
+    let mut params = window_params();
+    params.bounds = Rect::new(0.0, 0.0, 80.0, 24.0);
+    params.text_bounds = params.bounds;
+    params.left_fringe_width = 0.0;
+    params.right_fringe_width = 0.0;
+    params.char_width = 1.0;
+    params.char_height = 1.0;
+    params.window_start = 4000;
+    params.point = 4008;
+    params.window_system = false;
+    params
+}
+
+fn gutter_plan(
+    buffer: &neovm_core::buffer::Buffer,
+    params: &WindowParams,
+    face_cell_width: f32,
+) -> BufferWindowGeometryPlan {
+    let policy = BufferWindowLocalDisplayPolicy::from_window(buffer, params);
+    geometry_request(params, 1.0, 1.0, 0.0, 0.0, 0.0).into_window_plan(
+        &policy,
+        &RustBufferAccess::new(buffer),
+        params.window_start,
+        params.point,
+        face_cell_width,
+    )
+}
+
+#[test]
+fn line_number_geometry_uses_narrowed_viewport_for_all_modes() {
+    use neovm_core::buffer::EmacsByteRange;
+    use neovm_core::emacs_core::Value;
+
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut buffer = gutter_buffer();
+    buffer.narrow_to_emacs_byte_range(EmacsByteRange::from_usize(4000, 4020));
+    let mut params = gutter_params();
+    for mode in [
+        DisplayLineNumbersMode::Absolute,
+        DisplayLineNumbersMode::Relative,
+        DisplayLineNumbersMode::Visual,
+    ] {
+        params.display_line_numbers = mode;
+        for (widen, columns, first_line, point_line) in
+            [(Value::NIL, 4, 1, 3), (Value::T, 6, 1001, 1003)]
+        {
+            buffer.set_buffer_local("display-line-numbers-widen", widen);
+            let plan = gutter_plan(&buffer, &params, 2.0);
+            assert_eq!(
+                plan.line_number_field.columns(),
+                columns,
+                "{mode:?}/{widen:?}"
+            );
+            assert_eq!(plan.geometry.line_number_pixel_width, columns as f32 * 2.0);
+            let state = BufferWindowLocalDisplayPolicy::from_window(&buffer, &params)
+                .initial_line_numbers(&RustBufferAccess::new(&buffer), 4000, 4008);
+            assert_eq!(state.current_line(), first_line);
+            assert_eq!(state.point_line(), point_line);
+        }
+    }
+    params.display_line_numbers = DisplayLineNumbersMode::Off;
+    assert_eq!(
+        gutter_plan(&buffer, &params, 2.0)
+            .line_number_field
+            .columns(),
+        0
+    );
+
+    let mut small = neovm_core::buffer::Buffer::new_standalone(
+        neovm_core::buffer::BufferId(43),
+        Value::string("*small-gutter*"),
+    );
+    small.insert("one\ntwo\nthree\nfour\nfive");
+    params.display_line_numbers = DisplayLineNumbersMode::Absolute;
+    params.window_start = 0;
+    params.point = 8;
+    // The 24-row viewport reserves two digits even for only five lines.
+    assert_eq!(
+        gutter_plan(&small, &params, 1.0)
+            .line_number_field
+            .columns(),
+        4
+    );
+}
+
+#[test]
+fn line_number_geometry_uses_window_start_and_point_at_digit_thresholds() {
+    use neovm_core::emacs_core::Value;
+
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut buffer = gutter_buffer();
+    let mut params = gutter_params();
+    params.bounds.height = 4.0;
+    params.text_bounds.height = 4.0;
+    params.window_start = 96 * 4; // Line 97: the viewport bound is 99.
+    params.point = 98 * 4;
+    params.display_line_numbers = DisplayLineNumbersMode::Absolute;
+    assert_eq!(
+        gutter_plan(&buffer, &params, 1.0)
+            .line_number_field
+            .columns(),
+        4
+    );
+    params.window_start = 97 * 4; // Line 98: the bound crosses 100.
+    assert_eq!(
+        gutter_plan(&buffer, &params, 1.0)
+            .line_number_field
+            .columns(),
+        5
+    );
+
+    params.window_start = 96 * 4;
+    params.display_line_numbers = DisplayLineNumbersMode::Visual;
+    // Visual/current-absolute uses point's logical index, not window start.
+    assert_eq!(
+        gutter_plan(&buffer, &params, 1.0)
+            .line_number_field
+            .columns(),
+        5
+    );
+    buffer.set_buffer_local("display-line-numbers-current-absolute", Value::NIL);
+    for mode in [
+        DisplayLineNumbersMode::Relative,
+        DisplayLineNumbersMode::Visual,
+    ] {
+        params.display_line_numbers = mode;
+        assert_eq!(
+            gutter_plan(&buffer, &params, 1.0)
+                .line_number_field
+                .columns(),
+            3
+        );
+    }
+}
+
+#[test]
+fn line_number_geometry_clips_minimum_using_canonical_text_width() {
+    use neovm_core::emacs_core::Value;
+
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut buffer = gutter_buffer();
+    let mut params = gutter_params();
+    params.bounds.width = 20.0;
+    params.text_bounds.width = 20.0;
+    params.bounds.height = 4.0;
+    params.text_bounds.height = 4.0;
+    params.window_start = 0;
+    params.point = 0;
+    params.display_line_numbers = DisplayLineNumbersMode::Absolute;
+    buffer.set_buffer_local("display-line-numbers-width", Value::fixnum(100));
+    let plan = gutter_plan(&buffer, &params, 1.0);
+    assert_eq!(plan.line_number_field.columns(), 15); // 20 - 7 digits + 2 spaces.
+    assert_eq!(plan.geometry.line_number_pixel_width, 15.0);
+    for width in [
+        Value::fixnum(0),
+        Value::fixnum(-4),
+        Value::make_float(100.0),
+    ] {
+        buffer.set_buffer_local("display-line-numbers-width", width);
+        assert_eq!(
+            gutter_plan(&buffer, &params, 1.0)
+                .line_number_field
+                .columns(),
+            3
+        );
+    }
+}
+
+#[test]
+fn line_number_geometry_offset_shares_the_rendered_counting_origin() {
+    use neovm_core::buffer::EmacsByteRange;
+    use neovm_core::emacs_core::Value;
+
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut buffer = gutter_buffer();
+    buffer.narrow_to_emacs_byte_range(EmacsByteRange::from_usize(4000, 4020));
+    buffer.set_buffer_local("display-line-numbers-widen", Value::NIL);
+    buffer.set_buffer_local("display-line-numbers-offset", Value::fixnum(7));
+    let mut params = gutter_params();
+    for (mode, columns, first_line) in [
+        (DisplayLineNumbersMode::Absolute, 6, 1001),
+        (DisplayLineNumbersMode::Relative, 4, 1),
+        (DisplayLineNumbersMode::Visual, 4, 1),
+    ] {
+        params.display_line_numbers = mode;
+        assert_eq!(
+            gutter_plan(&buffer, &params, 1.0)
+                .line_number_field
+                .columns(),
+            columns
+        );
+        let state = BufferWindowLocalDisplayPolicy::from_window(&buffer, &params)
+            .initial_line_numbers(&RustBufferAccess::new(&buffer), 4000, 4008);
+        assert_eq!(state.current_line(), first_line);
+    }
+}

@@ -3614,21 +3614,71 @@ pub fn compute_motion<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult
 #[doc(hidden)]
 pub fn line_number_display_width<H: EditHost>(host: &mut H, args: &[Value]) -> EvalResult {
     expect_args_range("line-number-display-width", &args, 0, 1)?;
+    let columns = args
+        .first()
+        .is_some_and(|value| value == &Value::symbol(neovm_value::intern::WellKnown::Columns));
+    // GNU indent.c:2160-2165 returns make_float for `columns` even when
+    // no gutter was produced. Keep that type on every zero-result path.
+    let zero = || {
+        if columns {
+            Value::make_float(0.0)
+        } else {
+            Value::fixnum(0)
+        }
+    };
     let Some(target) = host.line_number_display_target() else {
-        return Ok(Value::fixnum(0));
+        return Ok(zero());
+    };
+    // Only an explicit minimum above one can depend on the horizontal clamp.
+    // Read that scalar before the existing geometry query, without keeping a
+    // buffer loan across its display callout. The ordinary automatic-width
+    // path needs only the window positions already projected in `target`.
+    let clamp_minimum = {
+        let (edit, vars) = host.edit_and_vars();
+        edit.buffers.get(target.buffer).is_some_and(|buffer| {
+            vars.value_in_buffer(
+                Some(buffer),
+                neovm_value::intern::WellKnown::DisplayLineNumbers.id(),
+            )
+            .is_some_and(|value| value.is_truthy())
+                && vars
+                    .value_in_buffer(
+                        Some(buffer),
+                        neovm_value::display_vocab::WindowLayoutVariable::DisplayLineNumbersWidth
+                            .sym_id(),
+                    )
+                    .and_then(|value| value.as_fixnum())
+                    .is_some_and(|width| width > 1)
+        })
+    };
+    let body_columns = if clamp_minimum {
+        host.window_geometry(None).body_width
+    } else {
+        i64::MAX
     };
     // The buffer loan lives in the match scrutinee: every use below is a
     // pure read, so one phase covers them all.
-    match host.edit_and_vars().0.buffers.get(target.buffer) {
+    let (edit, vars) = host.edit_and_vars();
+    match edit.buffers.get(target.buffer) {
         Some(buffer) => {
-            let enabled = buffer
-                .buffer_local_value_id(neovm_value::intern::WellKnown::DisplayLineNumbers.id())
+            let enabled = vars
+                .value_in_buffer(
+                    Some(buffer),
+                    neovm_value::intern::WellKnown::DisplayLineNumbers.id(),
+                )
                 .is_some_and(|value| value.is_truthy());
             if !enabled {
-                return Ok(Value::fixnum(0));
+                return Ok(zero());
             }
 
-            let digit_width = line_number_digit_width(buffer, target.visible_lines);
+            let digit_width = line_number_digit_width(
+                buffer,
+                vars,
+                target.visible_lines,
+                target.window_start,
+                buffer.point_emacs_byte_pos(),
+                body_columns,
+            );
             let displayed_columns = digit_width + 2;
 
             match args.first() {
@@ -3641,7 +3691,7 @@ pub fn line_number_display_width<H: EditHost>(host: &mut H, args: &[Value]) -> E
                 _ => Ok(Value::fixnum(digit_width)),
             }
         }
-        None => Ok(Value::fixnum(0)),
+        None => Ok(zero()),
     }
 }
 

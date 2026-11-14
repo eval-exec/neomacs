@@ -544,6 +544,7 @@ impl EditHost for Context {
             buffer,
             char_width,
             visible_lines,
+            window_start: window.window_start()?,
         })
     }
     fn force_mode_line_update(&mut self) -> EvalResult {

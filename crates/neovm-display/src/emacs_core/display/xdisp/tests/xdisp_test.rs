@@ -6738,12 +6738,26 @@ fn test_line_number_display_width() {
     let result =
         neovm_edit::emacs_core::indent::line_number_display_width(&mut eval, &vec![]).unwrap();
     assert_eq!(result, Value::fixnum(0));
+    let zero_columns = neovm_edit::emacs_core::indent::line_number_display_width(
+        &mut eval,
+        &[Value::symbol("columns")],
+    )
+    .unwrap();
+    assert!(matches!(zero_columns.kind(), ValueKind::Float));
+    assert_eq!(zero_columns.xfloat(), 0.0);
 
     let frame_id = super::super::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .char_width = 8.0;
+    let disabled_columns = neovm_edit::emacs_core::indent::line_number_display_width(
+        &mut eval,
+        &[Value::symbol("columns")],
+    )
+    .unwrap();
+    assert!(matches!(disabled_columns.kind(), ValueKind::Float));
+    assert_eq!(disabled_columns.xfloat(), 0.0);
     {
         let buffer = eval
             .edit
@@ -6758,12 +6772,13 @@ fn test_line_number_display_width() {
 
     let result =
         neovm_edit::emacs_core::indent::line_number_display_width(&mut eval, &vec![]).unwrap();
-    assert_eq!(result, Value::fixnum(3));
+    // GNU xdisp.c:25574-25605 sizes the first viewport, not all 101 lines.
+    assert_eq!(result, Value::fixnum(2));
 
     let result =
         neovm_edit::emacs_core::indent::line_number_display_width(&mut eval, &vec![Value::T])
             .unwrap();
-    assert_eq!(result, Value::fixnum(40));
+    assert_eq!(result, Value::fixnum(32));
 
     let result = neovm_edit::emacs_core::indent::line_number_display_width(
         &mut eval,
@@ -6771,9 +6786,54 @@ fn test_line_number_display_width() {
     )
     .unwrap();
     match result.kind() {
-        ValueKind::Float => assert_eq!(result.xfloat(), 5.0),
+        ValueKind::Float => assert_eq!(result.xfloat(), 4.0),
         other => panic!("expected float, got {other:?}"),
     }
+}
+
+#[test]
+fn line_number_display_width_uses_default_current_absolute_for_visual_mode() {
+    let mut eval = interactive_context();
+    let frame_id = super::super::window_cmds::ensure_selected_frame_id(&mut eval);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+        let selected = frame.selected_window;
+        let window = frame.find_window_mut(selected).unwrap();
+        window.set_bounds(crate::window::Rect::new(0.0, 0.0, 80.0, 24.0));
+        match window {
+            crate::window::Window::Leaf { window_start, .. } => {
+                *window_start = LispCharPos1::ONE;
+            }
+            crate::window::Window::Internal { .. } => panic!("selected leaf window"),
+        }
+    }
+    {
+        let buffer = eval.edit.buffers.current_buffer_mut().unwrap();
+        buffer.insert(&"x\n".repeat(120));
+        buffer.set_buffer_local("display-line-numbers", Value::symbol("visual"));
+        buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(200));
+        assert!(
+            buffer
+                .buffer_local_value("display-line-numbers-current-absolute")
+                .is_none()
+        );
+    }
+    eval.eval_str("(set-default 'display-line-numbers-current-absolute nil)")
+        .unwrap();
+    // GNU xdisp.c:25595-25604 uses rows - 2 when the current line is
+    // relative, even though point's absolute line number exceeds 100.
+    assert_eq!(
+        neovm_edit::emacs_core::indent::line_number_display_width(&mut eval, &[]).unwrap(),
+        Value::fixnum(2)
+    );
+    eval.eval_str("(set-default 'display-line-numbers-current-absolute t)")
+        .unwrap();
+    assert_eq!(
+        neovm_edit::emacs_core::indent::line_number_display_width(&mut eval, &[]).unwrap(),
+        Value::fixnum(3)
+    );
 }
 
 #[test]
@@ -6802,7 +6862,9 @@ fn line_number_display_width_uses_byte_newline_count_not_char_pos_scan() {
     let result =
         neovm_edit::emacs_core::indent::line_number_display_width(&mut eval, &vec![]).unwrap();
 
-    assert_eq!(result, Value::fixnum(4));
+    // Window-start is still BEGV: the distant multibyte tail must not widen
+    // this viewport, and its cached boundary needs no character scan.
+    assert_eq!(result, Value::fixnum(2));
     assert_eq!(
         neovm_edit::buffer::buffer_text::char_pos_to_emacs_byte_pos_call_count(),
         0,

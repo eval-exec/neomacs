@@ -7723,18 +7723,29 @@ pub fn builtin_tab_bar_height_ctx(
 /// `text_cols - (digit_width + 2)`.
 pub(crate) fn line_number_gutter_cols(
     buffer: &Buffer,
+    vars: VariableView<'_>,
     window_bounds_height: f32,
     char_height: f32,
+    window_start: LispCharPos1,
+    window_point: EmacsBytePos,
+    body_columns: i64,
 ) -> i64 {
-    let enabled = buffer
-        .buffer_local_value_id(WellKnown::DisplayLineNumbers.id())
+    let enabled = vars
+        .value_in_buffer(Some(buffer), WellKnown::DisplayLineNumbers.id())
         .is_some_and(|value| value.is_truthy());
     if !enabled {
         return 0;
     }
     let char_height = char_height.max(1.0);
     let visible_lines = ((window_bounds_height / char_height).floor() as i64).max(1);
-    line_number_digit_width(buffer, visible_lines) + 2
+    line_number_digit_width(
+        buffer,
+        vars,
+        visible_lines,
+        window_start,
+        window_point,
+        body_columns,
+    ) + 2
 }
 
 /// (long-line-optimizations-p) -> boolean

@@ -8,6 +8,8 @@
 //! glyph rows) is reached only through the `EditHost` display queries.
 
 use crate::buffer::{Buffer, BufferId, EmacsBytePos, LispCharPos1};
+use crate::emacs_core::edit_host::EditVariableRead;
+use neovm_value::display_vocab::WindowLayoutVariable;
 use neovm_value::emacs_char::EmacsChar;
 use neovm_value::value::{Value, ValueKind};
 
@@ -314,34 +316,88 @@ pub struct LineNumberDisplayTarget {
     pub buffer: BufferId,
     pub char_width: i64,
     pub visible_lines: i64,
+    pub window_start: LispCharPos1,
 }
 
 // ---------------------------------------------------------------------------
 // Line-number gutter metrics
 // ---------------------------------------------------------------------------
 
-/// Number of digit columns a line-number gutter shows, before the two
-/// padding columns (one leading, one trailing).  Mirrors GNU
-/// `maybe_produce_line_number`'s `it->lnum_width` (`max(width, log10(max)+1)`,
-/// src/xdisp.c).  `visible_lines` is the floor of the window's visible row
-/// count; GNU widens to whichever is larger so the gutter never shrinks below
-/// what the visible rows need.
-pub fn line_number_digit_width(buffer: &Buffer, visible_lines: i64) -> i64 {
-    let total_lines = display_line_number_total_lines(buffer)
-        .max(visible_lines)
-        .max(1);
-    let digit_count = total_lines.to_string().len() as i64;
-    let min_width = buffer
-        .buffer_local_value("display-line-numbers-width")
+/// Digit columns before the two display padding columns. GNU 31.1
+/// `xdisp.c:maybe_produce_line_number` (25574-25605) reserves the largest
+/// line number the window's row capacity can display, even beyond buffer end.
+/// The display owner supplies that capacity and its actual window positions.
+pub fn line_number_digit_width<'a>(
+    buffer: &Buffer,
+    vars: impl EditVariableRead<'a>,
+    visible_lines: i64,
+    window_start: LispCharPos1,
+    window_point: EmacsBytePos,
+    body_columns: i64,
+) -> i64 {
+    // Resolve locals, dynamic bindings and defaults through the existing
+    // variable-read port, just as the layout buffer projection does.
+    let value = |var: WindowLayoutVariable| vars.value_in_buffer(Some(buffer), var.sym_id());
+    let mode = value(WindowLayoutVariable::DisplayLineNumbers)
+        .and_then(|value| value.as_bare_symbol_name());
+    let relative = mode.as_deref() == Some("relative");
+    let visual = mode.as_deref() == Some("visual");
+    let current_absolute = value(WindowLayoutVariable::DisplayLineNumbersCurrentAbsolute)
+        .is_some_and(|value| value.is_truthy());
+    let rows = visible_lines.max(1);
+    let max_line = if (relative || visual) && !current_absolute {
+        rows.saturating_sub(2)
+    } else {
+        // Cached boundary byte positions keep the common start-at-BEGV case
+        // free of character-to-byte scans, including multibyte buffers.
+        let start = if window_start.to_char_pos() > buffer.total_char_end_pos() {
+            window_point
+        } else if window_start == buffer.point_min_lisp_char_pos() {
+            buffer.point_min_emacs_byte_pos()
+        } else if window_start == buffer.point_max_lisp_char_pos() {
+            buffer.point_max_emacs_byte_pos()
+        } else if window_start == buffer.point_lisp_char_pos() {
+            buffer.point_emacs_byte_pos()
+        } else {
+            buffer.lisp_pos_to_full_buffer_emacs_byte_pos(window_start)
+        };
+        let widen = value(WindowLayoutVariable::DisplayLineNumbersWiden)
+            .is_some_and(|value| value.is_truthy());
+        let offset = value(WindowLayoutVariable::DisplayLineNumbersOffset)
+            .and_then(|value| value.as_fixnum())
+            .unwrap_or(0);
+        // GNU xdisp.c:25475-25485 chooses BEG for absolute offsets. The
+        // getter also temporarily widens when window-start is outside BEGV/ZV
+        // (indent.c:2119-2127); choosing the origin preserves restriction state.
+        let whole = widen
+            || (offset != 0 && !relative && !visual)
+            || start < buffer.point_min_emacs_byte_pos()
+            || start > buffer.point_max_emacs_byte_pos();
+        let origin = if whole {
+            EmacsBytePos::ZERO
+        } else {
+            buffer.point_min_emacs_byte_pos()
+        };
+        let end = if whole {
+            buffer.total_emacs_byte_end_pos()
+        } else {
+            buffer.point_max_emacs_byte_pos()
+        };
+        let position = (if visual { window_point } else { start }).clamp(origin, end);
+        (buffer.count_newlines_emacs_byte(origin, position) as i64)
+            .saturating_add(rows)
+            .saturating_sub(1)
+    }
+    .max(1);
+    let digit_count = max_line.to_string().len() as i64;
+    // GNU clips an explicit FIXNAT minimum before comparing it with the
+    // natural width (xdisp.c:25553-25570). Zero is a valid explicit minimum.
+    let min_width = value(WindowLayoutVariable::DisplayLineNumbersWidth)
         .and_then(|value| value.as_fixnum())
-        .filter(|width| *width > 0)
+        .filter(|width| *width >= 0)
+        .map(|width| width.clamp(1, body_columns.saturating_sub(7).max(1)))
         .unwrap_or(1);
     digit_count.max(min_width)
-}
-
-fn display_line_number_total_lines(buffer: &Buffer) -> i64 {
-    let end = buffer.total_emacs_byte_end_pos();
-    buffer.count_newlines_emacs_byte(EmacsBytePos::ZERO, end) as i64 + 1
 }
 
 impl LineWrap {

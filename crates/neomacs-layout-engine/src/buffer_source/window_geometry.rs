@@ -146,7 +146,7 @@ pub(crate) struct BufferWindowLocalDisplayPolicy {
     line_number_major_tick: i32,
     line_number_current_absolute: bool,
     line_number_widen: bool,
-    line_number_min_width: i32,
+    line_number_min_width: Option<i64>,
     prefix_values: DisplayRowPrefixValues,
 }
 
@@ -389,10 +389,19 @@ impl BufferWindowGeometryRequest {
         self,
         local_display_policy: &BufferWindowLocalDisplayPolicy,
         buffer_access: &RustBufferAccess<'_, B>,
+        window_start: i64,
+        point_charpos: i64,
         line_number_cell_width_px: f32,
     ) -> BufferWindowGeometryPlan {
-        let line_number_columns = local_display_policy
-            .line_number_columns(buffer_access, self.line_number_row_capacity());
+        let line_number_columns = local_display_policy.line_number_columns(
+            buffer_access,
+            self.line_number_row_capacity(),
+            window_start,
+            point_charpos,
+            (self.text_width / self.char_width.max(1.0))
+                .floor()
+                .max(0.0) as i64,
+        );
         let line_number_field =
             LineNumberFieldLayout::new(line_number_columns, line_number_cell_width_px);
         let geometry = self.into_geometry(line_number_field);
@@ -425,8 +434,9 @@ impl BufferWindowLocalDisplayPolicy {
                 LayoutVar::DisplayLineNumbersCurrentAbsolute,
             ),
             line_number_widen: buffer_local_bool(buffer, LayoutVar::DisplayLineNumbersWiden),
-            line_number_min_width: buffer_local_int(buffer, LayoutVar::DisplayLineNumbersWidth, 0)
-                as i32,
+            line_number_min_width: buffer_local_value(buffer, LayoutVar::DisplayLineNumbersWidth)
+                .and_then(|value| value.as_fixnum())
+                .filter(|width| *width >= 0),
             prefix_values: DisplayRowPrefixValues::default_values(
                 buffer_local_value(buffer, LayoutVar::LinePrefix),
                 buffer_local_value(buffer, LayoutVar::WrapPrefix),
@@ -438,15 +448,54 @@ impl BufferWindowLocalDisplayPolicy {
         self,
         access: &RustBufferAccess<'_, B>,
         max_rows: usize,
+        window_start: i64,
+        point_charpos: i64,
+        canonical_columns: i64,
     ) -> i32 {
         if !self.line_numbers_enabled() {
             return 0;
         }
-        let total_lines = access.count_lines(0, access.zv()) + 1;
-        let visible_lines = max_rows.max(1) as i64;
-        let digit_count = total_lines.max(visible_lines).max(1).to_string().len() as i32;
-        let min = self.line_number_min_width.max(1);
-        digit_count.max(min) + 2
+        // GNU maybe_produce_line_number bounds the number by the viewport's
+        // matrix rows, even when the buffer ends before that bound. Logical
+        // indices here are zero-based, matching its this_line and pt_lnum.
+        let rows = i64::try_from(max_rows.max(1)).unwrap_or(i64::MAX);
+        let relative = matches!(
+            self.line_number_mode,
+            DisplayLineNumbersMode::Relative | DisplayLineNumbersMode::Visual
+        );
+        let max_number = if relative && !self.line_number_current_absolute {
+            rows.saturating_sub(2)
+        } else {
+            let position = if self.line_number_mode == DisplayLineNumbersMode::Visual {
+                point_charpos
+            } else {
+                window_start
+            };
+            let index = access.count_lines(
+                self.line_number_count_begin(access),
+                access.charpos_to_bytepos(position),
+            );
+            index.saturating_add(rows).saturating_sub(1)
+        };
+        let digits = max_number.max(1).to_string().len() as i64;
+        let minimum = self
+            .line_number_min_width
+            .map(|width| width.clamp(1, canonical_columns.saturating_sub(7).max(1)))
+            .unwrap_or(0);
+        i32::try_from(digits.max(minimum))
+            .unwrap_or(i32::MAX)
+            .saturating_add(2)
+    }
+
+    fn line_number_count_begin<B: LayoutBufferView>(self, access: &RustBufferAccess<'_, B>) -> i64 {
+        if self.line_number_widen
+            || (self.line_number_mode == DisplayLineNumbersMode::Absolute
+                && self.line_number_offset != 0)
+        {
+            0
+        } else {
+            access.begv()
+        }
     }
 
     pub(crate) fn initial_line_numbers<B: LayoutBufferView>(
@@ -456,11 +505,7 @@ impl BufferWindowLocalDisplayPolicy {
         point_charpos: i64,
     ) -> LineNumberRenderState {
         let window_start_byte = access.charpos_to_bytepos(window_start);
-        let begin_byte = if self.line_number_widen {
-            0
-        } else {
-            access.begv()
-        };
+        let begin_byte = self.line_number_count_begin(access);
         let current_line = if self.line_numbers_enabled() {
             access.count_lines(begin_byte, window_start_byte) + 1
         } else {
@@ -526,7 +571,8 @@ impl BufferWindowLocalDisplayPolicy {
             line_number_major_tick: 0,
             line_number_current_absolute: false,
             line_number_widen,
-            line_number_min_width,
+            line_number_min_width: (line_number_min_width >= 0)
+                .then_some(i64::from(line_number_min_width)),
             prefix_values,
         }
     }

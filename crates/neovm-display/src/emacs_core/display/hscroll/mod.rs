@@ -434,20 +434,6 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
             // `body_cols - gutter_cols` — GNU subtracts the gutter pixel width
             // (`x_offset`) in the same place (hscroll_window_tree STEP 3).
             let body_cols = (body_px as f32 / char_width).floor() as i64;
-            let window_height = window.bounds().height;
-            let gutter_cols = match ctx.edit.buffers.get(buffer_id) {
-                Some(buf) => crate::emacs_core::xdisp::line_number_gutter_cols(
-                    buf,
-                    window_height,
-                    char_height,
-                ),
-                None => 0,
-            };
-            let text_cols = body_cols - gutter_cols;
-            if text_cols <= 0 {
-                continue;
-            }
-
             // Point byte position: buffer PT for the selected window of the
             // selected frame, else the window's own pointm.
             let selected_frame_id = ctx.frame_manager().selected_frame().map(|f| f.id);
@@ -469,6 +455,24 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
                         None => continue,
                     }
                 };
+
+            let window_height = window.bounds().height;
+            let gutter_cols = match ctx.edit.buffers.get(buffer_id) {
+                Some(buf) => crate::emacs_core::xdisp::line_number_gutter_cols(
+                    buf,
+                    ctx.variables(),
+                    window_height,
+                    char_height,
+                    window.window_start().unwrap_or(point_lisp),
+                    point_byte,
+                    body_cols,
+                ),
+                None => 0,
+            };
+            let text_cols = body_cols - gutter_cols;
+            if text_cols <= 0 {
+                continue;
+            }
 
             // GNU `ITERATOR_AT_END_OF_LINE_P` (dispextern.h:2941) is true iff the
             // character AT point is a newline (`it->c == '\n'`). It is therefore

@@ -531,6 +531,8 @@ where
         } = geometry_request.into_window_plan(
             &local_display_policy,
             &buf_access,
+            resolved_window_start.get(),
+            params.point,
             line_number_cell_width,
         );
 
