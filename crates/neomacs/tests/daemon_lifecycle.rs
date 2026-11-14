@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::{
@@ -188,12 +188,14 @@ impl Fixture {
 
     /// Replacing kill-emacs-hook removes server-force-stop. GNU closes the
     /// listener during native shutdown but leaves its filesystem socket node.
-    fn assert_closed_server_socket_preserved(&self, name: &str) {
+    fn assert_closed_server_socket_preserved(&self, name: &str, before_inode: u64) {
         let path = self.socket(name);
+        let metadata = fs::symlink_metadata(&path).unwrap();
         assert!(
-            fs::symlink_metadata(&path).unwrap().file_type().is_socket(),
+            metadata.file_type().is_socket(),
             "custom shutdown hook must preserve the server socket pathname"
         );
+        assert_eq!(metadata.ino(), before_inode, "server socket inode changed");
         let error = std::os::unix::net::UnixStream::connect(&path)
             .expect_err("exited daemon still accepts server connections");
         assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
@@ -960,6 +962,9 @@ fn sigchld_retention_and_lost_authority_never_signal_an_auto_reaped_child() {
                 );
                 std::thread::sleep(Duration::from_millis(10));
             }
+            let server_inode = fs::symlink_metadata(fixture.socket("retention"))
+                .unwrap()
+                .ino();
             // Real TERM before any status probe; no external holder release.
             assert_eq!(
                 unsafe { libc::kill(fixture.daemon.as_ref().unwrap().id() as i32, libc::SIGTERM) },
@@ -971,7 +976,7 @@ fn sigchld_retention_and_lost_authority_never_signal_an_auto_reaped_child() {
             );
             wait_child(&mut client.0, Duration::from_secs(5));
             assert_eq!(fs::read_to_string(fixture.path("hook")).unwrap(), "1");
-            fixture.assert_closed_server_socket_preserved("retention");
+            fixture.assert_closed_server_socket_preserved("retention", server_inode);
             assert!(
                 !fs::read_to_string(fixture.path("trace"))
                     .unwrap_or_default()
@@ -981,6 +986,30 @@ fn sigchld_retention_and_lost_authority_never_signal_an_auto_reaped_child() {
             drop(holder);
         }
     }
+}
+
+#[test]
+#[should_panic(expected = "server socket inode changed")]
+fn closed_server_socket_preservation_rejects_a_replacement_inode() {
+    use std::os::unix::net::UnixListener;
+
+    let fixture = Fixture::new();
+    fs::create_dir(fixture.path("runtime/emacs")).unwrap();
+    let path = fixture.socket("inode-control");
+    let original = UnixListener::bind(&path).unwrap();
+    let original_inode = fs::symlink_metadata(&path).unwrap().ino();
+    // Keep the original listener open while rebinding so its inode cannot be
+    // recycled for the replacement node. Neither listener is a daemon child.
+    fs::remove_file(&path).unwrap();
+    let replacement = UnixListener::bind(&path).unwrap();
+    assert_ne!(
+        original_inode,
+        fs::symlink_metadata(&path).unwrap().ino(),
+        "negative control needs a distinct replacement inode"
+    );
+    drop(original);
+    drop(replacement);
+    fixture.assert_closed_server_socket_preserved("inode-control", original_inode);
 }
 
 #[test]
@@ -1325,6 +1354,9 @@ fn signal_terminal_cleanup(pgo: bool) {
             client.0.try_wait().unwrap().is_none(),
             "client detached before the signal"
         );
+        let server_inode = fs::symlink_metadata(fixture.socket("signal-tty"))
+            .unwrap()
+            .ino();
         assert_eq!(
             unsafe { libc::kill(fixture.daemon.as_ref().unwrap().id() as i32, sig) },
             0
@@ -1370,7 +1402,7 @@ fn signal_terminal_cleanup(pgo: bool) {
         if pgo {
             // This arm intentionally replaced kill-emacs-hook above, removing
             // server-force-stop; native process teardown only closes the socket.
-            fixture.assert_closed_server_socket_preserved("signal-tty");
+            fixture.assert_closed_server_socket_preserved("signal-tty", server_inode);
         } else {
             // The ordinary hook list retains the Lisp server cleanup control.
             assert!(!fixture.socket("signal-tty").exists());
