@@ -269,9 +269,24 @@ pub fn builtin_get_buffer_create<H: EditHost>(host: &mut H, args: Vec<Value>) ->
 /// (make-indirect-buffer BASE-BUFFER NAME &optional CLONE INHIBIT-BUFFER-HOOKS) → buffer
 #[doc(hidden)]
 pub fn builtin_make_indirect_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+    expect_args_range("make-indirect-buffer", &args, 2, 4)?;
+    // GNU buffer.c validates NAME's type and uniqueness before BASE.
+    let name = expect_string_lossy(&args[1])?;
+    let duplicate_name = {
+        let (edit, _) = host.edit_and_vars();
+        edit.buffers.find_buffer_by_name(&name).is_some()
+    };
+    if duplicate_name {
+        return Err(
+            host.signal_c_error(neovm_value::errors::CErrorMessage::with_string_arg(
+                "Buffer name `%s' is in use",
+                &name,
+            )),
+        );
+    }
     let plan = {
         let (edit, _) = host.edit_and_vars();
-        prepare_make_indirect_buffer_in_manager(&mut edit.buffers, args)?
+        prepare_make_indirect_buffer_in_manager(&mut edit.buffers, args, name)?
     };
     finish_make_indirect_buffer_hooks(host, plan)
 }
@@ -279,9 +294,8 @@ pub fn builtin_make_indirect_buffer<H: EditHost>(host: &mut H, args: Vec<Value>)
 pub(crate) fn prepare_make_indirect_buffer_in_manager(
     buffers: &mut BufferManager,
     args: Vec<Value>,
+    name: String,
 ) -> Result<MakeIndirectBufferPlan, Flow> {
-    expect_args_range("make-indirect-buffer", &args, 2, 4)?;
-
     let base_id = match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Buffer) => {
             let id = args[0].as_buffer_id().unwrap();
@@ -310,20 +324,13 @@ pub(crate) fn prepare_make_indirect_buffer_in_manager(
         }
     };
 
-    let name = expect_string_lossy(&args[1])?;
+    // Unlike the type/duplicate checks, GNU rejects empty NAME after BASE.
     if name.is_empty() {
         return Err(signal(
             "error",
             vec![Value::string("Empty string for buffer name is not allowed")],
         ));
     }
-    if buffers.find_buffer_by_name(&name).is_some() {
-        return Err(signal(
-            "error",
-            vec![Value::string(format!("Buffer name `{name}` is in use"))],
-        ));
-    }
-
     let clone = args.get(2).is_some_and(|value| !value.is_nil());
     let inhibit_buffer_hooks = args.get(3).is_some_and(|value| !value.is_nil());
     let id = buffers

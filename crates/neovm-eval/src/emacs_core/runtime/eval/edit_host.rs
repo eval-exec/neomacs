@@ -293,11 +293,16 @@ impl EditHost for Context {
             self.variables(),
             self.symbol_mode(),
         );
+        let template =
+            neovm_text::emacs_core::coding::requote_c_error_message(message.template(), style);
+        // GNU doprnt substitutes quotes in the format, not in `%s` data.
+        let text = match message.string_arg() {
+            Some(argument) => template.replacen("%s", argument, 1),
+            None => template,
+        };
         neovm_value::error::signal(
             neovm_value::error::LispCondition::Error,
-            vec![Value::string(
-                neovm_text::emacs_core::coding::requote_c_error_message(message.template(), style),
-            )],
+            vec![Value::string(text)],
         )
     }
 
@@ -584,4 +589,55 @@ pub(crate) fn reset_buffer_local_variables(
             buffers.clear_buffer_local_properties(buffer, obarray, kill_permanent)
         })
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use neovm_value::error::FlowKind;
+    use neovm_value::errors::CErrorMessage;
+
+    #[test]
+    fn native_error_string_argument_is_literal_under_all_quoting_styles() {
+        let mut eval = crate::test_utils::new_context();
+        let argument = "literal`' %s\0tail";
+        for (style, open, close) in [
+            ("curve", "‘", "’"),
+            ("straight", "'", "'"),
+            ("grave", "`", "'"),
+        ] {
+            eval.obarray_mut()
+                .set_symbol_value("text-quoting-style", Value::symbol(style));
+            let flow = EditHost::signal_c_error(
+                &eval,
+                CErrorMessage::with_string_arg("Buffer name `%s' is in use", argument),
+            );
+            let FlowKind::Signal(signal) = flow.into_kind() else {
+                panic!("native error must signal");
+            };
+            assert_eq!(signal.symbol_name(), "error");
+            assert_eq!(signal.data.len(), 1);
+            let expected = format!("Buffer name {open}{argument}{close} is in use");
+            assert_eq!(
+                signal.data[0].as_lisp_string().unwrap().as_bytes(),
+                expected.as_bytes(),
+                "quoting style {style}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_error_without_argument_keeps_literal_percent_placeholder() {
+        let mut eval = crate::test_utils::new_context();
+        eval.obarray_mut()
+            .set_symbol_value("text-quoting-style", Value::symbol("curve"));
+        let flow = EditHost::signal_c_error(&eval, CErrorMessage::from("Literal `%s'"));
+        let FlowKind::Signal(signal) = flow.into_kind() else {
+            panic!("native error must signal");
+        };
+        assert_eq!(
+            signal.data[0].as_lisp_string().unwrap().as_bytes(),
+            "Literal ‘%s’".as_bytes()
+        );
+    }
 }
