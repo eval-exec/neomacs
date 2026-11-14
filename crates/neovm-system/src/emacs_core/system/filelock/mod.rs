@@ -239,11 +239,23 @@ enum NativeLockFileName {
 impl NativeLockFileName {
     fn path(&self) -> PathBuf {
         match self {
-            Self::Encoded(value) => lisp_file_name_to_path_buf(
-                value
+            Self::Encoded(value) => {
+                let string = value
                     .as_lisp_string()
-                    .expect("ENCODE_FILE returned a rooted string"),
-            ),
+                    .expect("ENCODE_FILE returned a rooted string");
+                // ENCODE_FILE rejected NUL before later Lisp callbacks. A
+                // retained NOCOPY alias may since have changed; GNU consumes
+                // SSDATA here, without revalidating (filelock.c:297,396,504).
+                // Preserve the actual Value and truncate only the OS bytes.
+                if let Some(end) = string.as_bytes().iter().position(|byte| *byte == 0) {
+                    let prefix = neovm_value::heap_types::LispString::from_unibyte(
+                        string.as_bytes()[..end].to_vec(),
+                    );
+                    lisp_file_name_to_path_buf(&prefix)
+                } else {
+                    lisp_file_name_to_path_buf(string)
+                }
+            }
             Self::Bootstrap(path) => path.clone(),
         }
     }
