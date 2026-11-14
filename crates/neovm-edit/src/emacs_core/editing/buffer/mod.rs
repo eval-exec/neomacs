@@ -277,10 +277,15 @@ pub fn builtin_make_indirect_buffer<H: EditHost>(host: &mut H, args: Vec<Value>)
         edit.buffers.find_buffer_by_name(&name).is_some()
     };
     if duplicate_name {
+        // GNU's error("...%s...", SDATA(name)) uses doprnt's strnlen;
+        // only the display argument stops at NUL, not the lookup above.
+        let display_name = name
+            .split_once('\0')
+            .map_or(name.as_str(), |(prefix, _)| prefix);
         return Err(
             host.signal_c_error(neovm_value::errors::CErrorMessage::with_string_arg(
                 "Buffer name `%s' is in use",
-                &name,
+                display_name,
             )),
         );
     }
