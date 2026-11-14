@@ -81,6 +81,8 @@ fn make_indirect_buffer_duplicate_name_quotes_follow_style_without_requoting_nam
                    (kill-buffer existing))))
              (list "neovm--indirect-`quote'%s-tail"
                    (concat "neovm--indirect-`quote'%s-" (string 0) "-tail")))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[
+            r#""OK (((error (\"Buffer name ‘neovm--indirect-`quote'%s-tail’ is in use\")) (error (\"Buffer name 'neovm--indirect-`quote'%s-tail' is in use\")) (error (\"Buffer name `neovm--indirect-`quote'%s-tail' is in use\"))) ((error (\"Buffer name ‘neovm--indirect-`quote'%s-’ is in use\")) (error (\"Buffer name 'neovm--indirect-`quote'%s-' is in use\")) (error (\"Buffer name `neovm--indirect-`quote'%s-' is in use\"))))""#
+        ]],
     );
 }
