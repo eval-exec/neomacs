@@ -345,11 +345,13 @@ pub fn gui_window_system_active_value(value: Value) -> bool {
         .is_some_and(WindowSystemKind::is_neomacs_gui_compatible)
 }
 
+fn active_window_system_symbol(eval: &neovm_eval::emacs_core::eval::Context) -> Option<Value> {
+    selected_frame_window_system_symbol(eval).or_else(|| global_window_system_symbol(eval))
+}
+
 #[doc(hidden)]
 pub fn x_window_system_active(eval: &neovm_eval::emacs_core::eval::Context) -> bool {
-    let host_window_system =
-        selected_frame_window_system_symbol(eval).or_else(|| global_window_system_symbol(eval));
-    host_window_system.is_some_and(gui_window_system_active_value)
+    active_window_system_symbol(eval).is_some_and(gui_window_system_active_value)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -3227,13 +3229,25 @@ pub fn builtin_x_display_set_last_user_time(
 /// GNU `Fx_open_connection` runs both `CHECK_STRING`s before `x_term_init`
 /// (`src/xfns.c:7645-7647`). A typed DISPLAY on the non-daemon GUI arm still
 /// returns nil; refusing an unopenable name there is a separate change.
+///
+/// The `neo` frontend is Neomacs's pgtk analogue, and pgtk's own
+/// `Fx_open_connection` replaces a nil DISPLAY with the empty string before
+/// `CHECK_STRING` (`src/pgtkfns.c:2140-2143`). A native Wayland launch has no
+/// `DISPLAY`, and `window-system-initialization` passes nil; that must start.
 #[doc(hidden)]
 pub fn builtin_x_open_connection(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("x-open-connection", &args, 1, 3)?;
-    if !args[0].is_string() {
+    // `android-win`, `ns-win` and `w32-win` pass their own non-nil names;
+    // only the pgtk-like `neo` arm inherits pgtk's nil-is-empty rule.
+    let neo_nil_display = eval.daemon().is_none()
+        && args[0].is_nil()
+        && active_window_system_symbol(eval)
+            .and_then(|value| WindowSystemKind::from_symbol_value(&value))
+            == Some(WindowSystemKind::Neo);
+    if !args[0].is_string() && !neo_nil_display {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("stringp"), args[0]],
@@ -3268,7 +3282,9 @@ pub fn builtin_x_open_connection(
         }
         return Ok(Value::NIL);
     }
-    let display = display_string_text(&args[0]).expect("checked string");
+    // A nil display reaches the pgtk-like empty name here only if the `neo`
+    // frontend is not active after all; report it rather than panicking.
+    let display = display_string_text(&args[0]).unwrap_or_default();
     Err(signal(
         "error",
         vec![Value::string(format!("Display {display} can’t be opened"))],

@@ -1058,6 +1058,24 @@ fn x_open_connection_active_arm_returns_nil_for_string_display() {
     );
 }
 
+/// A native Wayland launch has no DISPLAY, so the `neo` frontend passes nil
+/// to `x-open-connection`. GNU's pgtk arm replaces nil with the empty string
+/// (`src/pgtkfns.c:2140-2143`), unlike the X11 arm, which rejects it
+/// (`src/xfns.c:7645-7647`).
+#[test]
+fn x_open_connection_accepts_nil_display_for_the_neo_frontend() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    eval.set_variable("initial-window-system", Value::symbol("neo"));
+    assert!(
+        builtin_x_open_connection(&mut eval, vec![Value::NIL])
+            .unwrap()
+            .is_nil()
+    );
+    // The pgtk arm still rejects a non-nil non-string.
+    assert_x_open_connection_stringp(&mut eval, vec![Value::fixnum(42)], Value::fixnum(42));
+}
+
 #[test]
 fn x_list_fonts_validates_query_arguments_on_x_display() {
     crate::test_utils::init_test_tracing();
