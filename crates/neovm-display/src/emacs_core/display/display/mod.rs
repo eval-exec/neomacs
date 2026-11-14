@@ -3224,11 +3224,11 @@ pub fn builtin_x_display_set_last_user_time(
     x_optional_display_query_error_eval(eval, "x-display-set-last-user-time", query_args)
 }
 
-/// Check DISPLAY and a non-nil XRM-STRING, then admit a daemon connection.
+/// Check DISPLAY and a non-nil XRM-STRING before admitting a connection.
 ///
 /// GNU `Fx_open_connection` runs both `CHECK_STRING`s before `x_term_init`
-/// (`src/xfns.c:7645-7647`). A typed DISPLAY on the non-daemon GUI arm still
-/// returns nil; refusing an unopenable name there is a separate change.
+/// (`src/xfns.c:7645-7647`). Ordinary GUI contexts admit only a connection
+/// identified by their native host; a foreign name cannot reuse that terminal.
 ///
 /// The `neo` frontend is Neomacs's pgtk analogue, and pgtk's own
 /// `Fx_open_connection` replaces a nil DISPLAY with the empty string before
@@ -3274,17 +3274,36 @@ pub fn builtin_x_open_connection(
         }
         return Ok(Value::NIL);
     }
-    if x_window_system_active(eval) {
-        if let Some(resources) = resources.as_deref()
-            && let Some(host) = eval.display_host.as_mut()
-        {
-            host.set_gui_resource_database(resources);
-        }
-        return Ok(Value::NIL);
-    }
-    // A nil display reaches the pgtk-like empty name here only if the `neo`
-    // frontend is not active after all; report it rather than panicking.
     let display = display_string_text(&args[0]).unwrap_or_default();
+    if x_window_system_active(eval) {
+        let admitted = match eval
+            .display_host
+            .as_ref()
+            .map(|host| host.graphical_connection_identity(Some(&display)))
+        {
+            Some(Ok(Some(_))) => true,
+            Some(Err(reason)) => {
+                tracing::debug!(%display, %reason, "x-open-connection host refused admission");
+                false
+            }
+            Some(Ok(None)) => {
+                tracing::debug!(%display, "x-open-connection host has no graphical connection");
+                false
+            }
+            None => {
+                tracing::debug!(%display, "x-open-connection has no native display host");
+                false
+            }
+        };
+        if admitted {
+            if let Some(resources) = resources.as_deref()
+                && let Some(host) = eval.display_host.as_mut()
+            {
+                host.set_gui_resource_database(resources);
+            }
+            return Ok(Value::NIL);
+        }
+    }
     Err(signal(
         "error",
         vec![Value::string(format!("Display {display} can’t be opened"))],
