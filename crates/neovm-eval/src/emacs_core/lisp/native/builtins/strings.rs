@@ -38,6 +38,14 @@ pub static NUMBER_TO_STRING_SUBR: SubrSpec = crate::emacs_core::subr::world_subr
     SubrArity::new(1, Some(1)),
 ));
 
+/// The production `substring` descriptor, shared by core and the unit runtime.
+#[doc(hidden)]
+pub static SUBSTRING_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "substring",
+    NativeFn::ContextSlice(|_ctx, args| builtin_substring_slice(args)),
+    SubrArity::new(1, Some(3)),
+));
+
 // ===========================================================================
 // String operations
 // ===========================================================================
@@ -232,7 +240,7 @@ pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
 
 #[inline(never)]
 #[doc(hidden)]
-pub fn builtin_substring_slice(args: &[Value]) -> EvalResult {
+pub(crate) fn builtin_substring_slice(args: &[Value]) -> EvalResult {
     crate::emacs_core::eval::perf::time_op(crate::emacs_core::eval::perf::PerfOp::Substring, || {
         neovm_value::strings_core::substring_impl("substring", args, true)
     })

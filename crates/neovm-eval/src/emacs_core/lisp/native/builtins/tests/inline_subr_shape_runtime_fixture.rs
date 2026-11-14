@@ -58,6 +58,7 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_set_char_table_range_matches_canonical_descriptor(&mut eval);
     assert_core_set_syntax_table_matches_canonical_descriptor(&mut eval);
     assert_core_copy_syntax_table_matches_canonical_descriptor(&mut eval);
+    assert_core_substring_matches_canonical_descriptor(&mut eval);
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
@@ -1573,4 +1574,97 @@ fn assert_core_base64_encode_string_matches_canonical_descriptor(context: &mut C
     let result =
         actual_fn(context, vec![Value::string("abc"), Value::T]).expect("core base64 body");
     assert_eq!(crate::emacs_core::print::print_value(&result), r#""YWJj""#);
+}
+
+fn assert_core_substring_matches_canonical_descriptor(context: &mut Context) {
+    use crate::emacs_core::builtins::strings::SUBSTRING_SUBR;
+    use crate::emacs_core::eval::lookup_global_subr_entry;
+    use crate::emacs_core::eval::subr_abi::SubrFn;
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+    let expected = SUBSTRING_SUBR;
+    let id = intern("substring");
+    let actual = lookup_global_subr_entry(id).expect("core registered substring");
+    let (Some(SubrFn::ManySlice(expected_fn)), Some(SubrFn::ManySlice(actual_fn))) =
+        (expected.function(), actual.function)
+    else {
+        panic!("substring retains ContextSlice");
+    };
+    assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+    assert_eq!(expected.name(), "substring");
+    assert_eq!(expected.arity(), SubrArity::new(1, Some(3)));
+    assert_eq!((actual.min_args, actual.max_args), (1, Some(3)));
+    assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+    assert!(expected.interactive_spec().is_none());
+    assert!(actual.interactive_spec.is_none());
+    assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+    assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(
+        context
+            .obarray_view()
+            .get_property("substring", "disabled")
+            .unwrap_or(neovm_value::value::Value::NIL)
+            .is_nil()
+    );
+    assert!(expected.leaf_spec().is_none());
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+    let call =
+        |context: &mut Context, args: Vec<neovm_value::value::Value>| actual_fn(context, &args);
+    use neovm_value::error::FlowRef;
+    use neovm_value::heap_types::LispString;
+    use neovm_value::value::Value;
+
+    let multi = Value::string("aλb");
+    let result = call(context, vec![multi, Value::fixnum(1), Value::fixnum(2)]).unwrap();
+    assert_eq!(result.as_lisp_string().unwrap().as_bytes(), "λ".as_bytes());
+    assert!(result.as_lisp_string().unwrap().is_multibyte());
+
+    let raw = Value::heap_string(LispString::from_unibyte(vec![0xff, b'a', 0xfe]));
+    let result = call(context, vec![raw, Value::fixnum(0), Value::fixnum(1)]).unwrap();
+    assert_eq!(result.as_lisp_string().unwrap().as_bytes(), &[0xff]);
+    assert!(!result.as_lisp_string().unwrap().is_multibyte());
+
+    let vector = Value::vector(vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)]);
+    let result = call(context, vec![vector, Value::fixnum(-2), Value::NIL]).unwrap();
+    let elements = result.as_vector_data().expect("substring vector result");
+    assert_eq!(elements.len(), 2);
+    assert_eq!(elements[0], Value::fixnum(2));
+    assert_eq!(elements[1], Value::fixnum(3));
+    assert_ne!(result, vector);
+
+    let source = Value::string("abcd");
+    let face = Value::symbol("face");
+    let bold = Value::symbol("bold");
+    let mut properties = neovm_edit::buffer::text_props::TextPropertyTable::new();
+    assert!(properties.put_property_in_char_range(
+        neovm_edit::buffer::CharRange::from_usize(1, 3),
+        face,
+        bold,
+    ));
+    neovm_value::value::set_string_text_properties_table_for_value(source, properties);
+    let result = call(context, vec![source, Value::fixnum(1), Value::fixnum(3)]).unwrap();
+    assert_eq!(result.as_lisp_string().unwrap().as_bytes(), b"bc");
+    let properties = neovm_value::value::get_string_text_properties_table_for_value(result)
+        .expect("substring copies string properties");
+    let intervals = properties.intervals_snapshot();
+    assert_eq!(intervals.len(), 1);
+    assert_eq!((intervals[0].start, intervals[0].end), (0, 2));
+    assert_eq!(intervals[0].properties.get(&face), Some(&bold));
+    let copied = call(context, vec![source]).unwrap();
+    assert_ne!(copied, source);
+    assert_eq!(copied.as_lisp_string().unwrap().as_bytes(), b"abcd");
+
+    let error = call(context, vec![source, Value::fixnum(2), Value::fixnum(1)])
+        .expect_err("substring rejects reversed bounds");
+    let FlowRef::Signal(signal) = error.kind() else {
+        panic!("bounds error is a signal");
+    };
+    assert_eq!(
+        signal.symbol,
+        neovm_value::intern::intern("args-out-of-range")
+    );
+    assert_eq!(
+        signal.data,
+        vec![source, Value::fixnum(2), Value::fixnum(1)]
+    );
 }

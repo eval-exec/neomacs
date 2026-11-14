@@ -3687,11 +3687,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(1, Some(1)),
     )));
 
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "substring",
-        NativeFn::ContextSlice(|_ctx, args| builtin_substring_slice(args)),
-        SubrArity::new(1, Some(3)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::strings::SUBSTRING_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "concat",
         NativeFn::ContextSlice(|_ctx, args| builtin_concat_slice(args)),

@@ -2754,4 +2754,47 @@ mod provider_tests {
             (1, Some(1), "always")
         );
     }
+    #[test]
+    fn core_substring_source_resolves_the_single_production_descriptor() {
+        const CALL: &str = "neovm_eval::emacs_core::builtins::strings::SUBSTRING_SUBR";
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert_eq!(read(&root, CORE_MANIFEST).unwrap().matches(CALL).count(), 1);
+        let (events, _) = manifest_events(&root).unwrap();
+        let direct: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Direct { spec, .. } => Some(spec),
+                _ => None,
+            })
+            .collect();
+        let index = direct
+            .iter()
+            .position(|spec| spec.name == "substring")
+            .unwrap();
+        assert_eq!(
+            direct
+                .iter()
+                .filter(|spec| spec.name == "substring")
+                .count(),
+            1
+        );
+        assert_eq!(direct[index - 1].name, "safe-length");
+        assert_eq!(direct[index + 1].name, "concat");
+        assert_eq!(
+            (
+                direct[index].min,
+                direct[index].max,
+                direct[index].cfg.as_str()
+            ),
+            (1, Some(3), "always")
+        );
+        let home = direct[index]
+            .static_home
+            .as_ref()
+            .expect("real static source home");
+        assert_eq!(
+            (home.module.as_str(), home.static_ident.as_str()),
+            ("strings", "SUBSTRING_SUBR")
+        );
+    }
 }
