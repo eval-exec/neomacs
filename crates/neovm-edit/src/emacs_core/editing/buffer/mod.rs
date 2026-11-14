@@ -811,7 +811,7 @@ pub fn builtin_buffer_substring_2<H: EditHost>(
 ) -> EvalResult {
     let args: [Value; 2] = [start, end];
     expect_args("buffer-substring", &args, 2)?;
-    let (current_id, start, end) = {
+    let (start, end, text) = {
         let (edit, _) = host.edit_and_vars();
         let start = expect_integer_or_marker_in_buffers(&edit.buffers, &args[0])?;
         let end = expect_integer_or_marker_in_buffers(&edit.buffers, &args[1])?;
@@ -829,43 +829,72 @@ pub fn builtin_buffer_substring_2<H: EditHost>(
             end,
             vec![Value::make_buffer(buf.id), args[0], args[1]],
         )?;
-        (current_id, start, end)
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let byte_range = accessible_lisp_range_to_byte_range(buf, start, end);
+        let text = buf.buffer_substring_lisp_string_no_properties_range(byte_range);
+        (start, end, text)
     };
-    update_buffer_properties_for_access(host, start, end)?;
-    let (edit, _) = host.edit_and_vars();
-    let buf = edit
-        .buffers
-        .get(current_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let byte_range = accessible_lisp_range_to_byte_range(buf, start, end);
-    Ok(buffer_slice_value_range(buf, byte_range))
+    finish_fontified_buffer_string(host, start, end, text)
 }
 
 #[doc(hidden)]
 pub fn builtin_buffer_string<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("buffer-string", &args, 0)?;
-    let (current_id, start, end) = {
+    let (start, end, text) = {
         let (edit, _) = host.edit_and_vars();
         let buf = edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         (
-            buf.id,
             buf.point_min_lisp_char_pos(),
             buf.point_max_lisp_char_pos(),
+            buf.buffer_substring_lisp_string_no_properties_range(buf.accessible_emacs_byte_range()),
         )
     };
+    finish_fontified_buffer_string(host, start, end, text)
+}
+
+/// GNU `make_buffer_string_both` copies bytes before access fontification,
+/// then copies intervals from the post-hook current buffer. Keep the detached
+/// string interval-free across the callback: it owns bytes, not Lisp values
+/// that would need GC roots while arbitrary Lisp executes.
+fn finish_fontified_buffer_string<H: EditHost>(
+    host: &mut H,
+    start: LispCharPos1,
+    end: LispCharPos1,
+    text: neovm_value::heap_types::LispString,
+) -> EvalResult {
     update_buffer_properties_for_access(host, start, end)?;
     let (edit, _) = host.edit_and_vars();
     let buf = edit
         .buffers
-        .get(current_id)
+        .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    Ok(buffer_slice_value_range(
+    // GNU's next-property-change validates START even when no intervals exist.
+    // Its LIMIT does not validate END against narrowing: the eventual interval
+    // copy uses the captured character span in the full buffer.
+    super::textprop::validate_buffer_property_point_char_pos_raw(
         buf,
-        buf.accessible_emacs_byte_range(),
-    ))
+        start.as_i64(),
+        Value::fixnum(start.as_i64()),
+    )?;
+    let byte_range = EmacsByteRange::new(
+        buf.lisp_pos_to_full_buffer_emacs_byte_pos(start),
+        buf.lisp_pos_to_full_buffer_emacs_byte_pos(end),
+    );
+    let value = Value::heap_string(text);
+    if !buf.text_props_is_empty() {
+        let sliced = buf.text_props_slice_emacs_byte_range(byte_range);
+        if !sliced.is_empty() {
+            set_string_text_properties_table_for_value(value, sliced);
+        }
+    }
+    Ok(value)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
