@@ -979,6 +979,12 @@ impl OverlayList {
         overlay_applies_to_window(overlay, window_id)
     }
 
+    /// Creation serial that orders fully equal overlays (GNU's arbitrary
+    /// XLI tie-break, made deterministic: later creation sorts later).
+    pub fn overlay_creation_serial(&self, overlay: Value) -> Option<u64> {
+        overlay.as_overlay_data().map(|data| data.serial.get())
+    }
+
     pub fn overlay_plist(&self, overlay: Value) -> Option<Value> {
         if self.index.contains(overlay) || overlay_live_buffer(overlay).is_none() {
             return Some(overlay.as_overlay_data().unwrap().plist);
