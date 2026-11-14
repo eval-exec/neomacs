@@ -37,3 +37,26 @@ fn buffer_text_pixel_size_elides_invisible_text_and_overlays() {
     // text listed -> 3, overlay t -> 3, overlay ellipsis -> 6.
     assert_eq!(format_eval_result(&result), "OK [3 6 3 3 6]");
 }
+
+/// Issue #715: a measurement that reenters an active layout query must not
+/// fail redisplay. GNU's `buffer-text-pixel-size` is its own `display_string`
+/// walk, independent of the redisplay transaction, so a mode-line `:eval`
+/// such as `mode--line-format-right-align` (which calls `string-pixel-width`)
+/// can measure while the mode line is being laid out. Neomacs serves that
+/// nested query from the display-aware scan instead of signalling.
+#[test]
+fn buffer_text_pixel_size_falls_back_when_a_layout_query_is_running() {
+    let mut ev = crate::test_utils::runtime_startup_context();
+    ev.install_window_layout_query_handler(|_, _, _, _| {
+        crate::window::WindowLayoutQueryOutcome::LayoutBusy
+    })
+    .expect("install the busy layout handler");
+    let result = ev.eval_str(
+        r#"(with-temp-buffer
+             (insert "abcdef")
+             (car (buffer-text-pixel-size nil nil t)))"#,
+    );
+    // The display-aware scan measures one column per ASCII character; the
+    // point is that it returns a width instead of erroring.
+    assert_eq!(format_eval_result(&result), "OK 6");
+}

@@ -164,18 +164,20 @@ impl TextMeasurement {
     }
 }
 
-/// Adapter absence is distinct from a failed or reentrant canonical query.
+/// Adapter absence is distinct from a failed canonical query.
+///
+/// A measurement that reenters an active layout query is *not* an error:
+/// GNU's `buffer-text-pixel-size` is its own `display_string` walk and does
+/// not consult the redisplay transaction at all. When the frame's engine is
+/// owned by a redisplay callback (`(:eval (mode--line-format-right-align))`
+/// measures `string-pixel-width` while the mode line is being laid out),
+/// serve the measurement from the same display-aware scan used when no
+/// frontend exists instead of failing redisplay (issue #715).
 fn query_geometry(
     outcome: WindowLayoutQueryOutcome,
 ) -> Result<Option<WindowDisplaySnapshot>, Flow> {
     match outcome {
-        WindowLayoutQueryOutcome::Unavailable => Ok(None),
-        WindowLayoutQueryOutcome::LayoutBusy => Err(signal(
-            "error",
-            vec![Value::string(
-                "Text measurement reentered an active layout query",
-            )],
-        )),
+        WindowLayoutQueryOutcome::Unavailable | WindowLayoutQueryOutcome::LayoutBusy => Ok(None),
         WindowLayoutQueryOutcome::Failed(error) => {
             Err(signal("error", vec![Value::string(error.message())]))
         }
