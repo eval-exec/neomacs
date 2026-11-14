@@ -1224,6 +1224,7 @@ impl TaggedValue {
                 VecLikeType::CondVar => "condvar",
                 VecLikeType::UserPtr => "user-ptr",
                 VecLikeType::ModuleFunction => "module-function",
+                VecLikeType::TsNode => "treesit-node",
                 VecLikeType::CharTable => "char-table",
                 VecLikeType::SubCharTable => "sub-char-table",
                 VecLikeType::Obarray => "obarray",

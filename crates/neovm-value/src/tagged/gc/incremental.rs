@@ -935,7 +935,7 @@ impl TaggedHeap {
                     self.mark_or_push_child(val, "sub-char-table-content");
                 }
             }
-            VecLikeType::Record | VecLikeType::WindowConfiguration => {
+            VecLikeType::Record | VecLikeType::WindowConfiguration | VecLikeType::TsNode => {
                 let obj = ptr as *const RecordObj;
                 for val in unsafe { (*obj).data.iter_atomic() } {
                     self.mark_or_push_child(val, "record-slot");
@@ -1921,9 +1921,9 @@ impl TaggedHeap {
                         // stays leak-free by construction).
                         drop(Box::from_raw(ptr as *mut ByteCodeObj))
                     },
-                    VecLikeType::Record | VecLikeType::WindowConfiguration => unsafe {
-                        drop(Box::from_raw(ptr as *mut RecordObj))
-                    },
+                    VecLikeType::Record
+                    | VecLikeType::WindowConfiguration
+                    | VecLikeType::TsNode => unsafe { drop(Box::from_raw(ptr as *mut RecordObj)) },
                     VecLikeType::Font => unsafe { drop(Box::from_raw(ptr as *mut FontObj)) },
                     VecLikeType::Overlay => unsafe { drop(Box::from_raw(ptr as *mut OverlayObj)) },
                     VecLikeType::Marker => unsafe { drop(Box::from_raw(ptr as *mut MarkerObj)) },
@@ -2113,7 +2113,7 @@ impl TaggedHeap {
     #[inline(never)]
     fn owns_veclike_object_by_registry(&self, ptr: *const u8) -> bool {
         // `VecLikeType::Vector`, `ByteCode`, `Lambda`, `Macro`, `Record`
-        // (incl. the `WindowConfiguration` tag — same `RecordObj`),
+        // (including window configurations and tree-sitter nodes — same `RecordObj`),
         // `SymbolWithPos`, `Marker` and `Bignum` are paged (each in its own
         // class arena — distinct registries, so a hit is never a cross-class
         // collision); every other veclike is a residual `Box` in the addr-set.
@@ -2596,13 +2596,16 @@ impl TaggedHeap {
                 "macro arena slot {slot:p} must NOT be in the vector registry",
             );
         }
-        // Record slots carry the Record or WindowConfiguration tag (same
-        // `RecordObj`, distinct pseudovector type) and never leak into the
+        // Record-arena slots carry Record, WindowConfiguration, or TsNode tags
+        // (same `RecordObj`, distinct pseudovector types) and never leak into the
         // vector registry. Native FontObj values use the residual boxed path.
         for slot in self.record_arena.collect_allocated_slots() {
             let tag = unsafe { (*(slot as *const VecLikeHeader)).type_tag };
             assert!(
-                matches!(tag, VecLikeType::Record | VecLikeType::WindowConfiguration),
+                matches!(
+                    tag,
+                    VecLikeType::Record | VecLikeType::WindowConfiguration | VecLikeType::TsNode
+                ),
                 "record arena slot {slot:p} carries an unrelated tag ({tag:?})",
             );
             assert!(

@@ -43,6 +43,91 @@ fn rec_slot(v: TaggedValue, i: usize) -> TaggedValue {
     obj.data.as_slice()[i]
 }
 
+// The parser is a heap graph fixture, not a grammar backend. Its only
+// route from the explicit roots is the node's private parser slot.
+fn treesit_gc_graph(
+    heap: &mut TaggedHeap,
+    identity: i64,
+) -> (TaggedValue, TaggedValue, TaggedValue) {
+    let parser_child = heap.alloc_record(vec![TaggedValue::fixnum(identity)]);
+    let parser = heap.alloc_record(vec![parser_child]);
+    let node = heap.alloc_treesit_node(vec![
+        TaggedValue::symbol("treesit-node"),
+        TaggedValue::fixnum(identity),
+        parser,
+    ]);
+    (node, parser, parser_child)
+}
+
+fn assert_treesit_gc_graph(
+    heap: &TaggedHeap,
+    graph: (TaggedValue, TaggedValue, TaggedValue),
+    identity: i64,
+) {
+    let (node, parser, parser_child) = graph;
+    for value in [node, parser, parser_child] {
+        assert!(heap.record_arena.owns(rec_ptr(value)));
+        assert!(heap.owns_non_cons_object(rec_ptr(value)));
+    }
+    assert_eq!(node.veclike_type(), Some(VecLikeType::TsNode));
+    assert!(!node.is_record());
+    assert!(node.as_record_data().is_none());
+    assert_eq!(rec_slot(node, 2), parser);
+    assert_eq!(rec_slot(parser, 0), parser_child);
+    assert_eq!(rec_slot(parser_child, 0).as_fixnum(), Some(identity));
+    heap.assert_object_arenas_coherent();
+}
+
+#[test]
+fn treesit_node_keeps_its_parser_graph_through_serial_collection() {
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let live = treesit_gc_graph(&mut heap, 73);
+    let dead = treesit_gc_graph(&mut heap, 91);
+    let dead_ptrs = [rec_ptr(dead.0), rec_ptr(dead.1), rec_ptr(dead.2)];
+
+    // Root only the node; neither parser nor parser-child is a separate root.
+    heap.collect_exact(std::iter::once(live.0));
+    assert_treesit_gc_graph(&heap, live, 73);
+    for ptr in dead_ptrs {
+        assert!(!heap.record_arena.owns(ptr), "unrooted control must die");
+    }
+    heap.collect_exact(std::iter::once(live.0));
+    assert_treesit_gc_graph(&heap, live, 73);
+
+    let live_ptrs = [rec_ptr(live.0), rec_ptr(live.1), rec_ptr(live.2)];
+    heap.collect_exact(std::iter::empty());
+    for ptr in live_ptrs {
+        assert!(
+            !heap.record_arena.owns(ptr),
+            "no native identity registry roots the node"
+        );
+    }
+}
+
+#[test]
+fn treesit_node_keeps_its_parser_graph_through_concurrent_collection() {
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let live = treesit_gc_graph(&mut heap, 73);
+    // Complete the ordinary dump-less bootstrap before using the existing
+    // admitted concurrent-collection seam.
+    heap.collect_exact(std::iter::once(live.0));
+    assert!(heap.should_run_concurrent());
+    let dead = treesit_gc_graph(&mut heap, 91);
+    let dead_ptrs = [rec_ptr(dead.0), rec_ptr(dead.1), rec_ptr(dead.2)];
+
+    run_concurrent_cycle(&mut heap, &[live.0]);
+    assert_treesit_gc_graph(&heap, live, 73);
+    for ptr in dead_ptrs {
+        assert!(!heap.record_arena.owns(ptr), "unrooted control must die");
+    }
+    run_concurrent_cycle(&mut heap, &[live.0]);
+    assert_treesit_gc_graph(&heap, live, 73);
+}
+
 /// (a) PAGE-SPAN ORACLE EXACTNESS for the 64B record class + cross-class
 /// no-collision (incl. the same-stride string/vector arenas).
 #[test]

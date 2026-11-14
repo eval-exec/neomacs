@@ -347,6 +347,7 @@ pub fn builtin_cl_type_of(args: &[Value]) -> EvalResult {
         ValueKind::Veclike(VecLikeType::Record) => unreachable!(),
         ValueKind::Veclike(VecLikeType::Font) => "font-object",
         ValueKind::Veclike(VecLikeType::WindowConfiguration) => "window-configuration",
+        ValueKind::Veclike(VecLikeType::TsNode) => "treesit-node",
         ValueKind::Veclike(VecLikeType::HashTable) => "hash-table",
         ValueKind::Veclike(VecLikeType::Obarray) => "obarray",
         ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr) => "primitive-function",

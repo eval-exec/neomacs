@@ -1,6 +1,45 @@
 use super::*;
 
 #[test]
+#[should_panic(expected = "pdump: tree-sitter node objects are not portable")]
+fn dump_value_rejects_runtime_treesit_nodes() {
+    crate::test_utils::init_test_tracing();
+    let node = Value::make_treesit_node(vec![
+        Value::symbol("treesit-node"),
+        Value::fixnum(1),
+        Value::NIL,
+    ]);
+    DumpEncoder::new().dump_value(&node);
+}
+
+#[test]
+#[should_panic(expected = "pdump: tree-sitter node objects are not portable")]
+fn dump_heap_object_rejects_runtime_treesit_nodes() {
+    crate::test_utils::init_test_tracing();
+    let node = Value::make_treesit_node(vec![
+        Value::symbol("treesit-node"),
+        Value::fixnum(1),
+        Value::NIL,
+    ]);
+    dump_heap_object_from_value(&mut DumpEncoder::new(), node);
+}
+
+#[test]
+fn dump_value_keeps_same_tag_ordinary_records_portable() {
+    crate::test_utils::init_test_tracing();
+    let forged = Value::make_record(vec![
+        Value::symbol("treesit-node"),
+        Value::fixnum(1),
+        Value::NIL,
+    ]);
+    let mut encoder = DumpEncoder::new();
+    assert!(matches!(encoder.dump_value(&forged), DumpValue::Record(_)));
+    assert!(
+        matches!(dump_heap_object_from_value(&mut encoder, forged), DumpHeapObject::Record(slots) if slots.len() == 3)
+    );
+}
+
+#[test]
 fn preload_tagged_heap_handles_deep_cons_chains_without_recursive_population() {
     crate::test_utils::init_test_tracing();
 

@@ -872,6 +872,7 @@ fn unreadable_object(value: Value) -> bool {
             | VecLikeType::Obarray
             | VecLikeType::Terminal
             | VecLikeType::WindowConfiguration
+            | VecLikeType::TsNode
             | VecLikeType::Subr
             | VecLikeType::Xwidget
             | VecLikeType::XwidgetView
@@ -2323,6 +2324,9 @@ fn write_value_stateful_inner(
             let wid = value.as_window_id().unwrap();
             write!(out, "#<window {}>", wid).unwrap();
         }
+        ValueKind::Veclike(VecLikeType::TsNode) => {
+            out.push_str("#<treesit-node>");
+        }
         ValueKind::Veclike(VecLikeType::WindowConfiguration) => {
             out.push_str("#<window-configuration>");
         }
@@ -2671,6 +2675,7 @@ impl<'value> LiteralSlots<'value> {
                 | VecLikeType::Obarray
                 | VecLikeType::Terminal
                 | VecLikeType::WindowConfiguration
+                | VecLikeType::TsNode
                 | VecLikeType::Subr
                 | VecLikeType::Xwidget
                 | VecLikeType::XwidgetView
@@ -3809,6 +3814,9 @@ fn append_print_value_bytes(value: &Value, out: &mut Vec<u8>, options: PrintOpti
             out.extend_from_slice(
                 format!("#<window {}>", value.as_window_id().unwrap()).as_bytes(),
             );
+        }
+        ValueKind::Veclike(VecLikeType::TsNode) => {
+            out.extend_from_slice(b"#<treesit-node>");
         }
         ValueKind::Veclike(VecLikeType::WindowConfiguration) => {
             out.extend_from_slice(b"#<window-configuration>");

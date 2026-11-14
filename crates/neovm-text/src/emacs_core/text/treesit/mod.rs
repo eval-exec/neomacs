@@ -7,6 +7,7 @@ use tree_sitter::{InputEdit, Language, Parser, Point, Query, QueryError, Tree, f
 
 use neovm_edit::buffer::{Buffer, BufferId, EmacsBytePos, EmacsByteRange};
 use neovm_value::intern::SymId;
+use neovm_value::tagged::header::VecLikeType;
 use neovm_value::value::Value;
 
 pub(crate) const TREESIT_PARSER_TAG: &str = "treesit-parser";
@@ -1179,7 +1180,7 @@ pub fn make_parser_value(id: u64, language_symbol: Value, buffer: Value, tag: Va
 
 #[doc(hidden)]
 pub fn make_node_value(id: u64, parser: Value) -> Value {
-    Value::make_record(vec![
+    Value::make_treesit_node(vec![
         Value::symbol(TREESIT_NODE_TAG),
         Value::fixnum(id as i64),
         parser,
@@ -1203,7 +1204,9 @@ pub fn parser_id(value: Value) -> Option<u64> {
 
 #[doc(hidden)]
 pub fn node_id(value: Value) -> Option<u64> {
-    record_id_with_tag(value, TREESIT_NODE_TAG, NODE_SLOT_ID)
+    let items = value.as_treesit_node_data()?;
+    let id = items.get(NODE_SLOT_ID)?.as_fixnum()?;
+    (id >= 0).then_some(id as u64)
 }
 
 #[doc(hidden)]
@@ -1218,7 +1221,7 @@ pub fn is_parser(value: Value) -> bool {
 
 #[doc(hidden)]
 pub fn is_node(value: Value) -> bool {
-    record_tag_is(value, TREESIT_NODE_TAG)
+    value.veclike_type() == Some(VecLikeType::TsNode)
 }
 
 #[doc(hidden)]

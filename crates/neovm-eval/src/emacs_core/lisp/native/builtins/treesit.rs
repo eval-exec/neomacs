@@ -262,10 +262,10 @@ fn parser_type_error(name: &str, value: Value) -> Flow {
     )
 }
 
-fn node_type_error(name: &str, value: Value) -> Flow {
+fn node_type_error(_name: &str, value: Value) -> Flow {
     signal(
         LispCondition::WrongTypeArgument,
-        vec![Value::symbol("treesit-node-p"), value, Value::symbol(name)],
+        vec![Value::symbol("treesit-node-p"), value],
     )
 }
 
@@ -2124,7 +2124,7 @@ pub fn builtin_treesit_node_parent(
 #[doc(hidden)]
 pub fn builtin_treesit_node_parser(args: Vec<Value>) -> EvalResult {
     expect_args("treesit-node-parser", &args, 1)?;
-    let Some(node) = args[0].as_record_data() else {
+    let Some(node) = args[0].as_treesit_node_data() else {
         return Err(node_type_error("treesit-node-parser", args[0]));
     };
     Ok(node.get(NODE_SLOT_PARSER).copied().unwrap_or(Value::NIL))

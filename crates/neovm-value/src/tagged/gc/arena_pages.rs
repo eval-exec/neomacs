@@ -130,9 +130,9 @@ const _: () = assert!(
 );
 // Record (task 03/3b): `RecordObj` is VecLikeHeader 24 + LispValueVec 24 =
 // 48B → the 64B class (1024 slots/page, link in bytes 56..64), shared with
-// string/vector in its OWN arena. `RecordObj` backs BOTH the `Record` and
-// `WindowConfiguration` type tags (`alloc_record` / `alloc_window_configuration`
-// — same Rust type, distinct tag), so both funnel to `record_arena`. If this
+// string/vector in its OWN arena. `RecordObj` backs Record, WindowConfiguration,
+// and TsNode (same Rust type, distinct tags), so all three constructors funnel
+// to `record_arena`. If this
 // assert fails the struct grew — bump the stride; never squeeze the link.
 const _: () = assert!(
     size_of::<RecordObj>() <= 56,
@@ -309,7 +309,7 @@ impl PagedObject for MacroObj {
 
 impl PagedObject for RecordObj {
     // 64B class (shared stride, own arena): 1024 slots/page, link 56..64.
-    // Backs both the Record and WindowConfiguration type tags.
+    // Backs the Record, WindowConfiguration, and TsNode type tags.
     const SLOT_BYTES: usize = 64;
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "record";

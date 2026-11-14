@@ -931,6 +931,9 @@ pub enum VecLikeType {
     CondVar = 24,
     /// Dynamic module function (GNU `PVEC_MODULE_FUNCTION`).
     ModuleFunction = 25,
+    /// A native tree-sitter node (GNU `PVEC_TS_NODE`). Its private slots use
+    /// `RecordObj` storage, with a distinct, Lisp-unforgeable type tag.
+    TsNode = 28,
     /// SQLite database or statement object (like GNU's PVEC_SQLITE).
     Sqlite = 30,
     /// Lisp closures are GNU `PVEC_CLOSURE`.
@@ -983,6 +986,7 @@ impl VecLikeType {
             Self::Mutex => GnuPvecType::Mutex,
             Self::CondVar => GnuPvecType::Condvar,
             Self::ModuleFunction => GnuPvecType::ModuleFunction,
+            Self::TsNode => GnuPvecType::TsNode,
             Self::Sqlite => GnuPvecType::Sqlite,
             Self::Lambda => GnuPvecType::Closure,
             Self::CharTable => GnuPvecType::CharTable,

@@ -1002,6 +1002,7 @@ unsafe extern "C" fn module_type_of(env: *mut emacs_env, arg: emacs_value) -> em
                 VecLikeType::Record => "record",
                 VecLikeType::Font => "font-object",
                 VecLikeType::WindowConfiguration => "window-configuration",
+                VecLikeType::TsNode => "treesit-node",
                 VecLikeType::Overlay => "overlay",
                 VecLikeType::Marker => "marker",
                 VecLikeType::Buffer => "buffer",

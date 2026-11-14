@@ -490,7 +490,9 @@ fn object_struct_bytes(header: *const GcHeader) -> usize {
                 VecLikeType::Lambda => size_of::<LambdaObj>(),
                 VecLikeType::Macro => size_of::<MacroObj>(),
                 VecLikeType::ByteCode => size_of::<ByteCodeObj>(),
-                VecLikeType::Record | VecLikeType::WindowConfiguration => size_of::<RecordObj>(),
+                VecLikeType::Record | VecLikeType::WindowConfiguration | VecLikeType::TsNode => {
+                    size_of::<RecordObj>()
+                }
                 VecLikeType::Font => size_of::<FontObj>(),
                 VecLikeType::Overlay => size_of::<OverlayObj>(),
                 VecLikeType::Marker => size_of::<MarkerObj>(),

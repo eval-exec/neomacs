@@ -3103,6 +3103,13 @@ impl TaggedValue {
         with_tagged_heap(|h| h.alloc_record(values))
     }
 
+    /// Allocate a native tree-sitter node with private, GC-traced slots.
+    /// Ordinary Lisp records cannot acquire this pseudovector type.
+    #[doc(hidden)]
+    pub fn make_treesit_node(values: Vec<Value>) -> Self {
+        with_tagged_heap(|h| h.alloc_treesit_node(values))
+    }
+
     /// Allocate an opaque opened-font pseudovector (`PVEC_FONT`).
     #[doc(hidden)]
     pub fn make_font(data: FontObjectData) -> Self {
@@ -3351,6 +3358,7 @@ impl TaggedValue {
                 | VecLikeType::Obarray
                 | VecLikeType::Terminal
                 | VecLikeType::WindowConfiguration
+                | VecLikeType::TsNode
                 | VecLikeType::Subr
                 | VecLikeType::Xwidget
                 | VecLikeType::XwidgetView
@@ -4037,6 +4045,21 @@ impl TaggedValue {
         }
     }
 
+    /// Borrow the private GC-traced slots of a native tree-sitter node.
+    /// This does not establish backend freshness or parser liveness.
+    #[doc(hidden)]
+    pub fn as_treesit_node_data(self) -> Option<&'static LispValueSlice> {
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::TsNode {
+            // SAFETY: TsNode allocations share the RecordObj storage layout,
+            // selected here only after checking their intrinsic header tag.
+            let ptr = header as *const RecordObj;
+            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+        } else {
+            None
+        }
+    }
+
     /// Borrow the typed native payload of an opened-font pseudovector.
     #[doc(hidden)]
     pub fn as_font_data(self) -> Option<&'static FontObjectData> {
@@ -4360,6 +4383,7 @@ impl TaggedValue {
                     kind,
                     VecLikeType::Vector
                         | VecLikeType::Record
+                        | VecLikeType::TsNode
                         | VecLikeType::CharTable
                         | VecLikeType::SubCharTable
                 ) =>
@@ -4633,11 +4657,16 @@ impl EqualSeenPair {
 /// GNU `internal_equal_1` treats normal vectors, records, char tables, and
 /// sub-char-tables as structural pseudovectors.  Their Rust layouts differ,
 /// so exposing one typed view keeps the two equality engines on the same
-/// exhaustive layout mapping without materializing temporary vectors.
+/// exhaustive layout mapping without materializing temporary vectors. Native
+/// tree-sitter wrappers retain their existing private slot equality here; this
+/// does not expose their slots through ordinary Lisp record or sequence APIs.
 #[derive(Clone, Copy)]
 pub(crate) enum StructuralPseudovectorView<'a> {
     Vector(&'a [Value]),
     Record(&'a [Value]),
+    // Keep the existing private wrapper slot equality/hash contract while
+    // excluding nodes from ordinary record access and cross-type equality.
+    TsNode(&'a [Value]),
     CharTable(&'a CharTableObj),
     SubCharTable(&'a SubCharTableObj),
 }
@@ -4651,6 +4680,9 @@ impl StructuralPseudovectorView<'_> {
             VecLikeType::Record => value
                 .as_record_data()
                 .map(|slots| Self::Record(slots.as_slice())),
+            VecLikeType::TsNode => value
+                .as_treesit_node_data()
+                .map(|slots| Self::TsNode(slots.as_slice())),
             VecLikeType::CharTable => value.as_char_table_obj().map(Self::CharTable),
             VecLikeType::SubCharTable => value.as_sub_char_table_obj().map(Self::SubCharTable),
             _ => None,
@@ -4660,7 +4692,8 @@ impl StructuralPseudovectorView<'_> {
     fn same_shape(self, other: Self) -> bool {
         match (self, other) {
             (Self::Vector(left), Self::Vector(right))
-            | (Self::Record(left), Self::Record(right)) => left.len() == right.len(),
+            | (Self::Record(left), Self::Record(right))
+            | (Self::TsNode(left), Self::TsNode(right)) => left.len() == right.len(),
             (Self::CharTable(left), Self::CharTable(right)) => {
                 left.extras.len() == right.extras.len()
             }
@@ -4675,7 +4708,7 @@ impl StructuralPseudovectorView<'_> {
 
     pub(crate) fn len(self) -> usize {
         match self {
-            Self::Vector(slots) | Self::Record(slots) => slots.len(),
+            Self::Vector(slots) | Self::Record(slots) | Self::TsNode(slots) => slots.len(),
             Self::CharTable(table) => 4 + CHAR_TABLE_TOP_SLOTS + table.extras.len(),
             Self::SubCharTable(table) => table.contents.len(),
         }
@@ -4683,7 +4716,7 @@ impl StructuralPseudovectorView<'_> {
 
     pub(crate) fn slot(self, index: usize) -> Value {
         match self {
-            Self::Vector(slots) | Self::Record(slots) => slots[index],
+            Self::Vector(slots) | Self::Record(slots) | Self::TsNode(slots) => slots[index],
             Self::CharTable(table) => match index {
                 0 => table.defalt.get(),
                 1 => table.parent.get(),
@@ -4703,6 +4736,7 @@ impl StructuralPseudovectorView<'_> {
         match self {
             Self::Vector(_) => "#<vector>",
             Self::Record(_) => "#<record>",
+            Self::TsNode(_) => "#<treesit-node>",
             Self::CharTable(_) => "#<char-table>",
             Self::SubCharTable(_) => "#<sub-char-table>",
         }
@@ -4846,6 +4880,7 @@ pub fn equal_value_inner(
         }
         VecLikeType::Vector
         | VecLikeType::Record
+        | VecLikeType::TsNode
         | VecLikeType::CharTable
         | VecLikeType::SubCharTable => {
             let (Some(left_view), Some(right_view)) = (
@@ -5160,6 +5195,7 @@ pub fn try_equal_value_inner(
         }
         VecLikeType::Vector
         | VecLikeType::Record
+        | VecLikeType::TsNode
         | VecLikeType::CharTable
         | VecLikeType::SubCharTable => {
             let (Some(left_view), Some(right_view)) = (

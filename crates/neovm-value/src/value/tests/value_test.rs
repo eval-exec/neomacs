@@ -210,6 +210,70 @@ fn equal_hash_keys_preserve_structural_pseudovector_types() {
 }
 
 #[test]
+fn treesit_node_header_is_opaque_to_record_and_sequence_access() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let parser = Value::make_record(vec![Value::symbol("treesit-parser"), Value::fixnum(7)]);
+        let slots = vec![Value::symbol("treesit-node"), Value::fixnum(19), parser];
+        let forged = Value::make_record(slots.clone());
+        let node = Value::make_treesit_node(slots);
+        let copied = node;
+
+        assert_eq!(node.veclike_type(), Some(VecLikeType::TsNode));
+        assert_eq!(node.type_name(), "treesit-node");
+        assert_eq!(copied, node);
+        assert_eq!(copied.as_treesit_node_data().unwrap()[2], parser);
+        assert!(forged.as_treesit_node_data().is_none());
+        assert!(!node.is_record());
+        assert!(node.as_record_data().is_none());
+        assert!(node.as_vector_data().is_none());
+        assert!(!node.set_record_slot(2, Value::NIL));
+        assert!(!node.replace_vectorlike_sequence_data(vec![Value::NIL]));
+        assert_eq!(node.as_treesit_node_data().unwrap()[2], parser);
+    });
+}
+
+#[test]
+fn treesit_node_wrappers_keep_private_slot_equality_and_hashing() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let parser = Value::make_record(vec![Value::symbol("treesit-parser"), Value::fixnum(7)]);
+        let slots = vec![Value::symbol("treesit-node"), Value::fixnum(19), parser];
+        let forged = Value::make_record(slots.clone());
+        let left = Value::make_treesit_node(slots.clone());
+        let right = Value::make_treesit_node(slots);
+        let different = Value::make_treesit_node(vec![
+            Value::symbol("treesit-node"),
+            Value::fixnum(20),
+            parser,
+        ]);
+
+        assert_ne!(left, right);
+        assert!(equal_value(&left, &right, 0));
+        assert!(try_equal_value_swp(&left, &right, 0, false).unwrap());
+        assert!(!equal_value(&left, &different, 0));
+        assert!(!equal_value(&left, &forged, 0));
+        assert_eq!(
+            left.to_hash_key(&HashTableTest::Equal),
+            right.to_hash_key(&HashTableTest::Equal)
+        );
+        assert_ne!(
+            left.to_hash_key(&HashTableTest::Equal),
+            forged.to_hash_key(&HashTableTest::Equal)
+        );
+        assert_eq!(
+            hash_index::equal_value_hash(left),
+            hash_index::equal_value_hash(right)
+        );
+        // Preserve the existing slot-hash stream while the header becomes opaque.
+        assert_eq!(
+            hash_index::equal_value_hash(left),
+            hash_index::equal_value_hash(forged)
+        );
+    });
+}
+
+#[test]
 fn make_int_uses_gnu_fixnum_boundary() {
     crate::test_utils::init_test_tracing();
     with_test_heap(|| {

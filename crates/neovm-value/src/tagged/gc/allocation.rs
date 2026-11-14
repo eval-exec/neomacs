@@ -790,8 +790,8 @@ impl TaggedHeap {
     /// Allocate a record.
     ///
     /// Allocated from the RECORD ARENA PAGES (task 03/3b): the single
-    /// `RecordObj` allocation chokepoint alongside `alloc_window_configuration`
-    /// (same Rust type, distinct tag — both funnel to `record_arena`). One
+    /// `RecordObj` allocation chokepoint alongside the window-configuration and
+    /// tree-sitter-node constructors (same Rust type, distinct tags). One
     /// FULL-header `ptr::write` (a stale kind would type-confuse the Drop of
     /// the garbage slot `Vec`), unconditional born-at-parity store; NO
     /// intrusive-list / addr-set entry (owned via the page-span oracle,
@@ -826,9 +826,18 @@ impl TaggedHeap {
         self.alloc_record_like(VecLikeType::WindowConfiguration, items)
     }
 
-    /// Shared `RecordObj` page allocator for the `Record` and
-    /// `WindowConfiguration` tags. `add_memory_use_count` is the caller's job
-    /// (both currently count `VectorCells`).
+    /// Allocate an opaque native tree-sitter node (`PVEC_TS_NODE`).
+    ///
+    /// The same record-arena storage retains its private Lisp slots, while
+    /// the immutable native header distinguishes it from Lisp-made records.
+    pub(crate) fn alloc_treesit_node(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
+        self.add_memory_use_count(MemoryUseCountSlot::VectorCells, items.len() as u64);
+        self.alloc_record_like(VecLikeType::TsNode, items)
+    }
+
+    /// Shared `RecordObj` page allocator for records, window configurations,
+    /// and tree-sitter nodes. `add_memory_use_count` is the caller's job
+    /// (all currently count `VectorCells`).
     pub(super) fn alloc_record_like(
         &mut self,
         tag: VecLikeType,
@@ -836,7 +845,7 @@ impl TaggedHeap {
     ) -> TaggedValue {
         debug_assert!(matches!(
             tag,
-            VecLikeType::Record | VecLikeType::WindowConfiguration
+            VecLikeType::Record | VecLikeType::WindowConfiguration | VecLikeType::TsNode
         ));
         let ptr = self.record_arena.alloc_slot();
         unsafe {
@@ -1102,7 +1111,7 @@ impl TaggedHeap {
                 VecLikeType::ByteCode => {
                     Self::bytecode_payload_layout(&*(header as *const ByteCodeObj))
                 }
-                VecLikeType::Record | VecLikeType::WindowConfiguration => {
+                VecLikeType::Record | VecLikeType::WindowConfiguration | VecLikeType::TsNode => {
                     Self::value_vec_payload_layout(&(*(header as *const RecordObj)).data)
                 }
                 VecLikeType::Font => {

@@ -311,13 +311,18 @@ fn equal_hash_obj(value: Value, depth: u32, mut hasher: FxHasher) -> FxHasher {
             hasher
         }
         ValueKind::Veclike(kind) => match kind {
-            VecLikeType::Vector | VecLikeType::Record | VecLikeType::CharTable => {
+            VecLikeType::Vector
+            | VecLikeType::Record
+            | VecLikeType::TsNode
+            | VecLikeType::CharTable => {
                 let Some(view) = StructuralPseudovectorView::from_value(value, kind) else {
                     return identity(hasher);
                 };
                 let tag = match kind {
                     VecLikeType::Vector => EqualHashTag::Vector,
-                    VecLikeType::Record => EqualHashTag::Record,
+                    // Preserve the old slot hash for native node wrappers;
+                    // equality still distinguishes their intrinsic type.
+                    VecLikeType::Record | VecLikeType::TsNode => EqualHashTag::Record,
                     _ => EqualHashTag::CharTable,
                 };
                 // GNU `sxhash_vector`: seeded with the size, then the first

@@ -571,8 +571,8 @@ pub struct TaggedHeap {
     lambda_arena: ObjectArena<LambdaObj>,
     /// Macros (task 03/3b): shares the 128B stride in its OWN arena.
     macro_arena: ObjectArena<MacroObj>,
-    /// Records (task 03/3b): 64B class, own arena — backs both the Record and
-    /// WindowConfiguration type tags (same `RecordObj`, distinct tag).
+    /// Records (task 03/3b): 64B class, own arena — backs Record,
+    /// WindowConfiguration, and TsNode type tags (same `RecordObj`, distinct tags).
     record_arena: ObjectArena<RecordObj>,
     /// Symbols-with-position (task 03/3b): 64B class, own arena. POD-like
     /// ({sym, pos} Values, `needs_drop` == false — no payload to free).
@@ -2001,7 +2001,9 @@ impl TaggedHeap {
                         VecLikeType::ByteCode => {
                             Self::bytecode_object_bytes(&*(ptr as *const ByteCodeObj))
                         }
-                        VecLikeType::Record | VecLikeType::WindowConfiguration => {
+                        VecLikeType::Record
+                        | VecLikeType::WindowConfiguration
+                        | VecLikeType::TsNode => {
                             Self::record_object_bytes(&*(ptr as *const RecordObj))
                         }
                         VecLikeType::Font => Self::font_object_bytes(&*(ptr as *const FontObj)),
@@ -2179,6 +2181,7 @@ impl TaggedHeap {
                     VecLikeType::Obarray => "obarray",
                     VecLikeType::Terminal => "terminal",
                     VecLikeType::WindowConfiguration => "window-configuration",
+                    VecLikeType::TsNode => "treesit-node",
                     VecLikeType::Subr => "subr",
                     VecLikeType::Xwidget => "xwidget",
                     VecLikeType::XwidgetView => "xwidget-view",

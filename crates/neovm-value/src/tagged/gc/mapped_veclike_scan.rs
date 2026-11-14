@@ -144,8 +144,10 @@ impl MappedVeclikeScanSnapshot {
                             MappedVeclikePayload::Backing(backing)
                         }
                     }
-                    VecLikeType::Record | VecLikeType::WindowConfiguration => {
-                        // SAFETY: these stopped subtypes both use RecordObj's
+                    VecLikeType::Record
+                    | VecLikeType::WindowConfiguration
+                    | VecLikeType::TsNode => {
+                        // SAFETY: these stopped subtypes all use RecordObj's
                         // layout. A mapped backing remains immutable on promote.
                         let data = unsafe { &(*(header as *const RecordObj)).data };
                         let backing = data.scan_entry();

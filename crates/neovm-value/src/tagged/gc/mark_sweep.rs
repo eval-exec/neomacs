@@ -1453,7 +1453,7 @@ impl TaggedHeap {
                 VecLikeType::Vector => {
                     sink.children((*(ptr as *const VectorObj)).data.iter().copied());
                 }
-                VecLikeType::Record | VecLikeType::WindowConfiguration => {
+                VecLikeType::Record | VecLikeType::WindowConfiguration | VecLikeType::TsNode => {
                     sink.children((*(ptr as *const RecordObj)).data.iter().copied());
                 }
                 VecLikeType::Font => {

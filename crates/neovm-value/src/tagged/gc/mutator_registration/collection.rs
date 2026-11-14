@@ -205,6 +205,7 @@ fn supported_with_weak(
                 | VecLikeType::Obarray
                 | VecLikeType::Terminal
                 | VecLikeType::WindowConfiguration
+                | VecLikeType::TsNode
                 | VecLikeType::Subr
                 | VecLikeType::Xwidget
                 | VecLikeType::XwidgetView

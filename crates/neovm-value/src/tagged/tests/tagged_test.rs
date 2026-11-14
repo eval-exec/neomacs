@@ -109,6 +109,7 @@ fn gnu_pvec_type_layout_for_shared_vectorlikes() {
         (VecLikeType::Xwidget, 20),
         (VecLikeType::XwidgetView, 21),
         (VecLikeType::ModuleFunction, 25),
+        (VecLikeType::TsNode, 28),
         (VecLikeType::Sqlite, 30),
         (VecLikeType::Lambda, 31),
         (VecLikeType::CharTable, 32),

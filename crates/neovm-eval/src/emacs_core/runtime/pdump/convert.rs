@@ -296,6 +296,11 @@ impl DumpEncoder {
             | ValueKind::Veclike(VecLikeType::WindowConfiguration) => {
                 DumpValue::Record(dump_heap_ref(self.value_to_heap_ref(v)))
             }
+            ValueKind::Veclike(VecLikeType::TsNode) => {
+                // GNU pdumper.c rejects PVEC_TS_NODE: node handles belong to
+                // a live parser and cannot be restored as ordinary records.
+                panic!("pdump: tree-sitter node objects are not portable")
+            }
             ValueKind::Veclike(VecLikeType::Font) => {
                 panic!("pdump: opened font objects are runtime display resources")
             }
@@ -3431,6 +3436,9 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
                 .map(|item| encoder.dump_value(item))
                 .collect(),
         ),
+        ValueKind::Veclike(VecLikeType::TsNode) => {
+            panic!("pdump: tree-sitter node objects are not portable")
+        }
         ValueKind::Veclike(VecLikeType::Overlay) => DumpHeapObject::Overlay(dump_overlay(
             encoder,
             value.as_overlay_data().expect("overlay"),
