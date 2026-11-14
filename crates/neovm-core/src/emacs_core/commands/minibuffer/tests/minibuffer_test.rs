@@ -2159,10 +2159,6 @@ fn test_completion_answers_an_obarray_like_gnu() {
     );
 }
 
-#[cfg(test)]
-#[path = "compare_case_table_test.rs"]
-mod compare_case_table;
-
 #[test]
 fn completion_primitives_observe_a_let_bound_buffer_local_case_policy() {
     crate::test_utils::init_test_tracing();

@@ -1391,6 +1391,7 @@ mod unit_runtime {
         let error = context
             .eval_str("(number-to-string nil)")
             .expect_err("number-to-string rejects a non-number");
+        let error = neovm_value::error::flow_from_eval_error(error);
         let FlowRef::Signal(signal) = error.kind() else {
             panic!("number-to-string wrong type is a signal");
         };
@@ -1405,7 +1406,7 @@ mod unit_runtime {
     fn unit_string_to_multibyte_uses_canonical_descriptor_and_registered_entry() {
         use crate::emacs_core::builtins::strings::STRING_TO_MULTIBYTE_SUBR;
         use crate::emacs_core::eval::subr_abi::SubrFn;
-        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity};
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
         use neovm_value::heap_types::LispString;
         let expected = STRING_TO_MULTIBYTE_SUBR;
         let actual = strings_family_subr("string-to-multibyte")

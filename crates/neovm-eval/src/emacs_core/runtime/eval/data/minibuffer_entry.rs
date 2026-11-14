@@ -1941,3 +1941,7 @@ pub fn builtin_test_completion(
 #[cfg(test)]
 #[path = "tests/completion_matcher_test.rs"]
 mod completion_matcher_tests;
+
+#[cfg(test)]
+#[path = "tests/completion_case_table_test.rs"]
+mod completion_case_table_tests;
