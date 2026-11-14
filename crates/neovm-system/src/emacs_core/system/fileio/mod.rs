@@ -58,8 +58,8 @@ pub use neovm_eval::emacs_core::eval::data::file_name_expand::{
     expand_file_name, file_name_absolute_p,
 };
 use neovm_eval::emacs_core::eval::data::file_name_expand::{
-    expand_file_name_bytes_with_home, expand_file_name_result_multibyte,
-    fallback_root_default_directory, file_name_lisp_from_bytes, lisp_file_name_absolute_system_p,
+    expand_file_name_bytes_with_home, fallback_root_default_directory, file_name_lisp_from_bytes,
+    lisp_file_name_absolute_system_p,
 };
 
 #[cfg(unix)]
