@@ -15,7 +15,7 @@ fn make_indirect_buffer_bad_name_precedes_bad_base() {
         r#"(condition-case err
                 (make-indirect-buffer 23 42)
               (error (list (car err) (cdr err))))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[r#""OK (wrong-type-argument (stringp 42))""#]],
     );
 }
 
@@ -25,7 +25,7 @@ fn make_indirect_buffer_bad_name_with_live_base() {
         r#"(condition-case err
                 (make-indirect-buffer (current-buffer) 42)
               (error (list (car err) (cdr err))))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[r#""OK (wrong-type-argument (stringp 42))""#]],
     );
 }
 
@@ -35,7 +35,7 @@ fn make_indirect_buffer_bad_base_with_valid_name() {
         r#"(condition-case err
                 (make-indirect-buffer 23 "neovm--indirect-validation-uncreated")
               (error (list (car err) (cdr err))))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[r#""OK (wrong-type-argument (stringp 23))""#]],
     );
 }
 
@@ -45,7 +45,7 @@ fn make_indirect_buffer_bad_base_precedes_empty_name() {
         r#"(condition-case err
                 (make-indirect-buffer 23 "")
               (error (list (car err) (cdr err))))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[r#""OK (wrong-type-argument (stringp 23))""#]],
     );
 }
 
@@ -58,6 +58,8 @@ fn make_indirect_buffer_duplicate_name_precedes_bad_base() {
                       (make-indirect-buffer 23 (buffer-name existing))
                     (error (list (car err) (cdr err))))
                 (kill-buffer existing)))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[
+            r#""OK (error (\"Buffer name ‘neovm--indirect-validation-existing’ is in use\"))""#
+        ]],
     );
 }
