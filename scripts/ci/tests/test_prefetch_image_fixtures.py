@@ -1,14 +1,19 @@
 """Hermetic cache/provisioning contracts; network access is always mocked."""
 
 import contextlib
+import errno
 import hashlib
+from http.client import HTTPResponse, IncompleteRead, RemoteDisconnected
 import importlib.util
 import io
 from pathlib import Path
+import socket
+import ssl
 import sys
 import tempfile
 import unittest
 from unittest import mock
+from urllib.error import HTTPError, URLError
 
 WORKSPACE = Path(__file__).resolve().parents[3]
 SCRIPT = WORKSPACE / "scripts/ci/prefetch-image-fixtures.py"
@@ -46,6 +51,13 @@ class ImageFixtureTests(unittest.TestCase):
         )
         guard.start()
         self.addCleanup(guard.stop)
+        sleep_guard = mock.patch.object(
+            provisioner.time,
+            "sleep",
+            side_effect=AssertionError("real unit-test backoff forbidden"),
+        )
+        sleep_guard.start()
+        self.addCleanup(sleep_guard.stop)
 
     def seed(self, data):
         self.cache.mkdir(parents=True)
@@ -184,6 +196,209 @@ class ImageFixtureTests(unittest.TestCase):
         opened.assert_called_once_with(
             self.pin.url, timeout=provisioner.IO_TIMEOUT_SECONDS
         )
+
+    def test_transient_network_failures_recover_on_fourth_attempt_with_backoff(self):
+        failures = [
+            ssl.SSLEOFError(8, "unexpected eof while reading"),
+            ConnectionResetError("connection reset by peer"),
+            TimeoutError("connection timed out"),
+        ]
+        with (
+            mock.patch.object(
+                provisioner, "urlopen", side_effect=[*failures, io.BytesIO(self.data)]
+            ) as opened,
+            mock.patch.object(provisioner.time, "sleep") as sleep,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(provisioner.fetch_bytes(self.pin.url), self.data)
+        self.assertEqual(opened.call_count, 4)
+        self.assertEqual(
+            sleep.call_args_list, [mock.call(2), mock.call(5), mock.call(15)]
+        )
+
+    def test_http_5xx_and_wrapped_transport_errors_retry(self):
+        error_body = io.BytesIO(b"server error")
+        failures = [
+            HTTPError(self.pin.url, 500, "server failed", None, error_body),
+            HTTPError(self.pin.url, 503, "service unavailable", None, None),
+            URLError(ssl.SSLEOFError(8, "unexpected eof while reading")),
+            URLError("TLS connect error: unexpected eof while reading"),
+            URLError(TimeoutError("timed out")),
+            URLError(OSError(errno.ENETUNREACH, "network unavailable")),
+            URLError(socket.gaierror(socket.EAI_AGAIN, "DNS temporarily unavailable")),
+            RemoteDisconnected("remote end closed connection without response"),
+        ]
+        for failure in failures:
+            with (
+                self.subTest(failure=failure),
+                mock.patch.object(
+                    provisioner, "urlopen", side_effect=[failure, io.BytesIO(self.data)]
+                ) as opened,
+                mock.patch.object(provisioner.time, "sleep") as sleep,
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(provisioner.fetch_bytes(self.pin.url), self.data)
+                self.assertEqual(opened.call_count, 2)
+                sleep.assert_called_once_with(2)
+        self.assertTrue(error_body.closed)
+
+    def test_all_http_4xx_certificates_and_unknown_failures_stop_without_retry(self):
+        failures = [
+            HTTPError(self.pin.url, status, "connection reset timed out", None, None)
+            for status in (400, 401, 403, 404, 408, 429, 499)
+        ] + [
+            URLError(URLError(ssl.SSLCertVerificationError(1, "timed out"))),
+            URLError("certificate verify failed; connection reset"),
+            ssl.SSLError("unknown TLS protocol failure"),
+            OSError("unknown failure"),
+            PermissionError("permission denied"),
+        ]
+        for failure in failures:
+            with (
+                self.subTest(failure=failure),
+                mock.patch.object(
+                    provisioner, "urlopen", side_effect=failure
+                ) as opened,
+                mock.patch.object(provisioner.time, "sleep") as sleep,
+            ):
+                with self.assertRaises(type(failure)) as error:
+                    provisioner.fetch_bytes(self.pin.url)
+                self.assertIs(error.exception, failure)
+                opened.assert_called_once()
+                sleep.assert_not_called()
+
+    def test_retry_exhaustion_preserves_four_causes_and_existing_cache(self):
+        self.seed(b"existing corrupt cache")
+        failures = [
+            ConnectionResetError(f"connection reset cause {n}") for n in range(4)
+        ]
+        with (
+            mock.patch.object(provisioner, "urlopen", side_effect=failures) as opened,
+            mock.patch.object(provisioner.time, "sleep") as sleep,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            with self.assertRaises(ValueError) as error:
+                provisioner.prefetch(self.workspace, self.pin)
+        diagnostic = str(error.exception)
+        self.assertIn("failed after 4 attempts", diagnostic)
+        for n in range(4):
+            self.assertIn(f"attempt {n + 1}: connection reset cause {n}", diagnostic)
+        self.assertIn(self.pin.url, diagnostic)
+        self.assertIn(self.pin.sha256, diagnostic)
+        self.assertEqual(opened.call_count, 4)
+        self.assertEqual(
+            sleep.call_args_list, [mock.call(2), mock.call(5), mock.call(15)]
+        )
+        self.assertEqual(self.destination.read_bytes(), b"existing corrupt cache")
+        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+
+    def test_permanent_failure_after_transient_does_not_spend_remaining_attempts(self):
+        permanent = HTTPError(self.pin.url, 404, "not found", None, None)
+        with (
+            mock.patch.object(
+                provisioner,
+                "urlopen",
+                side_effect=[TimeoutError("timed out"), permanent],
+            ) as opened,
+            mock.patch.object(provisioner.time, "sleep") as sleep,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            with self.assertRaises(HTTPError) as error:
+                provisioner.fetch_bytes(self.pin.url)
+        self.assertIs(error.exception, permanent)
+        self.assertEqual(opened.call_count, 2)
+        sleep.assert_called_once_with(2)
+
+    def test_partial_response_is_closed_and_discarded_before_retry(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read1.side_effect = [
+            b"discard partial bytes",
+            IncompleteRead(b"x", 10),
+        ]
+        with (
+            mock.patch.object(
+                provisioner, "urlopen", side_effect=[response, io.BytesIO(self.data)]
+            ) as opened,
+            mock.patch.object(provisioner.time, "sleep") as sleep,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(
+                provisioner.prefetch(self.workspace, self.pin), self.destination
+            )
+        self.assertEqual(self.destination.read_bytes(), self.data)
+        response.__exit__.assert_called_once()
+        self.assertEqual(opened.call_count, 2)
+        sleep.assert_called_once_with(2)
+
+    def test_truncated_content_length_response_retries_instead_of_hash_failure(self):
+        socket = mock.Mock()
+        socket.makefile.return_value = io.BytesIO(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort"
+        )
+        response = HTTPResponse(socket)
+        response.begin()
+        with (
+            mock.patch.object(
+                provisioner, "urlopen", side_effect=[response, io.BytesIO(self.data)]
+            ) as opened,
+            mock.patch.object(provisioner.time, "sleep") as sleep,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(
+                provisioner.prefetch(self.workspace, self.pin), self.destination
+            )
+        self.assertTrue(response.isclosed())
+        self.assertEqual(self.destination.read_bytes(), self.data)
+        self.assertEqual(opened.call_count, 2)
+        sleep.assert_called_once_with(2)
+
+    def test_hash_mismatch_is_not_retried_and_cache_hit_never_fetches_or_sleeps(self):
+        socket = mock.Mock()
+        socket.makefile.return_value = io.BytesIO(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nwrong image"
+        )
+        complete_response = HTTPResponse(socket)
+        complete_response.begin()
+        with (
+            mock.patch.object(
+                provisioner, "urlopen", return_value=complete_response
+            ) as opened,
+            mock.patch.object(provisioner.time, "sleep") as sleep,
+        ):
+            with self.assertRaisesRegex(ValueError, "SHA-256"):
+                provisioner.prefetch(self.workspace, self.pin)
+            opened.assert_called_once()
+            sleep.assert_not_called()
+            self.assertFalse(self.cache.exists())
+        self.seed(self.data)
+        with (
+            mock.patch.object(provisioner, "urlopen") as opened,
+            mock.patch.object(provisioner.time, "sleep") as sleep,
+        ):
+            self.assertEqual(
+                provisioner.prefetch(self.workspace, self.pin), self.destination
+            )
+            opened.assert_not_called()
+            sleep.assert_not_called()
+
+    def test_retry_attempts_share_original_budget_including_backoff(self):
+        with (
+            mock.patch.object(
+                provisioner, "urlopen", side_effect=TimeoutError("timed out")
+            ) as opened,
+            mock.patch.object(provisioner.time, "sleep") as sleep,
+            mock.patch.object(
+                provisioner.time,
+                "monotonic",
+                side_effect=[0, provisioner.DOWNLOAD_BUDGET_SECONDS + 1],
+            ),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            with self.assertRaisesRegex(TimeoutError, "budget"):
+                provisioner.fetch_bytes(self.pin.url)
+        opened.assert_called_once()
+        sleep.assert_called_once_with(2)
 
     def test_download_budget_is_checked_without_real_network_or_waiting(self):
         with mock.patch.object(
