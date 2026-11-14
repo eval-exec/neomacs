@@ -3266,7 +3266,23 @@ pub fn builtin_x_open_connection(
         _ => None,
     };
     if eval.daemon().is_some() {
-        ensure_daemon_graphical_connection(eval, Some(args[0]))?;
+        ensure_daemon_graphical_connection(eval, Some(args[0])).map_err(|reason| {
+            if reason
+                .as_signal()
+                .is_some_and(|sig| sig.symbol_name() == "error")
+            {
+                let requested_display = display_string_text(&args[0]).expect("checked string");
+                tracing::debug!(%requested_display, ?reason, "x-open-connection daemon refused admission");
+                signal(
+                    "error",
+                    vec![Value::string(format!(
+                        "Display {requested_display} can’t be opened"
+                    ))],
+                )
+            } else {
+                reason
+            }
+        })?;
         if let Some(resources) = resources.as_deref()
             && let Some(host) = eval.display_host.as_mut()
         {
