@@ -8,11 +8,12 @@ use crate::emacs_core::dispnew::pure::{
     builtin_redraw_frame, builtin_send_string_to_terminal, reset_dispnew_thread_locals,
 };
 use crate::emacs_core::terminal::pure::{
-    builtin_controlling_tty_p, builtin_frame_terminal, builtin_resume_tty,
+    TerminalOutputMethod, builtin_controlling_tty_p, builtin_frame_terminal, builtin_resume_tty,
     builtin_selected_terminal, builtin_set_terminal_parameter, builtin_suspend_tty,
     builtin_terminal_list, builtin_terminal_live_p, builtin_terminal_name,
     builtin_terminal_parameter, builtin_terminal_parameters, builtin_tty_top_frame,
-    builtin_tty_type, reset_terminal_thread_locals, terminal_handle_value,
+    builtin_tty_type, live_terminal_output_method_for_id, reset_terminal_thread_locals,
+    terminal_handle_value,
 };
 use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity, SelectionOwner};
 use neovm_eval::emacs_core::eval::{DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
@@ -1359,6 +1360,302 @@ fn x_open_connection_accepts_nil_display_for_the_neo_frontend() {
     );
     // The pgtk arm still rejects a non-nil non-string.
     assert_x_open_connection_stringp(&mut eval, vec![Value::fixnum(42)], Value::fixnum(42));
+}
+
+// Daemon identity is host-owned. These fixtures exercise only the unit host
+// seam, never a native display connection or daemon process startup.
+fn x_open_connection_daemon_test_context() -> Context {
+    reset_terminal_thread_locals();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.configure_daemon(None, None);
+    assert!(eval.daemon().is_some());
+    assert_eq!(
+        live_terminal_output_method_for_id(TERMINAL_ID),
+        Some(TerminalOutputMethod::Initial)
+    );
+    eval.set_variable("baud-rate", Value::fixnum(73));
+    eval
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct XOpenConnectionDaemonTerminalState {
+    terminals: Value,
+    selected_terminal: Value,
+    name: Value,
+    parameters: Value,
+    output_method: Option<TerminalOutputMethod>,
+    frames: Vec<Value>,
+    baud_rate: Option<Value>,
+    window_system: Option<Value>,
+}
+
+fn x_open_connection_daemon_terminal_state(
+    eval: &mut Context,
+) -> XOpenConnectionDaemonTerminalState {
+    XOpenConnectionDaemonTerminalState {
+        terminals: builtin_terminal_list(vec![]).unwrap(),
+        selected_terminal: builtin_selected_terminal(vec![]).unwrap(),
+        name: builtin_terminal_name(eval, vec![terminal_handle_value()]).unwrap(),
+        parameters: builtin_terminal_parameters(eval, vec![terminal_handle_value()]).unwrap(),
+        output_method: live_terminal_output_method_for_id(TERMINAL_ID),
+        frames: eval
+            .frame_manager()
+            .frame_list()
+            .into_iter()
+            .map(|frame| Value::make_frame(frame.0))
+            .collect(),
+        baud_rate: eval
+            .eval_symbol_by_id(neovm_value::intern::intern("baud-rate"))
+            .ok(),
+        window_system: eval
+            .eval_symbol_by_id(neovm_value::intern::intern("window-system"))
+            .ok(),
+    }
+}
+
+#[test]
+fn x_open_connection_daemon_refuses_missing_host_for_nil_and_true_must_succeed() {
+    crate::test_utils::init_test_tracing();
+    for must_succeed in [Value::NIL, Value::T] {
+        let mut eval = x_open_connection_daemon_test_context();
+        let before = x_open_connection_daemon_terminal_state(&mut eval);
+        assert_x_open_connection_error(
+            &mut eval,
+            vec![
+                Value::string(":987"),
+                Value::string("unadmitted daemon resources"),
+                must_succeed,
+            ],
+            "Display :987 can’t be opened",
+        );
+        assert_eq!(x_open_connection_daemon_terminal_state(&mut eval), before);
+    }
+}
+
+#[test]
+fn x_open_connection_daemon_refuses_unavailable_host_without_mutation() {
+    crate::test_utils::init_test_tracing();
+    for must_succeed in [Value::NIL, Value::T] {
+        let mut eval = x_open_connection_daemon_test_context();
+        let state = install_x_open_connection_host(&mut eval, None);
+        let before = x_open_connection_daemon_terminal_state(&mut eval);
+        assert_x_open_connection_error(
+            &mut eval,
+            vec![
+                Value::string(":42"),
+                Value::string("unadmitted daemon resources"),
+                must_succeed,
+            ],
+            "Display :42 can’t be opened",
+        );
+        assert_eq!(x_open_connection_daemon_terminal_state(&mut eval), before);
+        let state = state.lock().unwrap();
+        assert_eq!(state.resources, "original resources");
+        assert_eq!(
+            state.events,
+            [XOpenConnectionHostEvent::Admission(Some(":42".to_owned()))]
+        );
+    }
+}
+
+#[test]
+fn x_open_connection_daemon_masks_foreign_reason_without_mutating_live_terminal() {
+    crate::test_utils::init_test_tracing();
+    for must_succeed in [Value::NIL, Value::T] {
+        let mut eval = x_open_connection_daemon_test_context();
+        let state = install_x_open_connection_host(
+            &mut eval,
+            Some(GraphicalDisplayIdentity::named(GraphicalBackend::X11, ":42").unwrap()),
+        );
+        // Establish a model-owned graphical terminal before refusing another
+        // name, so this also detects accidental reinitialization of a live one.
+        assert!(
+            builtin_x_open_connection(&mut eval, vec![Value::string(":42")])
+                .unwrap()
+                .is_nil()
+        );
+        assert_eq!(
+            live_terminal_output_method_for_id(TERMINAL_ID),
+            Some(TerminalOutputMethod::WindowSystem)
+        );
+        eval.set_variable("baud-rate", Value::fixnum(73));
+        builtin_set_terminal_parameter(
+            &mut eval,
+            vec![
+                terminal_handle_value(),
+                Value::symbol("x-open-daemon-sentinel"),
+                Value::fixnum(91),
+            ],
+        )
+        .unwrap();
+        state.lock().unwrap().events.clear();
+        let before = x_open_connection_daemon_terminal_state(&mut eval);
+        assert_x_open_connection_error(
+            &mut eval,
+            vec![
+                Value::string(":987"),
+                Value::string("unadmitted daemon resources"),
+                must_succeed,
+            ],
+            "Display :987 can’t be opened",
+        );
+        assert_eq!(x_open_connection_daemon_terminal_state(&mut eval), before);
+        let state = state.lock().unwrap();
+        assert_eq!(state.resources, "original resources");
+        assert_eq!(
+            state.events,
+            [XOpenConnectionHostEvent::Admission(Some(":987".to_owned()))]
+        );
+    }
+}
+
+#[test]
+fn x_open_connection_daemon_checks_display_then_xrm_before_admission() {
+    crate::test_utils::init_test_tracing();
+    for must_succeed in [Value::NIL, Value::T] {
+        let mut eval = x_open_connection_daemon_test_context();
+        let state = install_x_open_connection_host(
+            &mut eval,
+            Some(GraphicalDisplayIdentity::named(GraphicalBackend::X11, ":42").unwrap()),
+        );
+        let before = x_open_connection_daemon_terminal_state(&mut eval);
+        for (display, resources, invalid) in [
+            (Value::NIL, Value::fixnum(42), Value::NIL),
+            (Value::fixnum(41), Value::fixnum(42), Value::fixnum(41)),
+            (Value::string(":987"), Value::fixnum(42), Value::fixnum(42)),
+        ] {
+            assert_x_open_connection_stringp(
+                &mut eval,
+                vec![display, resources, must_succeed],
+                invalid,
+            );
+            assert_eq!(x_open_connection_daemon_terminal_state(&mut eval), before);
+            let state = state.lock().unwrap();
+            assert!(state.events.is_empty());
+            assert_eq!(state.resources, "original resources");
+        }
+    }
+}
+
+#[test]
+fn x_open_connection_daemon_admits_owner_before_resources_and_preserves_reopen_state() {
+    crate::test_utils::init_test_tracing();
+    for identity in [
+        GraphicalDisplayIdentity::named(GraphicalBackend::X11, ":42").unwrap(),
+        GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland),
+    ] {
+        for resources in [None, Some("new daemon resources")] {
+            for must_succeed in [Value::NIL, Value::T] {
+                let mut eval = x_open_connection_daemon_test_context();
+                let display = identity.terminal_name().to_owned();
+                let state = install_x_open_connection_host(&mut eval, Some(identity.clone()));
+                let before_counts = x_open_connection_registry_counts(&eval);
+                let mut args = vec![Value::string(&display)];
+                if resources.is_some() || !must_succeed.is_nil() {
+                    args.push(resources.map(Value::string).unwrap_or(Value::NIL));
+                    args.push(must_succeed);
+                }
+                assert!(builtin_x_open_connection(&mut eval, args).unwrap().is_nil());
+                assert_eq!(x_open_connection_registry_counts(&eval), before_counts);
+                assert_eq!(
+                    live_terminal_output_method_for_id(TERMINAL_ID),
+                    Some(TerminalOutputMethod::WindowSystem)
+                );
+                assert_eq!(
+                    builtin_terminal_name(&mut eval, vec![terminal_handle_value()]).unwrap(),
+                    Value::string(&display)
+                );
+                {
+                    let state = state.lock().unwrap();
+                    assert_eq!(state.resources, resources.unwrap_or("original resources"));
+                    let mut expected =
+                        vec![XOpenConnectionHostEvent::Admission(Some(display.clone()))];
+                    if let Some(resources) = resources {
+                        expected.push(XOpenConnectionHostEvent::Resources(resources.to_owned()));
+                    }
+                    assert_eq!(state.events, expected);
+                }
+                eval.set_variable("baud-rate", Value::fixnum(73));
+                builtin_set_terminal_parameter(
+                    &mut eval,
+                    vec![
+                        terminal_handle_value(),
+                        Value::symbol("x-open-daemon-sentinel"),
+                        Value::fixnum(91),
+                    ],
+                )
+                .unwrap();
+                state.lock().unwrap().events.clear();
+                let before_reopen = x_open_connection_daemon_terminal_state(&mut eval);
+                assert!(
+                    builtin_x_open_connection(
+                        &mut eval,
+                        vec![Value::string(&display), Value::NIL, must_succeed],
+                    )
+                    .unwrap()
+                    .is_nil()
+                );
+                assert_eq!(
+                    x_open_connection_daemon_terminal_state(&mut eval),
+                    before_reopen
+                );
+                let state = state.lock().unwrap();
+                assert_eq!(state.resources, resources.unwrap_or("original resources"));
+                assert_eq!(
+                    state.events,
+                    [XOpenConnectionHostEvent::Admission(Some(display))]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn x_open_connection_daemon_preserves_general_helper_errors() {
+    crate::test_utils::init_test_tracing();
+    for case in 0..3 {
+        let mut eval = x_open_connection_daemon_test_context();
+        let state = match case {
+            0 => None,
+            1 => Some(install_x_open_connection_host(&mut eval, None)),
+            _ => Some(install_x_open_connection_host(
+                &mut eval,
+                Some(GraphicalDisplayIdentity::named(GraphicalBackend::X11, ":42").unwrap()),
+            )),
+        };
+        let before = x_open_connection_daemon_terminal_state(&mut eval);
+        match ensure_daemon_graphical_connection(&mut eval, Some(Value::string(":987"))).kinded() {
+            Err(FlowKind::Signal(sig)) => {
+                assert_eq!(sig.symbol_name(), "error");
+                let expected = if case == 2 {
+                    "private native connection refusal; do not expose to Lisp"
+                } else {
+                    "Graphical frames require a display-connected Neomacs daemon; use a TTY client"
+                };
+                assert_eq!(sig.data, vec![Value::string(expected)]);
+            }
+            other => panic!("expected unchanged daemon helper error, got {other:?}"),
+        }
+        assert_eq!(x_open_connection_daemon_terminal_state(&mut eval), before);
+        if let Some(state) = state {
+            let state = state.lock().unwrap();
+            assert_eq!(state.resources, "original resources");
+            assert_eq!(
+                state.events,
+                [XOpenConnectionHostEvent::Admission(Some(":987".to_owned()))]
+            );
+        }
+    }
+    let mut eval = x_open_connection_daemon_test_context();
+    let state = install_x_open_connection_host(&mut eval, None);
+    match ensure_daemon_graphical_connection(&mut eval, Some(Value::fixnum(42))).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(42)]);
+        }
+        other => panic!("expected unchanged helper stringp error, got {other:?}"),
+    }
+    assert!(state.lock().unwrap().events.is_empty());
 }
 
 #[test]
