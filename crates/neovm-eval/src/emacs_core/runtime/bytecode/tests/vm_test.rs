@@ -3993,6 +3993,54 @@ fn vm_reader_message_and_completion_builtins_use_shared_runtime_entry() {
     );
 }
 
+/// Exercise generic VM calls to the shared completion entries.
+#[test]
+fn vm_completion_builtins_use_shared_runtime_entry() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    let mut func = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    let try_completion = func.add_symbol("try-completion");
+    let app = func.add_constant(Value::string("app"));
+    let app_table = func.add_constant(Value::list(vec![
+        Value::string("application"),
+        Value::string("apple"),
+    ]));
+    let test_completion = func.add_symbol("test-completion");
+    let alpha = func.add_constant(Value::string("alpha"));
+    let alpha_table = func.add_constant(Value::list(vec![
+        Value::string("alpha"),
+        Value::string("beta"),
+    ]));
+    func.ops = vec![
+        Op::Constant(try_completion),
+        Op::Constant(app),
+        Op::Constant(app_table),
+        Op::Call(2),
+        Op::Constant(test_completion),
+        Op::Constant(alpha),
+        Op::Constant(alpha_table),
+        Op::Call(2),
+        Op::List(2),
+        Op::Return,
+    ];
+    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    func.lexical = false;
+    func.seal_hand_assembled_ops_for_test();
+    assert!(
+        func.executes_verified_ops(),
+        "the completion calls run verified"
+    );
+    let result = new_vm(&mut eval).execute(&func, vec![]).map_err(map_flow);
+    assert_eq!(
+        crate::emacs_core::format_eval_result(&result),
+        r#"OK ("appl" t)"#
+    );
+}
+
 #[test]
 fn vm_time_builtins_use_direct_timefns_dispatch() {
     crate::test_utils::init_test_tracing();
