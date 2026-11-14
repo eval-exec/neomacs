@@ -159,7 +159,7 @@ fn main() {
                                 "{name}: materialized and sealed ({host} package identity pinned = {digest})"
                             ),
                             None => println!(
-                                "{name}: materialized and sealed (unpinned on {host}; run `infra pin-packages`)"
+                                "{name}: materialized and sealed (unpinned on {host}; run `infra pin-packages {name}`)"
                             ),
                         }
                     }
