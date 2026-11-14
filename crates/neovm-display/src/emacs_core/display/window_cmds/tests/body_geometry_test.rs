@@ -39,30 +39,73 @@ fn matrix_adjustment_uses_committed_body_instead_of_previous_presented_regions()
         frame.set_known_parameter(FrameParam::HorizontalScrollBars, Value::NIL);
         frame.selected_window
     };
+    let (old_body, header_height) = {
+        let frame = ctx.frame_manager().get(frame_id).unwrap();
+        (
+            frame.find_window(window_id).unwrap().bounds().height as i64,
+            frame.char_height.max(1.0) as i64,
+        )
+    };
     publish_selected_gui_window_regions(
         &mut ctx,
         frame_id,
         1,
         crate::window::PresentedWindowRegions {
-            outer: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 600.0),
-            text_body: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 500.0),
+            outer: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, old_body as f32),
+            text_body: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, old_body as f32),
             ..Default::default()
         },
     );
-    // Commit a resize while retaining the previous completed presentation.
-    let current_body = {
-        let frame = ctx.frame_manager_mut().get_mut(frame_id).unwrap();
-        frame.resize_pixelwise(800, 320);
-        frame.find_window(window_id).unwrap().bounds().height as i64
-    };
-    assert_ne!(current_body, 500);
+    crate::emacs_core::window_cmds::adjust_frame_glyph_matrices(&ctx, frame_id);
+    let before_rows = ctx
+        .frame_manager()
+        .get(frame_id)
+        .unwrap()
+        .find_window(window_id)
+        .unwrap()
+        .display()
+        .unwrap()
+        .glyph_matrix_row_scale
+        .allocated_rows();
+    assert_eq!(
+        before_rows,
+        Some(required_gui_glyph_matrix_rows(
+            old_body,
+            0,
+            20,
+            std::num::NonZeroU32::MIN,
+        ))
+    );
+
+    // A native frame resize clears its redisplay cache via minibuffer
+    // repositioning. A buffer-local chrome change does not: it is the actual
+    // persistent-cache case that the following GNU margin adjustment consumes.
+    ctx.edit
+        .buffers
+        .get_mut(buffer)
+        .unwrap()
+        .set_buffer_local("header-line-format", Value::string("header"));
+    let current_body = old_body - header_height;
+    assert_ne!(current_body, old_body);
+    assert_eq!(
+        ctx.frame_manager()
+            .get(frame_id)
+            .unwrap()
+            .redisplay_snapshot(window_id)
+            .expect("completed redisplay remains installed after the buffer-local change")
+            .regions
+            .text_body
+            .height,
+        old_body as f32,
+        "the fixture must retain the old completed body rectangle"
+    );
     assert_eq!(
         crate::emacs_core::window_cmds::builtin_window_body_height(
             &mut ctx,
             &[Value::make_window(window_id.0), Value::T]
         )
         .unwrap(),
-        Value::fixnum(500),
+        Value::fixnum(old_body),
         "the ordinary query must still prefer the completed presentation"
     );
     let (_, adjustment_body) = crate::emacs_core::window_cmds::hook_window_body_dimensions(
@@ -73,7 +116,21 @@ fn matrix_adjustment_uses_committed_body_instead_of_previous_presented_regions()
     )
     .unwrap();
     assert_eq!(adjustment_body, current_body);
-    crate::emacs_core::window_cmds::adjust_frame_glyph_matrices(&ctx, frame_id);
+
+    // GNU apply_window_adjustment adjusts the complete frame even for a
+    // horizontal margin change, consuming the current chrome geometry.
+    assert_eq!(
+        crate::emacs_core::window_cmds::builtin_set_window_margins(
+            &mut ctx,
+            vec![
+                Value::make_window(window_id.0),
+                Value::fixnum(1),
+                Value::NIL
+            ],
+        )
+        .unwrap(),
+        Value::T,
+    );
     let frame = ctx.frame_manager().get(frame_id).unwrap();
     let owner = &frame
         .find_window(window_id)
@@ -90,8 +147,5 @@ fn matrix_adjustment_uses_committed_body_instead_of_previous_presented_regions()
             owner.current()
         ))
     );
-    assert_ne!(
-        owner.allocated_rows(),
-        Some(required_gui_glyph_matrix_rows(500, 0, 20, owner.current()))
-    );
+    assert_ne!(owner.allocated_rows(), before_rows);
 }
