@@ -69,7 +69,7 @@ fn treesit_node_sxhash_keeps_private_slot_hash_direct_nested_and_fallback() {
     let old_record = Value::make_record(slots.clone());
     let first = Value::make_treesit_node(slots.clone());
     let second = Value::make_treesit_node(slots);
-    assert_ne!(first, second);
+    assert_ne!(first.bits(), second.bits());
     let shapes: [fn(Value) -> Value; 3] = [
         |v| v,
         |v| Value::vector(vec![Value::fixnum(7), v]),

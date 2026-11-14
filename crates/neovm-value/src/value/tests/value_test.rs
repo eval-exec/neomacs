@@ -248,7 +248,7 @@ fn treesit_node_wrappers_keep_private_slot_equality_and_hashing() {
             parser,
         ]);
 
-        assert_ne!(left, right);
+        assert_ne!(left.bits(), right.bits());
         assert!(equal_value(&left, &right, 0));
         assert!(try_equal_value_swp(&left, &right, 0, false).unwrap());
         assert!(!equal_value(&left, &different, 0));
