@@ -2797,4 +2797,47 @@ mod provider_tests {
             ("strings", "SUBSTRING_SUBR")
         );
     }
+    #[test]
+    fn core_make_indirect_buffer_source_resolves_the_single_production_descriptor() {
+        const CALL: &str = "neovm_eval::emacs_core::builtins::misc_eval::MAKE_INDIRECT_BUFFER_SUBR";
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert_eq!(read(&root, CORE_MANIFEST).unwrap().matches(CALL).count(), 1);
+        let (events, _) = manifest_events(&root).unwrap();
+        let direct: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Direct { spec, .. } => Some(spec),
+                _ => None,
+            })
+            .collect();
+        let index = direct
+            .iter()
+            .position(|spec| spec.name == "make-indirect-buffer")
+            .unwrap();
+        assert_eq!(
+            direct
+                .iter()
+                .filter(|spec| spec.name == "make-indirect-buffer")
+                .count(),
+            1
+        );
+        assert_eq!(direct[index - 1].name, "get-buffer");
+        assert_eq!(direct[index + 1].name, "find-buffer");
+        assert_eq!(
+            (
+                direct[index].min,
+                direct[index].max,
+                direct[index].cfg.as_str()
+            ),
+            (2, Some(4), "always")
+        );
+        let home = direct[index]
+            .static_home
+            .as_ref()
+            .expect("real static source home");
+        assert_eq!(
+            (home.module.as_str(), home.static_ident.as_str()),
+            ("misc_eval", "MAKE_INDIRECT_BUFFER_SUBR")
+        );
+    }
 }

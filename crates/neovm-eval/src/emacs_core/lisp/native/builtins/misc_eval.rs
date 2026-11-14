@@ -11,6 +11,23 @@ use neovm_value::symbol::Obarray;
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::time_core::{LispTimeOutput, current_time_value};
 
+/// The production `make-indirect-buffer` descriptor, shared by core and the unit runtime.
+#[doc(hidden)]
+pub static MAKE_INDIRECT_BUFFER_SUBR: SubrSpec =
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "make-indirect-buffer",
+        NativeFn::ContextVec(|ctx, args| {
+            neovm_edit::emacs_core::buffer::builtin_make_indirect_buffer(ctx, args)
+        }),
+        SubrArity::new(2, Some(4)),
+    ))
+    .requires_eval_state()
+    .interactive(
+        crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String(
+            "bMake indirect buffer (to buffer): \nBName of indirect buffer: ",
+        ),
+    );
+
 /// The production `try-completion` descriptor, shared by core and the unit runtime.
 #[doc(hidden)]
 pub static TRY_COMPLETION_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(

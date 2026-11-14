@@ -59,6 +59,7 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_set_syntax_table_matches_canonical_descriptor(&mut eval);
     assert_core_copy_syntax_table_matches_canonical_descriptor(&mut eval);
     assert_core_substring_matches_canonical_descriptor(&mut eval);
+    assert_core_make_indirect_buffer_matches_canonical_descriptor(&mut eval);
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
@@ -1667,4 +1668,170 @@ fn assert_core_substring_matches_canonical_descriptor(context: &mut Context) {
         signal.data,
         vec![source, Value::fixnum(2), Value::fixnum(1)]
     );
+}
+
+fn assert_core_make_indirect_buffer_matches_canonical_descriptor(context: &mut Context) {
+    use crate::emacs_core::builtins::misc_eval::MAKE_INDIRECT_BUFFER_SUBR;
+    use crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec;
+    use crate::emacs_core::eval::lookup_global_subr_entry;
+    use crate::emacs_core::eval::subr_abi::SubrFn;
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+    let expected = MAKE_INDIRECT_BUFFER_SUBR;
+    let id = intern("make-indirect-buffer");
+    let actual = lookup_global_subr_entry(id).expect("core registered make-indirect-buffer");
+    let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(actual_fn))) =
+        (expected.function(), actual.function)
+    else {
+        panic!("make-indirect-buffer retains ContextVec");
+    };
+    assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+    assert_eq!(expected.name(), "make-indirect-buffer");
+    assert_eq!(expected.arity(), SubrArity::new(2, Some(4)));
+    assert_eq!((actual.min_args, actual.max_args), (2, Some(4)));
+    assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+    let (
+        Some(BuiltinInteractiveSpec::String(expected_prompt)),
+        Some(BuiltinInteractiveSpec::String(actual_prompt)),
+    ) = (expected.interactive_spec(), actual.interactive_spec)
+    else {
+        panic!("indirect descriptor retains its String interactive spec");
+    };
+    assert_eq!(
+        expected_prompt,
+        "bMake indirect buffer (to buffer): \nBName of indirect buffer: "
+    );
+    assert_eq!(actual_prompt, expected_prompt);
+    assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+    assert_eq!(expected.no_eval_policy(), NoEvalPolicy::RequiresEvalState);
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(
+        context
+            .obarray_view()
+            .get_property("make-indirect-buffer", "disabled")
+            .unwrap_or(neovm_value::value::Value::NIL)
+            .is_nil()
+    );
+    assert!(expected.leaf_spec().is_none());
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+    let call =
+        |context: &mut Context, args: Vec<neovm_value::value::Value>| actual_fn(context, args);
+    use neovm_edit::emacs_core::buffer::{
+        builtin_buffer_base_buffer, builtin_goto_char_1, builtin_point_0, builtin_set_buffer_1,
+    };
+    use neovm_value::error::FlowRef;
+    use neovm_value::value::Value;
+    let saved_current = context
+        .buffer_manager()
+        .current_buffer_id()
+        .expect("current buffer");
+    let base_id = context
+        .buffer_manager_mut()
+        .create_buffer("*libeval-indirect-base*");
+    let base = Value::make_buffer(base_id);
+    builtin_set_buffer_1(context, base).unwrap();
+    context
+        .buffer_manager_mut()
+        .insert_into_buffer(base_id, "abcd")
+        .expect("base text");
+    builtin_goto_char_1(context, Value::fixnum(2)).unwrap();
+    let indirect = call(
+        context,
+        vec![
+            base,
+            Value::string("*libeval-indirect-child*"),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .unwrap();
+    let indirect_id = indirect.as_buffer_id().expect("indirect buffer result");
+    assert_eq!(context.buffer_manager().current_buffer_id(), Some(base_id));
+    assert_eq!(
+        builtin_buffer_base_buffer(context.buffer_manager_mut(), vec![indirect]).unwrap(),
+        base
+    );
+    assert!(
+        context
+            .buffer_manager()
+            .get(base_id)
+            .unwrap()
+            .shares_text_storage_with(context.buffer_manager().get(indirect_id).unwrap(),)
+    );
+    builtin_set_buffer_1(context, indirect).unwrap();
+    builtin_goto_char_1(context, Value::fixnum(4)).unwrap();
+    builtin_set_buffer_1(context, base).unwrap();
+    assert_eq!(
+        builtin_point_0(context.buffer_manager_mut()).unwrap(),
+        Value::fixnum(2)
+    );
+    builtin_goto_char_1(context, Value::fixnum(1)).unwrap();
+    context
+        .buffer_manager_mut()
+        .insert_into_buffer(base_id, "zz")
+        .expect("shared mutation");
+    assert_eq!(
+        context
+            .buffer_manager()
+            .get(indirect_id)
+            .unwrap()
+            .buffer_string(),
+        "zzabcd"
+    );
+    let second = call(
+        context,
+        vec![
+            indirect,
+            Value::string("*libeval-indirect-second*"),
+            Value::NIL,
+            Value::T,
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        builtin_buffer_base_buffer(context.buffer_manager_mut(), vec![second]).unwrap(),
+        base
+    );
+
+    context
+        .eval_str("(setq libeval-indirect-clone-current nil libeval-indirect-list-ran nil)")
+        .unwrap();
+    let cloned = context
+        .eval_str(
+            r#"(let ((clone-indirect-buffer-hook
+                 (list (lambda () (setq libeval-indirect-clone-current (current-buffer)))))
+                (buffer-list-update-hook
+                 (list (lambda () (setq libeval-indirect-list-ran t)))))
+             (make-indirect-buffer "*libeval-indirect-base*" "*libeval-indirect-clone*" t t))"#,
+        )
+        .unwrap();
+    assert_eq!(
+        context.eval_str("libeval-indirect-clone-current").unwrap(),
+        cloned
+    );
+    assert_eq!(
+        context.eval_str("libeval-indirect-list-ran").unwrap(),
+        Value::NIL
+    );
+    assert_eq!(context.buffer_manager().current_buffer_id(), Some(base_id));
+    context.eval_str(r#"(let ((buffer-list-update-hook
+                 (list (lambda () (setq libeval-indirect-list-ran t)))))
+             (make-indirect-buffer "*libeval-indirect-base*" "*libeval-indirect-listed*" nil nil))"#).unwrap();
+    assert_eq!(
+        context.eval_str("libeval-indirect-list-ran").unwrap(),
+        Value::T
+    );
+    assert_eq!(context.buffer_manager().current_buffer_id(), Some(base_id));
+
+    for name in ["", "*libeval-indirect-child*"] {
+        let error = call(
+            context,
+            vec![base, Value::string(name), Value::NIL, Value::T],
+        )
+        .expect_err("invalid name");
+        let FlowRef::Signal(signal) = error.kind() else {
+            panic!("name error is a signal");
+        };
+        assert_eq!(signal.symbol, neovm_value::intern::intern("error"));
+    }
+    builtin_set_buffer_1(context, Value::make_buffer(saved_current)).unwrap();
 }

@@ -194,19 +194,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(1, Some(1)),
     )));
     crate::emacs_core::display_subrs::register_terminal_shader_video_xwidget(ctx);
-    ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::new(
-            "make-indirect-buffer",
-            NativeFn::ContextVec(|ctx, args| builtin_make_indirect_buffer(ctx, args)),
-            SubrArity::new(2, Some(4)),
-        ))
-        .requires_eval_state()
-        .interactive(
-            crate::emacs_core::interactive::BuiltinInteractiveSpec::String(
-                "bMake indirect buffer (to buffer): \nBName of indirect buffer: ",
-            ),
-        ),
-    );
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::MAKE_INDIRECT_BUFFER_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "find-buffer",
         NativeFn::ContextVec(|ctx, args| builtin_find_buffer(ctx, args)),
