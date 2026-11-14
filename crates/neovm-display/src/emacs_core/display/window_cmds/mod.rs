@@ -44,7 +44,7 @@ mod body_geometry;
 mod redisplay_core_defaults;
 
 use crate::emacs_core::xfaces::realization::XfacesRealizationContextExt;
-use crate::window::display::WindowDisplayContextExt;
+use crate::window::display::{WindowDisplayContextExt, adjust_frame_glyph_matrices_in_state};
 use neovm_edit::emacs_core::edit_host::EditHost;
 pub(crate) use redisplay_core_defaults::restore_gnu_configuration_hook_default;
 
@@ -53,43 +53,6 @@ pub(crate) use redisplay_core_defaults::restore_gnu_configuration_hook_default;
 #[doc(hidden)]
 pub fn adjust_frame_glyph_matrices(ctx: &neovm_eval::emacs_core::eval::Context, frame_id: FrameId) {
     adjust_frame_glyph_matrices_in_state(ctx.frame_manager(), ctx.buffer_manager(), frame_id);
-}
-
-fn adjust_frame_glyph_matrices_in_state(
-    frames: &FrameManager,
-    buffers: &BufferManager,
-    frame_id: FrameId,
-) {
-    let Some(frame) = frames.get(frame_id) else {
-        return;
-    };
-    if frame.effective_window_system().is_none() {
-        return;
-    }
-    let smallest_font_height = match frame.display_identity() {
-        crate::window::FrameDisplayIdentity::Graphical(identity) => {
-            identity.smallest_opened_font_height()
-        }
-        crate::window::FrameDisplayIdentity::None => 1,
-    };
-    for window_id in frame.all_leaf_ids() {
-        let Some(window) = frame.find_window(window_id) else {
-            continue;
-        };
-        let (Some(display), Some(redisplay)) = (window.display(), window.redisplay_state()) else {
-            continue;
-        };
-        let Ok((_, body_height)) =
-            hook_window_body_dimensions(frames, buffers, frame_id, window_id)
-        else {
-            continue;
-        };
-        let _ = display.glyph_matrix_row_scale.adjust(
-            body_height,
-            redisplay.vscroll,
-            smallest_font_height,
-        );
-    }
 }
 
 fn navigation_transition_direction(value: Value) -> Result<TransitionDirection, Flow> {

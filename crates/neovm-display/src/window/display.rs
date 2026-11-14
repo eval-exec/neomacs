@@ -1,7 +1,7 @@
 use super::display_table_input::LayoutDisplayTableInputExt;
 use super::invisibility_input::LayoutInvisibilityInputExt;
 use super::{
-    BufferLayoutInputState, Frame, FrameId, FrameParam, HorizontalScrollBarType,
+    BufferLayoutInputState, Frame, FrameId, FrameManager, FrameParam, HorizontalScrollBarType,
     VerticalScrollBarType, Window, WindowDisplaySnapshot, WindowDisplaySnapshotFreshness,
     WindowDisplayState, WindowId, WindowMargins,
 };
@@ -9,12 +9,53 @@ use crate::emacs_core::neo::scroll::ScrollContextExt;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::LayoutPrefixInputExt;
-use neovm_edit::buffer::{BufferId, LispCharPos1};
+use neovm_edit::buffer::{BufferId, BufferManager, LispCharPos1};
 use neovm_eval::emacs_core::eval::data::window_layout_query::{
     LayoutQueryInstallError, WindowLayoutQueryAdapter,
 };
 use neovm_value::intern::WellKnown;
 use neovm_value::value::Value;
+
+/// Commit desired-matrix allocation at an explicit frame adjustment boundary.
+/// The installed pure body query owns current geometry; getters never adjust it.
+pub(crate) fn adjust_frame_glyph_matrices_in_state(
+    frames: &FrameManager,
+    buffers: &BufferManager,
+    frame_id: FrameId,
+) {
+    let Some(frame) = frames.get(frame_id) else {
+        return;
+    };
+    if frame.effective_window_system().is_none() {
+        return;
+    }
+    let smallest_font_height = match frame.display_identity() {
+        crate::window::FrameDisplayIdentity::Graphical(identity) => {
+            identity.smallest_opened_font_height()
+        }
+        crate::window::FrameDisplayIdentity::None => 1,
+    };
+    for window_id in frame.all_leaf_ids() {
+        let Some(window) = frame.find_window(window_id) else {
+            continue;
+        };
+        let (Some(display), Some(redisplay)) = (window.display(), window.redisplay_state()) else {
+            continue;
+        };
+        let Ok((_, body_height)) =
+            neovm_eval::emacs_core::eval::display_query_hooks::window_body_dimensions(
+                frames, buffers, frame_id, window_id,
+            )
+        else {
+            continue;
+        };
+        let _ = display.glyph_matrix_row_scale.adjust(
+            body_height,
+            redisplay.vscroll,
+            smallest_font_height,
+        );
+    }
+}
 
 /// One complete marker-backed viewport transition chosen by a scroll engine.
 /// Row-based terminal and pixel-based graphical scrolling share its commit;
@@ -93,7 +134,11 @@ impl WindowScrollUpdate {
             *force_start = true;
         }
         if vscroll_grew || force_matrix_adjustment {
-            crate::emacs_core::window_cmds::adjust_frame_glyph_matrices(eval, self.frame);
+            adjust_frame_glyph_matrices_in_state(
+                eval.frame_manager(),
+                eval.buffer_manager(),
+                self.frame,
+            );
         }
         eval.publish_committed_scroll_preview(self.frame, self.window);
         Ok(())
