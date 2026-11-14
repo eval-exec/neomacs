@@ -290,6 +290,7 @@ static_assertions::assert_impl_all!(ScalarProgram: Send, Sync, Copy);
 /// and their inputs keep every assertion body; this module supplies the
 /// evaluator capabilities they need in-crate.
 #[cfg(test)]
+#[path = "tests/parallel_execution_fixtures/mod.rs"]
 mod execution_fixtures;
 
 #[cfg(test)]
