@@ -172,6 +172,9 @@ mod tls_fixture_cleanup;
 #[path = "oracle_treesit_node_type.rs"]
 mod oracle_treesit_node_type;
 
+#[path = "oracle_treesit_real_node.rs"]
+mod oracle_treesit_real_node;
+
 #[path = "treesit_grammar_loading.rs"]
 mod treesit_grammar_loading;
 
