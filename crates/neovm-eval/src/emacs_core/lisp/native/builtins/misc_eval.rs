@@ -10,6 +10,24 @@ use neovm_value::symbol::Obarray;
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::time_core::{LispTimeOutput, current_time_value};
 
+/// The production `commandp` descriptor, shared by core and the unit runtime.
+#[doc(hidden)]
+pub static COMMANDP_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "commandp",
+    NativeFn::ContextSlice(
+        crate::emacs_core::eval::interactive_registry::builtin_commandp_interactive,
+    ),
+    SubrArity::new(1, Some(2)),
+));
+
+/// The production `command-modes` descriptor, shared by core and the unit runtime.
+#[doc(hidden)]
+pub static COMMAND_MODES_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "command-modes",
+    NativeFn::ContextVec(crate::emacs_core::eval::interactive_registry::builtin_command_modes),
+    SubrArity::new(1, Some(1)),
+));
+
 /// GNU `process.c:Fwaiting_for_user_input_p`: read the command input wait state.
 /// Core and the eval unit runtime register this same evaluator-backed entry.
 #[doc(hidden)]

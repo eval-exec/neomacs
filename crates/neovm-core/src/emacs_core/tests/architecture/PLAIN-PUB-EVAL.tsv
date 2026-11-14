@@ -4611,3 +4611,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/green_select.rs	fn	fn impl GreenSe
 crates/neovm-eval/src/emacs_core/runtime/eval/green_select.rs	fn	fn impl ProcessManager::green_select_handle
 crates/neovm-eval/src/emacs_core/runtime/eval/green_select.rs	struct	struct GreenSelectHandle
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	use	use GreenSelectHandle
+crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	struct	struct CommandpSymbol
+crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl CommandpSymbol::id
+crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn builtin_commandp_interactive
+crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn builtin_command_modes

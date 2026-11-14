@@ -531,11 +531,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|ctx, args| builtin_get_byte(ctx, args)),
         SubrArity::new(0, Some(2)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "command-modes",
-        NativeFn::ContextVec(crate::emacs_core::interactive::builtin_command_modes),
-        SubrArity::new(1, Some(1)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::COMMAND_MODES_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "find-charset-region",
         NativeFn::ContextVec(crate::emacs_core::charset::builtin_find_charset_region),
@@ -1415,11 +1411,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextSlice(crate::emacs_core::interactive::builtin_call_interactively),
         SubrArity::new(1, Some(3)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "commandp",
-        NativeFn::ContextSlice(crate::emacs_core::interactive::builtin_commandp_interactive),
-        SubrArity::new(1, Some(2)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::COMMANDP_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "command-remapping",
         NativeFn::ContextVec(crate::emacs_core::interactive::builtin_command_remapping),

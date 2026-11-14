@@ -2371,6 +2371,59 @@ mod provider_tests {
     }
 
     #[test]
+    fn core_classification_source_resolves_single_statics_in_original_order() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = read(&root, CORE_MANIFEST).unwrap();
+        let (events, _) = manifest_events(&root).unwrap();
+        let direct: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Direct { spec, .. } => Some(spec),
+                _ => None,
+            })
+            .collect();
+        for (name, provider, before, after, min, max) in [
+            (
+                "command-modes",
+                "COMMAND_MODES_SUBR",
+                "get-byte",
+                "find-charset-region",
+                1,
+                Some(1),
+            ),
+            (
+                "commandp",
+                "COMMANDP_SUBR",
+                "call-interactively",
+                "command-remapping",
+                1,
+                Some(2),
+            ),
+        ] {
+            let call = format!(
+                "ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::{provider});"
+            );
+            assert_eq!(
+                source.matches(&call).count(),
+                1,
+                "{name}: source static reference"
+            );
+            let index = direct.iter().position(|spec| spec.name == name).unwrap();
+            assert_eq!(direct.iter().filter(|spec| spec.name == name).count(), 1);
+            assert_eq!(direct[index - 1].name, before);
+            assert_eq!(direct[index + 1].name, after);
+            assert_eq!(
+                (
+                    direct[index].min,
+                    direct[index].max,
+                    direct[index].cfg.as_str()
+                ),
+                (min, max, "always")
+            );
+        }
+    }
+
+    #[test]
     fn core_identity_event_resolves_the_single_production_descriptor() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let source = read(&root, CORE_MANIFEST).unwrap();
