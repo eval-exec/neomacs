@@ -135,6 +135,24 @@ fn run_kill_buffer_hooks(
     Ok(KillBufferHooks::Proceed)
 }
 
+/// Dispatch a modified buffer's string truename without selecting it.
+/// The caller passes the string borrowed from the original rooted Value.
+#[cold]
+#[inline(never)]
+fn unlock_buffer_file_before_retirement(
+    eval: &mut crate::emacs_core::eval::Context,
+    filename: Value,
+    string: &neovm_value::heap_types::LispString,
+) -> Result<(), Flow> {
+    // No buffer/manager borrow crosses the callback. Keep the original
+    // Lisp string (including interval Values) rooted until dispatch ends.
+    let roots = eval.save_specpdl_roots();
+    eval.push_specpdl_root(filename);
+    let result = neovm_eval::emacs_core::eval::lifecycle::unlock_file(eval, string);
+    eval.restore_specpdl_roots(roots);
+    result.map(|_| ())
+}
+
 pub(crate) fn builtin_kill_buffer(
     eval: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -241,6 +259,22 @@ pub(crate) fn builtin_kill_buffer(
         }
     }
 
+    // GNU buffer.c:2046-2051 selects away from the target before thread
+    // cleanup, unlocking and process sentinels. Do not defer this selection
+    // until retirement: an escaping unlock handler observes the live session.
+    if eval.edit.buffers.current_buffer_id() == Some(id) {
+        let other = {
+            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+            other_buffer_impl_in_state(frames, buffers, vec![Value::make_buffer(id)])?
+        };
+        if let Some(next) = other.as_buffer_id() {
+            eval.set_current_buffer_unrecorded(next)?;
+        }
+        if eval.edit.buffers.current_buffer_id() == Some(id) {
+            return Ok(Value::NIL);
+        }
+    }
+
     // GNU buffer.c:2055-2059: check the threads again, in case a hook
     // changed something, then move the other threads out of the buffers.
     if eval.green_threads_running() {
@@ -256,31 +290,45 @@ pub(crate) fn builtin_kill_buffer(
             eval.green_before_buffer_killed(dying)?;
         }
     }
-    let current_before = eval.edit.buffers.current_buffer().map(|buf| buf.id());
-    let killed_ids = eval
-        .edit
-        .buffers
-        .collect_killed_buffer_ids(id)
-        .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
-    let killed_set = killed_ids
-        .iter()
-        .copied()
-        .collect::<std::collections::HashSet<_>>();
-    let current_will_die = current_before.is_some_and(|current| killed_set.contains(&current));
-    let replacement = if current_will_die {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-        let other = other_buffer_impl_in_state(
-            frames,
-            buffers,
-            vec![Value::make_buffer(current_before.expect("current buffer"))],
-        )?;
-        match other.as_buffer_id() {
-            Some(next) if next != id => Some(next),
-            _ => None,
+    // GNU buffer.c:2063-2067: after the thread recheck, refuse when the
+    // current buffer is shown in the minibuffer and target is its sole other.
+    let current = eval.edit.buffers.current_buffer_id();
+    let minibuffer = eval
+        .minibuf_window_id()
+        .and_then(|window| eval.frame_manager().window_buffer_id(window));
+    if current.is_some() && current == minibuffer {
+        let other = {
+            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+            other_buffer_impl_in_state(frames, buffers, vec![Value::make_buffer(id)])?
+        };
+        if other.as_buffer_id() == Some(id) {
+            return Ok(Value::NIL);
         }
-    } else {
-        None
-    };
+    }
+
+    // GNU buffer.c:2072-2075: direct handler-aware unlock of the requested
+    // buffer, before deleting its processes or resetting its local state.
+    // This bypasses a replaced Lisp unlock-file/unlock-buffer function cell.
+    // Keep the ordinary unmodified path inline: one semantic tick
+    // comparison, without a helper call, root management or Result branch.
+    let filename = eval.edit.buffers.get(id).and_then(|buffer| {
+        (buffer.save_modified_tick() < buffer.modified_tick())
+            .then(|| buffer.buffer_local_value("buffer-file-truename"))
+            .flatten()
+    });
+    if let Some(filename) = filename
+        && let Some(string) = filename.as_lisp_string()
+    {
+        unlock_buffer_file_before_retirement(eval, filename, string)?;
+    }
+    if eval.edit.buffers.get(id).is_none() {
+        // GNU still runs kill_buffer_processes after a reentrant unlock
+        // handler kills the target (buffer.c:2073-2081). Real processes keep
+        // their buffer association after HUP, so the outer call must send
+        // its own HUP too; do not skip it or collect a dead retirement set.
+        eval.kill_buffer_processes(id)?;
+        return Ok(Value::T);
+    }
 
     let killed_ids_to_signal = eval
         .edit
@@ -316,6 +364,9 @@ pub(crate) fn builtin_kill_buffer(
         }
     }
 
+    // All callback mutations are complete. Use the actual retirement result
+    // below, not a set predicted before unlock or process sentinels ran.
+    let current_before_retirement = eval.edit.buffers.current_buffer_id();
     let killed_ids = eval
         .edit
         .buffers
@@ -331,6 +382,7 @@ pub(crate) fn builtin_kill_buffer(
     // buffer just because a buffer died: killing an unshown temporary buffer
     // must not create `*scratch*` (it would reappear in `list-buffers`).
     let mut dead_window_fallback = None;
+    let mut retired_selected_current_replacement = None;
     for killed_id in &killed_ids {
         if eval.frame_manager().window_count_showing_buffer(*killed_id) == 0 {
             continue;
@@ -347,8 +399,25 @@ pub(crate) fn builtin_kill_buffer(
                 fallback
             }
         };
+        // TODO(peer-5728): this bulk-retired current indirect would have
+        // been selected away during GNU's recursive child kill. Preserve the
+        // actual selected-window replacement only when that window showed it;
+        // an unrelated selected window must not override frame preferences.
+        let replaces_selected_current = current_before_retirement == Some(*killed_id)
+            && *killed_id != id
+            && eval
+                .frame_manager()
+                .selected_window()
+                .and_then(|window| window.buffer_id())
+                == Some(*killed_id);
         eval.frame_manager_mut()
             .replace_buffer_in_windows(*killed_id, fallback);
+        if replaces_selected_current {
+            retired_selected_current_replacement = eval
+                .frame_manager()
+                .selected_window()
+                .and_then(|window| window.buffer_id());
+        }
     }
 
     // Discard killed buffers from every frame's buffer list and buried
@@ -362,24 +431,43 @@ pub(crate) fn builtin_kill_buffer(
         }
     }
 
-    if current_will_die {
-        if let Some(next) = replacement
-            && eval.edit.buffers.get(next).is_some()
-        {
-            eval.set_current_buffer_unrecorded(next)?;
-        }
-        if eval.edit.buffers.current_buffer().is_none() {
-            if let Some(next) = eval.edit.buffers.buffer_list().into_iter().next() {
-                eval.set_current_buffer_unrecorded(next)?;
-            } else {
-                // No live buffer remains: GNU's `Fother_buffer` falls back to
-                // `get-scratch-buffer-create`.
-                let scratch = eval
-                    .edit
-                    .buffers
-                    .find_buffer_by_name("*scratch*")
-                    .unwrap_or_else(|| eval.edit.buffers.create_buffer("*scratch*"));
-                eval.set_current_buffer_unrecorded(scratch)?;
+    if eval.edit.buffers.current_buffer_id().is_none() {
+        match current_before_retirement {
+            // TODO(peer-5728): remove this transitional repair when recursive
+            // indirect kills and target-only mechanical retirement land.
+            // The deferred bulk path can retire an indirect that a callback
+            // selected. Only that actual non-target retirement may be repaired.
+            Some(previous) if previous != id && killed_ids.contains(&previous) => {
+                let fallback = match retired_selected_current_replacement {
+                    Some(replacement) => replacement,
+                    None => {
+                        let other = {
+                            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+                            other_buffer_impl_in_state(
+                                frames,
+                                buffers,
+                                vec![Value::make_buffer(previous)],
+                            )?
+                        };
+                        other.as_buffer_id().unwrap_or_else(|| {
+                            other_buffer_safely_in_state(&mut eval.edit.buffers, Some(previous))
+                        })
+                    }
+                };
+                eval.set_current_buffer_unrecorded(fallback)?;
+            }
+            previous => {
+                tracing::error!(
+                    target: "neomacs::kill_buffer",
+                    buffer = ?id,
+                    current_before_retirement = ?previous,
+                    killed_ids = ?killed_ids,
+                    "kill-buffer lost current selection outside deferred indirect retirement"
+                );
+                debug_assert!(
+                    eval.edit.buffers.current_buffer_id().is_some(),
+                    "kill-buffer lost current selection outside deferred indirect retirement"
+                );
             }
         }
     }

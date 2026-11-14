@@ -1,0 +1,62 @@
+;;; -*- lexical-binding: t; -*-
+(setq create-lockfiles nil auto-save-list-file-name nil)
+(setq r3-root (getenv "SHUTDOWN_PROBE_ROOT"))
+(setq r3-acks (expand-file-name "hup-acks" r3-root))
+(setq r3-log (expand-file-name "events.log" r3-root))
+(setq r3-target (get-buffer-create "r3-reentrant-real-target"))
+(setq r3-native-kill (symbol-function 'kill-buffer))
+(setq r3-entered nil)
+(defun r3-record (line)
+  (write-region (concat line "\n") nil r3-log t 'silent))
+(defun r3-ack-count ()
+  (if (file-exists-p r3-acks)
+      (with-temp-buffer
+        (insert-file-contents r3-acks)
+        (length (split-string (buffer-string) "\n" t)))
+    0))
+(defun r3-wait-ack (wanted)
+  (let ((deadline (+ (float-time) 5.0)))
+    (while (and (< (r3-ack-count) wanted) (< (float-time) deadline))
+      (accept-process-output r3-child 0.01)))
+  (r3-record (format "ACK-%d=%d" wanted (r3-ack-count))))
+(defun r3-handler (operation &rest args)
+  (if (eq operation 'unlock-file)
+      (if r3-entered
+          (r3-record "unlock-inner")
+        (setq r3-entered t)
+        (r3-record "unlock-outer")
+        (r3-record (format "inner-return=%S" (funcall r3-native-kill r3-target)))
+        ;; ACK1 proves the first handler has consumed its signal. Only now
+        ;; return to the outer native kill, so its second HUP cannot coalesce.
+        (r3-wait-ack 1))
+    (let ((inhibit-file-name-handlers (cons 'r3-handler inhibit-file-name-handlers))
+          (inhibit-file-name-operation operation))
+      (apply operation args))))
+(with-current-buffer r3-target
+  (setq buffer-file-truename "/r3-unlock-real/target")
+  (insert "modified"))
+(setq r3-child
+      (make-process :name "r3-real-child" :buffer r3-target :noquery t
+                    :connection-type 'pipe
+                    :command (list (getenv "SHUTDOWN_CHILD_PROGRAM")
+                                   (getenv "SHUTDOWN_CHILD_HELPER") r3-root)))
+(let ((deadline (+ (float-time) 5.0)))
+  (while (and (not (file-exists-p (expand-file-name "child.ready" r3-root)))
+              (< (float-time) deadline))
+    (accept-process-output r3-child 0.01)))
+(unless (file-exists-p (expand-file-name "child.ready" r3-root))
+  (error "Child never became ready"))
+(setq file-name-handler-alist '(("\\`/r3-unlock-real/" . r3-handler)))
+(r3-record "READY")
+(write-region "ready\n" nil (getenv "SHUTDOWN_READY") nil 'silent)
+(let ((deadline (+ (float-time) 5.0)))
+  (while (and (not (file-exists-p (getenv "SHUTDOWN_GO")))
+              (< (float-time) deadline))
+    (sleep-for 0.01)))
+(unless (file-exists-p (getenv "SHUTDOWN_GO")) (error "No supervisor GO"))
+(r3-record (format "outer-return=%S" (funcall r3-native-kill r3-target)))
+(r3-wait-ack 2)
+;; Explicit fixture cleanup AFTER observing both native acknowledgements.
+;; Removing the process avoids a third HUP from deliberate editor shutdown.
+(delete-process r3-child)
+(kill-emacs 0)

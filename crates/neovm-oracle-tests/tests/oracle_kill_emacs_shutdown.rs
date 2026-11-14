@@ -55,6 +55,7 @@ enum Probe {
     HookError,
     SafeHookDebugger,
     SafeHookDebugOnSignal,
+    KillBufferUnlock(&'static str),
     PipeServerSentinels,
     DaemonUnixListener,
     #[cfg(target_os = "linux")]
@@ -92,6 +93,11 @@ impl Probe {
     #[cfg(target_os = "linux")]
     fn native_child_spec(self) -> Option<NativeChildSpec> {
         match self {
+            Self::KillBufferUnlock("real-hup") => Some(NativeChildSpec {
+                disposition: HupDisposition::Caught,
+                after_editor: ChildAfterEditor::Exited,
+                helper: include_str!("fixtures/kill_emacs_shutdown/kill-buffer-unlock-real-hup.py"),
+            }),
             Self::IgnoredChildHangup(kind) => Some(NativeChildSpec {
                 disposition: HupDisposition::Ignored,
                 after_editor: match kind {
@@ -110,6 +116,20 @@ impl Probe {
     fn script(self) -> &'static str {
         match self {
             Self::Unlock => include_str!("fixtures/kill_emacs_shutdown/lock-release.el"),
+            Self::KillBufferUnlock("real-hup") => {
+                include_str!("fixtures/kill_emacs_shutdown/kill-buffer-unlock-real-hup.el")
+            }
+            Self::KillBufferUnlock("current-indirect-frame-preference") => {
+                include_str!(
+                    "fixtures/kill_emacs_shutdown/kill-buffer-current-indirect-preference.el"
+                )
+            }
+            Self::KillBufferUnlock("current-indirect-base") => {
+                include_str!("fixtures/kill_emacs_shutdown/kill-buffer-current-indirect.el")
+            }
+            Self::KillBufferUnlock(_) => {
+                include_str!("fixtures/kill_emacs_shutdown/kill-buffer-unlock.el")
+            }
             Self::DaemonUnixListener => {
                 include_str!("fixtures/kill_emacs_shutdown/daemon-unix-listener.el")
             }
@@ -165,6 +185,89 @@ impl Probe {
                 "autosave-old-status:closed/closed",
                 "after-new-delete",
             ],
+            Self::KillBufferUnlock(kind) => match kind {
+                "real-hup" => &[
+                    "READY",
+                    "unlock-outer",
+                    "unlock-inner",
+                    "inner-return=t",
+                    "ACK-1=1",
+                    "outer-return=t",
+                    "ACK-2=2",
+                ],
+                "current-indirect-frame-preference" => &[
+                    "BEFORE (:current-child t :window \"selection-shown\" :other \"selection-preferred\" :different t)",
+                    "AFTER (:result t :current-live t :current \"selection-preferred\" :window \"selection-shown\" :current-eq-before-other t :current-eq-window nil)",
+                    "DEAD-OTHER (:child-live nil :other \"selection-preferred\" :same-as-before t)",
+                ],
+                "current-indirect-base" => &[
+                    "SELECTION (:before-child t :kill-result t :base-live nil :child-live nil :current-live t :current-name \"*scratch*\" :selected-window-live t :current-matches-window t)",
+                ],
+                "normal" => &[
+                    "unlock:/inner-unlock-probe/truename:armed=t:target-live=t:current-target=nil:pipe-live=t",
+                    "sentinel:target-live=t",
+                    "after-first:result=t:target-live=nil:pipe-live=nil:current-target=nil",
+                ],
+                "current" => &[
+                    "unlock:/inner-unlock-probe/truename:armed=t:target-live=t:current-target=nil:pipe-live=t",
+                    "sentinel:target-live=t",
+                    "after-first:result=t:target-live=nil:pipe-live=nil:current-target=nil",
+                ],
+                "function-cell" => &[
+                    "unlock:/inner-unlock-probe/truename:armed=t:target-live=t:current-target=nil:pipe-live=t",
+                    "sentinel:target-live=t",
+                    "after-first:result=t:target-live=nil:pipe-live=nil:current-target=nil",
+                ],
+                "unmodified" => &[
+                    "sentinel:target-live=t",
+                    "after-first:result=t:target-live=nil:pipe-live=nil:current-target=nil",
+                ],
+                "nil-truename" => &[
+                    "sentinel:target-live=t",
+                    "after-first:result=t:target-live=nil:pipe-live=nil:current-target=nil",
+                ],
+                "current-reselect" => &[
+                    "unlock:/inner-unlock-probe/truename:armed=t:target-live=t:current-target=nil:pipe-live=t",
+                    "sentinel:target-live=t",
+                    "after-first:result=t:target-live=nil:pipe-live=nil:current-target=nil",
+                    "after-selection:third=t",
+                ],
+                "kill-target" => &[
+                    "unlock:/inner-unlock-probe/truename:armed=t:target-live=t:current-target=nil:pipe-live=t",
+                    "unlock:/inner-unlock-probe/truename:armed=nil:target-live=t:current-target=nil:pipe-live=t",
+                    "sentinel:target-live=t",
+                    "after-first:result=t:target-live=nil:pipe-live=nil:current-target=nil",
+                ],
+                "throw" => &[
+                    "unlock:/inner-unlock-probe/truename:armed=t:target-live=t:current-target=nil:pipe-live=t",
+                    "after-first:result=escaped:target-live=t:pipe-live=t:current-target=nil",
+                    "unlock:/inner-unlock-probe/truename:armed=nil:target-live=t:current-target=nil:pipe-live=t",
+                    "sentinel:target-live=t",
+                    "after-second:result=t:target-live=nil:pipe-live=nil",
+                ],
+                "current-throw" => &[
+                    "unlock:/inner-unlock-probe/truename:armed=t:target-live=t:current-target=nil:pipe-live=t",
+                    "after-first:result=escaped:target-live=t:pipe-live=t:current-target=nil",
+                    "unlock:/inner-unlock-probe/truename:armed=nil:target-live=t:current-target=nil:pipe-live=t",
+                    "sentinel:target-live=t",
+                    "after-second:result=t:target-live=nil:pipe-live=nil",
+                ],
+                "indirect-throw" => &[
+                    "unlock:/inner-unlock-probe/truename:armed=t:target-live=t:current-target=nil:pipe-live=t",
+                    "after-first:result=escaped:target-live=t:pipe-live=t:current-target=nil",
+                    "unlock:/inner-unlock-probe/truename:armed=nil:target-live=t:current-target=nil:pipe-live=t",
+                    "sentinel:target-live=t",
+                    "after-second:result=t:target-live=nil:pipe-live=nil",
+                ],
+                "file-error" => &[
+                    "unlock:/inner-unlock-probe/truename:armed=t:target-live=t:current-target=nil:pipe-live=t",
+                    "after-first:result=(caught file-error):target-live=t:pipe-live=t:current-target=nil",
+                    "unlock:/inner-unlock-probe/truename:armed=nil:target-live=t:current-target=nil:pipe-live=t",
+                    "sentinel:target-live=t",
+                    "after-second:result=t:target-live=nil:pipe-live=nil",
+                ],
+                _ => panic!("unknown kill-buffer unlock case: {kind}"),
+            },
             Self::Sentinels => &[
                 "sentinel:control",
                 "kill-hook",
@@ -218,6 +321,11 @@ impl Probe {
             events: events.iter().map(|s| (*s).into()).collect(),
             #[cfg(target_os = "linux")]
             native_child: match self {
+                Self::KillBufferUnlock("real-hup") => Some(NativeObservation::CaughtHup {
+                    disposition_before_go: true,
+                    hup_acknowledgements: 2,
+                    child_exited_before_cleanup: true,
+                }),
                 Self::IgnoredChildHangup(kind) => Some(NativeObservation::IgnoredHup {
                     disposition_before_go: true,
                     child_alive_after_editor_exit: !matches!(
@@ -399,6 +507,9 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
             }
             IgnoredHupProbe::Pipe | IgnoredHupProbe::ForegroundDaemonPipe => {}
         }
+    }
+    if let Probe::KillBufferUnlock(kind) = probe {
+        command.env("KILL_BUFFER_UNLOCK_CASE", kind);
     }
     let mut editor = RunningEditor {
         child: command.spawn().unwrap(),
@@ -613,4 +724,76 @@ fn shutdown_foreground_daemon_keeps_hup_ignoring_child_alive() {
 #[test]
 fn shutdown_foreground_daemon_preserves_user_unix_listener_path() {
     assert_shutdown_parity(Probe::DaemonUnixListener);
+}
+
+#[test]
+fn kill_buffer_unlock_normal() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("normal"));
+}
+
+#[test]
+fn kill_buffer_unlock_current() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("current"));
+}
+
+#[test]
+fn kill_buffer_unlock_function_cell() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("function-cell"));
+}
+
+#[test]
+fn kill_buffer_unlock_unmodified() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("unmodified"));
+}
+
+#[test]
+fn kill_buffer_unlock_nil_truename() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("nil-truename"));
+}
+
+#[test]
+fn kill_buffer_unlock_current_reselect() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("current-reselect"));
+}
+
+#[test]
+fn kill_buffer_unlock_kill_target() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("kill-target"));
+}
+
+#[test]
+fn kill_buffer_unlock_throw() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("throw"));
+}
+
+#[test]
+fn kill_buffer_unlock_current_throw() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("current-throw"));
+}
+
+#[test]
+fn kill_buffer_unlock_indirect_throw() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("indirect-throw"));
+}
+
+#[test]
+fn kill_buffer_unlock_file_error() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("file-error"));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn kill_buffer_unlock_reentrant_real_child_receives_both_hangups() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("real-hup"));
+}
+
+#[test]
+fn kill_buffer_base_with_current_indirect_keeps_live_selection() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("current-indirect-base"));
+}
+
+// Preserve native frame preference during transitional indirect retirement.
+#[test]
+fn kill_buffer_current_indirect_keeps_native_frame_preference() {
+    assert_shutdown_parity(Probe::KillBufferUnlock("current-indirect-frame-preference"));
 }
