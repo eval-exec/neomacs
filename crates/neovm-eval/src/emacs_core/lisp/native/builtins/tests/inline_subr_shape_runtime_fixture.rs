@@ -54,6 +54,7 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_char_table_subtype_matches_canonical_descriptor(&mut eval);
     assert_core_set_char_table_range_matches_canonical_descriptor(&mut eval);
     assert_core_set_syntax_table_matches_canonical_descriptor(&mut eval);
+    assert_core_copy_syntax_table_matches_canonical_descriptor(&mut eval);
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
@@ -1283,4 +1284,166 @@ fn assert_core_set_syntax_table_matches_canonical_descriptor(
         .unwrap()
         .set_slot_local_flag(BUFFER_SLOT_SYNTAX_TABLE, other_original_local);
     assert_eq!(context.edit.buffers.current_buffer_id(), Some(current));
+}
+
+fn assert_core_copy_syntax_table_matches_canonical_descriptor(
+    context: &mut crate::emacs_core::eval::Context,
+) {
+    use crate::emacs_core::builtins::misc_eval::COPY_SYNTAX_TABLE_SUBR;
+    use crate::emacs_core::eval::lookup_global_subr_entry;
+    use crate::emacs_core::eval::subr_abi::SubrFn;
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+    use neovm_value::intern::intern;
+    use neovm_value::value::Value;
+    let expected = COPY_SYNTAX_TABLE_SUBR;
+    assert_eq!(expected.name(), "copy-syntax-table");
+    assert_eq!(expected.arity(), SubrArity::new(0, Some(1)));
+    assert_eq!(
+        expected.dispatch_kind(),
+        neovm_value::tagged::header::SubrDispatchKind::Builtin
+    );
+    assert!(expected.interactive_spec().is_none());
+    assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(expected.leaf_spec().is_none());
+    let id = intern("copy-syntax-table");
+    let actual = lookup_global_subr_entry(id).expect("actual registered copy-syntax-table");
+    let (Some(SubrFn::Many(actual_fn)), Some(SubrFn::Many(expected_fn))) =
+        (actual.function, expected.function())
+    else {
+        panic!("original registered Many ABI");
+    };
+    assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+    assert_eq!(
+        (actual.min_args, actual.max_args),
+        (expected.arity().min(), expected.arity().max())
+    );
+    assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+    assert!(actual.interactive_spec.is_none());
+    assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+    assert!(
+        context
+            .obarray_view()
+            .get_property("copy-syntax-table", "disabled")
+            .is_none_or(|value| value.is_nil())
+    );
+    use neovm_value::chartab::{
+        char_table_default, char_table_extra_slot_value, char_table_set_char_direct, ct_ref,
+        is_char_table, make_char_table_value, make_char_table_with_extra_slots,
+    };
+    use neovm_value::tagged::SymbolMode;
+    let current = context.edit.buffers.current_buffer_id();
+    let standard = neovm_text::emacs_core::syntax::builtin_standard_syntax_table(vec![]).unwrap();
+    let standard_a = ct_ref(&standard, 'a' as i64);
+    let defaulted = actual_fn(context, vec![]).expect("default standard source");
+    let nil_source = actual_fn(context, vec![Value::NIL]).expect("nil standard source");
+    assert!(is_char_table(&defaulted) && is_char_table(&nil_source));
+    assert_ne!(defaulted.bits(), standard.bits());
+    assert_ne!(nil_source.bits(), standard.bits());
+    assert_ne!(nil_source.bits(), defaulted.bits());
+    assert!(char_table_default(&defaulted).is_nil());
+    assert!(char_table_default(&nil_source).is_nil());
+    assert_eq!(
+        defaulted.as_char_table_obj().unwrap().parent.get().bits(),
+        standard.bits()
+    );
+    assert_eq!(
+        nil_source.as_char_table_obj().unwrap().parent.get().bits(),
+        standard.bits()
+    );
+    assert_eq!(ct_ref(&defaulted, 'a' as i64).bits(), standard_a.bits());
+    let purpose = Value::symbol("syntax-table");
+    let parent = make_char_table_value(purpose, Value::fixnum(77));
+    let source = make_char_table_with_extra_slots(purpose, Value::fixnum(31), 2);
+    let shared = Value::cons(Value::fixnum(2), Value::NIL);
+    source
+        .with_char_table_mut(|object| {
+            object.set_parent(parent);
+            object.set_extra(0, shared);
+            object.set_extra(1, Value::fixnum(9));
+        })
+        .unwrap();
+    char_table_set_char_direct(source, 0x1234, shared, SymbolMode::Bare);
+    let copied = actual_fn(context, vec![source]).expect("explicit source");
+    assert_ne!(copied.bits(), source.bits());
+    assert_eq!(
+        copied.as_char_table_obj().unwrap().purpose.get().bits(),
+        purpose.bits()
+    );
+    assert!(char_table_default(&copied).is_nil());
+    assert_eq!(char_table_default(&source), Value::fixnum(31));
+    assert_eq!(
+        copied.as_char_table_obj().unwrap().parent.get().bits(),
+        parent.bits()
+    );
+    assert_eq!(
+        char_table_extra_slot_value(&copied, 0).unwrap().bits(),
+        shared.bits()
+    );
+    assert_eq!(
+        char_table_extra_slot_value(&copied, 1),
+        Some(Value::fixnum(9))
+    );
+    assert_eq!(char_table_extra_slot_value(&copied, 2), None);
+    assert_eq!(
+        ct_ref(&copied, 0x1234).bits(),
+        shared.bits(),
+        "ordinary leaf Values remain shared"
+    );
+    assert_ne!(
+        copied.as_char_table_obj().unwrap().contents[0].get().bits(),
+        source.as_char_table_obj().unwrap().contents[0].get().bits(),
+        "subtable storage must be fresh"
+    );
+    char_table_set_char_direct(copied, 0x1234, Value::fixnum(44), SymbolMode::Bare);
+    assert_eq!(ct_ref(&source, 0x1234).bits(), shared.bits());
+    assert_eq!(ct_ref(&copied, 0x1234), Value::fixnum(44));
+    char_table_set_char_direct(defaulted, 'a' as i64, Value::fixnum(45), SymbolMode::Bare);
+    assert_eq!(ct_ref(&standard, 'a' as i64).bits(), standard_a.bits());
+    for bad in [
+        Value::fixnum(9),
+        make_char_table_value(Value::symbol("not-syntax-table"), Value::NIL),
+    ] {
+        let error = actual_fn(context, vec![bad]).unwrap_err();
+        let signal = error.as_signal().expect("wrong type");
+        assert_eq!(signal.symbol, intern("wrong-type-argument"));
+        assert_eq!(signal.data, vec![Value::symbol("syntax-table-p"), bad]);
+    }
+    let error = actual_fn(context, vec![Value::NIL, Value::NIL]).unwrap_err();
+    let signal = error.as_signal().expect("wrong arity");
+    assert_eq!(signal.symbol, intern("wrong-number-of-arguments"));
+    assert_eq!(
+        signal.data,
+        vec![Value::symbol("copy-syntax-table"), Value::fixnum(2)]
+    );
+    let original_mode = context.symbols_with_pos_enabled;
+    let positioned_purpose = context
+        .tagged_heap
+        .alloc_symbol_with_pos(purpose, Value::fixnum(17));
+    let positioned = make_char_table_value(positioned_purpose, Value::NIL);
+    context.symbols_with_pos_enabled = false;
+    let error = actual_fn(context, vec![positioned]).unwrap_err();
+    let signal = error
+        .as_signal()
+        .expect("bare policy rejects positioned purpose");
+    assert_eq!(signal.symbol, intern("wrong-type-argument"));
+    assert_eq!(
+        signal.data,
+        vec![Value::symbol("syntax-table-p"), positioned]
+    );
+    context.symbols_with_pos_enabled = true;
+    let positioned_copy =
+        actual_fn(context, vec![positioned]).expect("positioned policy projects purpose");
+    assert_eq!(
+        positioned_copy
+            .as_char_table_obj()
+            .unwrap()
+            .purpose
+            .get()
+            .bits(),
+        positioned_purpose.bits()
+    );
+    context.symbols_with_pos_enabled = original_mode;
+    assert_eq!(context.edit.buffers.current_buffer_id(), current);
 }

@@ -186,6 +186,14 @@ pub static SET_SYNTAX_TABLE_SUBR: SubrSpec =
         FixedMin1::One
     ));
 
+/// Share the original host-generic syntax-table copy descriptor.
+#[doc(hidden)]
+pub static COPY_SYNTAX_TABLE_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "copy-syntax-table",
+    NativeFn::ContextVec(neovm_text::emacs_core::syntax::builtin_copy_syntax_table_in_state),
+    SubrArity::new(0, Some(1))
+));
+
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_pos_property(
     eval: &mut super::eval::Context,

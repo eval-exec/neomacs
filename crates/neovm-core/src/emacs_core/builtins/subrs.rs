@@ -2118,11 +2118,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "copy-syntax-table",
-        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_copy_syntax_table_in_state),
-        SubrArity::new(0, Some(1)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::COPY_SYNTAX_TABLE_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "syntax-table-p",
         NativeFn::ContextVec(crate::emacs_core::syntax::builtin_syntax_table_p_in_state),
