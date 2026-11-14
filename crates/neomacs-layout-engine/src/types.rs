@@ -357,6 +357,7 @@ pub struct WindowParams {
     pub window_system: bool,
     /// GNU desired-matrix row scale owned by this live window.
     pub glyph_matrix_row_scale: std::num::NonZeroU32,
+    pub glyph_matrix_rows: Option<usize>,
     /// Captured display-connection minimum, shared by capacity and freshness.
     pub smallest_opened_font_height: u32,
     /// Font pixel size

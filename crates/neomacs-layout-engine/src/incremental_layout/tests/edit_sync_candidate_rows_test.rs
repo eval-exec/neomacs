@@ -464,6 +464,7 @@ fn fixture_key(window_start: i64, point: i64) -> RetainedWindowKey {
         char_height: 16.0,
         smallest_opened_font_height: 16,
         glyph_matrix_row_scale: std::num::NonZeroU32::MIN,
+        glyph_matrix_rows: None,
         font_pixel_size: 16.0,
         tab_stop_list: Vec::new(),
         extra_line_spacing: 0.0,

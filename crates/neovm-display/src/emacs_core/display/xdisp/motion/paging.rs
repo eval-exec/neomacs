@@ -13,6 +13,8 @@ use std::num::NonZeroUsize;
 pub(crate) struct ScrollPlan {
     viewport: WindowScrollUpdate,
     goal: Option<ScrollGoal>,
+    // GNU's partially visible final-row branch adjusts even for contraction.
+    adjust_glyph_matrices: bool,
 }
 
 impl From<WindowScrollUpdate> for ScrollPlan {
@@ -20,6 +22,7 @@ impl From<WindowScrollUpdate> for ScrollPlan {
         Self {
             viewport,
             goal: None,
+            adjust_glyph_matrices: false,
         }
     }
 }
@@ -340,7 +343,8 @@ pub(crate) fn commit_scroll_plan<Plan: Into<ScrollPlan>>(
         return Ok(false);
     };
     let plan = plan.into();
-    plan.viewport.commit(eval)?;
+    plan.viewport
+        .commit_with_matrix_adjustment(eval, plan.adjust_glyph_matrices)?;
     eval.scroll_goal = plan.goal;
     Ok(true)
 }
@@ -469,6 +473,7 @@ fn plan_scroll(
     if let Some(offset) = next_offset {
         return Ok(Some(ScrollPlan {
             goal: eval.scroll_goal,
+            adjust_glyph_matrices: false,
             viewport: WindowScrollUpdate {
                 frame: frame_id,
                 window: window_id,
@@ -491,6 +496,7 @@ fn plan_scroll(
         // following command can then scroll within its pixel extent.
         return Ok(Some(ScrollPlan {
             goal: eval.scroll_goal,
+            adjust_glyph_matrices: false,
             viewport: WindowScrollUpdate {
                 frame: frame_id,
                 window: window_id,
@@ -565,6 +571,7 @@ fn plan_scroll(
                 if top < height && bottom > height {
                     return Ok(Some(ScrollPlan {
                         goal: eval.scroll_goal,
+                        adjust_glyph_matrices: true,
                         viewport: WindowScrollUpdate {
                             frame: frame_id,
                             window: window_id,
@@ -653,6 +660,7 @@ fn plan_scroll(
     };
     Ok(Some(ScrollPlan {
         goal,
+        adjust_glyph_matrices: false,
         viewport: WindowScrollUpdate {
             frame: frame_id,
             window: window_id,

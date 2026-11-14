@@ -932,6 +932,7 @@ impl Context {
                 frame_id,
             );
         }
+        super::redisplay_hooks::prepare_pending_gui_glyph_matrices(self);
         let before_signature = self.redisplay_signature();
         // A pending exact echo-area resize (GNU `resize_echo_area_exactly`)
         // must still drive a redisplay even when the visible signature is

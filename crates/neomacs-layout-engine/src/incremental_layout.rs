@@ -207,6 +207,7 @@ pub struct RetainedWindowKey {
     pub char_height: f32,
     pub smallest_opened_font_height: u32,
     pub glyph_matrix_row_scale: std::num::NonZeroU32,
+    pub glyph_matrix_rows: Option<usize>,
     pub font_pixel_size: f32,
     // --- Additional layout-affecting inputs (adversarial-review fixes). These
     // are read fresh from buffer-locals / window state each frame but do NOT
@@ -360,6 +361,7 @@ impl RetainedWindowKey {
             char_height: p.char_height,
             smallest_opened_font_height: p.smallest_opened_font_height,
             glyph_matrix_row_scale: p.glyph_matrix_row_scale,
+            glyph_matrix_rows: p.glyph_matrix_rows,
             font_pixel_size: p.font_pixel_size,
             tab_stop_list: p.tab_stop_list.clone(),
             extra_line_spacing: p.extra_line_spacing,
@@ -515,6 +517,7 @@ impl RetainedWindowKey {
             char_height,
             smallest_opened_font_height,
             glyph_matrix_row_scale,
+            glyph_matrix_rows,
             font_pixel_size,
             tab_stop_list,
             extra_line_spacing,

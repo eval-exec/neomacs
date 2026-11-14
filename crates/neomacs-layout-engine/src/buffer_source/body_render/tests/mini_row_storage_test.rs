@@ -54,6 +54,7 @@ fn window_params() -> WindowParams {
         char_height: 1.0,
         window_system: false,
         glyph_matrix_row_scale: std::num::NonZeroU32::MIN,
+        glyph_matrix_rows: None,
         smallest_opened_font_height: 1,
         font_pixel_size: 14.0,
         image_scale_environment: Default::default(),

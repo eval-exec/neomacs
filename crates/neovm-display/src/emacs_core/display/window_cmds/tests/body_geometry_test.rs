@@ -10,3 +10,88 @@ fn chrome_height_queries_agree_with_absent_pre_redisplay_chrome() {
     );
     assert_eq!(results[1], "OK (0 0 0)");
 }
+
+#[test]
+fn matrix_adjustment_uses_committed_body_instead_of_previous_presented_regions() {
+    use super::*;
+    use neomacs_display_protocol::glyph_matrix_capacity::required_gui_glyph_matrix_rows;
+    use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
+
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
+    let buffer = ctx.edit.buffers.create_buffer("*matrix-geometry*");
+    ctx.edit.buffers.set_current(buffer);
+    for name in ["mode-line-format", "header-line-format", "tab-line-format"] {
+        ctx.edit
+            .buffers
+            .get_mut(buffer)
+            .unwrap()
+            .set_buffer_local(name, Value::NIL);
+    }
+    let frame_id = ctx
+        .frame_manager_mut()
+        .create_frame("matrix-geometry", 800, 600, buffer);
+    let identity = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::X11);
+    identity.observe_opened_font_metrics(15, 5);
+    let window_id = {
+        let frame = ctx.frame_manager_mut().get_mut(frame_id).unwrap();
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.set_display_identity(crate::window::FrameDisplayIdentity::Graphical(identity));
+        frame.set_known_parameter(FrameParam::HorizontalScrollBars, Value::NIL);
+        frame.selected_window
+    };
+    publish_selected_gui_window_regions(
+        &mut ctx,
+        frame_id,
+        1,
+        crate::window::PresentedWindowRegions {
+            outer: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 600.0),
+            text_body: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 500.0),
+            ..Default::default()
+        },
+    );
+    // Commit a resize while retaining the previous completed presentation.
+    let current_body = {
+        let frame = ctx.frame_manager_mut().get_mut(frame_id).unwrap();
+        frame.resize_pixelwise(800, 320);
+        frame.find_window(window_id).unwrap().bounds().height as i64
+    };
+    assert_ne!(current_body, 500);
+    assert_eq!(
+        crate::emacs_core::window_cmds::builtin_window_body_height(
+            &mut ctx,
+            &[Value::make_window(window_id.0), Value::T]
+        )
+        .unwrap(),
+        Value::fixnum(500),
+        "the ordinary query must still prefer the completed presentation"
+    );
+    let (_, adjustment_body) = crate::emacs_core::window_cmds::hook_window_body_dimensions(
+        ctx.frame_manager(),
+        &ctx.edit.buffers,
+        frame_id,
+        window_id,
+    )
+    .unwrap();
+    assert_eq!(adjustment_body, current_body);
+    crate::emacs_core::window_cmds::adjust_frame_glyph_matrices(&ctx, frame_id);
+    let frame = ctx.frame_manager().get(frame_id).unwrap();
+    let owner = &frame
+        .find_window(window_id)
+        .unwrap()
+        .display()
+        .unwrap()
+        .glyph_matrix_row_scale;
+    assert_eq!(
+        owner.allocated_rows(),
+        Some(required_gui_glyph_matrix_rows(
+            current_body,
+            0,
+            20,
+            owner.current()
+        ))
+    );
+    assert_ne!(
+        owner.allocated_rows(),
+        Some(required_gui_glyph_matrix_rows(500, 0, 20, owner.current()))
+    );
+}

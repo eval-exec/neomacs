@@ -97,5 +97,5 @@ fn native_font_open_and_matrix_growth_refresh_attempt_inputs() {
         )
         .unwrap();
     assert!(matches!(&refreshed, std::borrow::Cow::Owned(_)));
-    assert_eq!(refreshed.window.glyph_matrix_row_scale.get(), 2);
+    assert_eq!(refreshed.window.glyph_matrix_row_scale.row_scale().get(), 2);
 }

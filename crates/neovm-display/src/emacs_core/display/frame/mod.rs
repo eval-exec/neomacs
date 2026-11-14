@@ -21,15 +21,15 @@ pub use selection::{builtin_handle_switch_frame, builtin_select_frame};
 use super::window_cmds::{
     DeleteFrameMode, FRAME_TEXT_LINES_PARAM, FRAME_TOTAL_COLS_PARAM, FRAME_TOTAL_LINES_PARAM,
     FrameResizeRequest, FrameSizeParam, LIVE_GUI_RESIZE_ACK_TIMEOUT, MIN_FRAME_TEXT_LINES,
-    OtherFramePurpose, delete_frame_owned, ensure_selected_frame_id_in_state, expect_int,
-    flush_pending_live_gui_resize, frame_is_top_level_non_window, frame_name_parameter_value,
-    frame_non_text_total_height_pixels, frame_non_text_total_width_pixels_in_state,
-    frame_realized_lines, frame_size_param_to_cells, frame_size_param_to_pixels,
-    frame_text_height_pixels, frame_text_width_pixels_in_state, frame_total_cols,
-    frame_total_lines, make_frame_plain_on_terminal, other_frames_in_state, parse_frame_size_param,
-    remember_selected_window_point_in_state, request_live_gui_frame_resize, resize_live_gui_frame,
-    resolve_frame_id, resolve_frame_id_in_state, selected_frame_impl, set_frame_text_size,
-    stringish_value, sync_selected_window_buffer_in_state,
+    OtherFramePurpose, adjust_frame_glyph_matrices, delete_frame_owned,
+    ensure_selected_frame_id_in_state, expect_int, flush_pending_live_gui_resize,
+    frame_is_top_level_non_window, frame_name_parameter_value, frame_non_text_total_height_pixels,
+    frame_non_text_total_width_pixels_in_state, frame_realized_lines, frame_size_param_to_cells,
+    frame_size_param_to_pixels, frame_text_height_pixels, frame_text_width_pixels_in_state,
+    frame_total_cols, frame_total_lines, make_frame_plain_on_terminal, other_frames_in_state,
+    parse_frame_size_param, remember_selected_window_point_in_state, request_live_gui_frame_resize,
+    resize_live_gui_frame, resolve_frame_id, resolve_frame_id_in_state, selected_frame_impl,
+    set_frame_text_size, stringish_value, sync_selected_window_buffer_in_state,
 };
 use crate::window::FrameManager;
 use crate::window::{
@@ -835,6 +835,7 @@ pub fn builtin_set_frame_height(
         .map(|frame| *frame.root_window().bounds())
         != old_root_bounds
     {
+        adjust_frame_glyph_matrices(ctx, fid);
         ctx.gnu_mark_frame_redisplay(fid);
         ctx.gnu_mark_frame_window_change(fid);
         // A child frame's new size reaches the compositor only through the
@@ -949,6 +950,7 @@ pub fn builtin_set_frame_width(
         .map(|frame| *frame.root_window().bounds())
         != old_root_bounds
     {
+        adjust_frame_glyph_matrices(ctx, fid);
         ctx.gnu_mark_frame_redisplay(fid);
         ctx.gnu_mark_frame_window_change(fid);
         // A child frame's new size reaches the compositor only through the
@@ -1096,6 +1098,7 @@ pub fn builtin_set_frame_size(
         .map(|frame| *frame.root_window().bounds())
         != old_root_bounds
     {
+        adjust_frame_glyph_matrices(ctx, fid);
         ctx.gnu_mark_frame_redisplay(fid);
         ctx.gnu_mark_frame_window_change(fid);
         // A child frame's new size reaches the compositor only through the
@@ -1830,6 +1833,7 @@ pub fn builtin_modify_frame_parameters(
     let mut requested_height = None;
     let mut requested_left = None;
     let mut requested_top = None;
+    let mut matrix_geometry_changed = false;
 
     for item in items.into_iter().rev() {
         if item.is_cons() {
@@ -1837,6 +1841,28 @@ pub fn builtin_modify_frame_parameters(
             let pair_cdr = item.cons_cdr();
             if let Some(key) = pair_car.as_symbol_id(symbol_mode) {
                 let key_name = resolve_sym(key);
+                if matches!(
+                    key_name,
+                    "internal-border-width"
+                        | "right-divider-width"
+                        | "bottom-divider-width"
+                        | "left-fringe"
+                        | "right-fringe"
+                        | "vertical-scroll-bars"
+                        | "horizontal-scroll-bars"
+                        | "scroll-bar-width"
+                        | "scroll-bar-height"
+                        | "menu-bar-lines"
+                        | "tool-bar-lines"
+                        | "tab-bar-lines"
+                ) && eval
+                    .frame_manager()
+                    .get(fid)
+                    .and_then(|frame| frame.parameter(key_name))
+                    != Some(pair_cdr)
+                {
+                    matrix_geometry_changed = true;
+                }
                 match key_name {
                     "width" => {
                         if parse_frame_size_param(pair_cdr).is_some()
@@ -1988,6 +2014,7 @@ pub fn builtin_modify_frame_parameters(
                                 super::font::seed_live_frame_default_face_from_font_parameter(
                                     eval, fid,
                                 );
+                                adjust_frame_glyph_matrices(eval, fid);
                             }
                         }
                         FrameParamKey::Known(FrameParam::Name) => {
@@ -2262,6 +2289,15 @@ pub fn builtin_modify_frame_parameters(
         }
     }
 
+    if matrix_geometry_changed
+        || eval
+            .frame_manager()
+            .get(fid)
+            .map(|frame| *frame.root_window().bounds())
+            != old_root_bounds
+    {
+        adjust_frame_glyph_matrices(eval, fid);
+    }
     if eval
         .frame_manager()
         .get(fid)

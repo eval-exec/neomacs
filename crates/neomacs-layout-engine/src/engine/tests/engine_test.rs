@@ -1900,6 +1900,7 @@ fn test_window_params() -> WindowParams {
         char_height: 16.0,
         window_system: true,
         glyph_matrix_row_scale: std::num::NonZeroU32::MIN,
+        glyph_matrix_rows: None,
         smallest_opened_font_height: 16,
         font_pixel_size: 14.0,
         image_scale_environment: Default::default(),

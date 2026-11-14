@@ -457,33 +457,11 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
                 };
 
             let visible_lines = if frame.effective_window_system().is_some() {
-                let Ok((_, body_height)) =
-                    crate::emacs_core::window_cmds::hook_window_body_dimensions(
-                        &ctx.frame_manager(),
-                        &ctx.edit.buffers,
-                        *frame_id,
-                        win_id,
-                    )
-                else {
-                    continue;
-                };
-                let smallest_font_height = match frame.display_identity() {
-                    crate::window::FrameDisplayIdentity::Graphical(identity) => {
-                        identity.smallest_opened_font_height()
-                    }
-                    crate::window::FrameDisplayIdentity::None => 1,
-                };
-                neomacs_display_protocol::glyph_matrix_capacity::required_gui_glyph_matrix_rows(
-                    body_height,
-                    window.redisplay_state().map_or(0, |state| state.vscroll),
-                    smallest_font_height,
-                    window
-                        .display()
-                        .map_or(std::num::NonZeroU32::MIN, |display| {
-                            display.glyph_matrix_row_scale.current()
-                        }),
-                )
-                .min(i64::MAX as usize) as i64
+                window
+                    .display()
+                    .and_then(|display| display.glyph_matrix_row_scale.allocated_rows())
+                    .unwrap_or(0)
+                    .min(i64::MAX as usize) as i64
             } else {
                 ((window.bounds().height / char_height.max(1.0)).floor() as i64).max(1)
             };

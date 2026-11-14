@@ -3729,6 +3729,10 @@ fn initialize_reused_gui_startup_frame(eval: &mut Context, frame_id: FrameId) {
         frame.set_known_parameter(FrameParam::ToolBarLines, Value::fixnum(1));
     }
 
+    // The graphical frame must own its initial matrix allocation before the
+    // face-initialization Lisp can query it, as at GNU frame creation.
+    neovm_core::emacs_core::window_cmds::adjust_frame_glyph_matrices(eval, frame_id);
+
     // Callers bootstrapping an existing GUI frame, including isolated test
     // fixtures, bypass faces.el:x-create-frame-with-faces. Apply its frame-local
     // Lisp initialization here. The GUI worker instead starts with a terminal
@@ -3850,6 +3854,12 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
         if frame.effective_window_system().is_none() {
             return;
         }
+        let previous_geometry = (
+            *frame.root_window().bounds(),
+            frame.menu_bar_height,
+            frame.tool_bar_height,
+            frame.compact_bar_height,
+        );
         // A shown GUI frame realizes its menu/tab/tool bars into the frame's
         // top margin (GNU's FRAME_TOP_MARGIN), so the window text area — and
         // the windows' tab/header lines — must sit below them.  The reused
@@ -3868,13 +3878,25 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
         } else {
             GuiBarPresentation::Separate
         });
-        geometry_hints = Some((frame.id, frame.gui_geometry_hints()));
+        let geometry_changed = previous_geometry
+            != (
+                *frame.root_window().bounds(),
+                frame.menu_bar_height,
+                frame.tool_bar_height,
+                frame.compact_bar_height,
+            );
+        geometry_hints = Some((frame.id, frame.gui_geometry_hints(), geometry_changed));
     }
 
-    if let Some((frame_id, hints)) = geometry_hints
-        && let Some(host) = eval.display_host.as_mut()
-    {
-        let _ = host.set_gui_frame_geometry_hints(frame_id, hints);
+    if let Some((frame_id, hints, geometry_changed)) = geometry_hints {
+        if geometry_changed {
+            // GNU bar-height changes adjust matrices after reflow. An unchanged
+            // chrome sync must not consume a pending unused-font opening.
+            neovm_core::emacs_core::window_cmds::adjust_frame_glyph_matrices(eval, frame_id);
+        }
+        if let Some(host) = eval.display_host.as_mut() {
+            let _ = host.set_gui_frame_geometry_hints(frame_id, hints);
+        }
     }
 }
 
@@ -5956,6 +5978,10 @@ fn bootstrap_buffers_with_font(
         }
     }
     eval.create_window_markers_for_minibuffer(frame_id, mini_id);
+    if display.frontend() == FrontendKind::Gui {
+        // Startup has now finalized the font and root/minibuffer geometry.
+        neovm_core::emacs_core::window_cmds::adjust_frame_glyph_matrices(eval, frame_id);
+    }
 
     BootstrapResult {
         scratch_id,

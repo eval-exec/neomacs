@@ -2287,6 +2287,30 @@ impl LayoutEngine {
             if query_window.is_none() {
                 crate::incremental_layout::chrome_memo::reset_fingerprint_record();
             }
+            if query_window.is_none() {
+                let pending = evaluator
+                    .frame_manager()
+                    .get(frame_id)
+                    .is_some_and(|frame| {
+                        let min_height = frame.layout_inputs().smallest_opened_font_height;
+                        frame
+                            .live_window_ids_with_minibuffer()
+                            .into_iter()
+                            .any(|id| {
+                                frame
+                                    .find_window(id)
+                                    .and_then(|window| window.display())
+                                    .is_some_and(|display| {
+                                        display.glyph_matrix_row_scale.needs_adjustment(min_height)
+                                    })
+                            })
+                    });
+                if pending {
+                    neovm_core::emacs_core::window_cmds::adjust_frame_glyph_matrices(
+                        evaluator, frame_id,
+                    );
+                }
+            }
             let attempt_topology_generation =
                 evaluator.frame_manager().window_topology_generation();
             let Some(attempt_smallest_font_height) = evaluator

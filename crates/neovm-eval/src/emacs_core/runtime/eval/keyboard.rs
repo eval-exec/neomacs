@@ -2788,6 +2788,7 @@ impl crate::emacs_core::eval::Context {
                 scale_factor,
                 emacs_frame_id,
             ) {
+                super::redisplay_hooks::adjust_gui_glyph_matrices(self, frame, false);
                 self.gnu_mark_frame_redisplay(frame);
                 self.gnu_mark_frame_window_change(frame);
                 // A child frame's size lives in its own geometry, which no
@@ -2839,11 +2840,15 @@ impl crate::emacs_core::eval::Context {
             &mut self.frames,
             &self.edit.buffers,
             self.display_host.as_deref(),
-        ) && crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
-        {
-            publications.push(frame);
+        ) {
+            if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+                publications.push(frame);
+            } else {
+                super::redisplay_hooks::adjust_gui_glyph_matrices(self, frame, false);
+            }
         }
         for frame in publications {
+            super::redisplay_hooks::adjust_gui_glyph_matrices(self, frame, false);
             self.gnu_mark_frame_redisplay(frame);
             self.gnu_mark_frame_window_change(frame);
         }
@@ -2869,6 +2874,7 @@ impl crate::emacs_core::eval::Context {
             &self.edit.buffers,
             self.display_host.as_deref(),
         ) {
+            super::redisplay_hooks::adjust_gui_glyph_matrices(self, frame, false);
             self.gnu_mark_frame_redisplay(frame);
             self.gnu_mark_frame_window_change(frame);
         }

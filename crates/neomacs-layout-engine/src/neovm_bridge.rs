@@ -1908,6 +1908,7 @@ pub fn window_params_from_neovm_with_font_sizing(
     // (issue #556).
     let frame_foreground = face_resolver.default_face().fg;
 
+    let glyph_matrix_input = window.display()?.glyph_matrix_row_scale.snapshot();
     Some(WindowParams {
         // Filled in by `resolve_window_display_source_params`, the one place
         // every window's params pass through that also holds the evaluator.
@@ -1991,7 +1992,8 @@ pub fn window_params_from_neovm_with_font_sizing(
         char_width,
         char_height,
         window_system: is_window_system,
-        glyph_matrix_row_scale: window.display()?.glyph_matrix_row_scale.current(),
+        glyph_matrix_row_scale: glyph_matrix_input.row_scale(),
+        glyph_matrix_rows: glyph_matrix_input.allocated_rows(),
         smallest_opened_font_height: frame.layout_inputs().smallest_opened_font_height,
         font_pixel_size: frame.font_pixel_size,
         image_scale_environment: image_scale_environment(frame, vars),

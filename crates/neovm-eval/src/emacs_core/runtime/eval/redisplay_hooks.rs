@@ -16,6 +16,64 @@ use neovm_edit::emacs_core::display_metrics::WindowId;
 use neovm_value::display_vocab::FrameId;
 use neovm_value::intern::WellKnown;
 
+/// Readjust only at an actual redisplay or a committed geometry change.
+/// The existing body-dimension hook is a pure query; getters never enter here.
+pub(crate) fn adjust_gui_glyph_matrices(eval: &Context, frame_id: FrameId, pending_only: bool) {
+    use super::data::window_state::FrameDisplayIdentity;
+    let Some(frame) = eval.frames.get(frame_id) else {
+        return;
+    };
+    if frame.effective_window_system().is_none() {
+        return;
+    }
+    let min_height = match frame.display_identity() {
+        FrameDisplayIdentity::Graphical(identity) => identity.smallest_opened_font_height(),
+        FrameDisplayIdentity::None => return,
+    };
+    let windows = frame.live_window_ids_with_minibuffer();
+    if pending_only
+        && !windows.iter().any(|id| {
+            frame
+                .find_window(*id)
+                .and_then(Window::display)
+                .is_some_and(|display| display.glyph_matrix_row_scale.needs_adjustment(min_height))
+        })
+    {
+        return;
+    }
+    for id in windows {
+        let Some(window) = frame.find_window(id) else {
+            continue;
+        };
+        let (Some(display), Some(redisplay)) = (window.display(), window.redisplay_state()) else {
+            continue;
+        };
+        let Ok((_, body_height)) = super::display_query_hooks::window_body_dimensions(
+            &eval.frames,
+            &eval.edit.buffers,
+            frame_id,
+            id,
+        ) else {
+            continue;
+        };
+        display
+            .glyph_matrix_row_scale
+            .adjust(body_height, redisplay.vscroll, min_height);
+    }
+}
+
+pub(crate) fn prepare_pending_gui_glyph_matrices(eval: &Context) {
+    for id in eval.frames.frame_list() {
+        if eval
+            .frames
+            .get(id)
+            .is_some_and(|frame| frame.visibility.is_visible())
+        {
+            adjust_gui_glyph_matrices(eval, id, true);
+        }
+    }
+}
+
 // Fixed redisplay spellings with GNU DEFSYM ids. GNU holds these as statics
 // (`Qpre_redisplay_function`, `Qinhibit_redisplay`, `Qinhibit_quit`, ...); the
 // redisplay transaction runs on every command and previously re-interned each
@@ -327,6 +385,7 @@ impl Context {
     /// A successful preparatory resize owns the GNU frame geometry/change
     /// flags before window-change hooks; it is not a painted-frame acceptance.
     pub fn gnu_publish_mini_geometry_changed(&mut self, frame: FrameId) {
+        adjust_gui_glyph_matrices(self, frame, false);
         if !gnu_redisplay_hooks_enabled() {
             return;
         }
@@ -1114,6 +1173,9 @@ impl RedisplayTransaction<'_> {
             );
         }
         self.eval.gnu_run_pre_redisplay()?;
+        // GNU xdisp.c:17464 consumes font changes before echo/minibuffer
+        // preparation and the later window-change hooks (17526–17563).
+        prepare_pending_gui_glyph_matrices(self.eval);
         if let Some(request) = self.eval.gnu_mini_geometry_request() {
             self.preparation = self.eval.redisplay_prepare_fn.take();
             if let Some(prepare) = self.preparation.as_mut() {

@@ -1,30 +1,66 @@
 //! GNU window-system glyph-matrix row capacity, independent of visible rows.
 
 use std::num::NonZeroU32;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-/// Persistent scale belonging to one logical window identity.
+/// Coherent numeric inputs copied from one window's allocated desired matrix.
+/// The current display minimum is separate: opening a font does not allocate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlyphMatrixInput {
+    row_scale: NonZeroU32,
+    allocated_rows: Option<usize>,
+}
+
+impl GlyphMatrixInput {
+    pub fn row_scale(self) -> NonZeroU32 {
+        self.row_scale
+    }
+
+    pub fn allocated_rows(self) -> Option<usize> {
+        self.allocated_rows
+    }
+}
+
+#[derive(Debug)]
+struct GlyphMatrixAllocation {
+    input: GlyphMatrixInput,
+    adjusted_font_height: Option<u32>,
+    adjusted_scale: NonZeroU32,
+}
+
+/// Persistent desired-matrix allocation belonging to one window identity.
 ///
-/// Configuration snapshots and restored copies share this numeric handle,
-/// just as GNU configurations retain the original window object. A newly
-/// created or split window receives a fresh default handle instead.
+/// Configuration snapshots retain the same owner; a newly split window starts
+/// independently. Batch/TTY windows remain dormant without a heap allocation.
+/// The private mutex keeps rows and their scale coherent across a shared
+/// configuration owner. It never encloses Lisp, font opening or another lock.
 #[derive(Clone, Debug, Default)]
 pub struct GlyphMatrixRowScale {
-    // Batch and TTY windows keep an allocation-free dormant scale of one.
-    value: Option<Arc<AtomicU32>>,
+    value: Option<Arc<Mutex<GlyphMatrixAllocation>>>,
 }
 
 impl GlyphMatrixRowScale {
-    /// Activate a graphical window before any configurations can clone it.
-    /// Repeated installation preserves the same logical window's learned scale.
+    fn allocation(&self) -> Option<MutexGuard<'_, GlyphMatrixAllocation>> {
+        self.value.as_ref().map(|value| {
+            value
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        })
+    }
+
     pub fn activate(&mut self) {
         if self.value.is_none() {
-            self.value = Some(Arc::new(AtomicU32::new(1)));
+            self.value = Some(Arc::new(Mutex::new(GlyphMatrixAllocation {
+                input: GlyphMatrixInput {
+                    row_scale: NonZeroU32::MIN,
+                    allocated_rows: None,
+                },
+                adjusted_font_height: None,
+                adjusted_scale: NonZeroU32::MIN,
+            })));
         }
     }
 
-    /// A new window has independent history, preserving the parent's domain.
     pub fn fresh_window(&self) -> Self {
         let mut window = Self::default();
         if self.value.is_some() {
@@ -33,30 +69,65 @@ impl GlyphMatrixRowScale {
         window
     }
 
-    pub fn current(&self) -> NonZeroU32 {
-        let Some(value) = &self.value else {
-            return NonZeroU32::MIN;
-        };
-        // Initialization and checked growth are the only writers; neither
-        // can publish zero. No other memory is synchronized by this scalar.
-        NonZeroU32::new(value.load(Ordering::Relaxed))
-            .expect("glyph matrix scale is always positive")
+    pub fn snapshot(&self) -> GlyphMatrixInput {
+        self.allocation().map_or(
+            GlyphMatrixInput {
+                row_scale: NonZeroU32::MIN,
+                allocated_rows: None,
+            },
+            |state| state.input,
+        )
     }
 
-    /// Grow once only for the exact scale whose matrix actually overflowed.
-    /// A stale observation or an exhausted integer must recollect instead.
+    pub fn current(&self) -> NonZeroU32 {
+        self.snapshot().row_scale()
+    }
+
+    pub fn allocated_rows(&self) -> Option<usize> {
+        self.snapshot().allocated_rows()
+    }
+
+    /// Font/overflow changes are consumed by actual redisplay before hooks.
+    /// Geometry alone is deliberately excluded: GNU vscroll contraction does
+    /// not immediately readjust the allocated matrix.
+    pub fn needs_adjustment(&self, smallest_font_height: u32) -> bool {
+        self.allocation().is_some_and(|state| {
+            state.input.allocated_rows.is_none()
+                || state.adjusted_font_height != Some(smallest_font_height.max(1))
+                || state.adjusted_scale != state.input.row_scale
+        })
+    }
+
+    /// GNU adjust_frame_glyphs boundary, after committed geometry is available.
+    /// This may shrink logical nrows; physical row storage is a separate owner.
+    pub fn adjust(
+        &self,
+        body_height_px: i64,
+        vscroll_px: i32,
+        smallest_font_height: u32,
+    ) -> Option<GlyphMatrixInput> {
+        let mut state = self.allocation()?;
+        state.input.allocated_rows = Some(required_gui_glyph_matrix_rows(
+            body_height_px,
+            vscroll_px,
+            smallest_font_height,
+            state.input.row_scale,
+        ));
+        state.adjusted_font_height = Some(smallest_font_height.max(1));
+        state.adjusted_scale = state.input.row_scale;
+        Some(state.input)
+    }
+
+    /// Grow only the exact scale whose allocated matrix really overflowed.
+    /// Allocation remains pending until the existing frame retry readjusts.
     pub fn grow_if(&self, expected: NonZeroU32) -> Option<NonZeroU32> {
-        let value = self.value.as_ref()?;
+        let mut state = self.allocation()?;
+        if state.input.row_scale != expected {
+            return None;
+        }
         let next = NonZeroU32::new(expected.get().checked_add(1)?)?;
-        value
-            .compare_exchange(
-                expected.get(),
-                next.get(),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            )
-            .ok()
-            .map(|_| next)
+        state.input.row_scale = next;
+        Some(next)
     }
 }
 
@@ -142,6 +213,53 @@ mod tests {
         assert_eq!(original.grow_if(NonZeroU32::MIN), Some(two));
         assert_eq!(original.grow_if(NonZeroU32::MIN), None);
         assert_eq!(original.current(), two);
+        assert_eq!(sibling.current(), NonZeroU32::MIN);
+    }
+
+    #[test]
+    fn font_opening_is_pending_until_real_matrix_adjustment() {
+        let mut window = GlyphMatrixRowScale::default();
+        window.activate();
+        assert!(window.needs_adjustment(20));
+        let first = window.adjust(758, 0, 20).unwrap();
+        assert_eq!(first.allocated_rows(), Some(43));
+        assert!(!window.needs_adjustment(20));
+        assert!(window.needs_adjustment(4));
+        assert_eq!(window.allocated_rows(), Some(43));
+        let adjusted = window.adjust(758, 0, 4).unwrap();
+        assert_eq!(adjusted.allocated_rows(), Some(195));
+        assert_ne!(first, adjusted);
+        assert!(!window.needs_adjustment(4));
+    }
+
+    #[test]
+    fn vscroll_contraction_stays_allocated_until_explicit_adjustment() {
+        let mut window = GlyphMatrixRowScale::default();
+        window.activate();
+        window.adjust(100, -40, 20).unwrap();
+        assert_eq!(window.allocated_rows(), Some(12));
+        // Merely requesting redisplay with the same font/scale cannot shrink.
+        assert!(!window.needs_adjustment(20));
+        assert_eq!(window.allocated_rows(), Some(12));
+        window.adjust(100, 0, 20).unwrap();
+        assert_eq!(window.allocated_rows(), Some(10));
+    }
+
+    #[test]
+    fn configuration_shares_allocated_rows_but_a_split_window_starts_unallocated() {
+        let mut window = GlyphMatrixRowScale::default();
+        window.activate();
+        window.adjust(100, 0, 20).unwrap();
+        let configuration = window.clone();
+        let sibling = window.fresh_window();
+        let before = configuration.snapshot();
+        window.grow_if(NonZeroU32::MIN).unwrap();
+        assert!(configuration.needs_adjustment(20));
+        assert_eq!(configuration.allocated_rows(), Some(10));
+        window.adjust(100, 0, 20).unwrap();
+        assert_eq!(configuration.allocated_rows(), Some(15));
+        assert_ne!(configuration.snapshot(), before);
+        assert_eq!(sibling.allocated_rows(), None);
         assert_eq!(sibling.current(), NonZeroU32::MIN);
     }
 

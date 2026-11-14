@@ -36,6 +36,14 @@ impl WindowScrollUpdate {
         self,
         eval: &mut neovm_eval::emacs_core::eval::Context,
     ) -> Result<(), neovm_value::error::Flow> {
+        self.commit_with_matrix_adjustment(eval, false)
+    }
+
+    pub(crate) fn commit_with_matrix_adjustment(
+        self,
+        eval: &mut neovm_eval::emacs_core::eval::Context,
+        force_matrix_adjustment: bool,
+    ) -> Result<(), neovm_value::error::Flow> {
         use neovm_value::error::{LispCondition, signal};
         let invalid = || {
             signal(
@@ -70,6 +78,7 @@ impl WindowScrollUpdate {
             super::window_markers::set_window_old_point_with_marker(buffers, window, self.point);
         }
         window.invalidate_window_end();
+        let mut vscroll_grew = false;
         if let Window::Leaf {
             vscroll,
             preserve_vscroll_p,
@@ -77,9 +86,14 @@ impl WindowScrollUpdate {
             ..
         } = window
         {
-            *vscroll = -self.hidden_top_pixels.max(0);
+            let next_vscroll = -self.hidden_top_pixels.max(0);
+            vscroll_grew = next_vscroll < 0 && next_vscroll < *vscroll;
+            *vscroll = next_vscroll;
             *preserve_vscroll_p = false;
             *force_start = true;
+        }
+        if vscroll_grew || force_matrix_adjustment {
+            crate::emacs_core::window_cmds::adjust_frame_glyph_matrices(eval, self.frame);
         }
         eval.publish_committed_scroll_preview(self.frame, self.window);
         Ok(())
@@ -485,7 +499,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
                         .find_window(window.id)
                         .and_then(|window| window.display())
                         .is_some_and(|display| {
-                            display.glyph_matrix_row_scale.current()
+                            display.glyph_matrix_row_scale.snapshot()
                                 == window.glyph_matrix_row_scale
                         })
             })

@@ -48,6 +48,50 @@ use crate::window::display::WindowDisplayContextExt;
 use neovm_edit::emacs_core::edit_host::EditHost;
 pub(crate) use redisplay_core_defaults::restore_gnu_configuration_hook_default;
 
+/// Commit GNU's desired-matrix allocation after an explicit frame adjustment.
+/// Font openings alone leave this allocation unchanged until such a boundary.
+#[doc(hidden)]
+pub fn adjust_frame_glyph_matrices(ctx: &neovm_eval::emacs_core::eval::Context, frame_id: FrameId) {
+    adjust_frame_glyph_matrices_in_state(ctx.frame_manager(), ctx.buffer_manager(), frame_id);
+}
+
+fn adjust_frame_glyph_matrices_in_state(
+    frames: &FrameManager,
+    buffers: &BufferManager,
+    frame_id: FrameId,
+) {
+    let Some(frame) = frames.get(frame_id) else {
+        return;
+    };
+    if frame.effective_window_system().is_none() {
+        return;
+    }
+    let smallest_font_height = match frame.display_identity() {
+        crate::window::FrameDisplayIdentity::Graphical(identity) => {
+            identity.smallest_opened_font_height()
+        }
+        crate::window::FrameDisplayIdentity::None => 1,
+    };
+    for window_id in frame.all_leaf_ids() {
+        let Some(window) = frame.find_window(window_id) else {
+            continue;
+        };
+        let (Some(display), Some(redisplay)) = (window.display(), window.redisplay_state()) else {
+            continue;
+        };
+        let Ok((_, body_height)) =
+            hook_window_body_dimensions(frames, buffers, frame_id, window_id)
+        else {
+            continue;
+        };
+        let _ = display.glyph_matrix_row_scale.adjust(
+            body_height,
+            redisplay.vscroll,
+            smallest_font_height,
+        );
+    }
+}
+
 fn navigation_transition_direction(value: Value) -> Result<TransitionDirection, Flow> {
     value
         .as_bare_symbol_name()
@@ -290,6 +334,13 @@ pub fn builtin_split_window_internal(
         combination_limit,
         sibling_resize,
     )?;
+    // GNU adjusts after the staged split sizes and before set_window_buffer's
+    // eager scroll hook; this allocation does not depend on hook policy.
+    if let Some(window) = result.as_window_id().map(crate::window::WindowId)
+        && let Some(frame) = eval.frame_manager().find_window_frame_id(window)
+    {
+        adjust_frame_glyph_matrices(eval, frame);
+    }
     if neovm_edit::emacs_core::redisplay_policy::gnu_redisplay_hooks_enabled()
         && let Some(window) = result.as_window_id().map(crate::window::WindowId)
         && let Some(frame) = eval.frame_manager().find_window_frame_id(window)
@@ -3879,7 +3930,7 @@ pub fn builtin_set_window_vscroll(
     let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_min_args("set-window-vscroll", &args, 2)?;
     expect_max_args("set-window-vscroll", &args, 4)?;
-    let (_fid, wid) =
+    let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let next_vscroll = expect_number(&args[1])?;
     let pixelwise = args.get(2).is_some_and(|v| v.is_truthy());
@@ -3888,7 +3939,12 @@ pub fn builtin_set_window_vscroll(
     let result = frames
         .set_window_vscroll(wid, next_vscroll, pixelwise, preserve)
         .unwrap_or(Value::fixnum(0));
-    let changed = frames.window_vscroll(wid, true) != previous;
+    let next = frames.window_vscroll(wid, true);
+    let changed = next != previous;
+    // GNU window.c:8967 adjusts only when negative internal vscroll grows.
+    if next.and_then(Value::as_int).unwrap_or(0) > previous.and_then(Value::as_int).unwrap_or(0) {
+        adjust_frame_glyph_matrices(eval, fid);
+    }
     if changed {
         eval.gnu_mark_window_redisplay(wid);
     }
@@ -3923,6 +3979,7 @@ pub fn builtin_set_window_margins(
                 frame.tty_posn_apply_window_adjustment(wid);
             }
             // GNU apply_window_adjustment (window.c:8415-8421).
+            adjust_frame_glyph_matrices(eval, fid);
             eval.gnu_mark_window_redisplay(wid);
             return Ok(Value::T);
         }
@@ -4041,6 +4098,7 @@ pub fn builtin_set_window_fringes(
         .and_then(|frame| frames.get(frame))
         .is_some_and(|frame| frame.effective_window_system().is_some());
     if geometry_changed && is_gui {
+        adjust_frame_glyph_matrices(eval, fid);
         // GNU set_window_fringes raises global ALL before apply_window_adjustment.
         eval.gnu_mark_windows_all();
         eval.gnu_mark_window_redisplay(wid);
@@ -4152,6 +4210,7 @@ pub fn builtin_set_window_scroll_bars(
         .and_then(|frame| frames.get(frame))
         .is_some_and(|frame| frame.effective_window_system().is_some());
     if geometry_changed && is_gui {
+        adjust_frame_glyph_matrices(eval, fid);
         eval.gnu_mark_window_redisplay(wid);
     }
     Ok(Value::bool_val(changed))
@@ -4354,7 +4413,7 @@ pub fn hook_window_body_dimensions(
     let window = get_leaf(frames, fid, wid)?;
     Ok((
         window_body_width_pixels(frames, fid, window),
-        body_geometry::body_height_pixels(frames, buffers, fid, wid)?,
+        body_geometry::current_body_height_pixels(frames, buffers, fid, wid)?,
     ))
 }
 
@@ -5108,6 +5167,7 @@ pub fn builtin_delete_window_internal(
     // than laying the surviving windows out afresh.  The Lisp layer is what
     // decides which sibling absorbs the deleted window's space.
     if frames.delete_window_with_resize(fid, wid, DeleteResize::ApplyStaged) {
+        adjust_frame_glyph_matrices(eval, fid);
         // GNU `Fdelete_window_internal` sets `FRAME_WINDOW_CHANGE` after the
         // tree mutation (window.c).  `run_window_change_functions` promotes
         // that frame flag to `windows_or_buffers_changed` before
@@ -5185,6 +5245,7 @@ pub fn builtin_delete_other_windows_internal(
     if let Some(buffer_id) = selected_buffer {
         buffers.switch_current(buffer_id);
     }
+    adjust_frame_glyph_matrices(eval, fid);
     if changes_tree {
         eval.gnu_mark_frame_redisplay(fid);
         eval.gnu_mark_frame_window_change(fid);
@@ -6248,6 +6309,9 @@ pub(crate) fn resize_live_gui_frame(
     let is_child_frame = frames
         .get(fid)
         .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some());
+    if !pretend || is_child_frame {
+        adjust_frame_glyph_matrices_in_state(frames, buffers, fid);
+    }
     if !pretend
         && !is_child_frame
         && let Some(host) = display_host.as_mut()
@@ -6333,6 +6397,9 @@ pub(crate) fn request_live_gui_frame_resize(
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         frame.clear_pending_gui_resize();
         set_frame_text_size(frame, cols, text_lines);
+        if frame.parent_frame.as_frame_id().is_some() {
+            adjust_frame_glyph_matrices_in_state(frames, buffers, fid);
+        }
         return Ok(());
     }
 
@@ -6378,6 +6445,7 @@ pub(crate) fn request_live_gui_frame_resize(
         Value::symbol(FRAME_TEXT_LINES_PARAM),
         Value::fixnum(text_lines),
     );
+    adjust_frame_glyph_matrices_in_state(frames, buffers, fid);
     Ok(())
 }
 
@@ -8050,6 +8118,8 @@ pub(crate) fn x_create_frame_impl(
         );
         resize_live_gui_frame(frames, buffers, display_host, fid, width, height, false)?;
     }
+    // Identity, opened default font, chrome and owned mini geometry are final.
+    adjust_frame_glyph_matrices_in_state(frames, buffers, fid);
     super::frame::position::apply_frame_position(frames, fid, parsed.left, parsed.top);
     if !is_child_frame && let Some(host) = display_host.as_mut() {
         let (width, height, geometry_hints, visibility, decorated) = frames
@@ -8577,6 +8647,7 @@ pub fn builtin_window_resize_apply(
     // Recalculate minibuffer position after tree resize.
     frame.recalculate_minibuffer_bounds();
     frame.tty_posn_adjust_current_matrices();
+    adjust_frame_glyph_matrices(eval, fid);
     // GNU window_resize_apply marks FRAME_WINDOW_CHANGE, and its public
     // pixel primitive additionally calls fset_redisplay (window.c:4994).
     eval.gnu_mark_frame_redisplay(fid);

@@ -27,6 +27,7 @@ pub(crate) struct BufferWindowGeometryRequest {
     glyph_matrix_body_height_px: i64,
     glyph_matrix_vscroll_px: i32,
     glyph_matrix_row_scale: std::num::NonZeroU32,
+    glyph_matrix_rows: Option<usize>,
     smallest_opened_font_height: u32,
     top_chrome_rows: usize,
     bottom_chrome_rows: usize,
@@ -199,6 +200,7 @@ impl BufferWindowGeometryRequest {
             glyph_matrix_body_height_px: body.height.round() as i64,
             glyph_matrix_vscroll_px: params.vscroll,
             glyph_matrix_row_scale: params.glyph_matrix_row_scale,
+            glyph_matrix_rows: params.glyph_matrix_rows,
             smallest_opened_font_height: params.smallest_opened_font_height,
             top_chrome_rows: usize::from(chrome.tab_line_height > 0.0)
                 + usize::from(chrome.header_line_height > 0.0),
@@ -236,12 +238,16 @@ impl BufferWindowGeometryRequest {
         // including its partial/chrome reserve, even for a tiny buffer.
         // Viewport rows and source measurement budgets remain independent.
         if self.window_system {
-            neomacs_display_protocol::required_gui_glyph_matrix_rows(
-                self.glyph_matrix_body_height_px,
-                self.glyph_matrix_vscroll_px,
-                self.smallest_opened_font_height,
-                self.glyph_matrix_row_scale,
-            )
+            self.glyph_matrix_rows.unwrap_or_else(|| {
+                // Pure geometry fixtures have no live window allocation.
+                // Production snapshots always use the owner's allocated N.
+                neomacs_display_protocol::required_gui_glyph_matrix_rows(
+                    self.glyph_matrix_body_height_px,
+                    self.glyph_matrix_vscroll_px,
+                    self.smallest_opened_font_height,
+                    self.glyph_matrix_row_scale,
+                )
+            })
         } else {
             self.base_max_rows()
         }

@@ -542,26 +542,12 @@ impl EditHost for Context {
         let char_width = frame.char_width.max(1.0).round() as i64;
         let char_height = frame.char_height.max(1.0).round() as i64;
         let visible_lines = if frame.effective_window_system().is_some() {
-            let (_, body_height) = super::display_query_hooks::window_body_dimensions(
-                &self.frames,
-                &self.edit.buffers,
-                frame.id,
-                window.id(),
-            )
-            .ok()?;
-            let smallest_font_height = match frame.display_identity() {
-                crate::emacs_core::eval::data::window_state::FrameDisplayIdentity::Graphical(
-                    identity,
-                ) => identity.smallest_opened_font_height(),
-                crate::emacs_core::eval::data::window_state::FrameDisplayIdentity::None => 1,
-            };
-            neomacs_display_protocol::glyph_matrix_capacity::required_gui_glyph_matrix_rows(
-                body_height,
-                window.redisplay_state()?.vscroll,
-                smallest_font_height,
-                window.display()?.glyph_matrix_row_scale.current(),
-            )
-            .min(i64::MAX as usize) as i64
+            window
+                .display()?
+                .glyph_matrix_row_scale
+                .allocated_rows()
+                .unwrap_or(0)
+                .min(i64::MAX as usize) as i64
         } else {
             match window {
                 crate::emacs_core::eval::data::window_state::Window::Leaf { bounds, .. } => {

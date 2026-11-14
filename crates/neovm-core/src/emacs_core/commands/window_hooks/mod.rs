@@ -1871,6 +1871,9 @@ pub(crate) fn set_window_configuration_with_options(
         // pre-menu-bar rows, while the live frame has a one-line top margin and
         // therefore a 23-line root at row 1.
         window_configuration_geometry::reconcile(eval, snapshot.frame_id)?;
+        // GNU adjusts the restored frame's matrices before returning to Lisp
+        // (window.c:8043-8045), including the restored owned minibuffer.
+        crate::emacs_core::window_cmds::adjust_frame_glyph_matrices(eval, snapshot.frame_id);
 
         eval.gnu_mark_frame_window_change(snapshot.frame_id);
         let frame_to_select = match options.selected_frame {

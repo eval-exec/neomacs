@@ -11,10 +11,22 @@ pub(super) fn body_height_pixels(
     fid: FrameId,
     wid: WindowId,
 ) -> Result<i64, Flow> {
-    let window = get_leaf(frames, fid, wid)?;
+    get_leaf(frames, fid, wid)?;
     if let Some(regions) = published_window_regions(frames, fid, wid)? {
         return published_geometry(regions.text_body_height_pixels());
     }
+    current_body_height_pixels(frames, buffers, fid, wid)
+}
+
+/// GNU window_box_height uses committed bounds and currently requested chrome,
+/// not the rectangle of the previous presentation.
+pub(super) fn current_body_height_pixels(
+    frames: &FrameManager,
+    buffers: &BufferManager,
+    fid: FrameId,
+    wid: WindowId,
+) -> Result<i64, Flow> {
+    let window = get_leaf(frames, fid, wid)?;
     let frame = frames.get(fid).expect("live window has a frame");
     let mut height = window_height_pixels(window);
     for line in [
@@ -22,7 +34,7 @@ pub(super) fn body_height_pixels(
         WindowChromeLine::HeaderLine,
         WindowChromeLine::TabLine,
     ] {
-        height -= chrome_height_pixels(frames, buffers, fid, wid, line)?;
+        height -= current_chrome_height_pixels(frames, buffers, fid, wid, line)?;
     }
     height -= frames.window_scroll_bar_area_height(wid);
     if !window_is_bottommost(frame, wid) {
@@ -41,6 +53,16 @@ pub(super) fn chrome_height_pixels(
     if let Some(regions) = published_window_regions(frames, fid, wid)? {
         return published_geometry(regions.chrome_height_pixels(line));
     }
+    current_chrome_height_pixels(frames, buffers, fid, wid, line)
+}
+
+fn current_chrome_height_pixels(
+    frames: &FrameManager,
+    buffers: &BufferManager,
+    fid: FrameId,
+    wid: WindowId,
+    line: WindowChromeLine,
+) -> Result<i64, Flow> {
     let window = get_leaf(frames, fid, wid)?;
     let frame = frames.get(fid).expect("live window has a frame");
     let buffer = window

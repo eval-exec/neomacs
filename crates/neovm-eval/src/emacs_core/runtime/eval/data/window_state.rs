@@ -33,7 +33,7 @@ use rustc_hash::FxHashSet as HashSet;
 use std::cell::Cell;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU64;
 use std::sync::{Arc, OnceLock};
 use strum::{EnumString, IntoStaticStr};
 
@@ -375,7 +375,7 @@ pub struct WindowLayoutInputState {
     pub hscroll: usize,
     pub vscroll: i32,
     pub preserve_vscroll_p: bool,
-    pub glyph_matrix_row_scale: NonZeroU32,
+    pub glyph_matrix_row_scale: neomacs_display_protocol::glyph_matrix_capacity::GlyphMatrixInput,
     pub margins: WindowMargins,
     pub display_table_identity: usize,
     pub char_table_mutation_epoch: CharTableLayoutRevision,
@@ -5973,7 +5973,7 @@ impl Frame {
             hscroll: state.hscroll,
             vscroll: state.vscroll,
             preserve_vscroll_p: state.preserve_vscroll_p,
-            glyph_matrix_row_scale: display.glyph_matrix_row_scale.current(),
+            glyph_matrix_row_scale: display.glyph_matrix_row_scale.snapshot(),
             margins: *margins,
             display_table_identity: display.display_table.bits(),
             char_table_mutation_epoch: current_char_table_layout_revision(),
