@@ -177,12 +177,10 @@ crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn builtin_verify_vis
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn builtin_visited_file_modtime
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn builtin_write_region
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn copy_file
-crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn default_directory_lisp_in_state
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn delete_file
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn directory_file_name
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn directory_name_p
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn dispatch_file_handler
-crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn expand_file_name_lisp
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn expand_file_operation
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn file_accessible_directory_p
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn file_attributes
@@ -211,8 +209,6 @@ crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn make_directory
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn read_file_contents
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn register_bootstrap_vars
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn rename_file
-crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn resolve_filename_lisp_for_eval
-crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn resolve_filename_lisp_in_state
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn signal_file_action_error_value
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn write_string_to_file
 crates/neovm-system/src/emacs_core/system/fileio/mod.rs	struct	struct DirectoryNameSource

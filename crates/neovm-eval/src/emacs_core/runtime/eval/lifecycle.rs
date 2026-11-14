@@ -203,7 +203,6 @@ impl BootHooks {
 pub struct FileIoHooks {
     expand_file_name_entry: fn(&mut Context, Vec<Value>) -> EvalResult,
     dispatch_file_handler: fn(&mut Context, &str, &[Value]) -> Result<Option<Value>, Flow>,
-    resolve_filename: fn(&Context, &LispString) -> LispString,
     lock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
     unlock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
 }
@@ -213,14 +212,12 @@ impl FileIoHooks {
     pub const fn new(
         expand_file_name_entry: fn(&mut Context, Vec<Value>) -> EvalResult,
         dispatch_file_handler: fn(&mut Context, &str, &[Value]) -> Result<Option<Value>, Flow>,
-        resolve_filename: fn(&Context, &LispString) -> LispString,
         lock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
         unlock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
     ) -> Self {
         Self {
             expand_file_name_entry,
             dispatch_file_handler,
-            resolve_filename,
             lock_file,
             unlock_file,
         }
@@ -632,11 +629,6 @@ impl FileIoHooks {
         &self,
     ) -> fn(&mut Context, &str, &[Value]) -> Result<Option<Value>, Flow> {
         self.dispatch_file_handler
-    }
-
-    #[doc(hidden)]
-    pub fn resolve_filename(&self) -> fn(&Context, &LispString) -> LispString {
-        self.resolve_filename
     }
 
     #[doc(hidden)]
@@ -1126,9 +1118,7 @@ pub fn dispatch_file_handler(
 }
 
 /// Resolve FILE against the visible default directory (EditHost seam).
-pub fn resolve_filename(ctx: &Context, filename: &LispString) -> LispString {
-    (lifecycle_hooks().fileio().resolve_filename())(ctx, filename)
-}
+pub use crate::emacs_core::eval::data::file_name_expand::resolve_filename_lisp_for_eval as resolve_filename;
 
 /// Handler-aware `lock-file` (EditHost seam).
 pub fn lock_file(ctx: &mut Context, filename: &LispString) -> Result<Value, Flow> {

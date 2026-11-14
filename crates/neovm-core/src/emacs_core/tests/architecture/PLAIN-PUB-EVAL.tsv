@@ -2832,7 +2832,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn reset_terminal_
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn reset_terminal_thread_locals
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn reset_timefns_thread_locals
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn resize_frame_pixelwise_with_buffer_constraints
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn resolve_filename
+crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	use	use resolve_filename_lisp_for_eval as resolve_filename
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn restore_created_faces_from_table
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn restore_fontset_registry
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn run_redisplay_window_change_hooks

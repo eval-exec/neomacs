@@ -181,7 +181,6 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
     FileIoHooks::new(
         crate::emacs_core::fileio::builtin_expand_file_name,
         crate::emacs_core::fileio::dispatch_file_handler,
-        crate::emacs_core::fileio::resolve_filename_lisp_for_eval,
         crate::emacs_core::filelock::lock_file,
         crate::emacs_core::filelock::unlock_file,
     ),

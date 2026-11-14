@@ -1191,7 +1191,6 @@ mod unit_runtime {
         FileIoHooks::new(
             s::fileio_expand_file_name_entry,
             s::fileio_dispatch_file_handler,
-            s::fileio_resolve_filename,
             s::fileio_lock_file,
             s::fileio_unlock_file,
         ),

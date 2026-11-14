@@ -395,7 +395,9 @@ impl EditHost for Context {
     // --- display/system queries (C4b, C5, C15) ---
 
     fn resolve_filename(&self, filename: &LispString) -> LispString {
-        crate::emacs_core::eval::lifecycle::resolve_filename(self, filename)
+        crate::emacs_core::eval::data::file_name_expand::resolve_filename_lisp_for_eval(
+            self, filename,
+        )
     }
 
     fn lock_file(&mut self, filename: &LispString) -> Result<(), Flow> {

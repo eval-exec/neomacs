@@ -391,10 +391,6 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER system::fileio.dispatch_file_handler");
             }
 
-            pub(crate) fn fileio_resolve_filename(ctx: &Context, name: &LispString) -> LispString {
-                absent_layer_panic("ABSENT-LAYER system::fileio.resolve_filename");
-            }
-
             pub(crate) fn fileio_lock_file(ctx: &mut Context, file: &LispString) -> Result<Value, Flow> {
                 absent_layer_panic("ABSENT-LAYER system::fileio.lock_file");
             }

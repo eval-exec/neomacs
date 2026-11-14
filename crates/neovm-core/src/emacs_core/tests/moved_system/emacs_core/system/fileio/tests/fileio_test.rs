@@ -9647,3 +9647,33 @@ fn auto_save_materialized_annotation_property_survives_coding_selector_gc() {
     );
     assert_eq!(fs::read(&target).expect("read auto-save bytes"), b"Aseed\n");
 }
+
+#[test]
+fn core_lexical_resolver_aliases_share_lower_definition_and_visible_directory() {
+    use neovm_edit::emacs_core::edit_host::EditHost;
+    use neovm_eval::emacs_core::eval::data::file_name_expand;
+    use neovm_value::heap_types::LispString;
+
+    type Resolver = fn(&Context, &LispString) -> LispString;
+    let system: Resolver = neovm_system::emacs_core::fileio::resolve_filename_lisp_for_eval;
+    let canonical: Resolver = file_name_expand::resolve_filename_lisp_for_eval;
+    let legacy: Resolver = neovm_eval::emacs_core::eval::lifecycle::resolve_filename;
+    assert!(std::ptr::fn_addr_eq(system, canonical));
+    assert!(std::ptr::fn_addr_eq(legacy, canonical));
+
+    let mut context = crate::test_utils::new_context();
+    let base = if cfg!(windows) {
+        "C:/resolve-lexical/"
+    } else {
+        "/resolve-lexical/"
+    };
+    context.set_variable("default-directory", Value::unibyte_string(base));
+    let request = LispString::from_utf8("part/../leaf");
+    let expected = format!("{base}leaf");
+    let via_system = system(&context, &request);
+    let via_edit_host = EditHost::resolve_filename(&context, &request);
+    assert_eq!(via_system.as_bytes(), expected.as_bytes());
+    assert_eq!(via_edit_host.as_bytes(), expected.as_bytes());
+    assert!(!via_system.is_multibyte());
+    assert!(!via_edit_host.is_multibyte());
+}
