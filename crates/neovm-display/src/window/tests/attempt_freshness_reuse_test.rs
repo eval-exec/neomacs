@@ -31,3 +31,71 @@ fn same_buffer_attempt_captures_fontifier_identity_once() {
         eval.buffer_layout_inputs(live).unwrap()
     );
 }
+
+#[test]
+fn native_font_open_and_matrix_growth_refresh_attempt_inputs() {
+    use crate::window::DisplayFrameExt;
+    use crate::window::WindowLayoutLispAdmission;
+    use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
+
+    let (mut eval, live, frame, window) =
+        crate::test_utils::upper_layer_helpers::attempt_freshness_projections(Context::new(
+            crate::test_utils::unit_runtime(),
+        ));
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .set_window_system(Some(neovm_value::value::Value::symbol("neo")));
+    let identity = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::X11);
+    identity.observe_opened_font_metrics(12, 4);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .set_display_identity(crate::window::FrameDisplayIdentity::Graphical(
+            identity.clone(),
+        ));
+    let captured = eval
+        .window_layout_attempt_freshness(frame, window, live)
+        .unwrap();
+    assert!(matches!(
+        eval.window_layout_attempt_freshness_after_span(
+            &captured,
+            WindowLayoutLispAdmission::NativeOnly
+        )
+        .unwrap(),
+        std::borrow::Cow::Borrowed(_)
+    ));
+
+    identity.observe_opened_font_metrics(9, 3);
+    let refreshed = eval
+        .window_layout_attempt_freshness_after_span(
+            &captured,
+            WindowLayoutLispAdmission::NativeOnly,
+        )
+        .unwrap();
+    assert!(matches!(&refreshed, std::borrow::Cow::Owned(_)));
+    assert_eq!(refreshed.frame.smallest_opened_font_height, 12);
+    drop(refreshed);
+
+    let captured = eval
+        .window_layout_attempt_freshness(frame, window, live)
+        .unwrap();
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .find_window_mut(window)
+        .unwrap()
+        .display_mut()
+        .unwrap()
+        .glyph_matrix_row_scale
+        .grow_if(std::num::NonZeroU32::MIN)
+        .unwrap();
+    let refreshed = eval
+        .window_layout_attempt_freshness_after_span(
+            &captured,
+            WindowLayoutLispAdmission::NativeOnly,
+        )
+        .unwrap();
+    assert!(matches!(&refreshed, std::borrow::Cow::Owned(_)));
+    assert_eq!(refreshed.window.glyph_matrix_row_scale.get(), 2);
+}

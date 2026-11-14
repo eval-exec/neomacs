@@ -2782,10 +2782,14 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         pixel_size: u32,
         wght: Option<f32>,
     ) -> Result<Option<neovm_core::emacs_core::eval::FontPxProbeResult>, String> {
-        Ok(neomacs_layout_engine::font::probe::probe_font_px_metrics(
+        let metrics = neomacs_layout_engine::font::probe::probe_font_px_metrics(
             file, face_index, pixel_size, wght,
-        )
-        .map(core_font_px_metrics))
+        );
+        if let Some(metrics) = metrics {
+            self.synchronized_font_metrics()
+                .observe_opened_font_metrics(metrics.ascent, metrics.descent);
+        }
+        Ok(metrics.map(core_font_px_metrics))
     }
 
     fn probe_font_entity_metrics(
@@ -2852,6 +2856,8 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         ) else {
             return Ok(None);
         };
+        self.synchronized_font_metrics()
+            .observe_opened_font_metrics(metrics.ascent, metrics.descent);
         let capability = self.font_otf_capability(file, 0).ok().flatten();
         Ok(Some(ResolvedFontEntityMetrics {
             metrics: core_font_px_metrics(metrics),
@@ -4480,7 +4486,13 @@ fn run_gui_evaluator_worker(
             pending_position: None,
         }),
         last_window_titles: Mutex::new(HashMap::new()),
-        font_metrics: None,
+        font_metrics: Some({
+            let mut service = FontMetricsService::new();
+            if let BootstrapDisplayKind::Gui { identity, .. } = &bootstrap_display.kind {
+                service.set_display_identity(identity.clone());
+            }
+            service
+        }),
         font_entities: FontEntityCatalog::default(),
         primary_window_size: Arc::clone(&primary_window_size),
         image_catalog: Rc::new(AsyncImageCatalog::new(
@@ -4547,7 +4559,13 @@ fn run_gui_evaluator_worker(
     )));
     install_diagnostics_eval_hooks(&mut evaluator);
 
-    frame_layout::configure_gui_runtime(bootstrap_display.font_sizing());
+    frame_layout::configure_gui_runtime(
+        bootstrap_display.font_sizing(),
+        match &bootstrap_display.kind {
+            BootstrapDisplayKind::Gui { identity, .. } => Some(identity.clone()),
+            BootstrapDisplayKind::Tty { .. } => None,
+        },
+    );
     let preview_tx = emacs_comms.cmd_tx.clone();
     let preview_waker = render_waker.clone();
     evaluator.scroll_preview_fn = Some(Box::new(move |eval, frame, window, inputs| {

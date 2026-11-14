@@ -309,6 +309,14 @@ impl FontMeasurementSnapshot {
                 }
             }
         }
+        // Open the exact fallback fonts through the evaluator's display-bound
+        // service before dispatching speculative measurement. A smaller font
+        // changes GNU's display-wide matrix allocation even if this row
+        // attempt is later discarded. Worker-local caches must not publish
+        // that mutable connection input from a background measurement.
+        for &(family, ch, weight, italic, size) in &requests {
+            let _ = fonts.resolved_font_for_char(ch, family, weight, italic, size);
+        }
         let policy = fonts
             .capture_worker_font_policy(&requests, budget.capture_bytes.saturating_sub(bytes))?;
         bytes += policy.bytes();

@@ -478,6 +478,17 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
             && *fontset_generation == crate::emacs_core::fontset::fontset_generation()
             && window.char_table_mutation_epoch == current_char_table_layout_revision()
             && *function_epoch == self.obarray().function_epoch()
+            && self.frame_manager().get(frame.id).is_some_and(|current| {
+                current.layout_inputs().smallest_opened_font_height
+                    == frame.smallest_opened_font_height
+                    && current
+                        .find_window(window.id)
+                        .and_then(|window| window.display())
+                        .is_some_and(|display| {
+                            display.glyph_matrix_row_scale.current()
+                                == window.glyph_matrix_row_scale
+                        })
+            })
         {
             Some(Cow::Borrowed(before))
         } else {

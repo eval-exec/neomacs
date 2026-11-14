@@ -11,8 +11,8 @@ use neovm_core::window::DisplayFrameExt;
 use neovm_core::window::DisplayFrameManagerExt;
 use std::cell::{Cell, RefCell};
 
-use neomacs_display_protocol::SealedFramePresentation;
 use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
+use neomacs_display_protocol::{GraphicalDisplayIdentity, SealedFramePresentation};
 use neomacs_layout_engine::LayoutEngine;
 use neomacs_layout_engine::engine::{
     FrameLayoutAttempt, WindowLayoutQueryEngine, WindowLayoutQuerySeed,
@@ -129,6 +129,9 @@ pub struct RedisplayRuntime {
     query_seed: RefCell<WindowLayoutQuerySeed>,
     cosmic_metrics_enabled: Cell<bool>,
     font_sizing: Cell<FontSizing>,
+    /// One frontend connection shared by presentation, reentrant queries and
+    /// shaping. The runtime is already boxed behind the existing TLS handle.
+    display_identity: RefCell<Option<GraphicalDisplayIdentity>>,
 }
 
 impl RedisplayRuntime {
@@ -175,7 +178,23 @@ impl RedisplayRuntime {
             shaping_metrics: RefCell::new(FontMetricsService::new()),
             cosmic_metrics_enabled: Cell::new(false),
             font_sizing: Cell::new(FontSizing::native_gui()),
+            display_identity: RefCell::new(None),
         }
+    }
+
+    /// Bind every evaluator-thread font opener to this native connection.
+    /// Standalone and detached measurement services remain unbound.
+    pub fn set_display_identity(&self, identity: GraphicalDisplayIdentity) {
+        self.engine
+            .borrow_mut()
+            .set_display_identity(identity.clone());
+        self.shaping_metrics
+            .borrow_mut()
+            .set_display_identity(identity.clone());
+        if let Some(engine) = self.reentrant_query_engine.borrow_mut().as_mut() {
+            engine.set_display_identity(identity.clone());
+        }
+        *self.display_identity.borrow_mut() = Some(identity);
     }
 
     pub fn enable_cosmic_metrics(&self) {
@@ -188,6 +207,9 @@ impl RedisplayRuntime {
         let mut query_engine = self.reentrant_query_engine.borrow_mut();
         let engine =
             query_engine.get_or_insert_with(WindowLayoutQueryEngine::new_without_font_metrics);
+        if let Some(identity) = self.display_identity.borrow().as_ref() {
+            engine.set_display_identity(identity.clone());
+        }
         engine.enable_cosmic_metrics();
         engine.set_font_sizing(self.font_sizing.get());
         engine.synchronize(self.query_seed.borrow().clone());
@@ -337,6 +359,9 @@ impl RedisplayRuntime {
             } else {
                 WindowLayoutQueryEngine::new_without_font_metrics()
             };
+            if let Some(identity) = self.display_identity.borrow().as_ref() {
+                engine.set_display_identity(identity.clone());
+            }
             engine.set_font_sizing(self.font_sizing.get());
             engine.synchronize(self.query_seed.borrow().clone());
             engine

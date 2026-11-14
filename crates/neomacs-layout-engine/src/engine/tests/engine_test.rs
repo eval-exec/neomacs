@@ -1896,6 +1896,8 @@ fn test_window_params() -> WindowParams {
         char_width: 8.0,
         char_height: 16.0,
         window_system: true,
+        glyph_matrix_row_scale: std::num::NonZeroU32::MIN,
+        smallest_opened_font_height: 16,
         font_pixel_size: 14.0,
         image_scale_environment: Default::default(),
         font_ascent: 12.0,

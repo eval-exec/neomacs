@@ -4633,3 +4633,55 @@ fn positions_left_of_a_rows_first_glyph_are_hidden_by_hscroll() {
         );
     }
 }
+
+#[test]
+fn split_window_resets_new_leaf_glyph_matrix_row_scale() {
+    crate::test_utils::init_test_tracing();
+    let mut mgr = FrameManager::new();
+    let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
+    let original = mgr.get(fid).unwrap().window_list()[0];
+    mgr.get_mut(fid)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+    let scale = std::num::NonZeroU32::new(3).unwrap();
+    let display = mgr
+        .get_mut(fid)
+        .unwrap()
+        .find_window_mut(original)
+        .and_then(Window::display_mut)
+        .unwrap();
+    assert_eq!(
+        display.glyph_matrix_row_scale.current(),
+        std::num::NonZeroU32::MIN
+    );
+    let two = display
+        .glyph_matrix_row_scale
+        .grow_if(std::num::NonZeroU32::MIN)
+        .unwrap();
+    assert_eq!(display.glyph_matrix_row_scale.grow_if(two), Some(scale));
+    let sibling = mgr
+        .split_window(
+            fid,
+            original,
+            SplitDirection::Horizontal,
+            BufferId(1),
+            None,
+            SplitPlacement::AfterTarget,
+        )
+        .expect("split");
+    let frame = mgr.get(fid).unwrap();
+    assert_eq!(
+        frame
+            .window_layout_inputs(original)
+            .unwrap()
+            .glyph_matrix_row_scale,
+        scale
+    );
+    assert_eq!(
+        frame
+            .window_layout_inputs(sibling)
+            .unwrap()
+            .glyph_matrix_row_scale,
+        std::num::NonZeroU32::MIN
+    );
+}

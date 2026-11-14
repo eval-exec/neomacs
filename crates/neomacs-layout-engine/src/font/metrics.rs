@@ -10,6 +10,7 @@
 use super::instance::{FontInstanceInterner, FontInstanceProperties};
 use crate::font::frame_metrics::{FrameFontDomain, GraphicFontSizePx};
 use cosmic_text::{Attrs, AttrsOwned, Buffer, Family, FontSystem, Style, Weight};
+use neomacs_display_protocol::GraphicalDisplayIdentity;
 use neomacs_display_protocol::types::FaceId;
 use neomacs_font_materializer::FontFileCache;
 
@@ -734,6 +735,9 @@ const SHAPED_RUN_CACHE_CAP: usize = 8192;
 /// [`crate::font_backend::FontBackend`] only for native candidates.
 /// `FontSystem` materializes the selected exact file/index for shaping.
 pub struct FontMetricsService {
+    /// Connection-wide opened-font metrics. Unbound workers and isolated
+    /// services measure fonts without changing any graphical display.
+    display_identity: Option<GraphicalDisplayIdentity>,
     /// Typed native-catalog generation published with every realized frame.
     /// Only [`Self::synchronize_font_catalog`] advances it.
     font_catalog: crate::font::catalog::FontCatalog,
@@ -944,6 +948,7 @@ impl FontMetricsService {
         font_resolver: crate::font::resolver::FontResolver,
     ) -> Self {
         Self {
+            display_identity: None,
             font_catalog: crate::font::catalog::FontCatalog::default(),
             font_system,
             bitmap_materializer: neomacs_font_materializer::FontMaterializer::new().ok(),
@@ -1037,6 +1042,45 @@ impl FontMetricsService {
         device_scale: neomacs_display_protocol::geometry::DeviceScale,
     ) {
         self.device_scale = device_scale;
+    }
+
+    /// Bind font openings to their graphical connection before using this
+    /// service. Display labels can compare equal for independent connections,
+    /// so every call replaces the binding.
+    pub fn set_display_identity(&mut self, identity: GraphicalDisplayIdentity) {
+        self.display_identity = Some(identity);
+    }
+
+    /// Publish an actual successful exact-font probe through this service's
+    /// connection binding. Failed and degraded observations must not call it.
+    pub fn observe_opened_font_metrics(&self, ascent: i32, descent: i32) {
+        // Only an actual successful font observation belongs here. In
+        // particular, absent vertical metrics and glyph-box/line-height
+        // fallbacks must not become a synthetic one-pixel display minimum.
+        if ascent < 0 || descent < 0 || (ascent == 0 && descent == 0) {
+            return;
+        }
+        if let Some(identity) = &self.display_identity {
+            identity.observe_opened_font_metrics(ascent, descent);
+        }
+    }
+
+    fn observe_opened_font_vertical_metrics(&self, metrics: Option<FontVerticalMetrics>) {
+        let Some(metrics) = metrics else {
+            return;
+        };
+        let ascent = f64::from(metrics.ascent);
+        let descent = f64::from(metrics.descent);
+        if !ascent.is_finite()
+            || !descent.is_finite()
+            || ascent < 0.0
+            || descent < 0.0
+            || ascent > f64::from(i32::MAX)
+            || descent > f64::from(i32::MAX)
+        {
+            return;
+        }
+        self.observe_opened_font_metrics(ascent.round() as i32, descent.round() as i32);
     }
 
     #[must_use]
@@ -1228,7 +1272,9 @@ impl FontMetricsService {
         query: &crate::font::resolver::FontEntityQuery,
         pixel_size: u32,
     ) -> Option<crate::font::resolver::OpenedFontEntity> {
-        self.font_resolver.open_entity(query, pixel_size)
+        let opened = self.font_resolver.open_entity(query, pixel_size)?;
+        self.observe_opened_font_metrics(opened.metrics.ascent, opened.metrics.descent);
+        Some(opened)
     }
 
     #[must_use]
@@ -2331,6 +2377,7 @@ impl FontMetricsService {
             self.probe_resolved_font_device_ascii_advances(&identity, font_size);
         let replay = FontReplay::Swash { asset };
         let glyph_advance = resolved_font_advance(spacing, px_metrics, &replay);
+        self.observe_opened_font_vertical_metrics(vertical);
         let font = self.font_instances.intern(identity, replay, font_size, || {
             FontInstanceProperties {
                 family: resolved_family,
@@ -2398,6 +2445,7 @@ impl FontMetricsService {
             Some(px_metrics),
             &replay,
         );
+        self.observe_opened_font_metrics(px_metrics.ascent, px_metrics.descent);
         let font = self
             .font_instances
             .intern(identity, replay, effective_size, || {
@@ -2675,6 +2723,7 @@ impl FontMetricsService {
             .or_else(|| self.font_metrics_from_selected_face(font_id, selection.font_size));
         let replay = FontReplay::Swash { asset };
         let glyph_advance = resolved_font_advance(spacing, px_metrics, &replay);
+        self.observe_opened_font_vertical_metrics(vertical);
         let font = self
             .font_instances
             .intern(identity, replay, selection.font_size, || {
@@ -2973,6 +3022,7 @@ impl FontMetricsService {
             .unwrap_or(file_weight);
         let replay = swash_file_replay(&identity)?;
         let glyph_advance = resolved_font_advance(spacing, px_metrics, &replay);
+        self.observe_opened_font_vertical_metrics(vertical);
         Some(self.font_instances.intern(identity, replay, font_size, || {
             FontInstanceProperties {
                 family,
@@ -3877,3 +3927,7 @@ mod tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "metrics/tests/device_glyph_advance_test.rs"]
 mod device_glyph_advance_tests;
+
+#[cfg(test)]
+#[path = "metrics/tests/opened_font_display_test.rs"]
+mod opened_font_display_tests;

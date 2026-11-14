@@ -24,6 +24,7 @@ pub(crate) enum BufferSourceVisibleLoopOutcome {
     MiniSourcePositionReached,
     SyncHorizonExhausted,
     QueryHorizonExhausted,
+    GlyphMatrixCapacityExhausted,
     /// A stable ordinary buffer glyph answered the query inside its row.
     QueryTargetReached,
     /// The live source proof selected the matching earlier retained frontier.
@@ -61,6 +62,9 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                 .row_geometry
                 .current_row_is_visible(loop_context.row_visibility_limit())
         {
+            if loop_context.glyph_matrix_capacity_exhausted(&self.row_build.row_geometry) {
+                return BufferSourceVisibleLoopOutcome::GlyphMatrixCapacityExhausted;
+            }
             self.render_row_prelude(row_prelude_context, params, active_face_state, buffer);
 
             let invisible_text_outcome = self.render_invisible_text_for_context(
@@ -162,6 +166,18 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
         // was the last copied character. Neither boundary is semantic EOB.
         if self.source_render.output_emitter().query_target_reached() {
             return BufferSourceVisibleLoopOutcome::QueryTargetReached;
+        }
+
+        // A row-count limit can stop the loop exactly before the next desired
+        // matrix row. Only a still-visible row with actual source/EOB work is
+        // a capacity overflow; an acquisition horizon is a separate outcome.
+        let has_row_work = self.progress.byte_idx() < text.len()
+            || (self.progress.charpos() == loop_context.accessible_end()
+                && text.last() == Some(&b'\n'));
+        if has_row_work
+            && loop_context.glyph_matrix_capacity_exhausted(&self.row_build.row_geometry)
+        {
+            return BufferSourceVisibleLoopOutcome::GlyphMatrixCapacityExhausted;
         }
 
         if loop_context.exhausted_sync_horizon(

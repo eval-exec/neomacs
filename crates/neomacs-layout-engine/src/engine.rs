@@ -314,6 +314,13 @@ impl WindowLayoutQueryEngine {
         }
     }
 
+    pub fn set_display_identity(
+        &mut self,
+        identity: neomacs_display_protocol::GraphicalDisplayIdentity,
+    ) {
+        self.inner.set_display_identity(identity);
+    }
+
     pub fn enable_cosmic_metrics(&mut self) {
         self.inner.enable_cosmic_metrics();
     }
@@ -845,6 +852,8 @@ pub struct LayoutEngine {
     /// now made once at startup by the binary that constructs the
     /// layout engine.
     pub font_metrics: Option<FontMetricsService>,
+    /// Connection binding survives disabling or lazily recreating font metrics.
+    display_identity: Option<neomacs_display_protocol::GraphicalDisplayIdentity>,
     /// Converts Emacs face height units into layout pixels for this display.
     font_sizing: FontSizing,
     /// Last accepted visual history, isolated by logical frame like GNU's
@@ -1083,6 +1092,7 @@ enum LeafLayoutAttempt {
     /// numeric budget is spent.
     Retry(Box<WindowLayoutRetry>),
     LogicalInputsChanged,
+    MatrixCapacityUnavailable,
     /// A `when` clause the walk took by the structural rule evaluated nil
     /// after the walk: relayout the frame once with the evaluated answers,
     /// which the ledger carries (`display_when::settle_display_when_visits`).
@@ -1650,6 +1660,7 @@ impl LayoutEngine {
             query_body_cache_state: QueryBodyCacheState::Disabled,
             query_cache: Default::default(),
             font_metrics: Some(FontMetricsService::new()),
+            display_identity: None,
             font_sizing: FontSizing::native_gui(),
             frame_visual_histories: FrameVisualHistories::default(),
             frame_output: FrameOutputOwner::new(),
@@ -1694,6 +1705,7 @@ impl LayoutEngine {
             query_body_cache_state: QueryBodyCacheState::Disabled,
             query_cache: Default::default(),
             font_metrics: None,
+            display_identity: None,
             font_sizing: FontSizing::native_gui(),
             frame_visual_histories: FrameVisualHistories::default(),
             frame_output: FrameOutputOwner::new(),
@@ -1745,10 +1757,25 @@ impl LayoutEngine {
     /// now made once at startup by which binary constructs the
     /// engine, matching GNU's per-frame redisplay_interface vtable
     /// dispatch.
+    pub fn set_display_identity(
+        &mut self,
+        identity: neomacs_display_protocol::GraphicalDisplayIdentity,
+    ) {
+        self.query_cache.clear();
+        if let Some(service) = self.font_metrics.as_mut() {
+            service.set_display_identity(identity.clone());
+        }
+        self.display_identity = Some(identity);
+    }
+
     pub fn enable_cosmic_metrics(&mut self) {
         self.query_cache.clear();
         if self.font_metrics.is_none() {
-            self.font_metrics = Some(FontMetricsService::new());
+            let mut service = FontMetricsService::new();
+            if let Some(identity) = self.display_identity.as_ref() {
+                service.set_display_identity(identity.clone());
+            }
+            self.font_metrics = Some(service);
         }
     }
 
@@ -2189,7 +2216,8 @@ impl LayoutEngine {
             curr_window_infos,
             retained_keys,
             accepted_window_chrome_metrics,
-            accepted_face_table,
+            mut frame_display_state,
+            face_seal,
             accepted_window_navigation_intents,
             accepted_frame_navigation_intent,
         ) = 'frame_layout: loop {
@@ -2261,6 +2289,17 @@ impl LayoutEngine {
             }
             let attempt_topology_generation =
                 evaluator.frame_manager().window_topology_generation();
+            let Some(attempt_smallest_font_height) = evaluator
+                .frame_manager()
+                .get(frame_id)
+                .map(|frame| frame.layout_inputs().smallest_opened_font_height)
+            else {
+                frame_window_end_attempts.reject_all(evaluator);
+                evaluator.retire_interaction_presentation(presentation_id);
+                self.last_frame_display_state = None;
+                self.reset_frame_attempt_state();
+                return None;
+            };
 
             let window_paths: rustc_hash::FxHashMap<_, _> = evaluator
                 .frame_manager()
@@ -3231,6 +3270,13 @@ impl LayoutEngine {
                             };
                             viewport_retry_phase = ViewportResolutionPhase::Resolve;
                         }
+                        LeafLayoutAttempt::MatrixCapacityUnavailable => {
+                            frame_window_end_attempts.reject_all(evaluator);
+                            evaluator.retire_interaction_presentation(presentation_id);
+                            self.last_frame_display_state = None;
+                            self.reset_frame_attempt_state();
+                            return None;
+                        }
                         LeafLayoutAttempt::LogicalInputsChanged => {
                             if evaluator.has_mode_line_display_flow() {
                                 frame_window_end_attempts.reject_all(evaluator);
@@ -3724,6 +3770,33 @@ impl LayoutEngine {
                 continue 'frame_layout;
             }
 
+            let Some(current_smallest_font_height) = evaluator
+                .frame_manager()
+                .get(frame_id)
+                .map(|frame| frame.layout_inputs().smallest_opened_font_height)
+            else {
+                frame_window_end_attempts.reject_all(evaluator);
+                evaluator.retire_interaction_presentation(presentation_id);
+                self.last_frame_display_state = None;
+                self.reset_frame_attempt_state();
+                return None;
+            };
+            if current_smallest_font_height != attempt_smallest_font_height {
+                if !Self::accept_frame_relayout_request(
+                    &mut layout_coordinator,
+                    evaluator,
+                    &mut frame_window_end_attempts,
+                    presentation_id,
+                    FrameRelayoutRequest::FontCapacityInputsChanged {
+                        before: attempt_smallest_font_height,
+                        after: current_smallest_font_height,
+                    },
+                ) {
+                    return None;
+                }
+                continue 'frame_layout;
+            }
+
             let accepted_window_chrome_metrics: rustc_hash::FxHashMap<
                 DisplayWindowId,
                 WindowChromeMetrics,
@@ -3737,145 +3810,182 @@ impl LayoutEngine {
                         .map(|metrics| (window, metrics))
                 })
                 .collect();
+            // Frame chrome (menu / tool / tab bar) is not a window, so no
+            // `(:window …)` `:filtered` predicate may match here. Clear the
+            // per-window parameters left over from the window loop above (GNU
+            // evaluates chrome faces with no window ⇒ such filters fail).
+            face_resolver.set_current_window_parameters(Vec::new());
+            face_resolver.set_current_window_id(None);
+
+            // Position the already-evaluated GUI chrome before publishing the
+            // frame. FrameChrome is the single owner of band ordering and absolute
+            // placement; this phase is deliberately Lisp-free.
+            // Keep the logical Lisp result available if a successful native
+            // font open below requires another physical frame attempt.
+            if let Some(PreparedGuiChromeSemantics {
+                menu_items,
+                tool_items,
+                ..
+            }) = prepared_gui_chrome.as_ref()
+            {
+                let pixel_to_color = |pixel: u32| -> Color {
+                    Color::rgb(
+                        ((pixel >> 16) & 0xFF) as f32 / 255.0,
+                        ((pixel >> 8) & 0xFF) as f32 / 255.0,
+                        (pixel & 0xFF) as f32 / 255.0,
+                    )
+                };
+                if frame_params.compact_bar_height > 0.0 {
+                    let menu_face = face_resolver.resolve_named_face_without_inverse_video("menu");
+                    let tool_face = face_resolver
+                        .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::ToolBar);
+                    let mut metrics = match self.font_metrics.as_mut() {
+                        Some(service) => crate::gui_chrome::MenuHeadingMetrics::Pixels {
+                            service,
+                            face: &menu_face,
+                        },
+                        None => {
+                            crate::gui_chrome::MenuHeadingMetrics::Cells(frame_params.char_width)
+                        }
+                    };
+                    let content = layout_gui_compact_bar_content(
+                        menu_items.clone(),
+                        tool_items.clone(),
+                        frame_params.width,
+                        frame_params.compact_bar_height,
+                        &mut metrics,
+                        pixel_to_color(menu_face.fg),
+                        pixel_to_color(menu_face.bg),
+                        pixel_to_color(tool_face.fg),
+                        pixel_to_color(tool_face.bg),
+                    );
+                    self.frame_output
+                        .add_frame_chrome_band(ChromeBandRequest::new(
+                            ProtocolFrameChromeKind::CompactBar,
+                            frame_params.compact_bar_height,
+                            FrameChromeContent::CompactBar(content),
+                        ));
+                } else {
+                    if frame_params.menu_bar_height > 0.0 {
+                        let face = face_resolver.resolve_named_face_without_inverse_video("menu");
+                        let terminal_face = face_resolver
+                            .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Menu);
+                        // GNU's non-toolkit `display_menu_bar` uses a SCHARS + 1
+                        // field. Preserve that terminal cell policy. GUI headings
+                        // follow GTK's font-measured labels instead; an ASCII cell
+                        // width cannot determine either their text or hit rectangles.
+                        let menu_h_padding = if window_system.is_some() {
+                            crate::gui_chrome::GUI_CHROME_HORIZONTAL_PADDING
+                        } else {
+                            frame_params.char_width * 0.5
+                        };
+                        let mut metrics =
+                            match (window_system.is_some(), self.font_metrics.as_mut()) {
+                                (true, Some(service)) => {
+                                    crate::gui_chrome::MenuHeadingMetrics::Pixels {
+                                        service,
+                                        face: &face,
+                                    }
+                                }
+                                _ => crate::gui_chrome::MenuHeadingMetrics::Cells(
+                                    frame_params.char_width,
+                                ),
+                            };
+                        let content = layout_gui_menu_bar_content(
+                            menu_items.clone(),
+                            frame_params.width,
+                            frame_params.menu_bar_height,
+                            &mut metrics,
+                            menu_h_padding,
+                            pixel_to_color(face.fg),
+                            pixel_to_color(face.bg),
+                        )
+                        .with_terminal_style(TerminalMenuBarStyle {
+                            fg: (!terminal_face.use_default_foreground)
+                                .then_some(terminal_face.terminal_fg)
+                                .flatten(),
+                            bg: (!terminal_face.use_default_background)
+                                .then_some(terminal_face.terminal_bg)
+                                .flatten(),
+                            bold: terminal_face.font_weight >= 600,
+                            inverse: terminal_face.terminal_inverse_video,
+                        });
+                        self.frame_output
+                            .add_frame_chrome_band(ChromeBandRequest::new(
+                                ProtocolFrameChromeKind::MenuBar,
+                                frame_params.menu_bar_height,
+                                FrameChromeContent::MenuBar(content),
+                            ));
+                    }
+                    if frame_params.tool_bar_height > 0.0 {
+                        let face = face_resolver
+                            .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::ToolBar);
+                        let content = layout_gui_tool_bar_content(
+                            tool_items.clone(),
+                            frame_params.width,
+                            frame_params.tool_bar_height,
+                            pixel_to_color(face.fg),
+                            pixel_to_color(face.bg),
+                        );
+                        self.frame_output
+                            .add_frame_chrome_band(ChromeBandRequest::new(
+                                ProtocolFrameChromeKind::ToolBar,
+                                frame_params.tool_bar_height,
+                                FrameChromeContent::ToolBar(content),
+                            ));
+                    }
+                }
+            }
+
+            let (frame_display_state, face_seal) =
+                match self.finish_frame_output(&frame_params, face_table) {
+                    Ok(output) => output,
+                    Err(error) => {
+                        tracing::error!(%error, "rejecting invalid frame chrome snapshot");
+                        frame_window_end_attempts.reject_all(evaluator);
+                        evaluator.retire_interaction_presentation(presentation_id);
+                        return None;
+                    }
+                };
+            let Some(current_smallest_font_height) = evaluator
+                .frame_manager()
+                .get(frame_id)
+                .map(|frame| frame.layout_inputs().smallest_opened_font_height)
+            else {
+                frame_window_end_attempts.reject_all(evaluator);
+                evaluator.retire_interaction_presentation(presentation_id);
+                self.last_frame_display_state = None;
+                self.reset_frame_attempt_state();
+                return None;
+            };
+            if current_smallest_font_height != attempt_smallest_font_height {
+                if !Self::accept_frame_relayout_request(
+                    &mut layout_coordinator,
+                    evaluator,
+                    &mut frame_window_end_attempts,
+                    presentation_id,
+                    FrameRelayoutRequest::FontCapacityInputsChanged {
+                        before: attempt_smallest_font_height,
+                        after: current_smallest_font_height,
+                    },
+                ) {
+                    return None;
+                }
+                continue 'frame_layout;
+            }
+
             break (
                 frame_params,
                 curr_window_infos,
                 retained_keys,
                 accepted_window_chrome_metrics,
-                face_table,
+                frame_display_state,
+                face_seal,
                 observed_window_navigation_intents,
                 observed_frame_navigation,
             );
         };
 
-        // Frame chrome (menu / tool / tab bar) is not a window, so no
-        // `(:window …)` `:filtered` predicate may match here. Clear the
-        // per-window parameters left over from the window loop above (GNU
-        // evaluates chrome faces with no window ⇒ such filters fail).
-        face_resolver.set_current_window_parameters(Vec::new());
-        face_resolver.set_current_window_id(None);
-
-        // Position the already-evaluated GUI chrome before publishing the
-        // frame. FrameChrome is the single owner of band ordering and absolute
-        // placement; this phase is deliberately Lisp-free.
-        if let Some(PreparedGuiChromeSemantics {
-            menu_items,
-            tool_items,
-            ..
-        }) = prepared_gui_chrome
-        {
-            let pixel_to_color = |pixel: u32| -> Color {
-                Color::rgb(
-                    ((pixel >> 16) & 0xFF) as f32 / 255.0,
-                    ((pixel >> 8) & 0xFF) as f32 / 255.0,
-                    (pixel & 0xFF) as f32 / 255.0,
-                )
-            };
-            if frame_params.compact_bar_height > 0.0 {
-                let menu_face = face_resolver.resolve_named_face_without_inverse_video("menu");
-                let tool_face = face_resolver
-                    .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::ToolBar);
-                let mut metrics = match self.font_metrics.as_mut() {
-                    Some(service) => crate::gui_chrome::MenuHeadingMetrics::Pixels {
-                        service,
-                        face: &menu_face,
-                    },
-                    None => crate::gui_chrome::MenuHeadingMetrics::Cells(frame_params.char_width),
-                };
-                let content = layout_gui_compact_bar_content(
-                    menu_items,
-                    tool_items,
-                    frame_params.width,
-                    frame_params.compact_bar_height,
-                    &mut metrics,
-                    pixel_to_color(menu_face.fg),
-                    pixel_to_color(menu_face.bg),
-                    pixel_to_color(tool_face.fg),
-                    pixel_to_color(tool_face.bg),
-                );
-                self.frame_output
-                    .add_frame_chrome_band(ChromeBandRequest::new(
-                        ProtocolFrameChromeKind::CompactBar,
-                        frame_params.compact_bar_height,
-                        FrameChromeContent::CompactBar(content),
-                    ));
-            } else {
-                if frame_params.menu_bar_height > 0.0 {
-                    let face = face_resolver.resolve_named_face_without_inverse_video("menu");
-                    let terminal_face = face_resolver
-                        .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Menu);
-                    // GNU's non-toolkit `display_menu_bar` uses a SCHARS + 1
-                    // field. Preserve that terminal cell policy. GUI headings
-                    // follow GTK's font-measured labels instead; an ASCII cell
-                    // width cannot determine either their text or hit rectangles.
-                    let menu_h_padding = if window_system.is_some() {
-                        crate::gui_chrome::GUI_CHROME_HORIZONTAL_PADDING
-                    } else {
-                        frame_params.char_width * 0.5
-                    };
-                    let mut metrics = match (window_system.is_some(), self.font_metrics.as_mut()) {
-                        (true, Some(service)) => crate::gui_chrome::MenuHeadingMetrics::Pixels {
-                            service,
-                            face: &face,
-                        },
-                        _ => crate::gui_chrome::MenuHeadingMetrics::Cells(frame_params.char_width),
-                    };
-                    let content = layout_gui_menu_bar_content(
-                        menu_items,
-                        frame_params.width,
-                        frame_params.menu_bar_height,
-                        &mut metrics,
-                        menu_h_padding,
-                        pixel_to_color(face.fg),
-                        pixel_to_color(face.bg),
-                    )
-                    .with_terminal_style(TerminalMenuBarStyle {
-                        fg: (!terminal_face.use_default_foreground)
-                            .then_some(terminal_face.terminal_fg)
-                            .flatten(),
-                        bg: (!terminal_face.use_default_background)
-                            .then_some(terminal_face.terminal_bg)
-                            .flatten(),
-                        bold: terminal_face.font_weight >= 600,
-                        inverse: terminal_face.terminal_inverse_video,
-                    });
-                    self.frame_output
-                        .add_frame_chrome_band(ChromeBandRequest::new(
-                            ProtocolFrameChromeKind::MenuBar,
-                            frame_params.menu_bar_height,
-                            FrameChromeContent::MenuBar(content),
-                        ));
-                }
-                if frame_params.tool_bar_height > 0.0 {
-                    let face = face_resolver
-                        .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::ToolBar);
-                    let content = layout_gui_tool_bar_content(
-                        tool_items,
-                        frame_params.width,
-                        frame_params.tool_bar_height,
-                        pixel_to_color(face.fg),
-                        pixel_to_color(face.bg),
-                    );
-                    self.frame_output
-                        .add_frame_chrome_band(ChromeBandRequest::new(
-                            ProtocolFrameChromeKind::ToolBar,
-                            frame_params.tool_bar_height,
-                            FrameChromeContent::ToolBar(content),
-                        ));
-                }
-            }
-        }
-
-        let (mut frame_display_state, face_seal) =
-            match self.finish_frame_output(&frame_params, accepted_face_table) {
-                Ok(output) => output,
-                Err(error) => {
-                    tracing::error!(%error, "rejecting invalid frame chrome snapshot");
-                    frame_window_end_attempts.reject_all(evaluator);
-                    evaluator.retire_interaction_presentation(presentation_id);
-                    return None;
-                }
-            };
         // xterm.c reads Vx_scroll_event_delta_factor from the C global in
         // the event path (xterm.c:22802); a live `let` is visible.
         frame_display_state.scroll_input_policy.x11_delta_factor =
@@ -6027,6 +6137,7 @@ impl LayoutEngine {
             ),
             BufferSourceRenderAttemptOutcome::Skipped
             | BufferSourceRenderAttemptOutcome::LogicalInputsChanged
+            | BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted
             | BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { .. }
             | BufferSourceRenderAttemptOutcome::Retry { .. }
             | BufferSourceRenderAttemptOutcome::ResolveViewport { .. }
@@ -6219,6 +6330,40 @@ impl LayoutEngine {
         drop(freshness_after_leaf);
         let (redisplay_positions, effective_default_face, line_number_field) = match render_outcome
         {
+            BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted => {
+                if let Some(attempt) = window_end_attempt.take() {
+                    evaluator.reject_redisplay_window_end_attempt(attempt);
+                }
+                // The producer certifies a real GUI viewport row crossing the
+                // semantic desired-matrix bound while text remains visible.
+                // Query, measurement and growing-source grids cannot request it.
+                if !params.window_system
+                    || params.source_extent != WindowSourceExtent::Viewport
+                    || position_publication.is_synchronous_query()
+                    || params.measurement_pixels.is_some()
+                    || params.measurement_rows.is_some()
+                {
+                    return LeafLayoutAttempt::MatrixCapacityUnavailable;
+                }
+                if let Some(display) = evaluator
+                    .frame_manager_mut()
+                    .get_mut(frame_id)
+                    .and_then(|frame| frame.find_window_mut(window_id))
+                    .and_then(|window| window.display_mut())
+                {
+                    let scale = &display.glyph_matrix_row_scale;
+                    if scale.grow_if(params.glyph_matrix_row_scale).is_none()
+                        && scale.current() == params.glyph_matrix_row_scale
+                    {
+                        // Same-value refusal means dormant GUI state or checked
+                        // overflow. Neither can converge by retrying unchanged.
+                        return LeafLayoutAttempt::MatrixCapacityUnavailable;
+                    }
+                }
+                // Recollect numeric inputs after growth or stale CAS. This
+                // does not move start/point or spend a visibility retry.
+                return LeafLayoutAttempt::LogicalInputsChanged;
+            }
             BufferSourceRenderAttemptOutcome::LogicalInputsChanged => {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);

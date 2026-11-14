@@ -34,6 +34,8 @@ fn synthetic_key(window_start: i64, point: i64) -> RetainedWindowKey {
         tab_width: 8,
         char_width: 8.0,
         char_height: 16.0,
+        smallest_opened_font_height: 16,
+        glyph_matrix_row_scale: std::num::NonZeroU32::MIN,
         font_pixel_size: 16.0,
         tab_stop_list: Vec::new(),
         extra_line_spacing: 0.0,
@@ -767,3 +769,24 @@ fn wrapped_projection_requires_the_same_source_origin_and_a_complete_join() {
 #[cfg(test)]
 #[path = "edit_sync_lazy_proof_planner_test.rs"]
 mod lazy_proof_tests;
+
+#[test]
+fn font_capacity_changes_refuse_cursor_and_scroll_reuse() {
+    let retained = synthetic_matrix(0, 5);
+    assert!(retained.cursor_only_replay(&retained.key).is_ok());
+    assert!(retained.scroll_replay(&synthetic_key(20, 25)).is_some());
+
+    for change_scale in [false, true] {
+        let mut cursor = retained.key.clone();
+        let mut scrolled = synthetic_key(20, 25);
+        if change_scale {
+            cursor.glyph_matrix_row_scale = std::num::NonZeroU32::new(2).unwrap();
+            scrolled.glyph_matrix_row_scale = cursor.glyph_matrix_row_scale;
+        } else {
+            cursor.smallest_opened_font_height = 12;
+            scrolled.smallest_opened_font_height = 12;
+        }
+        assert!(retained.cursor_only_replay(&cursor).is_err());
+        assert!(retained.scroll_replay(&scrolled).is_none());
+    }
+}

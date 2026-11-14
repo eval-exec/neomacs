@@ -46,8 +46,14 @@ const _: () = assert!(std::mem::size_of::<Box<RedisplayRuntime>>() == std::mem::
 
 /// Configure the direct GUI owner without exposing its native runtime slot.
 #[inline(always)]
-pub(super) fn configure_gui_runtime(font_sizing: super::FontSizing) {
+pub(super) fn configure_gui_runtime(
+    font_sizing: super::FontSizing,
+    identity: Option<neomacs_display_protocol::GraphicalDisplayIdentity>,
+) {
     REDISPLAY_RUNTIME.with(|runtime| {
+        if let Some(identity) = identity {
+            runtime.set_display_identity(identity);
+        }
         runtime.enable_cosmic_metrics();
         runtime.set_font_sizing(font_sizing);
     });

@@ -541,11 +541,34 @@ impl EditHost for Context {
         let buffer = window.buffer_id()?;
         let char_width = frame.char_width.max(1.0).round() as i64;
         let char_height = frame.char_height.max(1.0).round() as i64;
-        let visible_lines = match window {
-            crate::emacs_core::eval::data::window_state::Window::Leaf { bounds, .. } => {
-                ((bounds.height / char_height.max(1) as f32).floor() as i64).max(1)
+        let visible_lines = if frame.effective_window_system().is_some() {
+            let (_, body_height) = super::display_query_hooks::window_body_dimensions(
+                &self.frames,
+                &self.edit.buffers,
+                frame.id,
+                window.id(),
+            )
+            .ok()?;
+            let smallest_font_height = match frame.display_identity() {
+                crate::emacs_core::eval::data::window_state::FrameDisplayIdentity::Graphical(
+                    identity,
+                ) => identity.smallest_opened_font_height(),
+                crate::emacs_core::eval::data::window_state::FrameDisplayIdentity::None => 1,
+            };
+            neomacs_display_protocol::glyph_matrix_capacity::required_gui_glyph_matrix_rows(
+                body_height,
+                window.redisplay_state()?.vscroll,
+                smallest_font_height,
+                window.display()?.glyph_matrix_row_scale.current(),
+            )
+            .min(i64::MAX as usize) as i64
+        } else {
+            match window {
+                crate::emacs_core::eval::data::window_state::Window::Leaf { bounds, .. } => {
+                    ((bounds.height / char_height.max(1) as f32).floor() as i64).max(1)
+                }
+                crate::emacs_core::eval::data::window_state::Window::Internal { .. } => 1,
             }
-            crate::emacs_core::eval::data::window_state::Window::Internal { .. } => 1,
         };
         Some(LineNumberDisplayTarget {
             buffer,

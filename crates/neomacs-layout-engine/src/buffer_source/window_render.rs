@@ -660,9 +660,15 @@ where
         // `display_text_rows` is 1 for a growing AccessibleEnd grid while
         // `max_rows` stays the real walk budget. Use the widened slot count
         // only after a shorter face actually grew it.
-        let walk_rows = if scroll.as_ref().is_some_and(|replay| replay.bound_walk)
-            || geometry.matrix_body_rows <= geometry.display_text_rows
-        {
+        let walk_rows = if scroll.as_ref().is_some_and(|replay| replay.bound_walk) {
+            geometry.max_rows
+        } else if let Some(rows) = geometry.desired_matrix_rows {
+            // Body row indices exclude top chrome; an actual attempt at total
+            // matrix row N must reach the capacity retry before any tail work.
+            geometry
+                .matrix_body_rows
+                .max(rows.saturating_sub(geometry.display_text_row_base))
+        } else if geometry.matrix_body_rows <= geometry.display_text_rows {
             geometry.max_rows
         } else {
             geometry.matrix_body_rows

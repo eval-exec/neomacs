@@ -24,6 +24,11 @@ pub(crate) enum FrameRelayoutRequest {
     LogicalInputsChanged {
         window_id: DisplayWindowId,
     },
+    /// A successful native font open changed the display-wide matrix capacity.
+    FontCapacityInputsChanged {
+        before: u32,
+        after: u32,
+    },
     /// A `when` display clause the window's walk took by the structural rule
     /// evaluated nil after the walk. Replay the frame once with the answer.
     DisplayWhenAnswerChanged {

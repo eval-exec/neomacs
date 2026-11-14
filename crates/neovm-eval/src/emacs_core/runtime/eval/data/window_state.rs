@@ -33,7 +33,7 @@ use rustc_hash::FxHashSet as HashSet;
 use std::cell::Cell;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::{Arc, OnceLock};
 use strum::{EnumString, IntoStaticStr};
 
@@ -349,6 +349,8 @@ pub struct FrameLayoutInputState {
     pub displays_chrome: bool,
     pub has_window_system: bool,
     pub window_system_symbol: Option<SymId>,
+    /// Current numeric minimum of fonts opened on this graphical connection.
+    pub smallest_opened_font_height: u32,
 }
 
 /// Existing evaluator-thread revision for direct character-table writes.
@@ -373,6 +375,7 @@ pub struct WindowLayoutInputState {
     pub hscroll: usize,
     pub vscroll: i32,
     pub preserve_vscroll_p: bool,
+    pub glyph_matrix_row_scale: NonZeroU32,
     pub margins: WindowMargins,
     pub display_table_identity: usize,
     pub char_table_mutation_epoch: CharTableLayoutRevision,
@@ -844,6 +847,9 @@ impl WindowRedisplayOutput {
 /// snapshots remain published artifacts for renderer handoff.
 #[derive(Clone, Debug)]
 pub struct WindowDisplayState {
+    /// Persistent scale shared by configurations of the same logical window.
+    pub glyph_matrix_row_scale:
+        neomacs_display_protocol::glyph_matrix_capacity::GlyphMatrixRowScale,
     /// Window-local display table; nil means inherit from the buffer/frame.
     pub display_table: Value,
     /// Window-local cursor type; t means use the buffer-local value.
@@ -882,6 +888,7 @@ pub struct WindowDisplayState {
 impl Default for WindowDisplayState {
     fn default() -> Self {
         Self {
+            glyph_matrix_row_scale: Default::default(),
             display_table: Value::NIL,
             cursor_type: Value::T,
             cursor: None,
@@ -5655,6 +5662,10 @@ impl Frame {
             displays_chrome: self.displays_chrome,
             has_window_system: window_system.is_some(),
             window_system_symbol: window_system.and_then(Value::as_bare_symbol_id),
+            smallest_opened_font_height: match self.display_identity() {
+                FrameDisplayIdentity::None => 1,
+                FrameDisplayIdentity::Graphical(identity) => identity.smallest_opened_font_height(),
+            },
         }
     }
 
@@ -5664,6 +5675,18 @@ impl Frame {
     /// The field is the backend kind; the parameter is its Lisp projection.
     /// This is the only path that can retract the kind (pass `None`).
     pub fn set_window_system(&mut self, window_system: Option<Value>) {
+        if window_system.is_some() {
+            // Activate before GUI configurations can clone these logical
+            // windows. Batch/TTY construction remains allocation-free.
+            self.tree.for_each_leaf_mut(|window| {
+                if let Some(display) = window.display_mut() {
+                    display.glyph_matrix_row_scale.activate();
+                }
+            });
+            if let Some(display) = self.minibuffer_leaf.as_mut().and_then(Window::display_mut) {
+                display.glyph_matrix_row_scale.activate();
+            }
+        }
         self.window_system = window_system;
         match window_system {
             Some(value) => {
@@ -5950,6 +5973,7 @@ impl Frame {
             hscroll: state.hscroll,
             vscroll: state.vscroll,
             preserve_vscroll_p: state.preserve_vscroll_p,
+            glyph_matrix_row_scale: display.glyph_matrix_row_scale.current(),
             margins: *margins,
             display_table_identity: display.display_table.bits(),
             char_table_mutation_epoch: current_char_table_layout_revision(),

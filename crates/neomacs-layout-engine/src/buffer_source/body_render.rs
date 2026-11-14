@@ -60,6 +60,7 @@ pub(crate) enum BufferSourceBodyRenderOutcome {
     Complete(BufferSourcePostLoopRenderOutcome),
     SyncHorizonExhausted,
     QueryHorizonExhausted,
+    GlyphMatrixCapacityExhausted,
     SyncStateInvalid,
 }
 
@@ -250,7 +251,11 @@ impl<'a> BufferSourceWalkSetupRequest<'a> {
             geometry.row_origin_y(),
             params.bounds.y,
             geometry.line_number_pixel_width,
-            geometry.max_rows,
+            geometry
+                .desired_matrix_rows
+                .map(|rows| rows.saturating_sub(geometry.display_text_row_base))
+                .unwrap_or(geometry.max_rows)
+                .max(geometry.matrix_body_rows),
             default_face.row_metrics_for_body_width(geometry.char_width),
             default_face.measurement_policy().mode(),
             params.wrap_mode,
@@ -556,6 +561,9 @@ impl BufferSourceWalkSetup {
 
         use crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome;
         match loop_outcome {
+            BufferSourceVisibleLoopOutcome::GlyphMatrixCapacityExhausted => {
+                return BufferSourceBodyRenderOutcome::GlyphMatrixCapacityExhausted;
+            }
             BufferSourceVisibleLoopOutcome::SyncHorizonExhausted => {
                 return BufferSourceBodyRenderOutcome::SyncHorizonExhausted;
             }

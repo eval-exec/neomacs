@@ -1991,6 +1991,8 @@ pub fn window_params_from_neovm_with_font_sizing(
         char_width,
         char_height,
         window_system: is_window_system,
+        glyph_matrix_row_scale: window.display()?.glyph_matrix_row_scale.current(),
+        smallest_opened_font_height: frame.layout_inputs().smallest_opened_font_height,
         font_pixel_size: frame.font_pixel_size,
         image_scale_environment: image_scale_environment(frame, vars),
         font_ascent: if is_window_system {

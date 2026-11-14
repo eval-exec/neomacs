@@ -52,6 +52,8 @@ fn window_params() -> WindowParams {
         char_width: 8.0,
         char_height: 16.0,
         window_system: true,
+        glyph_matrix_row_scale: std::num::NonZeroU32::MIN,
+        smallest_opened_font_height: 16,
         font_pixel_size: 14.0,
         image_scale_environment: Default::default(),
         font_ascent: 11.0,
@@ -144,7 +146,8 @@ fn geometry_request_derives_text_area_and_matrix_rows() {
     let params = window_params();
     let request = geometry_request(&params, 8.0, 16.0, 12.0, 10.0, 6.0);
 
-    assert_eq!(request.line_number_row_capacity(), 5);
+    // GNU uses ceil(92 / 16) font rows plus five matrix reserve rows.
+    assert_eq!(request.line_number_row_capacity(), 11);
 
     let geometry = request.into_geometry(
         crate::display_row::walk_state::LineNumberFieldLayout::new(3, 8.0),
@@ -690,4 +693,66 @@ fn line_number_geometry_offset_shares_the_rendered_counting_origin() {
             .initial_line_numbers(&RustBufferAccess::new(&buffer), 4000, 4008);
         assert_eq!(state.current_line(), first_line);
     }
+}
+
+#[test]
+fn gui_gutter_matrix_capacity_does_not_change_physical_viewport_rows() {
+    let mut params = window_params();
+    params.bounds.height = 80.0;
+    params.text_bounds.height = 80.0;
+    params.smallest_opened_font_height = 8;
+    params.glyph_matrix_row_scale = std::num::NonZeroU32::new(2).unwrap();
+    let request = geometry_request(&params, 8.0, 16.0, 0.0, 0.0, 0.0);
+    assert_eq!(request.line_number_row_capacity(), 25);
+    let geometry = request.into_geometry(LineNumberFieldLayout::new(0, params.char_width));
+    assert_eq!(geometry.max_rows, 5);
+}
+
+#[test]
+fn semantic_matrix_exhaustion_is_independent_of_fixed_viewport_limits() {
+    let params = window_params();
+    let setup = setup_request().into_setup();
+    let context = BufferSourceLoopRequestContext::new(
+        neovm_core::buffer::BufferId(42),
+        0,
+        100,
+        0,
+        &params,
+        0.0,
+        false,
+        DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 11.0),
+        crate::display_row::geometry::DisplayRowVisibilityLimit {
+            allow_partial: true,
+            max_rows: 5,
+            bottom_y: 80.0,
+        },
+        setup.row_geometry_defaults,
+        2,
+        5,
+        crate::display_row::geometry::DisplayRowLimit { max_rows: 5 },
+        Color::from_pixel(0),
+    )
+    .with_desired_matrix_rows(Some(11));
+    let row = |index, y| {
+        crate::display_row::geometry::DisplayRowGeometryState::for_measurement_mode(
+            index,
+            y,
+            0.0,
+            1.0,
+            1.0,
+            DisplayRowMeasurementMode::LogicalCells,
+        )
+    };
+    // The physical five-row budget is not a semantic matrix overflow.
+    assert!(!context.glyph_matrix_capacity_exhausted(&row(5, 40.0)));
+    // Two top-chrome rows make body row9 the actual matrix row11.
+    assert!(!context.glyph_matrix_capacity_exhausted(&row(8, 60.0)));
+    assert!(context.glyph_matrix_capacity_exhausted(&row(9, 60.0)));
+    // A clipped next row and a measurement without capacity authority do not grow scale.
+    assert!(!context.glyph_matrix_capacity_exhausted(&row(9, 80.0)));
+    assert!(
+        !context
+            .with_desired_matrix_rows(None)
+            .glyph_matrix_capacity_exhausted(&row(9, 60.0))
+    );
 }

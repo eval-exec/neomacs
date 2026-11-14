@@ -24,6 +24,10 @@ pub(crate) struct BufferWindowGeometryRequest {
     /// the historical behavior (vscroll shrinks the visible area, if set at all),
     /// so the shift is applied only when this is true.
     window_system: bool,
+    glyph_matrix_body_height_px: i64,
+    glyph_matrix_vscroll_px: i32,
+    glyph_matrix_row_scale: std::num::NonZeroU32,
+    smallest_opened_font_height: u32,
     top_chrome_rows: usize,
     bottom_chrome_rows: usize,
     char_width: f32,
@@ -58,10 +62,13 @@ pub(crate) struct BufferWindowGeometry {
     pub(crate) char_width: f32,
     pub(crate) char_height: f32,
     pub(crate) max_rows: usize,
-    /// Glyph slots for the body walk. This is `max_rows` when every row is at
-    /// least the frame font, and the pixel box when a shorter face must still
-    /// reach the window bottom. Scroll margin keeps using `max_rows`.
+    /// Owned body storage, independent of physical viewport row budgets.
+    /// GUI storage reserves the semantic desired-matrix capacity; a shorter
+    /// realized face may additionally widen an attempt. Scroll margin keeps
+    /// using `max_rows`.
     pub(crate) matrix_body_rows: usize,
+    /// Semantic total desired-matrix rows for an ordinary GUI viewport.
+    pub(crate) desired_matrix_rows: Option<usize>,
     pub(crate) display_text_row_base: usize,
     pub(crate) display_text_rows: usize,
     pub(crate) bottom_chrome_rows: usize,
@@ -189,6 +196,10 @@ impl BufferWindowGeometryRequest {
             vscroll,
             kind: params.kind,
             window_system: params.window_system,
+            glyph_matrix_body_height_px: body.height.round() as i64,
+            glyph_matrix_vscroll_px: params.vscroll,
+            glyph_matrix_row_scale: params.glyph_matrix_row_scale,
+            smallest_opened_font_height: params.smallest_opened_font_height,
             top_chrome_rows: usize::from(chrome.tab_line_height > 0.0)
                 + usize::from(chrome.header_line_height > 0.0),
             bottom_chrome_rows: usize::from(chrome.mode_line_height > 0.0),
@@ -221,13 +232,19 @@ impl BufferWindowGeometryRequest {
     }
 
     pub(crate) fn line_number_row_capacity(self) -> usize {
-        // GNU's `maybe_produce_line_number' reserves `lnum_width + 2`
-        // columns: the right-aligned number plus one blank on each side.
-        // `lnum_width` is wide enough for the largest line number that can
-        // appear in the current window, so a tiny buffer in a tall window
-        // still gets the same two-digit gutter GNU displays for visible rows
-        // 1..N.
-        self.base_max_rows()
+        // GNU maybe_produce_line_number uses the complete desired matrix,
+        // including its partial/chrome reserve, even for a tiny buffer.
+        // Viewport rows and source measurement budgets remain independent.
+        if self.window_system {
+            neomacs_display_protocol::required_gui_glyph_matrix_rows(
+                self.glyph_matrix_body_height_px,
+                self.glyph_matrix_vscroll_px,
+                self.smallest_opened_font_height,
+                self.glyph_matrix_row_scale,
+            )
+        } else {
+            self.base_max_rows()
+        }
     }
 
     /// Row capacity of the physical viewport for this window, i.e. the
@@ -261,10 +278,21 @@ impl BufferWindowGeometryRequest {
             } else {
                 max_rows.max(1)
             };
-        // The frame font is the body slot count until a full layout sees a
-        // shorter face at the window start and widens `matrix_body_rows`.
-        // Scroll margin, `max_rows`, and `mode_line_display_row` stay here.
-        let matrix_body_rows = display_text_rows;
+        // GUI allocation follows the complete desired-matrix capacity. Keep
+        // physical scroll/visibility rows and the nominal mode-line position
+        // on the frame-font geometry; capacity is not a viewport budget.
+        let desired_matrix_rows = (self.window_system
+            && !self.kind.is_minibuffer()
+            && self.source_extent == crate::types::WindowSourceExtent::Viewport
+            && self.measurement_rows.is_none()
+            && self.measurement_pixels.is_none())
+        .then(|| self.line_number_row_capacity());
+        let matrix_body_rows = desired_matrix_rows
+            .map(|rows| {
+                rows.saturating_sub(self.top_chrome_rows + self.bottom_chrome_rows)
+                    .max(display_text_rows)
+            })
+            .unwrap_or(display_text_rows);
         let mode_line_display_row = display_text_row_base + display_text_rows;
         // GNU appends line-number glyphs to TEXT_AREA, then advances current_x
         // before producing buffer text.  The matrix therefore spans the whole
@@ -318,6 +346,7 @@ impl BufferWindowGeometryRequest {
             char_height: self.char_height,
             max_rows,
             matrix_body_rows,
+            desired_matrix_rows,
             display_text_row_base,
             display_text_rows,
             bottom_chrome_rows: self.bottom_chrome_rows,

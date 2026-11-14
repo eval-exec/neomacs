@@ -944,7 +944,16 @@ impl BufferSourceOutputSetup {
             // whose bg equals the frame bg is a visual no-op and is skipped.
             Color::from_pixel(default_face.face().bg),
         )
-        .with_read_boundary(source.read_boundary());
+        .with_read_boundary(source.read_boundary())
+        .with_desired_matrix_rows(
+            matches!(
+                self.position_publication,
+                WindowPositionPublication::Redisplay
+                    | WindowPositionPublication::RedisplayResumedScrollHook
+            )
+            .then_some(geometry.desired_matrix_rows)
+            .flatten(),
+        );
         let fallback_metrics = default_face.metrics();
         let tail_context = BufferSourceTailRequestContext::new(
             params,
@@ -1320,6 +1329,11 @@ impl BufferSourceOutputSetup {
                 buf_access,
             );
             let post_loop = match post_loop {
+                crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::GlyphMatrixCapacityExhausted => {
+                    output.output_target().builder().finish_edit_sync();
+                    output.restore_retry_checkpoint(retry_checkpoint);
+                    return BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted;
+                }
                 crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::QueryHorizonExhausted => {
                     output.output_target().builder().finish_edit_sync();
                     output.restore_retry_checkpoint(retry_checkpoint);
@@ -1898,6 +1912,11 @@ impl BufferSourceOutputSetup {
         );
 
         let post_loop = match post_loop {
+            crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::GlyphMatrixCapacityExhausted => {
+                output.output_target().builder().finish_edit_sync();
+                output.restore_retry_checkpoint(retry_checkpoint);
+                return BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted;
+            }
             crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::SyncStateInvalid => {
                 output.output_target().builder().finish_edit_sync();
                 output.restore_retry_checkpoint(retry_checkpoint);

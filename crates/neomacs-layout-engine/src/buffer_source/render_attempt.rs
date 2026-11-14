@@ -226,6 +226,9 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
     },
     /// A synchronous query needs more source, before any EOB publication.
     QuerySourceHorizonExhausted,
+    /// Actual GUI row production exceeded the semantic desired-matrix capacity.
+    /// The coordinator owns scale growth and geometry recollection.
+    GlyphMatrixCapacityExhausted,
     Finished {
         redisplay_positions: TextWindowRedisplayPositions,
         query_restart_rows: Vec<(neovm_core::buffer::LispCharPos1, i64)>,

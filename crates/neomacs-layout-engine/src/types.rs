@@ -355,6 +355,10 @@ pub struct WindowParams {
     pub char_height: f32,
     /// Whether the containing frame is a real window-system frame.
     pub window_system: bool,
+    /// GNU desired-matrix row scale owned by this live window.
+    pub glyph_matrix_row_scale: std::num::NonZeroU32,
+    /// Captured display-connection minimum, shared by capacity and freshness.
+    pub smallest_opened_font_height: u32,
     /// Font pixel size
     pub font_pixel_size: f32,
     /// Immutable GNU image-scaling facts inherited from the containing frame.

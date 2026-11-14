@@ -4630,3 +4630,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn bui
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn completion_ignore_case
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn completion_regexp_lisp_list
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn lisp_string_matches_completion_regexps
+crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	FrameLayoutInputState field smallest_opened_font_height
+crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowDisplayState field glyph_matrix_row_scale
+crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field glyph_matrix_row_scale

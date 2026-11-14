@@ -1,8 +1,8 @@
 //! Select one opened startup font for frame geometry and Lisp face seeding.
 
 use super::{
-    BootstrapDisplayConfig, BootstrapFrameMetrics, FontMetricsService, FontWeight,
-    FrameFontRequest, FrontendKind, SelectedFontInfo,
+    BootstrapDisplayConfig, BootstrapDisplayKind, BootstrapFrameMetrics, FontMetricsService,
+    FontWeight, FrameFontRequest, FrontendKind, SelectedFontInfo,
 };
 use neomacs_display_runtime::font_defaults::InitialFontFamilyMatch;
 use neovm_core::emacs_core::display_host::FrameFontSize;
@@ -54,6 +54,9 @@ impl StartupFont {
         preferred_font: Option<&str>,
     ) -> Option<Self> {
         let mut metrics = FontMetricsService::new();
+        if let BootstrapDisplayKind::Gui { identity, .. } = &display.kind {
+            metrics.set_display_identity(identity.clone());
+        }
         let mut open = |candidate: neomacs_display_runtime::font_defaults::InitialFontCandidate| {
             let request = neovm_core::emacs_core::display_host::frame_font_request_from_name(
                 candidate.name(),

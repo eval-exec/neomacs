@@ -838,6 +838,10 @@ fn make_split_sibling(
             *preserve_vscroll_p = false;
         }
     }
+    if let Some(display) = sibling.display_mut() {
+        // GNU make_window starts each new sibling with an independent scale.
+        display.glyph_matrix_row_scale = display.glyph_matrix_row_scale.fresh_window();
+    }
     sibling
 }
 

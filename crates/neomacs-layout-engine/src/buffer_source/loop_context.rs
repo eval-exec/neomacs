@@ -40,6 +40,7 @@ pub(crate) struct BufferSourceLoopRequestContext {
     display_text_row_base: usize,
     max_rows: usize,
     row_limit: DisplayRowLimit,
+    desired_matrix_rows: Option<usize>,
     frame_background: Color,
     /// `display-fill-column-indicator` column (buffer columns), or negative when
     /// the indicator is disabled. GNU `fill_column_indicator_column`.
@@ -84,10 +85,29 @@ impl BufferSourceLoopRequestContext {
             display_text_row_base,
             max_rows,
             row_limit,
+            desired_matrix_rows: None,
             frame_background,
             fill_column_indicator: params.fill_column_indicator,
             fill_column_indicator_char: params.fill_column_indicator_char,
         }
+    }
+
+    pub(crate) fn with_desired_matrix_rows(mut self, rows: Option<usize>) -> Self {
+        self.desired_matrix_rows = rows;
+        self
+    }
+
+    pub(crate) fn glyph_matrix_capacity_exhausted(
+        self,
+        row: &crate::display_row::geometry::DisplayRowGeometryState,
+    ) -> bool {
+        self.desired_matrix_rows.is_some_and(|rows| {
+            row.row().saturating_add(self.display_text_row_base) >= rows
+                && row.current_row_is_visible(DisplayRowVisibilityLimit {
+                    max_rows: usize::MAX,
+                    ..self.row_visibility_limit
+                })
+        })
     }
 
     pub(crate) fn with_read_boundary(

@@ -22,6 +22,7 @@ pub mod frame_glyphs;
 pub mod frame_time;
 pub mod geometry;
 pub mod glyph_matrix;
+pub mod glyph_matrix_capacity;
 pub mod gradient;
 pub mod image;
 pub mod image_diagnostic;
@@ -58,6 +59,7 @@ pub mod x11_colors;
 pub mod xterm_palette;
 pub mod xwidget_extent;
 pub use glyph_matrix::*;
+pub use glyph_matrix_capacity::*;
 pub mod tty_capabilities;
 
 pub use clipboard::*;

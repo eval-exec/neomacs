@@ -361,6 +361,7 @@ where
         | BufferSourceVisibleLoopOutcome::MiniSourcePositionReached
         | BufferSourceVisibleLoopOutcome::SyncHorizonExhausted
         | BufferSourceVisibleLoopOutcome::QueryHorizonExhausted
+        | BufferSourceVisibleLoopOutcome::GlyphMatrixCapacityExhausted
         | BufferSourceVisibleLoopOutcome::SyncStateInvalid => false,
     };
     if finalize_prefix {
@@ -407,6 +408,7 @@ where
             | BufferSourceVisibleLoopOutcome::EarlyBoundaryReached
             | BufferSourceVisibleLoopOutcome::SyncHorizonExhausted
             | BufferSourceVisibleLoopOutcome::QueryHorizonExhausted
+        | BufferSourceVisibleLoopOutcome::GlyphMatrixCapacityExhausted
             | BufferSourceVisibleLoopOutcome::SyncStateInvalid =>
                 crate::buffer_source::row_lifecycle::BufferSourceEobOverlayPolicy::Render,
         })
