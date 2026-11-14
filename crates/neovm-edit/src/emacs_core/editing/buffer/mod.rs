@@ -1196,7 +1196,8 @@ pub fn builtin_buffer_line_statistics(
         .and_then(|id| {
             buffers.get(id).map(|buf| {
                 let mut bytes = Vec::new();
-                buf.copy_emacs_byte_range_to(buf.accessible_emacs_byte_range(), &mut bytes);
+                // GNU Fbuffer_line_statistics scans BUF_BEG..BUF_Z, ignoring narrowing.
+                buf.copy_emacs_byte_range_to(buf.full_emacs_byte_range(), &mut bytes);
                 bytes
             })
         })
