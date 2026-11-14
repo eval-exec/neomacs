@@ -356,3 +356,14 @@ fn post_encode_lock_clash_alias_nul_mutation_gc() {
         Some(r#"OK (((ask-lock t t)) t t t)"#),
     );
 }
+
+#[test]
+fn whole_operation_multibyte_utf8_alias_value_survives_holder_clear_kill_gc() {
+    compare_filename_identity(
+        "whole_operation_multibyte_utf8_alias_value_survives_holder_clear_kill_gc",
+        include_str!(
+            "fixtures/filelock_identity/post_encode/weak-multibyte-utf8-alias-holder-clear-kill-gc.el"
+        ),
+        Some(r#"OK ((t t) (verify-visited-file-modtime 1 1 nil) t t nil t)"#),
+    );
+}
