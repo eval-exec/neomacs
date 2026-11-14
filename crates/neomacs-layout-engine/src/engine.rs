@@ -3937,6 +3937,9 @@ impl LayoutEngine {
                 }
             }
 
+            // Publication requires the exclusive table owner. The output
+            // builder drops its own handle; release the last producer here.
+            drop(face_attempt);
             let (frame_display_state, face_seal) =
                 match self.finish_frame_output(&frame_params, face_table) {
                     Ok(output) => output,
