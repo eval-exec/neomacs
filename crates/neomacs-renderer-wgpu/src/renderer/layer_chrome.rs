@@ -8,6 +8,32 @@ use super::super::vertex::RectVertex;
 use super::WgpuRenderer;
 use super::frame_pass::{ChromeLayerVertices, FrameParams, FramePassCtx};
 
+/// Cross-axis offset and thickness of the painted scroll bar inside its
+/// allocated band.
+///
+/// GNU's GtkScrollbar allocates the theme's full `slider-width +
+/// 2 * trough-border` (16px with Breeze/Adwaita) but paints a narrower trough
+/// and slider centered inside it; under Breeze/Adwaita that visible band is
+/// about 8px. Neomacs keeps the full band for layout and hit testing, but
+/// paints this narrower band. A positive `scroll-bar` effect `:width` selects
+/// the visible thickness; 0 uses half the allocated band.
+pub(super) fn scroll_bar_visible_band(band: f32, configured_width: i32) -> (f32, f32) {
+    if !(band > 0.0) {
+        return (0.0, 0.0);
+    }
+    // A sub-pixel band cannot hold a one-pixel mark; paint what exists.
+    if band <= 1.0 {
+        return (0.0, band);
+    }
+    let visible = if configured_width > 0 {
+        configured_width as f32
+    } else {
+        band * 0.5
+    }
+    .clamp(1.0, band);
+    ((band - visible) * 0.5, visible)
+}
+
 impl WgpuRenderer {
     /// Collect cursor rects (inverse-video bg, behind-text trail, front
     /// cursors), window borders, and scroll bar tracks/thumbs.
@@ -87,6 +113,20 @@ impl WgpuRenderer {
                     track_color,
                     thumb_color,
                 } => {
+                    // The glyph rect keeps the full allocated band for
+                    // layout and hit testing. GNU's GtkScrollbar allocates
+                    // that band but paints a narrower trough/slider centered
+                    // inside it, so paint only the visible band here.
+                    let (band_offset, band_thickness) = scroll_bar_visible_band(
+                        if *horizontal { *height } else { *width },
+                        self.effects.scroll_bar.width,
+                    );
+                    let (track_x, track_y, track_w, track_h) = if *horizontal {
+                        (*x, *y + band_offset, *width, band_thickness)
+                    } else {
+                        (*x + band_offset, *y, band_thickness, *height)
+                    };
+
                     // Draw scroll bar track (subtle, configurable opacity)
                     let subtle_track = Color::new(
                         track_color.r,
@@ -94,13 +134,19 @@ impl WgpuRenderer {
                         track_color.b,
                         track_color.a * self.effects.scroll_bar.track_opacity,
                     );
-                    self.add_rect(&mut cursor_vertices, *x, *y, *width, *height, &subtle_track);
+                    self.add_rect(
+                        &mut cursor_vertices,
+                        track_x,
+                        track_y,
+                        track_w,
+                        track_h,
+                        &subtle_track,
+                    );
 
-                    // Compute thumb bounds
                     let (tx, ty, tw, th) = if *horizontal {
-                        (*x + *thumb_start, *y, *thumb_size, *height)
+                        (*x + *thumb_start, track_y, *thumb_size, track_h)
                     } else {
-                        (*x, *y + *thumb_start, *width, *thumb_size)
+                        (track_x, *y + *thumb_start, track_w, *thumb_size)
                     };
 
                     // Brighten the thumb of the bar the compositor says the
@@ -209,3 +255,7 @@ impl WgpuRenderer {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "layer_chrome/tests/layer_chrome_test.rs"]
+mod tests;
