@@ -1,0 +1,10 @@
+;; UNEXECUTED SOURCE-ONLY PROBE. No observed result or regression grade.
+(let* ((file-name-handler-alist nil)
+       (name (copy-sequence (string-as-unibyte "/..")))
+       (marker (vector 'payload)))
+  (put-text-property 0 1 'threadsig-payload marker name)
+  (let ((result (expand-file-name name (string-as-unibyte "/"))))
+    (list (eq result name) (equal result name)
+          (substring-no-properties result)
+          (eq (get-text-property 0 'threadsig-payload result) marker)
+          (eq (get-text-property 0 'threadsig-payload name) marker))))

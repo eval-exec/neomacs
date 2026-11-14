@@ -1,0 +1,12 @@
+;; UNEXECUTED SOURCE-ONLY PROBE. No observed result or regression grade.
+(let* ((file-name-handler-alist nil)
+       (name (concat "/threadsig-expand-" (string #x3bb)))
+       (directory (unibyte-string ?/ #xe9))
+       (marker (vector 'payload)))
+  (put-text-property 0 1 'threadsig-payload marker name)
+  (let ((result (expand-file-name name directory)))
+    (list (multibyte-string-p name) (multibyte-string-p directory)
+          (multibyte-string-p result) (eq name result)
+          (string-to-list (string-as-unibyte name))
+          (string-to-list (string-as-unibyte result))
+          (eq (get-text-property 0 'threadsig-payload result) marker))))
