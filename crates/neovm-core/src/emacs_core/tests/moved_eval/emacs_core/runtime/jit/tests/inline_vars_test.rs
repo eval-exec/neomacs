@@ -125,6 +125,7 @@ fn interpret(ev: &mut Context, prog: &Prog, var: &str, args: &[Value]) -> String
     f.ops = prog.ops.clone();
     f.constants = constants(var).into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    seal_hand_assembled_ops_for_test(&mut f);
     let mut vm = Vm::from_context(ev);
     match vm.execute(&f, args.to_vec()) {
         Ok(v) => print_value(&v),
@@ -480,6 +481,7 @@ fn a_cache_miss_takes_the_shim_and_the_next_run_hits() {
 /// canonicalises.
 #[test]
 fn type_rules_match_the_interpreter() {
+    crate::test_utils::init_test_tracing();
     let cases: &[(&str, Prog, Vec<Value>)] = &[
         ("ivt-int", Prog::setq(), vec![Value::string("s")]),
         ("ivt-int", Prog::let_call(), vec![Value::string("s")]),
