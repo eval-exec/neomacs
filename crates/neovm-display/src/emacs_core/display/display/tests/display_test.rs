@@ -1254,7 +1254,8 @@ fn x_open_connection_masks_foreign_host_reason_for_nil_and_true_must_succeed() {
     crate::test_utils::init_test_tracing();
     for (display, expected) in [
         (":987", "Display :987 can’t be opened"),
-        ("", "Display  can’t be opened"),
+        // Neo's empty name selects the hosted default, like GNU pgtk.
+        // Explicit X11 empty-name refusal has its own regression below.
         ("bad\0display", "Display bad\0display can’t be opened"),
         (
             "initial_terminal",
@@ -1300,7 +1301,9 @@ fn x_open_connection_checks_display_then_xrm_before_requesting_host_admission() 
     );
     let before = x_open_connection_registry_counts(&eval);
     for (display, resources, invalid) in [
-        (Value::NIL, Value::fixnum(42), Value::NIL),
+        // GNU pgtk maps nil DISPLAY to empty before checking its type
+        // (src/pgtkfns.c:2140-2143), so XRM is the invalid argument here.
+        (Value::NIL, Value::fixnum(42), Value::fixnum(42)),
         (Value::fixnum(41), Value::fixnum(42), Value::fixnum(41)),
         (Value::string(":42"), Value::fixnum(42), Value::fixnum(42)),
     ] {
@@ -1351,15 +1354,119 @@ fn x_open_connection_rejects_xwayland_name_despite_native_display_seed() {
 #[test]
 fn x_open_connection_accepts_nil_display_for_the_neo_frontend() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    eval.set_variable("initial-window-system", Value::symbol("neo"));
-    assert!(
-        builtin_x_open_connection(&mut eval, vec![Value::NIL])
-            .unwrap()
-            .is_nil()
+    for identity in [
+        GraphicalDisplayIdentity::named(GraphicalBackend::X11, ":42").unwrap(),
+        GraphicalDisplayIdentity::named(GraphicalBackend::Wayland, "wayland-7").unwrap(),
+        GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland),
+    ] {
+        for nil_display in [true, false] {
+            for resources in [None, Some("new resources")] {
+                for must_succeed in [Value::NIL, Value::T] {
+                    let mut eval = x_open_connection_test_context();
+                    let state = install_x_open_connection_host(&mut eval, Some(identity.clone()));
+                    let before = x_open_connection_registry_counts(&eval);
+                    let display = if nil_display {
+                        Value::NIL
+                    } else {
+                        Value::string("")
+                    };
+                    let mut args = vec![display];
+                    if resources.is_some() || !must_succeed.is_nil() {
+                        args.push(resources.map(Value::string).unwrap_or(Value::NIL));
+                        args.push(must_succeed);
+                    }
+                    assert!(builtin_x_open_connection(&mut eval, args).unwrap().is_nil());
+                    assert_eq!(x_open_connection_registry_counts(&eval), before);
+                    let state = state.lock().unwrap();
+                    assert_eq!(state.resources, resources.unwrap_or("original resources"));
+                    // GNU pgtk opens its empty name as the default display
+                    // (src/gtkutil.c:246-250). The host protocol names that
+                    // request None; explicit foreign names remain strict.
+                    let mut expected = vec![XOpenConnectionHostEvent::Admission(None)];
+                    if let Some(resources) = resources {
+                        expected.push(XOpenConnectionHostEvent::Resources(resources.to_owned()));
+                    }
+                    assert_eq!(state.events, expected);
+                }
+            }
+        }
+    }
+    // Only nil inherits the pgtk empty-name rule; other non-strings stay
+    // invalid before admission, even when XRM is also invalid.
+    let mut eval = x_open_connection_test_context();
+    let state = install_x_open_connection_host(
+        &mut eval,
+        Some(GraphicalDisplayIdentity::named(GraphicalBackend::Wayland, "wayland-7").unwrap()),
     );
-    // The pgtk arm still rejects a non-nil non-string.
-    assert_x_open_connection_stringp(&mut eval, vec![Value::fixnum(42)], Value::fixnum(42));
+    let before = x_open_connection_registry_counts(&eval);
+    for invalid in [Value::fixnum(42), Value::symbol("not-a-string")] {
+        assert_x_open_connection_stringp(&mut eval, vec![invalid, Value::fixnum(43)], invalid);
+        assert_eq!(x_open_connection_registry_counts(&eval), before);
+    }
+    let state = state.lock().unwrap();
+    assert!(state.events.is_empty());
+    assert_eq!(state.resources, "original resources");
+}
+
+#[test]
+fn x_open_connection_neo_default_requires_an_owned_host_before_mutation() {
+    crate::test_utils::init_test_tracing();
+    for nil_display in [true, false] {
+        for unavailable_host in [false, true] {
+            for must_succeed in [Value::NIL, Value::T] {
+                let mut eval = x_open_connection_test_context();
+                let state =
+                    unavailable_host.then(|| install_x_open_connection_host(&mut eval, None));
+                let before = x_open_connection_registry_counts(&eval);
+                let display = if nil_display {
+                    Value::NIL
+                } else {
+                    Value::string("")
+                };
+                assert_x_open_connection_error(
+                    &mut eval,
+                    vec![display, Value::string("unadmitted resources"), must_succeed],
+                    "Display  can’t be opened",
+                );
+                assert_eq!(x_open_connection_registry_counts(&eval), before);
+                if let Some(state) = state {
+                    let state = state.lock().unwrap();
+                    assert_eq!(state.resources, "original resources");
+                    assert_eq!(state.events, [XOpenConnectionHostEvent::Admission(None)]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn x_open_connection_x11_empty_name_is_not_host_default() {
+    crate::test_utils::init_test_tracing();
+    for must_succeed in [Value::NIL, Value::T] {
+        let mut eval = x_open_connection_test_context();
+        eval.set_variable("initial-window-system", Value::symbol("x"));
+        let state = install_x_open_connection_host(
+            &mut eval,
+            Some(GraphicalDisplayIdentity::named(GraphicalBackend::X11, ":42").unwrap()),
+        );
+        let before = x_open_connection_registry_counts(&eval);
+        assert_x_open_connection_error(
+            &mut eval,
+            vec![
+                Value::string(""),
+                Value::string("unadmitted resources"),
+                must_succeed,
+            ],
+            "Display  can’t be opened",
+        );
+        assert_eq!(x_open_connection_registry_counts(&eval), before);
+        let state = state.lock().unwrap();
+        assert_eq!(state.resources, "original resources");
+        assert_eq!(
+            state.events,
+            [XOpenConnectionHostEvent::Admission(Some(String::new()))]
+        );
+    }
 }
 
 // Daemon identity is host-owned. These fixtures exercise only the unit host
@@ -1410,6 +1517,35 @@ fn x_open_connection_daemon_terminal_state(
         window_system: eval
             .eval_symbol_by_id(neovm_value::intern::intern("window-system"))
             .ok(),
+    }
+}
+
+#[test]
+fn x_open_connection_daemon_empty_name_is_not_host_default() {
+    crate::test_utils::init_test_tracing();
+    for must_succeed in [Value::NIL, Value::T] {
+        let mut eval = x_open_connection_daemon_test_context();
+        let state = install_x_open_connection_host(
+            &mut eval,
+            Some(GraphicalDisplayIdentity::named(GraphicalBackend::X11, ":42").unwrap()),
+        );
+        let before = x_open_connection_daemon_terminal_state(&mut eval);
+        assert_x_open_connection_error(
+            &mut eval,
+            vec![
+                Value::string(""),
+                Value::string("unadmitted daemon resources"),
+                must_succeed,
+            ],
+            "Display  can’t be opened",
+        );
+        assert_eq!(x_open_connection_daemon_terminal_state(&mut eval), before);
+        let state = state.lock().unwrap();
+        assert_eq!(state.resources, "original resources");
+        assert_eq!(
+            state.events,
+            [XOpenConnectionHostEvent::Admission(Some(String::new()))]
+        );
     }
 }
 
