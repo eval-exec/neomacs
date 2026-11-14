@@ -2009,6 +2009,45 @@ impl LayoutEngine {
             None => {}
         }
 
+        if matches!(default_geometry, Some(FrameCellGeometry::Graphic(_)))
+            && let Some(service) = self.font_metrics.as_mut()
+        {
+            use neovm_core::face::BasicFace;
+            use strum::IntoEnumIterator;
+
+            let default_face = face_resolver.default_face();
+            if service
+                .resolved_font_for_face(
+                    &default_face.font_family,
+                    default_face.font_weight,
+                    default_face.italic,
+                    default_face.font_size,
+                )
+                .is_some()
+            {
+                // GNU xfaces.c:5950 realizes every basic GUI face after the
+                // default font opens, including hidden chrome, before desired
+                // matrices use the minimum. Bypass buffer face remapping.
+                let table = evaluator.face_table();
+                let default =
+                    table.resolve_fixed_symbol(&neovm_core::emacs_core::intern::WellKnown::Default);
+                for basic in BasicFace::iter().filter(|basic| !matches!(basic, BasicFace::Default))
+                {
+                    // Merge relative point heights before pixel conversion, as
+                    // GNU merge_face_heights does; opened default pixels may
+                    // have already rounded to a different size.
+                    let attributes = default.merge(&table.resolve(basic.name()));
+                    let face = face_resolver.realize_face(&attributes);
+                    let _ = service.resolved_font_for_face(
+                        &face.font_family,
+                        face.font_weight,
+                        face.italic,
+                        face.font_size,
+                    );
+                }
+            }
+        }
+
         PreparedFrameFonts {
             resolver: face_resolver,
             default_metrics,
