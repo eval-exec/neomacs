@@ -33,7 +33,9 @@ fn insert_buffer_substring_copies_bytes_and_properties_without_access_hooks() {
                                 (with-current-buffer source
                                   (string-to-list (buffer-substring-no-properties 1 4))))))))
                 (kill-buffer source)))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[
+            r#""OK ((65 955 90) (65 206 187 90) t ((oracle-copy source) (face bold oracle-copy source) (oracle-copy source)) t (65 955 90))""#
+        ]],
     );
 }
 
@@ -64,7 +66,9 @@ fn replace_region_contents_buffer_slice_copies_bytes_and_properties_without_acce
                               (with-current-buffer source
                                 (string-to-list (buffer-substring-no-properties 1 6)))))))
                 (kill-buffer source)))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[
+            r#""OK ((65 955 90) (65 206 187 90) t ((oracle-copy source) (face bold oracle-copy source) (oracle-copy source)) 0 (120 65 955 90 121))""#
+        ]],
     );
 }
 
@@ -93,6 +97,8 @@ fn set_buffer_multibyte_roundtrip_preserves_bytes_and_remaps_properties_without_
                                 (multibyte-string-p text)
                                 (mapcar (lambda (pos) (text-properties-at pos)) '(1 2 3)))
                           calls)))))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[
+            r#""OK (((65 206 187 90) (65 206 187 90) nil ((oracle-copy source) (face bold oracle-copy source) (face bold oracle-copy source) (oracle-copy source))) ((65 955 90) (65 206 187 90) t ((oracle-copy source) (face bold oracle-copy source) (oracle-copy source))) 0)""#
+        ]],
     );
 }
