@@ -889,6 +889,11 @@ jobs:
       - *unpack_test_runtime
       - *download_workspace_test_archive
 
+      # The archive binaries read the live remapped workspace, not the
+      # --extract-to tree. Prepare the pinned image without compiling Rust.
+      - name: Prepare pinned image fixtures
+        run: python3 scripts/ci/prefetch-image-fixtures.py --workspace "$GITHUB_WORKSPACE"
+
       - name: Run display stack tests
         run: |
           cargo nextest run \

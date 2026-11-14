@@ -29,3 +29,19 @@ existing fetch-on-miss behavior.
 `cargo xtask image-fixtures` accepts no arguments. The existing
 `cargo xtask infra` / `cargo run -p neomacs-infra` CLI keeps selecting `infra`
 through the package's `default-run` setting.
+
+Archive runners can prepare the same Rust-declared pin without building a
+Rust executable:
+
+```sh
+python3 scripts/ci/prefetch-image-fixtures.py --workspace "$GITHUB_WORKSPACE"
+```
+
+Run this before archive nextest and use that same directory for
+`--workspace-remap`. The display CI job does this explicitly. Its archive
+`--extract-to "$TMPDIR/nextest"` directory contains binaries, and is not the
+fixture cache root. The Python provisioner reads the ordinary literal pin
+constants from `crates/neomacs-infra/src/image_fixtures.rs`; it has no copy
+of the URL or digest. It verifies hits, repairs missing/corrupt entries by
+hash-checking before an atomic replacement, and bounds download size and
+I/O time. Tests remain cache-only.
