@@ -599,15 +599,14 @@ mod tests {
 
     #[test]
     fn native_error_string_argument_is_literal_under_all_quoting_styles() {
-        let mut eval = crate::test_utils::new_context();
+        let mut eval = Context::new(crate::test_utils::unit_harness());
         let argument = "literal`' %s\0tail";
         for (style, open, close) in [
             ("curve", "‘", "’"),
             ("straight", "'", "'"),
             ("grave", "`", "'"),
         ] {
-            eval.obarray_mut()
-                .set_symbol_value("text-quoting-style", Value::symbol(style));
+            eval.set_variable("text-quoting-style", Value::symbol(style));
             let flow = EditHost::signal_c_error(
                 &eval,
                 CErrorMessage::with_string_arg("Buffer name `%s' is in use", argument),
@@ -628,9 +627,8 @@ mod tests {
 
     #[test]
     fn native_error_without_argument_keeps_literal_percent_placeholder() {
-        let mut eval = crate::test_utils::new_context();
-        eval.obarray_mut()
-            .set_symbol_value("text-quoting-style", Value::symbol("curve"));
+        let mut eval = Context::new(crate::test_utils::unit_harness());
+        eval.set_variable("text-quoting-style", Value::symbol("curve"));
         let flow = EditHost::signal_c_error(&eval, CErrorMessage::from("Literal `%s'"));
         let FlowKind::Signal(signal) = flow.into_kind() else {
             panic!("native error must signal");
