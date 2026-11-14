@@ -40,6 +40,9 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     }
 
     assert_core_identity_matches_canonical_descriptor(&mut eval);
+    assert_core_base64_encode_string_matches_canonical_descriptor(&mut eval);
+    assert_core_bobp_matches_canonical_descriptor(&mut eval);
+    assert_core_buffer_line_statistics_matches_canonical_descriptor(&mut eval);
     assert_core_classification_matches_canonical_descriptors(&mut eval);
     assert_core_completions_match_canonical_descriptors(&mut eval);
     assert_core_reverse_matches_canonical_descriptor(&mut eval);
@@ -55,9 +58,6 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_set_char_table_range_matches_canonical_descriptor(&mut eval);
     assert_core_set_syntax_table_matches_canonical_descriptor(&mut eval);
     assert_core_copy_syntax_table_matches_canonical_descriptor(&mut eval);
-    assert_core_base64_encode_string_matches_canonical_descriptor(&mut eval);
-    assert_core_bobp_matches_canonical_descriptor(&mut eval);
-    assert_core_buffer_line_statistics_matches_canonical_descriptor(&mut eval);
 }
 
 fn assert_core_identity_matches_canonical_descriptor(context: &mut Context) {
