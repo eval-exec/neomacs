@@ -982,7 +982,8 @@ pub fn delete_file(filename: &str) -> std::io::Result<()> {
 /// Windows needs an explicit policy boundary because Rust's standard-library
 /// deletion intentionally bypasses the read-only attribute, whereas GNU
 /// clears that attribute first and exposes the change to file notifications.
-fn unlink_file_path(path: &Path) -> std::io::Result<()> {
+#[doc(hidden)]
+pub fn unlink_file_path(path: &Path) -> std::io::Result<()> {
     std::cfg_select! {
         windows => crate::emacs_core::w32::filesystem::unlink(path),
         _ => fs::remove_file(path),

@@ -304,6 +304,7 @@ impl Context {
         // a later deliberate kill repeats both operations. The deliberate
         // auto-save-list unlink belongs after this walk, never before it.
         self.unlock_all_files_for_shutdown()?;
+        self.unlink_auto_save_list_for_deliberate_exit()?;
         self.log_cconv_memo_report();
         self.log_tier_i_report();
         self.shutdown_request = Some(request);
@@ -353,6 +354,55 @@ impl Context {
                 result?;
             }
         }
+        Ok(())
+    }
+
+    /// GNU Fkill_emacs's deliberate-exit postlude (emacs.c:3033-3037).
+    /// Called only after canonical auto-save and unlock cleanup succeed.
+    #[cold]
+    fn unlink_auto_save_list_for_deliberate_exit(&mut self) -> Result<(), Flow> {
+        let filename = self
+            .special_variable_value_by_id(neovm_value::intern::WellKnown::AutoSaveListFileName.id())
+            .unwrap_or(Value::NIL);
+        if self.lisp_string(filename).is_none() {
+            return Ok(());
+        }
+        // Expand through the canonical handler-aware primitive, independent
+        // of its Lisp function cell. Handler escapes must leave before unlink.
+        // The direct host entry has no evaluator argument frame. Root the
+        // original string, including interval Values, across recursive
+        // expansion and arbitrary file-name handlers; restore on every Flow.
+        let roots = self.save_specpdl_roots();
+        self.push_specpdl_root(filename);
+        let expanded_result =
+            super::lifecycle::expand_file_name_entry(self, vec![filename, Value::NIL]);
+        self.restore_specpdl_roots(roots);
+        let expanded = expanded_result?;
+        let expanded_string = self.expect_lisp_string(expanded)?;
+        // Fexpand_file_name rejects NUL in its input, but accepts any string
+        // returned by a handler (fileio.c:1049-1060). Fkill_emacs then passes
+        // SSDATA to emacs_unlink (emacs.c:3036-3037), so only that returned
+        // string's prefix before the first NUL reaches the native syscall.
+        // Keep this conversion at the cold postlude boundary; do not change
+        // the shared unlink helper or weaken expansion's input validation.
+        let c_prefix = expanded_string
+            .as_bytes()
+            .iter()
+            .position(|byte| *byte == 0)
+            .map(|end| {
+                let bytes = expanded_string.as_bytes()[..end].to_vec();
+                if expanded_string.is_multibyte() {
+                    neovm_value::heap_types::LispString::from_emacs_bytes(bytes)
+                } else {
+                    neovm_value::heap_types::LispString::from_unibyte(bytes)
+                }
+            });
+        let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(
+            c_prefix.as_ref().unwrap_or(expanded_string),
+        );
+        // GNU ignores emacs_unlink's return value. This native seam must not
+        // consult delete-file's function cell or a delete-file handler.
+        let _ = super::lifecycle::unlink_file_path(&path);
         Ok(())
     }
 

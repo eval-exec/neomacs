@@ -399,6 +399,10 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER system::fileio.unlock_file");
             }
 
+            pub(crate) fn fileio_unlink_file_path(path: &std::path::Path) -> std::io::Result<()> {
+                absent_layer_panic("ABSENT-LAYER system::fileio.unlink_file_path");
+            }
+
             pub(crate) fn terminal_handle_value() -> Value {
                 absent_layer_panic("ABSENT-LAYER display::terminal.handle_value");
             }

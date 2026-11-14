@@ -572,6 +572,7 @@ mod unit_runtime {
             s::fileio_dispatch_file_handler,
             s::fileio_lock_file,
             s::fileio_unlock_file,
+            s::fileio_unlink_file_path,
         ),
         TerminalHooks::new(
             s::terminal_handle_value,

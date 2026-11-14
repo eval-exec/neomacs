@@ -15,6 +15,7 @@ use crate::common::{self, OracleMode, oracle_sandbox::OracleSandbox};
 use neomacs_test_env::bounded_temp_dir;
 use std::ffi::OsString;
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::process::ExitStatusExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -50,6 +51,7 @@ enum EditorMode {
 enum Probe {
     Unlock,
     AutoSaveList,
+    ListPostlude(&'static str),
     Sentinels,
     HookOrder,
     HookError,
@@ -72,8 +74,10 @@ enum Probe {
 #[derive(Debug, PartialEq, Eq)]
 struct Observation {
     exit: Option<i32>,
+    signal: Option<i32>,
     artifact_before: Option<bool>,
     artifact_after: Option<bool>,
+    secondary_after: Option<bool>,
     events: Vec<String>,
     #[cfg(target_os = "linux")]
     native_child: Option<NativeObservation>,
@@ -117,6 +121,7 @@ impl Probe {
     fn script(self) -> &'static str {
         match self {
             Self::Unlock => include_str!("fixtures/kill_emacs_shutdown/lock-release.el"),
+            Self::ListPostlude(_) => include_str!("fixtures/kill_emacs_shutdown/list-postlude.el"),
             Self::UnlockMutation(_) => {
                 include_str!("fixtures/kill_emacs_shutdown/unlock-mutation.el")
             }
@@ -174,14 +179,110 @@ impl Probe {
             self,
             Self::Unlock
                 | Self::AutoSaveList
+                | Self::ListPostlude(_)
                 | Self::DaemonUnixListener
                 | Self::UnlockMutation("unlock-throw" | "post-dying-state")
         )
     }
 
+    fn signal(self) -> Option<i32> {
+        match self {
+            Self::ListPostlude("signal-term") => Some(libc::SIGTERM),
+            Self::ListPostlude("signal-abort") => Some(libc::SIGABRT),
+            _ => None,
+        }
+    }
+
+    fn secondary_path(self, root: &Path) -> Option<PathBuf> {
+        match self {
+            Self::ListPostlude("unintern-nil" | "unintern-decoy") => {
+                Some(root.join("replacement-list"))
+            }
+            Self::ListPostlude("postlude-missing") => Some(root.join("missing-list")),
+            Self::ListPostlude("postlude-directory") => Some(root.join("list-directory")),
+            _ => None,
+        }
+    }
+
     fn expected(self) -> Observation {
         let events: &[&str] = match self {
             Self::Unlock | Self::AutoSaveList => &[],
+            Self::ListPostlude(kind) => match kind {
+                "postlude-raw-bypass" => &[
+                    "delete-file-handler",
+                    "delete-handler-control-caught",
+                    "delete-function-cell",
+                    "delete-function-control-caught",
+                    "ready",
+                    "save-set-list",
+                ],
+                "postlude-expand-function-cell" => &["expand-function-control-caught", "ready"],
+                "postlude-input-nul" => &[
+                    "input-nul-control-filenamep",
+                    "ready",
+                    "save-set-list",
+                    "postlude-input-nul-caught:filenamep",
+                    "second-kill",
+                ],
+                "postlude-expand-nul" => &[
+                    "expand-handler",
+                    "expand-nul-control-exact=t:suffix-bytes=(0 115 117 102 102 105 120)",
+                    "ready",
+                    "save-set-list",
+                    "expand-handler",
+                ],
+                "postlude-expand-handler" => &[
+                    "expand-handler",
+                    "expand-control-ok",
+                    "ready",
+                    "save-set-list",
+                    "expand-handler",
+                ],
+                "postlude-expand-escape" => &[
+                    "expand-handler",
+                    "expand-control-ok",
+                    "ready",
+                    "save-set-list",
+                    "expand-handler",
+                    "escaped:expanded-escape",
+                    "second-kill",
+                ],
+                "postlude-missing" => &[
+                    "expand-handler",
+                    "expand-control-ok",
+                    "ready",
+                    "save-set-list",
+                    "expand-handler",
+                ],
+                "postlude-directory" => &[
+                    "expand-handler",
+                    "expand-control-ok",
+                    "ready",
+                    "save-set-list",
+                    "expand-handler",
+                ],
+                "save-escape" => &[
+                    "ready",
+                    "save-escape",
+                    "escaped:saved-escape",
+                    "second-kill",
+                ],
+                "nonstr-nil" => &["ready"],
+                "nonstr-t" => &["ready"],
+                "nonstr-int" => &["ready"],
+                "nonstr-cons" => &["ready"],
+                "unintern-nil" => &[
+                    "identity:distinct=t:original-preserved=t:replacement=nil",
+                    "ready",
+                ],
+                "unintern-decoy" => &[
+                    "identity:distinct=t:original-preserved=t:replacement=decoy",
+                    "ready",
+                ],
+                "signal-term" => &["ready"],
+                "signal-abort" => &["ready"],
+                _ => panic!("unknown list-postlude case: {kind}"),
+            },
             Self::UnlockMutation(kind) => match kind {
                 "append" => &["unlock:a", "unlock:b", "unlock:c"],
                 "rename-later" => &["unlock:a", "unlock:b-renamed"],
@@ -359,11 +460,37 @@ impl Probe {
             ],
         };
         Observation {
-            exit: Some(0),
+            exit: match self {
+                Self::ListPostlude("signal-term") => Some(libc::SIGTERM),
+                Self::ListPostlude("signal-abort") => None,
+                _ => Some(0),
+            },
+            signal: matches!(self, Self::ListPostlude("signal-abort")).then_some(libc::SIGABRT),
             artifact_before: self.checkpoint().then_some(true),
-            artifact_after: self
-                .checkpoint()
-                .then_some(matches!(self, Self::DaemonUnixListener)),
+            artifact_after: match self {
+                Self::ListPostlude(
+                    "postlude-expand-escape"
+                    | "postlude-input-nul"
+                    | "postlude-missing"
+                    | "postlude-directory"
+                    | "save-escape"
+                    | "nonstr-nil"
+                    | "nonstr-t"
+                    | "nonstr-int"
+                    | "nonstr-cons"
+                    | "signal-abort",
+                ) => Some(true),
+                _ => self
+                    .checkpoint()
+                    .then_some(matches!(self, Self::DaemonUnixListener)),
+            },
+            secondary_after: match self {
+                Self::ListPostlude("postlude-directory" | "unintern-nil" | "unintern-decoy") => {
+                    Some(true)
+                }
+                Self::ListPostlude("postlude-missing") => Some(false),
+                _ => None,
+            },
             events: events.iter().map(|s| (*s).into()).collect(),
             #[cfg(target_os = "linux")]
             native_child: match self {
@@ -473,9 +600,21 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
     fs::write(&target, "initial saved content\n").unwrap();
     if matches!(
         probe,
-        Probe::AutoSaveList | Probe::UnlockMutation("unlock-throw" | "post-dying-state")
+        Probe::AutoSaveList
+            | Probe::ListPostlude(_)
+            | Probe::UnlockMutation("unlock-throw" | "post-dying-state")
     ) {
         fs::write(&artifact, "preexisting auto-save session list\n").unwrap();
+    }
+    let secondary = probe.secondary_path(root);
+    match probe {
+        Probe::ListPostlude("unintern-nil" | "unintern-decoy") => {
+            fs::write(secondary.as_ref().unwrap(), "native decoy must survive\n").unwrap();
+        }
+        Probe::ListPostlude("postlude-directory") => {
+            fs::create_dir(secondary.as_ref().unwrap()).unwrap();
+        }
+        _ => {}
     }
     let script = root.join("probe.el");
     fs::write(&script, probe.script()).unwrap();
@@ -500,7 +639,18 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
         &common::oracle_sandbox::project_root().join("lisp"),
     )
     .unwrap();
-    let mut command = sandbox.pinned_command(binary);
+    let mut command = if probe.signal().is_some() {
+        // PinnedCommand intentionally has no pre_exec escape hatch. The fixed
+        // child-only shell wrapper disables core files and execs this exact
+        // editor argv, preserving the owned Child PID and final signal status.
+        let mut command = sandbox.pinned_command("sh");
+        command
+            .args(["-c", "ulimit -c 0 && exec \"$@\"", "shutdown-signal"])
+            .arg(binary);
+        command
+    } else {
+        sandbox.pinned_command(binary)
+    };
     sandbox.configure(&mut command);
     match editor_mode {
         EditorMode::Batch => {
@@ -531,6 +681,7 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
         .arg(&script)
         .env("SHUTDOWN_TARGET", &target)
         .env("SHUTDOWN_ARTIFACT", &artifact)
+        .env("SHUTDOWN_SECONDARY", secondary.as_deref().unwrap_or(root))
         .env("SHUTDOWN_READY", root.join("ready"))
         .env("SHUTDOWN_GO", root.join("go"))
         .env("SHUTDOWN_LOG", root.join("events.log"))
@@ -559,6 +710,9 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
     }
     if let Probe::KillBufferUnlock(kind) = probe {
         command.env("KILL_BUFFER_UNLOCK_CASE", kind);
+    }
+    if let Probe::ListPostlude(kind) = probe {
+        command.env("SHUTDOWN_LIST_ROW", kind);
     }
     if let Probe::UnlockMutation(kind) = probe {
         command.env("SHUTDOWN_UNLOCK_CASE", kind);
@@ -594,7 +748,18 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
                     .is_symlink()
             );
         }
-        fs::write(root.join("go"), "go\n").unwrap();
+        if let Some(signal) = probe.signal() {
+            let pid: libc::pid_t = editor
+                .child
+                .id()
+                .try_into()
+                .expect("owned child PID fits pid_t");
+            // SAFETY: Child is owned here and has not been reaped, so its PID
+            // cannot be reused for a different process before this kill call.
+            assert_eq!(unsafe { libc::kill(pid, signal) }, 0);
+        } else {
+            fs::write(root.join("go"), "go\n").unwrap();
+        }
         Some(exists)
     } else {
         None
@@ -636,12 +801,16 @@ fn observe(probe: Probe, binary: &Path) -> Observation {
     };
     let result = Observation {
         exit: status.code(),
+        signal: status.signal(),
         artifact_before: before,
         artifact_after: probe.checkpoint().then(|| {
             fs::symlink_metadata(&artifact).is_ok_and(|metadata| {
                 !matches!(probe, Probe::DaemonUnixListener) || metadata.file_type().is_socket()
             })
         }),
+        secondary_after: secondary
+            .as_ref()
+            .map(|path| fs::symlink_metadata(path).is_ok()),
         events,
         #[cfg(target_os = "linux")]
         native_child,
@@ -914,4 +1083,89 @@ fn shutdown_unlock_unlock_throw() {
 #[test]
 fn shutdown_unlock_post_dying_state() {
     assert_shutdown_parity(Probe::UnlockMutation("post-dying-state"));
+}
+
+#[test]
+fn shutdown_list_postlude_postlude_raw_bypass() {
+    assert_shutdown_parity(Probe::ListPostlude("postlude-raw-bypass"));
+}
+
+#[test]
+fn shutdown_list_postlude_postlude_expand_function_cell() {
+    assert_shutdown_parity(Probe::ListPostlude("postlude-expand-function-cell"));
+}
+
+#[test]
+fn shutdown_list_postlude_postlude_expand_handler() {
+    assert_shutdown_parity(Probe::ListPostlude("postlude-expand-handler"));
+}
+
+#[test]
+fn shutdown_list_postlude_postlude_expand_escape() {
+    assert_shutdown_parity(Probe::ListPostlude("postlude-expand-escape"));
+}
+
+#[test]
+fn shutdown_list_postlude_postlude_missing() {
+    assert_shutdown_parity(Probe::ListPostlude("postlude-missing"));
+}
+
+#[test]
+fn shutdown_list_postlude_postlude_directory() {
+    assert_shutdown_parity(Probe::ListPostlude("postlude-directory"));
+}
+
+#[test]
+fn shutdown_list_postlude_save_escape() {
+    assert_shutdown_parity(Probe::ListPostlude("save-escape"));
+}
+
+#[test]
+fn shutdown_list_postlude_nonstr_nil() {
+    assert_shutdown_parity(Probe::ListPostlude("nonstr-nil"));
+}
+
+#[test]
+fn shutdown_list_postlude_nonstr_t() {
+    assert_shutdown_parity(Probe::ListPostlude("nonstr-t"));
+}
+
+#[test]
+fn shutdown_list_postlude_nonstr_int() {
+    assert_shutdown_parity(Probe::ListPostlude("nonstr-int"));
+}
+
+#[test]
+fn shutdown_list_postlude_nonstr_cons() {
+    assert_shutdown_parity(Probe::ListPostlude("nonstr-cons"));
+}
+
+#[test]
+fn shutdown_list_postlude_unintern_nil() {
+    assert_shutdown_parity(Probe::ListPostlude("unintern-nil"));
+}
+
+#[test]
+fn shutdown_list_postlude_unintern_decoy() {
+    assert_shutdown_parity(Probe::ListPostlude("unintern-decoy"));
+}
+
+#[test]
+fn shutdown_list_postlude_signal_term() {
+    assert_shutdown_parity(Probe::ListPostlude("signal-term"));
+}
+
+#[test]
+fn shutdown_list_postlude_signal_abort() {
+    assert_shutdown_parity(Probe::ListPostlude("signal-abort"));
+}
+
+#[test]
+fn shutdown_list_postlude_expand_handler_result_nul_uses_c_string_prefix() {
+    assert_shutdown_parity(Probe::ListPostlude("postlude-expand-nul"));
+}
+
+#[test]
+fn shutdown_list_postlude_input_nul_rejects_before_handler_and_preserves_list() {
+    assert_shutdown_parity(Probe::ListPostlude("postlude-input-nul"));
 }

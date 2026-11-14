@@ -183,6 +183,7 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::emacs_core::fileio::dispatch_file_handler,
         crate::emacs_core::filelock::lock_file,
         crate::emacs_core::filelock::unlock_file,
+        crate::emacs_core::fileio::unlink_file_path,
     ),
     TerminalHooks::new(
         crate::emacs_core::terminal::pure::terminal_handle_value,

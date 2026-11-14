@@ -577,4 +577,8 @@ well_known_table! {
 
     // emacs.c:3484: interactive shutdown calls the original function symbol.
     RunHookQueryErrorWithTimeout = "run-hook-query-error-with-timeout",
+
+    // GNU Vauto_save_list_file_name retains its original DEFVAR identity.
+    // Append only: unintern/reintern must not retarget this native role.
+    AutoSaveListFileName = "auto-save-list-file-name",
 }

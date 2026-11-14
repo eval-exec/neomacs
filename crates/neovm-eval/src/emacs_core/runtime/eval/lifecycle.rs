@@ -37,7 +37,7 @@ use neovm_value::error::{EvalResult, Flow};
 use neovm_value::heap_types::LispString;
 use neovm_value::{HookInstallError, HookInstallStatus};
 use std::any::Any;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// Produce a placeholder for the World's carried thread-local state.
@@ -205,6 +205,7 @@ pub struct FileIoHooks {
     dispatch_file_handler: fn(&mut Context, &str, &[Value]) -> Result<Option<Value>, Flow>,
     lock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
     unlock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
+    unlink_file_path: fn(&Path) -> std::io::Result<()>,
 }
 
 impl FileIoHooks {
@@ -214,12 +215,14 @@ impl FileIoHooks {
         dispatch_file_handler: fn(&mut Context, &str, &[Value]) -> Result<Option<Value>, Flow>,
         lock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
         unlock_file: fn(&mut Context, &LispString) -> Result<Value, Flow>,
+        unlink_file_path: fn(&Path) -> std::io::Result<()>,
     ) -> Self {
         Self {
             expand_file_name_entry,
             dispatch_file_handler,
             lock_file,
             unlock_file,
+            unlink_file_path,
         }
     }
 }
@@ -1128,6 +1131,12 @@ pub fn lock_file(ctx: &mut Context, filename: &LispString) -> Result<Value, Flow
 /// Handler-aware `unlock-file` (EditHost seam).
 pub fn unlock_file(ctx: &mut Context, filename: &LispString) -> Result<Value, Flow> {
     (lifecycle_hooks().fileio().unlock_file())(ctx, filename)
+}
+
+/// Native unlink, without Lisp delete-file dispatch or file-name handlers.
+#[cold]
+pub(crate) fn unlink_file_path(path: &Path) -> std::io::Result<()> {
+    (lifecycle_hooks().fileio().unlink_file_path)(path)
 }
 
 /// The current terminal's Lisp handle value.
