@@ -56,5 +56,10 @@ fn real_json_node_keeps_type_and_parser_through_gc_and_deletion() {
     // Compare the error's predicate, exact data arity and offending-object
     // identity without serializing the native parser inside the fake record.
     // Placeholder only: GNU refresh must generate the expectation.
-    common::assert_oracle_parity_expect(&form, expect_test::expect![[""]]);
+    common::assert_oracle_parity_expect(
+        &form,
+        expect_test::expect![[
+            r#""OK (((t t nil treesit-node) \"document\" 1 18) (t t nil treesit-node) (t t nil treesit-node) (t t nil treesit-node) (t nil (wrong-type-argument treesit-node-p 2 t)))""#
+        ]],
+    );
 }

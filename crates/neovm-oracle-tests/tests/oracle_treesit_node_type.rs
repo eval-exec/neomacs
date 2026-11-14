@@ -24,6 +24,8 @@ fn treesit_node_parser_rejects_forged_record_objects() {
         (record 'not-a-node 11 'sentinel)
         (record 'treesit-node)
         (record 'treesit-node 11 'sentinel)))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[
+            r#""OK ((nil (error-symbol wrong-type-argument error-data (treesit-node-p nil))) (nil (error-symbol wrong-type-argument error-data (treesit-node-p 7))) (nil (error-symbol wrong-type-argument error-data (treesit-node-p \"not-a-node\"))) (nil (error-symbol wrong-type-argument error-data (treesit-node-p [treesit-node 11 sentinel]))) (nil (error-symbol wrong-type-argument error-data (treesit-node-p #s(not-a-node)))) (nil (error-symbol wrong-type-argument error-data (treesit-node-p #s(not-a-node 11)))) (nil (error-symbol wrong-type-argument error-data (treesit-node-p #s(not-a-node 11 sentinel)))) (nil (error-symbol wrong-type-argument error-data (treesit-node-p #s(treesit-node)))) (nil (error-symbol wrong-type-argument error-data (treesit-node-p #s(treesit-node 11 sentinel)))))""#
+        ]],
     );
 }
