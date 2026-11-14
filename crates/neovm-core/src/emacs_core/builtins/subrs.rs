@@ -3622,11 +3622,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(2, Some(2)),
     )));
 
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "subrp",
-        NativeFn::ContextSlice(|_ctx, args| crate::emacs_core::builtins_extra::builtin_subrp(args)),
-        SubrArity::new(1, Some(1)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_pure::SUBRP_SUBR);
 
     // -----------------------------------------------------------------------
     // Additional native subr declarations.

@@ -12,6 +12,14 @@ pub static REVERSE_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpe
     SubrArity::new(1, Some(1)),
 ));
 
+/// Canonical production/unit descriptor; retain the original Core closure and metadata.
+#[doc(hidden)]
+pub static SUBRP_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "subrp",
+    NativeFn::ContextSlice(|_ctx, args| crate::emacs_core::builtins_extra::builtin_subrp(args)),
+    SubrArity::new(1, Some(1)),
+));
+
 // ===========================================================================
 // Misc
 // ===========================================================================

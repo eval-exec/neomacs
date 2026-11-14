@@ -2555,4 +2555,37 @@ mod provider_tests {
             (1, Some(1), "always")
         );
     }
+
+    #[test]
+    fn core_subrp_event_resolves_the_single_production_descriptor() {
+        const SUBRP_PROVIDER_CALL: &str = "neovm_eval::emacs_core::builtins::misc_pure::SUBRP_SUBR";
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = read(&root, CORE_MANIFEST).unwrap();
+        assert_eq!(
+            source
+                .matches(&format!("ctx.register_subr({SUBRP_PROVIDER_CALL});"))
+                .count(),
+            1
+        );
+        let (events, _) = manifest_events(&root).unwrap();
+        let direct: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Direct { spec, .. } => Some(spec),
+                _ => None,
+            })
+            .collect();
+        let index = direct.iter().position(|spec| spec.name == "subrp").unwrap();
+        assert_eq!(direct.iter().filter(|spec| spec.name == "subrp").count(), 1);
+        assert_eq!(direct[index - 1].name, "buffer-substring-no-properties");
+        assert_eq!(direct[index + 1].name, "*");
+        assert_eq!(
+            (
+                direct[index].min,
+                direct[index].max,
+                direct[index].cfg.as_str()
+            ),
+            (1, Some(1), "always")
+        );
+    }
 }
