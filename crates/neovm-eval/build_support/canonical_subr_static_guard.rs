@@ -445,25 +445,12 @@ fn production_sources(root: &Path) -> Result<Vec<String>, String> {
     out.dedup();
     Ok(out)
 }
-fn world_literal(expr: &syn::Expr) -> Result<syn::Expr, String> {
-    let syn::Expr::Macro(e) = expr else {
-        return Err(fail("static/factory must contain one world_subr! literal"));
-    };
-    if !e.attrs.is_empty()
-        || path(&e.mac.path)
-            != Some(vec![
-                "crate".into(),
-                "emacs_core".into(),
-                "subr".into(),
-                "world_subr".into(),
-            ])
-    {
-        return Err(fail("unsupported descriptor marker"));
-    }
-    syn::parse2(e.mac.tokens.clone()).map_err(|e| fail(format!("descriptor: {e}")))
-}
-
-fn factory_literal(function: &syn::ItemFn) -> Result<syn::Expr, String> {
+fn factory_literal(
+    root: &Path,
+    home_file: &str,
+    home_ast: &syn::File,
+    function: &syn::ItemFn,
+) -> Result<syn::Expr, String> {
     let s = &function.sig;
     if !matches!(function.vis, syn::Visibility::Inherited)
         || s.constness.is_none()
@@ -485,7 +472,7 @@ fn factory_literal(function: &syn::ItemFn) -> Result<syn::Expr, String> {
     let [syn::Stmt::Expr(tail, None)] = function.block.stmts.as_slice() else {
         return Err(fail("initializer factory must contain one tail expression"));
     };
-    world_literal(tail)
+    super::initializer_world_literal(root, home_file, home_ast, tail)
 }
 struct Unit<'a> {
     functions: BTreeMap<String, &'a syn::ItemFn>,
@@ -840,10 +827,13 @@ pub(super) fn validate_static_subr_sources(
                     "private initializer factory is used outside its one static initializer",
                 ));
             }
-            (factory_literal(function)?, Owner::Function(factory.clone()))
+            (
+                factory_literal(root, &home.file, &module.ast, function)?,
+                Owner::Function(factory.clone()),
+            )
         } else {
             (
-                world_literal(&declaration.expr)?,
+                super::initializer_world_literal(root, &home.file, &module.ast, &declaration.expr)?,
                 Owner::Static(home.static_ident.clone()),
             )
         };
@@ -992,6 +982,114 @@ mod tests {
         }
         dir
     }
+    #[test]
+    fn static_guard_accepts_metadata_chains_only_at_the_literal_home() {
+        for chain in [
+            ".requires_eval_state()",
+            ".requires_eval_state().interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String(\"p\",))",
+            ".placeholder(crate::emacs_core::subr::NoEvalPlaceholder::Nil)",
+            ".interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::Form(crate::emacs_core::builtins::misc_pure::interactive_form))",
+            ".leaf(&crate::emacs_core::builtins::leaves::SAMPLE_LEAF)",
+        ] {
+            let literal = MODULE.replace("Some(1))));", &format!("Some(1)))){chain};"));
+            let form = "\nfn interactive_form() -> neovm_value::value::Value { opaque_form() }";
+            let dir = fixture(&format!("{literal}{form}"), CORE_SOURCE, UNIT_SOURCE);
+            for (relative, source) in [
+                ("crates/neovm-eval/src/lib.rs", "pub mod emacs_core;"),
+                (
+                    "crates/neovm-eval/src/emacs_core/mod.rs",
+                    r#"#[path="runtime/eval/mod.rs"] pub mod eval; #[path="lisp/native/subr/mod.rs"] pub mod subr; #[path="lisp/native/builtins/mod.rs"] pub mod builtins;"#,
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs",
+                    "pub mod interactive_registry;",
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs",
+                    "use neovm_value::value::Value; pub enum BuiltinInteractiveSpec { String(&'static str), Form(fn() -> Value) }",
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs",
+                    "pub enum NoEvalPlaceholder { Nil, FixnumZero, WindowLineHeight } pub(crate) mod leaf;",
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs",
+                    "pub struct LeafSpec;",
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs",
+                    "pub mod misc_pure; pub mod leaves;",
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/lisp/native/builtins/leaves/mod.rs",
+                    "use crate::emacs_core::subr::leaf::LeafSpec; pub static SAMPLE_LEAF: LeafSpec = LeafSpec::new(opaque_effects());",
+                ),
+            ] {
+                let path = dir.path().join(relative);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, source).unwrap();
+            }
+            assert!(validate_static_subr_sources(dir.path(), &[home(None)]).is_ok());
+            let private = format!(
+                "pub static SAMPLE_SUBR: SubrSpec = make_spec(); const fn make_spec() -> SubrSpec {{ {} }}",
+                literal
+                    .split_once(" = ")
+                    .unwrap()
+                    .1
+                    .trim()
+                    .trim_end_matches(';')
+            );
+            std::fs::write(
+                dir.path().join(format!("{BUILTINS}/misc_pure.rs")),
+                format!("{private}{form}"),
+            )
+            .unwrap();
+            assert!(validate_static_subr_sources(dir.path(), &[home(Some("make_spec"))]).is_ok());
+        }
+    }
+
+    #[test]
+    fn static_guard_rejects_metadata_recomputation_and_copy_builders() {
+        for chain in [
+            ".unknown_metadata()",
+            ".requires_eval_state(1)",
+            ".requires_eval_state::<u8>()",
+            ".interactive(build_interactive())",
+            ".placeholder(make_placeholder())",
+        ] {
+            let module = MODULE.replace("Some(1))));", &format!("Some(1)))){chain};"));
+            let dir = fixture(&module, CORE_SOURCE, UNIT_SOURCE);
+            assert!(
+                validate_static_subr_sources(dir.path(), &[home(None)]).is_err(),
+                "accepted {chain}"
+            );
+            let private = format!(
+                "pub static SAMPLE_SUBR: SubrSpec = make_spec(); const fn make_spec() -> SubrSpec {{ {} }}",
+                module
+                    .split_once(" = ")
+                    .unwrap()
+                    .1
+                    .trim()
+                    .trim_end_matches(';')
+            );
+            std::fs::write(dir.path().join(format!("{BUILTINS}/misc_pure.rs")), private).unwrap();
+            assert!(
+                validate_static_subr_sources(dir.path(), &[home(Some("make_spec"))]).is_err(),
+                "accepted private {chain}"
+            );
+        }
+        let module = MODULE.replace("Some(1))));", "Some(1)))).requires_eval_state();");
+        let core = CORE_SOURCE.replace("::SAMPLE_SUBR)", "::SAMPLE_SUBR.requires_eval_state())");
+        let dir = fixture(&module, &core, UNIT_SOURCE);
+        assert!(validate_static_subr_sources(dir.path(), &[home(None)]).is_err());
+        let unit = UNIT_SOURCE.replace("::SAMPLE_SUBR,", "::SAMPLE_SUBR.requires_eval_state(),");
+        let dir = fixture(&module, CORE_SOURCE, &unit);
+        assert!(validate_static_subr_sources(dir.path(), &[home(None)]).is_err());
+        let duplicate = format!("{module}\n{}", module.replace("SAMPLE_SUBR", "SECOND_SUBR"));
+        let dir = fixture(&duplicate, CORE_SOURCE, UNIT_SOURCE);
+        assert!(validate_static_subr_sources(dir.path(), &[home(None)]).is_err());
+    }
+
     #[test]
     fn static_guard_accepts_literal_home_and_transparent_unit_blocks() {
         let dir = fixture(

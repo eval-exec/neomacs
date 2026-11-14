@@ -234,6 +234,10 @@ pub struct PlanStep {
     pub marker: &'static str,
 }
 
+#[path = "canonical_subr_metadata_args.rs"]
+mod metadata_args;
+#[path = "canonical_subr_metadata_inventory.rs"]
+mod metadata_inventory;
 #[path = "canonical_subr_static_guard.rs"]
 mod static_guard;
 
@@ -974,7 +978,7 @@ fn static_spec(repo_root: &Path, expression: &syn::Expr) -> Result<ParsedSpec, S
         ));
     }
     let (initializer, initializer_factory) = match definition.expr.as_ref() {
-        syn::Expr::Macro(_) => (definition.expr.as_ref(), None),
+        syn::Expr::Macro(_) | syn::Expr::MethodCall(_) => (definition.expr.as_ref(), None),
         syn::Expr::Call(call) if call.attrs.is_empty() && call.args.is_empty() => {
             let syn::Expr::Path(function) = call.func.as_ref() else {
                 return Err("static factory must be a same-file private const function".to_owned());
@@ -1040,19 +1044,7 @@ fn static_spec(repo_root: &Path, expression: &syn::Expr) -> Result<ParsedSpec, S
             );
         }
     };
-    let syn::Expr::Macro(world) = initializer else {
-        return Err("static initializer requires one world literal".to_owned());
-    };
-    if !world.attrs.is_empty()
-        || !path_is(
-            &world.mac.path,
-            &["crate", "emacs_core", "subr", "world_subr"],
-        )
-    {
-        return Err("unsupported static descriptor macro".to_owned());
-    }
-    let literal = syn::parse2(world.mac.tokens.clone())
-        .map_err(|error| format!("static descriptor: {error}"))?;
+    let literal = initializer_world_literal(repo_root, &relative, &file, initializer)?;
     let mut spec = literal_spec(&literal, &static_ident)?;
     spec.static_home = Some(StaticHome {
         module: module_name,
@@ -1065,6 +1057,48 @@ fn static_spec(repo_root: &Path, expression: &syn::Expr) -> Result<ParsedSpec, S
         cfg: spec.cfg.clone(),
     });
     Ok(spec)
+}
+
+/// Metadata builders are permitted only at the single descriptor's source
+/// initializer, never on a Core or unit copy of its canonical static.
+fn initializer_world_literal(
+    root: &Path,
+    home_file: &str,
+    home_ast: &syn::File,
+    expr: &syn::Expr,
+) -> Result<syn::Expr, String> {
+    let mut receiver = expr;
+    while let syn::Expr::MethodCall(method) = receiver {
+        let builder = method.method.to_string();
+        if !method.attrs.is_empty()
+            || method.turbofish.is_some()
+            || !matches!(
+                builder.as_str(),
+                "requires_eval_state" | "interactive" | "placeholder" | "disabled_command" | "leaf"
+            )
+        {
+            return Err("unsupported static descriptor metadata builder".to_owned());
+        }
+        metadata_args::validate(root, home_file, home_ast, &builder, &method.args)?;
+        receiver = &method.receiver;
+    }
+    let syn::Expr::Macro(world) = receiver else {
+        return Err("static initializer requires one world literal".to_owned());
+    };
+    if !world.attrs.is_empty()
+        || !path_is(
+            &world.mac.path,
+            &["crate", "emacs_core", "subr", "world_subr"],
+        )
+    {
+        return Err("unsupported static descriptor macro".to_owned());
+    }
+    let literal = syn::parse2(world.mac.tokens.clone())
+        .map_err(|error| format!("static descriptor: {error}"))?;
+    // Keep the world marker's contents a bare literal constructor. The chain
+    // is outside that marker and cannot hide another constructor expression.
+    literal_spec(&literal, "static descriptor")?;
+    Ok(literal)
 }
 
 /// Read the literal descriptor AST itself, never a later textual constructor.
@@ -1306,6 +1340,7 @@ fn canonical_items(repo_root: &Path) -> Result<Vec<Item>, String> {
             _ => None,
         })
         .collect();
+    metadata_inventory::validate_classification(repo_root)?;
     static_guard::validate_static_subr_sources(repo_root, &homes)?;
     let upper = snapshot_map(repo_root)?;
     let eval_source = read(repo_root, EVAL_SUBRS)?;
@@ -2044,6 +2079,109 @@ mod provider_tests {
             .is_err(),
             "callable public descriptor factories must fail closed"
         );
+    }
+
+    #[test]
+    fn static_initializer_metadata_chains_preserve_literal_projection() {
+        for chain in [
+            ".requires_eval_state()",
+            ".requires_eval_state().interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String(\"p\",))",
+            ".placeholder(crate::emacs_core::subr::NoEvalPlaceholder::Nil)",
+            ".interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::Form(crate::emacs_core::builtins::misc_pure::interactive_form))",
+            ".leaf(&crate::emacs_core::builtins::leaves::SAMPLE_LEAF)",
+        ] {
+            let definition =
+                STATIC_DEFINITION.replace("        ));", &format!("        )){chain};"));
+            let form = "\nfn interactive_form() -> neovm_value::value::Value { opaque_form() }";
+            let root = fixture("", &format!("{definition}{form}"));
+            for (relative, source) in [
+                ("crates/neovm-eval/src/lib.rs", "pub mod emacs_core;"),
+                (
+                    "crates/neovm-eval/src/emacs_core/mod.rs",
+                    r#"#[path="runtime/eval/mod.rs"] pub mod eval; #[path="lisp/native/subr/mod.rs"] pub mod subr; #[path="lisp/native/builtins/mod.rs"] pub mod builtins;"#,
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs",
+                    "pub mod interactive_registry;",
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs",
+                    "use neovm_value::value::Value; pub enum BuiltinInteractiveSpec { String(&'static str), Form(fn() -> Value) }",
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs",
+                    "pub enum NoEvalPlaceholder { Nil, FixnumZero, WindowLineHeight } pub(crate) mod leaf;",
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs",
+                    "pub struct LeafSpec;",
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs",
+                    "pub mod misc_pure; pub mod leaves;",
+                ),
+                (
+                    "crates/neovm-eval/src/emacs_core/lisp/native/builtins/leaves/mod.rs",
+                    "use crate::emacs_core::subr::leaf::LeafSpec; pub static SAMPLE_LEAF: LeafSpec = LeafSpec::new(opaque_effects());",
+                ),
+            ] {
+                let path = root.path().join(relative);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, source).unwrap();
+            }
+            let spec = registration_spec(root.path(), &format!("{STATIC_REFERENCE},")).unwrap();
+            assert_eq!(
+                (spec.name.as_str(), spec.min, spec.max),
+                ("identity", 1, Some(1))
+            );
+            assert!(spec.static_home.unwrap().initializer_factory.is_none());
+            let private =
+                PRIVATE_FACTORY.replace("            ))", &format!("            )){chain}"));
+            std::fs::write(root.path().join(STATIC_FILE), format!("{private}{form}")).unwrap();
+            let spec = registration_spec(root.path(), STATIC_REFERENCE).unwrap();
+            assert_eq!(
+                spec.static_home.unwrap().initializer_factory.as_deref(),
+                Some("identity_spec")
+            );
+        }
+    }
+
+    #[test]
+    fn static_initializer_metadata_chains_reject_recomputation_and_unknown_shapes() {
+        for chain in [
+            ".unknown_metadata()",
+            ".requires_eval_state(1)",
+            ".requires_eval_state::<u8>()",
+            ".interactive(build_interactive())",
+            ".placeholder(make_placeholder())",
+        ] {
+            let definition =
+                STATIC_DEFINITION.replace("        ));", &format!("        )){chain};"));
+            let root = fixture("", &definition);
+            assert!(
+                registration_spec(root.path(), STATIC_REFERENCE).is_err(),
+                "accepted {chain}"
+            );
+            let private =
+                PRIVATE_FACTORY.replace("            ))", &format!("            )){chain}"));
+            std::fs::write(root.path().join(STATIC_FILE), private).unwrap();
+            assert!(
+                registration_spec(root.path(), STATIC_REFERENCE).is_err(),
+                "accepted private {chain}"
+            );
+        }
+        for definition in [
+            PRIVATE_FACTORY.replace("identity_spec();", "identity_spec().requires_eval_state();"),
+            STATIC_DEFINITION.replace(" = crate::", " = #[allow(dead_code)] crate::"),
+            STATIC_DEFINITION.replace("        ));", "        ).requires_eval_state());"),
+            format!("{STATIC_DEFINITION}\n{STATIC_DEFINITION}"),
+        ] {
+            let root = fixture("", &definition);
+            assert!(
+                registration_spec(root.path(), STATIC_REFERENCE).is_err(),
+                "accepted {definition}"
+            );
+        }
     }
 
     #[test]
