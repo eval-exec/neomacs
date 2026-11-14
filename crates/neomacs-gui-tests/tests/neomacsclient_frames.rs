@@ -4,8 +4,10 @@
 use neomacs_gui_tests::{DisplayHarness, DisplaySession, GuiBackend, run_input_tool};
 use neomacs_test_env::{CanonicalEnvironment, CanonicalPin, CanonicalProfile, PinnedCommand};
 use std::{
+    ffi::OsString,
     fs::{self, File},
     os::fd::{AsRawFd, FromRawFd},
+    os::unix::ffi::OsStringExt,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
@@ -118,6 +120,129 @@ impl Client {
     }
 }
 
+// Copy only the display's graphics selection: canonical locale/identity pins
+// still belong to CanonicalEnvironment, including for daemon/client commands.
+fn apply_display_environment(command: &mut PinnedCommand, environment: &[(String, String)]) {
+    command.envs(
+        environment
+            .iter()
+            .filter(|(key, _)| {
+                matches!(
+                    key.as_str(),
+                    "DISPLAY" | "XAUTHORITY" | "VK_DRIVER_FILES" | "VK_ICD_FILENAMES"
+                )
+            })
+            .map(|(key, value)| (key, value)),
+    );
+}
+
+// Independently validate the owned session's policy before comparing the
+// daemon. Ambient inheritance alone must not conceal deleted session wiring.
+fn expected_vulkan_environment(
+    display_environment: &[(String, String)],
+    caller: [Option<OsString>; 2],
+    keep_caller_selection: bool,
+) -> ([Option<OsString>; 2], serde_json::Value) {
+    let keys = ["VK_DRIVER_FILES", "VK_ICD_FILENAMES"];
+    let architecture = match std::env::consts::ARCH {
+        "x86" => "i686",
+        architecture => architecture,
+    };
+    let host_manifest = format!("lvp_icd.{architecture}.json");
+    let mut caller_lavapipe = Vec::new();
+    for (index, value) in caller.iter().enumerate() {
+        if let Some(value) = value {
+            for path in std::env::split_paths(value) {
+                let lavapipe = path.to_str().is_some()
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name == "lvp_icd.json" || name == host_manifest);
+                if lavapipe {
+                    caller_lavapipe.push((index, path));
+                }
+            }
+        }
+    }
+    let caller_receipt: Vec<_> = caller
+        .iter()
+        .map(|value| {
+            value
+                .as_ref()
+                .map(|value| value.to_string_lossy().into_owned())
+        })
+        .collect();
+    if !keep_caller_selection && !caller_lavapipe.is_empty() {
+        let selected: Vec<_> = keys
+            .iter()
+            .map(|key| {
+                let matches: Vec<_> = display_environment
+                    .iter()
+                    .filter(|(name, _)| name.as_str() == *key)
+                    .collect();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "owned Xvfb must publish exactly one {key}"
+                );
+                OsString::from(matches[0].1.as_str())
+            })
+            .collect();
+        assert_eq!(
+            selected[0], selected[1],
+            "owned Xvfb loader variables must agree"
+        );
+        let paths: Vec<_> = std::env::split_paths(&selected[0]).collect();
+        assert_eq!(
+            paths.len(),
+            1,
+            "owned Xvfb must select a singleton software ICD"
+        );
+        let (source, _) = caller_lavapipe
+            .iter()
+            .find(|(_, path)| path == &paths[0])
+            .expect("owned Xvfb selected an ICD absent from the caller's lavapipe entries");
+        let original = caller[*source].as_ref().unwrap();
+        let caller_was_mixed = std::env::split_paths(original).count() > 1;
+        let caller_was_narrowed = caller_was_mixed && original != &selected[0];
+        assert!(
+            !caller_was_mixed || caller_was_narrowed,
+            "mixed caller ICD list was not narrowed"
+        );
+        let receipt = serde_json::json!({
+            "policy_default_active": true,
+            "caller_loader_variables": caller_receipt,
+            "selected_singleton": selected[0].to_string_lossy(),
+            "selected_from_caller_variable": keys[*source],
+            "caller_list_was_mixed": caller_was_mixed,
+            "caller_list_was_narrowed": caller_was_narrowed,
+        });
+        return (
+            [Some(selected[0].clone()), Some(selected[1].clone())],
+            receipt,
+        );
+    }
+    for (index, key) in keys.iter().enumerate() {
+        for (_, value) in display_environment
+            .iter()
+            .filter(|(name, _)| name.as_str() == *key)
+        {
+            assert_eq!(
+                Some(std::ffi::OsStr::new(value)),
+                caller[index].as_deref(),
+                "owned Xvfb changed caller {key} while selection was inactive"
+            );
+        }
+    }
+    let receipt = serde_json::json!({
+        "policy_default_active": false,
+        "opt_out": keep_caller_selection,
+        "caller_loader_variables": caller_receipt,
+        "caller_list_was_narrowed": false,
+    });
+    (caller, receipt)
+}
+
 struct Fixture<'a> {
     daemon: OwnedChild,
     display: &'a DisplaySession,
@@ -187,17 +312,9 @@ impl<'a> Fixture<'a> {
         runtime: &Path,
         root: &Path,
     ) {
+        command.current_dir(root);
+        apply_display_environment(command, display.env());
         command
-            .current_dir(root)
-            // DisplaySession also supplies locale defaults; the canonical
-            // environment above owns those pins. Only copy display identity.
-            .envs(
-                display
-                    .env()
-                    .iter()
-                    .filter(|(key, _)| matches!(key.as_str(), "DISPLAY" | "XAUTHORITY"))
-                    .map(|(key, value)| (key, value)),
-            )
             .override_pin(CanonicalPin::XdgRuntimeDir, runtime)
             .override_pin(CanonicalPin::XdgConfigHome, isolation.join("config"))
             .override_pin(CanonicalPin::XdgDataHome, isolation.join("data"))
@@ -211,6 +328,52 @@ impl<'a> Fixture<'a> {
             .env_remove("EMACS_SERVER_FILE")
             .env_remove("EMACS_SOCKET_NAME")
             .env_remove("ALTERNATE_EDITOR");
+    }
+
+    /// Read the real daemon's environment, rather than assuming the spawn
+    /// builder propagated the owned display's selected Vulkan driver.
+    fn assert_daemon_vulkan_environment(&self) {
+        let path = PathBuf::from(format!("/proc/{}/environ", self.daemon.0.id()));
+        let environment = fs::read(&path).expect("read owned daemon environment");
+        let keep = std::env::var_os("NEOMACS_XVFB_KEEP_VK_ICD").is_some_and(|value| value == "1");
+        let (expected, policy_receipt) = expected_vulkan_environment(
+            self.display.env(),
+            [
+                std::env::var_os("VK_DRIVER_FILES"),
+                std::env::var_os("VK_ICD_FILENAMES"),
+            ],
+            keep,
+        );
+        let mut observed = serde_json::Map::new();
+        for (index, key) in ["VK_DRIVER_FILES", "VK_ICD_FILENAMES"].iter().enumerate() {
+            let prefix = format!("{key}=");
+            let actual = environment
+                .split(|byte| *byte == 0)
+                .find_map(|entry| entry.strip_prefix(prefix.as_bytes()))
+                .map(|value| OsString::from_vec(value.to_vec()));
+            observed.insert(
+                (*key).to_owned(),
+                actual
+                    .as_ref()
+                    .map(|value| serde_json::Value::String(value.to_string_lossy().into_owned()))
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            assert_eq!(
+                actual, expected[index],
+                "owned daemon did not inherit {key}"
+            );
+        }
+        let receipt = serde_json::json!({
+            "pid": self.daemon.0.id(),
+            "source": path,
+            "actual_daemon_environment": observed,
+            "owned_session_policy": policy_receipt,
+        });
+        fs::write(
+            self.artifacts.join("daemon-vulkan-environment.json"),
+            serde_json::to_vec_pretty(&receipt).unwrap(),
+        )
+        .expect("preserve actual daemon Vulkan environment");
     }
 
     /// Target this fixture's named server with the matching client executable.
@@ -412,6 +575,7 @@ fn neomacsclient_creates_gui_frames_from_a_daemon_with_display() {
     fixture.wait_for("daemon socket", |fixture| {
         fixture.runtime.join("emacs/gui-client-test").exists()
     });
+    fixture.assert_daemon_vulkan_environment();
     assert_eq!(fixture.evaluate("(+ 20 22)"), "42");
     assert_eq!(
         fixture.native_windows(),
@@ -472,4 +636,77 @@ fn neomacsclient_creates_gui_frames_from_a_daemon_with_display() {
     assert!(status.success(), "reopened GUI request failed: {status}");
     fixture.wait_for_gui();
     fixture.delete_gui();
+}
+
+#[test]
+fn daemon_display_environment_forwards_paired_icds_without_replacing_canonical_locale() {
+    let architecture = match std::env::consts::ARCH {
+        "x86" => "i686",
+        architecture => architecture,
+    };
+    let host = format!("/mesa/lvp_icd.{architecture}.json");
+    let environment = CanonicalEnvironment::new(
+        CanonicalProfile::Tui,
+        "/owned-test/home",
+        "/owned-test/tmp",
+        "/owned-test/workspace",
+    )
+    .unwrap();
+    let mut command = environment.command("not-executed");
+    let display = vec![
+        ("DISPLAY".to_owned(), "127.0.0.1:123".to_owned()),
+        ("XAUTHORITY".to_owned(), "/owned-test/Xauthority".to_owned()),
+        ("VK_DRIVER_FILES".to_owned(), host.clone()),
+        ("VK_ICD_FILENAMES".to_owned(), host.clone()),
+        ("LC_ALL".to_owned(), "incorrect-display-locale".to_owned()),
+    ];
+    let locale = command
+        .get_env("LC_ALL")
+        .map(|value| value.map(OsString::from));
+    apply_display_environment(&mut command, &display);
+    for key in [
+        "DISPLAY",
+        "XAUTHORITY",
+        "VK_DRIVER_FILES",
+        "VK_ICD_FILENAMES",
+    ] {
+        let expected = display.iter().find(|(name, _)| name == key).unwrap();
+        assert_eq!(
+            command.get_env(key),
+            Some(Some(std::ffi::OsStr::new(&expected.1)))
+        );
+    }
+    assert_eq!(
+        command
+            .get_env("LC_ALL")
+            .map(|value| value.map(OsString::from)),
+        locale
+    );
+
+    let caller = [
+        Some(OsString::from(format!("/mesa/intel_icd.json:{host}"))),
+        None,
+    ];
+    let (selected, receipt) = expected_vulkan_environment(&display, caller.clone(), false);
+    assert_eq!(selected[0], Some(OsString::from(&host)));
+    assert_eq!(selected[0], selected[1]);
+    assert_eq!(receipt["caller_list_was_mixed"], true);
+    assert_eq!(receipt["caller_list_was_narrowed"], true);
+    assert!(
+        std::panic::catch_unwind(|| expected_vulkan_environment(&[], caller.clone(), false))
+            .is_err(),
+        "deleted session wiring must fail even though the daemon could inherit caller ICDs"
+    );
+    assert_eq!(
+        expected_vulkan_environment(&[], caller.clone(), true).0,
+        caller
+    );
+    let no_lavapipe = [
+        Some(OsString::from("/mesa/intel_icd.json")),
+        Some(OsString::new()),
+    ];
+    assert_eq!(
+        expected_vulkan_environment(&[], no_lavapipe.clone(), false).0,
+        no_lavapipe
+    );
 }

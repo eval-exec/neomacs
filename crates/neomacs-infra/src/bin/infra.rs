@@ -140,6 +140,9 @@ fn main() {
             }
         },
         Some("status") => {
+            let require_host_pin =
+                args.next().as_deref().and_then(|arg| arg.to_str()) == Some("--require-host-pin");
+            let mut unpinned: Vec<&str> = Vec::new();
             for name in neomacs_infra::config_env::NAMES {
                 let status = match name.as_ref() {
                     "doom" => neomacs_infra::config_env::doom::doom_status().map(|_| ()),
@@ -149,9 +152,33 @@ fn main() {
                     _ => unreachable!("NAMES and status arms must stay in sync"),
                 };
                 match status {
-                    Ok(()) => println!("{name}: materialized and sealed"),
+                    Ok(()) => {
+                        let host = std::env::consts::OS;
+                        let pinned = neomacs_infra::config_env::common::Spec::load(name.as_ref())
+                            .ok()
+                            .and_then(|spec| spec.host_packages().map(str::to_owned));
+                        match pinned {
+                            Some(digest) => println!(
+                                "{name}: materialized and sealed ({host} package identity pinned = {digest})"
+                            ),
+                            None => {
+                                unpinned.push(name.as_ref());
+                                println!(
+                                    "{name}: materialized and sealed (unpinned on {host}; run `infra pin-packages {name}`)"
+                                );
+                            }
+                        }
+                    }
                     Err(reason) => println!("{name}: {reason}"),
                 }
+            }
+            if require_host_pin && !unpinned.is_empty() {
+                eprintln!(
+                    "error: no {} package identity pin for {}; run `infra pin-packages <name>`",
+                    std::env::consts::OS,
+                    unpinned.join(", ")
+                );
+                exit(1);
             }
         }
         _ => {

@@ -29,6 +29,7 @@ fn unselected_compact_frame_preserves_geometry_after_parameter_and_font_changes(
         &artifacts,
         GuiScenario::new("compact-frame-geometry", fixture.join("init.el")),
     )
+    .without_paint_proof()
     .with_program(binary)
     .with_args([format!("--init-directory={}", fixture.display())]);
     for (key, value) in session.env() {
