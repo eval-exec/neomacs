@@ -839,6 +839,9 @@ mod unit_runtime {
 
         Some(match name {
             "identity" => crate::emacs_core::builtins::misc_pure::IDENTITY_SUBR,
+            "test-completion" => crate::emacs_core::builtins::misc_eval::TEST_COMPLETION_SUBR,
+            "all-completions" => crate::emacs_core::builtins::misc_eval::ALL_COMPLETIONS_SUBR,
+            "try-completion" => crate::emacs_core::builtins::misc_eval::TRY_COMPLETION_SUBR,
             "command-modes" => crate::emacs_core::builtins::misc_eval::COMMAND_MODES_SUBR,
             "commandp" => crate::emacs_core::builtins::misc_eval::COMMANDP_SUBR,
             "current-time" => SubrSpec::new(
@@ -950,6 +953,66 @@ mod unit_runtime {
                 .unwrap()
                 .is_nil()
         );
+    }
+
+    #[test]
+    fn unit_completions_use_canonical_descriptors_and_installed_entries() {
+        use crate::emacs_core::builtins::misc_eval::{
+            ALL_COMPLETIONS_SUBR, TEST_COMPLETION_SUBR, TRY_COMPLETION_SUBR,
+        };
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        let context = Context::new(unit_runtime());
+        for (name, expected) in [
+            ("try-completion", TRY_COMPLETION_SUBR),
+            ("all-completions", ALL_COMPLETIONS_SUBR),
+            ("test-completion", TEST_COMPLETION_SUBR),
+        ] {
+            let actual = misc_family_subr(name).expect("real unit completion descriptor");
+            assert_eq!(actual.name(), expected.name());
+            assert_eq!(actual.name(), name);
+            assert_eq!(actual.arity(), expected.arity());
+            assert_eq!(actual.arity(), SubrArity::new(2, Some(3)));
+            assert_eq!(actual.dispatch_kind(), expected.dispatch_kind());
+            assert!(actual.interactive_spec().is_none());
+            assert!(expected.interactive_spec().is_none());
+            assert_eq!(actual.no_eval_policy(), expected.no_eval_policy());
+            // The three original declarations use SubrSpec::new without a
+            // policy builder. world_subr! adds no runtime policy metadata.
+            assert_eq!(actual.no_eval_policy(), NoEvalPolicy::Native);
+            assert_eq!(actual.command_default(), expected.command_default());
+            assert!(actual.leaf_spec().is_none());
+            assert!(expected.leaf_spec().is_none());
+            let entry = crate::emacs_core::eval::lookup_global_subr_entry(
+                neovm_value::intern::intern(name),
+            )
+            .expect("installed unit completion entry");
+            assert_eq!((entry.min_args, entry.max_args), (2, Some(3)));
+            assert_eq!(entry.dispatch_kind, expected.dispatch_kind());
+            assert!(entry.interactive_spec.is_none());
+            let id = neovm_value::intern::intern(name);
+            assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+            assert_eq!(expected.command_default(), CommandDefault::Enabled);
+            assert!(
+                context
+                    .obarray_view()
+                    .get_property(name, "disabled")
+                    .unwrap_or(Value::NIL)
+                    .is_nil()
+            );
+            assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+            match (expected.function(), actual.function(), entry.function) {
+                (
+                    Some(SubrFn::Many(expected_fn)),
+                    Some(SubrFn::Many(actual_fn)),
+                    Some(SubrFn::Many(installed_fn)),
+                ) => {
+                    assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+                    assert!(std::ptr::fn_addr_eq(installed_fn, expected_fn));
+                }
+                _ => panic!("{name}: production, unit and installed ContextVec ABIs must match"),
+            }
+        }
     }
 
     #[test]

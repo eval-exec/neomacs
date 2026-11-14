@@ -4615,3 +4615,13 @@ crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	struct	str
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl CommandpSymbol::id
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn builtin_commandp_interactive
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn builtin_command_modes
+crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	enum	enum CompletionStateVariable
+crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn impl CompletionStateVariable::symbol_id
+crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn expect_lisp_string
+crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn completion_display_string_from_value
+crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn builtin_try_completion
+crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn builtin_all_completions
+crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn builtin_test_completion
+crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn completion_ignore_case
+crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn completion_regexp_lisp_list
+crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn lisp_string_matches_completion_regexps

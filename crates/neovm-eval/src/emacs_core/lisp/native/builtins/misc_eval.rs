@@ -10,6 +10,30 @@ use neovm_value::symbol::Obarray;
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::time_core::{LispTimeOutput, current_time_value};
 
+/// The production `try-completion` descriptor, shared by core and the unit runtime.
+#[doc(hidden)]
+pub static TRY_COMPLETION_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "try-completion",
+    NativeFn::ContextVec(crate::emacs_core::eval::data::minibuffer_entry::builtin_try_completion),
+    SubrArity::new(2, Some(3)),
+));
+
+/// The production `all-completions` descriptor, shared by core and the unit runtime.
+#[doc(hidden)]
+pub static ALL_COMPLETIONS_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "all-completions",
+    NativeFn::ContextVec(crate::emacs_core::eval::data::minibuffer_entry::builtin_all_completions),
+    SubrArity::new(2, Some(3)),
+));
+
+/// The production `test-completion` descriptor, shared by core and the unit runtime.
+#[doc(hidden)]
+pub static TEST_COMPLETION_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "test-completion",
+    NativeFn::ContextVec(crate::emacs_core::eval::data::minibuffer_entry::builtin_test_completion),
+    SubrArity::new(2, Some(3)),
+));
+
 /// The production `commandp` descriptor, shared by core and the unit runtime.
 #[doc(hidden)]
 pub static COMMANDP_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(

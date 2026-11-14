@@ -1482,21 +1482,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_read_variable),
         SubrArity::new(1, Some(2)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "try-completion",
-        NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_try_completion),
-        SubrArity::new(2, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "all-completions",
-        NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_all_completions),
-        SubrArity::new(2, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "test-completion",
-        NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_test_completion),
-        SubrArity::new(2, Some(3)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::TRY_COMPLETION_SUBR);
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::ALL_COMPLETIONS_SUBR);
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::TEST_COMPLETION_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "completion--flex-cost-gotoh",
         NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_flex_cost_gotoh),

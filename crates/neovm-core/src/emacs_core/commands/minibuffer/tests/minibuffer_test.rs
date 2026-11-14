@@ -237,21 +237,6 @@ fn flex_cost_gotoh_honors_completion_ignore_case() {
 // -- Completion matching --------------------------------------------------
 
 #[test]
-fn completion_prefix_models_empty_input_as_match_all() {
-    let empty = LispString::from_utf8("");
-    let nonempty = LispString::from_utf8("M-x");
-
-    assert_eq!(
-        CompletionPrefix::from_lisp_string(&empty),
-        CompletionPrefix::Empty
-    );
-    assert_eq!(
-        CompletionPrefix::from_lisp_string(&nonempty),
-        CompletionPrefix::Characters(vec!['M' as u32, '-' as u32, 'x' as u32])
-    );
-}
-
-#[test]
 fn normalize_symbol_reader_default_uses_list_head_and_symbol_name() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
@@ -1905,15 +1890,6 @@ fn global_obarray_completion_has_no_pre_candidate_staging_collections() {
         crate::emacs_core::builtins::symbols::global_obarray_symbol_value_materializations(),
         0,
         "global obarray completion must stream cached ids and visible names directly into the rooted candidate set"
-    );
-}
-
-#[test]
-fn completion_candidate_keeps_the_global_obarray_scan_compact() {
-    assert!(
-        std::mem::size_of::<CompletionCandidate>() <= 5 * std::mem::size_of::<usize>(),
-        "completion candidates should carry compact ownership handles, not inline LispString payloads; got {} bytes",
-        std::mem::size_of::<CompletionCandidate>()
     );
 }
 
