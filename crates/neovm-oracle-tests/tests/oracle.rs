@@ -76,6 +76,9 @@ mod oracle_face_sentinel_identity;
 #[path = "oracle_face_theme.rs"]
 mod oracle_face_theme;
 
+#[path = "oracle_filelock_identity.rs"]
+mod oracle_filelock_identity;
+
 #[path = "oracle_fill_column_stipple.rs"]
 mod oracle_fill_column_stipple;
 
