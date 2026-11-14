@@ -872,6 +872,7 @@ mod unit_runtime {
                 crate::emacs_core::builtins::misc_pure::STANDARD_SYNTAX_TABLE_SUBR
             }
             "copy-marker" => crate::emacs_core::builtins::misc_eval::COPY_MARKER_SUBR,
+            "char-table-subtype" => crate::emacs_core::builtins::misc_pure::CHAR_TABLE_SUBTYPE_SUBR,
             "make-list" => SubrSpec::new(
                 "make-list",
                 NativeFn::ContextVec(bind_make_list),
@@ -1356,6 +1357,85 @@ mod unit_runtime {
         assert!(is_char_table(&defaulted));
         assert_eq!(char_table_default(&defaulted), Value::NIL);
         assert_eq!(char_table_extra_slot_value(&defaulted, 0), Some(Value::NIL));
+    }
+
+    #[test]
+    fn unit_char_table_subtype_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::misc_pure::CHAR_TABLE_SUBTYPE_SUBR;
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        use neovm_value::chartab::make_char_table_value;
+        use neovm_value::intern::intern;
+        use neovm_value::value::Value;
+
+        let expected = CHAR_TABLE_SUBTYPE_SUBR;
+        let descriptor = misc_family_subr("char-table-subtype")
+            .expect("unit runtime uses the production descriptor");
+        assert_eq!(expected.name(), "char-table-subtype");
+        assert_eq!(descriptor.name(), expected.name());
+        assert_eq!(descriptor.arity(), expected.arity());
+        assert_eq!(expected.arity(), SubrArity::new(1, Some(1)));
+        assert_eq!(
+            expected.dispatch_kind(),
+            neovm_value::tagged::header::SubrDispatchKind::Builtin
+        );
+        assert_eq!(descriptor.dispatch_kind(), expected.dispatch_kind());
+        assert!(descriptor.interactive_spec().is_none());
+        assert!(expected.interactive_spec().is_none());
+        assert_eq!(descriptor.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+        assert_eq!(descriptor.command_default(), expected.command_default());
+        assert!(descriptor.leaf_spec().is_none());
+        assert!(expected.leaf_spec().is_none());
+        let (Some(SubrFn::Many(expected_fn)), Some(SubrFn::Many(descriptor_fn))) =
+            (expected.function(), descriptor.function())
+        else {
+            panic!("char-table-subtype retains the ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(descriptor_fn, expected_fn));
+
+        let mut context = Context::new(unit_runtime());
+        let id = intern("char-table-subtype");
+        let actual = crate::emacs_core::eval::lookup_global_subr_entry(id)
+            .expect("registered unit char-table-subtype");
+        let Some(SubrFn::Many(actual_fn)) = actual.function else {
+            panic!("registered char-table-subtype ContextVec ABI");
+        };
+        assert!(std::ptr::fn_addr_eq(actual_fn, expected_fn));
+        assert_eq!((actual.min_args, actual.max_args), (1, Some(1)));
+        assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+        assert!(actual.interactive_spec.is_none());
+        assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+        assert!(
+            context
+                .obarray_view()
+                .get_property("char-table-subtype", "disabled")
+                .is_none_or(|value| value.is_nil())
+        );
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+
+        let purpose = Value::symbol("round4-subtype-purpose");
+        let table = make_char_table_value(purpose, Value::fixnum(23));
+        let result = actual_fn(&mut context, vec![table]).expect("registered subtype body");
+        assert_eq!(result, purpose);
+        let nil_purpose = make_char_table_value(Value::NIL, Value::NIL);
+        assert_eq!(
+            actual_fn(&mut context, vec![nil_purpose]).unwrap(),
+            Value::NIL
+        );
+        let bad = Value::fixnum(9);
+        let error = actual_fn(&mut context, vec![bad]).unwrap_err();
+        let signal = error.as_signal().expect("wrong-type signal");
+        assert_eq!(signal.symbol, intern("wrong-type-argument"));
+        assert_eq!(signal.data, vec![Value::symbol("char-table-p"), bad]);
+        let error = actual_fn(&mut context, vec![]).unwrap_err();
+        let signal = error.as_signal().expect("arity signal");
+        assert_eq!(signal.symbol, intern("wrong-number-of-arguments"));
+        assert_eq!(
+            signal.data,
+            vec![Value::symbol("char-table-subtype"), Value::fixnum(0)]
+        );
     }
 
     #[test]

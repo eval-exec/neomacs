@@ -49,6 +49,15 @@ pub static STANDARD_SYNTAX_TABLE_SUBR: SubrSpec =
         SubrArity::new(0, Some(0)),
     ));
 
+/// The original purpose getter, shared by production and unit registration.
+/// GNU chartab.c Fchar_table_subtype validates the table and returns its purpose.
+#[doc(hidden)]
+pub static CHAR_TABLE_SUBTYPE_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "char-table-subtype",
+    NativeFn::ContextVec(|_ctx, args| { neovm_value::chartab::builtin_char_table_subtype(args) }),
+    SubrArity::new(1, Some(1)),
+));
+
 #[doc(hidden)]
 pub fn builtin_identity(args: Vec<Value>) -> EvalResult {
     expect_args("identity", &args, 1)?;

@@ -4184,13 +4184,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(3, Some(3)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "char-table-subtype",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::chartable::builtin_char_table_subtype(args)
-        }),
-        SubrArity::new(1, Some(1)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_pure::CHAR_TABLE_SUBTYPE_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "bool-vector",
         NativeFn::ContextVec(|_ctx, args| crate::emacs_core::chartable::builtin_bool_vector(args)),
