@@ -227,6 +227,71 @@ fn partial_overlap_append_splits_ranges() {
 }
 
 #[test]
+fn update_targets_batch_matches_single_target_updates() {
+    crate::test_utils::init_test_tracing();
+    let mut data1 = FontsetData::default();
+    let mut data2 = FontsetData::default();
+
+    // Initial base ranges
+    let base_targets = vec![
+        FontsetTarget::Range(0x1000, 0x1050),
+        FontsetTarget::Range(0x2000, 0x2050),
+        FontsetTarget::Range(0x3000, 0x3050),
+    ];
+    for t in &base_targets {
+        data1.update_target(t.clone(), registry_spec("base"), FontsetAddMode::Overwrite);
+    }
+    data2.update_targets(base_targets.clone(), registry_spec("base"), FontsetAddMode::Overwrite);
+
+    // Apply multiple overlapping and new ranges with Append
+    let update_targets = vec![
+        FontsetTarget::Range(0x1020, 0x1040), // partial overlap
+        FontsetTarget::Range(0x1045, 0x1060), // partial overlap extending past end
+        FontsetTarget::Range(0x2000, 0x2050), // exact overlap
+        FontsetTarget::Range(0x2500, 0x2550), // disjoint new range
+        FontsetTarget::Range(0x3010, 0x3020), // sub-range
+    ];
+
+    for t in &update_targets {
+        data1.update_target(t.clone(), registry_spec("extra"), FontsetAddMode::Append);
+    }
+    data2.update_targets(update_targets, registry_spec("extra"), FontsetAddMode::Append);
+
+    // Verify both produce identical entries across sampled points
+    let probe_points = [
+        0x1000, 0x1019, 0x1020, 0x1030, 0x1040, 0x1041, 0x1045, 0x1050, 0x1055, 0x1060, 0x1061,
+        0x2000, 0x2025, 0x2050, 0x2051, 0x2500, 0x2525, 0x2550, 0x2551,
+        0x3000, 0x3009, 0x3010, 0x3015, 0x3020, 0x3021, 0x3050,
+    ];
+
+    for &cp in &probe_points {
+        assert_eq!(
+            data1.specific_entries_for_char(cp),
+            data2.specific_entries_for_char(cp),
+            "Mismatch at codepoint {cp:#x}"
+        );
+    }
+}
+
+#[test]
+fn update_targets_batch_large_fragmented_ranges() {
+    crate::test_utils::init_test_tracing();
+    let mut data = FontsetData::default();
+    // Simulate 4,000 non-contiguous ranges (like japanese-jisx0208)
+    let targets: Vec<FontsetTarget> = (0..4000)
+        .map(|i| FontsetTarget::Range(i * 10, i * 10 + 5))
+        .collect();
+
+    data.update_targets(targets, registry_spec("cjk"), FontsetAddMode::Overwrite);
+
+    assert_eq!(
+        data.specific_entries_for_char(25 * 10 + 2),
+        vec![registry_spec("cjk")]
+    );
+    assert_eq!(data.specific_entries_for_char(25 * 10 + 7), Vec::new());
+}
+
+#[test]
 fn fallback_entries_append_after_specific_entries() {
     crate::test_utils::init_test_tracing();
     let mut data = FontsetData::default();

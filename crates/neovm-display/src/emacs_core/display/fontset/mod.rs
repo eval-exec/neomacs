@@ -168,6 +168,19 @@ impl FontsetRegistry {
         self.generation = self.generation.wrapping_add(1);
     }
 
+    fn update_targets(
+        &mut self,
+        name: &FontNameSpelling,
+        targets: Vec<FontsetTarget>,
+        entry: FontSpecEntry,
+        add: FontsetAddMode,
+    ) {
+        self.ensure_fontset(name);
+        let data = self.fontsets.entry(name.clone()).or_default();
+        data.update_targets(targets, entry, add);
+        self.generation = self.generation.wrapping_add(1);
+    }
+
     fn list_value(&self) -> Value {
         Value::list(
             self.ordered_names
@@ -284,6 +297,131 @@ impl FontsetData {
             FontsetTarget::Fallback => self.update_fallback(entry, add),
             FontsetTarget::Range(from, to) => self.update_range(from, to, entry, add),
         }
+    }
+
+    fn update_targets(&mut self, targets: Vec<FontsetTarget>, entry: FontSpecEntry, add: FontsetAddMode) {
+        let entry = StoredFontsetEntry::from(entry);
+        let mut new_ranges = Vec::new();
+        for target in targets {
+            match target {
+                FontsetTarget::Fallback => self.update_fallback(entry.clone(), add),
+                FontsetTarget::Range(from, to) => {
+                    if from <= to {
+                        new_ranges.push((from, to));
+                    }
+                }
+            }
+        }
+        if !new_ranges.is_empty() {
+            self.update_ranges(new_ranges, entry, add);
+        }
+    }
+
+    fn update_ranges(
+        &mut self,
+        mut new_ranges: Vec<(u32, u32)>,
+        entry: StoredFontsetEntry,
+        add: FontsetAddMode,
+    ) {
+        if new_ranges.is_empty() {
+            return;
+        }
+
+        // Sort and coalesce adjacent/overlapping new ranges
+        new_ranges.sort_unstable_by_key(|&(from, _)| from);
+        let mut coalesced: Vec<(u32, u32)> = Vec::with_capacity(new_ranges.len());
+        for (from, to) in new_ranges {
+            if let Some(last) = coalesced.last_mut() {
+                if from <= last.1.saturating_add(1) {
+                    last.1 = last.1.max(to);
+                } else {
+                    coalesced.push((from, to));
+                }
+            } else {
+                coalesced.push((from, to));
+            }
+        }
+
+        let mut next = Vec::with_capacity(self.ranges.len() + coalesced.len() * 2);
+        let mut old_iter = std::mem::take(&mut self.ranges).into_iter().peekable();
+        let mut new_iter = coalesced.into_iter().peekable();
+
+        while let Some(&(n_from, n_to)) = new_iter.peek() {
+            let mut cursor = n_from;
+            while let Some(mut old) = old_iter.peek().cloned() {
+                if old.to < cursor {
+                    old_iter.next();
+                    push_range_entry(&mut next, old);
+                    continue;
+                }
+                if old.from > n_to {
+                    break;
+                }
+
+                // old overlaps with [cursor, n_to]
+                if old.from < cursor {
+                    push_range_entry(
+                        &mut next,
+                        RangeEntry {
+                            from: old.from,
+                            to: cursor - 1,
+                            entries: old.entries.clone(),
+                        },
+                    );
+                    old.from = cursor;
+                }
+
+                if cursor < old.from {
+                    push_range_entry(
+                        &mut next,
+                        RangeEntry {
+                            from: cursor,
+                            to: old.from - 1,
+                            entries: apply_fontset_add(None, entry.clone(), add),
+                        },
+                    );
+                    cursor = old.from;
+                }
+
+                let overlap_to = old.to.min(n_to);
+                push_range_entry(
+                    &mut next,
+                    RangeEntry {
+                        from: cursor,
+                        to: overlap_to,
+                        entries: apply_fontset_add(Some(&old.entries), entry.clone(), add),
+                    },
+                );
+                cursor = overlap_to.saturating_add(1);
+
+                if old.to > n_to {
+                    // Part of old remains past n_to; update old in peekable
+                    let mut peek_mut = old_iter.peek_mut().unwrap();
+                    peek_mut.from = n_to + 1;
+                    break;
+                } else {
+                    old_iter.next();
+                }
+            }
+
+            if cursor <= n_to {
+                push_range_entry(
+                    &mut next,
+                    RangeEntry {
+                        from: cursor,
+                        to: n_to,
+                        entries: apply_fontset_add(None, entry.clone(), add),
+                    },
+                );
+            }
+            new_iter.next();
+        }
+
+        for old in old_iter {
+            push_range_entry(&mut next, old);
+        }
+
+        self.ranges = next;
     }
 
     fn specific_entries_for_char(&self, code: u32) -> Vec<FontSpecEntry> {
@@ -969,9 +1107,7 @@ pub fn set_fontset_font(
         )
     })?;
     let canonical = slot.register_fontset(fontset_name_spelling(&fontset_name), None);
-    for target in targets {
-        slot.update_target(&canonical, target, entry.clone(), add_mode);
-    }
+    slot.update_targets(&canonical, targets, entry, add_mode);
     Ok(Value::NIL)
 }
 
