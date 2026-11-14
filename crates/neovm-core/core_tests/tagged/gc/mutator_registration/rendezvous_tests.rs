@@ -10,6 +10,9 @@ use neovm_value::test_support::authority::{
     ProofEra, RootedRendezvousCase, run_rooted_mutator_test_for_test,
 };
 
+#[path = "rendezvous/mapping_tests.rs"]
+mod mapping;
+
 fn rooted_era_impl(body: &mut dyn for<'e> FnMut(ProofEra<'e, Baton>, Vec<SharedRoot>)) {
     Context::with_test_rooted_mutator_era(|era, roots| body(era, roots));
 }

@@ -2,9 +2,27 @@
 //! check where one exists. Fixed ordering/linearity are not runtime race detectors.
 #![forbid(unsafe_code)]
 
-use super::rooted_tests::*;
+use super as failure;
 use super::*;
 use std::collections::BTreeSet;
+
+// The admission-scan control needs the same real symbol era and World walk
+// as the dedicated core admission-probe shell.
+fn in_slice_admission_word_refuses_catalog_transition() {
+    use neovm_eval::test_support::authority::baton_collect_parallel_world_roots;
+    use neovm_value::test_support::authority::{
+        AdmissionProbeCase, run_admission_probe_test_for_test,
+    };
+
+    let _hooks = crate::emacs_core::eval_hook_installers::install_eval_hooks();
+    Context::with_test_symbol_era(|era, _| {
+        run_admission_probe_test_for_test(
+            AdmissionProbeCase::InSliceAdmissionWordRefusesCatalogTransition,
+            era,
+            baton_collect_parallel_world_roots,
+        );
+    });
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MappingClass {
@@ -280,9 +298,7 @@ fn controls() -> [Control; 31] {
             witness: "ADMISSION_SKIPPED_SCAN_MISSES_LIVE_SLICE",
             class: RuntimeRefusal,
             check_name: "admission_scan",
-            check: Some(
-                crate::tagged::gc::mutator_registration::admission_probe::in_slice_admission_word_refuses_catalog_transition,
-            ),
+            check: Some(in_slice_admission_word_refuses_catalog_transition),
             expectation: "an IN_SLICE admission word refuses the catalog transition even when every gated precheck passes",
         },
     ]
@@ -292,7 +308,7 @@ fn controls() -> [Control; 31] {
 fn every_a1_negative_control_has_an_explicit_production_correspondence() {
     let reviewed = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/p1rv-rendezvous-loom/RESULTS.md"
+        "/../neovm-value/tests/p1rv-rendezvous-loom/RESULTS.md"
     ));
     let rows = controls();
     let mut names = BTreeSet::new();

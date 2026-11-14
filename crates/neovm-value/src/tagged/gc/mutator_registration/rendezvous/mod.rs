@@ -385,5 +385,3 @@ pub(crate) mod fixture_helpers;
 pub(crate) mod rooted_tests;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use rooted_tests::run_rooted_mutator_case;
-#[cfg(test)]
-mod tests;
