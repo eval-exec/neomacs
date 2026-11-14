@@ -63,7 +63,7 @@ fn commandp_reads_interactivity_from_the_subr_object() {
         .expect("forward-char should have a primitive function cell");
     assert_eq!(function.veclike_type(), Some(VecLikeType::Subr));
 
-    crate::test_support::authority::reset_global_subr_lookup_count();
+    crate::emacs_core::eval::reset_global_subr_lookup_count();
     assert_eq!(
         classify_command_object_in_state(&function, false, neovm_value::tagged::SymbolMode::Bare),
         CommandpClassification::Interactive
