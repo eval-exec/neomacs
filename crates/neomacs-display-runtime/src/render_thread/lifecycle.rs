@@ -580,7 +580,7 @@ impl RenderApp {
         #[cfg(target_os = "macos")]
         if super::macos_quit_redirect::quit_is_pending() {
             const QUIT_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
-            let quit_retry = std::time::Instant::now() + QUIT_RETRY_INTERVAL;
+            let quit_retry = now.plus(QUIT_RETRY_INTERVAL).into_instant();
             deadline = Some(deadline.map_or(quit_retry, |d| d.min(quit_retry)));
         }
         match deadline {
