@@ -429,6 +429,9 @@ pub enum WindowCommand {
     RemoveChildFrame { frame_id: u64 },
     /// Request window attention (urgency hint / taskbar flash)
     RequestAttention { urgent: bool },
+    /// Activate a GUI frame's native window (GNU `x-focus-frame`).
+    /// `frame.raw_id() == 0` also targets the adopted primary window.
+    FocusWindow { frame: FrameRef },
 }
 
 /// Typed commands for one stable compositor-owned video session.

@@ -18,7 +18,9 @@ use neomacs_display_protocol::SelectionOwner;
 use neovm_eval::emacs_core::eval::{DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
 use neovm_value::error::EvalError;
 use neovm_value::intern::resolve_sym;
+use std::cell::RefCell;
 use std::fs;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 struct ImageCapableDisplayHost;
@@ -3331,6 +3333,56 @@ fn x_focus_frame_accepts_live_neomacs_gui_frame() {
         builtin_x_focus_frame(&mut eval, vec![Value::NIL]).unwrap(),
         Value::NIL
     );
+}
+
+/// Records the host-side activation requests `x-focus-frame` emits.
+#[derive(Default, Clone)]
+struct FocusRecordingDisplayHost {
+    requests: Rc<RefCell<Vec<(crate::window::FrameId, bool)>>>,
+}
+
+impl DisplayHost for FocusRecordingDisplayHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn focus_gui_frame(
+        &mut self,
+        frame: crate::window::FrameId,
+        no_activate: bool,
+    ) -> Result<(), String> {
+        self.requests.borrow_mut().push((frame, no_activate));
+        Ok(())
+    }
+}
+
+/// GNU `x-focus-frame` calls the terminal's `focus_frame_hook`
+/// (`src/frame.c:3756`); the win32 hook activates the frame window
+/// (`src/w32term.c:7372`). Selection alone must not stand in for that call:
+/// that was #641, where `other-frame` changed the Lisp frame and left the OS
+/// focus on the old window.
+#[test]
+fn x_focus_frame_activates_the_host_window() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("selected frame")
+        .set_window_system(Some(Value::symbol(gui_window_system_symbol())));
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(FocusRecordingDisplayHost {
+        requests: Rc::clone(&requests),
+    }));
+
+    builtin_x_focus_frame(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap();
+    builtin_x_focus_frame(&mut eval, vec![Value::make_frame(frame_id.0), Value::T]).unwrap();
+
+    assert_eq!(&*requests.borrow(), &[(frame_id, false), (frame_id, true)]);
 }
 
 #[test]

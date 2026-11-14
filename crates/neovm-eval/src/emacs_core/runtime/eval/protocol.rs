@@ -396,6 +396,19 @@ pub trait DisplayHost {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Activate a GUI frame's native window, the host half of
+    /// `x-focus-frame`.
+    ///
+    /// GNU dispatches this to the toolkit's `focus_frame_hook`
+    /// (`src/frame.c:3756`); the win32 hook calls `SetForegroundWindow`
+    /// (`src/w32term.c:7372`). `no_activate` is GNU's NOACTIVATE, which the
+    /// win32 hook documents as having no effect because Windows cannot
+    /// activate an inactive window without also raising it. Backends without
+    /// a non-activating activation request ignore the flag for the same
+    /// reason.
+    fn focus_gui_frame(&mut self, _frame_id: FrameId, _no_activate: bool) -> Result<(), String> {
+        Ok(())
+    }
     fn set_gui_frame_title(
         &mut self,
         _frame_id: FrameId,
