@@ -171,3 +171,6 @@ mod oracle_startup_frame_lifecycle;
 
 #[path = "oracle_category_word_wrap.rs"]
 mod oracle_category_word_wrap;
+
+#[path = "oracle_buffer_fontification_snapshot.rs"]
+mod oracle_buffer_fontification_snapshot;
