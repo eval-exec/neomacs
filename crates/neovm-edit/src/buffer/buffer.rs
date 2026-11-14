@@ -6254,8 +6254,6 @@ pub struct BufferStorage {
     /// `last_name` and `filename` queryable.
     dead_buffers: FxHashMap<BufferId, Buffer>,
     buffer_order: Vec<BufferId>,
-    // Native links exist only while an owned cursor observes this storage.
-    buffer_order_observer: Option<Weak<RefCell<BufferListLinks>>>,
     next_id: u64,
     labeled_restrictions: FxHashMap<BufferId, Vec<LabeledRestriction>>,
     default_text_backend_kind: ImplementedBufferTextBackendKind,
@@ -6273,6 +6271,10 @@ pub struct BufferStorage {
     /// clone, which is why saving a point in one buffer supersedes the point
     /// saved in every other one -- see [`SavedPointBeforeCommand`].
     saved_point_before_command: SavedPointBeforeCommand,
+    // Native links exist only while an owned cursor observes this storage.
+    // Keep cold observer state after the existing fields: shipping codegen
+    // gates verify that hot default-slot displacements remain unchanged.
+    buffer_order_observer: Option<Weak<RefCell<BufferListLinks>>>,
 }
 
 /// Cold ownership is separate from the common hot storage pointer.
