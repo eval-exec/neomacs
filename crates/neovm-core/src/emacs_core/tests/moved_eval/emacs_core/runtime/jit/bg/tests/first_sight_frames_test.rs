@@ -12,7 +12,8 @@ use crate::test_utils::{init_test_tracing, runtime_startup_context};
 use neovm_eval::test_support::authority::{
     BgJobClassCopy, bg_stats_for_test, cache_entry_kind_for_test, defer_tier_up_for_test,
     dispatch_sized_is_compiled_for_test, drain_ready_pending_for_test, force_deopt_for_test,
-    force_mode_for_test, hold_workers_for_test, jit_compiled_id_for_test, quiesce_for_test,
+    force_inline_insts_for_test, force_mode_for_test, hold_workers_for_test,
+    jit_compiled_id_for_test, quiesce_for_test,
 };
 use neovm_value::intern::intern;
 use neovm_value::value::Value;
@@ -73,6 +74,16 @@ fn jit_bg_first_sight_strict_calls_keep_the_frames() {
     );
     force_mode_for_test(Some(crate::emacs_core::jit::BgMode::Threaded));
     force_deopt_for_test(false);
+    // This fixture needs pending worker jobs even for small native callers.
+    force_inline_insts_for_test(Some(0));
+    struct ResetWorkerRoute;
+    impl Drop for ResetWorkerRoute {
+        fn drop(&mut self) {
+            force_inline_insts_for_test(None);
+            force_mode_for_test(None);
+        }
+    }
+    let _worker_route = ResetWorkerRoute;
     // Make the caller hot without ever calling the callee, and install it.
     ev.eval_str("(dotimes (i 3000) (neovm--bgf-outer i nil))")
         .expect("warm");
@@ -122,5 +133,4 @@ fn jit_bg_first_sight_strict_calls_keep_the_frames() {
         crate::emacs_core::jit::compile::spec_fast_call_count_for_test() > spec_fast,
         "the installed callee is entered from the site"
     );
-    force_mode_for_test(None);
 }

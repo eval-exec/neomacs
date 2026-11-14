@@ -18,10 +18,10 @@ use crate::emacs_core::print::print_value;
 use crate::test_utils::{init_test_tracing, runtime_startup_context};
 use neovm_eval::test_support::authority::{
     BgJobClassCopy, TestInline2Mode, TestOptMode, bg_stats_for_test, force_deopt_for_test,
-    force_hof_inline_for_test, force_inline_for_test, force_inline2_token_for_test,
-    force_mode_for_test, force_profit_gate_for_test, force_stress_for_test,
-    jit_compiled_id_for_test, opt_mode_token_scope_for_test, quiesce_for_test,
-    stress_probe_skip_max_for_test, with_cached_leaf_for_test,
+    force_hof_inline_for_test, force_inline_for_test, force_inline_insts_for_test,
+    force_inline2_token_for_test, force_mode_for_test, force_profit_gate_for_test,
+    force_stress_for_test, jit_compiled_id_for_test, opt_mode_token_scope_for_test,
+    quiesce_for_test, stress_probe_skip_max_for_test, with_cached_leaf_for_test,
 };
 use neovm_value::intern::intern;
 use std::time::Duration;
@@ -41,6 +41,8 @@ impl Production {
         force_deopt_for_test(false);
         force_inline_for_test(Some(true));
         force_mode_for_test(Some(crate::emacs_core::jit::BgMode::Threaded));
+        // Threaded mode can still compile small jobs inline; exercise the worker.
+        force_inline_insts_for_test(Some(0));
         force_stress_for_test(Some(stress));
         Self(Box::new(opt_mode_token_scope_for_test(TestOptMode::Opt)))
     }
@@ -49,6 +51,7 @@ impl Production {
 impl Drop for Production {
     fn drop(&mut self) {
         force_stress_for_test(None);
+        force_inline_insts_for_test(None);
         force_mode_for_test(None);
         force_inline2_token_for_test(None);
         force_hof_inline_for_test(None);
