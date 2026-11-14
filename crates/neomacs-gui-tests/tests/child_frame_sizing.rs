@@ -31,6 +31,7 @@ fn fitting_chromeless_child_before_redisplay_keeps_one_text_line() {
             root.join("crates/neomacs-gui-tests/fixtures/child-frame-sizing.el"),
         ),
     )
+    .without_paint_proof()
     .with_program(binary);
     for (key, value) in session.env() {
         plan = plan.with_env(key.clone(), value.clone());

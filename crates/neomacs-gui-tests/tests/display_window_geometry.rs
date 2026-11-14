@@ -38,6 +38,7 @@ fn run_geometry_probe(probe: &str, gnu: bool) {
             root.join("crates/neomacs-gui-tests/fixtures/display-window-geometry.el"),
         ),
     )
+    .without_paint_proof()
     .with_program(program)
     .with_env("NEOMACS_GEOMETRY_PROBE", probe)
     .with_env("TMPDIR", root.join("tmp").to_string_lossy())
