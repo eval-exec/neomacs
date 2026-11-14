@@ -443,30 +443,42 @@ impl WgpuRenderer {
                     track_color,
                     thumb_color,
                 } => {
-                    // Track
-                    self.add_rect(
-                        &mut cursor_vertices,
-                        *x + offset_x,
-                        *y + offset_y,
-                        *width,
-                        *height,
-                        track_color,
-                    );
-                    // Thumb (rounded)
-                    let (tx, ty, tw, th) = if *horizontal {
+                    // The glyph rect keeps the full allocated band for layout
+                    // and hit testing; GNU paints a narrower trough/slider
+                    // centered inside it, so paint only the visible band.
+                    let (band_offset, band_thickness) =
+                        super::layer_chrome::scroll_bar_visible_band(
+                            if *horizontal { *height } else { *width },
+                            self.effects.scroll_bar.width,
+                        );
+                    let (track_x, track_y, track_w, track_h) = if *horizontal {
                         (
-                            *x + offset_x + *thumb_start,
-                            *y + offset_y,
-                            *thumb_size,
-                            *height,
+                            *x + offset_x,
+                            *y + offset_y + band_offset,
+                            *width,
+                            band_thickness,
                         )
                     } else {
                         (
-                            *x + offset_x,
-                            *y + offset_y + *thumb_start,
-                            *width,
-                            *thumb_size,
+                            *x + offset_x + band_offset,
+                            *y + offset_y,
+                            band_thickness,
+                            *height,
                         )
+                    };
+                    self.add_rect(
+                        &mut cursor_vertices,
+                        track_x,
+                        track_y,
+                        track_w,
+                        track_h,
+                        track_color,
+                    );
+                    // Thumb (rounded) inside the visible trough.
+                    let (tx, ty, tw, th) = if *horizontal {
+                        (*x + offset_x + *thumb_start, track_y, *thumb_size, track_h)
+                    } else {
+                        (track_x, *y + offset_y + *thumb_start, track_w, *thumb_size)
                     };
                     let radius = tw.min(th) * self.effects.scroll_bar.thumb_radius;
                     scroll_bar_thumbs.push((tx, ty, tw, th, radius, *thumb_color));
