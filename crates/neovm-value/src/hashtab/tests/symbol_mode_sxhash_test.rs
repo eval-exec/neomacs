@@ -60,3 +60,38 @@ fn sxhash_positioned_recurses_through_lists_vectors_records_and_fallback() {
         }
     }
 }
+
+#[test]
+fn treesit_node_sxhash_keeps_private_slot_hash_direct_nested_and_fallback() {
+    crate::test_utils::init_test_tracing();
+    let parser = Value::make_record(vec![Value::symbol("treesit-parser"), Value::fixnum(7)]);
+    let slots = vec![Value::symbol("treesit-node"), Value::fixnum(19), parser];
+    let old_record = Value::make_record(slots.clone());
+    let first = Value::make_treesit_node(slots.clone());
+    let second = Value::make_treesit_node(slots);
+    assert_ne!(first, second);
+    let shapes: [fn(Value) -> Value; 3] = [
+        |v| v,
+        |v| Value::vector(vec![Value::fixnum(7), v]),
+        |v| Value::list(vec![v, Value::fixnum(7)]),
+    ];
+    for mode in [SymbolMode::Bare, SymbolMode::Positioned] {
+        for shape in shapes {
+            let old = shape(old_record);
+            let a = shape(first);
+            let b = shape(second);
+            for value in [a, b] {
+                assert_eq!(
+                    sxhash_for(&value, HashTableTest::Equal, mode),
+                    sxhash_for(&old, HashTableTest::Equal, mode),
+                );
+                // Check the independent legacy fallback as well as the Lisp
+                // entry point's normal depth-limited structural dispatcher.
+                assert_eq!(
+                    fallback_sxhash_emacs_uint(&value, HashTableTest::Equal, mode),
+                    fallback_sxhash_emacs_uint(&old, HashTableTest::Equal, mode),
+                );
+            }
+        }
+    }
+}

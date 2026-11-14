@@ -307,6 +307,7 @@ fn emacs_sxhash_obj(value: &Value, depth: usize, symbol_mode: SymbolMode) -> Opt
         ValueKind::Cons => Some(emacs_sxhash_list(value, depth, symbol_mode)),
         ValueKind::Veclike(VecLikeType::Vector)
         | ValueKind::Veclike(VecLikeType::Record)
+        | ValueKind::Veclike(VecLikeType::TsNode)
         | ValueKind::Veclike(VecLikeType::CharTable)
         | ValueKind::Veclike(VecLikeType::SubCharTable) => {
             emacs_sxhash_structural_pseudovector(value, depth, symbol_mode)
@@ -435,15 +436,20 @@ fn hash_value_for_equal(
             hash_value_for_equal(&pair_car, hasher, depth + 1, symbol_mode);
             hash_value_for_equal(&pair_cdr, hasher, depth + 1, symbol_mode);
         }
-        ValueKind::Veclike(VecLikeType::Vector) | ValueKind::Veclike(VecLikeType::Record) => {
+        ValueKind::Veclike(VecLikeType::Vector)
+        | ValueKind::Veclike(VecLikeType::Record)
+        | ValueKind::Veclike(VecLikeType::TsNode) => {
             8_u8.hash(hasher);
             // Records aren't `is_vector()`, so as_vector_data() returns None for
             // them -- fall back to as_record_data() (mirrors GNU sxhash hashing a
             // record's slots like a vector). Previously this unwrap() panicked on
-            // any record / cl-defstruct, aborting the whole process.
+            // any record / cl-defstruct, aborting the whole process. Native
+            // tree-sitter wrappers keep that private slot hash after gaining
+            // their own opaque header; ordinary record access stays closed.
             let items = value
                 .as_vector_data()
                 .or_else(|| value.as_record_data())
+                .or_else(|| value.as_treesit_node_data())
                 .unwrap()
                 .clone();
             items.len().hash(hasher);
