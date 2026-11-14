@@ -92,7 +92,10 @@ pub enum Capability {
     ScreenCapture,
     /// A harness-owned compositor (Xvfb, Weston) that the test may start.
     CompositorControl,
-    /// A pinned GNU Emacs oracle is configured for comparisons.
+    /// A GNU Emacs executable is configured for comparisons
+    /// (`NEOMACS_GUI_TEST_GNU_EMACS`). The harness does not attest it:
+    /// CI's oracle action provisions the pinned build, and a local run is
+    /// only as trustworthy as the executable it points at.
     GnuOracle,
     /// The window server will actually make a window drawable: an unlocked
     /// console, an awake display, and a window on the active Space. Without

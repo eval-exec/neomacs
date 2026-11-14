@@ -130,6 +130,9 @@ fn a_missing_required_capability_skips_the_launch_and_names_itself() {
         frame_snapshot: None,
     };
 
+    // The fake runner would write this file if it were invoked; its absence
+    // proves the capability check short-circuited before any launch.
+    let _ = std::fs::remove_file(&artifacts.png);
     let result = plan
         .run_with(
             &mut runner,
@@ -141,6 +144,10 @@ fn a_missing_required_capability_skips_the_launch_and_names_itself() {
     assert_eq!(
         result.png_bytes, None,
         "an unsupported host must not run the editor"
+    );
+    assert!(
+        !artifacts.png.exists(),
+        "the runner was invoked before the capability check"
     );
     assert!(
         result
@@ -742,6 +749,8 @@ fn a_semantic_plan_succeeds_without_a_paint_readback() {
     let _ = std::fs::remove_file(&artifacts.png);
     let _ = std::fs::remove_file(&artifacts.stderr);
 
+    // Semantic scenarios opt out of the paint proof explicitly; the default
+    // for a plan that never opts out is still "the PNG must exist".
     let plan = GuiTestPlan::new(
         GuiBackend::Macos,
         &workspace_root,

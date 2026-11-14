@@ -130,7 +130,11 @@ runtime dirs, locale, display) and each backend implements it:
   `XAUTHORITY`; nothing the editor writes reaches the operator's home.
 - macOS: the current desktop session; pin `HOME`/`TMPDIR` and any XDG
   variables for config-environment tests; run one native-tier invocation
-  per desktop; never assume the editor is the frontmost app.
+  per desktop; never assume the editor is the frontmost app. The
+  `native-input` and `screen-capture` capabilities describe what the backend
+  can provide; the Swift driver's permission preflight decides at use time,
+  so a scenario that needs a grant reports the driver's failure reason rather
+  than being advertised as supported by the capability resolver.
 - Windows (future): the current desktop session, with the same pinning.
 
 ### 5. Artifact manifest
@@ -145,8 +149,9 @@ log remain the environment record.
 
 ### 6. GNU oracle availability
 
-GNU comparisons declare the `gnu_oracle` capability. Linux CI provides the
-pinned GTK3 oracle. macOS CI builds the same pinned commit with the action's
+GNU comparisons declare the `gnu_oracle` capability, which means only that
+`NEOMACS_GUI_TEST_GNU_EMACS` names a GNU executable; the harness does not
+attest that it is the pinned build. Linux CI provides the pinned GTK3 oracle. macOS CI builds the same pinned commit with the action's
 default `macos-ns` profile (`--with-ns --without-x`): it can bootstrap the
 Doom fixture and answer Lisp-visible questions, but it is not a GUI pixel
 reference. GUI comparisons on macOS therefore need one of two explicit oracle
