@@ -367,3 +367,14 @@ fn whole_operation_multibyte_utf8_alias_value_survives_holder_clear_kill_gc() {
         Some(r#"OK ((t t) (verify-visited-file-modtime 1 1 nil) t t nil t)"#),
     );
 }
+
+#[test]
+fn write_region_filename_handler_observes_visit_mutation() {
+    compare_filename_identity(
+        "write_region_filename_handler_observes_visit_mutation",
+        include_str!(
+            "fixtures/filelock_identity/write-region-filename-handler-after-visit-mutation.el"
+        ),
+        Some(r#"OK (((visit-expand t) (write-region t t t t)) threadsig-write-handler-marker t)"#),
+    );
+}
