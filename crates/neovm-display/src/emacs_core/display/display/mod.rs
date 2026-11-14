@@ -3274,24 +3274,24 @@ pub fn builtin_x_open_connection(
         }
         return Ok(Value::NIL);
     }
-    let display = display_string_text(&args[0]).unwrap_or_default();
+    let requested_display = display_string_text(&args[0]).unwrap_or_default();
     if x_window_system_active(eval) {
         let admitted = match eval
             .display_host
             .as_ref()
-            .map(|host| host.graphical_connection_identity(Some(&display)))
+            .map(|host| host.graphical_connection_identity(Some(&requested_display)))
         {
             Some(Ok(Some(_))) => true,
             Some(Err(reason)) => {
-                tracing::debug!(%display, %reason, "x-open-connection host refused admission");
+                tracing::debug!(%requested_display, %reason, "x-open-connection host refused admission");
                 false
             }
             Some(Ok(None)) => {
-                tracing::debug!(%display, "x-open-connection host has no graphical connection");
+                tracing::debug!(%requested_display, "x-open-connection host has no graphical connection");
                 false
             }
             None => {
-                tracing::debug!(%display, "x-open-connection has no native display host");
+                tracing::debug!(%requested_display, "x-open-connection has no native display host");
                 false
             }
         };
@@ -3306,7 +3306,9 @@ pub fn builtin_x_open_connection(
     }
     Err(signal(
         "error",
-        vec![Value::string(format!("Display {display} can’t be opened"))],
+        vec![Value::string(format!(
+            "Display {requested_display} can’t be opened"
+        ))],
     ))
 }
 
