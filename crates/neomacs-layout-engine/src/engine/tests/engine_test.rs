@@ -28484,6 +28484,9 @@ fn layout_frame_rust_keeps_changed_margin_marker_among_dense_empty_gutter_overla
             buf.insert(&format!("unchanged line {line}\n"));
         }
         buf.set_buffer_local("display-line-numbers", Value::T);
+        // Keep this margin regression's six-column number field explicit.
+        // GNU xdisp.c:25576-25586 applies this minimum before viewport sizing.
+        buf.set_buffer_local("display-line-numbers-width", Value::fixnum(4));
         buf.goto_emacs_byte_pos(EmacsBytePos::ZERO);
     }
     let install_gutter_overlays = r##"(save-excursion
