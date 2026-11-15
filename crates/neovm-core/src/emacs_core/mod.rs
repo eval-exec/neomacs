@@ -362,6 +362,9 @@ mod compile_main_rule_test;
 #[path = "tests/build_support/generated_lisp_test.rs"]
 mod generated_lisp_test;
 #[cfg(test)]
+#[path = "tests/gnu_surface/defsym_symbols_test.rs"]
+mod gnu_defsym_symbols_test;
+#[cfg(test)]
 #[path = "tests/gnu_surface/defvar_special_test.rs"]
 mod gnu_defvar_special_test;
 #[cfg(test)]
@@ -470,6 +473,10 @@ mod architecture_vis_ledger_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/test_support_surface_guard_test.rs"]
 mod architecture_test_support_surface_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/gnu_defsyms_generated_test.rs"]
+mod architecture_gnu_defsyms_generated_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/upper_subrs_generated_test.rs"]
