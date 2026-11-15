@@ -330,8 +330,6 @@ expt	2	2	core	always
 identity	1	1	core	always
 propertize	1	-	core	always
 capitalize	1	1	core	always
-define-charset-internal	17	-	core	always
-define-charset-alias	2	2	core	always
 internal-lisp-face-p	1	2	display	always
 internal-make-lisp-face	1	2	display	always
 internal-set-lisp-face-attribute	3	4	display	always

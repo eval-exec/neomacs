@@ -135,24 +135,6 @@ impl EvaluatorCompatibility<EvaluatorCompatibilityComplete> {
 /// initialization point. The remaining declarations are typed compatibility
 /// entries awaiting localization; every path installs a [`SubrSpec`] in the
 /// same static registry.
-/// Cons NAME onto `charset-list', as GNU's charset writers do.
-///
-/// GNU keeps every charset and alias ever defined in `Vcharset_list', newest
-/// first; `describe-character-set', `list-charset-chars' and anything else
-/// enumerating charsets reads it.
-fn push_onto_charset_list(
-    ctx: &mut crate::emacs_core::eval::Context,
-    name: crate::emacs_core::value::Value,
-) {
-    use crate::emacs_core::value::Value;
-    let current = ctx
-        .builtin_var_value_by_name("charset-list")
-        .unwrap_or(Value::NIL);
-    // Unconditionally, as GNU does: defining the same alias twice leaves two
-    // entries in its list, and nothing in a normal session defines a charset
-    // twice.
-    ctx.store_variable_by_name("charset-list", Value::cons(name, current));
-}
 
 pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     #[cfg(windows)]
@@ -1243,44 +1225,6 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         "capitalize",
         NativeFn::ContextVec(crate::emacs_core::casefiddle_entries::builtin_capitalize_in_state),
         SubrArity::new(1, Some(1)),
-    )));
-    // A coding system's memoized `:ascii-compatible-p`/`:category` are
-    // computed from its charsets (`compute_coding_ascii_compat`,
-    // `compute_coding_category`), so a charset defined, redefined or
-    // aliased after the memo filled would leave it stale: the two charset
-    // writers drop the coding-system memo too.
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "define-charset-internal",
-        NativeFn::ContextVec(|ctx, args| {
-            ctx.coding_systems().invalidate_lookup_cache();
-            let name = args.first().copied();
-            let defined =
-                crate::emacs_core::charset::builtin_define_charset_internal_in_state(ctx, args)?;
-            // GNU `Fdefine_charset_internal' ends by consing the name onto
-            // `Vcharset_list' (charset.c), newest first. Ours never did, so
-            // `charset-list' stayed nil while GNU's held 203 charsets --
-            // anything enumerating the defined charsets saw none.
-            if let Some(name) = name {
-                push_onto_charset_list(ctx, name);
-            }
-            Ok(defined)
-        }),
-        SubrArity::new(17, None),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "define-charset-alias",
-        NativeFn::ContextVec(|ctx, args| {
-            ctx.coding_systems().invalidate_lookup_cache();
-            let alias = args.first().copied();
-            let defined =
-                crate::emacs_core::charset::builtin_define_charset_alias_in_state(ctx, args)?;
-            // An alias joins `charset-list' too, though not the priority list.
-            if let Some(alias) = alias {
-                push_onto_charset_list(ctx, alias);
-            }
-            Ok(defined)
-        }),
-        SubrArity::new(2, Some(2)),
     )));
     crate::emacs_core::display_subrs::register_internal_lisp_face_p(ctx);
     ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::COPY_SYNTAX_TABLE_SUBR);

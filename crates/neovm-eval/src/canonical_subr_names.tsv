@@ -495,6 +495,8 @@ position-bytes	1	1	eval	always
 get-byte	0	2	eval	always
 find-charset-region	2	3	eval	always
 charset-after	0	1	eval	always
+define-charset-internal	17	-	eval	always
+define-charset-alias	2	2	eval	always
 modify-syntax-entry	2	3	eval	always
 syntax-table	0	0	eval	always
 char-syntax	1	1	eval	always
@@ -1168,8 +1170,6 @@ expt	2	2	core	always
 identity	1	1	core	always
 propertize	1	-	core	always
 capitalize	1	1	core	always
-define-charset-internal	17	-	core	always
-define-charset-alias	2	2	core	always
 internal-lisp-face-p	1	2	display	always
 internal-make-lisp-face	1	2	display	always
 internal-set-lisp-face-attribute	3	4	display	always
