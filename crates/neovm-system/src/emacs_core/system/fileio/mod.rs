@@ -7436,7 +7436,14 @@ pub(crate) fn builtin_find_file_noselect(
 
     let saved_current = eval.edit.buffers.current_buffer_id();
     let open_result = (|| -> EvalResult {
-        eval.switch_current_buffer(buf_id)?;
+        // GNU's `find-file-noselect' (lisp/files.el) visits under
+        // `with-current-buffer', whose switches go through `Fset_buffer' →
+        // `set_buffer_internal'.  `record_buffer' (buffer.c:2205) -- the
+        // only move-to-front -- is called solely from `set_window_buffer'
+        // (window.c:582), so the visit must not count as a selection:
+        // the new buffer stays at the tail (`get-buffer-create' appends,
+        // buffer.c:677) and does not become `other-buffer's preference.
+        eval.set_current_buffer_unrecorded(buf_id)?;
 
         let visit_error = if file_exists_path(&abs_path_buf) {
             builtin_insert_file_contents(

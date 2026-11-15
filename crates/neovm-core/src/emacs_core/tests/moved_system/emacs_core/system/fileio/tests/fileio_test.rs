@@ -6677,6 +6677,67 @@ fn test_find_file_noselect() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// GNU's `find-file-noselect` (lisp/files.el) visits under
+/// `with-current-buffer`, whose switches go through `Fset_buffer` →
+/// `set_buffer_internal`, and `record_buffer` (the only move-to-front,
+/// buffer.c:2205) is called solely from `set_window_buffer`
+/// (window.c:582).  `get-buffer-create` appends (buffer.c:677), so a
+/// buffer born of `find-file-noselect` stays at the tail of the buffer
+/// list, pre-existing buffers keep their relative order, and re-visiting
+/// the same file reorders nothing either.  Emacs 31.1 at
+/// a360712c9d272d950d8d8255ef74570f7e90b7d9.
+#[test]
+fn find_file_noselect_does_not_reorder_the_buffer_list() {
+    crate::test_utils::init_test_tracing();
+    use neovm_edit::buffer::BufferId;
+
+    let dir = std::env::temp_dir().join("neovm_findfile_order_test");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("ordered.txt");
+    let path_str = path.to_string_lossy().to_string();
+    write_string_to_file("ordered content", &path_str, false).unwrap();
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let first = eval.edit.buffers.create_buffer("order-first");
+    let second = eval.edit.buffers.create_buffer("order-second");
+
+    let visited = builtin_find_file_noselect(&mut eval, vec![Value::string(&path_str)])
+        .unwrap()
+        .as_buffer_id()
+        .unwrap();
+
+    let position = |order: &[BufferId], id: BufferId| {
+        order
+            .iter()
+            .position(|b| *b == id)
+            .unwrap_or_else(|| panic!("buffer {id:?} missing from buffer list"))
+    };
+    let order = eval.edit.buffers.buffer_list();
+    assert!(
+        position(&order, first) < position(&order, second),
+        "creation order must survive the visit: {order:?}"
+    );
+    assert!(
+        position(&order, visited) > position(&order, second),
+        "the visited buffer must stay at the tail, not jump to the head: {order:?}"
+    );
+
+    // Re-visiting the same file must not reorder either (GNU returns the
+    // existing buffer without any alist mutation).
+    let revisited = builtin_find_file_noselect(&mut eval, vec![Value::string(&path_str)])
+        .unwrap()
+        .as_buffer_id()
+        .unwrap();
+    assert_eq!(revisited, visited);
+    let order_after_revisit = eval.edit.buffers.buffer_list();
+    assert_eq!(
+        order_after_revisit, order,
+        "re-visiting must not reorder the buffer list"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn builtin_find_file_noselect_handles_raw_unibyte_filename() {
