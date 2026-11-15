@@ -1449,7 +1449,7 @@ impl Context {
                         } else if (*heap_ptr).incremental_sweep_slice(INCREMENTAL_SWEEP_BUDGET) {
                             cycle_completed = true; // sweep drained -> cycle done
                         } else {
-                            return; // more sweep to do; defer bookkeeping
+                            return self.bank_gc_cycle_time(start); // more sweep to do; defer bookkeeping
                         }
                     }
                     MarkPhase::ConcurrentRunning => {
@@ -1473,9 +1473,9 @@ impl Context {
                                 (*heap_ptr).note_must_finish();
                             }
                             self.terminate_concurrent_mark(heap_ptr);
-                            return; // sweep deferred; cycle not done yet
+                            return self.bank_gc_cycle_time(start); // sweep deferred; cycle not done yet
                         }
-                        return; // GC thread still marking; mutator continues
+                        return self.bank_gc_cycle_time(start); // GC thread still marking; mutator continues
                     }
                     MarkPhase::StoppedMarking => {
                         // A joined worker or dropped unpublished capture can leave a
@@ -1488,7 +1488,7 @@ impl Context {
                             Err(error) => {
                                 // Preserve the unfinished cycle on failed recovery.
                                 tracing::warn!(target: "neovm::gc", %error, "residual major recovery pending");
-                                return;
+                                return self.bank_gc_cycle_time(start);
                             }
                         }
                         cycle_completed = true;
@@ -1536,7 +1536,7 @@ impl Context {
                 );
                             self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                             (*heap_ptr).complete_minor_collection();
-                            return;
+                            return self.bank_gc_cycle_time(start);
                         } else {
                             let concurrent_kind = if (*heap_ptr).should_run_concurrent() {
                                 Some(ConcurrentCycleKind::Threshold)
@@ -1547,7 +1547,7 @@ impl Context {
                             };
                             if let Some(kind) = concurrent_kind {
                                 match self.start_concurrent_mark(heap_ptr, kind) {
-                        Ok(()) => return,
+                        Ok(()) => return self.bank_gc_cycle_time(start),
                         Err(neovm_value::tagged::gc::ConcurrentMarkAdmissionError::Excluded(_)) => {
                             // Held facade roots choose exact synchronous GC.
                         }
@@ -1557,7 +1557,7 @@ impl Context {
                             // An exchanged heap cannot use this owner's old
                             // census. Keep the incomplete cycle for explicit
                             // owner recovery rather than tracing foreign roots.
-                            return;
+                            return self.bank_gc_cycle_time(start);
                         }
                         Err(
                             neovm_value::tagged::gc::ConcurrentMarkAdmissionError::CollectorBusy
@@ -1591,7 +1591,7 @@ impl Context {
                                                 error = %error,
                                                 "NEOVM_GC synchronous recovery pending: {error}"
                                             );
-                                            return;
+                                            return self.bank_gc_cycle_time(start);
                                         }
                                     }
                                 }
@@ -1618,7 +1618,7 @@ impl Context {
             }
         }
         if !cycle_completed {
-            return;
+            return self.bank_gc_cycle_time(start);
         }
         // First partition cycle (concurrent bootstrap): with the sweep now
         // drained, promote survivors + blacken the image + build the initial
@@ -1629,7 +1629,10 @@ impl Context {
         }
         self.gc_pending = false;
         self.gc_count += 1;
-        self.update_gc_runtime_stats(start.elapsed());
+        // The whole collection, not only this last call: earlier calls of the
+        // cycle banked their time in `gc_cycle_elapsed`.
+        let elapsed = std::mem::take(&mut self.gc_cycle_elapsed) + start.elapsed();
+        self.update_gc_runtime_stats(elapsed);
         self.sync_gc_threshold_from_runtime_settings();
         // Destroy the GPU objects of shader-surface handles this cycle swept.
         // Every completed collection funnels through this block (explicit
@@ -1651,6 +1654,12 @@ impl Context {
             // allocation-bearing safe point.
             self.tagged_heap.reset_bytes_since_gc();
         }
+    }
+
+    /// Bank the time of a collector call that leaves its cycle unfinished;
+    /// the call that completes the cycle publishes the sum to `gc-elapsed`.
+    fn bank_gc_cycle_time(&mut self, start: std::time::Instant) {
+        self.gc_cycle_elapsed += start.elapsed();
     }
 
     /// Seed every evaluator/context root into the collector's gray queue and

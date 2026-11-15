@@ -63,6 +63,9 @@ fn every_context_offset_is_mains() {
     // f919779a16 added two usize probe words; 8659f75255 added one bytecode
     // accounting word (renamed to position in 69eb051e9e). These are real
     // production fields after jit_stack_limit, so all later pins move by 24.
+    // The collection-time accumulator (`gc_cycle_elapsed`, a Duration) is
+    // appended after `frame_and_buffer_state`: the size grows by 16 and no
+    // pinned offset moves.
     assert_eq!(size_of::<NativeStackProbe>(), 16);
     const TEST_EXTRA: usize =
         INTERACTIVE_EXTRA + MINIBUFFER_EXTRA + WAIT_GATE_EXTRA + OBSERVATION_EXTRA;
@@ -74,13 +77,13 @@ fn every_context_offset_is_mains() {
     #[cfg(debug_assertions)]
     assert_eq!(
         size_of::<Context>(),
-        44664 + TEST_EXTRA,
+        44680 + TEST_EXTRA,
         "Context size (debug with test instrumentation)"
     );
     #[cfg(not(debug_assertions))]
     assert_eq!(
         size_of::<Context>(),
-        44656 + TEST_EXTRA,
+        44672 + TEST_EXTRA,
         "Context size (release with test instrumentation)"
     );
     let table: &[(usize, usize, &str)] = &[
@@ -717,6 +720,11 @@ fn every_context_offset_is_mains() {
             44639,
             offset_of!(Context, loadup_dump_mode),
             "loadup_dump_mode",
+        ),
+        (
+            44656,
+            offset_of!(Context, gc_cycle_elapsed),
+            "gc_cycle_elapsed",
         ),
     ];
     // Adjust only for independently pinned test/debug storage. Boundaries

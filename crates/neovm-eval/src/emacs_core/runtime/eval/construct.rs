@@ -2449,6 +2449,7 @@ impl Context {
             in_flight_registry: seed.registries.in_flight,
             cached_standard_case_table: None,
             frame_and_buffer_state: None,
+            gc_cycle_elapsed: std::time::Duration::ZERO,
         }
     }
 
