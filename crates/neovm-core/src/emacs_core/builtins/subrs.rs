@@ -710,16 +710,6 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::kmacro::builtin_store_kbd_macro_event),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(
-        const {
-            crate::emacs_core::subr::world_subr!(SubrSpec::fixed3(
-                "get-char-property",
-                crate::emacs_core::textprop_entries::builtin_get_char_property_3,
-                FixedMin3::Two,
-            ))
-            .leaf(&leaves::GET_CHAR_PROPERTY)
-        },
-    );
     ctx.register_subr(neovm_eval::emacs_core::builtins::buffer_subrs::BOBP_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "bolp",
@@ -1934,13 +1924,6 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         "set-process-datagram-address",
         NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_datagram_address),
         SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "get-char-property-and-overlay",
-        NativeFn::ContextVec(
-            crate::emacs_core::textprop_entries::builtin_get_char_property_and_overlay
-        ),
-        SubrArity::new(2, Some(3)),
     )));
     crate::emacs_core::display_subrs::register_active_minibuffer_window(ctx);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

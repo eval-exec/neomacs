@@ -59,8 +59,7 @@ pub mod register;
 pub mod syntax_entries;
 #[path = "commands/system_entries/mod.rs"]
 pub(crate) mod system_entries;
-#[path = "commands/textprop_entries/mod.rs"]
-pub mod textprop_entries;
+pub use crate::emacs_core::eval::data::textprop_entries;
 
 // Display model, redisplay, and graphical/terminal surfaces.
 pub use neovm_display::emacs_core::chrome_dirty;

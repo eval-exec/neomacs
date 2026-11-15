@@ -107,7 +107,6 @@ end-kbd-macro	0	2	core	always
 call-last-kbd-macro	0	2	core	always
 execute-kbd-macro	1	3	core	always
 store-kbd-macro-event	1	1	core	always
-get-char-property	2	3	core	always
 bobp	0	0	core	always
 bolp	0	0	core	always
 forward-char	0	1	edit	always
@@ -497,7 +496,6 @@ set-process-query-on-exit-flag	2	2	system	always
 process-inherit-coding-system-flag	1	1	system	always
 set-process-coding-system	1	3	system	always
 set-process-datagram-address	2	2	system	always
-get-char-property-and-overlay	2	3	core	always
 active-minibuffer-window	0	0	display	always
 minibuffer-selected-window	0	0	display	always
 window-mode-line-height	0	1	display	always

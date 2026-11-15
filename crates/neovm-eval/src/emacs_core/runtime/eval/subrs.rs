@@ -2293,6 +2293,21 @@ crate::emacs_core::subr::define_subrs! {
         neovm_edit::emacs_core::textprop::builtin_previous_single_property_change_4,
         FixedMin4::Two,
     )),
+    const {
+        crate::emacs_core::subr::world_subr!(SubrSpec::fixed3(
+            "get-char-property",
+            crate::emacs_core::eval::data::textprop_entries::builtin_get_char_property_3,
+            FixedMin3::Two,
+        ))
+        .leaf(&leaves::GET_CHAR_PROPERTY)
+    },
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "get-char-property-and-overlay",
+        NativeFn::ContextVec(
+            crate::emacs_core::eval::data::textprop_entries::builtin_get_char_property_and_overlay
+        ),
+        SubrArity::new(2, Some(3)),
+    )),
     // -- Vector --
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "make-vector",
