@@ -551,6 +551,13 @@ mod emacs_core_runtime_bytecode_tests_decode_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/green_p15_condition_wait_test.rs"]
 mod emacs_core_runtime_eval_tests_green_p15_condition_wait_test_rs;
+// A green thread's face and display changes must reach the main thread:
+// internal-make-lisp-face and internal-set-lisp-face-attribute are
+// display-owned subrs, so the row runs against core's canonical face
+// install. Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/green_face_display_test.rs"]
+mod emacs_core_runtime_eval_tests_green_face_display_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tier_i/tests/list_bindings_test.rs"]
 mod emacs_core_runtime_eval_tier_i_tests_list_bindings_test_rs;

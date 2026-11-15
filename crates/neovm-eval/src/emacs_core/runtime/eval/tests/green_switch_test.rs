@@ -1214,31 +1214,6 @@ fn a_thread_sees_a_composition_made_by_another() {
     );
 }
 
-/// The redisplay change marks a buffer change bumps are one World's: the
-/// running owner holds them and hands them on with the Baton.
-#[test]
-fn a_threads_face_and_display_changes_reach_main() {
-    let mut ev = green();
-    let faces = ev.face_change_count();
-    let display = ev.display_var_change_count();
-    assert_eq!(
-        eval(
-            &mut ev,
-            "(thread-join (make-thread (lambda ()
-               (condition-case err
-                   (progn
-                     (internal-make-lisp-face 'tg3w-face)
-                     (internal-set-lisp-face-attribute 'tg3w-face :foreground \"green\")
-                     (set (make-local-variable (quote truncate-lines)) t)
-                     'done)
-                 (error err)))))"
-        ),
-        "done"
-    );
-    assert!(ev.face_change_count() > faces);
-    assert!(ev.display_var_change_count() > display);
-}
-
 fn select_parks() -> usize {
     super::switch::SELECT_PARKS.load(std::sync::atomic::Ordering::Relaxed)
 }
