@@ -56,6 +56,16 @@ jobs:
       - name: Verify build with cargo xtask fresh-build
         run: cargo xtask fresh-build --release
 
+      # The oracle, TUI, and MELPA suites below include the treesit rows,
+      # whose cache-only grammar reader fails loudly until this runs. This
+      # workflow builds locally, so unlike the sharded test-suite.yml (whose
+      # shards unpack a runtime tar that already carries the primed cache)
+      # the prefetch belongs here, once, before the first consumer suite.
+      - name: Prefetch pinned Tree-sitter grammars
+        env:
+          NEOVM_FORCE_ORACLE_PATH: /opt/gnu-emacs-oracle/bin/emacs
+        run: cargo xtask treesit-grammars
+
       # The release-pdump integration tests spawn target/release/neomacs with
       # the pdump fresh-build just produced; a debug-profile test harness is
       # enough (the feature fails loudly if the release binary is missing).
