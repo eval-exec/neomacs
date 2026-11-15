@@ -679,25 +679,65 @@ mod unit_runtime {
         s::process_terminate_and_defer_reaping,
     );
 
-    /// The eval unit runtime has no OS-signal INSTALLATION: `unit_harness`
+    /// The eval unit runtime installs NO OS-signal source: `unit_harness`
     /// never runs core's `os_signal::install`, so there is no signal handler,
     /// no signal self-pipe, no command loop, and no SIGINT/SIGTERM delivery
-    /// path into this evaluator. GNU's exact answer for those states is "no
-    /// signal pending" -- the OS-signal bit of `ASYNC_ATTENTION` (the same
-    /// process-wide state `system::os_signal::pending` reads) is clear when
-    /// no handler can raise it.
+    /// path into this evaluator. GNU's exact answer for that state is "no
+    /// signal pending".
     ///
-    /// A raised bit is outside the covered states: this runtime has no drain
-    /// path (the drain slot is ABSENT), so it refuses loudly instead of
-    /// answering false for a genuinely pending signal.
+    /// This answers `false` EVEN WHEN a test raises `ASYNC_ATTENTION`'s
+    /// OsSignal bit: that raw bit is a safe-point control, not an installed
+    /// source, so there is nothing pending to process and no drain is
+    /// attempted. Only an installed source (a self-pipe read fd) would make a
+    /// pending signal possible.
+    ///
+    /// The premise is asserted dynamically once per process: a POSIX signal
+    /// source is the only thing that installs the self-pipe, so the
+    /// descriptor's read end must be absent; installing one trips the assert.
     fn unit_os_signal_pending() -> bool {
-        assert!(
-            !neovm_value::quit::ASYNC_ATTENTION.is_raised(neovm_value::quit::AsyncSource::OsSignal),
-            "ABSENT-LAYER system::input.os_signal_pending: the unit runtime has no \
-             OS-signal install or drain path, so a real pending signal cannot be \
-             answered here"
-        );
+        static PREMISE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        PREMISE
+            .get_or_init(|| assert_no_signal_source_installed(s::input_signal_wake_pipe_read_fd()));
         false
+    }
+
+    /// Panic unless the descriptor carries NO OS-signal source. A POSIX
+    /// signal source is what installs the self-pipe, so a `Some(read_fd)`
+    /// here would mean a source exists and the no-signal answer is a lie.
+    fn assert_no_signal_source_installed(read_fd: Option<i32>) {
+        assert!(
+            read_fd.is_none(),
+            "ABSENT layer: an OS-signal source is installed in the unit runtime \
+             (self-pipe read fd {read_fd:?}); the no-signal answer would hide it"
+        );
+    }
+
+    #[cfg(test)]
+    mod os_signal_pending_premise {
+        use super::assert_no_signal_source_installed;
+
+        /// 6170 condition: installing a self-pipe (a real read fd) in the
+        /// unit runtime must trip the no-source premise assert.
+        #[test]
+        fn installing_a_self_pipe_trips_the_no_source_assert() {
+            let payload = std::panic::catch_unwind(|| assert_no_signal_source_installed(Some(7)))
+                .expect_err("a planted self-pipe must trip the premise");
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("");
+            assert!(
+                message.contains("OS-signal source is installed"),
+                "unexpected premise panic: {message}"
+            );
+        }
+
+        /// The descriptor's absent read end is the covered state.
+        #[test]
+        fn the_absent_read_end_satisfies_the_premise() {
+            assert_no_signal_source_installed(None);
+        }
     }
 
     static INPUT: InputHooks = InputHooks::new(
