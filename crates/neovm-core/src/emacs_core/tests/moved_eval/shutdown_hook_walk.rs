@@ -29,16 +29,24 @@ fn list_items(mut list: Value) -> Vec<Value> {
     items
 }
 
-/// Records the auto-save dispatch through [`Context::register_subr`].
+/// Records each shutdown auto-save upcall. Shutdown reaches the canonical
+/// `Fdo_auto_save` body only through the eval-owned `AutoSaveHooks` table
+/// (a redefined or unbound `do-auto-save` function cell cannot intercept
+/// it), so the recorder sits on that one path: the calling thread's
+/// auto-save body, installed through the evaluator's authority fence.
 /// The record is a Lisp list on this Context:
 /// `(args phase-fixnum . stored-flag)`, consed onto
 /// `neomacs--shutdown-dispatch-log`.
-fn recording_shutdown_subr(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+fn recording_shutdown_auto_save(
+    ctx: &mut Context,
+    no_message: Value,
+    current: Value,
+) -> EvalResult {
     let phase = ctx.shutdown_phase;
     let request_stored = ctx.shutdown_request().is_some();
     let stored = if request_stored { Value::T } else { Value::NIL };
     let record = Value::cons(
-        cons_list(args),
+        cons_list(vec![no_message, current]),
         Value::cons(Value::fixnum(phase as u8 as i64), stored),
     );
     let sym = dispatch_log_symbol(ctx);
@@ -47,13 +55,12 @@ fn recording_shutdown_subr(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-fn install_recording_shutdown_subr(ctx: &mut Context) {
+/// Clear this Context's log and route the thread's auto-save upcalls to the
+/// recorder until the returned guard drops.
+#[must_use = "the recorder is removed when the guard drops"]
+fn install_recording_shutdown_auto_save(ctx: &mut Context) -> impl Drop + use<> {
     ctx.assign_by_id(dispatch_log_symbol(ctx), Value::NIL);
-    ctx.register_subr(crate::emacs_core::subr::SubrSpec::new(
-        "do-auto-save",
-        crate::emacs_core::subr::NativeFn::ContextVec(recording_shutdown_subr),
-        crate::emacs_core::subr::SubrArity::new(0, Some(2)),
-    ));
+    neovm_eval::test_support::authority::auto_save_body_scope_for_test(recording_shutdown_auto_save)
 }
 
 fn assert_shutdown_dispatches(ctx: &Context, count: usize) {
@@ -97,7 +104,7 @@ fn kill_emacs_hook_runs_once_before_dying_and_later_walks_stay_silent() {
   (setq probe-hook (lambda () (setq probe-ran t))))"#,
     )
     .expect("install hooks");
-    install_recording_shutdown_subr(&mut ctx);
+    let _recorder = install_recording_shutdown_auto_save(&mut ctx);
     let flow = ctx
         .shutdown_with_hooks(ShutdownRequest {
             exit_code: 0,
@@ -143,7 +150,7 @@ fn hook_callback_kill_emacs_does_not_run_the_remaining_callbacks() {
     (lambda () (setq second t)))))"#,
     )
     .expect("install probe");
-    install_recording_shutdown_subr(&mut ctx);
+    let _recorder = install_recording_shutdown_auto_save(&mut ctx);
     let sym = hook_symbol_by_name(&ctx, "probe-hook");
     let value = hook_value_by_id(&ctx, sym).expect("probe value");
     let flow = run_hook_value(&mut ctx, sym, value, &[], true).expect_err("shutdown flow");
@@ -249,7 +256,8 @@ fn insert_live_tty_frame(ctx: &mut Context) {
     );
 }
 
-fn install_last_terminal_hook(ctx: &mut Context) {
+#[must_use = "the recorder is removed when the guard drops"]
+fn install_last_terminal_hook(ctx: &mut Context) -> impl Drop + use<> {
     insert_live_tty_frame(ctx);
     install_display_liveness_standins(ctx);
     ctx.eval_str(
@@ -265,7 +273,7 @@ fn install_last_terminal_hook(ctx: &mut Context) {
     (setq terminal-was-live (terminal-live-p (frame-terminal))))))"#,
     )
     .expect("install hook");
-    install_recording_shutdown_subr(ctx);
+    install_recording_shutdown_auto_save(ctx)
 }
 
 fn assert_last_terminal_exit(ctx: &mut Context) {
@@ -292,7 +300,7 @@ fn last_terminal_disconnect_enters_dying_after_kill_emacs_hook() {
     // Unattested GNU, not the attested oracle. Source contract at a360712c9d,
     // kill.log "KILL frame=t terminal=t", delete.log absent, exit 1.
     let mut ctx = crate::test_utils::new_context();
-    install_last_terminal_hook(&mut ctx);
+    let _recorder = install_last_terminal_hook(&mut ctx);
     ctx.handle_display_terminal_disconnect();
     assert_last_terminal_exit(&mut ctx);
 
@@ -300,7 +308,7 @@ fn last_terminal_disconnect_enters_dying_after_kill_emacs_hook() {
     // is still on the stack (`emacs.c:453-460`). A disconnect during
     // InProgress re-enters the hook instead of returning nil.
     let mut during = crate::test_utils::new_context();
-    install_last_terminal_hook(&mut during);
+    let _during_recorder = install_last_terminal_hook(&mut during);
     during.shutdown_phase = ShutdownPhase::InProgress;
     during.handle_display_terminal_disconnect();
     assert_last_terminal_exit(&mut during);
@@ -325,7 +333,7 @@ fn nested_kill_emacs_inside_the_hook_reenters_and_keeps_the_inner_code() {
       (setq second (1+ second))))))"#,
     )
     .expect("install hooks");
-    install_recording_shutdown_subr(&mut ctx);
+    let _recorder = install_recording_shutdown_auto_save(&mut ctx);
     ctx.eval_str("(kill-emacs 0)")
         .expect_err("inner shutdown propagates");
     assert_eq!(ctx.shutdown_request().expect("inner").exit_code, 5);
@@ -345,7 +353,7 @@ fn dying_retry_skips_the_hook_and_keeps_a_published_request() {
   (setq kill-emacs-hook (lambda () (setq n (1+ n)))))"#,
     )
     .expect("install hook");
-    install_recording_shutdown_subr(&mut ctx);
+    let _recorder = install_recording_shutdown_auto_save(&mut ctx);
     ctx.shutdown_phase = ShutdownPhase::Dying;
     let flow = ctx
         .shutdown_with_hooks(ShutdownRequest {

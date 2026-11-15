@@ -71,5 +71,65 @@ fn auto_save_hooks() -> &'static AutoSaveHooks {
 
 /// Run GNU's canonical `Fdo_auto_save` through the installed table.
 pub fn do_auto_save(ctx: &mut Context, no_message: Value, current: Value) -> EvalResult {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(body) = test_body_override::current_thread_body() {
+        return body(ctx, no_message, current);
+    }
     (auto_save_hooks().do_auto_save())(ctx, no_message, current)
+}
+
+/// Test-support observation seam for the auto-save upcall.
+///
+/// The installed table is a process-wide publish-once descriptor, so a test
+/// cannot swap it. A test that must observe the shutdown auto-save installs
+/// a body for its own thread only; the guard removes it on drop. The list is
+/// a process static keyed by `ThreadId` (no new thread-local), so tests on
+/// other threads keep the canonical body. Only the
+/// `test_support::authority` fence exports it; it does not exist in a
+/// production build.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod test_body_override {
+    use super::DoAutoSave;
+    use std::sync::Mutex;
+    use std::thread::ThreadId;
+
+    static THREAD_BODIES: Mutex<Vec<(ThreadId, DoAutoSave)>> = Mutex::new(Vec::new());
+
+    fn bodies() -> std::sync::MutexGuard<'static, Vec<(ThreadId, DoAutoSave)>> {
+        THREAD_BODIES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The innermost body installed by the calling thread, if any.
+    pub(crate) fn current_thread_body() -> Option<DoAutoSave> {
+        let thread = std::thread::current().id();
+        bodies()
+            .iter()
+            .rev()
+            .find(|(owner, _)| *owner == thread)
+            .map(|(_, body)| *body)
+    }
+
+    /// Removes the calling thread's innermost override when dropped.
+    pub(crate) struct ThreadBodyGuard {
+        thread: ThreadId,
+    }
+
+    impl Drop for ThreadBodyGuard {
+        fn drop(&mut self) {
+            let mut bodies = bodies();
+            if let Some(index) = bodies.iter().rposition(|(owner, _)| *owner == self.thread) {
+                bodies.remove(index);
+            }
+        }
+    }
+
+    /// Route the calling thread's auto-save upcalls to `body` until the
+    /// guard drops.
+    pub(crate) fn install_for_current_thread(body: DoAutoSave) -> ThreadBodyGuard {
+        let thread = std::thread::current().id();
+        bodies().push((thread, body));
+        ThreadBodyGuard { thread }
+    }
 }
