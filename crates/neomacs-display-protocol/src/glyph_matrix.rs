@@ -1973,6 +1973,10 @@ pub struct FrameDisplayState {
     /// Bounded body coverage, separate from authoritative query geometry.
     #[serde(default)]
     pub scroll_coverage: Vec<std::sync::Arc<crate::scroll_coverage::ScrollCoverage>>,
+    /// Epochs whose certified coverage this publish re-asserts without
+    /// re-exporting a surface (see [`crate::scroll_coverage::ScrollCoverageRenewal`]).
+    #[serde(default)]
+    pub scroll_coverage_renewals: Vec<crate::scroll_coverage::ScrollCoverageRenewal>,
     /// Completed native commands reflected in this immutable frame.
     #[serde(default)]
     pub input_checkpoint: Vec<crate::input_progress::InputCheckpoint>,
@@ -2533,6 +2537,7 @@ impl FrameDisplayState {
         Self {
             scroll_input_policy: crate::ScrollInputPolicy::default(),
             scroll_coverage: Vec::new(),
+            scroll_coverage_renewals: Vec::new(),
             input_checkpoint: Vec::new(),
             presentation_id: PresentationId::default(),
             origin: crate::presentation_origin::PresentationOrigin::Ordinary,
@@ -2791,6 +2796,7 @@ impl FrameDisplayState {
             .iter()
             .filter_map(|coverage| coverage.materialize(self))
             .collect();
+        buf.scroll_coverage_renewals = self.scroll_coverage_renewals.clone();
         buf.frame_placement = self.frame_placement;
         buf.origin = self.origin;
         buf.char_width = self.char_width;

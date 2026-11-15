@@ -525,12 +525,15 @@ fn scroll(dead: bool) {
     );
     let stream = neomacs_display_protocol::input_progress::InputStream::default();
     let delivery = stream.issue().unwrap();
-    assert!(
-        render
-            .compositor
-            .input_scroll
-            .push(&root, 11.0, 11.0, 4.0, delivery.receipt(), None)
-    );
+    assert!(render.compositor.input_scroll.push(
+        &render.compositor.coverage_retention,
+        &root,
+        11.0,
+        11.0,
+        4.0,
+        delivery.receipt(),
+        None
+    ));
     render.compositor.input_scroll.paint(&mut root);
     let prepared = retained_scroll::prepare(
         &mut renderer,
@@ -546,7 +549,10 @@ fn scroll(dead: bool) {
     let pressure = hold(&mut renderer, u64::from(W * H * 2));
     refused(&mut renderer, &mut render, &root, &full_plan());
     if dead {
+        // A publish that certifies neither a surface nor a renewal for the
+        // epoch: silence is revocation, so the pooled raster must retire.
         root.scroll_surfaces.clear();
+        render.compositor.coverage_retention.refresh(&root);
         render.compositor.input_scroll = Default::default();
     } else {
         render.overlays.idle_dim.active = true;

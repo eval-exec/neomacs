@@ -1716,6 +1716,7 @@ impl RenderApp {
                         .scroll_effects_active()
                     && let Some(frame) = state.render.compositor.current_frame.as_ref()
                     && state.render.compositor.input_scroll.push(
+                        &state.render.compositor.coverage_retention,
                         frame,
                         ev_x,
                         ev_y,

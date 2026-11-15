@@ -59,6 +59,10 @@ struct ExportedCoverage {
     window: DisplayWindowId,
     key: RetainedWindowKey,
     epoch: u64,
+    // True while the current epoch has produced at least one exported
+    // surface. Only a certified epoch may be renewed: a re-keyed epoch that
+    // never exported anything has nothing retained to keep alive.
+    certified: bool,
     backward_start: Option<CharPos0>,
     // Placement hint for eviction, updated even when the content epoch is
     // unchanged. It grants no authority to reuse source or geometry.

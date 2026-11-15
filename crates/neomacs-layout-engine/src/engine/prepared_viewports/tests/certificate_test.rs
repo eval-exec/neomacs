@@ -292,6 +292,7 @@ fn retiring_dead_frames_purges_entries_exports_and_invalidations() {
         window,
         key: entry.retained.key.clone(),
         epoch: 0,
+        certified: false,
         backward_start: None,
         visible_source: 0..10,
     };

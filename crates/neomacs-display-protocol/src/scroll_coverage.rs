@@ -9,6 +9,25 @@ use crate::{
     PresentedRegionKind, Rect, WindowMatrixEntry,
 };
 
+/// The publishing redisplay's assertion that a certified coverage epoch still
+/// describes this frame's rows, carried on publishes that re-export no
+/// coverage surface. A publish re-exports nothing whenever preparation adds no
+/// content (for example a cursor-only redisplay, or once the offscreen worker
+/// has drained), so surface presence alone cannot distinguish "still valid"
+/// from "revoked". The renewal can: it names the epoch that remains certified
+/// plus this publish's projection policy, and the compositor keeps its
+/// retained surface valid for exactly this presentation. Silence — neither a
+/// surface nor a renewal — expires the retained coverage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ScrollCoverageRenewal {
+    pub window: crate::DisplayWindowId,
+    pub epoch: u64,
+    #[serde(default)]
+    pub predict_pixels: bool,
+    #[serde(default)]
+    pub compositor_enabled: bool,
+}
+
 /// A destination already chosen by canonical command dispatch. This carries
 /// no command implementation and grants no permission to mutate the evaluator.
 #[derive(Clone, Debug)]
@@ -352,8 +371,12 @@ impl ScrollSurface {
             point.y() + self.clamp_offset(offset) + self.coverage.origin,
         )
         .expect("validated coverage offset");
+        // The index answers in its own frame of reference: it keeps its
+        // original export's stamp even while a renewal keeps the surface
+        // certified for later presentations, and the caller has already
+        // validated the projection against the presentation being asked about.
         let hit = self.coverage.hit_index.resolve(PresentedHitQuery::new(
-            PresentationFramePoint::from_witnessed(point.presentation(), mapped),
+            PresentationFramePoint::from_witnessed(self.coverage.hit_index.presentation(), mapped),
         ))?;
         let offset = self.clamp_offset(offset) + self.coverage.origin;
         let first = self

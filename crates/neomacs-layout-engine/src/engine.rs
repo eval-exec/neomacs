@@ -4219,6 +4219,11 @@ impl LayoutEngine {
                 text_bounds = ?coverage.content.text_clip_bounds,
                 "exported compositor coverage");
         }
+        for renewal in &mut frame_display_state.scroll_coverage_renewals {
+            let window = neovm_core::window::WindowId(renewal.window.get() as u64);
+            renewal.compositor_enabled = evaluator.compositor_scrolling_enabled(window);
+            renewal.predict_pixels = evaluator.permits_compositor_pixel_scroll(window);
+        }
         let resolved = match crate::frame_presentation::ResolvedFrame::new(frame_display_state) {
             Ok(resolved) => resolved,
             Err(error) => {

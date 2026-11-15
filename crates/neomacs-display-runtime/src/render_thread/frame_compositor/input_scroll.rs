@@ -1,9 +1,15 @@
 //! Input-driven body projection over immutable, certified scroll coverage.
+//!
+//! Coverage is consulted through the compositor's retention map, not the
+//! current frame's surface list: a publish that re-exports nothing (cursor-only
+//! redisplay, drained worker pages) renews the certified epoch instead, so
+//! prediction survives presentation churn that does not touch the rows.
 
+use super::coverage_retention::CoverageRetention;
 use neomacs_display_protocol::input_progress::InputReceipt;
 use neomacs_display_protocol::scroll_coverage::ScrollSurface;
 use neomacs_display_protocol::{
-    FrameGlyphBuffer, PresentationFramePoint, PresentedHit, PresentedHitError,
+    FrameGlyphBuffer, PresentationFramePoint, PresentationId, PresentedHit, PresentedHitError,
 };
 use std::sync::Arc;
 
@@ -15,14 +21,18 @@ pub(in crate::render_thread) struct InputScroll {
         neomacs_display_protocol::input_latency::InputToken,
     )>,
     /// Only submitted pixels may change pointer observations.
-    submitted: Option<(Arc<ScrollSurface>, f32)>,
-    staged: Option<Option<(Arc<ScrollSurface>, f32)>>,
+    submitted: Option<(Arc<ScrollSurface>, f32, PresentationId)>,
+    staged: Option<Option<(Arc<ScrollSurface>, f32, PresentationId)>>,
     staged_tokens: Vec<neomacs_display_protocol::input_latency::InputToken>,
 }
 
 struct PendingScroll {
     resolved: bool,
     surface: Arc<ScrollSurface>,
+    /// The presentation this projection was last certified at — the frame it
+    /// was resolved or reconciled against, kept explicitly because a retained
+    /// surface's own hit index keeps its original export's stamp.
+    presentation: PresentationId,
     offset: f32,
     receipts: Vec<InputReceipt>,
     tokens: Vec<neomacs_display_protocol::input_latency::InputToken>,
@@ -31,6 +41,7 @@ struct PendingScroll {
 impl InputScroll {
     pub(in crate::render_thread) fn push(
         &mut self,
+        retention: &CoverageRetention,
         frame: &FrameGlyphBuffer,
         x: f32,
         y: f32,
@@ -44,19 +55,23 @@ impl InputScroll {
         if !delta.is_finite() || delta == 0.0 || receipt.cancelled() {
             return false;
         }
-        let Some(surface) = frame.scroll_surfaces.iter().find(|surface| {
-            let coverage = surface.coverage();
-            let viewport = coverage.viewport;
-            coverage.compositor_enabled
-                && coverage.predict_pixels
-                && delta.abs() < viewport.height
-                && x >= viewport.x
-                && x < viewport.right()
-                && y >= viewport.y
-                && y < viewport.bottom()
-        }) else {
+        let Some(entry) = retention
+            .certified_windows_at(frame.presentation_id)
+            .find(|entry| {
+                let coverage = entry.surface().coverage();
+                let viewport = coverage.viewport;
+                entry.compositor_enabled()
+                    && entry.predict_pixels()
+                    && delta.abs() < viewport.height
+                    && x >= viewport.x
+                    && x < viewport.right()
+                    && y >= viewport.y
+                    && y < viewport.bottom()
+            })
+        else {
             return false;
         };
+        let surface = entry.surface();
         if self
             .active
             .as_ref()
@@ -64,13 +79,15 @@ impl InputScroll {
         {
             self.active = Some(PendingScroll {
                 resolved: false,
-                surface: surface.clone(),
+                surface: Arc::clone(surface),
+                presentation: frame.presentation_id,
                 offset: 0.0,
                 receipts: Vec::new(),
                 tokens: Vec::new(),
             });
         }
         let active = self.active.as_mut().unwrap();
+        active.presentation = frame.presentation_id;
         if active.receipts.len() >= 128 {
             self.active = None;
             return true;
@@ -110,17 +127,38 @@ impl InputScroll {
 
     pub(in crate::render_thread) fn resolve(
         &mut self,
+        retention: &CoverageRetention,
         frame: &FrameGlyphBuffer,
         mut intent: neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent,
     ) -> bool {
-        if intent.presentation != frame.presentation_id
-            || !intent.offset.is_finite()
+        if !intent.offset.is_finite()
             || intent.inputs.is_empty()
             || intent.inputs.len() > 128
             || self.active.as_ref().is_some_and(|active| !active.resolved)
         {
             return false;
         }
+        // The intent was resolved against the coverage epoch it names; the
+        // retention map says whether that epoch is still certified for the
+        // frame being displayed, which may be a later presentation that
+        // renewed it without re-exporting.
+        let Some(entry) =
+            retention.certified_epoch_at(frame.presentation_id, intent.window, intent.epoch)
+        else {
+            tracing::debug!(target: "neomacs_display_runtime::input_scroll",
+                window = intent.window.get(), epoch = intent.epoch,
+                intent_presentation = ?intent.presentation,
+                frame_presentation = ?frame.presentation_id,
+                "dropping resolved scroll intent: coverage epoch not certified for current frame");
+            return false;
+        };
+        if !entry.compositor_enabled() {
+            tracing::debug!(target: "neomacs_display_runtime::input_scroll",
+                window = intent.window.get(), epoch = intent.epoch,
+                "dropping resolved scroll intent: compositor scrolling disabled at renewal");
+            return false;
+        }
+        let surface = entry.surface();
         if let Some(active) = &self.active
             && active.surface.coverage().epoch == intent.epoch
             && active.surface.coverage().content.window_id == intent.window
@@ -141,14 +179,6 @@ impl InputScroll {
         if intent.inputs.is_empty() {
             return false;
         }
-        let Some(surface) = frame.scroll_surfaces.iter().find(|surface| {
-            let coverage = surface.coverage();
-            coverage.compositor_enabled
-                && coverage.epoch == intent.epoch
-                && coverage.content.window_id == intent.window
-        }) else {
-            return false;
-        };
         let offset = surface.clamp_offset(intent.offset);
         let tokens = if offset != 0.0 {
             self.observed
@@ -161,7 +191,8 @@ impl InputScroll {
         };
         self.active = Some(PendingScroll {
             resolved: true,
-            surface: surface.clone(),
+            surface: Arc::clone(surface),
+            presentation: frame.presentation_id,
             offset,
             receipts: intent.inputs,
             tokens,
@@ -174,6 +205,7 @@ impl InputScroll {
     /// no-op commands. A changed revision/policy/geometry cancels immediately.
     pub(in crate::render_thread) fn reconcile(
         &mut self,
+        retention: &CoverageRetention,
         frame: Option<&FrameGlyphBuffer>,
     ) -> Option<neomacs_display_protocol::DisplayWindowId> {
         if let Some(frame) = frame {
@@ -192,14 +224,25 @@ impl InputScroll {
         if active.receipts.is_empty() {
             return Some(window);
         }
-        let Some(next) = frame.scroll_surfaces.iter().find(|surface| {
-            surface.coverage().epoch == active.surface.coverage().epoch
-                && surface.coverage().compositor_enabled
-                && (active.resolved || surface.coverage().predict_pixels)
-                && surface.coverage().viewport == active.surface.coverage().viewport
-        }) else {
+        let Some(entry) = retention
+            .certified_epoch_at(
+                frame.presentation_id,
+                window,
+                active.surface.coverage().epoch,
+            )
+            .filter(|entry| {
+                entry.compositor_enabled()
+                    && (active.resolved || entry.predict_pixels())
+                    && entry.surface().coverage().viewport == active.surface.coverage().viewport
+            })
+        else {
+            tracing::debug!(target: "neomacs_display_runtime::input_scroll",
+                window = window.get(), epoch = active.surface.coverage().epoch,
+                frame_presentation = ?frame.presentation_id,
+                "input-driven scroll not carried: coverage epoch not certified for new frame");
             return Some(window);
         };
+        let next = entry.surface();
         let old = &active.surface.coverage().content;
         let new = &next.coverage().content;
         let common = new
@@ -228,7 +271,8 @@ impl InputScroll {
             return Some(window);
         };
         active.offset = next.clamp_offset(active.offset - displacement);
-        active.surface = next.clone();
+        active.surface = Arc::clone(next);
+        active.presentation = frame.presentation_id;
         self.active = Some(active);
         Some(window)
     }
@@ -246,7 +290,11 @@ impl InputScroll {
         let Some(active) = &self.active else {
             return;
         };
-        if active.surface.coverage().hit_index.presentation() != frame.presentation_id {
+        // The active projection is certified for exactly the presentation it
+        // was last resolved or reconciled against; a frame outside that
+        // boundary belongs to content the projection has not been validated
+        // for. (The retained surface's own hit index keeps an older stamp.)
+        if active.presentation != frame.presentation_id {
             return;
         }
         if let Err(error) = active.surface.paint(frame, active.offset) {
@@ -263,12 +311,19 @@ impl InputScroll {
         frame
             .window_cursors
             .retain(|cursor| cursor.window_id != window);
-        self.staged = Some(Some((active.surface.clone(), active.offset)));
+        self.staged = Some(Some((
+            active.surface.clone(),
+            active.offset,
+            active.presentation,
+        )));
     }
 
     /// Only the projection staged after surface acquisition may be rasterized.
     pub(in crate::render_thread) fn staged_projection(&self) -> Option<(Arc<ScrollSurface>, f32)> {
-        self.staged.as_ref()?.clone()
+        self.staged
+            .as_ref()?
+            .as_ref()
+            .map(|(surface, offset, _)| (Arc::clone(surface), *offset))
     }
 
     pub(in crate::render_thread) fn active(&self) -> bool {
@@ -284,7 +339,7 @@ impl InputScroll {
     pub(in crate::render_thread) fn submit(&mut self) {
         self.staged_tokens.clear();
         if let Some(staged) = self.staged.take() {
-            if let Some((surface, offset)) = &staged {
+            if let Some((surface, offset, _)) = &staged {
                 tracing::debug!(target: "neomacs_display_runtime::input_scroll", window = surface.coverage().content.window_id.get(), offset, "submitted input-driven scroll");
             }
             self.submitted = staged;
@@ -295,8 +350,8 @@ impl InputScroll {
         &self,
         point: PresentationFramePoint,
     ) -> Option<Result<Option<PresentedHit>, PresentedHitError>> {
-        let (surface, offset) = self.submitted.as_ref()?;
-        if surface.coverage().hit_index.presentation() != point.presentation() {
+        let (surface, offset, presentation) = self.submitted.as_ref()?;
+        if *presentation != point.presentation() {
             return None;
         }
         let viewport = surface.coverage().viewport;

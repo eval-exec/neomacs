@@ -214,9 +214,14 @@ fn retained_scroll_pixels_match_full_render_and_reuse_coverage_during_reversal()
             // the bounded coverage still paints exactly the same picture.
             let refreshed = fixture_with(|coverage| coverage.origin = step as f32 * 4.0);
             render.compositor.current_scene_generation += 1;
-            render.compositor.input_scroll.reconcile(Some(&refreshed));
+            render.compositor.coverage_retention.refresh(&refreshed);
+            render
+                .compositor
+                .input_scroll
+                .reconcile(&render.compositor.coverage_retention, Some(&refreshed));
             let delivery = stream.issue().unwrap();
             assert!(render.compositor.input_scroll.push(
+                &render.compositor.coverage_retention,
                 &refreshed,
                 11.0,
                 11.0,
@@ -384,6 +389,10 @@ fn retained_scroll_pixels_match_full_render_and_reuse_coverage_during_reversal()
             "acknowledging input must not discard an unchanged picture"
         );
         frame.scroll_surfaces.clear();
+        // Withdrawal is a silent publish: no surface and no renewal. Only the
+        // retention map's expiry — not bare surface absence — releases the
+        // lease, because a renewal-only publish legitimately carries none.
+        render.compositor.coverage_retention.refresh(&frame);
         assert!(
             prepare(
                 &mut renderer,
@@ -504,8 +513,10 @@ fn changed_coverage_pixels_and_font_catalog_rebuild_the_raster() {
             frame.font_catalog_generation = frame.font_catalog_generation.next();
         }
         render.compositor.input_scroll = Default::default();
+        render.compositor.coverage_retention.refresh(&frame);
         let delivery = stream.issue().unwrap();
         assert!(render.compositor.input_scroll.push(
+            &render.compositor.coverage_retention,
             &frame,
             11.0,
             11.0,
@@ -571,8 +582,10 @@ fn changing_coverage_defers_raster_work_until_paint_is_stable() {
                 Color::new(change as f32 / 8.0, 0.0, 0.0, 1.0);
         });
         render.compositor.input_scroll = Default::default();
+        render.compositor.coverage_retention.refresh(&frame);
         let delivery = stream.issue().unwrap();
         assert!(render.compositor.input_scroll.push(
+            &render.compositor.coverage_retention,
             &frame,
             11.0,
             11.0,
@@ -690,6 +703,7 @@ fn scrolling_hover_resolves_projected_slots_and_draws_live_pixels() {
     let stream = InputStream::default();
     let delivery = stream.issue().unwrap();
     assert!(render.compositor.input_scroll.push(
+        &render.compositor.coverage_retention,
         &frame,
         11.0,
         11.0,

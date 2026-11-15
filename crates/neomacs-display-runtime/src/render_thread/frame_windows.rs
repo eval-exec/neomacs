@@ -1302,7 +1302,17 @@ impl GuiFrameRenderState {
             installed_at,
         )
         .apply(self);
-        if let Some(window) = self.compositor.input_scroll.reconcile(frame.as_ref()) {
+        // Install-or-expire retained coverage before anything consults it: the
+        // renewal decision is per publish, and reconcile/push/paint below must
+        // all see the same verdict for this presentation.
+        if let Some(frame) = frame.as_ref() {
+            self.compositor.coverage_retention.refresh(frame);
+        }
+        if let Some(window) = self
+            .compositor
+            .input_scroll
+            .reconcile(&self.compositor.coverage_retention, frame.as_ref())
+        {
             // Projected motion has already been drawn; do not animate it twice.
             self.compositor
                 .pending

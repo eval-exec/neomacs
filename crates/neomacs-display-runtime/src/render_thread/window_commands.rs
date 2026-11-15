@@ -59,7 +59,11 @@ impl RenderApp {
                         .renderer_effects
                         .scroll_effects_active()
                     && let Some(frame) = state.render.compositor.current_frame.as_ref()
-                    && state.render.compositor.input_scroll.resolve(frame, intent)
+                    && state.render.compositor.input_scroll.resolve(
+                        &state.render.compositor.coverage_retention,
+                        frame,
+                        intent,
+                    )
                 {
                     state.render.compositor.current_scene_generation =
                         super::frame_state::next_scene_generation();

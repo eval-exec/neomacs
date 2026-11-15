@@ -1159,6 +1159,10 @@ pub struct FrameGlyphBuffer {
     pub scroll_input_policy: crate::ScrollInputPolicy,
     /// Shared immutable off-screen text for compositor scrolling.
     pub scroll_surfaces: Vec<std::sync::Arc<crate::scroll_coverage::ScrollSurface>>,
+    /// Coverage epochs this frame's publisher re-asserts without re-exporting
+    /// a surface; the compositor revalidates its retained surfaces against
+    /// these instead of treating surface absence as revocation.
+    pub scroll_coverage_renewals: Vec<crate::scroll_coverage::ScrollCoverageRenewal>,
     pub input_checkpoint: Vec<crate::input_progress::InputCheckpoint>,
     /// Evaluator interaction snapshot paired with these exact pixels.
     pub presentation_id: crate::frame_chrome::PresentationId,
@@ -1557,6 +1561,7 @@ impl FrameGlyphBuffer {
         Self {
             scroll_input_policy: crate::ScrollInputPolicy::default(),
             scroll_surfaces: Vec::new(),
+            scroll_coverage_renewals: Vec::new(),
             input_checkpoint: Vec::new(),
             presentation_id: crate::frame_chrome::PresentationId::default(),
             frame_placement: crate::presented_frame::PresentedFramePlacement::default(),

@@ -2,7 +2,7 @@
 
 use super::*;
 use neomacs_display_protocol::glyph_matrix::{GlyphMatrix, MatrixRow};
-use neomacs_display_protocol::scroll_coverage::ScrollCoverage;
+use neomacs_display_protocol::scroll_coverage::{ScrollCoverage, ScrollCoverageRenewal};
 use neomacs_display_protocol::{
     FrameDisplayState, FrameRect, GlyphRowRole, PresentedHitIndex, PresentedHitRegion,
     PresentedRegionKind, Rect,
@@ -35,6 +35,7 @@ impl PreparedViewports {
                     if !RetainedWindowKey::row_content_eligible(&export.key, &current.key) {
                         export.key = current.key.clone();
                         export.epoch = next_epoch();
+                        export.certified = false;
                     }
                     index
                 }
@@ -44,6 +45,7 @@ impl PreparedViewports {
                         window: *window,
                         key: current.key.clone(),
                         epoch: next_epoch(),
+                        certified: false,
                         backward_start: None,
                         visible_source: text_source_range(current),
                     });
@@ -64,8 +66,29 @@ impl PreparedViewports {
                 .as_ref()
                 .and_then(|coverage| coverage.content.matrix.rows.first())
                 .map(|row| CharPos0::new(row.start_charpos));
-            if let Some(coverage) = coverage {
-                state.scroll_coverage.push(Arc::new(coverage));
+            match coverage {
+                Some(coverage) => {
+                    self.exports[index].certified = true;
+                    state.scroll_coverage.push(Arc::new(coverage));
+                }
+                // A publish that re-exports nothing (cursor-only redisplay,
+                // drained worker pages, or an exactly-viewport body) must not
+                // read as revocation on the compositor side. Renew the last
+                // certified epoch explicitly; policy bits are stamped by the
+                // evaluator alongside fresh coverages. Absence of both a
+                // surface and a renewal expires the retained coverage.
+                None if self.exports[index].certified => {
+                    state.scroll_coverage_renewals.push(ScrollCoverageRenewal {
+                        window: *window,
+                        epoch: self.exports[index].epoch,
+                        predict_pixels: false,
+                        compositor_enabled: false,
+                    });
+                    tracing::debug!(target: "neomacs_layout_engine::scroll_coverage",
+                        window = window.get(), epoch = self.exports[index].epoch,
+                        "renewed certified scroll coverage without a fresh surface");
+                }
+                None => {}
             }
         }
     }

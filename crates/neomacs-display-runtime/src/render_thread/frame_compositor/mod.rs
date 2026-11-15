@@ -24,6 +24,7 @@ use neomacs_renderer_wgpu::{FullFrameTexture, RendererFrameEffects, WgpuGlyphAtl
 
 mod child_frames;
 pub(in crate::render_thread) mod continuity;
+mod coverage_retention;
 mod cursor;
 mod input_scroll;
 pub(in crate::render_thread) mod layout_continuity;
@@ -36,6 +37,10 @@ mod overlays;
 pub(crate) struct FrameCompositor {
     pub current_frame: Option<FrameGlyphBuffer>,
     pub(in crate::render_thread) input_scroll: input_scroll::InputScroll,
+    /// Certified scroll coverage kept alive across publishes that carry no
+    /// fresh surface; see [`coverage_retention`]. Refreshed on every install,
+    /// read by input-driven scrolling and the retained-scroll raster.
+    pub(in crate::render_thread) coverage_retention: coverage_retention::CoverageRetention,
     /// Video identities present in the root or any accepted child
     /// presentation. Rebuilt only when editor presentation data changes, so
     /// decoder wakeups do not rescan every glyph at video frame rate.
@@ -192,6 +197,7 @@ impl FrameCompositor {
         Self {
             current_frame: None,
             input_scroll: input_scroll::InputScroll::default(),
+            coverage_retention: coverage_retention::CoverageRetention::default(),
             #[cfg(feature = "video")]
             visible_videos: HashSet::new(),
             current_scene_generation: 0,

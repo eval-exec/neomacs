@@ -206,11 +206,23 @@ fn retention_allowed(
         && std::env::var_os("NEOMACS_DISABLE_RETAINED_SCROLL").is_none()
 }
 
-fn coverage_live(cache: &RetainedScroll, frame: &FrameGlyphBuffer) -> bool {
-    frame.scroll_surfaces.iter().any(|next| {
-        next.coverage().epoch == cache.paint.surface.coverage().epoch
-            && next.coverage().content.window_id == cache.paint.surface.coverage().content.window_id
-    })
+fn coverage_live(
+    cache: &RetainedScroll,
+    render: &GuiFrameRenderState,
+    frame: &FrameGlyphBuffer,
+) -> bool {
+    let coverage = cache.paint.surface.coverage();
+    // Retained coverage stays live through renewals (publishes that certified
+    // the epoch without re-exporting a surface); only silence expires it.
+    render
+        .compositor
+        .coverage_retention
+        .certified_epoch_at(
+            frame.presentation_id,
+            coverage.content.window_id,
+            coverage.epoch,
+        )
+        .is_some()
 }
 
 /// Borrow-only retirement: never sample, acknowledge or publish input scroll.
@@ -230,7 +242,7 @@ pub(super) fn retire_unusable(
                 .current_frame
                 .as_ref()
                 .is_none_or(|frame| {
-                    !coverage_live(cache, frame)
+                    !coverage_live(cache, render, frame)
                         || !retention_allowed(renderer, render, frame, has_gradient)
                         || cache.paint.scale != scale
                         || body_background(frame, cache.paint.surface.coverage().viewport).is_none()
@@ -258,7 +270,7 @@ pub(super) fn prepare(
             .compositor
             .retained_scroll
             .as_ref()
-            .is_some_and(|cache| !coverage_live(cache, frame))
+            .is_some_and(|cache| !coverage_live(cache, render, frame))
         {
             render.compositor.retained_scroll = None;
         }
