@@ -221,6 +221,20 @@ pub(crate) fn overlay_snapshot_copy_count() -> usize {
     OVERLAY_SNAPSHOT_COPIES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+#[cfg(test)]
+static OVERLAY_MIRROR_CANDIDATES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_overlay_mirror_candidate_count() {
+    OVERLAY_MIRROR_CANDIDATES.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn overlay_mirror_candidate_count() -> usize {
+    OVERLAY_MIRROR_CANDIDATES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[cfg(not(any(test, feature = "test-support")))]
 pub struct OverlayList {
     index: OverlayIndex,
@@ -319,19 +333,28 @@ impl OverlayList {
     /// Mirror a plist write on `source` onto this snapshot's copy of it: the
     /// indexed overlay carrying the source's precedence serial, which shares
     /// the source's start because every position write reaches both lists.
+    /// The search examines at most `MIRROR_CANDIDATE_LIMIT` overlays touching
+    /// that start. Past it the cache is dropped, so a write never costs more
+    /// than a bounded search, as the next snapshot's rebuild is paid anyway.
     fn mirror_plist_write(&mut self, source: Value, start: EmacsBytePos) -> bool {
+        const MIRROR_CANDIDATE_LIMIT: usize = 32;
         let source = source
             .as_overlay_data()
             .expect("overlay_put received a non-overlay value");
         let serial = source.serial;
-        let mut copies = self
-            .index
-            .overlays_touching(start)
-            .into_iter()
-            .filter(|copy| overlay_identity_key(*copy) == serial);
-        let (Some(copy), None) = (copies.next(), copies.next()) else {
+        let mut candidates = self.index.overlays_touching_iter(start);
+        let mut found = None;
+        for candidate in candidates.by_ref().take(MIRROR_CANDIDATE_LIMIT) {
+            #[cfg(test)]
+            OVERLAY_MIRROR_CANDIDATES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if overlay_identity_key(candidate) == serial && found.replace(candidate).is_some() {
+                return false;
+            }
+        }
+        let (Some(copy), None) = (found, candidates.next()) else {
             return false;
         };
+        drop(candidates);
         let Ok(plist) = neovm_value::sequence_copy::copy_sequence_with_symbols(
             source.plist,
             neovm_value::tagged::SymbolMode::Bare,

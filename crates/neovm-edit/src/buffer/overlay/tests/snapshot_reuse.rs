@@ -284,3 +284,42 @@ fn cached_snapshot_tracks_the_live_index_through_mixed_edits() {
         "text edits rebuilt the snapshot instead of adjusting it ({kept_edits} kept)"
     );
 }
+
+/// Restyle every one of `count` overlays sharing `[0, 100]` after a
+/// redisplay cached its snapshot, and return how many indexed copies the
+/// plist writes examined while looking for the written overlay's copy.
+fn mirror_candidates_restyling_shared_range(count: usize) -> usize {
+    let mut list = OverlayList::new();
+    let face = Value::symbol("face");
+    for _ in 0..count {
+        let overlay = alloc_overlay(0, 100);
+        list.insert_overlay(overlay);
+        list.overlay_put(overlay, face, Value::symbol("error"))
+            .unwrap();
+    }
+    drop(list.snapshot());
+    reset_overlay_mirror_candidate_count();
+    let overlays: Vec<_> = list.index.values().collect();
+    for overlay in overlays {
+        list.overlay_put(overlay, face, Value::symbol("warning"))
+            .unwrap();
+    }
+    let examined = overlay_mirror_candidate_count();
+    let snapshot = list.snapshot();
+    assert_eq!(observe(&snapshot), observe(&list));
+    examined
+}
+
+#[test]
+fn overlay_put_on_overlays_sharing_a_range_does_not_scan_every_copy() {
+    crate::test_utils::init_test_tracing();
+    let small = mirror_candidates_restyling_shared_range(100);
+    let large = mirror_candidates_restyling_shared_range(1_000);
+    // Each write scanning every overlay touching the shared start grows with
+    // the square of the overlay count: 10x the overlays, 100x the work.
+    assert!(
+        large < 20 * small.max(1),
+        "restyling overlays that share a range examined {small} copies for 100 \
+         and {large} for 1000"
+    );
+}

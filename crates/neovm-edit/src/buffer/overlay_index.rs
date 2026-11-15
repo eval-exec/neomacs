@@ -1289,6 +1289,17 @@ impl OverlayIndex {
         overlays
     }
 
+    /// Lazy `overlays_touching`, in the same order; holds the read lock
+    /// until dropped.
+    pub(super) fn overlays_touching_iter(
+        &self,
+        pos: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + '_ {
+        let records = RwLockReadGuard::map(self.intervals.read(), |tree| tree.records());
+        OrderedShiftTree::matches_owned(records, IntervalBPlusQuery::ClosedPoint(pos))
+            .map(|record| record.overlay())
+    }
+
     pub(super) fn overlays_in_region_iter(
         &self,
         range: EmacsByteRange,
