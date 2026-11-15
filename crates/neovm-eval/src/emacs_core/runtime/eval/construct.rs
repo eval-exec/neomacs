@@ -2530,6 +2530,13 @@ impl Context {
 
         let mut obarray = Obarray::new();
         if surface.seeds_well_known_members() {
+            // GNU's `init_obarray_once` interns the whole compiled
+            // `defsym_name[]` first, in make-docfile order (a `DEFSYM` in 31.1
+            // is only a make-docfile marker), then whatever else the initial
+            // obarray carries; the obarray's chain order - and therefore
+            // completion order - is that insertion order. The seeder keeps
+            // that order for both tables. The legacy pre-GNU image fixture
+            // deliberately keeps its smaller obarray.
             obarray.seed_well_known_members();
         }
         // Builtin names are interned by SubrSpec registration during init_builtins(),

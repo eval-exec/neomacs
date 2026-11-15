@@ -10,6 +10,10 @@
 //! more closely: a symbol is an object with a name, not just "slot N in the
 //! string interner".
 
+/// GNU's compiled `defsym_name[]` spellings, rendered by `cargo xtask
+/// gnu-defsyms` from `gnu_defsyms.snapshot.tsv`.
+#[path = "gnu_defsyms.generated.rs"]
+pub(crate) mod gnu_defsyms_generated;
 #[cfg(feature = "test-support")]
 pub mod parallel;
 #[cfg(not(feature = "test-support"))]

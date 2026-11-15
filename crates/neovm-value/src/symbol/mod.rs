@@ -1005,6 +1005,13 @@ pub struct Obarray {
     /// Bumped whenever global-obarray MEMBERSHIP changes (mark/clear);
     /// keys the completion bucket-order cache below.
     members_epoch: u64,
+    /// Global members in the order they entered this obarray, i.e. GNU's
+    /// `intern_sym` call order. GNU's bucket chains are LIFO pushes, so
+    /// completion order is this order reversed within a hash bucket; slot
+    /// order (creation order) agrees with it only when every symbol is marked
+    /// at creation, which the boot sequence does not guarantee. Append-only in
+    /// steady state; `unintern` is the only removal.
+    member_order: Vec<SymId>,
     /// Memoized GNU-bucket-order symbol list for completion over the
     /// global obarray: try-completion/all-completions re-derive the same
     /// ~30k-symbol hash+sort per call (a bootstrap hotspot). Completion owns
@@ -1080,6 +1087,31 @@ pub enum FunctionCellSnapshot {
 pub enum SymbolPlistSnapshot {
     NoEntries,
     Entries(Value),
+}
+
+/// Iterator behind [`Obarray::global_member_ids`]: the recorded membership
+/// order when it is complete, otherwise the reconciled copy.
+enum GlobalMemberIds<'a> {
+    Recorded(std::iter::Copied<std::slice::Iter<'a, SymId>>),
+    Reconciled(std::vec::IntoIter<SymId>),
+}
+
+impl Iterator for GlobalMemberIds<'_> {
+    type Item = SymId;
+
+    fn next(&mut self) -> Option<SymId> {
+        match self {
+            Self::Recorded(iter) => iter.next(),
+            Self::Reconciled(iter) => iter.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Recorded(iter) => iter.size_hint(),
+            Self::Reconciled(iter) => iter.size_hint(),
+        }
+    }
 }
 
 /// See [`Obarray::completion_order_cache`].
@@ -1708,6 +1740,7 @@ impl Clone for Obarray {
             // starts unresolved rather than pointing at the source's cell.
             dispatch_cells: CanonicalDispatchCells::new(FunctionEpoch(self.function_epoch())),
             members_epoch: self.members_epoch,
+            member_order: self.member_order.clone(),
             completion_order_cache: std::sync::Mutex::new(None),
             blvs,
             value_fwds,
@@ -1926,6 +1959,8 @@ impl Obarray {
         }
         self.global_member_count += 1;
         self.members_epoch += 1;
+        // GNU's `intern_sym` push order; completion reverses it per bucket.
+        self.member_order.push(id);
     }
 
     fn clear_global_member(&mut self, id: SymId) -> bool {
@@ -1939,6 +1974,10 @@ impl Obarray {
         sym.set_interned(SymbolInterned::Uninterned);
         self.global_member_count = self.global_member_count.saturating_sub(1);
         self.members_epoch += 1;
+        // Membership order is an append-only history in steady state; only
+        // `unintern` removes an entry, and the remaining relative order is
+        // GNU's (the chain keeps the order of the surviving pushes).
+        self.member_order.retain(|member| *member != id);
         true
     }
 
@@ -2014,6 +2053,7 @@ impl Obarray {
             global_member_count: 0,
             dispatch_cells: CanonicalDispatchCells::new(FunctionEpoch(0)),
             members_epoch: 0,
+            member_order: Vec::new(),
             completion_order_cache: std::sync::Mutex::new(None),
             blvs: Vec::new(),
             value_fwds: Vec::new(),
@@ -2036,15 +2076,33 @@ impl Obarray {
         ob
     }
 
-    /// Give this obarray GNU's initial DEFSYM membership: `init_obarray`
-    /// interns every well-known spelling at startup, so `intern-soft` and
-    /// `mapatoms` see them before Lisp names them (GNU 31.1 oracle:
-    /// tmp/jitcall15/gnu-obarray-probe.el). The predicate re-checks
-    /// canonicality, so a table spelling uninterned before this obarray was
-    /// created is not resurrected. Callers that model a pre-GNU image (the
-    /// legacy dump fixture) deliberately skip it.
+    /// Give this obarray GNU's initial obarray membership. Two tables, in
+    /// GNU's order:
+    ///
+    /// 1. `init_obarray_once` (`src/lread.c:5193-5203`) interns every spelling
+    ///    a build compiles into `defsym_name[]`, in make-docfile order (in
+    ///    31.1 `DEFSYM` is only a marker for the generated table,
+    ///    `src/lisp.h:2395`), with no function cell, no value and an empty
+    ///    plist. That table for this platform is `gnu_defsyms.generated.rs`.
+    ///    It comes first because the obarray's chain order - and therefore
+    ///    completion order - is this insertion order.
+    /// 2. The fixed-spelling `WellKnown` table, whose ids are compile-time
+    ///    constants used by the rest of the port; it adds only the spellings
+    ///    the first table does not already carry.
+    ///
+    /// `intern-soft` and `mapatoms` see all of them before Lisp names them
+    /// (GNU 31.1 oracle: tmp/jitcall15/gnu-obarray-probe.el). The predicate
+    /// re-checks canonicality, so a table spelling uninterned before this
+    /// obarray was created is not resurrected. Callers that model a pre-GNU
+    /// image (the legacy dump fixture) deliberately skip it.
     #[doc(hidden)]
     pub fn seed_well_known_members(&mut self) {
+        for (name, gate) in crate::intern::gnu_defsyms_generated::GNU_DEFSYMS {
+            if gate.is_active() {
+                let id = crate::intern::intern(name);
+                self.ensure_global_member_if_canonical(id);
+            }
+        }
         for symbol in crate::intern::WellKnown::VARIANTS {
             self.ensure_global_member_if_canonical(symbol.id());
         }
@@ -5034,12 +5092,48 @@ impl Obarray {
         })
     }
 
-    /// Iterate over ids interned in the global obarray.
+    /// Iterate over ids interned in the global obarray, in GNU's `intern_sym`
+    /// order: the order in which they entered this obarray.
+    ///
+    /// GNU's bucket chains are LIFO pushes, so `mapatoms` and completion order
+    /// are this order reversed within a hash bucket; slot order is creation
+    /// order and can differ once a symbol is marked for membership later than
+    /// it was interned. `member_order` records the real push order. A path
+    /// that publishes membership under a raw slot pointer (the parallel-era
+    /// admission commits membership without recording it) is reconciled here
+    /// by appending its members in slot order, which is their (newest)
+    /// admission order; the completion cache makes that scan one-time per
+    /// membership change.
     #[doc(hidden)]
     pub fn global_member_ids(&self) -> impl Iterator<Item = SymId> + '_ {
-        self.iter_symbols()
-            .filter(|(_, sym)| sym.interned_global)
-            .map(|(id, _)| id)
+        if self.member_order.len() == self.global_member_count {
+            GlobalMemberIds::Recorded(self.member_order.iter().copied())
+        } else {
+            GlobalMemberIds::Reconciled(self.reconciled_member_order().into_iter())
+        }
+    }
+
+    /// Reconcile the recorded membership order with the live membership bits:
+    /// drop entries that were uninterned, then append members no path
+    /// recorded, in slot (= admission) order.
+    fn reconciled_member_order(&self) -> Vec<SymId> {
+        let mut seen = vec![false; self.symbols.len];
+        let mut ordered = Vec::with_capacity(self.global_member_count);
+        for &id in &self.member_order {
+            let index = Self::slot_index(id);
+            if index < seen.len() && !seen[index] && self.is_global_member(id) {
+                seen[index] = true;
+                ordered.push(id);
+            }
+        }
+        for (id, sym) in self.iter_symbols() {
+            let index = Self::slot_index(id);
+            if sym.interned_global && !seen[index] {
+                seen[index] = true;
+                ordered.push(id);
+            }
+        }
+        ordered
     }
 
     /// Return the memoized completion bucket order for the current
@@ -5109,6 +5203,7 @@ impl Obarray {
             global_member_count: 0,
             dispatch_cells: CanonicalDispatchCells::new(FunctionEpoch(function_epoch)),
             members_epoch: 0,
+            member_order: Vec::new(),
             completion_order_cache: std::sync::Mutex::new(None),
             blvs: Vec::new(),
             value_fwds: Vec::new(),
@@ -5133,6 +5228,9 @@ impl Obarray {
             if !sym.interned_global {
                 sym.interned_global = true;
                 ob.global_member_count += 1;
+                // The dumped member list is GNU's `intern_sym` order, so
+                // completion order survives a dump round trip.
+                ob.member_order.push(id);
             }
         }
         for id in function_unbound {

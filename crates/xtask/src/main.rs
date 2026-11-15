@@ -2,6 +2,7 @@ mod canonical_subr_plan_command;
 mod compile_wave;
 mod dependency_coherence;
 mod gc_stress;
+mod gnu_defsyms_command;
 mod info_manuals;
 mod oracle_preflight_command;
 mod pentry_inventory_command;
@@ -454,6 +455,13 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
     ) {
         args.next();
         return pentry_inventory_command::run(&repo_root, args);
+    }
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("gnu-defsyms")
+    ) {
+        args.next();
+        return gnu_defsyms_command::run(&repo_root, args);
     }
     if matches!(
         args.peek().and_then(|arg| arg.to_str()),
