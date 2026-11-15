@@ -715,7 +715,7 @@ pub fn builtin_get_internal_run_time(
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+#[cfg(unix)]
 fn process_run_time() -> Result<Option<(i64, i64)>, neovm_value::error::Flow> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
     // SAFETY: getrusage initializes the output struct when it succeeds.
@@ -768,12 +768,7 @@ fn process_run_time() -> Result<Option<(i64, i64)>, neovm_value::error::Flow> {
     Ok(Some((secs, nanos * 100)))
 }
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "android",
-    windows
-)))]
+#[cfg(not(any(unix, windows)))]
 fn process_run_time() -> Result<Option<(i64, i64)>, neovm_value::error::Flow> {
     Ok(None)
 }

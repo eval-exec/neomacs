@@ -42,7 +42,7 @@ fn get_internal_run_time_tracks_cpu_and_output_shape() {
     let fields = list_to_vec(&list_value).expect("legacy time value is a proper list");
     assert_eq!(fields.len(), 4);
     assert!(fields.iter().all(|field| field.is_integer()));
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     assert_eq!(fields[3].as_fixnum(), Some(0));
 
     #[cfg(windows)]
