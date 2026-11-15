@@ -316,17 +316,28 @@ fn initial_feature_names() -> Vec<&'static str> {
     neovm_value::system_vocab::c_features::initial_feature_names()
 }
 
-fn initial_features_value() -> Value {
+fn initial_features_value(obarray: &mut Obarray) -> Value {
     Value::list(
         initial_feature_names()
             .into_iter()
-            .map(Value::symbol)
+            .map(|name| {
+                let id = intern(name);
+                obarray.ensure_interned_global_id(id);
+                Value::from_sym_id(id)
+            })
             .collect(),
     )
 }
 
-fn initial_feature_ids() -> Vec<SymId> {
-    initial_feature_names().into_iter().map(intern).collect()
+fn initial_feature_ids(obarray: &mut Obarray) -> Vec<SymId> {
+    initial_feature_names()
+        .into_iter()
+        .map(|name| {
+            let id = intern(name);
+            obarray.ensure_interned_global_id(id);
+            id
+        })
+        .collect()
 }
 
 /// GNU's `echo_buffer[2]`: the two buffers the echo area is allowed to display
@@ -2254,7 +2265,12 @@ struct CoreEvalSymbols {
 }
 
 fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) -> CoreEvalSymbols {
-    obarray.intern("internal-interpreter-environment");
+    // The evaluation environment lives on the process-interned HIDDEN symbol
+    // below; the spelling must not be an obarray member. GNU creates
+    // `Qinternal_interpreter_environment` in `syms_of_eval` and immediately
+    // `Funintern`s it (`src/eval.c:4597`), so `(intern-soft
+    // "internal-interpreter-environment")` is nil at startup. This used to
+    // call `obarray.intern(...)` here and re-expose it.
     let internal_interpreter_environment_symbol = hidden_internal_interpreter_environment_symbol();
     obarray.seed_value_id(internal_interpreter_environment_symbol, Value::NIL);
     obarray.make_special_id(internal_interpreter_environment_symbol);

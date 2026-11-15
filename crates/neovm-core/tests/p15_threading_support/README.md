@@ -28,8 +28,10 @@ Production visibility is never widened to accommodate a fixture.
 
 The qualified S1 baseline has one positive client and ten negative cases. The macOS overlays
 include unchanged common fixture bodies; only their expected diagnostics are
-per target. Linux cannot bless an arm64_macos golden. Goldens must contain no
-rustc-library/rust-src excerpts and must verify with TRYBUILD unset.
+per target. Linux cannot bless an arm64_macos golden. Since the 2026-11-15
+rust-src flip (rust-toolchain.toml lists the component and CI asserts it),
+goldens are blessed WITH rust-src present and may contain
+rustc-library/$RUST excerpts; they must verify with TRYBUILD unset.
 
 All ten counterfactuals compiled successfully, each together with the positive
 client. Eight controls changed a byte-identical copy of the included production

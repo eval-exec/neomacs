@@ -7,6 +7,9 @@ error[E0277]: `Rc<()>` cannot be sent between threads safely
   = help: within `ClaimedOwnerStep<'static, u64>`, the trait `Send` is not implemented for `Rc<()>`
 note: required because it appears within the type `std::marker::PhantomData<Rc<()>>`
  --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
 note: required because it appears within the type `OwnerResumePort<RedisplayStep, u64>`
  --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/owner_step.rs
   |

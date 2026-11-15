@@ -1,18 +1,31 @@
 error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<ParallelHeapEra<'static, Baton>>`, but its trait bounds were not satisfied
  --> tests/p1rv_ui/era_cannot_cross_threads.rs:8:49
   |
-8 |     ThreadTransfer::<ParallelHeapEra<'static>>::transfer(era);
-  |                                                 ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<ParallelHeapEra<'static, Baton>>` due to unsatisfied trait bounds
+8 |       ThreadTransfer::<ParallelHeapEra<'static>>::transfer(era);
+  |                                                   ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<ParallelHeapEra<'static, Baton>>` due to unsatisfied trait bounds
   |
  ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs
   |
-  | pub struct ParallelHeapEra<'heap, K: EraKeeper> {
-  | ----------------------------------------------- doesn't satisfy `ParallelHeapEra<'static, Baton>: Send`
+  |   pub struct ParallelHeapEra<'heap, K: EraKeeper> {
+  |   ----------------------------------------------- doesn't satisfy `ParallelHeapEra<'static, Baton>: Send`
+  |
+ ::: $RUST/core/src/ptr/non_null.rs
+  |
+  |   pub struct NonNull<T: PointeeSized> {
+  |   ----------------------------------- doesn't satisfy `NonNull<TaggedHeap>: Send` or `NonNull<[Cell<usize>; 8192]>: Send`
+  |
+ ::: $RUST/alloc/src/rc.rs
+  |
+  | / pub struct Rc<
+  | |     T: ?Sized,
+  | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+  | | > {
+  | |_- doesn't satisfy `Rc<()>: Send`, `Rc<Cell<*const ()>>: Send`, `Rc<Cell<Vec<TaggedValue>>>: Send` or `_: Send`
   |
  ::: tests/p1rv_ui/../thread_safety_ui/support/thread_bounds.rs
   |
-  | pub struct ThreadTransfer<T>(PhantomData<T>);
-  | ---------------------------- associated function or constant `transfer` not found for this struct
+  |   pub struct ThreadTransfer<T>(PhantomData<T>);
+  |   ---------------------------- associated function or constant `transfer` not found for this struct
   |
   = note: the following trait bounds were not satisfied:
           `Rc<()>: Send`

@@ -195,6 +195,14 @@ perf-probes = ["neovm-value/perf-probes", "neovm-eval/perf-probes"]
 # The postgate compiles them with
 # `cargo check -p neovm-core --features contract-fixtures --tests`.
 contract-fixtures = ["neovm-eval/contract-fixtures"]
+# Empty marker, never enabled on core itself: the contract fixtures mount
+# sibling product sources (host_effect_ui includes neovm-eval's wake modules
+# by #[path]), and those sources legitimately gate test hooks on
+# `feature = "test-support"`. The fixture crates are trybuild scratch bins
+# whose manifest copies THIS [features] table, so the cfg must be declared
+# here or rustc reports unexpected_cfg(test-support) in the fixture stderr.
+# Core's real test-support enablement stays on the dev edges below (A2).
+test-support = []
 
 [dev-dependencies]
 # Peer ruling A2 + TEST-SUPPORT-DESIGN rev 2: a provider's test surface is

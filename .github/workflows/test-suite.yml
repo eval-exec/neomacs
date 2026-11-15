@@ -347,14 +347,31 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
 
+      # Gate rule: rust-src REQUIRED. The contract goldens embed std source
+      # excerpts ($RUST/... snippets in Send/Sync note chains), which rustc
+      # renders only when the std sources are installed, and they are blessed
+      # with rust-src present (rust-toolchain.toml lists the component and the
+      # setup action installs it). A toolchain without it mismatches every
+      # excerpt-bearing golden, so fail fast before any runner starts.
+      - name: Assert rust-src is installed (contract gate rule)
+        run: |
+          src_dir="$(rustc --print sysroot)/lib/rustlib/src/rust/library"
+          if [ ! -d "$src_dir" ]; then
+            echo "::error::rust-src is REQUIRED for the contract suites but $src_dir is missing." >&2
+            echo "::error::Goldens are blessed with rust-src present; rust-toolchain.toml lists the component." >&2
+            exit 1
+          fi
+          echo "rust-src present: $src_dir"
+
       # trybuild always invokes `cargo --offline` on a scratch project that
       # copies this workspace's Cargo.lock and [patch.crates-io] table. The
       # eval-exec forks in that table (cosmic-text first) are git checkouts a
       # fresh runner does not have, so their sources must be fetched into
       # CARGO_HOME before any contract runner starts. This job uses the rustup
-      # toolchain from rust-toolchain.toml, whose components are rustfmt,
-      # clippy and llvm-tools -- no rust-src. That is the gate rule: a
-      # toolchain with rust-src produces false trybuild diagnostic mismatches.
+      # toolchain from rust-toolchain.toml, which lists rust-src: rustc renders
+      # std source excerpts into compile-fail diagnostics only when the std
+      # source is installed, so the goldens are blessed with rust-src present.
+      # That is the gate rule (asserted below): rust-src REQUIRED everywhere.
       - name: Fetch locked crates for trybuild's offline builds
         run: cargo fetch --locked
 
@@ -415,6 +432,18 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           target: aarch64-apple-darwin
           install-nextest: true
+
+      # Same gate rule as the Linux contracts job: rust-src REQUIRED (the
+      # goldens, including the arm64_macos overlays, are blessed with it).
+      - name: Assert rust-src is installed (contract gate rule)
+        run: |
+          src_dir="$(rustc --print sysroot)/lib/rustlib/src/rust/library"
+          if [ ! -d "$src_dir" ]; then
+            echo "::error::rust-src is REQUIRED for the contract suites but $src_dir is missing." >&2
+            echo "::error::Goldens are blessed with rust-src present; rust-toolchain.toml lists the component." >&2
+            exit 1
+          fi
+          echo "rust-src present: $src_dir"
 
       - name: Fetch locked crates for trybuild's offline builds
         run: cargo fetch --locked
