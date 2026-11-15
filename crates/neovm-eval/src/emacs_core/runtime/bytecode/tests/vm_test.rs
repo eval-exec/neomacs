@@ -4725,43 +4725,6 @@ fn vm_constrain_to_field_honors_dynamic_inhibit_field_text_motion_like_gnu() {
 }
 
 #[test]
-fn vm_replace_region_contents_uses_shared_source_and_property_state() {
-    crate::test_utils::init_test_tracing();
-    assert_eq!(
-        vm_eval_str(
-            r#"(let ((dest (current-buffer))
-                     (src (get-buffer-create "*rrc-src*"))
-                     (s (propertize "CD" 'face 'bold)))
-                 (set-buffer src)
-                 (erase-buffer)
-                 (insert "1234")
-                 (put-text-property 2 4 'face 'italic)
-                 (set-buffer dest)
-                 (list
-                  (progn
-                    (erase-buffer)
-                    (insert "abZZef")
-                    (replace-region-contents 3 5 s)
-                    (list
-                     (buffer-substring-no-properties 1 (point-max))
-                     (get-text-property 3 'face)))
-                  (progn
-                    (erase-buffer)
-                    (insert "abZZef")
-                    (replace-region-contents 3 5 (vector src 2 4))
-                    (list
-                     (buffer-substring-no-properties 1 (point-max))
-                     (get-text-property 3 'face)
-                     (get-text-property 4 'face)))
-                  (condition-case err
-                      (replace-region-contents 3 5 (current-buffer))
-                    (error (list (car err) (car (cdr err)))))))"#
-        ),
-        r#"OK (("abCDef" bold) ("ab23ef" italic italic) (error "Cannot replace a buffer with itself"))"#
-    );
-}
-
-#[test]
 fn vm_read_only_noop_buffer_mutations_match_gnu() {
     crate::test_utils::init_test_tracing();
     assert_eq!(

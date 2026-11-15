@@ -690,6 +690,8 @@ mod emacs_core_runtime_jit_tests_green_release_class_b_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/bytecode/tests/vm_syntax_motion_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_syntax_motion_runtime_test_rs;
+#[path = "emacs_core/runtime/bytecode/tests/vm_replace_region_runtime_test.rs"]
+mod emacs_core_runtime_bytecode_tests_vm_replace_region_runtime_test_rs;
 #[path = "emacs_core/runtime/bytecode/tests/vm_shared_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_shared_runtime_test_rs;
 
