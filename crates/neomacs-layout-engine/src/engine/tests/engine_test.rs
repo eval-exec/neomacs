@@ -12592,6 +12592,52 @@ fn layout_frame_rust_renders_line_prefix_through_row_builder() {
 }
 
 #[test]
+fn layout_frame_rust_renders_overlay_line_prefix_like_a_text_property_one() {
+    // GNU reads `line-prefix` through `get_it_property` ->
+    // `Fget_char_property` (overlays first, then text properties), so an
+    // overlay prefix is drawn exactly like a text-property prefix.
+    let (_eval, _buffer, _frame, rows, _cw, _ch) =
+        layout_main_text_rows_with("", |eval, buffer| {
+            eval.buffer_manager_mut().set_current(buffer);
+            eval.eval_str(
+                "(progn
+                   (insert \"A-plain\\n\")
+                   (let ((b (point)))
+                     (insert \"B-overlay-line-prefix\\n\")
+                     (overlay-put (make-overlay b (point)) 'line-prefix \">>>>\"))
+                   (let ((b (point)))
+                     (insert \"C-textprop-line-prefix\\n\")
+                     (put-text-property b (point) 'line-prefix \"####\"))
+                   (goto-char (point-min)))",
+            )
+            .expect("overlay and text-property line-prefix buffer");
+        });
+    let texts: Vec<String> = rows
+        .iter()
+        .map(|row| glyphs_logical_text(&row.glyphs[1]))
+        .collect();
+    let row_containing = |needle: &str| {
+        texts
+            .iter()
+            .find(|text| text.contains(needle))
+            .unwrap_or_else(|| panic!("no row contains {needle:?}: {texts:?}"))
+    };
+
+    assert!(
+        row_containing("A-plain").starts_with("A-plain"),
+        "a line without a prefix stays unprefixed: {texts:?}"
+    );
+    assert!(
+        row_containing("B-overlay-line-prefix").starts_with(">>>>B-overlay-line-prefix"),
+        "an overlay line-prefix must be drawn before its line: {texts:?}"
+    );
+    assert!(
+        row_containing("C-textprop-line-prefix").starts_with("####C-textprop-line-prefix"),
+        "a text-property line-prefix keeps being drawn: {texts:?}"
+    );
+}
+
+#[test]
 fn layout_frame_rust_remaps_named_faces_on_line_and_wrap_prefix_strings() {
     use neomacs_display_protocol::types::Color;
 
