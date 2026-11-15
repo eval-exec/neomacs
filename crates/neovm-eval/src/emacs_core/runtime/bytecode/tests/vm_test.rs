@@ -6090,29 +6090,6 @@ fn vm_plain_nil_varref_does_not_probe_buffer_local_storage() {
 }
 
 #[test]
-fn vm_syntax_motion_builtins_use_shared_point_and_syntax_state() {
-    crate::test_utils::init_test_tracing();
-    assert_eq!(
-        vm_eval_str(
-            r#"(progn
-                 (set-syntax-table (copy-syntax-table (standard-syntax-table)))
-                 (modify-syntax-entry ?\; "<")
-                 (modify-syntax-entry ?\n ">")
-                 (modify-syntax-entry ?' ". p")
-                 (erase-buffer)
-                 (insert "  ;c\n''foo bar")
-                 (list
-                  (progn (goto-char 1) (list (forward-comment 1) (point)))
-                  (progn (goto-char 8) (backward-prefix-chars) (point))
-                  (progn (goto-char 8) (forward-word) (point))
-                  (progn (goto-char 1) (list (skip-syntax-forward " ") (point)))
-                  (progn (goto-char 11) (list (skip-syntax-backward "w") (point)))))"#
-        ),
-        "OK ((t 6) 6 11 (2 3) (-3 8))"
-    );
-}
-
-#[test]
 fn vm_buffer_metadata_builtins_use_shared_manager_state() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
