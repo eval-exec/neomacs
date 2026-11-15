@@ -1980,6 +1980,10 @@ pub(crate) struct GuiFrameWindowManager {
     pub pending_creates: Vec<PendingWindow>,
     /// Pending window destruction requests
     pub pending_destroys: Vec<u64>,
+    /// Activation requested for the primary window before native realization.
+    /// The primary window lives in `windows` under a pending lifecycle, not in
+    /// `pending_creates`.
+    pub(super) pending_primary_focus: bool,
     /// Native chrome defaults applied to future secondary frame windows.
     pub(super) chrome_defaults: WindowChrome,
     /// Whether future secondary frame windows should start with FPS enabled.
@@ -1999,6 +2003,8 @@ pub(crate) struct PendingWindow {
     pub visibility: WindowVisibility,
     /// Outer position requested before the native window exists.
     pub position: Option<(i32, i32)>,
+    /// Activation requested before the native window exists.
+    pub focus: bool,
 }
 
 impl GuiFrameWindowManager {
@@ -2010,6 +2016,7 @@ impl GuiFrameWindowManager {
             primary_winit_id: None,
             pending_creates: Vec::new(),
             pending_destroys: Vec::new(),
+            pending_primary_focus: false,
             chrome_defaults: WindowChrome::default(),
             fps_enabled: false,
             option_as_alt: neomacs_display_protocol::OptionAsAltShape::Both,
@@ -2087,6 +2094,7 @@ impl GuiFrameWindowManager {
     }
 
     pub(super) fn populate_primary_native(&mut self, mut native: GuiFrameNativeWindowState) {
+        let pending_focus = std::mem::take(&mut self.pending_primary_focus);
         native.refresh_content_geometry();
         let key = self.primary_frame_key();
         if let Some(window_state) = self.windows.get_mut(&key) {
@@ -2107,6 +2115,11 @@ impl GuiFrameWindowManager {
             };
             if let Some((x, y)) = pending_position {
                 window_state.set_outer_position(x, y);
+            }
+            if pending_focus && let Some(window) = window_state.window() {
+                // Activation requested before the primary window existed;
+                // GNU's Fx_focus_frame focuses an already-created window.
+                window.focus_window();
             }
             window_state.render.set_surface_state(surface_state);
             self.sync_primary_mapping();
@@ -2158,6 +2171,7 @@ impl GuiFrameWindowManager {
             geometry_hints,
             visibility,
             position: None,
+            focus: false,
         });
     }
 
@@ -2181,6 +2195,59 @@ impl GuiFrameWindowManager {
             found = true;
         }
         found
+    }
+
+    /// Activate a frame's native window, GNU's `x-focus-frame` host half.
+    ///
+    /// A presented child frame activates the top-level window that owns it.
+    /// A frame whose native window does not exist yet records the request and
+    /// activates the window once it is realized; the primary window lives in
+    /// `windows` under a pending lifecycle rather than in `pending_creates`.
+    /// The latest request is authoritative: a presented activation clears
+    /// every deferred request, and a deferred activation replaces them. False
+    /// when the frame is unknown.
+    pub(super) fn focus(&mut self, emacs_frame_id: u64) -> bool {
+        let presented = self
+            .get_mut_by_presented_frame(emacs_frame_id)
+            .map(|window_state| window_state.window().cloned());
+        match presented {
+            Some(Some(window)) => {
+                window.focus_window();
+                self.clear_deferred_focus();
+                true
+            }
+            Some(None) => {
+                // The primary frame before `populate_primary_native`.
+                self.pending_primary_focus = true;
+                self.clear_pending_create_focus();
+                true
+            }
+            None => {
+                if !self
+                    .pending_creates
+                    .iter()
+                    .any(|pending| pending.emacs_frame_id == emacs_frame_id)
+                {
+                    return false;
+                }
+                self.pending_primary_focus = false;
+                for pending in self.pending_creates.iter_mut() {
+                    pending.focus = pending.emacs_frame_id == emacs_frame_id;
+                }
+                true
+            }
+        }
+    }
+
+    fn clear_deferred_focus(&mut self) {
+        self.pending_primary_focus = false;
+        self.clear_pending_create_focus();
+    }
+
+    fn clear_pending_create_focus(&mut self) {
+        for pending in self.pending_creates.iter_mut() {
+            pending.focus = false;
+        }
     }
 
     /// Move a frame's outer window, or keep the position for a window whose
@@ -2325,6 +2392,11 @@ impl GuiFrameWindowManager {
                     NativeTextInputPolicy::for_gui_frame().apply_to_window(window.as_ref());
                     apply_option_key_policy(window.as_ref(), self.option_as_alt);
                     apply_window_geometry_hints(window.as_ref(), req.geometry_hints);
+                    if req.focus {
+                        // Activation requested before the window existed; GNU's
+                        // Fx_focus_frame focuses a window that already exists.
+                        window.focus_window();
+                    }
 
                     let winit_id = window.id();
                     tracing::info!(

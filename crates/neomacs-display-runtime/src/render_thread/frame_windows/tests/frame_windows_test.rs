@@ -1314,6 +1314,113 @@ fn clear_primary_mapping_removes_adopted_primary_identity() {
 // request_create() — pending create queue
 // =======================================================================
 
+/// GNU's `x-focus-frame` needs a native window. A request that arrives while
+/// creation is still queued must be kept and applied by `process_creates`,
+/// not dropped on the assumption that creation itself activates the window.
+#[test]
+fn focus_before_native_creation_is_kept_for_the_new_window() {
+    let mut mgr = GuiFrameWindowManager::new();
+    mgr.request_create(
+        7,
+        320,
+        240,
+        "focus".into(),
+        default_geometry_hints(),
+        WindowVisibility::Visible,
+    );
+    assert!(mgr.focus(7));
+    assert!(
+        mgr.pending_creates
+            .iter()
+            .any(|pending| pending.emacs_frame_id == 7 && pending.focus)
+    );
+    assert!(!mgr.focus(8), "unknown frame ids are not focusable");
+}
+
+#[test]
+fn latest_focus_request_is_the_only_deferred_target() {
+    let mut mgr = GuiFrameWindowManager::new();
+    mgr.pending_primary_focus = true;
+    for (id, title) in [(7, "first"), (9, "second")] {
+        mgr.request_create(
+            id,
+            320,
+            240,
+            title.into(),
+            default_geometry_hints(),
+            WindowVisibility::Visible,
+        );
+    }
+    assert!(mgr.focus(7));
+    assert!(!mgr.pending_primary_focus);
+    assert!(mgr.focus(9));
+    let deferred: Vec<u64> = mgr
+        .pending_creates
+        .iter()
+        .filter(|pending| pending.focus)
+        .map(|pending| pending.emacs_frame_id)
+        .collect();
+    assert_eq!(deferred, vec![9], "the latest request must win");
+
+    assert!(!mgr.focus(8));
+    let unchanged: Vec<u64> = mgr
+        .pending_creates
+        .iter()
+        .filter(|pending| pending.focus)
+        .map(|pending| pending.emacs_frame_id)
+        .collect();
+    assert_eq!(
+        unchanged,
+        vec![9],
+        "an unknown frame must not disturb a deferred request"
+    );
+}
+
+/// The primary window is installed under `FrameKey::Pending` before
+/// `populate_primary_native`, not in `pending_creates`. A focus request for it
+/// must be retained for realization instead of reporting success without a
+/// native activation.
+#[test]
+fn focus_of_the_pending_primary_window_is_retained_until_realization() {
+    let mut mgr = GuiFrameWindowManager::new();
+    mgr.set_primary_pending(GuiFrameWindowState {
+        visibility: WindowVisibility::Visible,
+        pending_scale_factor: None,
+        lifecycle: FrameLifecycle::Pending {
+            width: 800,
+            height: 600,
+            scale_factor: 1.0,
+            mouse_hidden_for_typing: false,
+            ime_enabled: false,
+            last_ime_cursor_area: None,
+            chrome: Default::default(),
+            geometry_hints: None,
+            pending_position: None,
+        },
+        render: GuiFrameRenderState::new_without_device(
+            42,
+            false,
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        ),
+    });
+    mgr.adopt_primary_frame_id(42);
+
+    assert!(mgr.focus(42));
+    assert!(mgr.pending_primary_focus);
+
+    // A newer request for a queued secondary frame supersedes it.
+    mgr.request_create(
+        7,
+        320,
+        240,
+        "later".into(),
+        default_geometry_hints(),
+        WindowVisibility::Visible,
+    );
+    assert!(mgr.focus(7));
+    assert!(!mgr.pending_primary_focus);
+}
+
 #[test]
 fn primary_visibility_survives_pending_identity_adoption_and_detachment() {
     let mut mgr = GuiFrameWindowManager::new();
@@ -1731,6 +1838,7 @@ fn pending_window_stores_all_fields() {
         geometry_hints: default_geometry_hints(),
         visibility: WindowVisibility::Visible,
         position: None,
+        focus: false,
     };
 
     assert_eq!(pw.emacs_frame_id, 123);
@@ -1749,6 +1857,7 @@ fn pending_window_unicode_title() {
         geometry_hints: default_geometry_hints(),
         visibility: WindowVisibility::Visible,
         position: None,
+        focus: false,
     };
 
     assert!(pw.title.contains('\u{2014}')); // em dash

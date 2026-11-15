@@ -52,6 +52,7 @@ pub mod window_cmds_host {
         pub fullscreen_changes: Rc<RefCell<Vec<(crate::window::FrameId, FrameFullscreen)>>>,
         pub visibility_changes:
             Rc<RefCell<Vec<(crate::window::FrameId, crate::window::FrameVisibility)>>>,
+        pub focus_requests: Rc<RefCell<Vec<(crate::window::FrameId, bool)>>>,
         pub geometry_hints:
             Rc<RefCell<Vec<(crate::window::FrameId, crate::window::GuiFrameGeometryHints)>>>,
         pub primary_size: Option<GuiFrameHostSize>,
@@ -139,6 +140,17 @@ pub mod window_cmds_host {
             &mut self,
             _redirects: Vec<(crate::window::FrameId, Option<crate::window::FrameId>)>,
         ) -> Result<(), String> {
+            if self.fail_focus_sync.get() {
+                return Err("focus channel closed".into());
+            }
+            Ok(())
+        }
+        fn focus_gui_frame(
+            &mut self,
+            frame: crate::window::FrameId,
+            no_activate: bool,
+        ) -> Result<(), String> {
+            self.focus_requests.borrow_mut().push((frame, no_activate));
             if self.fail_focus_sync.get() {
                 return Err("focus channel closed".into());
             }
