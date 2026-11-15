@@ -480,3 +480,25 @@ fn oracle_prop_error_types_error_catches_all_standard() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+/// GNU defines `file-locked` in `lisp/userlock.el`, which loadup does not
+/// preload, so the symbol is absent until the file is loaded:
+/// `(intern-soft (concat "file-" "locked"))` is nil at startup and only then
+/// does `(define-error 'file-locked "File is locked" 'file-error)`
+/// (userlock.el:40) create it. The name is built at runtime so the reader
+/// cannot intern it before the check.
+#[test]
+fn oracle_prop_file_locked_is_defined_lazily_by_userlock() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"(list (intern-soft (concat "file-" "locked"))
+       (progn
+         (load "userlock")
+         (list (intern-soft (concat "file-" "locked"))
+               (get (intern (concat "file-" "locked")) 'error-conditions)
+               (get (intern (concat "file-" "locked")) 'error-message))))"#;
+    let expect = expect_test::expect![[
+        r#""OK (nil (file-locked (file-locked file-error error) \"File is locked\"))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

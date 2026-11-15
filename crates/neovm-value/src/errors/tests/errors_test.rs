@@ -631,7 +631,11 @@ fn obarray_all_standard_errors_have_message() {
         "file-error",
         "file-already-exists",
         "file-date-error",
-        "file-locked",
+        // `file-locked` is NOT part of the eager set: GNU defines it in
+        // lisp/userlock.el (define-error at :40), which loadup does not
+        // preload; pinned GNU 31.1 answers (intern-soft "file-locked") with
+        // nil at startup and only then defines it. See
+        // crates/neovm-oracle-tests/src/error/types_comprehensive.rs.
         "file-missing",
         "file-notify-error",
         "invalid-function",

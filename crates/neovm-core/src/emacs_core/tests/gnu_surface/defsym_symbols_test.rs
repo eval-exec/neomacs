@@ -93,3 +93,17 @@ fn explicitly_uninterned_gnu_defsym_spellings_are_absent() {
         .expect("GNU uninterned spelling oracle");
     assert_eq!(list_to_vec(&result), Some(vec![Value::NIL; 4]));
 }
+
+/// GNU defines `file-locked` in `lisp/userlock.el` (`define-error` at
+/// userlock.el:40), which loadup does not preload, so the name is not an
+/// obarray symbol at startup; the port used to register it eagerly with the
+/// file-error family. Pinned GNU 31.1: `(intern-soft "file-locked")` nil
+/// before `(load "userlock")` and `(file-locked file-error error)` after.
+#[test]
+fn file_locked_is_not_an_obarray_symbol_at_boot() {
+    let eval = crate::test_utils::new_context();
+    assert!(
+        eval.obarray().intern_soft("file-locked").is_none(),
+        "file-locked must be created lazily by userlock.el, not at boot"
+    );
+}

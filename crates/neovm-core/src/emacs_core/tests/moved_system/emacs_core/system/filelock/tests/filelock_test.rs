@@ -218,10 +218,18 @@ fn visit_file_in_current_buffer(eval: &mut neovm_eval::emacs_core::eval::Context
         .expect("set buffer-file-truename");
 }
 
-/// GNU lock_file (src/filelock.c) calls ask-user-about-lock when another
-/// process owns the lock, and any signal it raises — the batch-mode
-/// file-locked signal from userlock.el in particular — propagates and
-/// aborts the modification.
+/// GNU lock_file (src/filelock.c:626) calls ask-user-about-lock when another
+/// process owns the lock, and a signal it raises propagates and aborts the
+/// modification.
+///
+/// The fixture `fset`s ask-user-about-lock, which replaces the autoload that
+/// would have loaded userlock.el; that file's `(define-error 'file-locked
+/// "File is locked" 'file-error)` (userlock.el:40) is what gives the symbol
+/// error-conditions. With it unloaded, `(signal 'file-locked ...)` names an
+/// undefined error symbol, so GNU reports `(error "Invalid error symbol"
+/// file-locked)`. Pinned GNU 31.1 batch run of this exact scenario:
+/// `result=(error "Invalid error symbol" file-locked)`, buffer still
+/// `"hello\n"`.
 #[cfg(unix)]
 #[test]
 fn modifying_externally_locked_file_propagates_file_locked_and_leaves_buffer_untouched() {
@@ -252,14 +260,9 @@ fn modifying_externally_locked_file_propagates_file_locked_and_leaves_buffer_unt
     let result = eval.eval_str(r#"(insert "EDIT")"#);
     let formatted = neovm_eval::emacs_core::print::format_eval_result(&result);
     assert_eq!(
-        formatted,
-        format!(
-            "ERR (file-locked (\"{}\" \"someone@{} (pid {})\" \"Cannot resolve lock conflict in batch mode\"))",
-            visited.display(),
-            host,
-            owner.id(),
-        ),
-        "GNU propagates the ask-user-about-lock signal and refuses the edit"
+        formatted, "ERR (error (\"Invalid error symbol\" file-locked))",
+        "GNU refuses the edit; with userlock.el not loaded the unknown error \
+         symbol is reported as GNU reports it"
     );
 
     let buffer_after = eval.eval_str("(buffer-string)");

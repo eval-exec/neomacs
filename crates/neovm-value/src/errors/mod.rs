@@ -447,7 +447,13 @@ pub fn init_standard_errors(obarray: &mut Obarray) {
         "Cannot set file date",
         &["file-error"],
     );
-    register_simple(obarray, "file-locked", "File is locked", &["file-error"]);
+    // `file-locked` is deliberately absent: GNU defines it in `userlock.el`
+    // (`lisp/userlock.el:40`, `(define-error 'file-locked "File is locked"
+    // 'file-error)`), which loadup does not preload, so the pinned GNU 31.1
+    // answers `(intern-soft "file-locked")` with nil until the first file
+    // locking autoloads that file. Eagerly registering it here made the
+    // symbol visible at boot and changed `(intern-soft "file-locked")` /
+    // `(all-completions "file-" obarray)`.
     register_simple(obarray, "file-missing", "File is missing", &["file-error"]);
     register_simple(
         obarray,
