@@ -5,8 +5,7 @@ pub(crate) use super::batch_support::ParityBatchCase;
 use std::time::Duration;
 
 use crate::{
-    ASTRO_TS_MODE_MELPA_PIN, CachedMelpaOracle, EmacsRuntime, elisp_string,
-    prepare_cached_tree_sitter_grammar, prepare_cached_tree_sitter_grammar_from_subdirectory,
+    ASTRO_TS_MODE_MELPA_PIN, CachedMelpaOracle, elisp_string, extra_tree_sitter_grammar_pin,
 };
 use expect_test::expect;
 
@@ -18,37 +17,16 @@ mod workflows;
 
 const ASTRO_TS_MODE_TEST_TIMEOUT: Duration = Duration::from_secs(180);
 
-const ASTRO_GRAMMAR_REPOSITORY: &str = "https://github.com/virchau13/tree-sitter-astro";
-const ASTRO_GRAMMAR_REVISION: &str = "213f6e6973d9b456c6e50e86f19f66877e7ef0ee";
-const CSS_GRAMMAR_REPOSITORY: &str = "https://github.com/tree-sitter/tree-sitter-css";
-const CSS_GRAMMAR_REVISION: &str = "dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f";
-const TYPESCRIPT_GRAMMAR_REPOSITORY: &str = "https://github.com/tree-sitter/tree-sitter-typescript";
-const TYPESCRIPT_GRAMMAR_REVISION: &str = "75b3874edb2dc714fb1fd77a32013d0f8699989f";
-
 fn astro_ts_mode_oracle(source_file: &str) -> CachedMelpaOracle {
-    let gnu_emacs = EmacsRuntime::gnu_emacs();
-    let astro_grammar_dir = prepare_cached_tree_sitter_grammar(
-        &gnu_emacs,
-        "astro",
-        ASTRO_GRAMMAR_REPOSITORY,
-        ASTRO_GRAMMAR_REVISION,
-    )
-    .expect("prepare pinned Astro grammar below ./tmp");
-    let css_grammar_dir = prepare_cached_tree_sitter_grammar(
-        &gnu_emacs,
-        "css",
-        CSS_GRAMMAR_REPOSITORY,
-        CSS_GRAMMAR_REVISION,
-    )
-    .expect("prepare pinned CSS grammar below ./tmp");
-    let tsx_grammar_dir = prepare_cached_tree_sitter_grammar_from_subdirectory(
-        &gnu_emacs,
-        "tsx",
-        TYPESCRIPT_GRAMMAR_REPOSITORY,
-        TYPESCRIPT_GRAMMAR_REVISION,
-        "tsx/src",
-    )
-    .expect("prepare pinned TSX grammar below ./tmp");
+    let astro_grammar_dir = extra_tree_sitter_grammar_pin("astro")
+        .and_then(|pin| pin.prepare())
+        .expect("read the pinned Astro grammar from the prefetched cache");
+    let css_grammar_dir = extra_tree_sitter_grammar_pin("css")
+        .and_then(|pin| pin.prepare())
+        .expect("read the pinned CSS grammar from the prefetched cache");
+    let tsx_grammar_dir = extra_tree_sitter_grammar_pin("tsx")
+        .and_then(|pin| pin.prepare())
+        .expect("read the pinned TSX grammar from the prefetched cache");
     let astro_grammar_dir = elisp_string(&astro_grammar_dir.to_string_lossy());
     let css_grammar_dir = elisp_string(&css_grammar_dir.to_string_lossy());
     let tsx_grammar_dir = elisp_string(&tsx_grammar_dir.to_string_lossy());

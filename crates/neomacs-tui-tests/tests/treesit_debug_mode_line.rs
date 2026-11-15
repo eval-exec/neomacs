@@ -10,7 +10,7 @@ fn go_grammar_loads_and_multibyte_mode_line_renders_with_debug_logging() {
         .iter()
         .find(|case| case.language == "go")
         .unwrap()
-        .prepare(&gnu)
+        .prepare()
         .unwrap();
     let fixture = neomacs_infra::workspace_root()
         .join("crates/neomacs-gui-tests/fixtures/treesit-debug-mode-line.el");
