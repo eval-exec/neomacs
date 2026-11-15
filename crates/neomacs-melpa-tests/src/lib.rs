@@ -17,11 +17,10 @@ use neomacs_melpa_test_support::{
 };
 pub use neomacs_melpa_test_support::{
     EmacsRuntime, LockedPackageSource, MelpaSandbox, PackageActivation, PreparedPackageSet,
-    PreparedSourceInstall, SHALLOW_GIT_FETCH_ARGS, SourceBuild, locked_melpa_install_plan,
-    locked_melpa_source, locked_melpa_sources, neomacs_binary, package_activation_elisp,
-    preflight_locked_melpa_packages, prepare_cached_locked_melpa_package,
-    prepare_cached_tree_sitter_grammar, prepare_cached_tree_sitter_grammar_from_subdirectory,
-    workspace_root,
+    PreparedSourceInstall, SHALLOW_GIT_FETCH_ARGS, SourceBuild, cached_tree_sitter_grammar,
+    extra_tree_sitter_grammar_pin, locked_melpa_install_plan, locked_melpa_source,
+    locked_melpa_sources, neomacs_binary, package_activation_elisp,
+    preflight_locked_melpa_packages, prepare_cached_locked_melpa_package, workspace_root,
 };
 use neomacs_test_oracle::{
     BatchProbe, EvalOutcome, ExpectedOutcome, extract_marked_batch_protocol,

@@ -7904,178 +7904,201 @@ pub fn builtin_do_auto_save(
     let mut native_scope = AutoSaveNativeScope::enter(eval);
     let eval = native_scope.context();
 
-    // Collect buffer ids to process
-    let buffer_ids: Vec<neovm_edit::buffer::BufferId> = if current_only {
-        eval.edit.buffers.current_buffer_id().into_iter().collect()
-    } else {
-        eval.edit.buffers.buffer_list()
-    };
-
-    for buf_id in buffer_ids {
-        // Gather info from the buffer (immutable borrow)
-        let (auto_save_name, file_name, content_len, buffer_name, saved_size) = {
-            let Some(buf) = eval.edit.buffers.get(buf_id) else {
+    // GNU `Fdo_auto_save` walks the LIVE buffer alist twice
+    // (`fileio.c:6402`): pass 0 saves every buffer whose auto-save file
+    // name has no `write-region' file-name-handler -- pure C writes in
+    // GNU, so no Lisp runs -- and pass 1 saves the handler buffers, whose
+    // `write-region' dispatch may run arbitrary Lisp. Handler Lisp only
+    // ever observes a completed handler-less pass: a buffer it kills was
+    // saved first (if it was handler-less), and a buffer it appends is
+    // visited by the still-running pass 1. `FOR_EACH_LIVE_BUFFER`
+    // (`buffer.h:1329`) follows retained cons links; neither a Vec
+    // snapshot nor a seen-set implements that walk, so reuse the
+    // kill-emacs unlock walk's cursor (`BufferListCursor`,
+    // `command_loop.rs`).
+    let write_region = Value::symbol("write-region");
+    for do_handled_files in [false, true] {
+        let cursor = eval.edit.buffers.buffer_list_cursor();
+        for buf_id in cursor {
+            // GNU fileio.c:6409-6411 checks CURRENT-ONLY against the buffer
+            // current at each visit -- the hook may have changed it -- never
+            // against an entry snapshot.
+            if current_only && eval.edit.buffers.current_buffer_id() != Some(buf_id) {
                 continue;
+            }
+            // Gather info from the buffer (immutable borrow)
+            let (auto_save_name, file_name, content_len, buffer_name, saved_size) = {
+                let Some(buf) = eval.edit.buffers.get(buf_id) else {
+                    continue;
+                };
+
+                // Skip internal buffers (name starts with space)
+                if buf.name_starts_with_space() {
+                    continue;
+                }
+
+                // Skip indirect buffers
+                if buf.base_buffer().is_some() {
+                    continue;
+                }
+
+                // GNU skips the buffer unless `save_length` is a fixnum >= 0
+                // (`fileio.c:6436-6437`). A negative value is the shrink-a-lot
+                // disable, cleared only by a real save.
+                let saved_size = buf
+                    .get_buffer_local("buffer-saved-size")
+                    .and_then(|value| value.as_fixnum());
+                if saved_size.is_some_and(|n| n < 0) {
+                    continue;
+                }
+
+                // Buffer must be modified since last auto-save
+                // (modified_tick > autosave_modified_tick means unsaved changes)
+                if buf.autosave_modified_tick() >= buf.modified_tick() {
+                    continue;
+                }
+
+                // Buffer must actually be modified
+                if !buf.is_modified() {
+                    continue;
+                }
+
+                // GNU fileio.c:6408 gates every buffer on
+                // `STRINGP (BVAR (b, auto_save_file_name))' before anything
+                // else: a buffer with no auto-save name is skipped -- never
+                // written, and never NAMED here.  Naming is `auto-save-mode's
+                // job (lisp/files.el); do-auto-save only reads the field.  The
+                // Rust subr used to invent `#*buffer*#' names for file-less
+                // buffers (DIVERGENCES.md 152), which made buffer-modified-p
+                // answer `autosaved' where GNU answers t.
+                let auto_name = buf.auto_save_file_name_lisp_string().cloned();
+                if auto_name.is_none() {
+                    continue;
+                }
+                let visit_name = buf.file_name_lisp_string().cloned();
+                (
+                    auto_name,
+                    visit_name,
+                    // GNU `save_length` is `Z - BEG` in characters
+                    // (`fileio.c:6481`), not the byte length of the auto-save file.
+                    buf.total_char_len().get() as i64,
+                    buf.name_value(),
+                    saved_size,
+                )
             };
 
-            // Skip internal buffers (name starts with space)
-            if buf.name_starts_with_space() {
+            // GNU auto_save_1 always passes auto_save_file_name to Fwrite_region.
+            // auto-save-visited-file-name changes VISIT (lambda/t), not this name.
+            // The name also selects the pass (`fileio.c:6439-6440`): pass 0
+            // saves only buffers without a `write-region' handler, pass 1 only
+            // buffers with one.
+            let Some(auto_save_name) = auto_save_name else {
+                continue;
+            };
+            let has_write_region_handler =
+                !find_file_name_handler_lisp_for_eval(eval, &auto_save_name, write_region).is_nil();
+            if has_write_region_handler != do_handled_files {
                 continue;
             }
 
-            // Skip indirect buffers
-            if buf.base_buffer().is_some() {
+            // GNU `fileio.c:6446-6448`: a recent failure (recorded when the
+            // attempt itself took more than 60 s) skips this buffer for 1200 s.
+            // The time lives on the buffer (`buffer.h`), not in a process map.
+            let now = auto_save_unix_secs();
+            let failure = eval
+                .edit
+                .buffers
+                .get(buf_id)
+                .map(|buf| buf.auto_save_failure_time())
+                .unwrap_or(0);
+            if auto_save_failure_blocks(failure, now) {
                 continue;
             }
 
-            // GNU skips the buffer unless `save_length` is a fixnum >= 0
-            // (`fileio.c:6436-6437`). A negative value is the shrink-a-lot
-            // disable, cleared only by a real save.
-            let saved_size = buf
-                .get_buffer_local("buffer-saved-size")
-                .and_then(|value| value.as_fixnum());
-            if saved_size.is_some_and(|n| n < 0) {
+            // Shrink-a-lot (`fileio.c:6450-6474`) runs before the progress
+            // line and does not count as a save. `4*(Z-BEG) < 3*save_length`
+            // is `(growth_factor) * size < (growth_factor - 1) * save_length`
+            // with `growth_factor = 4` and `Z - BEG` in characters. A non-nil
+            // NO-MESSAGE skips the whole conjunction, so the save proceeds and
+            // `save_length` is not -1.
+            // GNU `set_buffer_internal (b)` (`fileio.c:6453`) happens before
+            // the shrink test and stays in effect through that arm. The
+            // shrink `continue` does not restore `old`. `old` is restored
+            // only after a real save (`:6482`). The variable read therefore
+            // sees b's buffer-local value (`:6454`).
+            eval.set_current_buffer_unrecorded(buf_id)?;
+            let include_big_deletions = eval
+                .builtin_var_value_by_name("auto-save-include-big-deletions")
+                .is_some_and(|value| value.is_truthy());
+            let shrunk = !include_big_deletions
+                && saved_size.is_some_and(|saved| saved > 5000)
+                && saved_size.is_some_and(|saved| (content_len as i128) * 4 < (saved as i128) * 3)
+                && file_name.is_some()
+                && !no_message;
+            if shrunk {
+                auto_save_disable_for_shrink(
+                    eval,
+                    buf_id,
+                    buffer_name,
+                    raise_at_entry,
+                    raise_after_hook,
+                )?;
                 continue;
             }
 
-            // Buffer must be modified since last auto-save
-            // (modified_tick > autosave_modified_tick means unsaved changes)
-            if buf.autosave_modified_tick() >= buf.modified_tick() {
-                continue;
+            // GNU makes the buffer current, runs `auto_save_1` under
+            // `internal_condition_case (auto_save_1, Qt, auto_save_error)`, marks
+            // the buffer auto-saved whether or not that succeeded, and selects
+            // OLD again (`set_buffer_internal`, src/fileio.c:6453 and 6478-6482).
+            // A `file-modes` handler therefore runs in the buffer being
+            // auto-saved.  An error while reading the visited file's modes (a
+            // stat failing with EACCES, a handler signaling) or while writing
+            // abandons this buffer's write and is reported as a warning; the pass
+            // goes on with the next buffer, and this one is not retried before
+            // its next change.
+            eval.set_current_buffer_unrecorded(buf_id)?;
+            // GNU prints the progress line once, before the first attempt,
+            // including an attempt that then signals (`fileio.c:6476-6478`).
+            if !auto_saved && !no_message {
+                auto_save_say(eval, "Auto-saving...");
             }
-
-            // Buffer must actually be modified
-            if !buf.is_modified() {
-                continue;
-            }
-
-            // GNU fileio.c:6408 gates every buffer on
-            // `STRINGP (BVAR (b, auto_save_file_name))' before anything
-            // else: a buffer with no auto-save name is skipped -- never
-            // written, and never NAMED here.  Naming is `auto-save-mode's
-            // job (lisp/files.el); do-auto-save only reads the field.  The
-            // Rust subr used to invent `#*buffer*#' names for file-less
-            // buffers (DIVERGENCES.md 152), which made buffer-modified-p
-            // answer `autosaved' where GNU answers t.
-            let auto_name = buf.auto_save_file_name_lisp_string().cloned();
-            if auto_name.is_none() {
-                continue;
-            }
-            let visit_name = buf.file_name_lisp_string().cloned();
-            (
-                auto_name,
-                visit_name,
-                // GNU `save_length` is `Z - BEG` in characters
-                // (`fileio.c:6481`), not the byte length of the auto-save file.
-                buf.total_char_len().get() as i64,
-                buf.name_value(),
-                saved_size,
-            )
-        };
-
-        // GNU auto_save_1 always passes auto_save_file_name to Fwrite_region.
-        // auto-save-visited-file-name changes VISIT (lambda/t), not this name.
-        let Some(_auto_save_name) = auto_save_name else {
-            continue;
-        };
-
-        // GNU `fileio.c:6446-6448`: a recent failure (recorded when the
-        // attempt itself took more than 60 s) skips this buffer for 1200 s.
-        // The time lives on the buffer (`buffer.h`), not in a process map.
-        let now = auto_save_unix_secs();
-        let failure = eval
-            .edit
-            .buffers
-            .get(buf_id)
-            .map(|buf| buf.auto_save_failure_time())
-            .unwrap_or(0);
-        if auto_save_failure_blocks(failure, now) {
-            continue;
-        }
-
-        // Shrink-a-lot (`fileio.c:6450-6474`) runs before the progress
-        // line and does not count as a save. `4*(Z-BEG) < 3*save_length`
-        // is `(growth_factor) * size < (growth_factor - 1) * save_length`
-        // with `growth_factor = 4` and `Z - BEG` in characters. A non-nil
-        // NO-MESSAGE skips the whole conjunction, so the save proceeds and
-        // `save_length` is not -1.
-        // GNU `set_buffer_internal (b)` (`fileio.c:6453`) happens before
-        // the shrink test and stays in effect through that arm. The
-        // shrink `continue` does not restore `old`. `old` is restored
-        // only after a real save (`:6482`). The variable read therefore
-        // sees b's buffer-local value (`:6454`).
-        eval.set_current_buffer_unrecorded(buf_id)?;
-        let include_big_deletions = eval
-            .builtin_var_value_by_name("auto-save-include-big-deletions")
-            .is_some_and(|value| value.is_truthy());
-        let shrunk = !include_big_deletions
-            && saved_size.is_some_and(|saved| saved > 5000)
-            && saved_size.is_some_and(|saved| (content_len as i128) * 4 < (saved as i128) * 3)
-            && file_name.is_some()
-            && !no_message;
-        if shrunk {
-            auto_save_disable_for_shrink(
-                eval,
-                buf_id,
-                buffer_name,
-                raise_at_entry,
-                raise_after_hook,
-            )?;
-            continue;
-        }
-
-        // GNU makes the buffer current, runs `auto_save_1` under
-        // `internal_condition_case (auto_save_1, Qt, auto_save_error)`, marks
-        // the buffer auto-saved whether or not that succeeded, and selects
-        // OLD again (`set_buffer_internal`, src/fileio.c:6453 and 6478-6482).
-        // A `file-modes` handler therefore runs in the buffer being
-        // auto-saved.  An error while reading the visited file's modes (a
-        // stat failing with EACCES, a handler signaling) or while writing
-        // abandons this buffer's write and is reported as a warning; the pass
-        // goes on with the next buffer, and this one is not retried before
-        // its next change.
-        eval.set_current_buffer_unrecorded(buf_id)?;
-        // GNU prints the progress line once, before the first attempt,
-        // including an attempt that then signals (`fileio.c:6476-6478`).
-        if !auto_saved && !no_message {
-            auto_save_say(eval, "Auto-saving...");
-        }
-        let before_secs = auto_save_unix_secs();
-        let result = match auto_save_1(eval) {
-            Err(flow) if flow.is_signal() => {
-                auto_save_error_occurred = true;
-                auto_save_error(eval, &flow)
-            }
-            other => other,
-        };
-        // GNU `internal_condition_case` (`fileio.c:6478`) returns only when
-        // `auto_save_1` or `auto_save_error` returns. A signal from the
-        // handler (`ring_bell`, `display-warning`) leaves `Fdo_auto_save`
-        // before the mark, the `save_length` store, and `set_buffer_internal
-        // (old)` (`:6479-6482`). The failure-time store at `:6488` is in
-        // that same tail.
-        result?;
-        let _ = eval.edit.buffers.set_buffer_auto_saved(buf_id);
-        if let Some(buf) = eval.edit.buffers.get_mut(buf_id) {
-            let saved_size = buf.total_char_len().get() as i64;
-            buf.set_buffer_local("buffer-saved-size", Value::fixnum(saved_size));
-        }
-        // GNU restores `old` after a handler that returned (`fileio.c:6482`).
-        // The shrink arm never gets here.
-        if let Some(old_buffer) = old_buffer {
-            eval.restore_current_buffer_if_live(old_buffer);
-        }
-        // GNU `fileio.c:6488-6489`: an attempt that spans more than 60 s
-        // is treated as an NFS timeout and suppresses retries for 1200 s.
-        // A fast success does not clear a previous timestamp. Lisp
-        // `set-buffer-auto-saved` and `clear-buffer-auto-save-failure` do.
-        let after_secs = auto_save_unix_secs();
-        if let Some(recorded) = auto_save_failure_time_after_attempt(before_secs, after_secs) {
+            let before_secs = auto_save_unix_secs();
+            let result = match auto_save_1(eval) {
+                Err(flow) if flow.is_signal() => {
+                    auto_save_error_occurred = true;
+                    auto_save_error(eval, &flow)
+                }
+                other => other,
+            };
+            // GNU `internal_condition_case` (`fileio.c:6478`) returns only when
+            // `auto_save_1` or `auto_save_error` returns. A signal from the
+            // handler (`ring_bell`, `display-warning`) leaves `Fdo_auto_save`
+            // before the mark, the `save_length` store, and `set_buffer_internal
+            // (old)` (`:6479-6482`). The failure-time store at `:6488` is in
+            // that same tail.
+            result?;
+            let _ = eval.edit.buffers.set_buffer_auto_saved(buf_id);
             if let Some(buf) = eval.edit.buffers.get_mut(buf_id) {
-                buf.set_auto_save_failure_time(recorded);
+                let saved_size = buf.total_char_len().get() as i64;
+                buf.set_buffer_local("buffer-saved-size", Value::fixnum(saved_size));
             }
+            // GNU restores `old` after a handler that returned (`fileio.c:6482`).
+            // The shrink arm never gets here.
+            if let Some(old_buffer) = old_buffer {
+                eval.restore_current_buffer_if_live(old_buffer);
+            }
+            // GNU `fileio.c:6488-6489`: an attempt that spans more than 60 s
+            // is treated as an NFS timeout and suppresses retries for 1200 s.
+            // A fast success does not clear a previous timestamp. Lisp
+            // `set-buffer-auto-saved` and `clear-buffer-auto-save-failure` do.
+            let after_secs = auto_save_unix_secs();
+            if let Some(recorded) = auto_save_failure_time_after_attempt(before_secs, after_secs) {
+                if let Some(buf) = eval.edit.buffers.get_mut(buf_id) {
+                    buf.set_auto_save_failure_time(recorded);
+                }
+            }
+            auto_saved = true;
         }
-        auto_saved = true;
     }
 
     // GNU `Fdo_auto_save` ends with `record_auto_save`, regardless of whether
