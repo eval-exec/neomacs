@@ -1014,19 +1014,197 @@ fn next_single_char_property_change_on_raw_unibyte_string_uses_lisp_length() {
 }
 
 #[test]
-fn get_display_property_queries_display_only() {
+fn get_display_property_finds_the_spec_inside_the_display_property() {
+    // GNU xdisp.c:5877 + find_display_property (xdisp.c:5707), attested
+    // against the GNU oracle 11-15: SPEC is the car of a display
+    // specification searched INSIDE the `display' property, never the
+    // property name itself.
     crate::test_utils::init_test_tracing();
+    let height_2 = Value::list(vec![Value::symbol("height"), Value::make_float(2.0)]);
     let mut eval = eval_with_text("abcd");
     builtin_put_text_property(
         &mut eval,
         vec![
             Value::fixnum(2),
             Value::fixnum(4),
-            Value::symbol("p"),
-            Value::symbol("v"),
+            Value::symbol("display"),
+            Value::list(vec![height_2]),
         ],
     )
     .unwrap();
+    let got = builtin_get_display_property(
+        &mut eval,
+        vec![
+            Value::fixnum(2),
+            Value::symbol("height"),
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .unwrap();
+    assert_eq!(got.as_float(), Some(2.0), "attested GNU: 2.0");
+    // Inside the run, before it: nil.
+    let before = builtin_get_display_property(
+        &mut eval,
+        vec![
+            Value::fixnum(1),
+            Value::symbol("height"),
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .unwrap();
+    assert!(before.is_nil());
+    let inside = builtin_get_display_property(
+        &mut eval,
+        vec![
+            Value::fixnum(3),
+            Value::symbol("height"),
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .unwrap();
+    assert_eq!(inside.as_float(), Some(2.0));
+
+    // A simple spec `(height 2.0)' and a vector of specs behave alike.
+    builtin_put_text_property(
+        &mut eval,
+        vec![
+            Value::fixnum(2),
+            Value::fixnum(4),
+            Value::symbol("display"),
+            Value::vector(vec![Value::NIL, height_2]),
+        ],
+    )
+    .unwrap();
+    let from_vector = builtin_get_display_property(
+        &mut eval,
+        vec![
+            Value::fixnum(2),
+            Value::symbol("height"),
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .unwrap();
+    assert_eq!(from_vector.as_float(), Some(2.0));
+
+    // PROPERTIES non-nil replaces the text properties entirely.
+    let from_properties = builtin_get_display_property(
+        &mut eval,
+        vec![
+            Value::fixnum(1),
+            Value::symbol("height"),
+            Value::NIL,
+            Value::list(vec![height_2]),
+        ],
+    )
+    .unwrap();
+    assert_eq!(from_properties.as_float(), Some(2.0));
+}
+
+#[test]
+fn get_display_property_value_shapes_match_gnu_find_display_property() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = eval_with_text("abcd");
+    let check = |eval: &mut Context, display: Value| -> (Value, Value) {
+        builtin_put_text_property(
+            eval,
+            vec![
+                Value::fixnum(2),
+                Value::fixnum(4),
+                Value::symbol("display"),
+                display,
+            ],
+        )
+        .unwrap();
+        let height = builtin_get_display_property(
+            eval,
+            vec![
+                Value::fixnum(2),
+                Value::symbol("height"),
+                Value::NIL,
+                Value::NIL,
+            ],
+        )
+        .unwrap();
+        let width = builtin_get_display_property(
+            eval,
+            vec![
+                Value::fixnum(2),
+                Value::symbol("width"),
+                Value::NIL,
+                Value::NIL,
+            ],
+        )
+        .unwrap();
+        (height, width)
+    };
+    // Multi-element spec yields the whole value list: GNU (2.0 3.0).
+    let (height, _) = check(
+        &mut eval,
+        Value::list(vec![
+            Value::symbol("height"),
+            Value::make_float(2.0),
+            Value::make_float(3.0),
+        ]),
+    );
+    assert!(height.is_cons());
+    assert_eq!(height.cons_car().as_float(), Some(2.0));
+    assert_eq!(height.cons_cdr().cons_car().as_float(), Some(3.0));
+    // Valueless specs never match: `(height)' and `(height . 2.0)' -> nil
+    // (the cdr must be a cons).  Attested GNU: nil, nil.
+    let (no_value, _) = check(&mut eval, Value::list(vec![Value::symbol("height")]));
+    assert!(no_value.is_nil());
+    let (dotted, _) = check(
+        &mut eval,
+        Value::cons(Value::symbol("height"), Value::make_float(2.0)),
+    );
+    assert!(dotted.is_nil());
+}
+
+#[test]
+fn get_display_property_reads_text_properties_not_overlays() {
+    // GNU uses Fget_text_property, so an overlay carrying `display' is
+    // invisible to get-display-property.  Attested GNU: nil.
+    crate::test_utils::init_test_tracing();
+    let mut eval = eval_with_text("abcd");
+    let overlay = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(3)],
+    )
+    .unwrap();
+    builtin_overlay_put(
+        &mut eval,
+        vec![
+            overlay,
+            Value::symbol("display"),
+            Value::list(vec![Value::symbol("height"), Value::make_float(2.0)]),
+        ],
+    )
+    .unwrap();
+    let got = builtin_get_display_property(
+        &mut eval,
+        vec![
+            Value::fixnum(2),
+            Value::symbol("height"),
+            Value::NIL,
+            Value::NIL,
+        ],
+    )
+    .unwrap();
+    assert!(got.is_nil());
+}
+
+#[test]
+fn get_display_property_on_a_bare_symbol_display_value_is_nil() {
+    // The old assertion here claimed spec `display' on a bare-symbol display
+    // value returns the symbol; GNU's find_display_property never matches a
+    // non-cons spec container, so both `display' and any other spec answer
+    // nil.  Attested GNU 11-15: nil, nil.
+    crate::test_utils::init_test_tracing();
+    let mut eval = eval_with_text("abcd");
     builtin_put_text_property(
         &mut eval,
         vec![
@@ -1037,14 +1215,7 @@ fn get_display_property_queries_display_only() {
         ],
     )
     .unwrap();
-    let non_display = builtin_get_display_property(
-        &mut eval,
-        vec![Value::fixnum(2), Value::symbol("p"), Value::NIL, Value::NIL],
-    )
-    .unwrap();
-    assert!(non_display.is_nil());
-
-    let display = builtin_get_display_property(
+    let as_spec = builtin_get_display_property(
         &mut eval,
         vec![
             Value::fixnum(2),
@@ -1054,7 +1225,30 @@ fn get_display_property_queries_display_only() {
         ],
     )
     .unwrap();
-    assert!(display.is_bare_symbol_named("dv"));
+    assert!(as_spec.is_nil());
+    let other = builtin_get_display_property(
+        &mut eval,
+        vec![Value::fixnum(2), Value::symbol("p"), Value::NIL, Value::NIL],
+    )
+    .unwrap();
+    assert!(other.is_nil());
+}
+
+#[test]
+fn get_display_property_properties_must_be_a_list() {
+    // GNU CHECK_LIST: wrong-type-argument listp.  Attested GNU 11-15.
+    crate::test_utils::init_test_tracing();
+    let mut eval = eval_with_text("abcd");
+    let result = builtin_get_display_property(
+        &mut eval,
+        vec![
+            Value::fixnum(1),
+            Value::symbol("height"),
+            Value::NIL,
+            Value::fixnum(42),
+        ],
+    );
+    assert!(result.is_err());
 }
 
 #[test]

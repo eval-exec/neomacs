@@ -183,6 +183,7 @@ mod gdh_strconv_semantics;
 mod generator_semantics;
 mod generic_function_comprehensive;
 mod get;
+mod get_display_property_semantics;
 mod global_local_keymap_semantics;
 mod goto_char;
 mod goto_char_advanced;

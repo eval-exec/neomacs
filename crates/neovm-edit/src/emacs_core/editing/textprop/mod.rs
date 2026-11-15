@@ -4157,7 +4157,7 @@ pub fn builtin_get_char_property_and_overlay_with_window_lookup<
     Ok(Value::cons(value, Value::NIL))
 }
 
-/// (get-display-property POS PROP &optional OBJECT PROPERTIES)
+/// (get-display-property POSITION SPEC &optional OBJECT PROPERTIES)
 #[doc(hidden)]
 pub fn builtin_get_display_property<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     let (edit, vars) = host.edit_and_vars();
@@ -4171,15 +4171,74 @@ pub(crate) fn builtin_get_display_property_in_state<'a, Vars: EditVariableRead<'
 ) -> EvalResult {
     expect_min_args("get-display-property", &args, 2)?;
     expect_max_args("get-display-property", &args, 4)?;
-    let prop = expect_property_key(&args[1])?;
-    if prop != display_prop() {
-        return Ok(Value::NIL);
+    // GNU xdisp.c:5877 `Fget_display_property`: PROPERTIES non-nil is
+    // searched directly; nil falls back to the `display' text property at
+    // POSITION -- Fget_text_property, so overlays are never consulted.
+    let properties = match args.get(3) {
+        Some(&properties) if !properties.is_nil() => {
+            if !properties.is_cons() {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("listp"), properties],
+                ));
+            }
+            properties
+        }
+        _ => builtin_get_text_property_in_state(
+            vars,
+            buffers,
+            &[
+                args[0],
+                display_prop(),
+                args.get(2).copied().unwrap_or(Value::NIL),
+            ],
+        )?,
+    };
+    Ok(find_display_property(properties, args[1]))
+}
+
+/// GNU `find_display_property` (xdisp.c:5707): fetch SPEC (the car of a
+/// display specification, e.g. `height') from a `display' property value.
+///
+/// A specification must name its value: its cdr has to be a cons, so `(height)'
+/// and `(height . 2.0)' never match. A two-element specification yields its
+/// value; a longer one yields the whole value list.
+fn find_display_property(disp: Value, spec: Value) -> Value {
+    let spec_value = |elem: Value| -> Option<Value> {
+        if !elem.is_cons() {
+            return None;
+        }
+        let rest = elem.cons_cdr();
+        if !rest.is_cons() || !eq_value(&elem.cons_car(), &spec) {
+            return None;
+        }
+        Some(if rest.cons_cdr().is_nil() {
+            rest.cons_car()
+        } else {
+            rest
+        })
+    };
+    if disp.is_nil() {
+        return Value::NIL;
     }
-    let mut forwarded = vec![args[0], args[1]];
-    if let Some(object) = args.get(2) {
-        forwarded.push(*object);
+    if let Some(items) = disp.as_vector_data() {
+        return items
+            .iter()
+            .find_map(|&elem| spec_value(elem))
+            .unwrap_or(Value::NIL);
     }
-    builtin_get_char_property_in_state(vars, buffers, forwarded)
+    if disp.is_cons() && disp.cons_car().is_cons() {
+        let mut cursor = disp;
+        while cursor.is_cons() {
+            if let Some(value) = spec_value(cursor.cons_car()) {
+                return value;
+            }
+            // GNU only follows a proper spine: a dotted tail ends the walk.
+            cursor = cursor.cons_cdr();
+        }
+        return Value::NIL;
+    }
+    spec_value(disp).unwrap_or(Value::NIL)
 }
 
 // ===========================================================================
