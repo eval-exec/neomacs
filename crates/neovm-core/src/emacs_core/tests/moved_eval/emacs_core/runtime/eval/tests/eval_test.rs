@@ -1967,6 +1967,41 @@ fn read_char_switches_active_kboard_to_keypress_source_frame_terminal() {
 }
 
 #[test]
+fn read_char_reswitches_to_cached_frame_when_selected_tty_is_different() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    let buf = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let first = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F1", 7, 80, 25, buf);
+    let second = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F2", 8, 80, 25, buf);
+
+    // The last input came from F1. Attaching F2 selects it but leaves the TTY
+    // input-frame cache intact to avoid select-window loops.
+    ev.observe_keyboard_input_frame(first);
+    ev.frame_manager_mut().select_frame(second);
+
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    ev.init_input_system();
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(vec![b'a'], first.0))
+        .expect("queue input for first TTY frame");
+
+    assert_eq!(
+        ev.read_char().expect("switch-frame before character"),
+        Value::list(vec![
+            Value::symbol("switch-frame"),
+            Value::make_frame(first.0)
+        ])
+    );
+    assert_eq!(
+        ev.read_char().expect("original key stays queued"),
+        Value::fixnum('a' as i64)
+    );
+}
+
+#[test]
 fn read_char_returns_unread_emacs_event_value_without_reencoding() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();

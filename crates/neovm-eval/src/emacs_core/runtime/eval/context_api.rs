@@ -1855,7 +1855,15 @@ impl Context {
             .keyboard
             .kboard
             .internal_last_event_frame();
-        let switching = Some(frame_id) != last_event_frame && Some(frame_id) != selected_frame;
+        let selected_terminal_differs = self
+            .frames
+            .get(frame_id)
+            .zip(selected_frame.and_then(|selected_id| self.frames.get(selected_id)))
+            .is_some_and(|(input_frame, selected_frame)| {
+                input_frame.terminal_id != selected_frame.terminal_id
+            });
+        let switching = Some(frame_id) != selected_frame
+            && (Some(frame_id) != last_event_frame || selected_terminal_differs);
         self.command_loop
             .keyboard
             .kboard
