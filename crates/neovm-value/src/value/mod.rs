@@ -1392,10 +1392,32 @@ impl HashTableStorage {
         }
     }
 
-    /// File a new entry for a key [`Self::try_probe_for_insert`] found
-    /// absent under `hash`. `hash_key` is the key materialized under the
-    /// table's test and `key` the key object.
-    pub fn insert_absent(&mut self, hash: u64, hash_key: HashKey, key: Value, value: Value) {
+    /// File a new entry for the key object `key`, which
+    /// [`Self::try_probe_for_insert`] found absent under `hash` with the same
+    /// `test` and `symbols_with_pos_enabled`.
+    ///
+    /// An `equal` table files a cons, vector, record or string key by the
+    /// object itself ([`HashKey::LiveKey`]), so the insertion costs nothing
+    /// that grows with the key; any other key is stored materialized under
+    /// the table's test. So is every key put while `symbols_with_pos_enabled`
+    /// is set: its materialized form strips positioned symbols, which a
+    /// reader rebuilding it from the object would not.
+    pub fn insert_absent(
+        &mut self,
+        hash: u64,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+        key: Value,
+        value: Value,
+    ) {
+        let hash_key = if test == HashTableTest::Equal
+            && !symbols_with_pos_enabled
+            && keyed_by_live_object(key)
+        {
+            HashKey::LiveKey
+        } else {
+            key.to_hash_key_swp(&test, symbols_with_pos_enabled)
+        };
         debug_assert_eq!(
             hash,
             stored_hash(&hash_key, key),
@@ -5969,7 +5991,7 @@ mod hash_index;
 pub mod switch_plan;
 
 pub(crate) use hash_index::equal_value_hash;
-use hash_index::{HashIndex, entry_has_key, fx_hash_key, stored_hash};
+use hash_index::{HashIndex, entry_has_key, fx_hash_key, keyed_by_live_object, stored_hash};
 
 // ---------------------------------------------------------------------------
 // Tests

@@ -19,11 +19,16 @@
 //! an equal copy, and a key mutated after insertion answered as the old
 //! structure rather than the object GNU compares.
 //!
-//! The materialized [`HashKey`] is still stored beside each entry: the
-//! iteration, dump and user-defined-test consumers read it. It no longer
-//! decides `equal`-table membership. An entry may instead hold
-//! [`HashKey::LiveKey`], whose key is the slot's key object; a reader that
-//! wants its materialized form builds it from that object.
+//! `puthash` of a cons, vector, record or string into an `equal` table,
+//! with `symbols-with-pos-enabled` nil, stores no materialized key either:
+//! the entry holds [`HashKey::LiveKey`] and its slot holds the key object,
+//! as GNU `hash_put` stores `key` beside its hash. Materializing that key
+//! copied it whole -- 4.8MB of allocation for one 100,000-element vector
+//! key, where GNU stores one word. Every other key is still materialized
+//! beside its entry for the iteration, dump and user-defined-test consumers
+//! that read it; a reader that wants the materialized form of a live-key
+//! entry builds it from the slot's key object. It no longer decides
+//! `equal`-table membership.
 use super::*;
 
 /// GNU `SXHASH_MAX_DEPTH` (src/fns.c): the deepest level `sxhash_obj`
@@ -239,6 +244,20 @@ fn live_key_can_be(value: Value, key: &HashKey) -> bool {
         // vector, record or string materializes to one as a whole.
         _ => false,
     }
+}
+
+/// Whether an `equal` table files `value` by the key object itself
+/// ([`HashKey::LiveKey`]) rather than by its materialized key: a cons,
+/// vector, record or string, whose materialized key is a copy as large as
+/// the object.
+#[inline]
+pub(super) fn keyed_by_live_object(value: Value) -> bool {
+    matches!(
+        value.kind(),
+        ValueKind::Cons
+            | ValueKind::String
+            | ValueKind::Veclike(VecLikeType::Vector | VecLikeType::Record)
+    )
 }
 
 impl HashKey {

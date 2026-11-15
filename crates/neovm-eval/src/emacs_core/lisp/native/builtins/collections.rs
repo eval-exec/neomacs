@@ -1414,8 +1414,13 @@ fn builtin_puthash_values(
                         }
                         HashProbe::Absent(hash) => {
                             maybe_resize_hash_table_for_insert(ht, true);
-                            let key = key_value.to_hash_key_swp(&test, symbols_with_pos_enabled);
-                            ht.data.insert_absent(hash, key, key_value, value);
+                            ht.data.insert_absent(
+                                hash,
+                                test,
+                                symbols_with_pos_enabled,
+                                key_value,
+                                value,
+                            );
                         }
                     }
                     Ok(())
@@ -1456,8 +1461,13 @@ fn builtin_puthash_values_concurrent(
                         }
                         HashProbe::Absent(hash) => {
                             maybe_resize_hash_table_for_insert(ht, true);
-                            let key = key_value.to_hash_key_swp(&test, symbols_with_pos_enabled);
-                            ht.data.insert_absent(hash, key, key_value, value);
+                            ht.data.insert_absent(
+                                hash,
+                                test,
+                                symbols_with_pos_enabled,
+                                key_value,
+                                value,
+                            );
                         }
                     }
                     Ok(())
