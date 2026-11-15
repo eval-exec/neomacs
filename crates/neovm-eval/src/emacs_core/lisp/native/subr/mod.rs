@@ -663,6 +663,10 @@ macro_rules! define_subrs {
             );
 
         // Apply cfg attributes to array elements before deriving declarations.
+        // The duplicate scan is a bounded quadratic loop; the evaluator batch
+        // is large enough to pass rustc's const-eval progress threshold, which
+        // reports long evaluations, not non-terminating ones.
+        #[allow(long_running_const_eval)]
         const _: () = $crate::emacs_core::subr::effect_schema::assert_valid(
             &$crate::emacs_core::subr::WorldSubr::batch_declarations(&[$($spec),+]),
         );
