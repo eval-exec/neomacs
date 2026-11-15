@@ -1164,6 +1164,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod process_tls
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod redisplay
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod register
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod terminal_state
+crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod textprop_entries
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod window_edge_drag
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod window_layout_query
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod window_markers
