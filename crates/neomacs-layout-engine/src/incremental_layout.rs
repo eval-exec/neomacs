@@ -205,7 +205,10 @@ pub struct RetainedWindowKey {
     pub tab_width: i32,
     pub char_width: f32,
     pub char_height: f32,
-    pub smallest_opened_font_height: u32,
+    /// Graphical-connection font minimum; `None` when the frame has no
+    /// graphical connection (GNU `FRAME_SMALLEST_FONT_HEIGHT` exists only for
+    /// window-system displays, src/frame.h:1831).
+    pub smallest_opened_font_height: Option<u32>,
     pub glyph_matrix_row_scale: std::num::NonZeroU32,
     pub glyph_matrix_rows: Option<usize>,
     pub font_pixel_size: f32,

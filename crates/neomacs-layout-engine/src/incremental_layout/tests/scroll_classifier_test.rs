@@ -34,7 +34,7 @@ fn synthetic_key(window_start: i64, point: i64) -> RetainedWindowKey {
         tab_width: 8,
         char_width: 8.0,
         char_height: 16.0,
-        smallest_opened_font_height: 16,
+        smallest_opened_font_height: Some(16),
         glyph_matrix_row_scale: std::num::NonZeroU32::MIN,
         glyph_matrix_rows: None,
         font_pixel_size: 16.0,
@@ -784,8 +784,8 @@ fn font_capacity_changes_refuse_cursor_and_scroll_reuse() {
             cursor.glyph_matrix_row_scale = std::num::NonZeroU32::new(2).unwrap();
             scrolled.glyph_matrix_row_scale = cursor.glyph_matrix_row_scale;
         } else {
-            cursor.smallest_opened_font_height = 12;
-            scrolled.smallest_opened_font_height = 12;
+            cursor.smallest_opened_font_height = Some(12);
+            scrolled.smallest_opened_font_height = Some(12);
         }
         assert!(retained.cursor_only_replay(&cursor).is_err());
         assert!(retained.scroll_replay(&scrolled).is_none());

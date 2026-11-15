@@ -349,8 +349,11 @@ pub struct FrameLayoutInputState {
     pub displays_chrome: bool,
     pub has_window_system: bool,
     pub window_system_symbol: Option<SymId>,
-    /// Current numeric minimum of fonts opened on this graphical connection.
-    pub smallest_opened_font_height: u32,
+    /// Current numeric minimum of fonts opened on this frame's graphical
+    /// connection. `None` means the frame has no graphical connection, so
+    /// GNU `required_matrix_height` takes its `WINDOW_TOTAL_LINES` branch
+    /// instead of dividing pixels by a font height.
+    pub smallest_opened_font_height: Option<u32>,
 }
 
 /// Existing evaluator-thread revision for direct character-table writes.
@@ -5663,8 +5666,10 @@ impl Frame {
             has_window_system: window_system.is_some(),
             window_system_symbol: window_system.and_then(Value::as_bare_symbol_id),
             smallest_opened_font_height: match self.display_identity() {
-                FrameDisplayIdentity::None => 1,
-                FrameDisplayIdentity::Graphical(identity) => identity.smallest_opened_font_height(),
+                FrameDisplayIdentity::None => None,
+                FrameDisplayIdentity::Graphical(identity) => {
+                    Some(identity.smallest_opened_font_height())
+                }
             },
         }
     }

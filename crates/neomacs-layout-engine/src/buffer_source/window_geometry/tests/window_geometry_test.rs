@@ -54,7 +54,7 @@ fn window_params() -> WindowParams {
         window_system: true,
         glyph_matrix_row_scale: std::num::NonZeroU32::MIN,
         glyph_matrix_rows: None,
-        smallest_opened_font_height: 16,
+        smallest_opened_font_height: Some(16),
         font_pixel_size: 14.0,
         image_scale_environment: Default::default(),
         font_ascent: 11.0,
@@ -697,11 +697,28 @@ fn line_number_geometry_offset_shares_the_rendered_counting_origin() {
 }
 
 #[test]
+fn identity_less_gui_frames_keep_line_count_matrix_capacity() {
+    let mut params = window_params();
+    params.bounds.height = 80.0;
+    params.text_bounds.height = 80.0;
+    params.smallest_opened_font_height = None;
+    let request = geometry_request(&params, 8.0, 16.0, 0.0, 0.0, 0.0);
+    // GNU required_matrix_height falls back to WINDOW_TOTAL_LINES when the
+    // frame has no graphical display (src/dispnew.c:1758-1772): one row per
+    // body pixel would exhaust the prepared-viewport row budget and make the
+    // semantic capacity boundary unreachable for such frames.
+    assert_eq!(request.line_number_row_capacity(), 5);
+    let geometry = request.into_geometry(LineNumberFieldLayout::new(0, params.char_width));
+    assert_eq!(geometry.desired_matrix_rows, None);
+    assert_eq!(geometry.matrix_body_rows, geometry.display_text_rows);
+}
+
+#[test]
 fn gui_gutter_matrix_capacity_does_not_change_physical_viewport_rows() {
     let mut params = window_params();
     params.bounds.height = 80.0;
     params.text_bounds.height = 80.0;
-    params.smallest_opened_font_height = 8;
+    params.smallest_opened_font_height = Some(8);
     params.glyph_matrix_row_scale = std::num::NonZeroU32::new(2).unwrap();
     let request = geometry_request(&params, 8.0, 16.0, 0.0, 0.0, 0.0);
     assert_eq!(request.line_number_row_capacity(), 25);

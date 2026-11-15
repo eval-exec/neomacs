@@ -2331,16 +2331,24 @@ impl LayoutEngine {
                     .frame_manager()
                     .get(frame_id)
                     .is_some_and(|frame| {
-                        let min_height = frame.layout_inputs().smallest_opened_font_height;
+                        // Only a graphical connection adjusts the pixel-division
+                        // allocation; identity-less frames keep it dormant.
                         frame
-                            .live_window_ids_with_minibuffer()
-                            .into_iter()
-                            .any(|id| {
+                            .layout_inputs()
+                            .smallest_opened_font_height
+                            .is_some_and(|min_height| {
                                 frame
-                                    .find_window(id)
-                                    .and_then(|window| window.display())
-                                    .is_some_and(|display| {
-                                        display.glyph_matrix_row_scale.needs_adjustment(min_height)
+                                    .live_window_ids_with_minibuffer()
+                                    .into_iter()
+                                    .any(|id| {
+                                        frame
+                                            .find_window(id)
+                                            .and_then(|window| window.display())
+                                            .is_some_and(|display| {
+                                                display
+                                                    .glyph_matrix_row_scale
+                                                    .needs_adjustment(min_height)
+                                            })
                                     })
                             })
                     });
@@ -3844,6 +3852,9 @@ impl LayoutEngine {
                 self.reset_frame_attempt_state();
                 return None;
             };
+            // `None` (no graphical connection) never changes during an
+            // attempt, so a difference here always carries real heights; the
+            // sentinel 1 only reports a pre-open graphical minimum.
             if current_smallest_font_height != attempt_smallest_font_height {
                 if !Self::accept_frame_relayout_request(
                     &mut layout_coordinator,
@@ -3851,8 +3862,8 @@ impl LayoutEngine {
                     &mut frame_window_end_attempts,
                     presentation_id,
                     FrameRelayoutRequest::FontCapacityInputsChanged {
-                        before: attempt_smallest_font_height,
-                        after: current_smallest_font_height,
+                        before: attempt_smallest_font_height.unwrap_or(1),
+                        after: current_smallest_font_height.unwrap_or(1),
                     },
                 ) {
                     return None;
@@ -4024,6 +4035,9 @@ impl LayoutEngine {
                 self.reset_frame_attempt_state();
                 return None;
             };
+            // `None` (no graphical connection) never changes during an
+            // attempt, so a difference here always carries real heights; the
+            // sentinel 1 only reports a pre-open graphical minimum.
             if current_smallest_font_height != attempt_smallest_font_height {
                 if !Self::accept_frame_relayout_request(
                     &mut layout_coordinator,
@@ -4031,8 +4045,8 @@ impl LayoutEngine {
                     &mut frame_window_end_attempts,
                     presentation_id,
                     FrameRelayoutRequest::FontCapacityInputsChanged {
-                        before: attempt_smallest_font_height,
-                        after: current_smallest_font_height,
+                        before: attempt_smallest_font_height.unwrap_or(1),
+                        after: current_smallest_font_height.unwrap_or(1),
                     },
                 ) {
                     return None;

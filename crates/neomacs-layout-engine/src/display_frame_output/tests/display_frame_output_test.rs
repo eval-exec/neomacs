@@ -82,7 +82,7 @@ fn window_params() -> WindowParams {
         window_system: true,
         glyph_matrix_row_scale: std::num::NonZeroU32::MIN,
         glyph_matrix_rows: None,
-        smallest_opened_font_height: 16,
+        smallest_opened_font_height: Some(16),
         font_pixel_size: 14.0,
         image_scale_environment: Default::default(),
         font_ascent: 11.0,

@@ -359,7 +359,10 @@ pub struct WindowParams {
     pub glyph_matrix_row_scale: std::num::NonZeroU32,
     pub glyph_matrix_rows: Option<usize>,
     /// Captured display-connection minimum, shared by capacity and freshness.
-    pub smallest_opened_font_height: u32,
+    /// `None` on frames without a graphical connection: GNU's
+    /// `required_matrix_height` then uses `WINDOW_TOTAL_LINES`, never a
+    /// pixel division by a sentinel font height (src/dispnew.c:1758).
+    pub smallest_opened_font_height: Option<u32>,
     /// Font pixel size
     pub font_pixel_size: f32,
     /// Immutable GNU image-scaling facts inherited from the containing frame.

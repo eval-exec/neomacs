@@ -74,7 +74,7 @@ fn native_font_open_and_matrix_growth_refresh_attempt_inputs() {
         )
         .unwrap();
     assert!(matches!(&refreshed, std::borrow::Cow::Owned(_)));
-    assert_eq!(refreshed.frame.smallest_opened_font_height, 12);
+    assert_eq!(refreshed.frame.smallest_opened_font_height, Some(12));
     drop(refreshed);
 
     let captured = eval

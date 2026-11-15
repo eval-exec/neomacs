@@ -28,7 +28,7 @@ pub(crate) struct BufferWindowGeometryRequest {
     glyph_matrix_vscroll_px: i32,
     glyph_matrix_row_scale: std::num::NonZeroU32,
     glyph_matrix_rows: Option<usize>,
-    smallest_opened_font_height: u32,
+    smallest_opened_font_height: Option<u32>,
     top_chrome_rows: usize,
     bottom_chrome_rows: usize,
     char_width: f32,
@@ -238,16 +238,24 @@ impl BufferWindowGeometryRequest {
         // including its partial/chrome reserve, even for a tiny buffer.
         // Viewport rows and source measurement budgets remain independent.
         if self.window_system {
-            self.glyph_matrix_rows.unwrap_or_else(|| {
-                // Pure geometry fixtures have no live window allocation.
-                // Production snapshots always use the owner's allocated N.
-                neomacs_display_protocol::required_gui_glyph_matrix_rows(
-                    self.glyph_matrix_body_height_px,
-                    self.glyph_matrix_vscroll_px,
-                    self.smallest_opened_font_height,
-                    self.glyph_matrix_row_scale,
-                )
-            })
+            match self.smallest_opened_font_height {
+                // Only a frame with a graphical connection divides pixels by
+                // its display's smallest opened font height. Without one, GNU
+                // `required_matrix_height` falls back to WINDOW_TOTAL_LINES
+                // (src/dispnew.c:1758-1772); dividing by the pre-open sentinel
+                // 1 would reserve one row per body pixel.
+                Some(smallest_opened_font_height) => self.glyph_matrix_rows.unwrap_or_else(|| {
+                    // Pure geometry fixtures have no live window allocation.
+                    // Production snapshots always use the owner's allocated N.
+                    neomacs_display_protocol::required_gui_glyph_matrix_rows(
+                        self.glyph_matrix_body_height_px,
+                        self.glyph_matrix_vscroll_px,
+                        smallest_opened_font_height,
+                        self.glyph_matrix_row_scale,
+                    )
+                }),
+                None => self.base_max_rows(),
+            }
         } else {
             self.base_max_rows()
         }
@@ -287,7 +295,11 @@ impl BufferWindowGeometryRequest {
         // GUI allocation follows the complete desired-matrix capacity. Keep
         // physical scroll/visibility rows and the nominal mode-line position
         // on the frame-font geometry; capacity is not a viewport budget.
+        // A frame without a graphical connection has no pixel-division
+        // capacity: its walk keeps the line-count budget, and no semantic
+        // exhaustion can arise (GNU WINDOW_TOTAL_LINES branch).
         let desired_matrix_rows = (self.window_system
+            && self.smallest_opened_font_height.is_some()
             && !self.kind.is_minibuffer()
             && self.source_extent == crate::types::WindowSourceExtent::Viewport
             && self.measurement_rows.is_none()

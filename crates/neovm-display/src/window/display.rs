@@ -29,11 +29,15 @@ pub(crate) fn adjust_frame_glyph_matrices_in_state(
     if frame.effective_window_system().is_none() {
         return;
     }
+    // The pixel-division capacity needs a real graphical connection, matching
+    // the evaluator-side adjuster in `redisplay_hooks::adjust_gui_glyph_matrices`
+    // and GNU `FRAME_WINDOW_P`: a window-system parameter without a connection
+    // keeps the line-count budget instead of dividing pixels by the sentinel 1.
     let smallest_font_height = match frame.display_identity() {
         crate::window::FrameDisplayIdentity::Graphical(identity) => {
             identity.smallest_opened_font_height()
         }
-        crate::window::FrameDisplayIdentity::None => 1,
+        crate::window::FrameDisplayIdentity::None => return,
     };
     for window_id in frame.all_leaf_ids() {
         let Some(window) = frame.find_window(window_id) else {
