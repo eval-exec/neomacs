@@ -37,3 +37,27 @@ fn positioned_fringe_alignment_and_frame_symbol_checks_follow_mode() {
         "((error wrong-type-argument) (t void-variable))"
     );
 }
+
+/// Re-homed from the eval unit-test tree (assertion byte-identical): the
+/// completion-flags path calls `kill-buffer`, a primitive core owns by R0
+/// placement, so the test executes in core's real runtime instead of a
+/// test-only eval stand-in.
+#[test]
+fn positioned_completion_flags_follow_eq_policy() {
+    assert_eq!(
+        answer(
+            r#"(let ((buffer (get-buffer-create "issue554-complete-target")))
+                          (unwind-protect
+                            (let ((symbols-with-pos-enabled t))
+                              (list (internal-complete-buffer "issue554-complete-target" nil
+                                                              (position-symbol 'lambda 0))
+                                    (eq (car (internal-complete-buffer "" nil
+                                                                      (position-symbol 'metadata 1))) 'metadata)
+                                    (equal (internal-complete-buffer "issue554-complete-target" nil
+                                                                     (position-symbol t 2))
+                                           '("issue554-complete-target"))))
+                            (kill-buffer buffer)))"#
+        ),
+        "(t t t)"
+    );
+}

@@ -27,23 +27,3 @@ fn positioned_sort_option_keywords_and_designators_follow_mode() {
         "(error [1 2 3])"
     );
 }
-
-#[test]
-fn positioned_completion_flags_follow_eq_policy() {
-    assert_eq!(
-        answer(
-            r#"(let ((buffer (get-buffer-create "issue554-complete-target")))
-                          (unwind-protect
-                            (let ((symbols-with-pos-enabled t))
-                              (list (internal-complete-buffer "issue554-complete-target" nil
-                                                              (position-symbol 'lambda 0))
-                                    (eq (car (internal-complete-buffer "" nil
-                                                                      (position-symbol 'metadata 1))) 'metadata)
-                                    (equal (internal-complete-buffer "issue554-complete-target" nil
-                                                                     (position-symbol t 2))
-                                           '("issue554-complete-target"))))
-                            (kill-buffer buffer)))"#
-        ),
-        "(t t t)"
-    );
-}
