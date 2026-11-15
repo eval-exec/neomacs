@@ -184,6 +184,8 @@ mod window_divider_overlay_arrow;
 mod window_end_oracle;
 #[path = "windows_tabs.rs"]
 mod windows_tabs;
+#[path = "wrapped_line_recenter_oracle.rs"]
+mod wrapped_line_recenter_oracle;
 
 #[path = "gnu_redisplay_mutation_oracle.rs"]
 mod gnu_redisplay_mutation_oracle;
