@@ -18744,6 +18744,16 @@ fn a_dead_process_lisp_still_holds_keeps_every_field_across_garbage_collect() {
     assert_eq!(orphan, "OK t");
     let after = ev.eval_str("(progn (garbage-collect) t)");
     assert_eq!(format_eval_result(&after), "OK t");
+    let fields_after = ev.eval_str(
+        r#"(list (process-status retired-held)
+                 (process-exit-status retired-held)
+                 (process-name retired-held)
+                 (plist-get (process-plist retired-held) 'payload)
+                 (funcall (process-filter retired-held) nil nil)
+                 (functionp (process-sentinel retired-held))
+                 (eq retired-held retired-held))"#,
+    );
+    assert_eq!(format_eval_result(&fields_after), result);
     assert_eq!(ev.processes().deleted_processes.len(), 1);
 }
 
