@@ -2,7 +2,7 @@
 //!
 //! The fixture drives `replace-region-contents`, a core-owned buffer command
 //! (R0 placement: it drives buffer source/property state through the command
-//! layer). Eval's unit runtime carries the upper entry as an ABSENT-LAYER
+//! layer). Eval's unit runtime carries the upper entry as an upper-layer
 //! refusal, so the test belongs to the runtime that owns the primitive.
 //! Core's `new_context` constructs that same surface with the canonical
 //! hook-installation proof. The Lisp form and expected string are unchanged.

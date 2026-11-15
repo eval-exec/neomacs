@@ -2,7 +2,7 @@
 //!
 //! The fixture round-trips printer output through `read`, a core-owned
 //! minibuffer/reader command. Eval's unit runtime carries the upper entry as
-//! an ABSENT-LAYER refusal, so the test belongs to the runtime that owns the
+//! an upper-layer refusal, so the test belongs to the runtime that owns the
 //! primitive. Core's `new_context` constructs that same surface with the
 //! canonical hook-installation proof. Every assertion and expected string is
 //! unchanged from the eval copy.

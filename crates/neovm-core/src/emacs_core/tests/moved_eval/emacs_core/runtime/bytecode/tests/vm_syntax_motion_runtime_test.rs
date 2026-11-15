@@ -2,7 +2,7 @@
 //!
 //! The fixture drives `forward-comment`, a core-owned syntax command (its R0
 //! placement keeps syntax scanning with the command layer). Eval's unit
-//! runtime carries the upper entry as an ABSENT-LAYER refusal, so the test
+//! runtime carries the upper entry as an upper-layer refusal, so the test
 //! belongs to the runtime that owns the primitive. Core's `new_context`
 //! constructs that same surface with the canonical hook-installation proof.
 //! The Lisp form and expected string are unchanged from the eval copy.

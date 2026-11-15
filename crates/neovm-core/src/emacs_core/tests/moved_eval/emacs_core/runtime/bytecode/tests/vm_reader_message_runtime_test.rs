@@ -2,7 +2,7 @@
 //!
 //! The fixture drives `read`, a core-owned minibuffer/reader command (R0
 //! placement: it binds the minibuffer and the reader entry). Eval's unit
-//! runtime carries the upper entry as an ABSENT-LAYER refusal, so the test
+//! runtime carries the upper entry as an upper-layer refusal, so the test
 //! belongs to the runtime that owns the primitive. Core's `new_context`
 //! constructs that same surface with the canonical hook-installation proof.
 //! The Lisp form, init closure and expected string are unchanged.
