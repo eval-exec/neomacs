@@ -865,8 +865,9 @@ pub fn define_coding_system_internal(
         args.clone(),
         mode,
     )?;
-    // SAFETY: the completed coding-system registration is recorded only in
-    // symbol value/property cells. This helper is noncalling and preserves
+    // SAFETY: the completed coding-system registration is recorded in
+    // symbol value/property cells and in obarray membership (GNU interns the
+    // `make_subsidiaries` names). This helper is noncalling and preserves
     // canonical dispatch metadata and manager storage identity.
     let owner = &mut eval.owner;
     unsafe {
@@ -887,8 +888,9 @@ pub fn define_coding_system_alias(eval: &mut super::eval::Context, args: Vec<Val
         args.clone(),
         mode,
     )?;
-    // SAFETY: the completed coding-system registration is recorded only in
-    // symbol value/property cells. This helper is noncalling and preserves
+    // SAFETY: the completed coding-system registration is recorded in
+    // symbol value/property cells and in obarray membership (GNU interns the
+    // `make_subsidiaries` names). This helper is noncalling and preserves
     // canonical dispatch metadata and manager storage identity.
     let owner = &mut eval.owner;
     unsafe {
