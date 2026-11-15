@@ -105,6 +105,11 @@ fn held_pending_callee_keeps_cleanup_backtrace_args_after_recovery() {
         ev.gc_collect_exact();
         let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Legacy);
         bg::force_mode_for_test(Some(bg::BgMode::Threaded));
+        // The callee is tiny, so the default in-line threshold would finish
+        // its backend on this thread and install a COMPILED entry; pin 0 so
+        // every backend defers to the held worker and the pending interpreter
+        // fallback (the subject of this test) is what runs.
+        bg::force_inline_insts_for_test(Some(0));
         force_profit_gate_for_test(false);
         force_deopt_for_test(false);
         let _hold = bg::hold_workers_for_test();
