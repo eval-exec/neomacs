@@ -360,6 +360,95 @@ fn do_auto_save_creates_the_list_file_directory_mode_700() {
     );
 }
 
+// Pass 1 saves EVERY still-eligible buffer (`fileio.c:6438-6440`: the
+// handler gate is `do_handled_files || NILP (handler)`, so only pass 0
+// skips a routed buffer). A `write-region' handler running in pass 1
+// creates a handler-less buffer "late" that needs saving; pass 1 must come
+// back to it. Peer audit 5788 R1 (autosave-pass1.el): GNU late-saved=t.
+// Pinned GNU 31.1.
+#[test]
+fn do_auto_save_pass_one_saves_late_handlerless_buffers() {
+    let form = r##"(progn
+  (defvar asp1-log nil)
+  (defun asp1-handler (operation &rest args)
+    (when (eq operation 'write-region)
+      (push 'handler asp1-log)
+      (unless (get-buffer "late")
+        (with-current-buffer (get-buffer-create "late")
+          (insert "late text")
+          (setq buffer-auto-save-file-name
+                (expand-file-name "#late#" temporary-file-directory)))))
+    (let ((inhibit-file-name-handlers
+           (cons 'asp1-handler (and (eq inhibit-file-name-operation operation)
+                                    inhibit-file-name-handlers)))
+          (inhibit-file-name-operation operation))
+      (apply operation args)))
+  (setq file-name-handler-alist
+        (cons (cons (concat "\\`"
+                            (regexp-quote (expand-file-name
+                                           "#asp1-handled#"
+                                           temporary-file-directory))
+                            "\\'")
+                    'asp1-handler)
+              file-name-handler-alist))
+  (with-current-buffer (get-buffer-create "handled")
+    (insert "handled text")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#asp1-handled#" temporary-file-directory)))
+  (do-auto-save t)
+  (list 'log (nreverse asp1-log)
+        'handled-saved (file-exists-p
+                        (expand-file-name "#asp1-handled#" temporary-file-directory))
+        'late-exists (and (get-buffer "late") t)
+        'late-saved (file-exists-p
+                     (expand-file-name "#late#" temporary-file-directory))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""VALUE OK (log (handler) handled-saved t late-exists t late-saved t)""##
+        ]],
+    );
+}
+
+// The peer audit's exact list file (5789, autosave-list.el): a visited
+// buffer records "visited\nauto-save\n"; a file-less buffer whose NAME
+// starts with a space still has an auto-save name, is saved, and records
+// "\nauto-save\n" with an empty first line. The contents are asserted
+// verbatim, in walk order. Pinned GNU 31.1.
+#[test]
+fn do_auto_save_writes_the_peers_exact_list_file() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name
+        (expand-file-name "saves-list" temporary-file-directory))
+  (with-current-buffer (get-buffer-create "visited")
+    (insert "hello")
+    (setq buffer-file-name (expand-file-name "visited.txt" temporary-file-directory))
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#visited#" temporary-file-directory)))
+  ;; A space-named buffer with an auto-save name: GNU's walk has no
+  ;; leading-space skip (peer audit 5789).
+  (with-current-buffer (get-buffer-create " space")
+    (insert "hidden")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#space#" temporary-file-directory)))
+  (do-auto-save t)
+  (list 'list-file-exists (file-exists-p auto-save-list-file-name)
+        'list-file-contents (and (file-exists-p auto-save-list-file-name)
+                                 (with-temp-buffer
+                                   (insert-file-contents auto-save-list-file-name)
+                                   (buffer-string)))
+        'visited-autosave (file-exists-p
+                           (expand-file-name "#visited#" temporary-file-directory))
+        'space-autosave (file-exists-p
+                         (expand-file-name "#space#" temporary-file-directory))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""VALUE OK (list-file-exists t list-file-contents \"[SESSION-TMPDIR]/visited.txt\\n[SESSION-TMPDIR]/#visited#\\n\\n[SESSION-TMPDIR]/#space#\\n\" visited-autosave t space-autosave t)""##
+        ]],
+    );
+}
+
 #[test]
 fn clear_buffer_auto_save_failure_returns_nil_and_leaves_save_length() {
     // Live GNU 31.1: the C field is not Lisp-visible. The call returns nil
