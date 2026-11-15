@@ -280,3 +280,29 @@ fn localized_consed_local_binding_counts_while_its_buffer_is_current() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_returns(&mut eval, LOCAL_BINDING_COUNTS_FORM, "(t t t t t t t)");
 }
+
+/// `set-default` while a local binding is loaded stores only the default cell
+/// (`set_default_internal`, `src/data.c:2068-2079`); loading the default
+/// binding again copies that cell into the counter.
+const DEFAULT_WRITE_UNDER_LOCAL_FORM: &str = "
+(let ((a (get-buffer-create \" *consed-default-a*\"))
+      (b (get-buffer-create \" *consed-default-b*\"))
+      target in-a default-in-a seen)
+  (set-buffer a)
+  (make-local-variable 'cons-cells-consed)
+  (setq target (+ cons-cells-consed 100000000))
+  (set-default 'cons-cells-consed target)
+  (setq in-a cons-cells-consed
+        default-in-a (default-value 'cons-cells-consed))
+  (set-buffer b)
+  (setq seen cons-cells-consed)
+  (list (< in-a target)
+        (= default-in-a target)
+        (<= target seen)
+        (< (- seen target) 1000)))";
+
+#[test]
+fn localized_consed_default_written_under_a_local_binding_is_loaded_later() {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    assert_returns(&mut eval, DEFAULT_WRITE_UNDER_LOCAL_FORM, "(t t t t)");
+}
