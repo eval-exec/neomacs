@@ -670,6 +670,10 @@ mod emacs_core_lisp_native_builtins_tests_positioned_final_boundaries_class_b_te
 mod emacs_core_runtime_eval_tests_green_switch_class_b_test_rs;
 
 #[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/green_thread_buffer_test.rs"]
+mod emacs_core_runtime_eval_tests_green_thread_buffer_test_rs;
+
+#[cfg(test)]
 #[path = "emacs_core/runtime/eval/keyboard/tests/display_service_class_b_test.rs"]
 mod emacs_core_runtime_eval_keyboard_tests_display_service_class_b_test_rs;
 

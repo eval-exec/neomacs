@@ -2426,3 +2426,27 @@ fn vm_compiled_load_tracks_recursive_state_by_found_filename_text() {
         "load should restore the caller's in-progress stack after using a distinct found filename",
     );
 }
+
+/// The printer must render a killed buffer as `#<killed buffer>` inside
+/// nested records and text-property owners, GNU 31.1's shape. Re-homed from
+/// neovm-eval's `vm_test.rs`: `kill-buffer` is a core-owned subr, so the row
+/// can only execute where the production hook set is installed. Assertions
+/// are the ones the eval test had.
+#[test]
+fn vm_prin1_to_string_prints_killed_buffers_in_nested_values_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        vm_eval_str(
+            r##"(let* ((buf (get-buffer-create "vm-print-dead"))
+                      (rec (record 'vm-print-owner buf))
+                      (text (copy-sequence "payload")))
+                 (put-text-property 0 (length text) 'owner rec text)
+                 (kill-buffer buf)
+                 (list
+                  (equal (prin1-to-string rec)
+                         "#s(vm-print-owner #<killed buffer>)")
+                  (if (string-match "#<killed buffer>" (prin1-to-string text) nil t) t)))"##
+        ),
+        "OK (t t)"
+    );
+}

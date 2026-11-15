@@ -4136,25 +4136,6 @@ fn vm_printer_builtins_use_shared_runtime_entry() {
 }
 
 #[test]
-fn vm_prin1_to_string_prints_killed_buffers_in_nested_values_like_gnu() {
-    crate::test_utils::init_test_tracing();
-    assert_eq!(
-        vm_eval_str(
-            r##"(let* ((buf (get-buffer-create "vm-print-dead"))
-                      (rec (record 'vm-print-owner buf))
-                      (text (copy-sequence "payload")))
-                 (put-text-property 0 (length text) 'owner rec text)
-                 (kill-buffer buf)
-                 (list
-                  (equal (prin1-to-string rec)
-                         "#s(vm-print-owner #<killed buffer>)")
-                  (if (string-match "#<killed buffer>" (prin1-to-string text) nil t) t)))"##
-        ),
-        "OK (t t)"
-    );
-}
-
-#[test]
 fn vm_write_char_and_terpri_callable_targets_use_shared_runtime_callback() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
