@@ -401,6 +401,21 @@ mod unit_runtime {
     /// does not need the w32 symbol block, so this slot is a no-op here.
     fn boot_register_platform_bootstrap_vars(_obarray: &mut neovm_value::symbol::Obarray) {}
 
+    /// The unit runtime's startup-frame seed. Eval cannot name the display
+    /// module and this runtime holds no frame record, so seeding is an
+    /// exact no-op: the premise below refuses the fold the moment a frame
+    /// ever exists here, and the returned id is unobservable (every caller
+    /// discards it; the frame manager stays empty), so GNU's
+    /// `buffer_window_count == 0' branch of `force-mode-line-update'
+    /// follows by construction (buffer.c:1540-1545).
+    fn boot_seed_batch_startup_frame(ctx: &mut Context) -> neovm_value::display_vocab::FrameId {
+        assert!(
+            ctx.frame_manager().frames.is_empty(),
+            "ABSENT layer: the eval unit runtime cannot seed a startup frame over existing frames; run this test in core"
+        );
+        neovm_value::display_vocab::FrameId(0)
+    }
+
     /// Walk the canonical production registration plan. Eval-owned steps call
     /// the same registrars production calls; the event step runs the same
     /// production initialization through the same wrapper core uses; upper
@@ -558,7 +573,7 @@ mod unit_runtime {
             s::boot_install_host_environment_snapshot,
             s::boot_shell_file_name_install,
             s::boot_shell_file_name_install_dump_default,
-            s::boot_seed_batch_startup_frame,
+            boot_seed_batch_startup_frame,
             boot_register_core_bootstrap_vars,
             boot_register_platform_bootstrap_vars,
             s::boot_init_frame_lisp_faces,

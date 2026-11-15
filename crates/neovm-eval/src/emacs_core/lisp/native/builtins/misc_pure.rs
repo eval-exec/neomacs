@@ -677,7 +677,10 @@ pub fn builtin_force_mode_line_update(
         // synthesizes that frame lazily, so resolve it before counting. The
         // lifecycle boot closure owns frame synthesis (eval never names the
         // display module); it is the same in-state ensure, with only the
-        // startup diagnostic suppressed.
+        // startup diagnostic suppressed. The eval unit runtime's seed slot
+        // is an exact premise-asserting no-op (that runtime holds no frame
+        // record), so the count below stays zero there and GNU's no-window
+        // branch follows (buffer.c:1540-1545).
         crate::emacs_core::eval::lifecycle::seed_batch_startup_frame(ctx);
         super::eval::ModeLineUpdateTarget::CurrentBuffer(current_buffer)
     };
