@@ -159,6 +159,100 @@ fn do_auto_save_save_length_at_most_5000_does_not_disable() {
     );
 }
 
+// A space inside the auto-save file name does not disable saving.
+//
+// GNU 31.1 has no special case for space-prefixed or space-containing
+// auto-save names: the visit predicate at fileio.c:6428 is just
+// `STRINGP (BVAR (b, auto_save_file_name))`. Neo used to skip names whose
+// file component starts with a space.
+#[test]
+fn do_auto_save_saves_a_space_containing_auto_save_name() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name nil)
+  (let ((buf (generate-new-buffer "as-space"))
+        (target (expand-file-name "#as-space name#" temporary-file-directory)))
+    (with-current-buffer buf
+      (insert "space text")
+      (setq buffer-auto-save-file-name target))
+    (do-auto-save t)
+    (list 'exists (file-exists-p target)
+          'content (and (file-exists-p target)
+                        (with-temp-buffer
+                          (insert-file-contents target)
+                          (buffer-string))))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[r##""VALUE OK (exists t content \"space text\")""##]],
+    );
+}
+
+// `erase-buffer` resets `buffer-saved-size` to 0 (buffer.c:2486: "Use of
+// erase-buffer implies that the future text is not really related to the
+// past text"), so a buffer that shrank from 8000 to 4 bytes via
+// `erase-buffer` + fresh insert does NOT take the shrink arm: GNU saves it
+// and leaves `buffer-saved-size` at Z-BEG (4). The first element pins the
+// reset itself. Pinned GNU 31.1.
+#[test]
+fn erase_buffer_resets_saved_size_so_shrink_does_not_fire() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name nil)
+  (let ((reset (with-current-buffer (generate-new-buffer "as-er0")
+                 (setq buffer-saved-size 8000)
+                 (erase-buffer)
+                 buffer-saved-size))
+        (buf (generate-new-buffer "as-erase")))
+    (with-current-buffer buf
+      (setq buffer-file-name (expand-file-name "as-erase.txt" temporary-file-directory))
+      (insert (make-string 100 ?x))
+      (setq buffer-saved-size 8000)
+      (erase-buffer)
+      (insert "tiny")
+      (setq buffer-auto-save-file-name
+            (expand-file-name "#as-erase#" temporary-file-directory)))
+    (do-auto-save)
+    (list 'reset reset
+          'saved (with-current-buffer (get-buffer "as-erase") buffer-saved-size))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""Auto-saving...\nAuto-saving...done\nVALUE OK (reset 0 saved 4)""##
+        ]],
+    );
+}
+
+// The shrink arm `continue`s without restoring the previous current buffer
+// (fileio.c:6466 does `set_buffer_internal (b)` and the shrink branch at
+// :6450-6474 never switches back), so after `do-auto-save` returns, the
+// shrunk buffer is current. Pinned GNU 31.1.
+#[test]
+fn do_auto_save_shrink_leaves_the_shrunk_buffer_current() {
+    let form = format!(
+        r##"(progn
+  (setq auto-save-list-file-name nil)
+  {setup}
+  (do-auto-save)
+  (buffer-name (current-buffer)))"##,
+        setup = shrunk_filename_buffer("as-leak", 8000)
+    );
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""Buffer as-leak has shrunk a lot; auto save disabled in that buffer until next real save\nVALUE OK \"as-leak\"""##
+        ]],
+    );
+}
+
+// `auto-save-list-file-name' streams a two-line record per pass-0 visit
+// (`fileio.c:6409-6426`): visited file name (or an empty line) and the
+// auto-save name. Recording runs BEFORE the current-only, indirect,
+// saved-size, modification and handler gates, so a handler-routed buffer
+// (aslf-H, saved only in pass 1), an unmodified visiting buffer (aslf-U,
+// never saved) and an indirect buffer (aslf-I, never saved) are all
+// recorded, while a buffer without an auto-save name (aslf-N) never is.
+// The file is truncate-opened per `do-auto-save' (`fopen ... "w"',
+// `fileio.c:6391`): the pre-written JUNK line must not survive. Pinned
+// GNU 31.1.
+#[test]
 #[test]
 fn clear_buffer_auto_save_failure_returns_nil_and_leaves_save_length() {
     // Live GNU 31.1: the C field is not Lisp-visible. The call returns nil

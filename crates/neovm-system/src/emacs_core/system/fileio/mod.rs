@@ -7935,23 +7935,21 @@ pub fn builtin_do_auto_save(
                     continue;
                 };
 
-                // Skip internal buffers (name starts with space)
-                if buf.name_starts_with_space() {
-                    continue;
-                }
-
                 // Skip indirect buffers
                 if buf.base_buffer().is_some() {
                     continue;
                 }
 
-                // GNU skips the buffer unless `save_length` is a fixnum >= 0
-                // (`fileio.c:6436-6437`). A negative value is the shrink-a-lot
-                // disable, cleared only by a real save.
+                // GNU requires `save_length` to be a fixnum >= 0
+                // (`fileio.c:6436-6437`): a negative value is the shrink-a-lot
+                // disable, cleared only by a real save, and a non-fixnum
+                // disables saving the same way.  GNU has no space-name skip:
+                // internal buffers reach this gate only when something gave
+                // them an auto-save name.
                 let saved_size = buf
                     .get_buffer_local("buffer-saved-size")
                     .and_then(|value| value.as_fixnum());
-                if saved_size.is_some_and(|n| n < 0) {
+                if !saved_size.is_some_and(|n| n >= 0) {
                     continue;
                 }
 
