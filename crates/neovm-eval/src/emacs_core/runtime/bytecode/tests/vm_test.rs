@@ -4413,15 +4413,12 @@ fn vm_base64_json_ccl_and_runtime_clusters_use_direct_dispatch() {
                  (null (fboundp 'gpm-mouse-start))
                  (null (fboundp 'gpm-mouse-stop))
                  (null (handle-save-session nil))
-                 (null (init-image-library nil))
-                 (condition-case nil (clear-image-cache nil) (error t))
                  (null (internal--track-mouse (lambda () nil)))
                  (stringp (internal-complete-buffer "" nil nil))
                  (equal (internal-describe-syntax-value 7) 7)
                  (condition-case nil (internal-handle-focus-in nil) (error t))
                  (null (internal-stack-stats))
                  (internal-subr-documentation 'car)
-                 (null (dump-emacs-portable "x"))
                  (null (dump-emacs-portable--sort-predicate nil nil))
                  (null (dump-emacs-portable--sort-predicate-copied nil nil)))"#
                 .replace(
@@ -4429,7 +4426,7 @@ fn vm_base64_json_ccl_and_runtime_clusters_use_direct_dispatch() {
                     if cfg!(neomacs_have_dbus) { "t" } else { "nil" }
                 )
         ),
-        r#"OK (t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t)"#
+        r#"OK (t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t)"#
     );
 }
 

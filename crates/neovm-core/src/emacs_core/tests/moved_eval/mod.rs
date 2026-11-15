@@ -720,6 +720,11 @@ mod emacs_core_runtime_bytecode_tests_vm_shared_runtime_test_rs;
 mod emacs_core_runtime_bytecode_tests_vm_syntax_motion_runtime_test_rs;
 #[path = "emacs_core/runtime/bytecode/tests/vm_time_builtins_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_time_builtins_runtime_test_rs;
+// The misc-cluster rows of eval's vm_base64_json_ccl test (init-image-library,
+// clear-image-cache, dump-emacs-portable) re-homed to the canonical install.
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/vm_image_and_dump_runtime_test.rs"]
+mod emacs_core_runtime_bytecode_tests_vm_image_and_dump_runtime_test_rs;
 
 #[cfg(all(test, feature = "sqlite"))]
 #[path = "emacs_core/runtime/eval/tests/sqlite_runtime_feature_test.rs"]
