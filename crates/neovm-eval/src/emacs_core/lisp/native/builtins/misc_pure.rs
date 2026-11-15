@@ -689,21 +689,88 @@ pub fn builtin_force_mode_line_update(
 }
 
 #[doc(hidden)]
-pub fn builtin_get_internal_run_time(args: Vec<Value>) -> EvalResult {
+pub fn builtin_get_internal_run_time(
+    ctx: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("get-internal-run-time", &args, 0)?;
 
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let dur = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs() as i64;
-    let usecs = dur.subsec_micros() as i64;
-    Ok(Value::list(vec![
-        Value::fixnum(secs >> 16),
-        Value::fixnum(secs & 0xFFFF),
-        Value::fixnum(usecs),
-        Value::fixnum(0),
-    ]))
+    let output = super::misc_eval::lisp_time_output_from_context(ctx)?;
+    match process_run_time()? {
+        Some((secs, nanos)) => {
+            #[cfg(windows)]
+            let output = neovm_value::time_core::LispTimeOutput::LegacyList;
+
+            match output {
+                neovm_value::time_core::LispTimeOutput::LegacyList => {
+                    Ok(neovm_value::time_core::make_lisp_time(secs, nanos, output))
+                }
+                neovm_value::time_core::LispTimeOutput::TicksHz => {
+                    let ticks = secs * 1_000_000 + nanos / 1_000;
+                    Ok(Value::cons(Value::fixnum(ticks), Value::fixnum(1_000_000)))
+                }
+            }
+        }
+        None => Ok(neovm_value::time_core::current_time_value(output)),
+    }
+}
+
+#[cfg(unix)]
+fn process_run_time() -> Result<Option<(i64, i64)>, neovm_value::error::Flow> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    // SAFETY: getrusage initializes the output struct when it succeeds.
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return Err(neovm_value::error::signal("error", Vec::new()));
+    }
+    // SAFETY: the successful getrusage call initialized the struct.
+    let usage = unsafe { usage.assume_init() };
+    let secs = i64::from(usage.ru_utime.tv_sec) + i64::from(usage.ru_stime.tv_sec);
+    let usecs = i64::from(usage.ru_utime.tv_usec) + i64::from(usage.ru_stime.tv_usec);
+    let carry = usecs / 1_000_000;
+    let usecs = usecs % 1_000_000;
+    Ok(Some((secs + carry, usecs * 1_000)))
+}
+
+#[cfg(windows)]
+fn process_run_time() -> Result<Option<(i64, i64)>, neovm_value::error::Flow> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: all output pointers refer to initialized writable FILETIME values.
+    let ok = unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    if ok == 0 {
+        return Ok(None);
+    }
+
+    let filetime_ticks =
+        |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+    // FILETIME counts 100 ns intervals. GNU's w32 ltime preserves that
+    // precision in the picosecond field of its four-element timestamp.
+    let total_100ns = filetime_ticks(kernel).saturating_add(filetime_ticks(user));
+    let Some(secs) = i64::try_from(total_100ns / 10_000_000).ok() else {
+        return Ok(None);
+    };
+    let Some(nanos) = i64::try_from(total_100ns % 10_000_000).ok() else {
+        return Ok(None);
+    };
+    Ok(Some((secs, nanos * 100)))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_run_time() -> Result<Option<(i64, i64)>, neovm_value::error::Flow> {
+    Ok(None)
 }
 
 #[doc(hidden)]
