@@ -277,11 +277,12 @@ impl OverlayList {
     /// mutable handle to the cached index. Mutation drops the cache without
     /// changing an observer already using the previous snapshot.
     ///
-    /// Text edits are the exception while no observer holds the cache: they
-    /// apply the same shift to the cached copy, so typing in a buffer with
-    /// many overlays does not re-create every overlay object. A copy kept
-    /// this way keeps its object identity, as the live overlay it mirrors
-    /// does, so `bits()` of a snapshot copy no longer changes on every edit.
+    /// Text edits and `overlay-put` are the exception while no observer holds
+    /// the cache: they apply the same write to the cached copy, so typing in a
+    /// buffer with many overlays does not re-create every overlay object. A
+    /// copy kept this way keeps its object identity, as the live overlay it
+    /// mirrors does, so `bits()` of a snapshot copy no longer changes on every
+    /// edit or plist write.
     pub fn snapshot(&self) -> OverlaySnapshot {
         if let Some(snapshot) = self.snapshot.borrow().as_ref() {
             return snapshot.clone();
@@ -313,6 +314,36 @@ impl OverlayList {
         if !retained {
             cache.take();
         }
+    }
+
+    /// Mirror a plist write on `source` onto this snapshot's copy of it: the
+    /// indexed overlay carrying the source's precedence serial, which shares
+    /// the source's start because every position write reaches both lists.
+    fn mirror_plist_write(&mut self, source: Value, start: EmacsBytePos) -> bool {
+        let source = source
+            .as_overlay_data()
+            .expect("overlay_put received a non-overlay value");
+        let serial = source.serial;
+        let mut copies = self
+            .index
+            .overlays_touching(start)
+            .into_iter()
+            .filter(|copy| overlay_identity_key(*copy) == serial);
+        let (Some(copy), None) = (copies.next(), copies.next()) else {
+            return false;
+        };
+        let Ok(plist) = neovm_value::sequence_copy::copy_sequence_with_symbols(
+            source.plist,
+            neovm_value::tagged::SymbolMode::Bare,
+        ) else {
+            return false;
+        };
+        let _ = copy.with_overlay_data_mut(|data| {
+            data.plist = plist;
+        });
+        self.absent_properties.set([None; 8]);
+        self.index.overlay_properties_changed(copy);
+        true
     }
 
     /// Apply a text edit to this list's index and overlay objects.
@@ -1012,12 +1043,15 @@ impl OverlayList {
                 Ok::<_, Flow>((changed, plist_replaced))
             })
             .unwrap()?;
-        if changed {
-            self.index_mut().overlay_properties_changed(overlay);
-        } else if plist_replaced {
-            // Adding a previously absent nil property changes the plist even
-            // though GNU's display-change flag remains false.
-            self.index_mut().overlay_properties_changed(overlay);
+        // Adding a previously absent nil property changes the plist even
+        // though GNU's display-change flag remains false.
+        if changed || plist_replaced {
+            self.absent_properties.set([None; 8]);
+            self.index.overlay_properties_changed(overlay);
+            self.retain_snapshot_if(|live, snapshot| {
+                live.range(overlay)
+                    .is_some_and(|range| snapshot.mirror_plist_write(overlay, range.start()))
+            });
         }
         Ok(changed)
     }

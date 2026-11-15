@@ -1,9 +1,9 @@
-//! The cached redisplay snapshot survives text edits.
+//! The cached redisplay snapshot survives text edits and plist writes.
 //!
 //! Layout takes `OverlayList::snapshot` on every attempt. These tests pin two
-//! contracts: an edit that no observer is watching updates the cached copy
-//! in place (no overlay object is re-created), and an observer that already
-//! holds a snapshot keeps seeing the state it captured.
+//! contracts: an edit or `overlay-put` that no observer is watching updates
+//! the cached copy in place (no overlay object is re-created), and an
+//! observer that already holds a snapshot keeps seeing the state it captured.
 //!
 //! The copy counter is one process-wide static. `cargo nextest` runs each test
 //! in its own process, so the exact copy counts asserted here hold there; under
@@ -111,6 +111,53 @@ fn text_edit_keeps_the_cached_overlay_snapshot_without_copying_overlays() {
 }
 
 #[test]
+fn overlay_put_updates_the_cached_snapshot_without_copying_overlays() {
+    crate::test_utils::init_test_tracing();
+    let mut list = face_overlays(1_000);
+    let face = Value::symbol("face");
+    drop(list.snapshot());
+    reset_overlay_snapshot_copy_count();
+
+    let target = overlays_at(&list, 7 * 400)[0];
+    list.overlay_put(target, face, Value::symbol("warning"))
+        .unwrap();
+    // A previously absent key replaces the plist head.
+    list.overlay_put(target, Value::symbol("help-echo"), Value::symbol("w"))
+        .unwrap();
+    let snapshot = list.snapshot();
+    assert_eq!(
+        overlay_snapshot_copy_count(),
+        0,
+        "one overlay-put re-created every overlay of the buffer"
+    );
+    let copy = overlays_at(&snapshot, 7 * 400)[0];
+    assert_ne!(copy.bits(), target.bits());
+    assert_eq!(
+        snapshot.overlay_get_named(copy, face),
+        Some(Value::symbol("warning"))
+    );
+    assert_eq!(
+        snapshot.overlay_get_named(copy, Value::symbol("help-echo")),
+        Some(Value::symbol("w"))
+    );
+    assert!(snapshot.may_contain_property(Value::symbol("help-echo")));
+    assert_eq!(observe(&snapshot), observe(&list));
+    drop(snapshot);
+
+    // The copy owns its plist: a later in-place write to the live plist
+    // reaches the snapshot only through `overlay_put`.
+    list.overlay_put(target, face, Value::symbol("success"))
+        .unwrap();
+    let snapshot = list.snapshot();
+    let copy = overlays_at(&snapshot, 7 * 400)[0];
+    assert_eq!(
+        snapshot.overlay_get_named(copy, face),
+        Some(Value::symbol("success"))
+    );
+    assert_eq!(overlay_snapshot_copy_count(), 0);
+}
+
+#[test]
 fn walk_holding_the_snapshot_sees_the_pre_callback_overlay_state() {
     crate::test_utils::init_test_tracing();
     let mut list = OverlayList::new();
@@ -150,5 +197,90 @@ fn walk_holding_the_snapshot_sees_the_pre_callback_overlay_state() {
     assert_eq!(
         next.overlay_get_named(moved, face),
         Some(Value::symbol("new"))
+    );
+}
+
+#[test]
+fn cached_snapshot_tracks_the_live_index_through_mixed_edits() {
+    crate::test_utils::init_test_tracing();
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = |bound: usize| {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 33) as usize % bound
+    };
+    let mut list = OverlayList::new();
+    let mut text_len = 120;
+    let evaporate = Value::symbol("evaporate");
+    let face = Value::symbol("face");
+    for _ in 0..48 {
+        // Small coordinates force shared starts, shared ends and empties.
+        let start = next(text_len);
+        let end = (start + next(6)).min(text_len);
+        let overlay = alloc_overlay(start, end);
+        list.insert_overlay(overlay);
+        list.set_front_advance(overlay, next(2) == 0);
+        list.set_rear_advance(overlay, next(2) == 0);
+        if next(3) == 0 {
+            list.overlay_put(overlay, evaporate, Value::T).unwrap();
+        }
+    }
+    let mut kept_edits = 0;
+    for step in 0..600 {
+        drop(list.snapshot());
+        let copies_before = overlay_snapshot_copy_count();
+        let text_edit = match next(10) {
+            0..=3 => {
+                let length = 1 + next(3);
+                list.adjust_for_insert_at_emacs_byte_pos(
+                    emacs_byte_pos(next(text_len + 1)),
+                    emacs_byte_len(length),
+                    next(6) == 0,
+                );
+                text_len += length;
+                true
+            }
+            4..=6 if text_len > 4 => {
+                let start = next(text_len - 1);
+                let end = (start + 1 + next(4)).min(text_len);
+                list.adjust_for_delete_emacs_byte_range(emacs_byte_range(start, end));
+                text_len -= end - start;
+                true
+            }
+            7 | 8 => {
+                let live: Vec<_> = list.index.values().collect();
+                if !live.is_empty() {
+                    let overlay = live[next(live.len())];
+                    let value = [Value::NIL, Value::T, Value::symbol("bold")][next(3)];
+                    let prop = [face, evaporate, Value::symbol("priority")][next(3)];
+                    list.overlay_put(overlay, prop, value).unwrap();
+                }
+                false
+            }
+            _ => {
+                let start = next(text_len + 1);
+                let end = (start + next(4)).min(text_len);
+                list.insert_overlay(alloc_overlay(start, end));
+                false
+            }
+        };
+        let snapshot = list.snapshot();
+        if text_edit && overlay_snapshot_copy_count() == copies_before {
+            kept_edits += 1;
+        }
+        assert_eq!(observe(&snapshot), observe(&list), "step {step}");
+        for pos in 0..=text_len {
+            assert_eq!(
+                serials_at(&snapshot, pos),
+                serials_at(&list, pos),
+                "step {step} pos {pos}"
+            );
+        }
+        snapshot.index.assert_invariants();
+    }
+    assert!(
+        kept_edits > 100,
+        "text edits rebuilt the snapshot instead of adjusting it ({kept_edits} kept)"
     );
 }
