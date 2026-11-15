@@ -471,10 +471,11 @@ mod unit_runtime {
     /// The unit runtime's startup-frame seed. Eval cannot name the display
     /// module and this runtime holds no frame record, so seeding is an
     /// exact no-op: the premise below refuses the fold the moment a frame
-    /// ever exists here, and the returned id is unobservable (every caller
-    /// discards it; the frame manager stays empty), so GNU's
-    /// `buffer_window_count == 0' branch of `force-mode-line-update'
-    /// follows by construction (buffer.c:1540-1545).
+    /// ever exists here, and the returned id has no semantic consumer
+    /// (two call sites discard it and the third only prints it in a
+    /// bootstrap trace, load/mod.rs:6414; the frame manager stays empty),
+    /// so GNU's `buffer_window_count == 0' branch of
+    /// `force-mode-line-update' follows by construction (buffer.c:1540-1545).
     fn boot_seed_batch_startup_frame(ctx: &mut Context) -> neovm_value::display_vocab::FrameId {
         assert!(
             ctx.frame_manager().frames.is_empty(),
