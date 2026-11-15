@@ -3536,6 +3536,24 @@ fn forward_search_slice_range(
     EmacsByteRange::new(forward_search_slice_start(buf, context, start), context_end)
 }
 
+/// A backward search's matches start in [LIMIT, END] and end at END at the
+/// latest (GNU passes point as `re_search_2`'s STOP), so it reads that stretch
+/// plus one character on each side: the one before LIMIT for `^', `\b' and
+/// `\<', the one after END for `$', `\b' and `\>'. Those are exactly the
+/// two context characters a forward search from LIMIT to END keeps.
+///
+/// After an edit the gap sits at point, which is END: the slice then holds it
+/// at its last character, and making the slice one piece moves one character
+/// where asking for the whole region moved half the buffer.
+fn backward_search_slice_range(
+    buf: &Buffer,
+    accessible: EmacsByteRange,
+    limit: EmacsBytePos,
+    end: EmacsBytePos,
+) -> EmacsByteRange {
+    forward_search_slice_range(buf, accessible, limit, end)
+}
+
 /// Apply a Lisp-originated regexp to UTF-8 text as a boolean predicate.
 ///
 /// This is the compatibility seam for Lisp-facing APIs that receive an Emacs
@@ -4015,7 +4033,8 @@ pub(crate) fn re_search_backward_with_posix(
         ));
     }
 
-    let region_start = accessible.start();
+    let search_range = backward_search_slice_range(buf, accessible.range(), limit, end);
+    let region_start = search_range.start();
     let start_rel = end.get() - region_start.get();
     let limit_rel = limit.get() - region_start.get();
     let multibyte = buf.get_multibyte();
@@ -4023,29 +4042,23 @@ pub(crate) fn re_search_backward_with_posix(
     let compiled =
         compile_search_pattern_with_posix(&pattern_for_compile(pattern), case_fold, posix, &syn)?;
 
-    let md_opt =
-        with_buffer_emacs_bytes_for_search(buf, accessible.range(), |text| match &compiled {
-            CompiledSearchPattern::Literal(literal) => literal_rfind_emacs_bytes(
-                &text[limit_rel..start_rel],
-                literal,
-                multibyte,
-                case_fold,
+    let md_opt = with_buffer_emacs_bytes_for_search(buf, search_range, |text| match &compiled {
+        CompiledSearchPattern::Literal(literal) => {
+            literal_rfind_emacs_bytes(&text[limit_rel..start_rel], literal, multibyte, case_fold)
+                .map(|matched| {
+                    EngineMatchData::new(gnu_single_group_vec(Some(
+                        matched.shift(region_start.get() + limit_rel),
+                    )))
+                })
+        }
+        CompiledSearchPattern::Emacs(cp) => {
+            // Backward search: negative range means search backward.
+            let range = -((start_rel - limit_rel) as isize);
+            regex_emacs::re_search(cp.as_ref(), text, start_rel, range, &syn, start_rel).map(
+                |(_pos, regs)| buffer_engine_match_data_from_registers(&regs, region_start.get()),
             )
-            .map(|matched| {
-                EngineMatchData::new(gnu_single_group_vec(Some(
-                    matched.shift(region_start.get() + limit_rel),
-                )))
-            }),
-            CompiledSearchPattern::Emacs(cp) => {
-                // Backward search: negative range means search backward.
-                let range = -((start_rel - limit_rel) as isize);
-                regex_emacs::re_search(cp.as_ref(), text, start_rel, range, &syn, start_rel).map(
-                    |(_pos, regs)| {
-                        buffer_engine_match_data_from_registers(&regs, region_start.get())
-                    },
-                )
-            }
-        });
+        }
+    });
 
     if md_opt.is_none()
         && matches!(compiled, CompiledSearchPattern::Emacs(_))
@@ -4297,7 +4310,8 @@ pub fn re_search_backward_lisp_with_posix_into(
         return Err("Search failed".to_string());
     }
 
-    let region_start = accessible.start();
+    let search_range = backward_search_slice_range(buf, accessible.range(), limit, end);
+    let region_start = search_range.start();
     let start_rel = end.get() - region_start.get();
     let limit_rel = limit.get() - region_start.get();
     let syn = buffer_regexp_syntax_lookup(buf, region_start, match_context);
@@ -4310,7 +4324,7 @@ pub fn re_search_backward_lisp_with_posix_into(
         &syn,
     )?;
 
-    let search_result = with_buffer_emacs_bytes_for_search(buf, accessible.range(), |text| {
+    let search_result = with_buffer_emacs_bytes_for_search(buf, search_range, |text| {
         regex_emacs::re_search(
             compiled.as_ref(),
             text,
@@ -4359,12 +4373,13 @@ pub fn re_search_backward_compiled_into(
         return Err("Search failed".to_string());
     }
 
-    let region_start = accessible.start();
+    let search_range = backward_search_slice_range(buf, accessible.range(), limit, end);
+    let region_start = search_range.start();
     let start_rel = end.get() - region_start.get();
     let limit_rel = limit.get() - region_start.get();
     let syn = buffer_regexp_syntax_lookup(buf, region_start, match_context);
 
-    let search_result = with_buffer_emacs_bytes_for_search(buf, accessible.range(), |text| {
+    let search_result = with_buffer_emacs_bytes_for_search(buf, search_range, |text| {
         regex_emacs::re_search(
             compiled,
             text,
