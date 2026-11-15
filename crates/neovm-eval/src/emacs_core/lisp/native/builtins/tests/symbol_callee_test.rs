@@ -366,3 +366,46 @@ fn apply1_symbol_callee_bytecode_skips_generic_named_call() {
     );
     assert_eq!((ctx.depth, ctx.specpdl.len()), before);
 }
+
+#[test]
+fn run_hook_symbol_callee_bytecode_skips_generic_named_call() {
+    let mut ctx = context();
+    ctx.eval_str(
+        "(progn
+           (setq symcallee-hook-calls nil)
+           (fset 'symcallee-hook-record
+                 (lambda (x)
+                   (setq symcallee-hook-calls (cons x symcallee-hook-calls))
+                   nil))
+           (setq symcallee-hook '(symcallee-hooked symcallee-hooked)))",
+    )
+    .unwrap();
+    named(
+        &mut ctx,
+        "symcallee-hooked",
+        Some(Value::symbol("symcallee-hook-record")),
+    );
+    forget_resolution(&mut ctx, "symcallee-hooked");
+    assert_eq!(
+        print_value(
+            &ctx.eval_str("(run-hook-with-args 'symcallee-hook 5)")
+                .unwrap()
+        ),
+        "nil"
+    );
+    assert_eq!(
+        print_value(
+            &ctx.eval_str("(run-hook-with-args-until-success 'symcallee-hook 6)")
+                .unwrap()
+        ),
+        "nil"
+    );
+    assert_eq!(
+        print_value(&ctx.eval_str("symcallee-hook-calls").unwrap()),
+        "(6 6 5 5)"
+    );
+    assert!(
+        !resolved_generically(&ctx, "symcallee-hooked"),
+        "a hook re-resolved a byte-code function through the generic named call"
+    );
+}
