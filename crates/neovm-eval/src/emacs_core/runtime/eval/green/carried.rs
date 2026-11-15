@@ -211,17 +211,16 @@ mod absent_carried_world_state {
         }
     }
 
+    /// The terminal live-ids slot is an exact premise-asserting unit
+    /// implementation, not an absent-layer panic: this runtime holds no
+    /// terminal record, so the exact answer is no terminals — GNU's
+    /// keyboard.c:8113-8124 zero-live-terminal branch. A terminal record
+    /// would make the slot refuse instead; core's registry tests cover the
+    /// non-empty answer.
     #[test]
-    fn a_terminal_behaviour_hook_still_panics_absent() {
+    fn a_terminal_live_ids_slot_answers_exact_empty_in_the_unit_runtime() {
         let _green = green();
-        let err = catch_unwind(AssertUnwindSafe(|| {
-            let _ = live_terminal_ids_in_keyboard_poll_order();
-        }));
-        let text = panic_text(err.expect_err("terminal live-ids must still panic"));
-        assert!(
-            text.contains("ABSENT-LAYER display::terminal.live_terminal_ids"),
-            "terminal hook panic was {text}"
-        );
+        assert!(live_terminal_ids_in_keyboard_poll_order().is_empty());
     }
 
     #[test]

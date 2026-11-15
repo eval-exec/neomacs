@@ -1153,16 +1153,15 @@ impl super::keyboard::FatalSignalShutdown for ShutdownRequest {
     }
 }
 
-/// GNU's last-terminal test is one live terminal. Zero also takes the fatal
-/// path. The eval unit runtime's query panics, and that runtime has no
-/// other terminal, so the absent slot is treated as last.
+/// GNU's last-terminal test is one live terminal (`!terminal_list->next_terminal`),
+/// and zero also takes the fatal path (keyboard.c:8113-8124; emacs.c:441-462
+/// turns it into `Fkill_emacs`). The eval unit runtime's slot is an exact
+/// premise-asserting implementation: it refuses the fold the moment a
+/// terminal record exists there and answers no terminals, so the zero branch
+/// here is exact by construction — no cfg(test) pointer comparison in this
+/// caller.
 fn last_live_display_terminal() -> bool {
-    let query = lifecycle_hooks().terminal().live_terminal_ids();
-    #[cfg(test)]
-    if crate::test_utils::terminal_live_ids_slot_is_absent(query) {
-        return true;
-    }
-    query().len() <= 1
+    (lifecycle_hooks().terminal().live_terminal_ids())().len() <= 1
 }
 
 /// Delete a terminal without running Lisp hooks (input-reader disconnect).
@@ -1170,8 +1169,9 @@ fn last_live_display_terminal() -> bool {
 /// When this is the last live terminal, publish `shutdown_if_last` first,
 /// while the frame and terminal are still live. Dying then keeps the queued
 /// delete walks from running. A non-last terminal only queues the delete.
-/// The eval unit runtime's delete slot refuses the call, and that runtime
-/// has no terminal record.
+/// The eval unit runtime's delete slot is an exact premise-asserting empty
+/// fold: it refuses the call the moment a terminal record with this id
+/// exists there, so no cfg(test) pointer comparison lives in this caller.
 pub fn delete_terminal_noelisp_owned(
     ctx: &mut Context,
     terminal_id: u64,
@@ -1180,12 +1180,7 @@ pub fn delete_terminal_noelisp_owned(
     if last_live_display_terminal() {
         let _ = ctx.shutdown_with_hooks(shutdown_if_last);
     }
-    let delete = lifecycle_hooks().terminal().delete_noelisp();
-    #[cfg(test)]
-    if crate::test_utils::terminal_delete_noelisp_slot_is_absent(delete) {
-        return Ok(Value::NIL);
-    }
-    delete(ctx, terminal_id)
+    (lifecycle_hooks().terminal().delete_noelisp())(ctx, terminal_id)
 }
 
 /// Capture a window configuration through the core `current-window-configuration`

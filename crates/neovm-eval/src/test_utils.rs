@@ -370,16 +370,83 @@ mod unit_runtime {
     crate::eval_absent_layer_slots!();
     use absent_layer_slots as s;
 
-    /// The eval unit runtime's terminal slot panics. Production disconnect
-    /// code compares the installed pointer and skips that call.
-    pub(crate) fn terminal_live_ids_slot_is_absent(slot: fn() -> Vec<u64>) -> bool {
-        slot == absent_layer_slots::terminal_live_terminal_ids
+    /// Exact premise-asserting terminal live-ids slot for the eval unit
+    /// runtime.
+    ///
+    /// The runtime has no native terminal and every terminal-creating path is
+    /// an absent hook, so zero live terminals is the exact answer — GNU's
+    /// keyboard.c:8113-8124 last-terminal test (`!terminal_list->next_terminal`)
+    /// also takes the fatal path at zero. The eval-side Lisp registry is real:
+    /// Context construction installs this runtime's per-thread empty handle
+    /// (`terminal_current_registry_handle`) and `ensure_terminal` would
+    /// populate it. Assert the registry is still empty; a terminal record
+    /// here means the fold is not exact and the test must run in core.
+    fn unit_terminal_live_ids() -> Vec<u64> {
+        let handle = s::terminal_current_registry_handle();
+        let has_records = !handle.borrow().terminals.is_empty();
+        assert!(
+            !has_records,
+            "ABSENT layer: the eval unit runtime has a terminal record; run this test in core"
+        );
+        Vec::new()
     }
 
-    pub(crate) fn terminal_delete_noelisp_slot_is_absent(
-        slot: fn(&mut crate::emacs_core::eval::Context, u64) -> neovm_value::error::EvalResult,
-    ) -> bool {
-        slot == absent_layer_slots::terminal_delete_noelisp
+    /// Exact premise-asserting no-op delete for the eval unit runtime.
+    ///
+    /// GNU `delete_terminal` with no matching record is an empty fold; assert
+    /// the requested id has no terminal record in this runtime's registry,
+    /// then answer nil. The native delete slot stays display-owned in
+    /// production.
+    fn unit_terminal_delete_noelisp(
+        ctx: &mut crate::emacs_core::eval::Context,
+        terminal_id: u64,
+    ) -> neovm_value::error::EvalResult {
+        let present = ctx
+            .terminal_registry
+            .borrow()
+            .terminals
+            .contains_key(&terminal_id);
+        assert!(
+            !present,
+            "ABSENT layer: the eval unit runtime has terminal record {terminal_id}; run this test in core"
+        );
+        Ok(Value::NIL)
+    }
+
+    /// The two exact terminal slots must REFUSE the fold the moment a terminal
+    /// Lisp record exists in the unit runtime: the empty answer is exact only
+    /// while the runtime's registry is empty (GNU keyboard.c:8113-8124 and
+    /// terminal.c delete_terminal). This proves the ABSENT panic rather than a
+    /// silent wrong answer.
+    #[test]
+    fn unit_terminal_slots_refuse_when_a_terminal_record_exists() {
+        let mut context = Context::new(unit_runtime());
+        context.terminal_registry.borrow_mut().ensure_terminal(7);
+        let live =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unit_terminal_live_ids()));
+        let payload = live.expect_err("a terminal record must refuse the live-ids fold");
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("");
+        assert!(
+            message.contains("ABSENT layer"),
+            "unexpected live-ids panic message: {message}"
+        );
+        let delete = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            unit_terminal_delete_noelisp(&mut context, 7)
+        }));
+        let payload = delete.expect_err("a terminal record must refuse the delete fold");
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("");
+        assert!(
+            message.contains("ABSENT layer"),
+            "unexpected delete panic message: {message}"
+        );
     }
 
     include!("upper_subrs.generated.rs");
@@ -591,7 +658,7 @@ mod unit_runtime {
         ),
         TerminalHooks::new(
             s::terminal_handle_value,
-            s::terminal_delete_noelisp,
+            unit_terminal_delete_noelisp,
             s::terminal_frame_terminal,
             s::terminal_print_handle,
             s::terminal_configure_window_system_runtime,
@@ -601,7 +668,7 @@ mod unit_runtime {
             s::terminal_reset_handle,
             s::terminal_world_state_placeholder,
             s::terminal_swap_world_state,
-            s::terminal_live_terminal_ids,
+            unit_terminal_live_ids,
             s::terminal_current_registry_handle,
             s::terminal_install_registry_handle,
             s::terminal_install_owner_registry_handle,
@@ -3699,10 +3766,7 @@ mod unit_runtime {
 #[allow(unused_imports)]
 pub(crate) use unit_runtime::unit_runtime;
 #[cfg(test)]
-pub(crate) use unit_runtime::{
-    auto_save_slot_calls_for_test, reset_auto_save_slot_calls_for_test,
-    terminal_delete_noelisp_slot_is_absent, terminal_live_ids_slot_is_absent,
-};
+pub(crate) use unit_runtime::{auto_save_slot_calls_for_test, reset_auto_save_slot_calls_for_test};
 
 /// Enter an explicitly context-free evaluator unit fixture.
 ///
