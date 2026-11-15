@@ -30,6 +30,22 @@ pub fn is_active_gnu_defsym_spelling(name: &str) -> bool {
         .map(|index| table[index].1.is_active())
         .unwrap_or(false)
 }
+
+/// Whether `name` is a DEFSYM spelling GNU removes, or never interns, before
+/// the startup obarray is complete.
+///
+/// The set is the five `syms_of_*` `Funintern` calls (`get-file-char`,
+/// `get-emacs-mule-file-char`, `outermost-restriction`,
+/// `internal-interpreter-environment`, `print--unreadable-callback-buffer`)
+/// plus `Qunbound`, which `define_symbol` deliberately leaves uninterned.
+/// Generated from the same ledger as the boot table so a startup census can
+/// consume one list instead of maintaining a second.
+#[doc(hidden)]
+pub fn is_gnu_startup_uninterned_spelling(name: &str) -> bool {
+    gnu_defsyms_generated::GNU_UNINTERNED_SPELLINGS
+        .binary_search(&name)
+        .is_ok()
+}
 #[cfg(feature = "test-support")]
 pub mod parallel;
 #[cfg(not(feature = "test-support"))]

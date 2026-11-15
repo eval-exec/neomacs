@@ -4113,5 +4113,19 @@ pub(crate) static GNU_DEFSYMS_BY_SPELLING: &[(&str, DefsymGate)] = &[
     ("zlib", DefsymGate(DefsymGate::WINDOWS)),
 ];
 
+/// GNU compiles these DEFSYM spellings and then removes them from the
+/// initial obarray (`Funintern`), or never interns them at all.
+/// 6 spellings, sorted.
+#[rustfmt::skip]
+pub(crate) static GNU_UNINTERNED_SPELLINGS: &[&str] = &[
+    "get-emacs-mule-file-char",
+    "get-file-char",
+    "internal-interpreter-environment",
+    "outermost-restriction",
+    "print--unreadable-callback-buffer",
+    "unbound",
+];
+
 const _: () = assert!(GNU_DEFSYMS.len() == 2031);
 const _: () = assert!(GNU_DEFSYMS_BY_SPELLING.len() == GNU_DEFSYMS.len());
+const _: () = assert!(GNU_UNINTERNED_SPELLINGS.len() == 6);

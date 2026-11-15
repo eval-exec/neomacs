@@ -857,11 +857,35 @@ pub fn render_generated(rows: &[Row]) -> Result<String, String> {
         .expect("write to String");
     }
     out.push_str("];\n");
+
+    // The startup-uninterned spellings, sorted, for the shared helper the
+    // startup census consumes instead of maintaining a second list.
+    let mut uninterned: Vec<&Row> = rows
+        .iter()
+        .filter(|row| row.gate == Gate::Uninterned)
+        .collect();
+    uninterned.sort_by(|left, right| left.name.cmp(&right.name));
+    writeln!(
+        out,
+        "\n/// GNU compiles these DEFSYM spellings and then removes them from the\n\
+         /// initial obarray (`Funintern`), or never interns them at all.\n\
+         /// {} spellings, sorted.\n\
+         #[rustfmt::skip]\n\
+         pub(crate) static GNU_UNINTERNED_SPELLINGS: &[&str] = &[",
+        uninterned.len()
+    )
+    .expect("write to String");
+    for row in &uninterned {
+        writeln!(out, "    {},", rust_string_literal(&row.name)).expect("write to String");
+    }
+    out.push_str("];\n");
     writeln!(
         out,
         "\nconst _: () = assert!(GNU_DEFSYMS.len() == {});\n\
-         const _: () = assert!(GNU_DEFSYMS_BY_SPELLING.len() == GNU_DEFSYMS.len());",
-        emitted.len()
+         const _: () = assert!(GNU_DEFSYMS_BY_SPELLING.len() == GNU_DEFSYMS.len());\n\
+         const _: () = assert!(GNU_UNINTERNED_SPELLINGS.len() == {});",
+        emitted.len(),
+        uninterned.len()
     )
     .expect("write to String");
     Ok(out)
