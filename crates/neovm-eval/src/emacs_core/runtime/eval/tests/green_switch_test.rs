@@ -1345,6 +1345,16 @@ fn a_lone_green_select_publishes_and_preserves_a_control_wake_before_arm() {
     assert_no_ready_peer_select_publication(&mut ev, false);
 }
 
+/// A sleeping peer still publishes its select deadline. `thread-signal`
+/// stores the pair without waking the select (`src/thread.c:974-1034`);
+/// the signal is raised at the next reacquire (`src/thread.c:146-154`),
+/// while `Fthread_join` re-raises the `error_symbol` snapshot it copied
+/// before its wait (`src/thread.c:1126-1138`). The attested GNU 31.1
+/// oracle (linux-gtk3, THREADS) therefore reports `(error stop)` at the
+/// join and a nil `thread-last-error`: transcript
+/// `tmp/v10x/oracleb-evalfam/gnu-thread-signal-select-proof.txt`. The
+/// corrected expectation still guards the park publication and the select
+/// deadline because those assertions are unchanged.
 #[test]
 fn a_green_select_with_only_a_sleeping_peer_publishes_its_own_deadline() {
     let mut ev = green();
@@ -1361,8 +1371,11 @@ fn a_green_select_with_only_a_sleeping_peer_publishes_its_own_deadline() {
         "sleeping"
     );
     assert_no_ready_peer_select_publication(&mut ev, true);
-    // `thread-signal` does not end the worker's select (src/thread.c:974-982).
-    // The signal is raised when that select returns.
+    // `thread-signal` does not end the worker's select (src/thread.c:974-1034).
+    // The worker raises the pending pair when its select returns, while the
+    // join re-raises the error snapshot it copied before the wait
+    // (src/thread.c:1126-1138), so the attested GNU oracle reports the
+    // signal here.
     let started = std::time::Instant::now();
     assert_eq!(
         eval(
@@ -1372,7 +1385,7 @@ fn a_green_select_with_only_a_sleeping_peer_publishes_its_own_deadline() {
                (thread-yield)
                (thread-join s2r3-select-sleeper))"
         ),
-        "interrupted"
+        "ERR error (stop)"
     );
     assert!(
         started.elapsed() >= std::time::Duration::from_millis(150),
@@ -1471,8 +1484,16 @@ fn a_yield_without_ready_peers_still_refuses_gc_inhibition() {
 }
 
 /// A worker `sleep-for` runs until its own deadline. `thread-signal` stores
-/// the pair and does not end the select (`src/thread.c:974-982`); the
-/// handler runs when select returns. Join then sees the caught result.
+/// the pair and does not end the select (`src/thread.c:974-1034`); the
+/// condition-case handler runs when select returns. `Fthread_join` copies
+/// the target's `error_symbol` BEFORE its wait (`src/thread.c:1126-1138`)
+/// and raises that snapshot after the wait, while
+/// `post_acquire_global_lock` clears and raises the worker's copy on
+/// reacquire (`src/thread.c:146-154`). The attested GNU 31.1 oracle
+/// (linux-gtk3, THREADS) therefore signals `error (wake)` at the join:
+/// transcript `tmp/v10x/oracleb-evalfam/gnu-thread-signal-select-proof.txt`.
+/// The corrected expectation still guards the deadline: the join cannot
+/// return before the worker's 0.35 s select expires.
 #[test]
 fn a_select_wait_runs_to_its_deadline_before_the_signal_is_raised() {
     let mut ev = green();
@@ -1488,7 +1509,7 @@ fn a_select_wait_runs_to_its_deadline_before_the_signal_is_raised() {
            (thread-yield)
            (list (thread-join th) (thread-last-error th)))"
         ),
-        "(interrupted nil)"
+        "ERR error (wake)"
     );
     assert!(
         started.elapsed() >= std::time::Duration::from_millis(200),
