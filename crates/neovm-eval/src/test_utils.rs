@@ -1044,6 +1044,75 @@ mod unit_runtime {
         assert_eq!(actual_fn(&mut context).unwrap(), Value::NIL);
     }
 
+    /// The eval unit runtime's exact `accept-process-output` slot: GNU's
+    /// timeout path with an empty process table (asserted). Any premise in
+    /// which a process could produce output is an explicit ABSENT-LAYER
+    /// refusal, never a silent no-op.
+    fn unit_accept_process_output(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+        use neovm_value::error::{LispCondition, expect_max_args, signal};
+        use neovm_value::value::{ValueKind, VecLikeType};
+
+        expect_max_args("accept-process-output", &args, 4)?;
+        assert!(
+            ctx.processes().list_processes().is_empty(),
+            "ABSENT-LAYER system::accept-process-output: the eval unit runtime carries no process backend"
+        );
+        if let Some(process) = args.first().copied() {
+            if !process.is_nil() {
+                assert!(
+                    process.is_process(),
+                    "accept-process-output: PROCESS must be a process"
+                );
+                panic!(
+                    "ABSENT-LAYER system::accept-process-output: a process argument needs the system wait backend"
+                );
+            }
+        }
+        let seconds = match args.get(1).copied() {
+            None => 0.0,
+            Some(value) if value.is_nil() => 0.0,
+            Some(value) => match value.kind() {
+                ValueKind::Fixnum(_) => value.as_fixnum().expect("fixnum") as f64,
+                ValueKind::Float => value.xfloat(),
+                ValueKind::Veclike(VecLikeType::Bignum) => {
+                    panic!("ABSENT-LAYER system::accept-process-output: bignum timeout")
+                }
+                _ => {
+                    return Err(signal(
+                        LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("numberp"), value],
+                    ));
+                }
+            },
+        };
+        let millis = match args.get(2).copied() {
+            None => 0,
+            Some(value) if value.is_nil() => 0,
+            Some(value) => value.as_fixnum().ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("fixnump"), value],
+                )
+            })?,
+        };
+        let total_secs = seconds + millis as f64 / 1000.0;
+        if total_secs > 0.0 {
+            let total = std::time::Duration::from_secs_f64(total_secs);
+            let end_time = crate::emacs_core::eval::GnuTimerTimestamp::now().add_duration(total);
+            loop {
+                let now = crate::emacs_core::eval::GnuTimerTimestamp::now();
+                if now >= end_time {
+                    break;
+                }
+                let remaining = end_time.duration_until(now);
+                crate::emacs_core::eval::hooks_proof::wait::wait_for_duration_until_timer_deadline(
+                    ctx, remaining, end_time,
+                )?;
+            }
+        }
+        Ok(Value::NIL)
+    }
+
     /// Misc descriptors owned by this crate, including lower host-generic bodies.
     /// The unit runtime uses the same production descriptor or entry shape.
     fn misc_family_subr(name: &str) -> Option<crate::emacs_core::subr::SubrSpec> {
@@ -1100,6 +1169,13 @@ mod unit_runtime {
             }
             "copy-marker" => crate::emacs_core::builtins::misc_eval::COPY_MARKER_SUBR,
             "sleep-for" => crate::emacs_core::builtins::misc_eval::SLEEP_FOR_SUBR,
+            // The system owns production `accept-process-output`; the unit
+            // runtime binds its own exact timeout-only entry (see above).
+            "accept-process-output" => SubrSpec::new(
+                "accept-process-output",
+                NativeFn::ContextVec(unit_accept_process_output),
+                SubrArity::new(0, Some(4)),
+            ),
             "char-table-subtype" => crate::emacs_core::builtins::misc_pure::CHAR_TABLE_SUBTYPE_SUBR,
             "set-char-table-range" => {
                 crate::emacs_core::builtins::misc_eval::SET_CHAR_TABLE_RANGE_SUBR
@@ -2353,6 +2429,41 @@ mod unit_runtime {
             started.elapsed() >= std::time::Duration::from_millis(10),
             "the eval-only wait did not wait: {:?}",
             started.elapsed()
+        );
+    }
+
+    #[test]
+    fn unit_accept_process_output_is_the_exact_timeout_path() {
+        use neovm_value::value::Value;
+
+        let mut context = Context::new(unit_runtime());
+        assert!(
+            context.processes().list_processes().is_empty(),
+            "the accepted unit premise is an empty process table"
+        );
+        assert_eq!(
+            context
+                .eval_str("(accept-process-output nil 0)")
+                .expect("zero-timeout accept"),
+            Value::NIL
+        );
+        let started = std::time::Instant::now();
+        assert_eq!(
+            context
+                .eval_str("(accept-process-output nil 0.02)")
+                .expect("short-timeout accept"),
+            Value::NIL
+        );
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(10),
+            "the unit accept timeout did not wait: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            context
+                .eval_str("(accept-process-output nil \"x\")")
+                .is_err(),
+            "a non-number timeout is refused"
         );
     }
 
