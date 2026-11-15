@@ -253,6 +253,113 @@ fn do_auto_save_shrink_leaves_the_shrunk_buffer_current() {
 // `fileio.c:6391`): the pre-written JUNK line must not survive. Pinned
 // GNU 31.1.
 #[test]
+fn do_auto_save_streams_pass_zero_visits_to_the_list_file() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name (expand-file-name "as-listfile" temporary-file-directory))
+  (with-temp-buffer
+    (insert "JUNK\n")
+    (write-region (point-min) (point-max) auto-save-list-file-name nil 'silent))
+  (defvar aslf-ops 0)
+  (defun aslf-handler (operation &rest arguments)
+    (if (eq operation 'write-region)
+        (progn (setq aslf-ops (1+ aslf-ops)) 'handled)
+      (let ((inhibit-file-name-handlers
+             (cons 'aslf-handler (and (eq inhibit-file-name-operation operation)
+                                      inhibit-file-name-handlers)))
+            (inhibit-file-name-operation operation))
+        (apply operation arguments))))
+  (setq file-name-handler-alist
+        (cons (cons (concat "\\`"
+                            (regexp-quote (expand-file-name "#aslf-handled#"
+                                                            temporary-file-directory))
+                            "\\'")
+                    'aslf-handler)
+              file-name-handler-alist))
+  (dolist (nm '("aslf-H" "aslf-U" "aslf-N" "aslf-D"))
+    (with-current-buffer (get-buffer-create nm)
+      (insert "text " nm)
+      (setq buffer-auto-save-file-name
+            (expand-file-name (concat "#" nm "#") temporary-file-directory))))
+  (with-current-buffer "aslf-H"
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#aslf-handled#" temporary-file-directory)))
+  (with-current-buffer "aslf-U"
+    (setq buffer-file-name (expand-file-name "aslf-U-visited.txt" temporary-file-directory))
+    (set-buffer-modified-p nil))
+  (with-current-buffer "aslf-N" (setq buffer-auto-save-file-name nil))
+  (with-current-buffer "aslf-D"
+    (setq buffer-file-name (expand-file-name "aslf-D-visited.txt" temporary-file-directory)))
+  (with-current-buffer (make-indirect-buffer (get-buffer "aslf-D") "aslf-I")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#aslf-I#" temporary-file-directory)))
+  (do-auto-save t)
+  (list 'entries (with-temp-buffer
+                   (insert-file-contents auto-save-list-file-name)
+                   (buffer-string))
+        'handled-saves aslf-ops))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""VALUE OK (entries \"\\n[SESSION-TMPDIR]/#aslf-handled#\\n[SESSION-TMPDIR]/aslf-U-visited.txt\\n[SESSION-TMPDIR]/#aslf-U#\\n[SESSION-TMPDIR]/aslf-D-visited.txt\\n[SESSION-TMPDIR]/#aslf-D#\\n\\n[SESSION-TMPDIR]/#aslf-I#\\n\" handled-saves 1)""##
+        ]],
+    );
+}
+
+// A list file whose parent path crosses a regular file exercises the
+// swallowed-error leg: `make-directory' signals, `do_auto_save_eh'
+// (`fileio.c:6308-6312') eats it, `fopen' then fails on ENOTDIR, and the
+// pass-0 stream is silently absent -- the buffers still auto-save.  (GNU's
+// `Vrun_hooks' gate at `fileio.c:6374' is an internal shut-down flag, not
+// the Elisp `run-hooks' variable, so only the error path is reachable from
+// Lisp.)  Pinned GNU 31.1.
+#[test]
+fn do_auto_save_swallows_list_file_directory_errors() {
+    let form = r##"(progn
+  (write-region "x" nil (expand-file-name "as-a-file.txt" temporary-file-directory)
+                nil 'silent)
+  (setq auto-save-list-file-name
+        (expand-file-name "as-a-file.txt/as-listfile" temporary-file-directory))
+  (with-current-buffer (get-buffer-create "as-blocked")
+    (insert "text")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#as-blocked#" temporary-file-directory)))
+  (do-auto-save t)
+  (list 'file-exists (file-exists-p auto-save-list-file-name)
+        'saved (with-current-buffer "as-blocked" (recent-auto-save-p))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[r##""VALUE OK (file-exists nil saved t)""##]],
+    );
+}
+
+// The list file's missing parent directory is created by
+// `(make-directory DIR 'parents)' under `auto_saving_dir_umask' 077
+// (`fileio.c:6302-6304`), i.e. mode 0700 (448), and the stream then records
+// the pass-0 visits into it. Pinned GNU 31.1.
+#[test]
+fn do_auto_save_creates_the_list_file_directory_mode_700() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name
+        (expand-file-name "as-lfdir/as-listfile" temporary-file-directory))
+  (with-current-buffer (get-buffer-create "as-mk")
+    (insert "text")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#as-mk#" temporary-file-directory)))
+  (do-auto-save t)
+  (list 'dir-modes (file-modes (file-name-directory auto-save-list-file-name))
+        'file-exists (file-exists-p auto-save-list-file-name)
+        'entry (and (file-exists-p auto-save-list-file-name)
+                    (with-temp-buffer
+                      (insert-file-contents auto-save-list-file-name)
+                      (buffer-string)))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""VALUE OK (dir-modes 448 file-exists t entry \"\\n[SESSION-TMPDIR]/#as-mk#\\n\")""##
+        ]],
+    );
+}
+
 #[test]
 fn clear_buffer_auto_save_failure_returns_nil_and_leaves_save_length() {
     // Live GNU 31.1: the C field is not Lisp-visible. The call returns nil

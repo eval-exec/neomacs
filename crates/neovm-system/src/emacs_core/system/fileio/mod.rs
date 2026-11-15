@@ -33,6 +33,7 @@ use neovm_value::heap_types::LispString;
 
 use neovm_eval::emacs_core::eval::AutoSaveNativeWritePolicy;
 use neovm_eval::emacs_core::eval::Context;
+use neovm_eval::emacs_core::eval::ShutdownPhase;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::intern::WellKnown;
 use neovm_value::intern::{intern, resolve_sym};
@@ -4396,7 +4397,6 @@ pub fn builtin_add_name_to_file(eval: &mut Context, args: Vec<Value>) -> EvalRes
 /// `make-directory` level via Qmake_directory; we mirror that so
 /// callers that go through the internal entry point still see the
 /// handler.
-#[doc(hidden)]
 pub fn builtin_make_directory_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "make-directory", &args)? {
         return Ok(result);
@@ -4404,7 +4404,23 @@ pub fn builtin_make_directory_internal(eval: &mut Context, args: Vec<Value>) -> 
     expect_args("make-directory-internal", &args, 1)?;
     let dir = expect_lisp_string_strict(&args[0])?;
     let resolved = resolve_filename_lisp_for_eval(eval, &dir);
-    fs::create_dir(lisp_file_name_to_path_buf(&resolved)).map_err(|e| {
+    let path = lisp_file_name_to_path_buf(&resolved);
+    let created = {
+        // GNU passes `0777 & ~auto_saving_dir_umask` to mkdir; the umask is
+        // the owner slab's `native_fileio_dir_umask`, zero outside the
+        // list-file directory-creation window.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            let mode = 0o777 & !eval.auto_saving_dir_umask();
+            std::fs::DirBuilder::new().mode(mode).create(&path)
+        }
+        #[cfg(not(unix))]
+        {
+            fs::create_dir(&path)
+        }
+    };
+    created.map_err(|e| {
         signal_file_action_error_value(e, "Creating directory", Value::heap_string(resolved))
     })?;
     Ok(Value::NIL)
@@ -7855,6 +7871,69 @@ fn auto_save_error(eval: &mut Context, flow: &Flow) -> Result<(), Flow> {
 /// `(do-auto-save &optional NO-MESSAGE CURRENT)` -> nil
 ///
 /// Auto-save all buffers that need it.
+/// Open GNU's `auto-save-list-file-name` stream (`Fdo_auto_save`,
+/// `fileio.c:6367-6392`).
+///
+/// The name is expanded; while `run-hooks` is non-nil ("Don't try to create
+/// the directory when shutting down Emacs", `fileio.c:6375`) a missing
+/// parent directory is made with `(make-directory DIR 'parents)` under
+/// `auto_saving_dir_umask` 077 -- errors swallowed by
+/// `internal_condition_case_1` (`fileio.c:6379-6383`) -- and the file is
+/// truncate-created, like `fopen (listfile, "w")`.  A non-string variable,
+/// a signaling expand, or an open failure gives `None`: GNU's `NULL`
+/// stream, which silently disables pass-0 recording.  Closing happens at
+/// drop, which runs on every exit from `builtin_do_auto_save` like GNU's
+/// `do_auto_save_unwind`.
+fn open_auto_save_list_file_stream(eval: &mut Context) -> Result<Option<std::fs::File>, Flow> {
+    let name = eval
+        .builtin_var_value_by_name("auto-save-list-file-name")
+        .and_then(|value| value.as_lisp_string().cloned());
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    // GNU `Fexpand_file_name (Vauto_save_list_file_name, Qnil)` is NOT under
+    // the condition-case: a signaling name propagates out of `do-auto-save`.
+    let listfile = builtin_expand_file_name(eval, vec![Value::heap_string(name), Value::NIL])?;
+    let Some(listfile) = listfile.as_lisp_string().cloned() else {
+        return Ok(None);
+    };
+    // GNU gates the directory creation on `Vrun_hooks' (`fileio.c:6374`):
+    // an internal C flag holding the symbol `run-hooks', nil only while
+    // `shut_down_emacs' runs and during early startup.  It is NOT the
+    // Elisp `run-hooks' variable -- `let'-binding that changes nothing.
+    // `ShutdownPhase::Dying' is Neomacs' name for the shut-down state.
+    if eval.shutdown_phase != ShutdownPhase::Dying {
+        let dir = eval
+            .funcall_general(
+                Value::symbol("file-name-directory"),
+                vec![Value::heap_string(listfile.clone())],
+            )
+            .ok()
+            .filter(|value| !value.is_nil());
+        let dir_exists = dir
+            .as_ref()
+            .map(|dir| {
+                eval.funcall_general(Value::symbol("file-directory-p"), vec![dir.clone()])
+                    .map(|value| value.is_truthy())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !dir_exists && let Some(dir) = dir {
+            // `do_auto_save_make_dir' (fileio.c:6297-6306): 077 around the
+            // funcall, cleared on the normal return and by `do_auto_save_eh'
+            // (:6308-6313) on error -- a funcall returns Flow errors instead
+            // of longjmping, so this clear covers both arms.
+            eval.replace_auto_saving_dir_umask(0o77);
+            let made = eval.funcall_general(Value::symbol("make-directory"), vec![dir, Value::T]);
+            eval.replace_auto_saving_dir_umask(0);
+            // Any error leaves the umask cleared and the walk continues
+            // without the directory.
+            let _ = made;
+        }
+    }
+    Ok(std::fs::File::create(lisp_file_name_to_path_buf(&listfile)).ok())
+}
+
 /// If NO-MESSAGE is non-nil, suppress the "Auto-saving..." message.
 /// If CURRENT is non-nil, only auto-save the current buffer.
 #[doc(hidden)]
@@ -7907,6 +7986,10 @@ pub fn builtin_do_auto_save(
     let mut native_scope = AutoSaveNativeScope::enter(eval);
     let eval = native_scope.context();
 
+    // GNU opens the auto-save list stream after the hook and before the
+    // passes (`fileio.c:6367-6392`); the unwind closes it on every exit.
+    let mut list_file_stream = open_auto_save_list_file_stream(eval)?;
+
     // GNU `Fdo_auto_save` walks the LIVE buffer alist twice
     // (`fileio.c:6402`): pass 0 saves every buffer whose auto-save file
     // name has no `write-region' file-name-handler -- pure C writes in
@@ -7923,6 +8006,25 @@ pub fn builtin_do_auto_save(
     for do_handled_files in [false, true] {
         let cursor = eval.edit.buffers.buffer_list_cursor();
         for buf_id in cursor {
+            // GNU records every pass-0 visit that has an auto-save name in
+            // the list stream FIRST (`fileio.c:6409-6426`): before the
+            // current-only, indirect, modification, saved-size and handler
+            // gates.  A handler-routed, unmodified or indirect buffer is
+            // still recorded; a buffer without an auto-save name never is.
+            // The entry is the visited file name (or an empty line) and the
+            // auto-save name, and write errors are ignored like GNU's
+            // unchecked `fwrite'/`putc'.
+            if !do_handled_files
+                && let Some(stream) = list_file_stream.as_mut()
+                && let Some(buf) = eval.edit.buffers.get(buf_id)
+                && let Some(name) = buf.auto_save_file_name_lisp_string()
+            {
+                let visited = buf.file_name_lisp_string();
+                let _ = stream.write_all(visited.map(|f| f.as_bytes()).unwrap_or_default());
+                let _ = stream.write_all(b"\n");
+                let _ = stream.write_all(name.as_bytes());
+                let _ = stream.write_all(b"\n");
+            }
             // GNU fileio.c:6409-6411 checks CURRENT-ONLY against the buffer
             // current at each visit -- the hook may have changed it -- never
             // against an entry snapshot.
