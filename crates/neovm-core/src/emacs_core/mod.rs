@@ -105,14 +105,7 @@ pub mod dired;
 pub use neovm_edit::emacs_core::display_metrics;
 pub use neovm_edit::emacs_core::editfns;
 pub(crate) use neovm_edit::emacs_core::file_name;
-pub mod indent {
-    pub use neovm_edit::emacs_core::indent::*;
-    #[path = "subrs.rs"]
-    mod subrs;
-    #[cfg(test)]
-    pub(crate) use subrs::SUBRS;
-    pub(crate) use subrs::register_subrs;
-}
+pub use neovm_edit::emacs_core::indent;
 pub use neovm_edit::emacs_core::marker;
 pub use neovm_edit::emacs_core::mode;
 pub use neovm_edit::emacs_core::navigation;
@@ -338,14 +331,7 @@ pub use neovm_text::emacs_core::character;
 pub use neovm_text::emacs_core::charset;
 pub use neovm_text::emacs_core::chartable;
 pub use neovm_text::emacs_core::coding;
-pub mod composite {
-    pub use neovm_text::emacs_core::composite::*;
-    #[path = "subrs.rs"]
-    mod subrs;
-    #[cfg(test)]
-    pub(crate) use subrs::SUBRS;
-    pub(crate) use subrs::register_subrs;
-}
+pub use neovm_text::emacs_core::composite;
 pub use neovm_text::emacs_core::format;
 pub use neovm_text::emacs_core::json;
 pub use neovm_text::emacs_core::regex;

@@ -2492,6 +2492,38 @@ crate::emacs_core::subr::define_subrs! {
     // although its entry point lives in this crate or in a layer it depends on
     // (neovm-edit, neovm-text, neovm-value). Moved body-identically, in their
     // original relative order; the manifest's section headers come along.
+    // -- Composition (GNU composite.c; implementations live in neovm-text) --
+    // GNU emacs.c sequences composite.c before window.c/xdisp.c.
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "compose-region-internal",
+        NativeFn::ContextVec(neovm_text::emacs_core::composite::compose_region_internal),
+        SubrArity::new(2, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "compose-string-internal",
+        NativeFn::ContextVec(neovm_text::emacs_core::composite::compose_string),
+        SubrArity::new(3, Some(5)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "find-composition-internal",
+        NativeFn::ContextVec(neovm_text::emacs_core::composite::find_composition_internal),
+        SubrArity::new(4, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "composition-get-gstring",
+        NativeFn::ContextVec(neovm_text::emacs_core::composite::composition_get_gstring),
+        SubrArity::new(4, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "clear-composition-cache",
+        NativeFn::ContextVec(neovm_text::emacs_core::composite::clear_cache),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "composition-sort-rules",
+        NativeFn::ContextVec(neovm_text::emacs_core::composite::sort_rules),
+        SubrArity::new(1, Some(1)),
+    )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "find-buffer",
         NativeFn::ContextVec(|ctx, args| builtin_find_buffer(ctx, args)),
@@ -2926,6 +2958,49 @@ crate::emacs_core::subr::define_subrs! {
             neovm_edit::emacs_core::navigation::builtin_region_end(&ctx.edit.buffers, args)
         }),
         SubrArity::new(0, Some(0)),
+    )),
+    // -- Indentation (GNU indent.c; implementations live in neovm-edit) --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "current-indentation",
+        NativeFn::ContextVec(neovm_edit::emacs_core::indent::current_indentation),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "indent-to",
+        NativeFn::ContextVec(neovm_edit::emacs_core::indent::indent_to),
+        SubrArity::new(1, Some(2)),
+    ))
+    .interactive(
+        crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("NIndent to column: "),
+    ),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "current-column",
+        NativeFn::ContextVec(neovm_edit::emacs_core::indent::current_column),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "move-to-column",
+        NativeFn::ContextVec(neovm_edit::emacs_core::indent::move_to_column),
+        SubrArity::new(1, Some(2)),
+    ))
+    .interactive(
+        crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("NMove to column: "),
+    ),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "line-number-display-width",
+        NativeFn::ContextSlice(neovm_edit::emacs_core::indent::line_number_display_width),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "vertical-motion",
+        NativeFn::ContextSlice(neovm_edit::emacs_core::indent::vertical_motion),
+        SubrArity::new(1, Some(3)),
+    ))
+    .requires_eval_state(),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "compute-motion",
+        NativeFn::ContextVec(neovm_edit::emacs_core::indent::compute_motion),
+        SubrArity::new(7, Some(7)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "undo-boundary",

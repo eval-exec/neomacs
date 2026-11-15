@@ -11,20 +11,14 @@ use super::architecture_production_source_roots::{
 /// the crate that owns them, and each crate may publish only these names at
 /// its `emacs_core` root.
 const DOMAINS: &[&str] = &[
-    "builtins",
-    "commands",
-    "composite",
+    "builtins", "commands",
     // `data` is no longer a top-level domain: the data subr batch moved with
     // its implementation to `neovm-eval/src/emacs_core/runtime/data`, and
     // core's facade re-exports it through an inline `pub mod data` block.
-    "display",
-    "editing",
-    "indent",
-    "lisp",
-    "runtime",
-    "system",
-    "tests",
-    "text",
+    // `composite` and `indent` followed (H3b): their batches now register
+    // from the evaluator's declaration batch, and core re-exports the
+    // neovm-text / neovm-edit modules.
+    "display", "editing", "lisp", "runtime", "system", "tests", "text",
 ];
 
 /// Loose `*.rs` files allowed directly below an `emacs_core` root. Core keeps
@@ -67,9 +61,7 @@ fn allowed_root_files(crate_dir: &str) -> &'static [&'static str] {
 /// subsystem directory.
 const DOMAIN_ROOT_FILES: &[(&str, &str, &str)] = &[
     ("neovm-core", "builtins", "subrs.rs"),
-    ("neovm-core", "composite", "subrs.rs"),
     ("neovm-core", "data", "subrs.rs"),
-    ("neovm-core", "indent", "subrs.rs"),
     ("neovm-edit", "editing", "display_metrics.rs"),
     ("neovm-edit", "editing", "file_name.rs"),
     ("neovm-edit", "editing", "redisplay_policy.rs"),

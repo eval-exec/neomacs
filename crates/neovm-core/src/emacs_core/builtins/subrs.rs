@@ -33,12 +33,10 @@ const LOCALIZED_SUBR_CATALOG: &[SubrBatch] = &[
     lcms::SUBRS,
     crate::emacs_core::data::SUBRS,
     crate::emacs_core::eval::SUBRS,
-    crate::emacs_core::composite::SUBRS,
     crate::emacs_core::neo::terminal::SUBRS,
     crate::emacs_core::shader_surface::SUBRS,
     crate::emacs_core::video::SUBRS,
     crate::emacs_core::xwidget::SUBRS,
-    crate::emacs_core::indent::SUBRS,
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     file_notify::SUBRS,
     #[cfg(neomacs_have_dbus)]
@@ -176,8 +174,6 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         ),
         SubrArity::new(0, Some(1)),
     )));
-    // GNU emacs.c sequences composite.c before window.c/xdisp.c.
-    crate::emacs_core::composite::register_subrs(ctx);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "run-window-scroll-functions",
         NativeFn::ContextVec(crate::emacs_core::window_hooks::builtin_run_window_scroll_functions),
@@ -825,7 +821,6 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         ))
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("p")),
     );
-    crate::emacs_core::indent::register_subrs(ctx);
     crate::emacs_core::display_subrs::register_selected_window(ctx);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "current-window-configuration",
