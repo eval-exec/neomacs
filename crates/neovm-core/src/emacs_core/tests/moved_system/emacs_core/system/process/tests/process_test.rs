@@ -18638,3 +18638,260 @@ fn retained_raw_dos_decoder_holds_cr_across_process_reads() {
         "OK (((nil nil (4194243 4194217) (4194243 4194217 10) neovm-retained-fixed nil) (nil t (4194243 4194217) (4194243 4194217 10) neovm-retained-fixed nil)) ((t nil (4194243 4194217) (4194243 4194217 10) neovm-retained-hook-fixed ((2 (4194243 4194217)) (1 (10)))) (t t (4194243 4194217) (4194243 4194217 10) neovm-retained-hook-fixed ((2 (4194243 4194217)) (1 (10))))))"
     );
 }
+
+/// Run `body` lexically after defining `retired-wait`, which services process
+/// output until `(symbol-value FLAG)` is non-nil or about ten seconds pass.
+/// The forms use primitives only, so they need no bootstrap Lisp.
+fn eval_lexical_with_retired_wait(ev: &mut Context, body: &str) -> String {
+    let source = format!(
+        r#"(eval '(progn
+                   (fset 'retired-wait
+                         (lambda (flag)
+                           (let ((tries 0))
+                             (while (and (null (symbol-value flag)) (< tries 200))
+                               (accept-process-output nil 0.05)
+                               (setq tries (1+ tries))))
+                           (symbol-value flag)))
+                   {body})
+                 t)"#
+    );
+    format_eval_result(&ev.eval_str(&source))
+}
+
+#[test]
+fn garbage_collect_reclaims_a_dead_process_nothing_refers_to() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let setup = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil)
+               (let* ((payload (make-list 64 'x))
+                      (p (make-process
+                          :name "retired-reclaim"
+                          :buffer nil
+                          :command (list "{true_bin}")
+                          :connection-type 'pipe
+                          :sentinel (lambda (_p _m)
+                                      payload
+                                      (setq retired-done t)))))
+                 (puthash payload t retired-payloads)
+                 (set-process-plist p (list 'payload payload))
+                 (set-process-filter p (lambda (_p _s) payload))
+                 (list (retired-wait 'retired-done)
+                       (process-status p)
+                       (null (get-process "retired-reclaim"))
+                       (hash-table-count retired-payloads)))"#
+        ),
+    );
+    assert_eq!(setup, "OK (t exit t 1)");
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+
+    let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
+    assert_eq!(format_eval_result(&after), "OK 0");
+    assert_eq!(ev.processes().deleted_processes.len(), 0);
+}
+
+#[test]
+fn a_dead_process_lisp_still_holds_keeps_every_field_across_garbage_collect() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let result = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-done nil)
+               (setq retired-held
+                     (make-process
+                      :name "retired-held"
+                      :buffer nil
+                      :command (list "{true_bin}")
+                      :connection-type 'pipe
+                      :sentinel (lambda (_p _m) (setq retired-done t))))
+               (set-process-filter retired-held (lambda (_p _s) 'filter))
+               (set-process-plist retired-held (list 'payload (list 'kept "payload")))
+               (retired-wait 'retired-done)
+               (list (process-status retired-held)
+                     (process-exit-status retired-held)
+                     (process-name retired-held)
+                     (plist-get (process-plist retired-held) 'payload)
+                     (funcall (process-filter retired-held) nil nil)
+                     (functionp (process-sentinel retired-held))
+                     (eq retired-held retired-held))"#
+        ),
+    );
+    assert_eq!(
+        result,
+        r#"OK (exit 0 "retired-held" (kept "payload") filter t t)"#
+    );
+    let orphan = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-orphan-done nil)
+               (let* ((payload (make-list 32 'orphan))
+                      (p (make-process
+                          :name "retired-orphan"
+                          :buffer nil
+                          :command (list "{true_bin}")
+                          :connection-type 'pipe
+                          :sentinel (lambda (_p _m)
+                                      payload
+                                      (setq retired-orphan-done t)))))
+                 (set-process-plist p (list 'payload payload))
+                 (retired-wait 'retired-orphan-done))
+               t"#
+        ),
+    );
+    assert_eq!(orphan, "OK t");
+    let after = ev.eval_str("(progn (garbage-collect) t)");
+    assert_eq!(format_eval_result(&after), "OK t");
+    let fields_after = ev.eval_str(
+        r#"(list (process-status retired-held)
+                 (process-exit-status retired-held)
+                 (process-name retired-held)
+                 (plist-get (process-plist retired-held) 'payload)
+                 (funcall (process-filter retired-held) nil nil)
+                 (functionp (process-sentinel retired-held))
+                 (eq retired-held retired-held))"#,
+    );
+    assert_eq!(format_eval_result(&fields_after), result);
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+}
+
+#[test]
+fn garbage_collect_reclaims_a_dead_process_whose_own_fields_refer_to_it() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let setup = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil)
+               (let* ((payload (make-list 64 'x))
+                      (cell (list nil))
+                      (p (make-process
+                          :name "retired-cycle"
+                          :buffer nil
+                          :command (list "{true_bin}")
+                          :connection-type 'pipe
+                          :sentinel (lambda (_p _m)
+                                      (list payload cell)
+                                      (setq retired-done t)))))
+                 ;; The sentinel's closure and the plist both reach P.
+                 (setcar cell p)
+                 (set-process-plist p (list 'self p))
+                 (puthash payload t retired-payloads)
+                 (retired-wait 'retired-done))"#
+        ),
+    );
+    assert_eq!(setup, "OK t");
+    assert_eq!(ev.processes().deleted_processes.len(), 1);
+
+    let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
+    assert_eq!(format_eval_result(&after), "OK 0");
+    assert_eq!(ev.processes().deleted_processes.len(), 0);
+}
+
+#[test]
+fn a_dead_process_reached_only_through_another_dead_process_is_kept_with_it() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let result = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-done-inner nil retired-done-outer nil
+                     retired-orphan-done nil
+                     retired-orphans (make-hash-table :test 'eq :weakness 'key))
+               (let ((inner (make-process
+                             :name "retired-inner"
+                             :buffer nil
+                             :command (list "{true_bin}")
+                             :connection-type 'pipe
+                             :sentinel (lambda (_p _m) (setq retired-done-inner t)))))
+                 (set-process-plist inner (list 'payload (list "inner payload")))
+                 (retired-wait 'retired-done-inner)
+                 (setq retired-outer
+                       (make-process
+                        :name "retired-outer"
+                        :buffer nil
+                        :command (list "{true_bin}")
+                        :connection-type 'pipe
+                        :sentinel (lambda (_p _m) (setq retired-done-outer t))))
+                 ;; INNER is reachable only through OUTER's plist.
+                 (set-process-plist retired-outer (list 'inner inner))
+                 (retired-wait 'retired-done-outer)
+                 (let* ((payload (make-list 32 'orphan))
+                        (orphan (make-process
+                                 :name "retired-unrelated"
+                                 :buffer nil
+                                 :command (list "{true_bin}")
+                                 :connection-type 'pipe
+                                 :sentinel (lambda (_p _m)
+                                             payload
+                                             (setq retired-orphan-done t)))))
+                   (puthash payload t retired-orphans)
+                   (set-process-plist orphan (list 'payload payload))
+                   (retired-wait 'retired-orphan-done)))
+               (garbage-collect)
+               (let ((inner (plist-get (process-plist retired-outer) 'inner)))
+                 (list (process-name inner)
+                       (process-status inner)
+                       (plist-get (process-plist inner) 'payload)
+                       (hash-table-count retired-orphans)))"#
+        ),
+    );
+    assert_eq!(result, r#"OK ("retired-inner" exit ("inner payload") 0)"#);
+    assert_eq!(ev.processes().deleted_processes.len(), 2);
+
+    let after = ev.eval_str("(progn (setq retired-outer nil) (garbage-collect) t)");
+    assert_eq!(format_eval_result(&after), "OK t");
+    assert_eq!(ev.processes().deleted_processes.len(), 0);
+}
+
+#[test]
+fn a_thousand_short_lived_processes_leave_nothing_retired_after_garbage_collect() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let result = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-finished 0)
+               (let ((batch 0))
+                 (while (< batch 20)
+                   (let ((batch-done nil) (pending 50) (i 0) (tries 0))
+                     (while (< i 50)
+                       (let* ((payload (make-list 32 'x))
+                              (p (make-process
+                                  :name "retired-burst"
+                                  :buffer nil
+                                  :command (list "{true_bin}")
+                                  :connection-type 'pipe
+                                  :sentinel (lambda (_p _m)
+                                              payload
+                                              (setq retired-finished (1+ retired-finished))
+                                              (setq pending (1- pending))
+                                              (if (= pending 0)
+                                                  (setq batch-done t))))))
+                         (puthash payload t retired-payloads)
+                         (set-process-plist p (list 'payload payload)))
+                       (setq i (1+ i)))
+                     (while (and (null batch-done) (< tries 400))
+                       (accept-process-output nil 0.05)
+                       (setq tries (1+ tries))))
+                   (setq batch (1+ batch))))
+               (list retired-finished (hash-table-count retired-payloads))"#
+        ),
+    );
+    assert_eq!(result, "OK (1000 1000)");
+    assert_eq!(ev.processes().deleted_processes.len(), 1000);
+
+    let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
+    assert_eq!(format_eval_result(&after), "OK 0");
+    assert_eq!(ev.processes().deleted_processes.len(), 0);
+}

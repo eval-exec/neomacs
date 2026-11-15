@@ -2268,6 +2268,33 @@ impl ProcessManager {
         }
     }
 
+    /// Temporarily remove retired records from the ordinary root walk while
+    /// an explicit full collection decides which process objects remain live.
+    pub(crate) fn take_retired_processes_for_gc(
+        &mut self,
+    ) -> (Vec<(ProcessId, Vec<Value>)>, Vec<(ProcessId, Process)>) {
+        let retired = std::mem::take(&mut self.deleted_processes);
+        let ephemerons = retired
+            .iter()
+            .map(|(id, process)| (*id, process.gc_fields().to_vec()))
+            .collect();
+        (ephemerons, retired.into_iter().collect())
+    }
+
+    /// Restore records whose process object was reached by the collection.
+    pub(crate) fn restore_reached_retired_processes(
+        &mut self,
+        retired: Vec<(ProcessId, Process)>,
+        reclaimed: Vec<ProcessId>,
+    ) {
+        let reclaimed: std::collections::HashSet<ProcessId> = reclaimed.into_iter().collect();
+        self.deleted_processes.extend(
+            retired
+                .into_iter()
+                .filter(|(id, _)| !reclaimed.contains(id)),
+        );
+    }
+
     pub fn set_default_read_config(&mut self, config: ProcessReadConfig) {
         self.default_read_config = config;
     }
@@ -3446,6 +3473,33 @@ pub enum LastBlockArrival {
     AlreadyRaised,
 }
 
+impl Process {
+    fn gc_fields(&self) -> [Value; 20] {
+        [
+            self.name,
+            self.proc_type,
+            self.buffer,
+            self.mark,
+            self.command,
+            self.childp,
+            self.status,
+            self.pending_status,
+            self.tty_name,
+            self.write_queue,
+            self.filter,
+            self.sentinel,
+            self.log,
+            self.plist,
+            self.stderrproc,
+            self.datagram_address,
+            self.coding_decode,
+            self.coding_encode,
+            self.thread,
+            self.gnutls_boot_parameters,
+        ]
+    }
+}
+
 // GcTrace moved verbatim with the state type (peer ruling condition 3).
 
 impl GcTrace for ProcessManager {
@@ -3455,26 +3509,7 @@ impl GcTrace for ProcessManager {
             .values()
             .chain(self.deleted_processes.values())
         {
-            roots.push(process.name);
-            roots.push(process.proc_type);
-            roots.push(process.buffer);
-            roots.push(process.mark);
-            roots.push(process.command);
-            roots.push(process.childp);
-            roots.push(process.status);
-            roots.push(process.pending_status);
-            roots.push(process.tty_name);
-            roots.push(process.write_queue);
-            roots.push(process.filter);
-            roots.push(process.sentinel);
-            roots.push(process.log);
-            roots.push(process.plist);
-            roots.push(process.stderrproc);
-            roots.push(process.datagram_address);
-            roots.push(process.coding_decode);
-            roots.push(process.coding_encode);
-            roots.push(process.thread);
-            roots.push(process.gnutls_boot_parameters);
+            roots.extend(process.gc_fields());
         }
     }
 }
