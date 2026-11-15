@@ -696,7 +696,7 @@ pub fn builtin_get_internal_run_time(
     expect_args("get-internal-run-time", &args, 0)?;
 
     let output = super::misc_eval::lisp_time_output_from_context(ctx)?;
-    match process_run_time() {
+    match process_run_time()? {
         Some((secs, nanos)) => {
             #[cfg(windows)]
             let output = neovm_value::time_core::LispTimeOutput::LegacyList;
@@ -716,23 +716,23 @@ pub fn builtin_get_internal_run_time(
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
-fn process_run_time() -> Option<(i64, i64)> {
+fn process_run_time() -> Result<Option<(i64, i64)>, neovm_value::error::Flow> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
     // SAFETY: getrusage initializes the output struct when it succeeds.
     if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
-        return None;
+        return Err(neovm_value::error::signal("error", Vec::new()));
     }
     // SAFETY: the successful getrusage call initialized the struct.
     let usage = unsafe { usage.assume_init() };
-    let secs = usage.ru_utime.tv_sec + usage.ru_stime.tv_sec;
-    let usecs = usage.ru_utime.tv_usec + usage.ru_stime.tv_usec;
+    let secs = i64::from(usage.ru_utime.tv_sec) + i64::from(usage.ru_stime.tv_sec);
+    let usecs = i64::from(usage.ru_utime.tv_usec) + i64::from(usage.ru_stime.tv_usec);
     let carry = usecs / 1_000_000;
     let usecs = usecs % 1_000_000;
-    Some((secs + carry, usecs * 1_000))
+    Ok(Some((secs + carry, usecs * 1_000)))
 }
 
 #[cfg(windows)]
-fn process_run_time() -> Option<(i64, i64)> {
+fn process_run_time() -> Result<Option<(i64, i64)>, neovm_value::error::Flow> {
     use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
 
@@ -751,7 +751,7 @@ fn process_run_time() -> Option<(i64, i64)> {
         )
     };
     if ok == 0 {
-        return None;
+        return Ok(None);
     }
 
     let filetime_ticks =
@@ -759,9 +759,13 @@ fn process_run_time() -> Option<(i64, i64)> {
     // FILETIME counts 100 ns intervals. GNU's w32 ltime preserves that
     // precision in the picosecond field of its four-element timestamp.
     let total_100ns = filetime_ticks(kernel).saturating_add(filetime_ticks(user));
-    let secs = i64::try_from(total_100ns / 10_000_000).ok()?;
-    let nanos = i64::try_from(total_100ns % 10_000_000).ok()? * 100;
-    Some((secs, nanos))
+    let Some(secs) = i64::try_from(total_100ns / 10_000_000).ok() else {
+        return Ok(None);
+    };
+    let Some(nanos) = i64::try_from(total_100ns % 10_000_000).ok() else {
+        return Ok(None);
+    };
+    Ok(Some((secs, nanos * 100)))
 }
 
 #[cfg(not(any(
@@ -770,8 +774,8 @@ fn process_run_time() -> Option<(i64, i64)> {
     target_os = "android",
     windows
 )))]
-fn process_run_time() -> Option<(i64, i64)> {
-    None
+fn process_run_time() -> Result<Option<(i64, i64)>, neovm_value::error::Flow> {
+    Ok(None)
 }
 
 #[doc(hidden)]
