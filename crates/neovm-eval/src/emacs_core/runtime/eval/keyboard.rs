@@ -4285,6 +4285,17 @@ impl crate::emacs_core::eval::Context {
                 }
                 match tty_input_decoding {
                     TtyInputDecoding::RawBytes => {
+                        if self.command_loop.keyboard.has_unread_selection_event() {
+                            // switch-frame is read first; the byte stays
+                            // queued, untranslated and unrecorded.
+                            self.command_loop.keyboard.pending_input_events.push_front(
+                                InputEvent::FrameSwitchDeferred(Box::new(InputEvent::TtyByte {
+                                    byte,
+                                    target,
+                                })),
+                            );
+                            return Ok(None);
+                        }
                         self.clear_current_message_for_keyboard_input();
                         let raw_event = Value::fixnum(i64::from(byte));
                         if self.event_is_quit_char(&raw_event) {

@@ -2051,6 +2051,50 @@ fn read_char_rechecks_source_frame_for_each_byte_of_a_tty_batch() {
 }
 
 #[test]
+fn read_char_defers_raw_tty_byte_behind_its_frame_switch() {
+    use neovm_value::system_vocab::input::TtyInputDecoding;
+
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    let buf = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let first = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F1", 7, 80, 25, buf);
+    let second = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F2", 8, 80, 25, buf);
+    ev.frame_manager_mut().select_frame(first);
+    ev.observe_keyboard_input_frame(first);
+
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    ev.init_input_system();
+    tx.send(
+        crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(vec![b'a', b'b'], first.0),
+    )
+    .expect("queue a two-byte batch for the first TTY frame");
+
+    assert_eq!(
+        ev.read_char_with_timeout_decoding(None, TtyInputDecoding::RawBytes)
+            .expect("first raw byte"),
+        Some(Value::fixnum('a' as i64))
+    );
+    ev.frame_manager_mut().select_frame(second);
+    assert_eq!(
+        ev.read_char_with_timeout_decoding(None, TtyInputDecoding::RawBytes)
+            .expect("switch-frame before the raw byte"),
+        Some(Value::list(vec![
+            Value::symbol("switch-frame"),
+            Value::make_frame(first.0)
+        ]))
+    );
+    assert_eq!(
+        ev.read_char_with_timeout_decoding(None, TtyInputDecoding::RawBytes)
+            .expect("raw byte stays queued"),
+        Some(Value::fixnum('b' as i64))
+    );
+}
+
+#[test]
 fn read_char_returns_unread_emacs_event_value_without_reencoding() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
