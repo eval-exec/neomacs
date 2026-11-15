@@ -3369,7 +3369,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "get-internal-run-time",
-        NativeFn::ContextVec(|_ctx, args| builtin_get_internal_run_time(args)),
+        NativeFn::ContextVec(builtin_get_internal_run_time),
         SubrArity::new(0, Some(0)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
