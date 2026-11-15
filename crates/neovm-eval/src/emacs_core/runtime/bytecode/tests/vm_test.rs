@@ -6287,73 +6287,9 @@ fn vm_motion_builtins_use_shared_current_buffer_state() {
                   (progn (beginning-of-line) (point))
                   (progn (end-of-line) (point))
                   (progn (backward-char 2) (point))
-                  (progn (forward-char 1) (point))
-                  (progn
-                    (goto-char 1)
-                    (list (vertical-motion 1) (point)
-                          (vertical-motion 1) (point)
-                          (vertical-motion -1) (point)))))"#
+                  (progn (forward-char 1) (point))))"#
         ),
-        "OK (5 8 9 9 12 10 11 (1 5 1 9 -1 5))"
-    );
-}
-
-#[test]
-fn vm_vertical_motion_uses_invisible_text_boundaries_like_gnu() {
-    crate::test_utils::init_test_tracing();
-    assert_eq!(
-        vm_eval_str(
-            r#"(progn
-                 (insert "aaaa\nbbbb\ncccc\n")
-                 (put-text-property 5 10 'invisible t)
-                 (goto-char 5)
-                 (let ((forward (list (vertical-motion 1)
-                                      (point)
-                                      (line-number-at-pos)
-                                      (current-column)
-                                      (char-after))))
-                   (goto-char 11)
-                   (list forward
-                         (list (vertical-motion -1)
-                               (point)
-                               (line-number-at-pos)
-                               (current-column)
-                               (char-after)))))"#
-        ),
-        "OK ((1 11 3 0 99) (-1 1 1 0 97))"
-    );
-}
-
-#[test]
-fn vm_vertical_motion_zero_backs_across_invisible_newlines_to_visual_row_start_like_gnu() {
-    crate::test_utils::init_test_tracing();
-    assert_eq!(
-        vm_eval_str(
-            r#"(progn
-                 (insert
-                  "order-17\n"
-                  "  item: keyboard\n"
-                  "  item: mouse\n"
-                  "  total: 120\n"
-                  "order-23\n"
-                  "  status: shipped\n")
-                 (setq buffer-invisibility-spec '(checkout-fold))
-                 (let* ((fold-end (save-excursion
-                                    (goto-char (point-min))
-                                    (forward-line 4)
-                                    (point)))
-                        (fold (make-overlay
-                               (save-excursion
-                                 (goto-char (point-min))
-                                 (line-end-position))
-                               fold-end)))
-                   (overlay-put fold 'invisible 'checkout-fold)
-                   (goto-char fold-end)
-                   (list (vertical-motion 0)
-                         (point)
-                         (line-number-at-pos))))"#
-        ),
-        "OK (0 1 1)"
+        "OK (5 8 9 9 12 10 11)"
     );
 }
 

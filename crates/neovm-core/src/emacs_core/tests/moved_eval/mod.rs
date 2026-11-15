@@ -435,6 +435,12 @@ mod emacs_core_runtime_bytecode_tests_vm_window_surface_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/bytecode/tests/vm_display_host_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_display_host_test_rs;
+// VM tests for vertical-motion over display-resolved rows: eval's unit
+// runtime has no window geometry, so the rows cannot fold there. Assertions
+// are unchanged; the plain-text tail of vm_motion_builtins stays in eval.
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/vm_display_motion_test.rs"]
+mod emacs_core_runtime_bytecode_tests_vm_display_motion_test_rs;
 
 // VM tests whose harness is the runtime-startup image. The canonical hook
 // proof is minted in core. The lexical-binding macroexpand test writes
