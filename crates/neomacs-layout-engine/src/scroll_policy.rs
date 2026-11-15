@@ -195,9 +195,25 @@ pub(crate) fn last_usable_row(window_rows: usize, scroll_margin: ScrollMargin) -
 }
 
 /// Buffer text as the line-boundary searches below read it.
+///
+/// GNU finds line boundaries with `find_newline` (src/search.c), a `memchr`
+/// over the contiguous halves of the gap buffer that converts between
+/// character and byte positions only where a search starts and stops. These
+/// searches do the same through the buffer's own newline searches, so a
+/// search across a long line costs a vectorized scan of its bytes and a few
+/// position conversions, not a conversion and a byte read per character.
+///
+/// A newline is one byte in Emacs's internal encoding and never occurs inside
+/// a multibyte sequence, so a byte search finds exactly the newline characters.
 pub(crate) trait LineText {
-    /// The byte at character position `charpos`.
-    fn byte_at_charpos(&self, charpos: i64) -> Option<u8>;
+    fn charpos_to_bytepos(&self, charpos: i64) -> i64;
+    fn bytepos_to_charpos(&self, bytepos: i64) -> i64;
+    /// Byte position just past the `n`th newline in bytes `from..to`, and how
+    /// many newlines were crossed: `n` when that newline was found, fewer when
+    /// `to` came first.
+    fn after_nth_newline(&self, from: i64, to: i64, n: usize) -> (i64, usize);
+    /// Byte position of the last newline in bytes `from..to`.
+    fn last_newline_before(&self, from: i64, to: i64) -> Option<i64>;
 }
 
 /// Count newlines in `from..to`, stopping once `limit` is exceeded.
@@ -212,18 +228,21 @@ pub(crate) fn count_lines_bounded(
     limit: i64,
     text: &(impl LineText + ?Sized),
 ) -> (i64, bool) {
-    let mut lines = 0i64;
-    let mut pos = from;
-    while pos < to {
-        if text.byte_at_charpos(pos) == Some(b'\n') {
-            lines += 1;
-            if lines > limit {
-                return (lines, false);
-            }
-        }
-        pos += 1;
+    if from >= to {
+        return (0, true);
     }
-    (lines, true)
+    let wanted = limit.max(0).saturating_add(1);
+    let n = usize::try_from(wanted).unwrap_or(usize::MAX);
+    let (_, crossed) = text.after_nth_newline(
+        text.charpos_to_bytepos(from),
+        text.charpos_to_bytepos(to),
+        n,
+    );
+    if crossed == n {
+        (wanted, false)
+    } else {
+        (crossed as i64, true)
+    }
 }
 
 /// Start of the line `lines_above` lines above `point`, clamped to
@@ -238,21 +257,26 @@ pub(crate) fn line_start_above(
     accessible_start: i64,
     text: &(impl LineText + ?Sized),
 ) -> i64 {
-    let mut pos = point.max(accessible_start);
-    let is_line_start =
-        |pos: i64| pos <= accessible_start || text.byte_at_charpos(pos - 1) == Some(b'\n');
-    while !is_line_start(pos) {
-        pos -= 1;
+    if point <= accessible_start {
+        return accessible_start;
     }
+    let start = text.charpos_to_bytepos(accessible_start);
+    let line_start_at_or_before = |pos: i64| {
+        text.last_newline_before(start, pos)
+            .map_or(start, |newline| newline + 1)
+    };
+    let mut pos = line_start_at_or_before(text.charpos_to_bytepos(point));
     let mut moved = 0;
-    while moved < lines_above && pos > accessible_start {
-        pos -= 1;
-        while !is_line_start(pos) {
-            pos -= 1;
-        }
+    while moved < lines_above && pos > start {
+        // `pos - 1` is the newline that ends the line above.
+        pos = line_start_at_or_before(pos - 1);
         moved += 1;
     }
-    pos
+    if pos == start {
+        accessible_start
+    } else {
+        text.bytepos_to_charpos(pos)
+    }
 }
 
 /// Start of the line `lines` lines below `from`, clamped to `accessible_end`.
@@ -266,22 +290,49 @@ pub(crate) fn line_start_below(
     accessible_end: i64,
     text: &(impl LineText + ?Sized),
 ) -> i64 {
-    let mut pos = from;
-    let mut moved = 0;
-    while moved < lines && pos < accessible_end {
-        if text.byte_at_charpos(pos) == Some(b'\n') {
-            moved += 1;
-        }
-        pos += 1;
+    if lines <= 0 || from >= accessible_end {
+        return from;
     }
-    pos
+    let n = usize::try_from(lines).unwrap_or(usize::MAX);
+    let (after, crossed) = text.after_nth_newline(
+        text.charpos_to_bytepos(from),
+        text.charpos_to_bytepos(accessible_end),
+        n,
+    );
+    if crossed == n {
+        text.bytepos_to_charpos(after)
+    } else {
+        accessible_end
+    }
 }
 
 /// Unibyte ASCII test text: character and byte positions coincide.
 #[cfg(test)]
 impl LineText for &[u8] {
-    fn byte_at_charpos(&self, charpos: i64) -> Option<u8> {
-        self.get(charpos as usize).copied()
+    fn charpos_to_bytepos(&self, charpos: i64) -> i64 {
+        charpos.clamp(0, self.len() as i64)
+    }
+
+    fn bytepos_to_charpos(&self, bytepos: i64) -> i64 {
+        bytepos
+    }
+
+    fn after_nth_newline(&self, from: i64, to: i64, n: usize) -> (i64, usize) {
+        let bytes = self.get(from as usize..to as usize).unwrap_or_default();
+        let newlines = bytes.iter().enumerate().filter(|&(_, &byte)| byte == b'\n');
+        newlines
+            .take(n)
+            .fold((from, 0), |(_, crossed), (index, _)| {
+                (from + index as i64 + 1, crossed + 1)
+            })
+    }
+
+    fn last_newline_before(&self, from: i64, to: i64) -> Option<i64> {
+        let bytes = self.get(from as usize..to as usize)?;
+        bytes
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map(|index| from + index as i64)
     }
 }
 

@@ -2059,6 +2059,27 @@ impl BufferTextSnapshot {
             .indexed_newline_count(range.start(), range.end(), build)
     }
 
+    /// Position past the `n`th `\n` in `[from, limit)`, and how many were
+    /// crossed, in one traversal.  See [`BufferText::nth_newline_emacs_byte`].
+    pub fn nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize) {
+        self.text.nth_newline_emacs_byte(from, limit, n)
+    }
+
+    /// Last `\n` in logical emacs-byte range `[floor, from)`, scanned in
+    /// place.  See [`BufferText::prev_newline_emacs_byte`].
+    pub fn prev_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        floor: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.text.prev_newline_emacs_byte(from, floor)
+    }
+
     /// Constant-time absence proof over the complete, unprojected property table.
     pub fn text_props_is_empty(&self) -> bool {
         self.text.text_props_is_empty()

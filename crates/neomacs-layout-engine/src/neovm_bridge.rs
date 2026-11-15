@@ -202,6 +202,22 @@ pub(crate) trait LayoutBufferView {
     fn layout_indexed_newline_count(&self, _range: EmacsByteRange) -> Option<usize> {
         None
     }
+    /// Position just past the `n`th `\n` in `[from, limit)`, and how many
+    /// were crossed (fewer than `n` when `limit` came first). The buffer's
+    /// `nth_newline_emacs_byte`: one `memchr` pass, or its text line index.
+    fn layout_nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize);
+    /// Last `\n` in `[floor, from)`. The buffer's `prev_newline_emacs_byte`:
+    /// `memrchr` over windows that widen back from `from`.
+    fn layout_prev_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        floor: EmacsBytePos,
+    ) -> Option<EmacsBytePos>;
     /// Prove the complete source has no text properties, including categories
     /// and aliases. Projected/unknown views must conservatively return false.
     fn layout_text_props_is_empty(&self) -> bool {
@@ -472,6 +488,23 @@ impl LayoutBufferView for Buffer {
         // The layout's counts are the line-number gutter's, repeated for
         // every redisplay: large enough ranges may build the index.
         self.indexed_newline_count(range, neovm_core::buffer::LineIndexBuild::IfLarge)
+    }
+
+    fn layout_nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize) {
+        self.nth_newline_emacs_byte(from, limit, n)
+    }
+
+    fn layout_prev_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        floor: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.prev_newline_emacs_byte(from, floor)
     }
 
     fn layout_text_props_is_empty(&self) -> bool {
@@ -2558,8 +2591,35 @@ impl<'a, B: LayoutBufferView> RustBufferAccess<'a, B> {
 }
 
 impl<B: LayoutBufferView> crate::scroll_policy::LineText for RustBufferAccess<'_, B> {
-    fn byte_at_charpos(&self, charpos: i64) -> Option<u8> {
-        self.byte_at(self.charpos_to_bytepos(charpos))
+    fn charpos_to_bytepos(&self, charpos: i64) -> i64 {
+        RustBufferAccess::charpos_to_bytepos(self, charpos)
+    }
+
+    fn bytepos_to_charpos(&self, bytepos: i64) -> i64 {
+        layout_emacs_byte_pos_from_i64(bytepos).map_or(0, |pos| {
+            buffer_emacs_byte_pos_to_charpos(self.buffer, pos) as i64
+        })
+    }
+
+    fn after_nth_newline(&self, from: i64, to: i64, n: usize) -> (i64, usize) {
+        let (Some(from_pos), Some(to_pos)) = (
+            layout_emacs_byte_pos_from_i64(from),
+            layout_emacs_byte_pos_from_i64(to),
+        ) else {
+            return (from, 0);
+        };
+        let (after, crossed) = self
+            .buffer
+            .layout_nth_newline_emacs_byte(from_pos, to_pos, n);
+        (after.get() as i64, crossed)
+    }
+
+    fn last_newline_before(&self, from: i64, to: i64) -> Option<i64> {
+        let floor = layout_emacs_byte_pos_from_i64(from)?;
+        let before = layout_emacs_byte_pos_from_i64(to)?;
+        self.buffer
+            .layout_prev_newline_emacs_byte(before, floor)
+            .map(|newline| newline.get() as i64)
     }
 }
 
