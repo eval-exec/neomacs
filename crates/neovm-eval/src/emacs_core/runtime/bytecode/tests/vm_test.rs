@@ -4022,12 +4022,11 @@ fn vm_misc_runtime_builtins_use_direct_dispatch() {
                    (error (eq (car err) 'error)))
                  (null (flush-standard-output))
                  (equal (force-mode-line-update 'foo) 'foo)
-                 (force-window-update)
                  (stringp (invocation-directory))
                  (stringp (invocation-name))
                  (integerp (emacs-pid)))"#
         ),
-        r#"OK (t t t t t t t t)"#
+        r#"OK (t t t t t t t)"#
     );
 }
 

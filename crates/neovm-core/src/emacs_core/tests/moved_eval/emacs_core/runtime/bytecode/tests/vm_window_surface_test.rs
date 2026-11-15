@@ -510,3 +510,14 @@ fn vm_buffer_text_pixel_size_measures_the_buffer_text() {
         "OK (1 . 2)"
     );
 }
+
+/// `force-window-update` is a display-owned subr, so the row moved here
+/// from eval's vm_test.rs. The row is unchanged.
+#[test]
+fn vm_force_window_update_accepts_the_selected_window() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        vm_eval_with_init_str("(force-window-update)", |_| {}),
+        "OK t"
+    );
+}
