@@ -30,4450 +30,3154 @@ fn upper_subr_0005(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
 }
 
 fn upper_subr_0006(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::find-buffer");
-}
-
-fn upper_subr_0007(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-live-p");
-}
-
-fn upper_subr_0008(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::get-file-buffer");
 }
 
-fn upper_subr_0009(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0007(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::kill-buffer");
 }
 
-fn upper_subr_0010(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0008(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-buffer");
 }
 
-fn upper_subr_0011(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0009(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::current-buffer");
 }
 
-fn upper_subr_0012(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-name");
-}
-
-fn upper_subr_0013(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-file-name");
-}
-
-fn upper_subr_0014(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-base-buffer");
-}
-
-fn upper_subr_0015(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-last-name");
-}
-
-fn upper_subr_0016(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-string");
-}
-
-fn upper_subr_0017(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0010(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::buffer-line-statistics");
 }
 
-fn upper_subr_0018(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0011(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::buffer-text-pixel-size");
 }
 
-fn upper_subr_0019(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-substring");
-}
-
-fn upper_subr_0020(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0012(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::point");
 }
 
-fn upper_subr_0021(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0013(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::point-min");
 }
 
-fn upper_subr_0022(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0014(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::point-max");
 }
 
-fn upper_subr_0023(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0015(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::goto-char");
 }
 
-fn upper_subr_0024(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::field-beginning");
-}
-
-fn upper_subr_0025(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::field-end");
-}
-
-fn upper_subr_0026(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::field-string");
-}
-
-fn upper_subr_0027(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::field-string-no-properties");
-}
-
-fn upper_subr_0028(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::constrain-to-field");
-}
-
-fn upper_subr_0029(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0016(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::insert");
 }
 
-fn upper_subr_0030(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::insert-and-inherit");
-}
-
-fn upper_subr_0031(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::insert-before-markers-and-inherit");
-}
-
-fn upper_subr_0032(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::insert-buffer-substring");
-}
-
-fn upper_subr_0033(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::insert-char");
-}
-
-fn upper_subr_0034(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0017(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::insert-byte");
 }
 
-fn upper_subr_0035(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0018(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::replace-region-contents");
 }
 
-fn upper_subr_0036(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0019(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-buffer-multibyte");
 }
 
-fn upper_subr_0037(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0020(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::kill-all-local-variables");
 }
 
-fn upper_subr_0038(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::buffer-swap-text");
-}
-
-fn upper_subr_0039(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0021(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER edit::delete-region");
 }
 
-fn upper_subr_0040(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::delete-and-extract-region");
-}
-
-fn upper_subr_0041(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::subst-char-in-region");
-}
-
-fn upper_subr_0042(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::delete-field");
-}
-
-fn upper_subr_0043(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::delete-all-overlays");
-}
-
-fn upper_subr_0044(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0022(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER edit::erase-buffer");
 }
 
-fn upper_subr_0045(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-enable-undo");
-}
-
-fn upper_subr_0046(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-size");
-}
-
-fn upper_subr_0047(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0023(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::narrow-to-region");
 }
 
-fn upper_subr_0048(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0024(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::widen");
 }
 
-fn upper_subr_0049(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-modified-p");
-}
-
-fn upper_subr_0050(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::set-buffer-modified-p");
-}
-
-fn upper_subr_0051(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-modified-tick");
-}
-
-fn upper_subr_0052(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-chars-modified-tick");
-}
-
-fn upper_subr_0053(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0025(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::buffer-list");
 }
 
-fn upper_subr_0054(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0026(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::other-buffer");
 }
 
-fn upper_subr_0055(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::generate-new-buffer-name");
-}
-
-fn upper_subr_0056(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0027(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::char-after");
 }
 
-fn upper_subr_0057(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::char-before");
-}
-
-fn upper_subr_0058(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::byte-to-position");
-}
-
-fn upper_subr_0059(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::position-bytes");
-}
-
-fn upper_subr_0060(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::get-byte");
-}
-
-fn upper_subr_0061(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0028(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::command-modes");
 }
 
-fn upper_subr_0062(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::find-charset-region");
-}
-
-fn upper_subr_0063(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::charset-after");
-}
-
-fn upper_subr_0064(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0029(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::format-mode-line");
 }
 
-fn upper_subr_0065(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0030(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-line-height");
 }
 
-fn upper_subr_0066(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0031(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::posn-at-point");
 }
 
-fn upper_subr_0067(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0032(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::posn-at-x-y");
 }
 
-fn upper_subr_0068(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0033(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::coordinates-in-window-p");
 }
 
-fn upper_subr_0069(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0034(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::tool-bar-height");
 }
 
-fn upper_subr_0070(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0035(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::tab-bar-height");
 }
 
-fn upper_subr_0071(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0036(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::new-fontset");
 }
 
-fn upper_subr_0072(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0037(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-fontset-font");
 }
 
-fn upper_subr_0073(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0038(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::insert-file-contents");
 }
 
-fn upper_subr_0074(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0039(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::write-region");
 }
 
-fn upper_subr_0075(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0040(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::file-name-completion");
 }
 
-fn upper_subr_0076(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0041(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-visited-file-modtime");
 }
 
-fn upper_subr_0077(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0042(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::print--preprocess");
 }
 
-fn upper_subr_0078(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0043(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::format-network-address");
 }
 
-fn upper_subr_0079(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0044(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::network-interface-list");
 }
 
-fn upper_subr_0080(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0045(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::network-interface-info");
 }
 
-fn upper_subr_0081(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0046(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::signal-names");
 }
 
-fn upper_subr_0082(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0047(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::accept-process-output");
 }
 
-fn upper_subr_0083(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0048(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::list-system-processes");
 }
 
-fn upper_subr_0084(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0049(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::num-processors");
 }
 
-fn upper_subr_0085(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0050(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::make-process");
 }
 
-fn upper_subr_0086(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0051(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::make-network-process");
 }
 
-fn upper_subr_0087(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0052(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::neomacs-open-tls-stream");
 }
 
-fn upper_subr_0088(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0053(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::neomacs-tls-available-p");
 }
 
-fn upper_subr_0089(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0054(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::make-pipe-process");
 }
 
-fn upper_subr_0090(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0055(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::gnutls-boot");
 }
 
-fn upper_subr_0091(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0056(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::make-serial-process");
 }
 
-fn upper_subr_0092(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0057(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::serial-process-configure");
 }
 
-fn upper_subr_0093(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0058(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::call-process");
 }
 
-fn upper_subr_0094(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0059(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::call-process-region");
 }
 
-fn upper_subr_0095(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0060(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::continue-process");
 }
 
-fn upper_subr_0096(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0061(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::delete-process");
 }
 
-fn upper_subr_0097(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0062(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::interrupt-process");
 }
 
-fn upper_subr_0098(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0063(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::kill-process");
 }
 
-fn upper_subr_0099(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0064(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::quit-process");
 }
 
-fn upper_subr_0100(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0065(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::signal-process");
 }
 
-fn upper_subr_0101(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0066(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::stop-process");
 }
 
-fn upper_subr_0102(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0067(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::get-process");
 }
 
-fn upper_subr_0103(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0068(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::get-buffer-process");
 }
 
-fn upper_subr_0104(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0069(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-attributes");
 }
 
-fn upper_subr_0105(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0070(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::processp");
 }
 
-fn upper_subr_0106(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0071(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-id");
 }
 
-fn upper_subr_0107(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0072(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-command");
 }
 
-fn upper_subr_0108(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0073(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-contact");
 }
 
-fn upper_subr_0109(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0074(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-filter");
 }
 
-fn upper_subr_0110(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0075(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-process-filter");
 }
 
-fn upper_subr_0111(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0076(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-sentinel");
 }
 
-fn upper_subr_0112(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0077(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-process-sentinel");
 }
 
-fn upper_subr_0113(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0078(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-coding-system");
 }
 
-fn upper_subr_0114(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0079(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-datagram-address");
 }
 
-fn upper_subr_0115(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0080(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-process-buffer");
 }
 
-fn upper_subr_0116(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0081(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-process-thread");
 }
 
-fn upper_subr_0117(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0082(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-process-window-size");
 }
 
-fn upper_subr_0118(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0083(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-tty-name");
 }
 
-fn upper_subr_0119(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0084(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-plist");
 }
 
-fn upper_subr_0120(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0085(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-process-plist");
 }
 
-fn upper_subr_0121(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0086(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-mark");
 }
 
-fn upper_subr_0122(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0087(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-type");
 }
 
-fn upper_subr_0123(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0088(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-thread");
 }
 
-fn upper_subr_0124(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0089(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-running-child-p");
 }
 
-fn upper_subr_0125(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0090(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-send-region");
 }
 
-fn upper_subr_0126(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0091(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-send-eof");
 }
 
-fn upper_subr_0127(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0092(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-send-string");
 }
 
-fn upper_subr_0128(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0093(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-status");
 }
 
-fn upper_subr_0129(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0094(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-exit-status");
 }
 
-fn upper_subr_0130(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0095(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-list");
 }
 
-fn upper_subr_0131(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0096(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-name");
 }
 
-fn upper_subr_0132(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0097(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-buffer");
 }
 
-fn upper_subr_0133(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0098(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sleep-for");
 }
 
-fn upper_subr_0134(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::modify-syntax-entry");
-}
-
-fn upper_subr_0135(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::syntax-table");
-}
-
-fn upper_subr_0136(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0099(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER text::set-syntax-table");
 }
 
-fn upper_subr_0137(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::char-syntax");
-}
-
-fn upper_subr_0138(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::matching-paren");
-}
-
-fn upper_subr_0139(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0100(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::forward-comment");
 }
 
-fn upper_subr_0140(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0101(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::backward-prefix-chars");
 }
 
-fn upper_subr_0141(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0102(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::forward-word");
 }
 
-fn upper_subr_0142(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::scan-lists");
-}
-
-fn upper_subr_0143(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::scan-sexps");
-}
-
-fn upper_subr_0144(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::parse-partial-sexp");
-}
-
-fn upper_subr_0145(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::skip-syntax-forward");
-}
-
-fn upper_subr_0146(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::skip-syntax-backward");
-}
-
-fn upper_subr_0147(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0103(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::start-kbd-macro");
 }
 
-fn upper_subr_0148(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0104(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::end-kbd-macro");
 }
 
-fn upper_subr_0149(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0105(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::call-last-kbd-macro");
 }
 
-fn upper_subr_0150(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0106(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::execute-kbd-macro");
 }
 
-fn upper_subr_0151(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0107(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::store-kbd-macro-event");
 }
 
-fn upper_subr_0152(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0108(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::get-char-property");
 }
 
-fn upper_subr_0153(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::next-overlay-change");
-}
-
-fn upper_subr_0154(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::previous-overlay-change");
-}
-
-fn upper_subr_0155(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::make-overlay");
-}
-
-fn upper_subr_0156(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::delete-overlay");
-}
-
-fn upper_subr_0157(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::overlay-put");
-}
-
-fn upper_subr_0158(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::overlay-get");
-}
-
-fn upper_subr_0159(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::overlays-at");
-}
-
-fn upper_subr_0160(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::overlays-in");
-}
-
-fn upper_subr_0161(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::move-overlay");
-}
-
-fn upper_subr_0162(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::overlay-start");
-}
-
-fn upper_subr_0163(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::overlay-end");
-}
-
-fn upper_subr_0164(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::overlay-buffer");
-}
-
-fn upper_subr_0165(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::overlay-properties");
-}
-
-fn upper_subr_0166(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::overlayp");
-}
-
-fn upper_subr_0167(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0109(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::bobp");
 }
 
-fn upper_subr_0168(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::eobp");
-}
-
-fn upper_subr_0169(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0110(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::bolp");
 }
 
-fn upper_subr_0170(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::eolp");
-}
-
-fn upper_subr_0171(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::line-end-position");
-}
-
-fn upper_subr_0172(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::line-number-at-pos");
-}
-
-fn upper_subr_0173(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::forward-line");
-}
-
-fn upper_subr_0174(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::beginning-of-line");
-}
-
-fn upper_subr_0175(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::end-of-line");
-}
-
-fn upper_subr_0176(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0111(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER edit::forward-char");
 }
 
-fn upper_subr_0177(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::backward-char");
-}
-
-fn upper_subr_0178(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::skip-chars-forward");
-}
-
-fn upper_subr_0179(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::skip-chars-backward");
-}
-
-fn upper_subr_0180(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::mark-marker");
-}
-
-fn upper_subr_0181(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::region-beginning");
-}
-
-fn upper_subr_0182(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::region-end");
-}
-
-fn upper_subr_0183(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0112(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::downcase-region");
 }
 
-fn upper_subr_0184(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0113(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::upcase-region");
 }
 
-fn upper_subr_0185(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0114(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::capitalize-region");
 }
 
-fn upper_subr_0186(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0115(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::downcase-word");
 }
 
-fn upper_subr_0187(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0116(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::upcase-word");
 }
 
-fn upper_subr_0188(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0117(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::capitalize-word");
 }
 
-fn upper_subr_0189(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0118(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::selected-window");
 }
 
-fn upper_subr_0190(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0119(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::old-selected-window");
 }
 
-fn upper_subr_0191(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0120(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::minibuffer-window");
 }
 
-fn upper_subr_0192(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0121(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-parameter");
 }
 
-fn upper_subr_0193(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0122(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-parameter");
 }
 
-fn upper_subr_0194(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0123(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-parameters");
 }
 
-fn upper_subr_0195(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0124(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-parent");
 }
 
-fn upper_subr_0196(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0125(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-top-child");
 }
 
-fn upper_subr_0197(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0126(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-left-child");
 }
 
-fn upper_subr_0198(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0127(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-next-sibling");
 }
 
-fn upper_subr_0199(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0128(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-prev-sibling");
 }
 
-fn upper_subr_0200(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0129(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-normal-size");
 }
 
-fn upper_subr_0201(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0130(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-display-table");
 }
 
-fn upper_subr_0202(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0131(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-cursor-type");
 }
 
-fn upper_subr_0203(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0132(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-buffer");
 }
 
-fn upper_subr_0204(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0133(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-start");
 }
 
-fn upper_subr_0205(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0134(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-end");
 }
 
-fn upper_subr_0206(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0135(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-point");
 }
 
-fn upper_subr_0207(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0136(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-use-time");
 }
 
-fn upper_subr_0208(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0137(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-bump-use-time");
 }
 
-fn upper_subr_0209(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0138(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-old-point");
 }
 
-fn upper_subr_0210(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0139(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-old-buffer");
 }
 
-fn upper_subr_0211(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0140(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-prev-buffers");
 }
 
-fn upper_subr_0212(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0141(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-next-buffers");
 }
 
-fn upper_subr_0213(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0142(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-left-column");
 }
 
-fn upper_subr_0214(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0143(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-top-line");
 }
 
-fn upper_subr_0215(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0144(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-pixel-left");
 }
 
-fn upper_subr_0216(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0145(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-pixel-top");
 }
 
-fn upper_subr_0217(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0146(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-hscroll");
 }
 
-fn upper_subr_0218(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0147(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-vscroll");
 }
 
-fn upper_subr_0219(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0148(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-margins");
 }
 
-fn upper_subr_0220(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0149(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-fringes");
 }
 
-fn upper_subr_0221(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0150(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-scroll-bars");
 }
 
-fn upper_subr_0222(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0151(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-pixel-height");
 }
 
-fn upper_subr_0223(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0152(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-pixel-width");
 }
 
-fn upper_subr_0224(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0153(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-body-height");
 }
 
-fn upper_subr_0225(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0154(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-body-width");
 }
 
-fn upper_subr_0226(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0155(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-text-height");
 }
 
-fn upper_subr_0227(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0156(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-text-width");
 }
 
-fn upper_subr_0228(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0157(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-total-height");
 }
 
-fn upper_subr_0229(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0158(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-total-width");
 }
 
-fn upper_subr_0230(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0159(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-list");
 }
 
-fn upper_subr_0231(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0160(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-list-1");
 }
 
-fn upper_subr_0232(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0161(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::get-buffer-window");
 }
 
-fn upper_subr_0233(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0162(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-dedicated-p");
 }
 
-fn upper_subr_0234(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0163(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-minibuffer-p");
 }
 
-fn upper_subr_0235(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0164(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-at");
 }
 
-fn upper_subr_0236(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0165(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-live-p");
 }
 
-fn upper_subr_0237(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0166(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-start");
 }
 
-fn upper_subr_0238(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0167(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-hscroll");
 }
 
-fn upper_subr_0239(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0168(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-margins");
 }
 
-fn upper_subr_0240(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0169(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-fringes");
 }
 
-fn upper_subr_0241(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0170(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-vscroll");
 }
 
-fn upper_subr_0242(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0171(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-point");
 }
 
-fn upper_subr_0243(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0172(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::split-window-internal");
 }
 
-fn upper_subr_0244(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0173(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::select-window");
 }
 
-fn upper_subr_0245(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0174(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::scroll-up");
 }
 
-fn upper_subr_0246(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0175(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::scroll-down");
 }
 
-fn upper_subr_0247(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0176(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::scroll-left");
 }
 
-fn upper_subr_0248(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0177(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::scroll-right");
 }
 
-fn upper_subr_0249(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0178(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-resize-apply");
 }
 
-fn upper_subr_0250(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0179(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::recenter");
 }
 
-fn upper_subr_0251(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0180(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::next-window");
 }
 
-fn upper_subr_0252(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0181(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::previous-window");
 }
 
-fn upper_subr_0253(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0182(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-buffer");
 }
 
-fn upper_subr_0254(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0183(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs--record-window-navigation-intent");
 }
 
-fn upper_subr_0255(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0184(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs--record-frame-navigation-intent");
 }
 
-fn upper_subr_0256(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0185(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::current-window-configuration");
 }
 
-fn upper_subr_0257(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0186(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-window-configuration");
 }
 
-fn upper_subr_0258(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0187(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::old-selected-frame");
 }
 
-fn upper_subr_0259(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0188(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::selected-frame");
 }
 
-fn upper_subr_0260(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0189(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::mouse-pixel-position");
 }
 
-fn upper_subr_0261(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0190(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::mouse-position");
 }
 
-fn upper_subr_0262(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0191(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::next-frame");
 }
 
-fn upper_subr_0263(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0192(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::previous-frame");
 }
 
-fn upper_subr_0264(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0193(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::select-frame");
 }
 
-fn upper_subr_0265(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0194(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::last-nonminibuffer-frame");
 }
 
-fn upper_subr_0266(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0195(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::visible-frame-list");
 }
 
-fn upper_subr_0267(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0196(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-list");
 }
 
-fn upper_subr_0268(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0197(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-create-frame");
 }
 
-fn upper_subr_0269(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0198(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::make-frame-visible");
 }
 
-fn upper_subr_0270(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0199(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::iconify-frame");
 }
 
-fn upper_subr_0271(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0200(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::delete-frame");
 }
 
-fn upper_subr_0272(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0201(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-char-height");
 }
 
-fn upper_subr_0273(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0202(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-char-width");
 }
 
-fn upper_subr_0274(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0203(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-native-height");
 }
 
-fn upper_subr_0275(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0204(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-native-width");
 }
 
-fn upper_subr_0276(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0205(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-text-cols");
 }
 
-fn upper_subr_0277(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0206(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-text-height");
 }
 
-fn upper_subr_0278(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0207(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-text-lines");
 }
 
-fn upper_subr_0279(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0208(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-text-width");
 }
 
-fn upper_subr_0280(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0209(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-total-cols");
 }
 
-fn upper_subr_0281(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0210(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-total-lines");
 }
 
-fn upper_subr_0282(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0211(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-position");
 }
 
-fn upper_subr_0283(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0212(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-parameters");
 }
 
-fn upper_subr_0284(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0213(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-frame-height");
 }
 
-fn upper_subr_0285(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0214(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-frame-width");
 }
 
-fn upper_subr_0286(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0215(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-frame-size");
 }
 
-fn upper_subr_0287(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0216(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-frame-position");
 }
 
-fn upper_subr_0288(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0217(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-visible-p");
 }
 
-fn upper_subr_0289(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0218(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-live-p");
 }
 
-fn upper_subr_0290(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0219(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-initial-p");
 }
 
-fn upper_subr_0291(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0220(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-first-window");
 }
 
-fn upper_subr_0292(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0221(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-root-window");
 }
 
-fn upper_subr_0293(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0222(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::windowp");
 }
 
-fn upper_subr_0294(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0223(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-valid-p");
 }
 
-fn upper_subr_0295(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0224(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::framep");
 }
 
-fn upper_subr_0296(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0225(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-frame");
 }
 
-fn upper_subr_0297(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0226(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::frame-id");
 }
 
-fn upper_subr_0298(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0227(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::frame-root-frame");
 }
 
-fn upper_subr_0299(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0228(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-open-connection");
 }
 
-fn upper_subr_0300(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0229(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-get-resource");
 }
 
 #[cfg(target_os = "macos")]
-fn upper_subr_0301(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0230(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::ns-get-resource");
 }
 
 #[cfg(target_os = "macos")]
-fn upper_subr_0302(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0231(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::ns-set-resource");
 }
 
-fn upper_subr_0303(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0232(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-list-fonts");
 }
 
-fn upper_subr_0304(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0233(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-system");
 }
 
-fn upper_subr_0305(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0234(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-server-version");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0306(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0235(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-server-input-extension-version");
 }
 
-fn upper_subr_0307(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0236(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-server-vendor");
 }
 
-fn upper_subr_0308(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0237(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-mm-height");
 }
 
-fn upper_subr_0309(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0238(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-mm-width");
 }
 
-fn upper_subr_0310(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0239(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-planes");
 }
 
-fn upper_subr_0311(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0240(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-screens");
 }
 
-fn upper_subr_0312(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0241(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-close-connection");
 }
 
-fn upper_subr_0313(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0242(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::call-interactively");
 }
 
-fn upper_subr_0314(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0243(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::commandp");
 }
 
-fn upper_subr_0315(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0244(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::command-remapping");
 }
 
-fn upper_subr_0316(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0245(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::self-insert-command");
 }
 
-fn upper_subr_0317(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0246(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::key-binding");
 }
 
-fn upper_subr_0318(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0247(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::where-is-internal");
 }
 
-fn upper_subr_0319(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0248(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::this-command-keys");
 }
 
-fn upper_subr_0320(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0249(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read");
 }
 
-fn upper_subr_0321(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0250(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-from-minibuffer");
 }
 
-fn upper_subr_0322(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0251(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-string");
 }
 
-fn upper_subr_0323(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0252(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::completing-read");
 }
 
-fn upper_subr_0324(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0253(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-buffer");
 }
 
-fn upper_subr_0325(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0254(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-command");
 }
 
-fn upper_subr_0326(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0255(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-variable");
 }
 
-fn upper_subr_0327(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0256(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::try-completion");
 }
 
-fn upper_subr_0328(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0257(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::all-completions");
 }
 
-fn upper_subr_0329(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0258(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::test-completion");
 }
 
-fn upper_subr_0330(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0259(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::completion--flex-cost-gotoh");
 }
 
-fn upper_subr_0331(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0260(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::input-pending-p");
 }
 
-fn upper_subr_0332(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0261(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::discard-input");
 }
 
-fn upper_subr_0333(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0262(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::current-input-mode");
 }
 
-fn upper_subr_0334(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0263(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-input-mode");
 }
 
-fn upper_subr_0335(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0264(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-input-interrupt-mode");
 }
 
-fn upper_subr_0336(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0265(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::insert-special-event");
 }
 
-fn upper_subr_0337(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0266(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-key-sequence");
 }
 
-fn upper_subr_0338(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0267(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-key-sequence-vector");
 }
 
-fn upper_subr_0339(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0268(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::minibufferp");
 }
 
-fn upper_subr_0340(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0269(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::minibuffer-contents");
 }
 
-fn upper_subr_0341(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0270(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::minibuffer-contents-no-properties");
 }
 
-fn upper_subr_0342(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0271(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::minibuffer-depth");
 }
 
-fn upper_subr_0343(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0272(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::exit-recursive-edit");
 }
 
-fn upper_subr_0344(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0273(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::abort-recursive-edit");
 }
 
-fn upper_subr_0345(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::undo-boundary");
-}
-
-fn upper_subr_0346(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::set-marker");
-}
-
-fn upper_subr_0347(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::marker-position");
-}
-
-fn upper_subr_0348(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::marker-buffer");
-}
-
-fn upper_subr_0349(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0274(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::copy-marker");
 }
 
-fn upper_subr_0350(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::point-marker");
-}
-
-fn upper_subr_0351(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::point-min-marker");
-}
-
-fn upper_subr_0352(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::point-max-marker");
-}
-
-fn upper_subr_0353(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::current-case-table");
-}
-
-fn upper_subr_0354(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::standard-case-table");
-}
-
-fn upper_subr_0355(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::set-case-table");
-}
-
-fn upper_subr_0356(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::define-category");
-}
-
-fn upper_subr_0357(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::category-docstring");
-}
-
-fn upper_subr_0358(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::modify-category-entry");
-}
-
-fn upper_subr_0359(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::char-category-set");
-}
-
-fn upper_subr_0360(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::category-table");
-}
-
-fn upper_subr_0361(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::set-category-table");
-}
-
-fn upper_subr_0362(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::map-char-table");
-}
-
-fn upper_subr_0363(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::json-parse-buffer");
-}
-
-fn upper_subr_0364(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::json-insert");
-}
-
-fn upper_subr_0365(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0275(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-char-exclusive");
 }
 
-fn upper_subr_0366(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::insert-before-markers");
-}
-
-fn upper_subr_0367(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::delete-char");
-}
-
-fn upper_subr_0368(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0276(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER edit::following-char");
 }
 
-fn upper_subr_0369(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::preceding-char");
-}
-
-fn upper_subr_0370(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0277(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::face-font");
 }
 
-fn upper_subr_0371(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0278(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::access-file");
 }
 
-fn upper_subr_0372(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0279(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::expand-file-name");
 }
 
-fn upper_subr_0373(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0280(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::delete-file-internal");
 }
 
-fn upper_subr_0374(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0281(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::rename-file");
 }
 
-fn upper_subr_0375(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0282(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::copy-file");
 }
 
-fn upper_subr_0376(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0283(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::add-name-to-file");
 }
 
-fn upper_subr_0377(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0284(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::make-symbolic-link");
 }
 
-fn upper_subr_0378(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0285(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::directory-files");
 }
 
-fn upper_subr_0379(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0286(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::file-attributes");
 }
 
-fn upper_subr_0380(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0287(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-exists-p");
 }
 
-fn upper_subr_0381(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0288(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-readable-p");
 }
 
-fn upper_subr_0382(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0289(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-writable-p");
 }
 
-fn upper_subr_0383(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0290(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-acl");
 }
 
-fn upper_subr_0384(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0291(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-executable-p");
 }
 
-fn upper_subr_0385(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0292(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-locked-p");
 }
 
-fn upper_subr_0386(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0293(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-selinux-context");
 }
 
-fn upper_subr_0387(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0294(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-system-info");
 }
 
-fn upper_subr_0388(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0295(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-directory-p");
 }
 
-fn upper_subr_0389(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0296(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-regular-p");
 }
 
-fn upper_subr_0390(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0297(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-symlink-p");
 }
 
-fn upper_subr_0391(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0298(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-modes");
 }
 
-fn upper_subr_0392(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0299(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-file-modes");
 }
 
-fn upper_subr_0393(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0300(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-file-times");
 }
 
-fn upper_subr_0394(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0301(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-process-inherit-coding-system-flag");
 }
 
-fn upper_subr_0395(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0302(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-parameter");
 }
 
-fn upper_subr_0396(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0303(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::send-string-to-terminal");
 }
 
-fn upper_subr_0397(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0304(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::internal-show-cursor");
 }
 
-fn upper_subr_0398(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0305(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::internal-show-cursor-p");
 }
 
-fn upper_subr_0399(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0306(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::redraw-frame");
 }
 
-fn upper_subr_0400(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0307(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::display-supports-face-attributes-p");
 }
 
-fn upper_subr_0401(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0308(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::terminal-name");
 }
 
-fn upper_subr_0402(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0309(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::terminal-live-p");
 }
 
-fn upper_subr_0403(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0310(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::terminal-parameter");
 }
 
-fn upper_subr_0404(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0311(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::terminal-parameters");
 }
 
-fn upper_subr_0405(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0312(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-terminal-parameter");
 }
 
-fn upper_subr_0406(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0313(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::tty-type");
 }
 
-fn upper_subr_0407(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0314(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::tty-top-frame");
 }
 
-fn upper_subr_0408(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0315(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::tty-display-color-p");
 }
 
-fn upper_subr_0409(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0316(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::tty-display-color-cells");
 }
 
-fn upper_subr_0410(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0317(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::tty-no-underline");
 }
 
-fn upper_subr_0411(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0318(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::controlling-tty-p");
 }
 
-fn upper_subr_0412(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0319(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::suspend-tty");
 }
 
-fn upper_subr_0413(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0320(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::resume-tty");
 }
 
-fn upper_subr_0414(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0321(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-terminal");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0415(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0322(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-monitor-attributes-list");
 }
 
-fn upper_subr_0416(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0323(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-char");
 }
 
-fn upper_subr_0417(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0324(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::minibuffer-innermost-command-loop-p");
 }
 
-fn upper_subr_0418(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0325(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::recursive-edit");
 }
 
-fn upper_subr_0419(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::find-coding-systems-region-internal");
-}
-
-fn upper_subr_0420(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0326(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-event");
 }
 
-fn upper_subr_0421(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::integer-or-marker-p");
-}
-
-fn upper_subr_0422(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::number-or-marker-p");
-}
-
-fn upper_subr_0423(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::vector-or-char-table-p");
-}
-
-fn upper_subr_0424(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::marker-insertion-type");
-}
-
-fn upper_subr_0425(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::make-marker");
-}
-
-fn upper_subr_0426(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::bool-vector-p");
-}
-
-fn upper_subr_0427(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::make-category-set");
-}
-
-fn upper_subr_0428(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::function-equal");
-}
-
-fn upper_subr_0429(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::module-function-p");
-}
-
-fn upper_subr_0430(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::user-ptrp");
-}
-
-fn upper_subr_0431(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::length<");
-}
-
-fn upper_subr_0432(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::length=");
-}
-
-fn upper_subr_0433(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::length>");
-}
-
-fn upper_subr_0434(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::substring-no-properties");
-}
-
-fn upper_subr_0435(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::atan");
-}
-
-fn upper_subr_0436(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::log");
-}
-
-fn upper_subr_0437(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0327(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::expt");
 }
 
-fn upper_subr_0438(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::random");
-}
-
-fn upper_subr_0439(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::isnan");
-}
-
-fn upper_subr_0440(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::string");
-}
-
-fn upper_subr_0441(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0328(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::identity");
 }
 
-fn upper_subr_0442(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::ngettext");
-}
-
-fn upper_subr_0443(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::secure-hash-algorithms");
-}
-
-fn upper_subr_0444(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::prefix-numeric-value");
-}
-
-fn upper_subr_0445(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0329(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::propertize");
 }
 
-fn upper_subr_0446(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0330(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::capitalize");
 }
 
-fn upper_subr_0447(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::charsetp");
-}
-
-fn upper_subr_0448(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::charset-plist");
-}
-
-fn upper_subr_0449(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0331(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::define-charset-internal");
 }
 
-fn upper_subr_0450(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0332(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::define-charset-alias");
 }
 
-fn upper_subr_0451(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0333(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::internal-lisp-face-p");
 }
 
-fn upper_subr_0452(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0334(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::internal-make-lisp-face");
 }
 
-fn upper_subr_0453(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0335(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::internal-set-lisp-face-attribute");
 }
 
-fn upper_subr_0454(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::string-to-syntax");
-}
-
-fn upper_subr_0455(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::syntax-class-to-char");
-}
-
-fn upper_subr_0456(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0336(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER text::copy-syntax-table");
 }
 
-fn upper_subr_0457(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::syntax-table-p");
-}
-
-fn upper_subr_0458(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0337(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::standard-syntax-table");
 }
 
-fn upper_subr_0459(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0338(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::current-time");
 }
 
-fn upper_subr_0460(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::current-cpu-time");
-}
-
-fn upper_subr_0461(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::get-internal-run-time");
-}
-
-fn upper_subr_0462(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0339(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::float-time");
 }
 
-fn upper_subr_0463(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::flush-standard-output");
-}
-
-fn upper_subr_0464(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0340(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-name-directory");
 }
 
-fn upper_subr_0465(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0341(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-name-nondirectory");
 }
 
-fn upper_subr_0466(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0342(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-name-as-directory");
 }
 
-fn upper_subr_0467(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0343(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::directory-file-name");
 }
 
-fn upper_subr_0468(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0344(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::file-name-concat");
 }
 
-fn upper_subr_0469(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0345(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::file-name-absolute-p");
 }
 
-fn upper_subr_0470(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0346(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::directory-name-p");
 }
 
-fn upper_subr_0471(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0347(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::substitute-in-file-name");
 }
 
-fn upper_subr_0472(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0348(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-file-acl");
 }
 
-fn upper_subr_0473(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0349(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-file-selinux-context");
 }
 
-fn upper_subr_0474(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0350(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::visited-file-modtime");
 }
 
-fn upper_subr_0475(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0351(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::make-temp-name");
 }
 
-fn upper_subr_0476(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0352(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::next-read-file-uses-dialog-p");
 }
 
-fn upper_subr_0477(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0353(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::unhandled-file-name-directory");
 }
 
-fn upper_subr_0478(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::get-truename-buffer");
-}
-
-fn upper_subr_0479(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::single-key-description");
-}
-
-fn upper_subr_0480(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::key-description");
-}
-
-fn upper_subr_0481(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::event-convert-list");
-}
-
-fn upper_subr_0482(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::text-char-description");
-}
-
-fn upper_subr_0483(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0354(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-binary-mode");
 }
 
-fn upper_subr_0484(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::group-name");
-}
-
-fn upper_subr_0485(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0355(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::group-gid");
 }
 
-fn upper_subr_0486(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0356(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::group-real-gid");
 }
 
-fn upper_subr_0487(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::load-average");
-}
-
-fn upper_subr_0488(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::logcount");
-}
-
-fn upper_subr_0489(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0357(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-frame-size-and-position-pixelwise");
 }
 
-fn upper_subr_0490(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0358(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::mouse-position-in-root-frame");
 }
 
-fn upper_subr_0491(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0359(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-load-color-file");
 }
 
-fn upper_subr_0492(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::display--line-is-continued-p");
-}
-
-fn upper_subr_0493(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0360(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::display--update-for-mouse-movement");
 }
 
-fn upper_subr_0494(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0361(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::do-auto-save");
 }
 
-fn upper_subr_0495(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0362(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::describe-buffer-bindings");
 }
 
-fn upper_subr_0496(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0363(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::face-attributes-as-vector");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0497(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0364(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-get-system-font");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0498(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0365(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-get-system-normal-font");
 }
 
-fn upper_subr_0499(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0366(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::fontset-font");
 }
 
-fn upper_subr_0500(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::fontset-info");
-}
-
-fn upper_subr_0501(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::fontset-list");
-}
-
-fn upper_subr_0502(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0367(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::frame--set-was-invisible");
 }
 
-fn upper_subr_0503(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0368(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::frame-after-make-frame");
 }
 
-fn upper_subr_0504(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0369(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-ancestor-p");
 }
 
-fn upper_subr_0505(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0370(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-bottom-divider-width");
 }
 
-fn upper_subr_0506(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0371(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-child-frame-border-width");
 }
 
-fn upper_subr_0507(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0372(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-focus");
 }
 
-fn upper_subr_0508(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0373(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::frame-font-cache");
 }
 
-fn upper_subr_0509(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::frame-fringe-width");
-}
-
-fn upper_subr_0510(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0374(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-internal-border-width");
 }
 
-fn upper_subr_0511(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0375(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-or-buffer-changed-p");
 }
 
-fn upper_subr_0512(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0376(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-parent");
 }
 
-fn upper_subr_0513(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::frame-pointer-visible-p");
-}
-
-fn upper_subr_0514(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0377(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-right-divider-width");
 }
 
-fn upper_subr_0515(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0378(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-scale-factor");
 }
 
-fn upper_subr_0516(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0379(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::frame-scroll-bar-height");
 }
 
-fn upper_subr_0517(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0380(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::frame-scroll-bar-width");
 }
 
-fn upper_subr_0518(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0381(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-window-state-change");
 }
 
-fn upper_subr_0519(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0382(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::fringe-bitmaps-at-pos");
 }
 
-fn upper_subr_0520(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::garbage-collect-heapsize");
-}
-
-fn upper_subr_0521(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::get-unicode-property-internal");
-}
-
-fn upper_subr_0522(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0383(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-available-p");
 }
 
-fn upper_subr_0523(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0384(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::gnutls-asynchronous-parameters");
 }
 
-fn upper_subr_0524(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0385(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::gnutls-bye");
 }
 
-fn upper_subr_0525(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0386(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-ciphers");
 }
 
-fn upper_subr_0526(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0387(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::gnutls-deinit");
 }
 
-fn upper_subr_0527(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0388(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-digests");
 }
 
-fn upper_subr_0528(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0389(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-error-fatalp");
 }
 
-fn upper_subr_0529(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0390(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-error-string");
 }
 
-fn upper_subr_0530(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0391(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-errorp");
 }
 
-fn upper_subr_0531(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0392(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-format-certificate");
 }
 
-fn upper_subr_0532(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0393(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::gnutls-get-initstage");
 }
 
-fn upper_subr_0533(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0394(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-hash-digest");
 }
 
-fn upper_subr_0534(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0395(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-hash-mac");
 }
 
-fn upper_subr_0535(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0396(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-macs");
 }
 
-fn upper_subr_0536(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0397(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::gnutls-peer-status");
 }
 
-fn upper_subr_0537(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0398(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-peer-status-warning-describe");
 }
 
-fn upper_subr_0538(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0399(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-symmetric-decrypt");
 }
 
-fn upper_subr_0539(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0400(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-symmetric-encrypt");
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0540(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::handle-save-session");
-}
-
-fn upper_subr_0541(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0401(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::handle-switch-frame");
 }
 
-fn upper_subr_0542(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0402(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::help--describe-vector");
 }
 
-fn upper_subr_0543(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0403(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::init-image-library");
 }
 
-fn upper_subr_0544(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::internal--obarray-buckets");
-}
-
-fn upper_subr_0545(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::internal--set-buffer-modified-tick");
-}
-
-fn upper_subr_0546(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0404(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::internal-set-lisp-face-attribute-from-resource");
 }
 
-fn upper_subr_0547(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::internal-stack-stats");
-}
-
-fn upper_subr_0548(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::internal-subr-documentation");
-}
-
-fn upper_subr_0549(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::decode-coding-region");
-}
-
-fn upper_subr_0550(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0405(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::dump-emacs-portable");
 }
 
-fn upper_subr_0551(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::dump-emacs-portable--sort-predicate");
-}
-
-fn upper_subr_0552(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::dump-emacs-portable--sort-predicate-copied");
-}
-
-fn upper_subr_0553(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::encode-coding-region");
-}
-
-fn upper_subr_0554(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::iso-charset");
-}
-
-fn upper_subr_0555(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0406(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::keymap--get-keyelt");
 }
 
-fn upper_subr_0556(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0407(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::lower-frame");
 }
 
-fn upper_subr_0557(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::lread--substitute-object-in-subtree");
-}
-
-fn upper_subr_0558(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::malloc-info");
-}
-
-fn upper_subr_0559(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::malloc-trim");
-}
-
-fn upper_subr_0560(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0408(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::make-byte-code");
 }
 
-fn upper_subr_0561(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::make-char");
-}
-
-fn upper_subr_0562(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0409(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::make-closure");
 }
 
-fn upper_subr_0563(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::marker-last-position");
-}
-
-fn upper_subr_0564(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::make-interpreted-closure");
-}
-
-fn upper_subr_0565(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::make-record");
-}
-
-fn upper_subr_0566(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0410(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::make-temp-file-internal");
 }
 
-fn upper_subr_0567(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::memory-info");
-}
-
-fn upper_subr_0568(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0411(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::make-frame-invisible");
 }
 
-fn upper_subr_0569(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0412(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::menu-bar-menu-at-x-y");
 }
 
-fn upper_subr_0570(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::menu-or-popup-active-p");
-}
-
-fn upper_subr_0571(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0413(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::module-load");
 }
 
-fn upper_subr_0572(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::newline-cache-check");
-}
-
-fn upper_subr_0573(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::native-comp-available-p");
-}
-
-fn upper_subr_0574(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::obarray-clear");
-}
-
-fn upper_subr_0575(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0414(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::obarray-make");
 }
 
-fn upper_subr_0576(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0415(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::open-dribble-file");
 }
 
-fn upper_subr_0577(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::open-font");
-}
-
-fn upper_subr_0578(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::optimize-char-table");
-}
-
-fn upper_subr_0579(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::overlay-lists");
-}
-
-fn upper_subr_0580(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::overlay-recenter");
-}
-
-fn upper_subr_0581(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::pdumper-stats");
-}
-
-fn upper_subr_0582(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0416(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::play-sound-internal");
 }
 
-fn upper_subr_0583(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::put-unicode-property-internal");
-}
-
-fn upper_subr_0584(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0417(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::query-fontset");
 }
 
-fn upper_subr_0585(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::raise-frame");
-}
-
-fn upper_subr_0586(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0418(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-positioning-symbols");
 }
 
-fn upper_subr_0587(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::re--describe-compiled");
-}
-
-fn upper_subr_0588(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::recent-auto-save-p");
-}
-
-fn upper_subr_0589(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0419(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs--frame-snapshot");
 }
 
-fn upper_subr_0590(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0420(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs--write-frame-snapshot");
 }
 
-fn upper_subr_0591(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0421(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs--debug-lose-device");
 }
 
-fn upper_subr_0592(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0422(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::record");
 }
 
-fn upper_subr_0593(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0423(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::reconsider-frame-fonts");
 }
 
-fn upper_subr_0594(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0424(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::redirect-debugging-output");
 }
 
-fn upper_subr_0595(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0425(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::redirect-frame-focus");
 }
 
-fn upper_subr_0596(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::remove-pos-from-symbol");
-}
-
-fn upper_subr_0597(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0426(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::resize-mini-window-internal");
 }
 
-fn upper_subr_0598(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::restore-buffer-modified-p");
-}
-
-fn upper_subr_0599(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::set-buffer-auto-saved");
-}
-
-fn upper_subr_0600(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::set-charset-plist");
-}
-
-fn upper_subr_0601(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0427(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-frame-window-state-change");
 }
 
-fn upper_subr_0602(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0428(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-mouse-pixel-position");
 }
 
-fn upper_subr_0603(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0429(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-mouse-position");
 }
 
-fn upper_subr_0604(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0430(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-new-normal");
 }
 
-fn upper_subr_0605(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0431(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-new-pixel");
 }
 
-fn upper_subr_0606(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0432(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-new-total");
 }
 
-fn upper_subr_0607(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::sort-charsets");
-}
-
-fn upper_subr_0608(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::split-char");
-}
-
-fn upper_subr_0609(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::string-distance");
-}
-
-fn upper_subr_0610(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::subr-native-lambda-list");
-}
-
-fn upper_subr_0611(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::subr-type");
-}
-
-fn upper_subr_0612(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::suspend-emacs");
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0613(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::tool-bar-get-system-style");
-}
-
-fn upper_subr_0614(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0433(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::tool-bar-pixel-width");
 }
 
-fn upper_subr_0615(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::translate-region-internal");
-}
-
-fn upper_subr_0616(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::tty--output-buffer-size");
-}
-
-fn upper_subr_0617(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::tty--set-output-buffer-size");
-}
-
-fn upper_subr_0618(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0434(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::tty-display-pixel-height");
 }
 
-fn upper_subr_0619(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0435(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::tty-display-pixel-width");
 }
 
-fn upper_subr_0620(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0436(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::tty-frame-at");
 }
 
-fn upper_subr_0621(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0437(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::tty-frame-edges");
 }
 
-fn upper_subr_0622(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0438(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::tty-frame-geometry");
 }
 
-fn upper_subr_0623(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0439(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::tty-frame-list-z-order");
 }
 
-fn upper_subr_0624(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::tty-frame-restack");
-}
-
-fn upper_subr_0625(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::tty-suppress-bold-inverse-default-colors");
-}
-
-fn upper_subr_0626(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::unencodable-char-position");
-}
-
-fn upper_subr_0627(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0440(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::unicode-property-table-internal");
 }
 
-fn upper_subr_0628(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::unify-charset");
-}
-
-fn upper_subr_0629(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::unix-sync");
-}
-
-fn upper_subr_0630(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::x-begin-drag");
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0631(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::x-double-buffered-p");
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0632(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::x-menu-bar-open-internal");
-}
-
-fn upper_subr_0633(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0441(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::xw-color-defined-p");
 }
 
-fn upper_subr_0634(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0442(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::xw-color-values");
 }
 
-fn upper_subr_0635(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0443(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::xw-display-color-p");
 }
 
-fn upper_subr_0636(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0444(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::lock-buffer");
 }
 
-fn upper_subr_0637(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0445(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::lock-file");
 }
 
-fn upper_subr_0638(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::lossage-size");
-}
-
-fn upper_subr_0639(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0446(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::unlock-buffer");
 }
 
-fn upper_subr_0640(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0447(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::unlock-file");
 }
 
-fn upper_subr_0641(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0448(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-bottom-divider-width");
 }
 
-fn upper_subr_0642(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0449(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-lines-pixel-dimensions");
 }
 
-fn upper_subr_0643(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0450(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-new-normal");
 }
 
-fn upper_subr_0644(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0451(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-new-pixel");
 }
 
-fn upper_subr_0645(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0452(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-new-total");
 }
 
-fn upper_subr_0646(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0453(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-old-body-pixel-height");
 }
 
-fn upper_subr_0647(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0454(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-old-body-pixel-width");
 }
 
-fn upper_subr_0648(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0455(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-old-pixel-height");
 }
 
-fn upper_subr_0649(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0456(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-old-pixel-width");
 }
 
-fn upper_subr_0650(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0457(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-right-divider-width");
 }
 
-fn upper_subr_0651(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0458(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-scroll-bar-height");
 }
 
-fn upper_subr_0652(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0459(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-scroll-bar-width");
 }
 
-fn upper_subr_0653(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::treesit-available-p");
-}
-
-fn upper_subr_0654(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::treesit-compiled-query-p");
-}
-
-fn upper_subr_0655(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::treesit-library-abi-version");
-}
-
-fn upper_subr_0656(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::treesit-node-p");
-}
-
-fn upper_subr_0657(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::treesit-node-parser");
-}
-
-fn upper_subr_0658(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::treesit-parser-p");
-}
-
-fn upper_subr_0659(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::treesit-query-language");
-}
-
-fn upper_subr_0660(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::treesit-query-p");
-}
-
-fn upper_subr_0661(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::treesit-query-source");
-}
-
-fn upper_subr_0662(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::fillarray");
-}
-
-fn upper_subr_0663(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::hash-table-test");
-}
-
-fn upper_subr_0664(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::hash-table-size");
-}
-
-fn upper_subr_0665(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::hash-table-rehash-size");
-}
-
-fn upper_subr_0666(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::hash-table-rehash-threshold");
-}
-
-fn upper_subr_0667(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::hash-table-weakness");
-}
-
-fn upper_subr_0668(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::copy-hash-table");
-}
-
-fn upper_subr_0669(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::sxhash-eq");
-}
-
-fn upper_subr_0670(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::sxhash-eql");
-}
-
-fn upper_subr_0671(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::sxhash-equal");
-}
-
-fn upper_subr_0672(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::sxhash-equal-including-properties");
-}
-
-fn upper_subr_0673(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::internal--hash-table-buckets");
-}
-
-fn upper_subr_0674(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::internal--hash-table-histogram");
-}
-
-fn upper_subr_0675(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::internal--hash-table-index-size");
-}
-
-fn upper_subr_0676(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::neomacs-frame-geometry");
-}
-
-fn upper_subr_0677(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0460(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-frame-edges");
 }
 
-fn upper_subr_0678(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::neomacs-mouse-absolute-pixel-position");
-}
-
-fn upper_subr_0679(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::neomacs-set-mouse-absolute-pixel-position");
-}
-
-fn upper_subr_0680(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0461(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::neomacs-display-monitor-attributes-list");
 }
 
-fn upper_subr_0681(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::neomacs-core-backend");
-}
-
-fn upper_subr_0682(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::debugger-trap");
-}
-
-fn upper_subr_0683(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0462(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-discard-buffer-from-window");
 }
 
-fn upper_subr_0684(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0463(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-cursor-info");
 }
 
-fn upper_subr_0685(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0464(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::combine-windows");
 }
 
-fn upper_subr_0686(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0465(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::uncombine-window");
 }
 
-fn upper_subr_0687(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::frame-windows-min-size");
-}
-
-fn upper_subr_0688(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0466(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::remember-mouse-glyph");
 }
 
-fn upper_subr_0689(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::obarrayp");
-}
-
-fn upper_subr_0690(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0467(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::ntake");
 }
 
-fn upper_subr_0691(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0468(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::default-file-modes");
 }
 
-fn upper_subr_0692(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0469(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-default-file-modes");
 }
 
-fn upper_subr_0693(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0470(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::window-configuration-p");
 }
 
-fn upper_subr_0694(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0471(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::window-configuration-frame");
 }
 
-fn upper_subr_0695(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0472(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::window-configuration-equal-p");
 }
 
-fn upper_subr_0696(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0473(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-input-meta-mode");
 }
 
-fn upper_subr_0697(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0474(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-output-flow-control");
 }
 
-fn upper_subr_0698(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0475(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-quit-char");
 }
 
-fn upper_subr_0699(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0476(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::top-level");
 }
 
-fn upper_subr_0700(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::documentation-stringp");
-}
-
-fn upper_subr_0701(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0477(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-text-pixel-size");
 }
 
-fn upper_subr_0702(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0478(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::pos-visible-in-window-p");
 }
 
-fn upper_subr_0703(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0479(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame--face-hash-table");
 }
 
-fn upper_subr_0704(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0480(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::delete-directory-internal");
 }
 
-fn upper_subr_0705(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0481(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::make-directory-internal");
 }
 
-fn upper_subr_0706(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0482(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::directory-files-and-attributes");
 }
 
-fn upper_subr_0707(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0483(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::find-file-name-handler");
 }
 
-fn upper_subr_0708(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0484(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::file-name-all-completions");
 }
 
-fn upper_subr_0709(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0485(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-accessible-directory-p");
 }
 
-fn upper_subr_0710(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0486(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-name-case-insensitive-p");
 }
 
-fn upper_subr_0711(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0487(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::file-newer-than-file-p");
 }
 
-fn upper_subr_0712(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0488(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::verify-visited-file-modtime");
 }
 
-fn upper_subr_0713(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0489(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::internal-default-interrupt-process");
 }
 
-fn upper_subr_0714(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0490(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::internal-default-process-filter");
 }
 
-fn upper_subr_0715(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0491(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::internal-default-process-sentinel");
 }
 
-fn upper_subr_0716(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0492(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::internal-default-signal-process");
 }
 
-fn upper_subr_0717(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0493(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::network-lookup-address-info");
 }
 
-fn upper_subr_0718(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0494(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-network-process-option");
 }
 
-fn upper_subr_0719(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0495(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-query-on-exit-flag");
 }
 
-fn upper_subr_0720(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0496(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-process-query-on-exit-flag");
 }
 
-fn upper_subr_0721(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0497(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::process-inherit-coding-system-flag");
 }
 
-fn upper_subr_0722(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0498(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-process-coding-system");
 }
 
-fn upper_subr_0723(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0499(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::set-process-datagram-address");
 }
 
-fn upper_subr_0724(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0500(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::get-char-property-and-overlay");
 }
 
-fn upper_subr_0725(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER edit::line-beginning-position");
-}
-
-fn upper_subr_0726(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0501(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::active-minibuffer-window");
 }
 
-fn upper_subr_0727(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0502(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::minibuffer-selected-window");
 }
 
-fn upper_subr_0728(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0503(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-mode-line-height");
 }
 
-fn upper_subr_0729(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0504(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-header-line-height");
 }
 
-fn upper_subr_0730(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0505(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-tab-line-height");
 }
 
-fn upper_subr_0731(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0506(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-display-table");
 }
 
-fn upper_subr_0732(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0507(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-cursor-type");
 }
 
-fn upper_subr_0733(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0508(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-scroll-bars");
 }
 
-fn upper_subr_0734(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0509(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-next-buffers");
 }
 
-fn upper_subr_0735(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0510(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-prev-buffers");
 }
 
-fn upper_subr_0736(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0511(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-dedicated-p");
 }
 
-fn upper_subr_0737(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0512(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::delete-window-internal");
 }
 
-fn upper_subr_0738(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0513(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::delete-other-windows-internal");
 }
 
-fn upper_subr_0739(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0514(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-combination-limit");
 }
 
-fn upper_subr_0740(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0515(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-window-combination-limit");
 }
 
-fn upper_subr_0741(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0516(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::window-resize-apply-total");
 }
 
-fn upper_subr_0742(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0517(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::other-window-for-scrolling");
 }
 
-fn upper_subr_0743(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0518(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::modify-frame-parameters");
 }
 
-fn upper_subr_0744(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0519(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-selected-window");
 }
 
-fn upper_subr_0745(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0520(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-old-selected-window");
 }
 
-fn upper_subr_0746(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0521(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-frame-selected-window");
 }
 
-fn upper_subr_0747(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0522(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-pixel-width");
 }
 
-fn upper_subr_0748(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0523(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-pixel-height");
 }
 
-fn upper_subr_0749(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0524(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-server-max-request-size");
 }
 
-fn upper_subr_0750(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0525(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-grayscale-p");
 }
 
-fn upper_subr_0751(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0526(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-backing-store");
 }
 
-fn upper_subr_0752(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0527(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-color-cells");
 }
 
-fn upper_subr_0753(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0528(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-save-under");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0754(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0529(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-set-last-user-time");
 }
 
-fn upper_subr_0755(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0530(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-visual-class");
 }
 
-fn upper_subr_0756(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0531(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::minor-mode-key-binding");
 }
 
-fn upper_subr_0757(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0532(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::this-command-keys-vector");
 }
 
-fn upper_subr_0758(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0533(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::this-single-command-keys");
 }
 
-fn upper_subr_0759(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0534(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::this-single-command-raw-keys");
 }
 
-fn upper_subr_0760(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0535(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::clear-this-command-keys");
 }
 
-fn upper_subr_0761(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0536(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::waiting-for-user-input-p");
 }
 
-fn upper_subr_0762(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0537(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::minibuffer-prompt");
 }
 
-fn upper_subr_0763(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0538(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::minibuffer-prompt-end");
 }
 
-fn upper_subr_0764(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0539(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::innermost-minibuffer-p");
 }
 
-fn upper_subr_0765(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0540(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::abort-minibuffers");
 }
 
-fn upper_subr_0766(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::set-marker-insertion-type");
-}
-
-fn upper_subr_0767(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::set-standard-case-table");
-}
-
-fn upper_subr_0768(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::get-unused-category");
-}
-
-fn upper_subr_0769(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::standard-category-table");
-}
-
-fn upper_subr_0770(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0541(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::upcase-initials-region");
 }
 
-fn upper_subr_0771(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::buffer-substring-no-properties");
-}
-
-fn upper_subr_0772(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0542(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::subrp");
 }
 
-fn upper_subr_0773(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0543(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::*");
 }
 
-fn upper_subr_0774(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0544(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::/");
 }
 
-fn upper_subr_0775(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::abs");
-}
-
-fn upper_subr_0776(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0545(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::logand");
 }
 
-fn upper_subr_0777(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::logior");
-}
-
-fn upper_subr_0778(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::logxor");
-}
-
-fn upper_subr_0779(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::lognot");
-}
-
-fn upper_subr_0780(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0546(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::ash");
 }
 
-fn upper_subr_0781(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::characterp");
-}
-
-fn upper_subr_0782(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::hash-table-p");
-}
-
-fn upper_subr_0783(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0547(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::bufferp");
 }
 
-fn upper_subr_0784(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::sequencep");
-}
-
-fn upper_subr_0785(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::arrayp");
-}
-
-fn upper_subr_0786(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::cl-type-of");
-}
-
-fn upper_subr_0787(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0548(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::reverse");
 }
 
-fn upper_subr_0788(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::copy-alist");
-}
-
-fn upper_subr_0789(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0549(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::make-list");
 }
 
-fn upper_subr_0790(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::safe-length");
-}
-
-fn upper_subr_0791(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0550(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::substring");
 }
 
-fn upper_subr_0792(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0551(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::concat");
 }
 
-fn upper_subr_0793(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0552(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::unibyte-string");
 }
 
-fn upper_subr_0794(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0553(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::number-to-string");
 }
 
-fn upper_subr_0795(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::char-to-string");
-}
-
-fn upper_subr_0796(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::string-to-char");
-}
-
-fn upper_subr_0797(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::clear-string");
-}
-
-fn upper_subr_0798(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::string-make-multibyte");
-}
-
-fn upper_subr_0799(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::string-make-unibyte");
-}
-
-fn upper_subr_0800(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0554(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::string-to-multibyte");
 }
 
-fn upper_subr_0801(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0555(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::string-to-unibyte");
 }
 
-fn upper_subr_0802(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::string-as-unibyte");
-}
-
-fn upper_subr_0803(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::string-as-multibyte");
-}
-
-fn upper_subr_0804(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::unibyte-char-to-multibyte");
-}
-
-fn upper_subr_0805(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::multibyte-char-to-unibyte");
-}
-
-fn upper_subr_0806(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::vconcat");
-}
-
-fn upper_subr_0807(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::clrhash");
-}
-
-fn upper_subr_0808(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0556(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::hash-table-count");
 }
 
-fn upper_subr_0809(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0557(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::float");
 }
 
-fn upper_subr_0810(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::copysign");
-}
-
-fn upper_subr_0811(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::frexp");
-}
-
-fn upper_subr_0812(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::ldexp");
-}
-
-fn upper_subr_0813(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::logb");
-}
-
-fn upper_subr_0814(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::fceiling");
-}
-
-fn upper_subr_0815(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::ffloor");
-}
-
-fn upper_subr_0816(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::fround");
-}
-
-fn upper_subr_0817(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::ftruncate");
-}
-
-fn upper_subr_0818(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::bitmap-spec-p");
-}
-
-fn upper_subr_0819(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::byte-to-string");
-}
-
-fn upper_subr_0820(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::clear-buffer-auto-save-failure");
-}
-
-fn upper_subr_0821(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::locale-info");
-}
-
-fn upper_subr_0822(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::subr-name");
-}
-
-fn upper_subr_0823(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::native-comp-function-p");
-}
-
-fn upper_subr_0824(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::interpreted-function-p");
-}
-
-fn upper_subr_0825(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::char-width");
-}
-
-fn upper_subr_0826(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::string-bytes");
-}
-
-fn upper_subr_0827(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::multibyte-string-p");
-}
-
-fn upper_subr_0828(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::encode-coding-string");
-}
-
-fn upper_subr_0829(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::decode-coding-string");
-}
-
-fn upper_subr_0830(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::char-or-string-p");
-}
-
-fn upper_subr_0831(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::max-char");
-}
-
-fn upper_subr_0832(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::regexp-quote");
-}
-
-fn upper_subr_0833(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0558(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::file-attributes-lessp");
 }
 
-fn upper_subr_0834(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0559(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::system-users");
 }
 
-fn upper_subr_0835(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0560(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::system-groups");
 }
 
-fn upper_subr_0836(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0561(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::user-uid");
 }
 
-fn upper_subr_0837(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0562(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::user-real-uid");
 }
 
-fn upper_subr_0838(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0563(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::time-add");
 }
 
-fn upper_subr_0839(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0564(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::time-subtract");
 }
 
-fn upper_subr_0840(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0565(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::time-less-p");
 }
 
-fn upper_subr_0841(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0566(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::time-equal-p");
 }
 
-fn upper_subr_0842(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0567(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::current-time-string");
 }
 
-fn upper_subr_0843(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0568(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::current-time-zone");
 }
 
-fn upper_subr_0844(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0569(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::encode-time");
 }
 
-fn upper_subr_0845(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0570(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::decode-time");
 }
 
-fn upper_subr_0846(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0571(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::time-convert");
 }
 
-fn upper_subr_0847(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0572(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::set-time-zone-rule");
 }
 
-fn upper_subr_0848(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0573(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::format-time-string");
 }
 
-fn upper_subr_0849(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0574(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::upcase-initials");
 }
 
-fn upper_subr_0850(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::char-resolve-modifiers");
-}
-
-fn upper_subr_0851(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0575(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::internal-lisp-face-attribute-values");
 }
 
-fn upper_subr_0852(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0576(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::internal-lisp-face-equal-p");
 }
 
-fn upper_subr_0853(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0577(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::internal-lisp-face-empty-p");
 }
 
-fn upper_subr_0854(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0578(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::face-attribute-relative-p");
 }
 
-fn upper_subr_0855(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0579(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::merge-face-attribute");
 }
 
-fn upper_subr_0856(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0580(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::color-gray-p");
 }
 
-fn upper_subr_0857(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0581(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::color-supported-p");
 }
 
-fn upper_subr_0858(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0582(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::color-distance");
 }
 
-fn upper_subr_0859(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0583(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::color-values-from-color-spec");
 }
 
-fn upper_subr_0860(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0584(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::internal-face-x-get-resource");
 }
 
-fn upper_subr_0861(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0585(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::internal-set-font-selection-order");
 }
 
-fn upper_subr_0862(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0586(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::internal-set-alternative-font-family-alist");
 }
 
-fn upper_subr_0863(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0587(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::internal-set-alternative-font-registry-alist");
 }
 
-fn upper_subr_0864(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0588(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::internal-copy-lisp-face");
 }
 
-fn upper_subr_0865(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0589(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::internal-get-lisp-face-attribute");
 }
 
-fn upper_subr_0866(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0590(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::internal-merge-in-global-face");
 }
 
-fn upper_subr_0867(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::case-table-p");
-}
-
-fn upper_subr_0868(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::category-table-p");
-}
-
-fn upper_subr_0869(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::copy-category-table");
-}
-
-fn upper_subr_0870(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::make-category-table");
-}
-
-fn upper_subr_0871(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::category-set-mnemonics");
-}
-
-fn upper_subr_0872(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::char-table-p");
-}
-
-fn upper_subr_0873(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0591(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER text::set-char-table-range");
 }
 
-fn upper_subr_0874(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::char-table-range");
-}
-
-fn upper_subr_0875(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::char-table-parent");
-}
-
-fn upper_subr_0876(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::set-char-table-parent");
-}
-
-fn upper_subr_0877(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::char-table-extra-slot");
-}
-
-fn upper_subr_0878(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::set-char-table-extra-slot");
-}
-
-fn upper_subr_0879(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0592(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::char-table-subtype");
 }
 
-fn upper_subr_0880(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::bool-vector");
-}
-
-fn upper_subr_0881(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::bool-vector-count-population");
-}
-
-fn upper_subr_0882(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::bool-vector-count-consecutive");
-}
-
-fn upper_subr_0883(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::bool-vector-intersection");
-}
-
-fn upper_subr_0884(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::bool-vector-not");
-}
-
-fn upper_subr_0885(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::bool-vector-set-difference");
-}
-
-fn upper_subr_0886(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::bool-vector-union");
-}
-
-fn upper_subr_0887(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::bool-vector-exclusive-or");
-}
-
-fn upper_subr_0888(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::bool-vector-subsetp");
-}
-
-fn upper_subr_0889(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0593(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER text::make-char-table");
 }
 
-fn upper_subr_0890(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::charset-priority-list");
-}
-
-fn upper_subr_0891(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::set-charset-priority");
-}
-
-fn upper_subr_0892(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::char-charset");
-}
-
-fn upper_subr_0893(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::charset-id-internal");
-}
-
-fn upper_subr_0894(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::declare-equiv-charset");
-}
-
-fn upper_subr_0895(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::find-charset-string");
-}
-
-fn upper_subr_0896(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::decode-big5-char");
-}
-
-fn upper_subr_0897(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::decode-char");
-}
-
-fn upper_subr_0898(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::decode-sjis-char");
-}
-
-fn upper_subr_0899(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::encode-big5-char");
-}
-
-fn upper_subr_0900(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::encode-char");
-}
-
-fn upper_subr_0901(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::encode-sjis-char");
-}
-
-fn upper_subr_0902(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::get-unused-iso-final-char");
-}
-
-fn upper_subr_0903(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::clear-charset-maps");
-}
-
-fn upper_subr_0904(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::set-text-conversion-style");
-}
-
-fn upper_subr_0905(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::text-quoting-style");
-}
-
-fn upper_subr_0906(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0594(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::yes-or-no-p");
 }
 
-fn upper_subr_0907(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0595(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::redraw-display");
 }
 
-fn upper_subr_0908(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0596(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::open-termscript");
 }
 
-fn upper_subr_0909(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0597(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::ding");
 }
 
-fn upper_subr_0910(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0598(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::frame--z-order-lessp");
 }
 
-fn upper_subr_0911(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0599(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::force-window-update");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0912(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0600(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-export-frames");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0913(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0601(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-backspace-delete-keys-p");
 }
 
 #[cfg(not(target_os = "macos"))]
-fn upper_subr_0914(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0602(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-change-window-property");
 }
 
-fn upper_subr_0915(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0603(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-focus-frame");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0916(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0604(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-get-local-selection");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0917(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0605(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-get-modifier-masks");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0918(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0606(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-get-selection-internal");
 }
 
-fn upper_subr_0919(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0607(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-display-list");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0920(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0608(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-disown-selection-internal");
 }
 
 #[cfg(not(target_os = "macos"))]
-fn upper_subr_0921(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0609(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-delete-window-property");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0922(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0610(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-frame-edges");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0923(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0611(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-frame-geometry");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0924(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0612(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-frame-list-z-order");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0925(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0613(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-frame-restack");
 }
 
-fn upper_subr_0926(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0614(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-family-fonts");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0927(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0615(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-get-atom-name");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0928(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0616(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-mouse-absolute-pixel-position");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0929(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0617(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-own-selection-internal");
 }
 
-fn upper_subr_0930(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0618(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-parse-geometry");
 }
 
-fn upper_subr_0931(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0619(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-popup-dialog");
 }
 
-fn upper_subr_0932(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0620(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-popup-menu");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0933(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0621(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-register-dnd-atom");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0934(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0622(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-selection-exists-p");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0935(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0623(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-selection-owner-p");
 }
 
-fn upper_subr_0936(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0624(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-hide-tip");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0937(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0625(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-internal-focus-input-context");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0938(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0626(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-send-client-message");
 }
 
-fn upper_subr_0939(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0627(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-show-tip");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0940(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0628(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-set-mouse-absolute-pixel-position");
 }
 
 #[cfg(not(target_os = "macos"))]
-fn upper_subr_0941(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0629(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-synchronize");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0942(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0630(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-translate-coordinates");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0943(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0631(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-uses-old-gtk-dialog");
 }
 
 #[cfg(not(target_os = "macos"))]
-fn upper_subr_0944(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0632(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-window-property");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0945(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0633(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-window-property-attributes");
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn upper_subr_0946(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0634(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-wm-set-size-hint");
 }
 
-fn upper_subr_0947(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0635(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::terminal-list");
 }
 
-fn upper_subr_0948(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0636(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::delete-terminal");
 }
 
-fn upper_subr_0949(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0637(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::make-terminal-frame");
 }
 
-fn upper_subr_0950(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0638(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::image-size");
 }
 
-fn upper_subr_0951(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0639(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::image-mask-p");
 }
 
-fn upper_subr_0952(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0640(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::image-flush");
 }
 
-fn upper_subr_0953(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0641(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::clear-image-cache");
 }
 
-fn upper_subr_0954(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0642(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::image-cache-size");
 }
 
-fn upper_subr_0955(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0643(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::image-metadata");
 }
 
-fn upper_subr_0956(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0644(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-image-extent");
 }
 
-fn upper_subr_0957(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0645(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::imagep");
 }
 
-fn upper_subr_0958(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0646(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::image-transforms-p");
 }
 
-fn upper_subr_0959(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0647(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::invisible-p");
 }
 
-fn upper_subr_0960(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0648(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::line-pixel-height");
 }
 
-fn upper_subr_0961(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0649(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::move-point-visually");
 }
 
-fn upper_subr_0962(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0650(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::lookup-image-map");
 }
 
-fn upper_subr_0963(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0651(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::current-bidi-paragraph-direction");
 }
 
-fn upper_subr_0964(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0652(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::bidi-resolved-levels");
 }
 
-fn upper_subr_0965(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0653(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::bidi-find-overridden-directionality");
 }
 
-fn upper_subr_0966(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0654(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::move-to-window-line");
 }
 
-fn upper_subr_0967(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0655(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::long-line-optimizations-p");
 }
 
-fn upper_subr_0968(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::libxml-parse-html-region");
-}
-
-fn upper_subr_0969(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::libxml-parse-xml-region");
-}
-
-fn upper_subr_0970(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::libxml-available-p");
-}
-
-fn upper_subr_0971(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::zlib-available-p");
-}
-
-fn upper_subr_0972(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::zlib-decompress-region");
-}
-
-fn upper_subr_0973(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::json-serialize");
-}
-
-fn upper_subr_0974(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER text::json-parse-string");
-}
-
-fn upper_subr_0975(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::markerp");
-}
-
-fn upper_subr_0976(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::get-load-suffixes");
-}
-
-fn upper_subr_0977(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0656(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-coding-system");
 }
 
-fn upper_subr_0978(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0657(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::read-non-nil-coding-system");
 }
 
-fn upper_subr_0979(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0658(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::base64-encode-string");
 }
 
-fn upper_subr_0980(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::base64-decode-string");
-}
-
-fn upper_subr_0981(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-    s::absent_layer_panic("ABSENT-LAYER core::base64url-encode-string");
-}
-
 #[cfg(windows)]
-fn upper_subr_0982(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0659(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::w32-short-file-name");
 }
 
 #[cfg(windows)]
-fn upper_subr_0983(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0660(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::w32-long-file-name");
 }
 
 #[cfg(windows)]
-fn upper_subr_0984(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0661(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::w32-get-valid-codepages");
 }
 
 #[cfg(windows)]
-fn upper_subr_0985(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0662(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::w32-get-console-codepage");
 }
 
 #[cfg(windows)]
-fn upper_subr_0986(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0663(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::w32-set-console-codepage");
 }
 
 #[cfg(windows)]
-fn upper_subr_0987(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0664(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::w32-get-console-output-codepage");
 }
 
 #[cfg(windows)]
-fn upper_subr_0988(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0665(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::w32-set-console-output-codepage");
 }
 
 #[cfg(windows)]
-fn upper_subr_0989(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0666(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::w32-get-codepage-charset");
 }
 
 #[cfg(windows)]
-fn upper_subr_0990(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0667(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::w32-shell-execute");
 }
 
-fn upper_subr_0991(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0668(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::compose-region-internal");
 }
 
-fn upper_subr_0992(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0669(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::compose-string-internal");
 }
 
-fn upper_subr_0993(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0670(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::find-composition-internal");
 }
 
-fn upper_subr_0994(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0671(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::composition-get-gstring");
 }
 
-fn upper_subr_0995(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0672(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::clear-composition-cache");
 }
 
-fn upper_subr_0996(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0673(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::composition-sort-rules");
 }
 
-fn upper_subr_0997(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0674(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-terminal-create");
 }
 
-fn upper_subr_0998(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0675(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-terminal-write");
 }
 
-fn upper_subr_0999(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0676(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-terminal-resize");
 }
 
-fn upper_subr_1000(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0677(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-terminal-destroy");
 }
 
-fn upper_subr_1001(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0678(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-terminal-set-float");
 }
 
-fn upper_subr_1002(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0679(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-terminal-get-text");
 }
 
-fn upper_subr_1003(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0680(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-surface-create");
 }
 
-fn upper_subr_1004(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0681(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-surface-set-uniform");
 }
 
-fn upper_subr_1005(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0682(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-surface-destroy");
 }
 
-fn upper_subr_1006(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0683(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-surface-available-p");
 }
 
-fn upper_subr_1007(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0684(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-frame-shader");
 }
 
-fn upper_subr_1008(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0685(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-frame-shader-set-uniform");
 }
 
-fn upper_subr_1009(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0686(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-video-p");
 }
 
-fn upper_subr_1010(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0687(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-video-load");
 }
 
-fn upper_subr_1011(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0688(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-video-play");
 }
 
-fn upper_subr_1012(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0689(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-video-pause");
 }
 
-fn upper_subr_1013(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0690(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-video-stop");
 }
 
-fn upper_subr_1014(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0691(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-video-set-loop");
 }
 
-fn upper_subr_1015(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0692(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-video-destroy");
 }
 
-fn upper_subr_1016(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0693(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-video-diagnostics");
 }
 
-fn upper_subr_1017(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0694(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-video-begin-measurement-epoch");
 }
 
-fn upper_subr_1018(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0695(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::make-xwidget");
 }
 
-fn upper_subr_1019(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0696(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidgetp");
 }
 
-fn upper_subr_1020(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0697(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-p");
 }
 
-fn upper_subr_1021(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0698(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-live-p");
 }
 
-fn upper_subr_1022(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0699(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-info");
 }
 
-fn upper_subr_1023(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0700(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-info");
 }
 
-fn upper_subr_1024(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0701(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-model");
 }
 
-fn upper_subr_1025(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0702(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-window");
 }
 
-fn upper_subr_1026(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0703(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-lookup");
 }
 
-fn upper_subr_1027(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0704(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::delete-xwidget-view");
 }
 
-fn upper_subr_1028(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0705(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-plist");
 }
 
-fn upper_subr_1029(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0706(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-xwidget-plist");
 }
 
-fn upper_subr_1030(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0707(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-buffer");
 }
 
-fn upper_subr_1031(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0708(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-xwidget-buffer");
 }
 
-fn upper_subr_1032(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0709(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-query-on-exit-flag");
 }
 
-fn upper_subr_1033(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0710(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-xwidget-query-on-exit-flag");
 }
 
-fn upper_subr_1034(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0711(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::get-buffer-xwidgets");
 }
 
-fn upper_subr_1035(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0712(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::kill-xwidget");
 }
 
-fn upper_subr_1036(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0713(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-resize");
 }
 
-fn upper_subr_1037(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0714(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-size-request");
 }
 
-fn upper_subr_1038(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0715(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-uri");
 }
 
-fn upper_subr_1039(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0716(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-title");
 }
 
-fn upper_subr_1040(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0717(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-goto-uri");
 }
 
-fn upper_subr_1041(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0718(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-execute-script");
 }
 
-fn upper_subr_1042(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0719(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-estimated-load-progress");
 }
 
-fn upper_subr_1043(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0720(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::current-indentation");
 }
 
-fn upper_subr_1044(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0721(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::indent-to");
 }
 
-fn upper_subr_1045(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0722(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::current-column");
 }
 
-fn upper_subr_1046(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0723(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::move-to-column");
 }
 
-fn upper_subr_1047(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0724(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::line-number-display-width");
 }
 
-fn upper_subr_1048(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0725(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::vertical-motion");
 }
 
-fn upper_subr_1049(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0726(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::compute-motion");
 }
 
 #[cfg(neomacs_have_dbus)]
-fn upper_subr_1050(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0727(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::dbus--init-bus");
 }
 
 #[cfg(neomacs_have_dbus)]
-fn upper_subr_1051(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0728(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::dbus-get-unique-name");
 }
 
 #[cfg(neomacs_have_dbus)]
-fn upper_subr_1052(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0729(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::dbus-message-internal");
 }
 
 #[cfg(neomacs_have_dbus)]
-fn upper_subr_1053(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0730(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::dbus--fd-open");
 }
 
 #[cfg(neomacs_have_dbus)]
-fn upper_subr_1054(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0731(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::dbus--fd-close");
 }
 
 #[cfg(neomacs_have_dbus)]
-fn upper_subr_1055(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0732(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::dbus--registered-fds");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1056(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0733(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-open");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1057(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0734(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-close");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1058(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0735(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-execute");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1059(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0736(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-select");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1060(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0737(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-execute-batch");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1061(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0738(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-transaction");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1062(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0739(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-commit");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1063(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0740(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-rollback");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1064(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0741(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-pragma");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1065(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0742(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-load-extension");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1066(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0743(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-next");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1067(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0744(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-columns");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1068(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0745(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-more-p");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1069(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0746(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-finalize");
 }
 
 #[cfg(feature = "sqlite")]
-fn upper_subr_1070(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0747(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-version");
 }
 
-fn upper_subr_1071(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0748(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlitep");
 }
 
-fn upper_subr_1072(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0749(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER system::sqlite-available-p");
 }
 
-fn upper_subr_1073(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0750(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::fontp");
 }
 
-fn upper_subr_1074(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0751(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-spec");
 }
 
-fn upper_subr_1075(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0752(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-get");
 }
 
-fn upper_subr_1076(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0753(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-face-attributes");
 }
 
-fn upper_subr_1077(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0754(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-put");
 }
 
-fn upper_subr_1078(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0755(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::list-fonts");
 }
 
-fn upper_subr_1079(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0756(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-family-list");
 }
 
-fn upper_subr_1080(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0757(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::find-font");
 }
 
-fn upper_subr_1081(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0758(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-xlfd-name");
 }
 
-fn upper_subr_1082(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0759(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::clear-font-cache");
 }
 
-fn upper_subr_1083(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0760(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-shape-gstring");
 }
 
-fn upper_subr_1084(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0761(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-variation-glyphs");
 }
 
-fn upper_subr_1085(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0762(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::internal-char-font");
 }
 
-fn upper_subr_1086(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0763(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::close-font");
 }
 
-fn upper_subr_1087(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0764(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::query-font");
 }
 
-fn upper_subr_1088(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0765(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-get-glyphs");
 }
 
-fn upper_subr_1089(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0766(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-has-char-p");
 }
 
-fn upper_subr_1090(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0767(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-match-p");
 }
 
-fn upper_subr_1091(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0768(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-at");
 }
 
-fn upper_subr_1092(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0769(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-info");
 }
 
-fn upper_subr_1093(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0770(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs--effect-set");
 }
 
-fn upper_subr_1094(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0771(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-effect-get");
 }
 
-fn upper_subr_1095(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0772(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs--effects-apply");
 }
 
-fn upper_subr_1096(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0773(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-effect-schema");
 }
 
-fn upper_subr_1097(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0774(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-effect-names");
 }
 
-fn upper_subr_1098(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0775(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-set-modifier-policy");
 }
 
-fn upper_subr_1099(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0776(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-set-scroll-indicators");
 }
 
-fn upper_subr_1100(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+fn upper_subr_0777(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-set-extra-spacing");
 }
 
@@ -4484,1167 +3188,840 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("get-buffer-create", 1, Some(2), upper_subr_0003),
     ("get-buffer", 1, Some(1), upper_subr_0004),
     ("make-indirect-buffer", 2, Some(4), upper_subr_0005),
-    ("find-buffer", 2, Some(2), upper_subr_0006),
-    ("buffer-live-p", 1, Some(1), upper_subr_0007),
-    ("get-file-buffer", 1, Some(1), upper_subr_0008),
-    ("kill-buffer", 0, Some(1), upper_subr_0009),
-    ("set-buffer", 1, Some(1), upper_subr_0010),
-    ("current-buffer", 0, Some(0), upper_subr_0011),
-    ("buffer-name", 0, Some(1), upper_subr_0012),
-    ("buffer-file-name", 0, Some(1), upper_subr_0013),
-    ("buffer-base-buffer", 0, Some(1), upper_subr_0014),
-    ("buffer-last-name", 0, Some(1), upper_subr_0015),
-    ("buffer-string", 0, Some(0), upper_subr_0016),
-    ("buffer-line-statistics", 0, Some(1), upper_subr_0017),
-    ("buffer-text-pixel-size", 0, Some(4), upper_subr_0018),
-    ("buffer-substring", 2, Some(2), upper_subr_0019),
-    ("point", 0, Some(0), upper_subr_0020),
-    ("point-min", 0, Some(0), upper_subr_0021),
-    ("point-max", 0, Some(0), upper_subr_0022),
-    ("goto-char", 1, Some(1), upper_subr_0023),
-    ("field-beginning", 0, Some(3), upper_subr_0024),
-    ("field-end", 0, Some(3), upper_subr_0025),
-    ("field-string", 0, Some(1), upper_subr_0026),
-    ("field-string-no-properties", 0, Some(1), upper_subr_0027),
-    ("constrain-to-field", 2, Some(5), upper_subr_0028),
-    ("insert", 0, None, upper_subr_0029),
-    ("insert-and-inherit", 0, None, upper_subr_0030),
-    ("insert-before-markers-and-inherit", 0, None, upper_subr_0031),
-    ("insert-buffer-substring", 1, Some(3), upper_subr_0032),
-    ("insert-char", 1, Some(3), upper_subr_0033),
-    ("insert-byte", 2, Some(3), upper_subr_0034),
-    ("replace-region-contents", 3, Some(6), upper_subr_0035),
-    ("set-buffer-multibyte", 1, Some(1), upper_subr_0036),
-    ("kill-all-local-variables", 0, Some(1), upper_subr_0037),
-    ("buffer-swap-text", 1, Some(1), upper_subr_0038),
-    ("delete-region", 2, Some(2), upper_subr_0039),
-    ("delete-and-extract-region", 2, Some(2), upper_subr_0040),
-    ("subst-char-in-region", 4, Some(5), upper_subr_0041),
-    ("delete-field", 0, Some(1), upper_subr_0042),
-    ("delete-all-overlays", 0, Some(1), upper_subr_0043),
-    ("erase-buffer", 0, Some(0), upper_subr_0044),
-    ("buffer-enable-undo", 0, Some(1), upper_subr_0045),
-    ("buffer-size", 0, Some(1), upper_subr_0046),
-    ("narrow-to-region", 2, Some(2), upper_subr_0047),
-    ("widen", 0, Some(0), upper_subr_0048),
-    ("buffer-modified-p", 0, Some(1), upper_subr_0049),
-    ("set-buffer-modified-p", 1, Some(1), upper_subr_0050),
-    ("buffer-modified-tick", 0, Some(1), upper_subr_0051),
-    ("buffer-chars-modified-tick", 0, Some(1), upper_subr_0052),
-    ("buffer-list", 0, Some(1), upper_subr_0053),
-    ("other-buffer", 0, Some(3), upper_subr_0054),
-    ("generate-new-buffer-name", 1, Some(2), upper_subr_0055),
-    ("char-after", 0, Some(1), upper_subr_0056),
-    ("char-before", 0, Some(1), upper_subr_0057),
-    ("byte-to-position", 1, Some(1), upper_subr_0058),
-    ("position-bytes", 1, Some(1), upper_subr_0059),
-    ("get-byte", 0, Some(2), upper_subr_0060),
-    ("command-modes", 1, Some(1), upper_subr_0061),
-    ("find-charset-region", 2, Some(3), upper_subr_0062),
-    ("charset-after", 0, Some(1), upper_subr_0063),
-    ("format-mode-line", 1, Some(4), upper_subr_0064),
-    ("window-line-height", 0, Some(2), upper_subr_0065),
-    ("posn-at-point", 0, Some(2), upper_subr_0066),
-    ("posn-at-x-y", 2, Some(4), upper_subr_0067),
-    ("coordinates-in-window-p", 2, Some(2), upper_subr_0068),
-    ("tool-bar-height", 0, Some(2), upper_subr_0069),
-    ("tab-bar-height", 0, Some(2), upper_subr_0070),
-    ("new-fontset", 2, Some(2), upper_subr_0071),
-    ("set-fontset-font", 3, Some(5), upper_subr_0072),
-    ("insert-file-contents", 1, Some(5), upper_subr_0073),
-    ("write-region", 3, Some(7), upper_subr_0074),
-    ("file-name-completion", 2, Some(3), upper_subr_0075),
-    ("set-visited-file-modtime", 0, Some(1), upper_subr_0076),
-    ("print--preprocess", 1, Some(1), upper_subr_0077),
-    ("format-network-address", 1, Some(2), upper_subr_0078),
-    ("network-interface-list", 0, Some(2), upper_subr_0079),
-    ("network-interface-info", 1, Some(1), upper_subr_0080),
-    ("signal-names", 0, Some(0), upper_subr_0081),
-    ("accept-process-output", 0, Some(4), upper_subr_0082),
-    ("list-system-processes", 0, Some(0), upper_subr_0083),
-    ("num-processors", 0, Some(1), upper_subr_0084),
-    ("make-process", 0, None, upper_subr_0085),
-    ("make-network-process", 0, None, upper_subr_0086),
-    ("neomacs-open-tls-stream", 4, Some(4), upper_subr_0087),
-    ("neomacs-tls-available-p", 0, Some(0), upper_subr_0088),
-    ("make-pipe-process", 0, None, upper_subr_0089),
-    ("gnutls-boot", 3, Some(3), upper_subr_0090),
-    ("make-serial-process", 0, None, upper_subr_0091),
-    ("serial-process-configure", 0, None, upper_subr_0092),
-    ("call-process", 1, None, upper_subr_0093),
-    ("call-process-region", 3, None, upper_subr_0094),
-    ("continue-process", 0, Some(2), upper_subr_0095),
-    ("delete-process", 0, Some(1), upper_subr_0096),
-    ("interrupt-process", 0, Some(2), upper_subr_0097),
-    ("kill-process", 0, Some(2), upper_subr_0098),
-    ("quit-process", 0, Some(2), upper_subr_0099),
-    ("signal-process", 2, Some(3), upper_subr_0100),
-    ("stop-process", 0, Some(2), upper_subr_0101),
-    ("get-process", 1, Some(1), upper_subr_0102),
-    ("get-buffer-process", 1, Some(1), upper_subr_0103),
-    ("process-attributes", 1, Some(1), upper_subr_0104),
-    ("processp", 1, Some(1), upper_subr_0105),
-    ("process-id", 1, Some(1), upper_subr_0106),
-    ("process-command", 1, Some(1), upper_subr_0107),
-    ("process-contact", 1, Some(3), upper_subr_0108),
-    ("process-filter", 1, Some(1), upper_subr_0109),
-    ("set-process-filter", 2, Some(2), upper_subr_0110),
-    ("process-sentinel", 1, Some(1), upper_subr_0111),
-    ("set-process-sentinel", 2, Some(2), upper_subr_0112),
-    ("process-coding-system", 1, Some(1), upper_subr_0113),
-    ("process-datagram-address", 1, Some(1), upper_subr_0114),
-    ("set-process-buffer", 2, Some(2), upper_subr_0115),
-    ("set-process-thread", 2, Some(2), upper_subr_0116),
-    ("set-process-window-size", 3, Some(3), upper_subr_0117),
-    ("process-tty-name", 1, Some(2), upper_subr_0118),
-    ("process-plist", 1, Some(1), upper_subr_0119),
-    ("set-process-plist", 2, Some(2), upper_subr_0120),
-    ("process-mark", 1, Some(1), upper_subr_0121),
-    ("process-type", 1, Some(1), upper_subr_0122),
-    ("process-thread", 1, Some(1), upper_subr_0123),
-    ("process-running-child-p", 0, Some(1), upper_subr_0124),
-    ("process-send-region", 3, Some(3), upper_subr_0125),
-    ("process-send-eof", 0, Some(1), upper_subr_0126),
-    ("process-send-string", 2, Some(2), upper_subr_0127),
-    ("process-status", 1, Some(1), upper_subr_0128),
-    ("process-exit-status", 1, Some(1), upper_subr_0129),
-    ("process-list", 0, Some(0), upper_subr_0130),
-    ("process-name", 1, Some(1), upper_subr_0131),
-    ("process-buffer", 1, Some(1), upper_subr_0132),
-    ("sleep-for", 1, Some(2), upper_subr_0133),
-    ("modify-syntax-entry", 2, Some(3), upper_subr_0134),
-    ("syntax-table", 0, Some(0), upper_subr_0135),
-    ("set-syntax-table", 1, Some(1), upper_subr_0136),
-    ("char-syntax", 1, Some(1), upper_subr_0137),
-    ("matching-paren", 1, Some(1), upper_subr_0138),
-    ("forward-comment", 1, Some(1), upper_subr_0139),
-    ("backward-prefix-chars", 0, Some(0), upper_subr_0140),
-    ("forward-word", 0, Some(1), upper_subr_0141),
-    ("scan-lists", 3, Some(3), upper_subr_0142),
-    ("scan-sexps", 2, Some(2), upper_subr_0143),
-    ("parse-partial-sexp", 2, Some(6), upper_subr_0144),
-    ("skip-syntax-forward", 1, Some(2), upper_subr_0145),
-    ("skip-syntax-backward", 1, Some(2), upper_subr_0146),
-    ("start-kbd-macro", 1, Some(2), upper_subr_0147),
-    ("end-kbd-macro", 0, Some(2), upper_subr_0148),
-    ("call-last-kbd-macro", 0, Some(2), upper_subr_0149),
-    ("execute-kbd-macro", 1, Some(3), upper_subr_0150),
-    ("store-kbd-macro-event", 1, Some(1), upper_subr_0151),
-    ("get-char-property", 2, Some(3), upper_subr_0152),
-    ("next-overlay-change", 1, Some(1), upper_subr_0153),
-    ("previous-overlay-change", 1, Some(1), upper_subr_0154),
-    ("make-overlay", 2, Some(5), upper_subr_0155),
-    ("delete-overlay", 1, Some(1), upper_subr_0156),
-    ("overlay-put", 3, Some(3), upper_subr_0157),
-    ("overlay-get", 2, Some(2), upper_subr_0158),
-    ("overlays-at", 1, Some(2), upper_subr_0159),
-    ("overlays-in", 2, Some(2), upper_subr_0160),
-    ("move-overlay", 3, Some(4), upper_subr_0161),
-    ("overlay-start", 1, Some(1), upper_subr_0162),
-    ("overlay-end", 1, Some(1), upper_subr_0163),
-    ("overlay-buffer", 1, Some(1), upper_subr_0164),
-    ("overlay-properties", 1, Some(1), upper_subr_0165),
-    ("overlayp", 1, Some(1), upper_subr_0166),
-    ("bobp", 0, Some(0), upper_subr_0167),
-    ("eobp", 0, Some(0), upper_subr_0168),
-    ("bolp", 0, Some(0), upper_subr_0169),
-    ("eolp", 0, Some(0), upper_subr_0170),
-    ("line-end-position", 0, Some(1), upper_subr_0171),
-    ("line-number-at-pos", 0, Some(2), upper_subr_0172),
-    ("forward-line", 0, Some(1), upper_subr_0173),
-    ("beginning-of-line", 0, Some(1), upper_subr_0174),
-    ("end-of-line", 0, Some(1), upper_subr_0175),
-    ("forward-char", 0, Some(1), upper_subr_0176),
-    ("backward-char", 0, Some(1), upper_subr_0177),
-    ("skip-chars-forward", 1, Some(2), upper_subr_0178),
-    ("skip-chars-backward", 1, Some(2), upper_subr_0179),
-    ("mark-marker", 0, Some(0), upper_subr_0180),
-    ("region-beginning", 0, Some(0), upper_subr_0181),
-    ("region-end", 0, Some(0), upper_subr_0182),
-    ("downcase-region", 2, Some(3), upper_subr_0183),
-    ("upcase-region", 2, Some(3), upper_subr_0184),
-    ("capitalize-region", 2, Some(3), upper_subr_0185),
-    ("downcase-word", 1, Some(1), upper_subr_0186),
-    ("upcase-word", 1, Some(1), upper_subr_0187),
-    ("capitalize-word", 1, Some(1), upper_subr_0188),
-    ("selected-window", 0, Some(0), upper_subr_0189),
-    ("old-selected-window", 0, Some(0), upper_subr_0190),
-    ("minibuffer-window", 0, Some(1), upper_subr_0191),
-    ("window-parameter", 2, Some(2), upper_subr_0192),
-    ("set-window-parameter", 3, Some(3), upper_subr_0193),
-    ("window-parameters", 0, Some(1), upper_subr_0194),
-    ("window-parent", 0, Some(1), upper_subr_0195),
-    ("window-top-child", 0, Some(1), upper_subr_0196),
-    ("window-left-child", 0, Some(1), upper_subr_0197),
-    ("window-next-sibling", 0, Some(1), upper_subr_0198),
-    ("window-prev-sibling", 0, Some(1), upper_subr_0199),
-    ("window-normal-size", 0, Some(2), upper_subr_0200),
-    ("window-display-table", 0, Some(1), upper_subr_0201),
-    ("window-cursor-type", 0, Some(1), upper_subr_0202),
-    ("window-buffer", 0, Some(1), upper_subr_0203),
-    ("window-start", 0, Some(1), upper_subr_0204),
-    ("window-end", 0, Some(2), upper_subr_0205),
-    ("window-point", 0, Some(1), upper_subr_0206),
-    ("window-use-time", 0, Some(1), upper_subr_0207),
-    ("window-bump-use-time", 0, Some(1), upper_subr_0208),
-    ("window-old-point", 0, Some(1), upper_subr_0209),
-    ("window-old-buffer", 0, Some(1), upper_subr_0210),
-    ("window-prev-buffers", 0, Some(1), upper_subr_0211),
-    ("window-next-buffers", 0, Some(1), upper_subr_0212),
-    ("window-left-column", 0, Some(1), upper_subr_0213),
-    ("window-top-line", 0, Some(1), upper_subr_0214),
-    ("window-pixel-left", 0, Some(1), upper_subr_0215),
-    ("window-pixel-top", 0, Some(1), upper_subr_0216),
-    ("window-hscroll", 0, Some(1), upper_subr_0217),
-    ("window-vscroll", 0, Some(2), upper_subr_0218),
-    ("window-margins", 0, Some(1), upper_subr_0219),
-    ("window-fringes", 0, Some(1), upper_subr_0220),
-    ("window-scroll-bars", 0, Some(1), upper_subr_0221),
-    ("window-pixel-height", 0, Some(1), upper_subr_0222),
-    ("window-pixel-width", 0, Some(1), upper_subr_0223),
-    ("window-body-height", 0, Some(2), upper_subr_0224),
-    ("window-body-width", 0, Some(2), upper_subr_0225),
-    ("window-text-height", 0, Some(2), upper_subr_0226),
-    ("window-text-width", 0, Some(2), upper_subr_0227),
-    ("window-total-height", 0, Some(2), upper_subr_0228),
-    ("window-total-width", 0, Some(2), upper_subr_0229),
-    ("window-list", 0, Some(3), upper_subr_0230),
-    ("window-list-1", 0, Some(3), upper_subr_0231),
-    ("get-buffer-window", 0, Some(2), upper_subr_0232),
-    ("window-dedicated-p", 0, Some(1), upper_subr_0233),
-    ("window-minibuffer-p", 0, Some(1), upper_subr_0234),
-    ("window-at", 2, Some(3), upper_subr_0235),
-    ("window-live-p", 1, Some(1), upper_subr_0236),
-    ("set-window-start", 2, Some(3), upper_subr_0237),
-    ("set-window-hscroll", 2, Some(2), upper_subr_0238),
-    ("set-window-margins", 2, Some(3), upper_subr_0239),
-    ("set-window-fringes", 2, Some(5), upper_subr_0240),
-    ("set-window-vscroll", 2, Some(4), upper_subr_0241),
-    ("set-window-point", 2, Some(2), upper_subr_0242),
-    ("split-window-internal", 4, Some(5), upper_subr_0243),
-    ("select-window", 1, Some(2), upper_subr_0244),
-    ("scroll-up", 0, Some(1), upper_subr_0245),
-    ("scroll-down", 0, Some(1), upper_subr_0246),
-    ("scroll-left", 0, Some(2), upper_subr_0247),
-    ("scroll-right", 0, Some(2), upper_subr_0248),
-    ("window-resize-apply", 0, Some(2), upper_subr_0249),
-    ("recenter", 0, Some(2), upper_subr_0250),
-    ("next-window", 0, Some(3), upper_subr_0251),
-    ("previous-window", 0, Some(3), upper_subr_0252),
-    ("set-window-buffer", 2, Some(3), upper_subr_0253),
-    ("neomacs--record-window-navigation-intent", 1, Some(2), upper_subr_0254),
-    ("neomacs--record-frame-navigation-intent", 1, Some(2), upper_subr_0255),
-    ("current-window-configuration", 0, Some(1), upper_subr_0256),
-    ("set-window-configuration", 1, Some(3), upper_subr_0257),
-    ("old-selected-frame", 0, Some(0), upper_subr_0258),
-    ("selected-frame", 0, Some(0), upper_subr_0259),
-    ("mouse-pixel-position", 0, Some(0), upper_subr_0260),
-    ("mouse-position", 0, Some(0), upper_subr_0261),
-    ("next-frame", 0, Some(2), upper_subr_0262),
-    ("previous-frame", 0, Some(2), upper_subr_0263),
-    ("select-frame", 1, Some(2), upper_subr_0264),
-    ("last-nonminibuffer-frame", 0, Some(0), upper_subr_0265),
-    ("visible-frame-list", 0, Some(0), upper_subr_0266),
-    ("frame-list", 0, Some(0), upper_subr_0267),
-    ("x-create-frame", 1, Some(1), upper_subr_0268),
-    ("make-frame-visible", 0, Some(1), upper_subr_0269),
-    ("iconify-frame", 0, Some(1), upper_subr_0270),
-    ("delete-frame", 0, Some(2), upper_subr_0271),
-    ("frame-char-height", 0, Some(1), upper_subr_0272),
-    ("frame-char-width", 0, Some(1), upper_subr_0273),
-    ("frame-native-height", 0, Some(1), upper_subr_0274),
-    ("frame-native-width", 0, Some(1), upper_subr_0275),
-    ("frame-text-cols", 0, Some(1), upper_subr_0276),
-    ("frame-text-height", 0, Some(1), upper_subr_0277),
-    ("frame-text-lines", 0, Some(1), upper_subr_0278),
-    ("frame-text-width", 0, Some(1), upper_subr_0279),
-    ("frame-total-cols", 0, Some(1), upper_subr_0280),
-    ("frame-total-lines", 0, Some(1), upper_subr_0281),
-    ("frame-position", 0, Some(1), upper_subr_0282),
-    ("frame-parameters", 0, Some(1), upper_subr_0283),
-    ("set-frame-height", 2, Some(4), upper_subr_0284),
-    ("set-frame-width", 2, Some(4), upper_subr_0285),
-    ("set-frame-size", 3, Some(4), upper_subr_0286),
-    ("set-frame-position", 3, Some(3), upper_subr_0287),
-    ("frame-visible-p", 1, Some(1), upper_subr_0288),
-    ("frame-live-p", 1, Some(1), upper_subr_0289),
-    ("frame-initial-p", 0, Some(1), upper_subr_0290),
-    ("frame-first-window", 0, Some(1), upper_subr_0291),
-    ("frame-root-window", 0, Some(1), upper_subr_0292),
-    ("windowp", 1, Some(1), upper_subr_0293),
-    ("window-valid-p", 1, Some(1), upper_subr_0294),
-    ("framep", 1, Some(1), upper_subr_0295),
-    ("window-frame", 0, Some(1), upper_subr_0296),
-    ("frame-id", 0, Some(1), upper_subr_0297),
-    ("frame-root-frame", 0, Some(1), upper_subr_0298),
-    ("x-open-connection", 1, Some(3), upper_subr_0299),
-    ("x-get-resource", 2, Some(4), upper_subr_0300),
+    ("get-file-buffer", 1, Some(1), upper_subr_0006),
+    ("kill-buffer", 0, Some(1), upper_subr_0007),
+    ("set-buffer", 1, Some(1), upper_subr_0008),
+    ("current-buffer", 0, Some(0), upper_subr_0009),
+    ("buffer-line-statistics", 0, Some(1), upper_subr_0010),
+    ("buffer-text-pixel-size", 0, Some(4), upper_subr_0011),
+    ("point", 0, Some(0), upper_subr_0012),
+    ("point-min", 0, Some(0), upper_subr_0013),
+    ("point-max", 0, Some(0), upper_subr_0014),
+    ("goto-char", 1, Some(1), upper_subr_0015),
+    ("insert", 0, None, upper_subr_0016),
+    ("insert-byte", 2, Some(3), upper_subr_0017),
+    ("replace-region-contents", 3, Some(6), upper_subr_0018),
+    ("set-buffer-multibyte", 1, Some(1), upper_subr_0019),
+    ("kill-all-local-variables", 0, Some(1), upper_subr_0020),
+    ("delete-region", 2, Some(2), upper_subr_0021),
+    ("erase-buffer", 0, Some(0), upper_subr_0022),
+    ("narrow-to-region", 2, Some(2), upper_subr_0023),
+    ("widen", 0, Some(0), upper_subr_0024),
+    ("buffer-list", 0, Some(1), upper_subr_0025),
+    ("other-buffer", 0, Some(3), upper_subr_0026),
+    ("char-after", 0, Some(1), upper_subr_0027),
+    ("command-modes", 1, Some(1), upper_subr_0028),
+    ("format-mode-line", 1, Some(4), upper_subr_0029),
+    ("window-line-height", 0, Some(2), upper_subr_0030),
+    ("posn-at-point", 0, Some(2), upper_subr_0031),
+    ("posn-at-x-y", 2, Some(4), upper_subr_0032),
+    ("coordinates-in-window-p", 2, Some(2), upper_subr_0033),
+    ("tool-bar-height", 0, Some(2), upper_subr_0034),
+    ("tab-bar-height", 0, Some(2), upper_subr_0035),
+    ("new-fontset", 2, Some(2), upper_subr_0036),
+    ("set-fontset-font", 3, Some(5), upper_subr_0037),
+    ("insert-file-contents", 1, Some(5), upper_subr_0038),
+    ("write-region", 3, Some(7), upper_subr_0039),
+    ("file-name-completion", 2, Some(3), upper_subr_0040),
+    ("set-visited-file-modtime", 0, Some(1), upper_subr_0041),
+    ("print--preprocess", 1, Some(1), upper_subr_0042),
+    ("format-network-address", 1, Some(2), upper_subr_0043),
+    ("network-interface-list", 0, Some(2), upper_subr_0044),
+    ("network-interface-info", 1, Some(1), upper_subr_0045),
+    ("signal-names", 0, Some(0), upper_subr_0046),
+    ("accept-process-output", 0, Some(4), upper_subr_0047),
+    ("list-system-processes", 0, Some(0), upper_subr_0048),
+    ("num-processors", 0, Some(1), upper_subr_0049),
+    ("make-process", 0, None, upper_subr_0050),
+    ("make-network-process", 0, None, upper_subr_0051),
+    ("neomacs-open-tls-stream", 4, Some(4), upper_subr_0052),
+    ("neomacs-tls-available-p", 0, Some(0), upper_subr_0053),
+    ("make-pipe-process", 0, None, upper_subr_0054),
+    ("gnutls-boot", 3, Some(3), upper_subr_0055),
+    ("make-serial-process", 0, None, upper_subr_0056),
+    ("serial-process-configure", 0, None, upper_subr_0057),
+    ("call-process", 1, None, upper_subr_0058),
+    ("call-process-region", 3, None, upper_subr_0059),
+    ("continue-process", 0, Some(2), upper_subr_0060),
+    ("delete-process", 0, Some(1), upper_subr_0061),
+    ("interrupt-process", 0, Some(2), upper_subr_0062),
+    ("kill-process", 0, Some(2), upper_subr_0063),
+    ("quit-process", 0, Some(2), upper_subr_0064),
+    ("signal-process", 2, Some(3), upper_subr_0065),
+    ("stop-process", 0, Some(2), upper_subr_0066),
+    ("get-process", 1, Some(1), upper_subr_0067),
+    ("get-buffer-process", 1, Some(1), upper_subr_0068),
+    ("process-attributes", 1, Some(1), upper_subr_0069),
+    ("processp", 1, Some(1), upper_subr_0070),
+    ("process-id", 1, Some(1), upper_subr_0071),
+    ("process-command", 1, Some(1), upper_subr_0072),
+    ("process-contact", 1, Some(3), upper_subr_0073),
+    ("process-filter", 1, Some(1), upper_subr_0074),
+    ("set-process-filter", 2, Some(2), upper_subr_0075),
+    ("process-sentinel", 1, Some(1), upper_subr_0076),
+    ("set-process-sentinel", 2, Some(2), upper_subr_0077),
+    ("process-coding-system", 1, Some(1), upper_subr_0078),
+    ("process-datagram-address", 1, Some(1), upper_subr_0079),
+    ("set-process-buffer", 2, Some(2), upper_subr_0080),
+    ("set-process-thread", 2, Some(2), upper_subr_0081),
+    ("set-process-window-size", 3, Some(3), upper_subr_0082),
+    ("process-tty-name", 1, Some(2), upper_subr_0083),
+    ("process-plist", 1, Some(1), upper_subr_0084),
+    ("set-process-plist", 2, Some(2), upper_subr_0085),
+    ("process-mark", 1, Some(1), upper_subr_0086),
+    ("process-type", 1, Some(1), upper_subr_0087),
+    ("process-thread", 1, Some(1), upper_subr_0088),
+    ("process-running-child-p", 0, Some(1), upper_subr_0089),
+    ("process-send-region", 3, Some(3), upper_subr_0090),
+    ("process-send-eof", 0, Some(1), upper_subr_0091),
+    ("process-send-string", 2, Some(2), upper_subr_0092),
+    ("process-status", 1, Some(1), upper_subr_0093),
+    ("process-exit-status", 1, Some(1), upper_subr_0094),
+    ("process-list", 0, Some(0), upper_subr_0095),
+    ("process-name", 1, Some(1), upper_subr_0096),
+    ("process-buffer", 1, Some(1), upper_subr_0097),
+    ("sleep-for", 1, Some(2), upper_subr_0098),
+    ("set-syntax-table", 1, Some(1), upper_subr_0099),
+    ("forward-comment", 1, Some(1), upper_subr_0100),
+    ("backward-prefix-chars", 0, Some(0), upper_subr_0101),
+    ("forward-word", 0, Some(1), upper_subr_0102),
+    ("start-kbd-macro", 1, Some(2), upper_subr_0103),
+    ("end-kbd-macro", 0, Some(2), upper_subr_0104),
+    ("call-last-kbd-macro", 0, Some(2), upper_subr_0105),
+    ("execute-kbd-macro", 1, Some(3), upper_subr_0106),
+    ("store-kbd-macro-event", 1, Some(1), upper_subr_0107),
+    ("get-char-property", 2, Some(3), upper_subr_0108),
+    ("bobp", 0, Some(0), upper_subr_0109),
+    ("bolp", 0, Some(0), upper_subr_0110),
+    ("forward-char", 0, Some(1), upper_subr_0111),
+    ("downcase-region", 2, Some(3), upper_subr_0112),
+    ("upcase-region", 2, Some(3), upper_subr_0113),
+    ("capitalize-region", 2, Some(3), upper_subr_0114),
+    ("downcase-word", 1, Some(1), upper_subr_0115),
+    ("upcase-word", 1, Some(1), upper_subr_0116),
+    ("capitalize-word", 1, Some(1), upper_subr_0117),
+    ("selected-window", 0, Some(0), upper_subr_0118),
+    ("old-selected-window", 0, Some(0), upper_subr_0119),
+    ("minibuffer-window", 0, Some(1), upper_subr_0120),
+    ("window-parameter", 2, Some(2), upper_subr_0121),
+    ("set-window-parameter", 3, Some(3), upper_subr_0122),
+    ("window-parameters", 0, Some(1), upper_subr_0123),
+    ("window-parent", 0, Some(1), upper_subr_0124),
+    ("window-top-child", 0, Some(1), upper_subr_0125),
+    ("window-left-child", 0, Some(1), upper_subr_0126),
+    ("window-next-sibling", 0, Some(1), upper_subr_0127),
+    ("window-prev-sibling", 0, Some(1), upper_subr_0128),
+    ("window-normal-size", 0, Some(2), upper_subr_0129),
+    ("window-display-table", 0, Some(1), upper_subr_0130),
+    ("window-cursor-type", 0, Some(1), upper_subr_0131),
+    ("window-buffer", 0, Some(1), upper_subr_0132),
+    ("window-start", 0, Some(1), upper_subr_0133),
+    ("window-end", 0, Some(2), upper_subr_0134),
+    ("window-point", 0, Some(1), upper_subr_0135),
+    ("window-use-time", 0, Some(1), upper_subr_0136),
+    ("window-bump-use-time", 0, Some(1), upper_subr_0137),
+    ("window-old-point", 0, Some(1), upper_subr_0138),
+    ("window-old-buffer", 0, Some(1), upper_subr_0139),
+    ("window-prev-buffers", 0, Some(1), upper_subr_0140),
+    ("window-next-buffers", 0, Some(1), upper_subr_0141),
+    ("window-left-column", 0, Some(1), upper_subr_0142),
+    ("window-top-line", 0, Some(1), upper_subr_0143),
+    ("window-pixel-left", 0, Some(1), upper_subr_0144),
+    ("window-pixel-top", 0, Some(1), upper_subr_0145),
+    ("window-hscroll", 0, Some(1), upper_subr_0146),
+    ("window-vscroll", 0, Some(2), upper_subr_0147),
+    ("window-margins", 0, Some(1), upper_subr_0148),
+    ("window-fringes", 0, Some(1), upper_subr_0149),
+    ("window-scroll-bars", 0, Some(1), upper_subr_0150),
+    ("window-pixel-height", 0, Some(1), upper_subr_0151),
+    ("window-pixel-width", 0, Some(1), upper_subr_0152),
+    ("window-body-height", 0, Some(2), upper_subr_0153),
+    ("window-body-width", 0, Some(2), upper_subr_0154),
+    ("window-text-height", 0, Some(2), upper_subr_0155),
+    ("window-text-width", 0, Some(2), upper_subr_0156),
+    ("window-total-height", 0, Some(2), upper_subr_0157),
+    ("window-total-width", 0, Some(2), upper_subr_0158),
+    ("window-list", 0, Some(3), upper_subr_0159),
+    ("window-list-1", 0, Some(3), upper_subr_0160),
+    ("get-buffer-window", 0, Some(2), upper_subr_0161),
+    ("window-dedicated-p", 0, Some(1), upper_subr_0162),
+    ("window-minibuffer-p", 0, Some(1), upper_subr_0163),
+    ("window-at", 2, Some(3), upper_subr_0164),
+    ("window-live-p", 1, Some(1), upper_subr_0165),
+    ("set-window-start", 2, Some(3), upper_subr_0166),
+    ("set-window-hscroll", 2, Some(2), upper_subr_0167),
+    ("set-window-margins", 2, Some(3), upper_subr_0168),
+    ("set-window-fringes", 2, Some(5), upper_subr_0169),
+    ("set-window-vscroll", 2, Some(4), upper_subr_0170),
+    ("set-window-point", 2, Some(2), upper_subr_0171),
+    ("split-window-internal", 4, Some(5), upper_subr_0172),
+    ("select-window", 1, Some(2), upper_subr_0173),
+    ("scroll-up", 0, Some(1), upper_subr_0174),
+    ("scroll-down", 0, Some(1), upper_subr_0175),
+    ("scroll-left", 0, Some(2), upper_subr_0176),
+    ("scroll-right", 0, Some(2), upper_subr_0177),
+    ("window-resize-apply", 0, Some(2), upper_subr_0178),
+    ("recenter", 0, Some(2), upper_subr_0179),
+    ("next-window", 0, Some(3), upper_subr_0180),
+    ("previous-window", 0, Some(3), upper_subr_0181),
+    ("set-window-buffer", 2, Some(3), upper_subr_0182),
+    ("neomacs--record-window-navigation-intent", 1, Some(2), upper_subr_0183),
+    ("neomacs--record-frame-navigation-intent", 1, Some(2), upper_subr_0184),
+    ("current-window-configuration", 0, Some(1), upper_subr_0185),
+    ("set-window-configuration", 1, Some(3), upper_subr_0186),
+    ("old-selected-frame", 0, Some(0), upper_subr_0187),
+    ("selected-frame", 0, Some(0), upper_subr_0188),
+    ("mouse-pixel-position", 0, Some(0), upper_subr_0189),
+    ("mouse-position", 0, Some(0), upper_subr_0190),
+    ("next-frame", 0, Some(2), upper_subr_0191),
+    ("previous-frame", 0, Some(2), upper_subr_0192),
+    ("select-frame", 1, Some(2), upper_subr_0193),
+    ("last-nonminibuffer-frame", 0, Some(0), upper_subr_0194),
+    ("visible-frame-list", 0, Some(0), upper_subr_0195),
+    ("frame-list", 0, Some(0), upper_subr_0196),
+    ("x-create-frame", 1, Some(1), upper_subr_0197),
+    ("make-frame-visible", 0, Some(1), upper_subr_0198),
+    ("iconify-frame", 0, Some(1), upper_subr_0199),
+    ("delete-frame", 0, Some(2), upper_subr_0200),
+    ("frame-char-height", 0, Some(1), upper_subr_0201),
+    ("frame-char-width", 0, Some(1), upper_subr_0202),
+    ("frame-native-height", 0, Some(1), upper_subr_0203),
+    ("frame-native-width", 0, Some(1), upper_subr_0204),
+    ("frame-text-cols", 0, Some(1), upper_subr_0205),
+    ("frame-text-height", 0, Some(1), upper_subr_0206),
+    ("frame-text-lines", 0, Some(1), upper_subr_0207),
+    ("frame-text-width", 0, Some(1), upper_subr_0208),
+    ("frame-total-cols", 0, Some(1), upper_subr_0209),
+    ("frame-total-lines", 0, Some(1), upper_subr_0210),
+    ("frame-position", 0, Some(1), upper_subr_0211),
+    ("frame-parameters", 0, Some(1), upper_subr_0212),
+    ("set-frame-height", 2, Some(4), upper_subr_0213),
+    ("set-frame-width", 2, Some(4), upper_subr_0214),
+    ("set-frame-size", 3, Some(4), upper_subr_0215),
+    ("set-frame-position", 3, Some(3), upper_subr_0216),
+    ("frame-visible-p", 1, Some(1), upper_subr_0217),
+    ("frame-live-p", 1, Some(1), upper_subr_0218),
+    ("frame-initial-p", 0, Some(1), upper_subr_0219),
+    ("frame-first-window", 0, Some(1), upper_subr_0220),
+    ("frame-root-window", 0, Some(1), upper_subr_0221),
+    ("windowp", 1, Some(1), upper_subr_0222),
+    ("window-valid-p", 1, Some(1), upper_subr_0223),
+    ("framep", 1, Some(1), upper_subr_0224),
+    ("window-frame", 0, Some(1), upper_subr_0225),
+    ("frame-id", 0, Some(1), upper_subr_0226),
+    ("frame-root-frame", 0, Some(1), upper_subr_0227),
+    ("x-open-connection", 1, Some(3), upper_subr_0228),
+    ("x-get-resource", 2, Some(4), upper_subr_0229),
     #[cfg(target_os = "macos")]
-    ("ns-get-resource", 2, Some(2), upper_subr_0301),
+    ("ns-get-resource", 2, Some(2), upper_subr_0230),
     #[cfg(target_os = "macos")]
-    ("ns-set-resource", 3, Some(3), upper_subr_0302),
-    ("x-list-fonts", 1, Some(5), upper_subr_0303),
-    ("window-system", 0, Some(1), upper_subr_0304),
-    ("x-server-version", 0, Some(1), upper_subr_0305),
+    ("ns-set-resource", 3, Some(3), upper_subr_0231),
+    ("x-list-fonts", 1, Some(5), upper_subr_0232),
+    ("window-system", 0, Some(1), upper_subr_0233),
+    ("x-server-version", 0, Some(1), upper_subr_0234),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-server-input-extension-version", 0, Some(1), upper_subr_0306),
-    ("x-server-vendor", 0, Some(1), upper_subr_0307),
-    ("x-display-mm-height", 0, Some(1), upper_subr_0308),
-    ("x-display-mm-width", 0, Some(1), upper_subr_0309),
-    ("x-display-planes", 0, Some(1), upper_subr_0310),
-    ("x-display-screens", 0, Some(1), upper_subr_0311),
-    ("x-close-connection", 1, Some(1), upper_subr_0312),
-    ("call-interactively", 1, Some(3), upper_subr_0313),
-    ("commandp", 1, Some(2), upper_subr_0314),
-    ("command-remapping", 1, Some(3), upper_subr_0315),
-    ("self-insert-command", 1, Some(2), upper_subr_0316),
-    ("key-binding", 1, Some(4), upper_subr_0317),
-    ("where-is-internal", 1, Some(5), upper_subr_0318),
-    ("this-command-keys", 0, Some(0), upper_subr_0319),
-    ("read", 0, Some(1), upper_subr_0320),
-    ("read-from-minibuffer", 1, Some(7), upper_subr_0321),
-    ("read-string", 1, Some(5), upper_subr_0322),
-    ("completing-read", 2, Some(8), upper_subr_0323),
-    ("read-buffer", 1, Some(4), upper_subr_0324),
-    ("read-command", 1, Some(2), upper_subr_0325),
-    ("read-variable", 1, Some(2), upper_subr_0326),
-    ("try-completion", 2, Some(3), upper_subr_0327),
-    ("all-completions", 2, Some(3), upper_subr_0328),
-    ("test-completion", 2, Some(3), upper_subr_0329),
-    ("completion--flex-cost-gotoh", 2, Some(2), upper_subr_0330),
-    ("input-pending-p", 0, Some(1), upper_subr_0331),
-    ("discard-input", 0, Some(0), upper_subr_0332),
-    ("current-input-mode", 0, Some(0), upper_subr_0333),
-    ("set-input-mode", 3, Some(4), upper_subr_0334),
-    ("set-input-interrupt-mode", 1, Some(1), upper_subr_0335),
-    ("insert-special-event", 1, Some(1), upper_subr_0336),
-    ("read-key-sequence", 1, Some(6), upper_subr_0337),
-    ("read-key-sequence-vector", 1, Some(6), upper_subr_0338),
-    ("minibufferp", 0, Some(2), upper_subr_0339),
-    ("minibuffer-contents", 0, Some(0), upper_subr_0340),
-    ("minibuffer-contents-no-properties", 0, Some(0), upper_subr_0341),
-    ("minibuffer-depth", 0, Some(0), upper_subr_0342),
-    ("exit-recursive-edit", 0, Some(0), upper_subr_0343),
-    ("abort-recursive-edit", 0, Some(0), upper_subr_0344),
-    ("undo-boundary", 0, Some(0), upper_subr_0345),
-    ("set-marker", 2, Some(3), upper_subr_0346),
-    ("marker-position", 1, Some(1), upper_subr_0347),
-    ("marker-buffer", 1, Some(1), upper_subr_0348),
-    ("copy-marker", 0, Some(2), upper_subr_0349),
-    ("point-marker", 0, Some(0), upper_subr_0350),
-    ("point-min-marker", 0, Some(0), upper_subr_0351),
-    ("point-max-marker", 0, Some(0), upper_subr_0352),
-    ("current-case-table", 0, Some(0), upper_subr_0353),
-    ("standard-case-table", 0, Some(0), upper_subr_0354),
-    ("set-case-table", 1, Some(1), upper_subr_0355),
-    ("define-category", 2, Some(3), upper_subr_0356),
-    ("category-docstring", 1, Some(2), upper_subr_0357),
-    ("modify-category-entry", 2, Some(4), upper_subr_0358),
-    ("char-category-set", 1, Some(1), upper_subr_0359),
-    ("category-table", 0, Some(0), upper_subr_0360),
-    ("set-category-table", 1, Some(1), upper_subr_0361),
-    ("map-char-table", 2, Some(2), upper_subr_0362),
-    ("json-parse-buffer", 0, None, upper_subr_0363),
-    ("json-insert", 1, None, upper_subr_0364),
-    ("read-char-exclusive", 0, Some(3), upper_subr_0365),
-    ("insert-before-markers", 0, None, upper_subr_0366),
-    ("delete-char", 1, Some(2), upper_subr_0367),
-    ("following-char", 0, Some(0), upper_subr_0368),
-    ("preceding-char", 0, Some(0), upper_subr_0369),
-    ("face-font", 1, Some(3), upper_subr_0370),
-    ("access-file", 2, Some(2), upper_subr_0371),
-    ("expand-file-name", 1, Some(2), upper_subr_0372),
-    ("delete-file-internal", 1, Some(1), upper_subr_0373),
-    ("rename-file", 2, Some(3), upper_subr_0374),
-    ("copy-file", 2, Some(6), upper_subr_0375),
-    ("add-name-to-file", 2, Some(3), upper_subr_0376),
-    ("make-symbolic-link", 2, Some(3), upper_subr_0377),
-    ("directory-files", 1, Some(5), upper_subr_0378),
-    ("file-attributes", 1, Some(2), upper_subr_0379),
-    ("file-exists-p", 1, Some(1), upper_subr_0380),
-    ("file-readable-p", 1, Some(1), upper_subr_0381),
-    ("file-writable-p", 1, Some(1), upper_subr_0382),
-    ("file-acl", 1, Some(1), upper_subr_0383),
-    ("file-executable-p", 1, Some(1), upper_subr_0384),
-    ("file-locked-p", 1, Some(1), upper_subr_0385),
-    ("file-selinux-context", 1, Some(1), upper_subr_0386),
-    ("file-system-info", 1, Some(1), upper_subr_0387),
-    ("file-directory-p", 1, Some(1), upper_subr_0388),
-    ("file-regular-p", 1, Some(1), upper_subr_0389),
-    ("file-symlink-p", 1, Some(1), upper_subr_0390),
-    ("file-modes", 1, Some(2), upper_subr_0391),
-    ("set-file-modes", 2, Some(3), upper_subr_0392),
-    ("set-file-times", 1, Some(3), upper_subr_0393),
-    ("set-process-inherit-coding-system-flag", 2, Some(2), upper_subr_0394),
-    ("frame-parameter", 2, Some(2), upper_subr_0395),
-    ("send-string-to-terminal", 1, Some(2), upper_subr_0396),
-    ("internal-show-cursor", 2, Some(2), upper_subr_0397),
-    ("internal-show-cursor-p", 0, Some(1), upper_subr_0398),
-    ("redraw-frame", 0, Some(1), upper_subr_0399),
-    ("display-supports-face-attributes-p", 1, Some(2), upper_subr_0400),
-    ("terminal-name", 0, Some(1), upper_subr_0401),
-    ("terminal-live-p", 1, Some(1), upper_subr_0402),
-    ("terminal-parameter", 2, Some(2), upper_subr_0403),
-    ("terminal-parameters", 0, Some(1), upper_subr_0404),
-    ("set-terminal-parameter", 3, Some(3), upper_subr_0405),
-    ("tty-type", 0, Some(1), upper_subr_0406),
-    ("tty-top-frame", 0, Some(1), upper_subr_0407),
-    ("tty-display-color-p", 0, Some(1), upper_subr_0408),
-    ("tty-display-color-cells", 0, Some(1), upper_subr_0409),
-    ("tty-no-underline", 0, Some(1), upper_subr_0410),
-    ("controlling-tty-p", 0, Some(1), upper_subr_0411),
-    ("suspend-tty", 0, Some(1), upper_subr_0412),
-    ("resume-tty", 0, Some(1), upper_subr_0413),
-    ("frame-terminal", 0, Some(1), upper_subr_0414),
+    ("x-server-input-extension-version", 0, Some(1), upper_subr_0235),
+    ("x-server-vendor", 0, Some(1), upper_subr_0236),
+    ("x-display-mm-height", 0, Some(1), upper_subr_0237),
+    ("x-display-mm-width", 0, Some(1), upper_subr_0238),
+    ("x-display-planes", 0, Some(1), upper_subr_0239),
+    ("x-display-screens", 0, Some(1), upper_subr_0240),
+    ("x-close-connection", 1, Some(1), upper_subr_0241),
+    ("call-interactively", 1, Some(3), upper_subr_0242),
+    ("commandp", 1, Some(2), upper_subr_0243),
+    ("command-remapping", 1, Some(3), upper_subr_0244),
+    ("self-insert-command", 1, Some(2), upper_subr_0245),
+    ("key-binding", 1, Some(4), upper_subr_0246),
+    ("where-is-internal", 1, Some(5), upper_subr_0247),
+    ("this-command-keys", 0, Some(0), upper_subr_0248),
+    ("read", 0, Some(1), upper_subr_0249),
+    ("read-from-minibuffer", 1, Some(7), upper_subr_0250),
+    ("read-string", 1, Some(5), upper_subr_0251),
+    ("completing-read", 2, Some(8), upper_subr_0252),
+    ("read-buffer", 1, Some(4), upper_subr_0253),
+    ("read-command", 1, Some(2), upper_subr_0254),
+    ("read-variable", 1, Some(2), upper_subr_0255),
+    ("try-completion", 2, Some(3), upper_subr_0256),
+    ("all-completions", 2, Some(3), upper_subr_0257),
+    ("test-completion", 2, Some(3), upper_subr_0258),
+    ("completion--flex-cost-gotoh", 2, Some(2), upper_subr_0259),
+    ("input-pending-p", 0, Some(1), upper_subr_0260),
+    ("discard-input", 0, Some(0), upper_subr_0261),
+    ("current-input-mode", 0, Some(0), upper_subr_0262),
+    ("set-input-mode", 3, Some(4), upper_subr_0263),
+    ("set-input-interrupt-mode", 1, Some(1), upper_subr_0264),
+    ("insert-special-event", 1, Some(1), upper_subr_0265),
+    ("read-key-sequence", 1, Some(6), upper_subr_0266),
+    ("read-key-sequence-vector", 1, Some(6), upper_subr_0267),
+    ("minibufferp", 0, Some(2), upper_subr_0268),
+    ("minibuffer-contents", 0, Some(0), upper_subr_0269),
+    ("minibuffer-contents-no-properties", 0, Some(0), upper_subr_0270),
+    ("minibuffer-depth", 0, Some(0), upper_subr_0271),
+    ("exit-recursive-edit", 0, Some(0), upper_subr_0272),
+    ("abort-recursive-edit", 0, Some(0), upper_subr_0273),
+    ("copy-marker", 0, Some(2), upper_subr_0274),
+    ("read-char-exclusive", 0, Some(3), upper_subr_0275),
+    ("following-char", 0, Some(0), upper_subr_0276),
+    ("face-font", 1, Some(3), upper_subr_0277),
+    ("access-file", 2, Some(2), upper_subr_0278),
+    ("expand-file-name", 1, Some(2), upper_subr_0279),
+    ("delete-file-internal", 1, Some(1), upper_subr_0280),
+    ("rename-file", 2, Some(3), upper_subr_0281),
+    ("copy-file", 2, Some(6), upper_subr_0282),
+    ("add-name-to-file", 2, Some(3), upper_subr_0283),
+    ("make-symbolic-link", 2, Some(3), upper_subr_0284),
+    ("directory-files", 1, Some(5), upper_subr_0285),
+    ("file-attributes", 1, Some(2), upper_subr_0286),
+    ("file-exists-p", 1, Some(1), upper_subr_0287),
+    ("file-readable-p", 1, Some(1), upper_subr_0288),
+    ("file-writable-p", 1, Some(1), upper_subr_0289),
+    ("file-acl", 1, Some(1), upper_subr_0290),
+    ("file-executable-p", 1, Some(1), upper_subr_0291),
+    ("file-locked-p", 1, Some(1), upper_subr_0292),
+    ("file-selinux-context", 1, Some(1), upper_subr_0293),
+    ("file-system-info", 1, Some(1), upper_subr_0294),
+    ("file-directory-p", 1, Some(1), upper_subr_0295),
+    ("file-regular-p", 1, Some(1), upper_subr_0296),
+    ("file-symlink-p", 1, Some(1), upper_subr_0297),
+    ("file-modes", 1, Some(2), upper_subr_0298),
+    ("set-file-modes", 2, Some(3), upper_subr_0299),
+    ("set-file-times", 1, Some(3), upper_subr_0300),
+    ("set-process-inherit-coding-system-flag", 2, Some(2), upper_subr_0301),
+    ("frame-parameter", 2, Some(2), upper_subr_0302),
+    ("send-string-to-terminal", 1, Some(2), upper_subr_0303),
+    ("internal-show-cursor", 2, Some(2), upper_subr_0304),
+    ("internal-show-cursor-p", 0, Some(1), upper_subr_0305),
+    ("redraw-frame", 0, Some(1), upper_subr_0306),
+    ("display-supports-face-attributes-p", 1, Some(2), upper_subr_0307),
+    ("terminal-name", 0, Some(1), upper_subr_0308),
+    ("terminal-live-p", 1, Some(1), upper_subr_0309),
+    ("terminal-parameter", 2, Some(2), upper_subr_0310),
+    ("terminal-parameters", 0, Some(1), upper_subr_0311),
+    ("set-terminal-parameter", 3, Some(3), upper_subr_0312),
+    ("tty-type", 0, Some(1), upper_subr_0313),
+    ("tty-top-frame", 0, Some(1), upper_subr_0314),
+    ("tty-display-color-p", 0, Some(1), upper_subr_0315),
+    ("tty-display-color-cells", 0, Some(1), upper_subr_0316),
+    ("tty-no-underline", 0, Some(1), upper_subr_0317),
+    ("controlling-tty-p", 0, Some(1), upper_subr_0318),
+    ("suspend-tty", 0, Some(1), upper_subr_0319),
+    ("resume-tty", 0, Some(1), upper_subr_0320),
+    ("frame-terminal", 0, Some(1), upper_subr_0321),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-display-monitor-attributes-list", 0, Some(1), upper_subr_0415),
-    ("read-char", 0, Some(3), upper_subr_0416),
-    ("minibuffer-innermost-command-loop-p", 0, Some(1), upper_subr_0417),
-    ("recursive-edit", 0, Some(0), upper_subr_0418),
-    ("find-coding-systems-region-internal", 2, Some(3), upper_subr_0419),
-    ("read-event", 0, Some(3), upper_subr_0420),
-    ("integer-or-marker-p", 1, Some(1), upper_subr_0421),
-    ("number-or-marker-p", 1, Some(1), upper_subr_0422),
-    ("vector-or-char-table-p", 1, Some(1), upper_subr_0423),
-    ("marker-insertion-type", 1, Some(1), upper_subr_0424),
-    ("make-marker", 0, Some(0), upper_subr_0425),
-    ("bool-vector-p", 1, Some(1), upper_subr_0426),
-    ("make-category-set", 1, Some(1), upper_subr_0427),
-    ("function-equal", 2, Some(2), upper_subr_0428),
-    ("module-function-p", 1, Some(1), upper_subr_0429),
-    ("user-ptrp", 1, Some(1), upper_subr_0430),
-    ("length<", 2, Some(2), upper_subr_0431),
-    ("length=", 2, Some(2), upper_subr_0432),
-    ("length>", 2, Some(2), upper_subr_0433),
-    ("substring-no-properties", 1, Some(3), upper_subr_0434),
-    ("atan", 1, Some(2), upper_subr_0435),
-    ("log", 1, Some(2), upper_subr_0436),
-    ("expt", 2, Some(2), upper_subr_0437),
-    ("random", 0, Some(1), upper_subr_0438),
-    ("isnan", 1, Some(1), upper_subr_0439),
-    ("string", 0, None, upper_subr_0440),
-    ("identity", 1, Some(1), upper_subr_0441),
-    ("ngettext", 3, Some(3), upper_subr_0442),
-    ("secure-hash-algorithms", 0, Some(0), upper_subr_0443),
-    ("prefix-numeric-value", 1, Some(1), upper_subr_0444),
-    ("propertize", 1, None, upper_subr_0445),
-    ("capitalize", 1, Some(1), upper_subr_0446),
-    ("charsetp", 1, Some(1), upper_subr_0447),
-    ("charset-plist", 1, Some(1), upper_subr_0448),
-    ("define-charset-internal", 17, None, upper_subr_0449),
-    ("define-charset-alias", 2, Some(2), upper_subr_0450),
-    ("internal-lisp-face-p", 1, Some(2), upper_subr_0451),
-    ("internal-make-lisp-face", 1, Some(2), upper_subr_0452),
-    ("internal-set-lisp-face-attribute", 3, Some(4), upper_subr_0453),
-    ("string-to-syntax", 1, Some(1), upper_subr_0454),
-    ("syntax-class-to-char", 1, Some(1), upper_subr_0455),
-    ("copy-syntax-table", 0, Some(1), upper_subr_0456),
-    ("syntax-table-p", 1, Some(1), upper_subr_0457),
-    ("standard-syntax-table", 0, Some(0), upper_subr_0458),
-    ("current-time", 0, Some(0), upper_subr_0459),
-    ("current-cpu-time", 0, Some(0), upper_subr_0460),
-    ("get-internal-run-time", 0, Some(0), upper_subr_0461),
-    ("float-time", 0, Some(1), upper_subr_0462),
-    ("flush-standard-output", 0, Some(0), upper_subr_0463),
-    ("file-name-directory", 1, Some(1), upper_subr_0464),
-    ("file-name-nondirectory", 1, Some(1), upper_subr_0465),
-    ("file-name-as-directory", 1, Some(1), upper_subr_0466),
-    ("directory-file-name", 1, Some(1), upper_subr_0467),
-    ("file-name-concat", 1, None, upper_subr_0468),
-    ("file-name-absolute-p", 1, Some(1), upper_subr_0469),
-    ("directory-name-p", 1, Some(1), upper_subr_0470),
-    ("substitute-in-file-name", 1, Some(1), upper_subr_0471),
-    ("set-file-acl", 2, Some(2), upper_subr_0472),
-    ("set-file-selinux-context", 2, Some(2), upper_subr_0473),
-    ("visited-file-modtime", 0, Some(0), upper_subr_0474),
-    ("make-temp-name", 1, Some(1), upper_subr_0475),
-    ("next-read-file-uses-dialog-p", 0, Some(0), upper_subr_0476),
-    ("unhandled-file-name-directory", 1, Some(1), upper_subr_0477),
-    ("get-truename-buffer", 1, Some(1), upper_subr_0478),
-    ("single-key-description", 1, Some(2), upper_subr_0479),
-    ("key-description", 1, Some(2), upper_subr_0480),
-    ("event-convert-list", 1, Some(1), upper_subr_0481),
-    ("text-char-description", 1, Some(1), upper_subr_0482),
-    ("set-binary-mode", 2, Some(2), upper_subr_0483),
-    ("group-name", 1, Some(1), upper_subr_0484),
-    ("group-gid", 0, Some(0), upper_subr_0485),
-    ("group-real-gid", 0, Some(0), upper_subr_0486),
-    ("load-average", 0, Some(1), upper_subr_0487),
-    ("logcount", 1, Some(1), upper_subr_0488),
-    ("set-frame-size-and-position-pixelwise", 5, Some(6), upper_subr_0489),
-    ("mouse-position-in-root-frame", 0, Some(0), upper_subr_0490),
-    ("x-load-color-file", 1, Some(1), upper_subr_0491),
-    ("display--line-is-continued-p", 0, Some(0), upper_subr_0492),
-    ("display--update-for-mouse-movement", 3, Some(3), upper_subr_0493),
-    ("do-auto-save", 0, Some(2), upper_subr_0494),
-    ("describe-buffer-bindings", 1, Some(3), upper_subr_0495),
-    ("face-attributes-as-vector", 1, Some(1), upper_subr_0496),
+    ("x-display-monitor-attributes-list", 0, Some(1), upper_subr_0322),
+    ("read-char", 0, Some(3), upper_subr_0323),
+    ("minibuffer-innermost-command-loop-p", 0, Some(1), upper_subr_0324),
+    ("recursive-edit", 0, Some(0), upper_subr_0325),
+    ("read-event", 0, Some(3), upper_subr_0326),
+    ("expt", 2, Some(2), upper_subr_0327),
+    ("identity", 1, Some(1), upper_subr_0328),
+    ("propertize", 1, None, upper_subr_0329),
+    ("capitalize", 1, Some(1), upper_subr_0330),
+    ("define-charset-internal", 17, None, upper_subr_0331),
+    ("define-charset-alias", 2, Some(2), upper_subr_0332),
+    ("internal-lisp-face-p", 1, Some(2), upper_subr_0333),
+    ("internal-make-lisp-face", 1, Some(2), upper_subr_0334),
+    ("internal-set-lisp-face-attribute", 3, Some(4), upper_subr_0335),
+    ("copy-syntax-table", 0, Some(1), upper_subr_0336),
+    ("standard-syntax-table", 0, Some(0), upper_subr_0337),
+    ("current-time", 0, Some(0), upper_subr_0338),
+    ("float-time", 0, Some(1), upper_subr_0339),
+    ("file-name-directory", 1, Some(1), upper_subr_0340),
+    ("file-name-nondirectory", 1, Some(1), upper_subr_0341),
+    ("file-name-as-directory", 1, Some(1), upper_subr_0342),
+    ("directory-file-name", 1, Some(1), upper_subr_0343),
+    ("file-name-concat", 1, None, upper_subr_0344),
+    ("file-name-absolute-p", 1, Some(1), upper_subr_0345),
+    ("directory-name-p", 1, Some(1), upper_subr_0346),
+    ("substitute-in-file-name", 1, Some(1), upper_subr_0347),
+    ("set-file-acl", 2, Some(2), upper_subr_0348),
+    ("set-file-selinux-context", 2, Some(2), upper_subr_0349),
+    ("visited-file-modtime", 0, Some(0), upper_subr_0350),
+    ("make-temp-name", 1, Some(1), upper_subr_0351),
+    ("next-read-file-uses-dialog-p", 0, Some(0), upper_subr_0352),
+    ("unhandled-file-name-directory", 1, Some(1), upper_subr_0353),
+    ("set-binary-mode", 2, Some(2), upper_subr_0354),
+    ("group-gid", 0, Some(0), upper_subr_0355),
+    ("group-real-gid", 0, Some(0), upper_subr_0356),
+    ("set-frame-size-and-position-pixelwise", 5, Some(6), upper_subr_0357),
+    ("mouse-position-in-root-frame", 0, Some(0), upper_subr_0358),
+    ("x-load-color-file", 1, Some(1), upper_subr_0359),
+    ("display--update-for-mouse-movement", 3, Some(3), upper_subr_0360),
+    ("do-auto-save", 0, Some(2), upper_subr_0361),
+    ("describe-buffer-bindings", 1, Some(3), upper_subr_0362),
+    ("face-attributes-as-vector", 1, Some(1), upper_subr_0363),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("font-get-system-font", 0, Some(0), upper_subr_0497),
+    ("font-get-system-font", 0, Some(0), upper_subr_0364),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("font-get-system-normal-font", 0, Some(0), upper_subr_0498),
-    ("fontset-font", 2, Some(3), upper_subr_0499),
-    ("fontset-info", 1, Some(2), upper_subr_0500),
-    ("fontset-list", 0, Some(0), upper_subr_0501),
-    ("frame--set-was-invisible", 2, Some(2), upper_subr_0502),
-    ("frame-after-make-frame", 2, Some(2), upper_subr_0503),
-    ("frame-ancestor-p", 2, Some(2), upper_subr_0504),
-    ("frame-bottom-divider-width", 0, Some(1), upper_subr_0505),
-    ("frame-child-frame-border-width", 0, Some(1), upper_subr_0506),
-    ("frame-focus", 0, Some(1), upper_subr_0507),
-    ("frame-font-cache", 0, Some(1), upper_subr_0508),
-    ("frame-fringe-width", 0, Some(1), upper_subr_0509),
-    ("frame-internal-border-width", 0, Some(1), upper_subr_0510),
-    ("frame-or-buffer-changed-p", 0, Some(1), upper_subr_0511),
-    ("frame-parent", 0, Some(1), upper_subr_0512),
-    ("frame-pointer-visible-p", 0, Some(1), upper_subr_0513),
-    ("frame-right-divider-width", 0, Some(1), upper_subr_0514),
-    ("frame-scale-factor", 0, Some(1), upper_subr_0515),
-    ("frame-scroll-bar-height", 0, Some(1), upper_subr_0516),
-    ("frame-scroll-bar-width", 0, Some(1), upper_subr_0517),
-    ("frame-window-state-change", 0, Some(1), upper_subr_0518),
-    ("fringe-bitmaps-at-pos", 0, Some(2), upper_subr_0519),
-    ("garbage-collect-heapsize", 0, Some(0), upper_subr_0520),
-    ("get-unicode-property-internal", 2, Some(2), upper_subr_0521),
-    ("gnutls-available-p", 0, Some(0), upper_subr_0522),
-    ("gnutls-asynchronous-parameters", 2, Some(2), upper_subr_0523),
-    ("gnutls-bye", 2, Some(2), upper_subr_0524),
-    ("gnutls-ciphers", 0, Some(0), upper_subr_0525),
-    ("gnutls-deinit", 1, Some(1), upper_subr_0526),
-    ("gnutls-digests", 0, Some(0), upper_subr_0527),
-    ("gnutls-error-fatalp", 1, Some(1), upper_subr_0528),
-    ("gnutls-error-string", 1, Some(1), upper_subr_0529),
-    ("gnutls-errorp", 1, Some(1), upper_subr_0530),
-    ("gnutls-format-certificate", 1, Some(1), upper_subr_0531),
-    ("gnutls-get-initstage", 1, Some(1), upper_subr_0532),
-    ("gnutls-hash-digest", 2, Some(2), upper_subr_0533),
-    ("gnutls-hash-mac", 3, Some(3), upper_subr_0534),
-    ("gnutls-macs", 0, Some(0), upper_subr_0535),
-    ("gnutls-peer-status", 1, Some(1), upper_subr_0536),
-    ("gnutls-peer-status-warning-describe", 1, Some(1), upper_subr_0537),
-    ("gnutls-symmetric-decrypt", 4, Some(5), upper_subr_0538),
-    ("gnutls-symmetric-encrypt", 4, Some(5), upper_subr_0539),
+    ("font-get-system-normal-font", 0, Some(0), upper_subr_0365),
+    ("fontset-font", 2, Some(3), upper_subr_0366),
+    ("frame--set-was-invisible", 2, Some(2), upper_subr_0367),
+    ("frame-after-make-frame", 2, Some(2), upper_subr_0368),
+    ("frame-ancestor-p", 2, Some(2), upper_subr_0369),
+    ("frame-bottom-divider-width", 0, Some(1), upper_subr_0370),
+    ("frame-child-frame-border-width", 0, Some(1), upper_subr_0371),
+    ("frame-focus", 0, Some(1), upper_subr_0372),
+    ("frame-font-cache", 0, Some(1), upper_subr_0373),
+    ("frame-internal-border-width", 0, Some(1), upper_subr_0374),
+    ("frame-or-buffer-changed-p", 0, Some(1), upper_subr_0375),
+    ("frame-parent", 0, Some(1), upper_subr_0376),
+    ("frame-right-divider-width", 0, Some(1), upper_subr_0377),
+    ("frame-scale-factor", 0, Some(1), upper_subr_0378),
+    ("frame-scroll-bar-height", 0, Some(1), upper_subr_0379),
+    ("frame-scroll-bar-width", 0, Some(1), upper_subr_0380),
+    ("frame-window-state-change", 0, Some(1), upper_subr_0381),
+    ("fringe-bitmaps-at-pos", 0, Some(2), upper_subr_0382),
+    ("gnutls-available-p", 0, Some(0), upper_subr_0383),
+    ("gnutls-asynchronous-parameters", 2, Some(2), upper_subr_0384),
+    ("gnutls-bye", 2, Some(2), upper_subr_0385),
+    ("gnutls-ciphers", 0, Some(0), upper_subr_0386),
+    ("gnutls-deinit", 1, Some(1), upper_subr_0387),
+    ("gnutls-digests", 0, Some(0), upper_subr_0388),
+    ("gnutls-error-fatalp", 1, Some(1), upper_subr_0389),
+    ("gnutls-error-string", 1, Some(1), upper_subr_0390),
+    ("gnutls-errorp", 1, Some(1), upper_subr_0391),
+    ("gnutls-format-certificate", 1, Some(1), upper_subr_0392),
+    ("gnutls-get-initstage", 1, Some(1), upper_subr_0393),
+    ("gnutls-hash-digest", 2, Some(2), upper_subr_0394),
+    ("gnutls-hash-mac", 3, Some(3), upper_subr_0395),
+    ("gnutls-macs", 0, Some(0), upper_subr_0396),
+    ("gnutls-peer-status", 1, Some(1), upper_subr_0397),
+    ("gnutls-peer-status-warning-describe", 1, Some(1), upper_subr_0398),
+    ("gnutls-symmetric-decrypt", 4, Some(5), upper_subr_0399),
+    ("gnutls-symmetric-encrypt", 4, Some(5), upper_subr_0400),
+    ("handle-switch-frame", 1, Some(1), upper_subr_0401),
+    ("help--describe-vector", 7, Some(7), upper_subr_0402),
+    ("init-image-library", 1, Some(1), upper_subr_0403),
+    ("internal-set-lisp-face-attribute-from-resource", 3, Some(4), upper_subr_0404),
+    ("dump-emacs-portable", 1, Some(2), upper_subr_0405),
+    ("keymap--get-keyelt", 2, Some(2), upper_subr_0406),
+    ("lower-frame", 0, Some(1), upper_subr_0407),
+    ("make-byte-code", 4, None, upper_subr_0408),
+    ("make-closure", 1, None, upper_subr_0409),
+    ("make-temp-file-internal", 4, Some(4), upper_subr_0410),
+    ("make-frame-invisible", 0, Some(2), upper_subr_0411),
+    ("menu-bar-menu-at-x-y", 2, Some(3), upper_subr_0412),
+    ("module-load", 1, Some(1), upper_subr_0413),
+    ("obarray-make", 0, Some(1), upper_subr_0414),
+    ("open-dribble-file", 1, Some(1), upper_subr_0415),
+    ("play-sound-internal", 1, Some(1), upper_subr_0416),
+    ("query-fontset", 1, Some(2), upper_subr_0417),
+    ("read-positioning-symbols", 0, Some(1), upper_subr_0418),
+    ("neomacs--frame-snapshot", 0, Some(2), upper_subr_0419),
+    ("neomacs--write-frame-snapshot", 1, Some(3), upper_subr_0420),
+    ("neomacs--debug-lose-device", 0, Some(0), upper_subr_0421),
+    ("record", 1, None, upper_subr_0422),
+    ("reconsider-frame-fonts", 1, Some(1), upper_subr_0423),
+    ("redirect-debugging-output", 1, Some(2), upper_subr_0424),
+    ("redirect-frame-focus", 1, Some(2), upper_subr_0425),
+    ("resize-mini-window-internal", 1, Some(1), upper_subr_0426),
+    ("set-frame-window-state-change", 0, Some(2), upper_subr_0427),
+    ("set-mouse-pixel-position", 3, Some(3), upper_subr_0428),
+    ("set-mouse-position", 3, Some(3), upper_subr_0429),
+    ("set-window-new-normal", 1, Some(2), upper_subr_0430),
+    ("set-window-new-pixel", 2, Some(3), upper_subr_0431),
+    ("set-window-new-total", 2, Some(3), upper_subr_0432),
+    ("tool-bar-pixel-width", 0, Some(1), upper_subr_0433),
+    ("tty-display-pixel-height", 0, Some(1), upper_subr_0434),
+    ("tty-display-pixel-width", 0, Some(1), upper_subr_0435),
+    ("tty-frame-at", 2, Some(2), upper_subr_0436),
+    ("tty-frame-edges", 0, Some(2), upper_subr_0437),
+    ("tty-frame-geometry", 0, Some(1), upper_subr_0438),
+    ("tty-frame-list-z-order", 0, Some(1), upper_subr_0439),
+    ("unicode-property-table-internal", 1, Some(1), upper_subr_0440),
+    ("xw-color-defined-p", 1, Some(2), upper_subr_0441),
+    ("xw-color-values", 1, Some(2), upper_subr_0442),
+    ("xw-display-color-p", 0, Some(1), upper_subr_0443),
+    ("lock-buffer", 0, Some(1), upper_subr_0444),
+    ("lock-file", 1, Some(1), upper_subr_0445),
+    ("unlock-buffer", 0, Some(0), upper_subr_0446),
+    ("unlock-file", 1, Some(1), upper_subr_0447),
+    ("window-bottom-divider-width", 0, Some(1), upper_subr_0448),
+    ("window-lines-pixel-dimensions", 0, Some(6), upper_subr_0449),
+    ("window-new-normal", 0, Some(1), upper_subr_0450),
+    ("window-new-pixel", 0, Some(1), upper_subr_0451),
+    ("window-new-total", 0, Some(1), upper_subr_0452),
+    ("window-old-body-pixel-height", 0, Some(1), upper_subr_0453),
+    ("window-old-body-pixel-width", 0, Some(1), upper_subr_0454),
+    ("window-old-pixel-height", 0, Some(1), upper_subr_0455),
+    ("window-old-pixel-width", 0, Some(1), upper_subr_0456),
+    ("window-right-divider-width", 0, Some(1), upper_subr_0457),
+    ("window-scroll-bar-height", 0, Some(1), upper_subr_0458),
+    ("window-scroll-bar-width", 0, Some(1), upper_subr_0459),
+    ("neomacs-frame-edges", 0, Some(2), upper_subr_0460),
+    ("neomacs-display-monitor-attributes-list", 0, None, upper_subr_0461),
+    ("window-discard-buffer-from-window", 2, Some(3), upper_subr_0462),
+    ("window-cursor-info", 0, Some(1), upper_subr_0463),
+    ("combine-windows", 2, Some(2), upper_subr_0464),
+    ("uncombine-window", 1, Some(1), upper_subr_0465),
+    ("remember-mouse-glyph", 3, Some(3), upper_subr_0466),
+    ("ntake", 2, Some(2), upper_subr_0467),
+    ("default-file-modes", 0, Some(0), upper_subr_0468),
+    ("set-default-file-modes", 1, Some(1), upper_subr_0469),
+    ("window-configuration-p", 1, Some(1), upper_subr_0470),
+    ("window-configuration-frame", 1, Some(1), upper_subr_0471),
+    ("window-configuration-equal-p", 2, Some(2), upper_subr_0472),
+    ("set-input-meta-mode", 1, Some(2), upper_subr_0473),
+    ("set-output-flow-control", 1, Some(2), upper_subr_0474),
+    ("set-quit-char", 1, Some(1), upper_subr_0475),
+    ("top-level", 0, Some(0), upper_subr_0476),
+    ("window-text-pixel-size", 0, Some(7), upper_subr_0477),
+    ("pos-visible-in-window-p", 0, Some(3), upper_subr_0478),
+    ("frame--face-hash-table", 0, Some(1), upper_subr_0479),
+    ("delete-directory-internal", 1, Some(1), upper_subr_0480),
+    ("make-directory-internal", 1, Some(1), upper_subr_0481),
+    ("directory-files-and-attributes", 1, Some(6), upper_subr_0482),
+    ("find-file-name-handler", 2, Some(2), upper_subr_0483),
+    ("file-name-all-completions", 2, Some(2), upper_subr_0484),
+    ("file-accessible-directory-p", 1, Some(1), upper_subr_0485),
+    ("file-name-case-insensitive-p", 1, Some(1), upper_subr_0486),
+    ("file-newer-than-file-p", 2, Some(2), upper_subr_0487),
+    ("verify-visited-file-modtime", 0, Some(1), upper_subr_0488),
+    ("internal-default-interrupt-process", 0, Some(2), upper_subr_0489),
+    ("internal-default-process-filter", 2, Some(2), upper_subr_0490),
+    ("internal-default-process-sentinel", 2, Some(2), upper_subr_0491),
+    ("internal-default-signal-process", 2, Some(3), upper_subr_0492),
+    ("network-lookup-address-info", 1, Some(3), upper_subr_0493),
+    ("set-network-process-option", 3, Some(4), upper_subr_0494),
+    ("process-query-on-exit-flag", 1, Some(1), upper_subr_0495),
+    ("set-process-query-on-exit-flag", 2, Some(2), upper_subr_0496),
+    ("process-inherit-coding-system-flag", 1, Some(1), upper_subr_0497),
+    ("set-process-coding-system", 1, Some(3), upper_subr_0498),
+    ("set-process-datagram-address", 2, Some(2), upper_subr_0499),
+    ("get-char-property-and-overlay", 2, Some(3), upper_subr_0500),
+    ("active-minibuffer-window", 0, Some(0), upper_subr_0501),
+    ("minibuffer-selected-window", 0, Some(0), upper_subr_0502),
+    ("window-mode-line-height", 0, Some(1), upper_subr_0503),
+    ("window-header-line-height", 0, Some(1), upper_subr_0504),
+    ("window-tab-line-height", 0, Some(1), upper_subr_0505),
+    ("set-window-display-table", 2, Some(2), upper_subr_0506),
+    ("set-window-cursor-type", 2, Some(2), upper_subr_0507),
+    ("set-window-scroll-bars", 1, Some(6), upper_subr_0508),
+    ("set-window-next-buffers", 2, Some(2), upper_subr_0509),
+    ("set-window-prev-buffers", 2, Some(2), upper_subr_0510),
+    ("set-window-dedicated-p", 2, Some(2), upper_subr_0511),
+    ("delete-window-internal", 1, Some(1), upper_subr_0512),
+    ("delete-other-windows-internal", 0, Some(2), upper_subr_0513),
+    ("window-combination-limit", 1, Some(1), upper_subr_0514),
+    ("set-window-combination-limit", 2, Some(2), upper_subr_0515),
+    ("window-resize-apply-total", 0, Some(2), upper_subr_0516),
+    ("other-window-for-scrolling", 0, Some(0), upper_subr_0517),
+    ("modify-frame-parameters", 2, Some(2), upper_subr_0518),
+    ("frame-selected-window", 0, Some(1), upper_subr_0519),
+    ("frame-old-selected-window", 0, Some(1), upper_subr_0520),
+    ("set-frame-selected-window", 2, Some(3), upper_subr_0521),
+    ("x-display-pixel-width", 0, Some(1), upper_subr_0522),
+    ("x-display-pixel-height", 0, Some(1), upper_subr_0523),
+    ("x-server-max-request-size", 0, Some(1), upper_subr_0524),
+    ("x-display-grayscale-p", 0, Some(1), upper_subr_0525),
+    ("x-display-backing-store", 0, Some(1), upper_subr_0526),
+    ("x-display-color-cells", 0, Some(1), upper_subr_0527),
+    ("x-display-save-under", 0, Some(1), upper_subr_0528),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("handle-save-session", 1, Some(1), upper_subr_0540),
-    ("handle-switch-frame", 1, Some(1), upper_subr_0541),
-    ("help--describe-vector", 7, Some(7), upper_subr_0542),
-    ("init-image-library", 1, Some(1), upper_subr_0543),
-    ("internal--obarray-buckets", 1, Some(1), upper_subr_0544),
-    ("internal--set-buffer-modified-tick", 1, Some(2), upper_subr_0545),
-    ("internal-set-lisp-face-attribute-from-resource", 3, Some(4), upper_subr_0546),
-    ("internal-stack-stats", 0, Some(0), upper_subr_0547),
-    ("internal-subr-documentation", 1, Some(1), upper_subr_0548),
-    ("decode-coding-region", 3, Some(4), upper_subr_0549),
-    ("dump-emacs-portable", 1, Some(2), upper_subr_0550),
-    ("dump-emacs-portable--sort-predicate", 2, Some(2), upper_subr_0551),
-    ("dump-emacs-portable--sort-predicate-copied", 2, Some(2), upper_subr_0552),
-    ("encode-coding-region", 3, Some(4), upper_subr_0553),
-    ("iso-charset", 3, Some(3), upper_subr_0554),
-    ("keymap--get-keyelt", 2, Some(2), upper_subr_0555),
-    ("lower-frame", 0, Some(1), upper_subr_0556),
-    ("lread--substitute-object-in-subtree", 3, Some(3), upper_subr_0557),
-    ("malloc-info", 0, Some(0), upper_subr_0558),
-    ("malloc-trim", 0, Some(1), upper_subr_0559),
-    ("make-byte-code", 4, None, upper_subr_0560),
-    ("make-char", 1, Some(5), upper_subr_0561),
-    ("make-closure", 1, None, upper_subr_0562),
-    ("marker-last-position", 1, Some(1), upper_subr_0563),
-    ("make-interpreted-closure", 3, Some(5), upper_subr_0564),
-    ("make-record", 3, Some(3), upper_subr_0565),
-    ("make-temp-file-internal", 4, Some(4), upper_subr_0566),
-    ("memory-info", 0, Some(0), upper_subr_0567),
-    ("make-frame-invisible", 0, Some(2), upper_subr_0568),
-    ("menu-bar-menu-at-x-y", 2, Some(3), upper_subr_0569),
-    ("menu-or-popup-active-p", 0, Some(0), upper_subr_0570),
-    ("module-load", 1, Some(1), upper_subr_0571),
-    ("newline-cache-check", 0, Some(1), upper_subr_0572),
-    ("native-comp-available-p", 0, Some(0), upper_subr_0573),
-    ("obarray-clear", 1, Some(1), upper_subr_0574),
-    ("obarray-make", 0, Some(1), upper_subr_0575),
-    ("open-dribble-file", 1, Some(1), upper_subr_0576),
-    ("open-font", 1, Some(3), upper_subr_0577),
-    ("optimize-char-table", 1, Some(2), upper_subr_0578),
-    ("overlay-lists", 0, Some(0), upper_subr_0579),
-    ("overlay-recenter", 1, Some(1), upper_subr_0580),
-    ("pdumper-stats", 0, Some(0), upper_subr_0581),
-    ("play-sound-internal", 1, Some(1), upper_subr_0582),
-    ("put-unicode-property-internal", 3, Some(3), upper_subr_0583),
-    ("query-fontset", 1, Some(2), upper_subr_0584),
-    ("raise-frame", 0, Some(1), upper_subr_0585),
-    ("read-positioning-symbols", 0, Some(1), upper_subr_0586),
-    ("re--describe-compiled", 1, Some(2), upper_subr_0587),
-    ("recent-auto-save-p", 0, Some(0), upper_subr_0588),
-    ("neomacs--frame-snapshot", 0, Some(2), upper_subr_0589),
-    ("neomacs--write-frame-snapshot", 1, Some(3), upper_subr_0590),
-    ("neomacs--debug-lose-device", 0, Some(0), upper_subr_0591),
-    ("record", 1, None, upper_subr_0592),
-    ("reconsider-frame-fonts", 1, Some(1), upper_subr_0593),
-    ("redirect-debugging-output", 1, Some(2), upper_subr_0594),
-    ("redirect-frame-focus", 1, Some(2), upper_subr_0595),
-    ("remove-pos-from-symbol", 1, Some(1), upper_subr_0596),
-    ("resize-mini-window-internal", 1, Some(1), upper_subr_0597),
-    ("restore-buffer-modified-p", 1, Some(1), upper_subr_0598),
-    ("set-buffer-auto-saved", 0, Some(0), upper_subr_0599),
-    ("set-charset-plist", 2, Some(2), upper_subr_0600),
-    ("set-frame-window-state-change", 0, Some(2), upper_subr_0601),
-    ("set-mouse-pixel-position", 3, Some(3), upper_subr_0602),
-    ("set-mouse-position", 3, Some(3), upper_subr_0603),
-    ("set-window-new-normal", 1, Some(2), upper_subr_0604),
-    ("set-window-new-pixel", 2, Some(3), upper_subr_0605),
-    ("set-window-new-total", 2, Some(3), upper_subr_0606),
-    ("sort-charsets", 1, Some(1), upper_subr_0607),
-    ("split-char", 1, Some(1), upper_subr_0608),
-    ("string-distance", 2, Some(3), upper_subr_0609),
-    ("subr-native-lambda-list", 1, Some(1), upper_subr_0610),
-    ("subr-type", 1, Some(1), upper_subr_0611),
-    ("suspend-emacs", 0, Some(1), upper_subr_0612),
+    ("x-display-set-last-user-time", 1, Some(2), upper_subr_0529),
+    ("x-display-visual-class", 0, Some(1), upper_subr_0530),
+    ("minor-mode-key-binding", 1, Some(2), upper_subr_0531),
+    ("this-command-keys-vector", 0, Some(0), upper_subr_0532),
+    ("this-single-command-keys", 0, Some(0), upper_subr_0533),
+    ("this-single-command-raw-keys", 0, Some(0), upper_subr_0534),
+    ("clear-this-command-keys", 0, Some(1), upper_subr_0535),
+    ("waiting-for-user-input-p", 0, Some(0), upper_subr_0536),
+    ("minibuffer-prompt", 0, Some(0), upper_subr_0537),
+    ("minibuffer-prompt-end", 0, Some(0), upper_subr_0538),
+    ("innermost-minibuffer-p", 0, Some(1), upper_subr_0539),
+    ("abort-minibuffers", 0, Some(0), upper_subr_0540),
+    ("upcase-initials-region", 2, Some(3), upper_subr_0541),
+    ("subrp", 1, Some(1), upper_subr_0542),
+    ("*", 0, None, upper_subr_0543),
+    ("/", 1, None, upper_subr_0544),
+    ("logand", 0, None, upper_subr_0545),
+    ("ash", 2, Some(2), upper_subr_0546),
+    ("bufferp", 1, Some(1), upper_subr_0547),
+    ("reverse", 1, Some(1), upper_subr_0548),
+    ("make-list", 2, Some(2), upper_subr_0549),
+    ("substring", 1, Some(3), upper_subr_0550),
+    ("concat", 0, None, upper_subr_0551),
+    ("unibyte-string", 0, None, upper_subr_0552),
+    ("number-to-string", 1, Some(1), upper_subr_0553),
+    ("string-to-multibyte", 1, Some(1), upper_subr_0554),
+    ("string-to-unibyte", 1, Some(1), upper_subr_0555),
+    ("hash-table-count", 1, Some(1), upper_subr_0556),
+    ("float", 1, Some(1), upper_subr_0557),
+    ("file-attributes-lessp", 2, Some(2), upper_subr_0558),
+    ("system-users", 0, Some(0), upper_subr_0559),
+    ("system-groups", 0, Some(0), upper_subr_0560),
+    ("user-uid", 0, Some(0), upper_subr_0561),
+    ("user-real-uid", 0, Some(0), upper_subr_0562),
+    ("time-add", 2, Some(2), upper_subr_0563),
+    ("time-subtract", 2, Some(2), upper_subr_0564),
+    ("time-less-p", 2, Some(2), upper_subr_0565),
+    ("time-equal-p", 2, Some(2), upper_subr_0566),
+    ("current-time-string", 0, Some(2), upper_subr_0567),
+    ("current-time-zone", 0, Some(2), upper_subr_0568),
+    ("encode-time", 1, None, upper_subr_0569),
+    ("decode-time", 0, Some(3), upper_subr_0570),
+    ("time-convert", 1, Some(2), upper_subr_0571),
+    ("set-time-zone-rule", 1, Some(1), upper_subr_0572),
+    ("format-time-string", 1, Some(3), upper_subr_0573),
+    ("upcase-initials", 1, Some(1), upper_subr_0574),
+    ("internal-lisp-face-attribute-values", 1, Some(1), upper_subr_0575),
+    ("internal-lisp-face-equal-p", 2, Some(3), upper_subr_0576),
+    ("internal-lisp-face-empty-p", 1, Some(2), upper_subr_0577),
+    ("face-attribute-relative-p", 2, Some(2), upper_subr_0578),
+    ("merge-face-attribute", 3, Some(3), upper_subr_0579),
+    ("color-gray-p", 1, Some(2), upper_subr_0580),
+    ("color-supported-p", 1, Some(3), upper_subr_0581),
+    ("color-distance", 2, Some(4), upper_subr_0582),
+    ("color-values-from-color-spec", 1, Some(1), upper_subr_0583),
+    ("internal-face-x-get-resource", 2, Some(3), upper_subr_0584),
+    ("internal-set-font-selection-order", 1, Some(1), upper_subr_0585),
+    ("internal-set-alternative-font-family-alist", 1, Some(1), upper_subr_0586),
+    ("internal-set-alternative-font-registry-alist", 1, Some(1), upper_subr_0587),
+    ("internal-copy-lisp-face", 4, Some(4), upper_subr_0588),
+    ("internal-get-lisp-face-attribute", 2, Some(3), upper_subr_0589),
+    ("internal-merge-in-global-face", 2, Some(2), upper_subr_0590),
+    ("set-char-table-range", 3, Some(3), upper_subr_0591),
+    ("char-table-subtype", 1, Some(1), upper_subr_0592),
+    ("make-char-table", 1, Some(2), upper_subr_0593),
+    ("yes-or-no-p", 1, Some(1), upper_subr_0594),
+    ("redraw-display", 0, Some(0), upper_subr_0595),
+    ("open-termscript", 1, Some(1), upper_subr_0596),
+    ("ding", 0, Some(1), upper_subr_0597),
+    ("frame--z-order-lessp", 2, Some(2), upper_subr_0598),
+    ("force-window-update", 0, Some(1), upper_subr_0599),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("tool-bar-get-system-style", 0, Some(0), upper_subr_0613),
-    ("tool-bar-pixel-width", 0, Some(1), upper_subr_0614),
-    ("translate-region-internal", 3, Some(3), upper_subr_0615),
-    ("tty--output-buffer-size", 0, Some(1), upper_subr_0616),
-    ("tty--set-output-buffer-size", 1, Some(2), upper_subr_0617),
-    ("tty-display-pixel-height", 0, Some(1), upper_subr_0618),
-    ("tty-display-pixel-width", 0, Some(1), upper_subr_0619),
-    ("tty-frame-at", 2, Some(2), upper_subr_0620),
-    ("tty-frame-edges", 0, Some(2), upper_subr_0621),
-    ("tty-frame-geometry", 0, Some(1), upper_subr_0622),
-    ("tty-frame-list-z-order", 0, Some(1), upper_subr_0623),
-    ("tty-frame-restack", 2, Some(3), upper_subr_0624),
-    ("tty-suppress-bold-inverse-default-colors", 1, Some(1), upper_subr_0625),
-    ("unencodable-char-position", 3, Some(5), upper_subr_0626),
-    ("unicode-property-table-internal", 1, Some(1), upper_subr_0627),
-    ("unify-charset", 1, Some(3), upper_subr_0628),
-    ("unix-sync", 0, Some(0), upper_subr_0629),
-    ("x-begin-drag", 1, Some(6), upper_subr_0630),
+    ("x-export-frames", 0, Some(2), upper_subr_0600),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-double-buffered-p", 0, Some(1), upper_subr_0631),
-    #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-menu-bar-open-internal", 0, Some(1), upper_subr_0632),
-    ("xw-color-defined-p", 1, Some(2), upper_subr_0633),
-    ("xw-color-values", 1, Some(2), upper_subr_0634),
-    ("xw-display-color-p", 0, Some(1), upper_subr_0635),
-    ("lock-buffer", 0, Some(1), upper_subr_0636),
-    ("lock-file", 1, Some(1), upper_subr_0637),
-    ("lossage-size", 0, Some(1), upper_subr_0638),
-    ("unlock-buffer", 0, Some(0), upper_subr_0639),
-    ("unlock-file", 1, Some(1), upper_subr_0640),
-    ("window-bottom-divider-width", 0, Some(1), upper_subr_0641),
-    ("window-lines-pixel-dimensions", 0, Some(6), upper_subr_0642),
-    ("window-new-normal", 0, Some(1), upper_subr_0643),
-    ("window-new-pixel", 0, Some(1), upper_subr_0644),
-    ("window-new-total", 0, Some(1), upper_subr_0645),
-    ("window-old-body-pixel-height", 0, Some(1), upper_subr_0646),
-    ("window-old-body-pixel-width", 0, Some(1), upper_subr_0647),
-    ("window-old-pixel-height", 0, Some(1), upper_subr_0648),
-    ("window-old-pixel-width", 0, Some(1), upper_subr_0649),
-    ("window-right-divider-width", 0, Some(1), upper_subr_0650),
-    ("window-scroll-bar-height", 0, Some(1), upper_subr_0651),
-    ("window-scroll-bar-width", 0, Some(1), upper_subr_0652),
-    ("treesit-available-p", 0, Some(0), upper_subr_0653),
-    ("treesit-compiled-query-p", 1, Some(1), upper_subr_0654),
-    ("treesit-library-abi-version", 0, Some(1), upper_subr_0655),
-    ("treesit-node-p", 1, Some(1), upper_subr_0656),
-    ("treesit-node-parser", 1, Some(1), upper_subr_0657),
-    ("treesit-parser-p", 1, Some(1), upper_subr_0658),
-    ("treesit-query-language", 1, Some(1), upper_subr_0659),
-    ("treesit-query-p", 1, Some(1), upper_subr_0660),
-    ("treesit-query-source", 1, Some(1), upper_subr_0661),
-    ("fillarray", 2, Some(2), upper_subr_0662),
-    ("hash-table-test", 1, Some(1), upper_subr_0663),
-    ("hash-table-size", 1, Some(1), upper_subr_0664),
-    ("hash-table-rehash-size", 1, Some(1), upper_subr_0665),
-    ("hash-table-rehash-threshold", 1, Some(1), upper_subr_0666),
-    ("hash-table-weakness", 1, Some(1), upper_subr_0667),
-    ("copy-hash-table", 1, Some(1), upper_subr_0668),
-    ("sxhash-eq", 1, Some(1), upper_subr_0669),
-    ("sxhash-eql", 1, Some(1), upper_subr_0670),
-    ("sxhash-equal", 1, Some(1), upper_subr_0671),
-    ("sxhash-equal-including-properties", 1, Some(1), upper_subr_0672),
-    ("internal--hash-table-buckets", 1, Some(1), upper_subr_0673),
-    ("internal--hash-table-histogram", 1, Some(1), upper_subr_0674),
-    ("internal--hash-table-index-size", 1, Some(1), upper_subr_0675),
-    ("neomacs-frame-geometry", 0, None, upper_subr_0676),
-    ("neomacs-frame-edges", 0, Some(2), upper_subr_0677),
-    ("neomacs-mouse-absolute-pixel-position", 0, None, upper_subr_0678),
-    ("neomacs-set-mouse-absolute-pixel-position", 0, None, upper_subr_0679),
-    ("neomacs-display-monitor-attributes-list", 0, None, upper_subr_0680),
-    ("neomacs-core-backend", 0, None, upper_subr_0681),
-    ("debugger-trap", 0, Some(0), upper_subr_0682),
-    ("window-discard-buffer-from-window", 2, Some(3), upper_subr_0683),
-    ("window-cursor-info", 0, Some(1), upper_subr_0684),
-    ("combine-windows", 2, Some(2), upper_subr_0685),
-    ("uncombine-window", 1, Some(1), upper_subr_0686),
-    ("frame-windows-min-size", 4, Some(4), upper_subr_0687),
-    ("remember-mouse-glyph", 3, Some(3), upper_subr_0688),
-    ("obarrayp", 1, Some(1), upper_subr_0689),
-    ("ntake", 2, Some(2), upper_subr_0690),
-    ("default-file-modes", 0, Some(0), upper_subr_0691),
-    ("set-default-file-modes", 1, Some(1), upper_subr_0692),
-    ("window-configuration-p", 1, Some(1), upper_subr_0693),
-    ("window-configuration-frame", 1, Some(1), upper_subr_0694),
-    ("window-configuration-equal-p", 2, Some(2), upper_subr_0695),
-    ("set-input-meta-mode", 1, Some(2), upper_subr_0696),
-    ("set-output-flow-control", 1, Some(2), upper_subr_0697),
-    ("set-quit-char", 1, Some(1), upper_subr_0698),
-    ("top-level", 0, Some(0), upper_subr_0699),
-    ("documentation-stringp", 1, Some(1), upper_subr_0700),
-    ("window-text-pixel-size", 0, Some(7), upper_subr_0701),
-    ("pos-visible-in-window-p", 0, Some(3), upper_subr_0702),
-    ("frame--face-hash-table", 0, Some(1), upper_subr_0703),
-    ("delete-directory-internal", 1, Some(1), upper_subr_0704),
-    ("make-directory-internal", 1, Some(1), upper_subr_0705),
-    ("directory-files-and-attributes", 1, Some(6), upper_subr_0706),
-    ("find-file-name-handler", 2, Some(2), upper_subr_0707),
-    ("file-name-all-completions", 2, Some(2), upper_subr_0708),
-    ("file-accessible-directory-p", 1, Some(1), upper_subr_0709),
-    ("file-name-case-insensitive-p", 1, Some(1), upper_subr_0710),
-    ("file-newer-than-file-p", 2, Some(2), upper_subr_0711),
-    ("verify-visited-file-modtime", 0, Some(1), upper_subr_0712),
-    ("internal-default-interrupt-process", 0, Some(2), upper_subr_0713),
-    ("internal-default-process-filter", 2, Some(2), upper_subr_0714),
-    ("internal-default-process-sentinel", 2, Some(2), upper_subr_0715),
-    ("internal-default-signal-process", 2, Some(3), upper_subr_0716),
-    ("network-lookup-address-info", 1, Some(3), upper_subr_0717),
-    ("set-network-process-option", 3, Some(4), upper_subr_0718),
-    ("process-query-on-exit-flag", 1, Some(1), upper_subr_0719),
-    ("set-process-query-on-exit-flag", 2, Some(2), upper_subr_0720),
-    ("process-inherit-coding-system-flag", 1, Some(1), upper_subr_0721),
-    ("set-process-coding-system", 1, Some(3), upper_subr_0722),
-    ("set-process-datagram-address", 2, Some(2), upper_subr_0723),
-    ("get-char-property-and-overlay", 2, Some(3), upper_subr_0724),
-    ("line-beginning-position", 0, Some(1), upper_subr_0725),
-    ("active-minibuffer-window", 0, Some(0), upper_subr_0726),
-    ("minibuffer-selected-window", 0, Some(0), upper_subr_0727),
-    ("window-mode-line-height", 0, Some(1), upper_subr_0728),
-    ("window-header-line-height", 0, Some(1), upper_subr_0729),
-    ("window-tab-line-height", 0, Some(1), upper_subr_0730),
-    ("set-window-display-table", 2, Some(2), upper_subr_0731),
-    ("set-window-cursor-type", 2, Some(2), upper_subr_0732),
-    ("set-window-scroll-bars", 1, Some(6), upper_subr_0733),
-    ("set-window-next-buffers", 2, Some(2), upper_subr_0734),
-    ("set-window-prev-buffers", 2, Some(2), upper_subr_0735),
-    ("set-window-dedicated-p", 2, Some(2), upper_subr_0736),
-    ("delete-window-internal", 1, Some(1), upper_subr_0737),
-    ("delete-other-windows-internal", 0, Some(2), upper_subr_0738),
-    ("window-combination-limit", 1, Some(1), upper_subr_0739),
-    ("set-window-combination-limit", 2, Some(2), upper_subr_0740),
-    ("window-resize-apply-total", 0, Some(2), upper_subr_0741),
-    ("other-window-for-scrolling", 0, Some(0), upper_subr_0742),
-    ("modify-frame-parameters", 2, Some(2), upper_subr_0743),
-    ("frame-selected-window", 0, Some(1), upper_subr_0744),
-    ("frame-old-selected-window", 0, Some(1), upper_subr_0745),
-    ("set-frame-selected-window", 2, Some(3), upper_subr_0746),
-    ("x-display-pixel-width", 0, Some(1), upper_subr_0747),
-    ("x-display-pixel-height", 0, Some(1), upper_subr_0748),
-    ("x-server-max-request-size", 0, Some(1), upper_subr_0749),
-    ("x-display-grayscale-p", 0, Some(1), upper_subr_0750),
-    ("x-display-backing-store", 0, Some(1), upper_subr_0751),
-    ("x-display-color-cells", 0, Some(1), upper_subr_0752),
-    ("x-display-save-under", 0, Some(1), upper_subr_0753),
-    #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-display-set-last-user-time", 1, Some(2), upper_subr_0754),
-    ("x-display-visual-class", 0, Some(1), upper_subr_0755),
-    ("minor-mode-key-binding", 1, Some(2), upper_subr_0756),
-    ("this-command-keys-vector", 0, Some(0), upper_subr_0757),
-    ("this-single-command-keys", 0, Some(0), upper_subr_0758),
-    ("this-single-command-raw-keys", 0, Some(0), upper_subr_0759),
-    ("clear-this-command-keys", 0, Some(1), upper_subr_0760),
-    ("waiting-for-user-input-p", 0, Some(0), upper_subr_0761),
-    ("minibuffer-prompt", 0, Some(0), upper_subr_0762),
-    ("minibuffer-prompt-end", 0, Some(0), upper_subr_0763),
-    ("innermost-minibuffer-p", 0, Some(1), upper_subr_0764),
-    ("abort-minibuffers", 0, Some(0), upper_subr_0765),
-    ("set-marker-insertion-type", 2, Some(2), upper_subr_0766),
-    ("set-standard-case-table", 1, Some(1), upper_subr_0767),
-    ("get-unused-category", 0, Some(1), upper_subr_0768),
-    ("standard-category-table", 0, Some(0), upper_subr_0769),
-    ("upcase-initials-region", 2, Some(3), upper_subr_0770),
-    ("buffer-substring-no-properties", 2, Some(2), upper_subr_0771),
-    ("subrp", 1, Some(1), upper_subr_0772),
-    ("*", 0, None, upper_subr_0773),
-    ("/", 1, None, upper_subr_0774),
-    ("abs", 1, Some(1), upper_subr_0775),
-    ("logand", 0, None, upper_subr_0776),
-    ("logior", 0, None, upper_subr_0777),
-    ("logxor", 0, None, upper_subr_0778),
-    ("lognot", 1, Some(1), upper_subr_0779),
-    ("ash", 2, Some(2), upper_subr_0780),
-    ("characterp", 1, Some(2), upper_subr_0781),
-    ("hash-table-p", 1, Some(1), upper_subr_0782),
-    ("bufferp", 1, Some(1), upper_subr_0783),
-    ("sequencep", 1, Some(1), upper_subr_0784),
-    ("arrayp", 1, Some(1), upper_subr_0785),
-    ("cl-type-of", 1, Some(1), upper_subr_0786),
-    ("reverse", 1, Some(1), upper_subr_0787),
-    ("copy-alist", 1, Some(1), upper_subr_0788),
-    ("make-list", 2, Some(2), upper_subr_0789),
-    ("safe-length", 1, Some(1), upper_subr_0790),
-    ("substring", 1, Some(3), upper_subr_0791),
-    ("concat", 0, None, upper_subr_0792),
-    ("unibyte-string", 0, None, upper_subr_0793),
-    ("number-to-string", 1, Some(1), upper_subr_0794),
-    ("char-to-string", 1, Some(1), upper_subr_0795),
-    ("string-to-char", 1, Some(1), upper_subr_0796),
-    ("clear-string", 1, Some(1), upper_subr_0797),
-    ("string-make-multibyte", 1, Some(1), upper_subr_0798),
-    ("string-make-unibyte", 1, Some(1), upper_subr_0799),
-    ("string-to-multibyte", 1, Some(1), upper_subr_0800),
-    ("string-to-unibyte", 1, Some(1), upper_subr_0801),
-    ("string-as-unibyte", 1, Some(1), upper_subr_0802),
-    ("string-as-multibyte", 1, Some(1), upper_subr_0803),
-    ("unibyte-char-to-multibyte", 1, Some(1), upper_subr_0804),
-    ("multibyte-char-to-unibyte", 1, Some(1), upper_subr_0805),
-    ("vconcat", 0, None, upper_subr_0806),
-    ("clrhash", 1, Some(1), upper_subr_0807),
-    ("hash-table-count", 1, Some(1), upper_subr_0808),
-    ("float", 1, Some(1), upper_subr_0809),
-    ("copysign", 2, Some(2), upper_subr_0810),
-    ("frexp", 1, Some(1), upper_subr_0811),
-    ("ldexp", 2, Some(2), upper_subr_0812),
-    ("logb", 1, Some(1), upper_subr_0813),
-    ("fceiling", 1, Some(1), upper_subr_0814),
-    ("ffloor", 1, Some(1), upper_subr_0815),
-    ("fround", 1, Some(1), upper_subr_0816),
-    ("ftruncate", 1, Some(1), upper_subr_0817),
-    ("bitmap-spec-p", 1, Some(1), upper_subr_0818),
-    ("byte-to-string", 1, Some(1), upper_subr_0819),
-    ("clear-buffer-auto-save-failure", 0, Some(0), upper_subr_0820),
-    ("locale-info", 1, Some(1), upper_subr_0821),
-    ("subr-name", 1, Some(1), upper_subr_0822),
-    ("native-comp-function-p", 1, Some(1), upper_subr_0823),
-    ("interpreted-function-p", 1, Some(1), upper_subr_0824),
-    ("char-width", 1, Some(1), upper_subr_0825),
-    ("string-bytes", 1, Some(1), upper_subr_0826),
-    ("multibyte-string-p", 1, Some(1), upper_subr_0827),
-    ("encode-coding-string", 2, Some(4), upper_subr_0828),
-    ("decode-coding-string", 2, Some(4), upper_subr_0829),
-    ("char-or-string-p", 1, Some(1), upper_subr_0830),
-    ("max-char", 0, Some(1), upper_subr_0831),
-    ("regexp-quote", 1, Some(1), upper_subr_0832),
-    ("file-attributes-lessp", 2, Some(2), upper_subr_0833),
-    ("system-users", 0, Some(0), upper_subr_0834),
-    ("system-groups", 0, Some(0), upper_subr_0835),
-    ("user-uid", 0, Some(0), upper_subr_0836),
-    ("user-real-uid", 0, Some(0), upper_subr_0837),
-    ("time-add", 2, Some(2), upper_subr_0838),
-    ("time-subtract", 2, Some(2), upper_subr_0839),
-    ("time-less-p", 2, Some(2), upper_subr_0840),
-    ("time-equal-p", 2, Some(2), upper_subr_0841),
-    ("current-time-string", 0, Some(2), upper_subr_0842),
-    ("current-time-zone", 0, Some(2), upper_subr_0843),
-    ("encode-time", 1, None, upper_subr_0844),
-    ("decode-time", 0, Some(3), upper_subr_0845),
-    ("time-convert", 1, Some(2), upper_subr_0846),
-    ("set-time-zone-rule", 1, Some(1), upper_subr_0847),
-    ("format-time-string", 1, Some(3), upper_subr_0848),
-    ("upcase-initials", 1, Some(1), upper_subr_0849),
-    ("char-resolve-modifiers", 1, Some(1), upper_subr_0850),
-    ("internal-lisp-face-attribute-values", 1, Some(1), upper_subr_0851),
-    ("internal-lisp-face-equal-p", 2, Some(3), upper_subr_0852),
-    ("internal-lisp-face-empty-p", 1, Some(2), upper_subr_0853),
-    ("face-attribute-relative-p", 2, Some(2), upper_subr_0854),
-    ("merge-face-attribute", 3, Some(3), upper_subr_0855),
-    ("color-gray-p", 1, Some(2), upper_subr_0856),
-    ("color-supported-p", 1, Some(3), upper_subr_0857),
-    ("color-distance", 2, Some(4), upper_subr_0858),
-    ("color-values-from-color-spec", 1, Some(1), upper_subr_0859),
-    ("internal-face-x-get-resource", 2, Some(3), upper_subr_0860),
-    ("internal-set-font-selection-order", 1, Some(1), upper_subr_0861),
-    ("internal-set-alternative-font-family-alist", 1, Some(1), upper_subr_0862),
-    ("internal-set-alternative-font-registry-alist", 1, Some(1), upper_subr_0863),
-    ("internal-copy-lisp-face", 4, Some(4), upper_subr_0864),
-    ("internal-get-lisp-face-attribute", 2, Some(3), upper_subr_0865),
-    ("internal-merge-in-global-face", 2, Some(2), upper_subr_0866),
-    ("case-table-p", 1, Some(1), upper_subr_0867),
-    ("category-table-p", 1, Some(1), upper_subr_0868),
-    ("copy-category-table", 0, Some(1), upper_subr_0869),
-    ("make-category-table", 0, Some(0), upper_subr_0870),
-    ("category-set-mnemonics", 1, Some(1), upper_subr_0871),
-    ("char-table-p", 1, Some(1), upper_subr_0872),
-    ("set-char-table-range", 3, Some(3), upper_subr_0873),
-    ("char-table-range", 2, Some(2), upper_subr_0874),
-    ("char-table-parent", 1, Some(1), upper_subr_0875),
-    ("set-char-table-parent", 2, Some(2), upper_subr_0876),
-    ("char-table-extra-slot", 2, Some(2), upper_subr_0877),
-    ("set-char-table-extra-slot", 3, Some(3), upper_subr_0878),
-    ("char-table-subtype", 1, Some(1), upper_subr_0879),
-    ("bool-vector", 0, None, upper_subr_0880),
-    ("bool-vector-count-population", 1, Some(1), upper_subr_0881),
-    ("bool-vector-count-consecutive", 3, Some(3), upper_subr_0882),
-    ("bool-vector-intersection", 2, Some(3), upper_subr_0883),
-    ("bool-vector-not", 1, Some(2), upper_subr_0884),
-    ("bool-vector-set-difference", 2, Some(3), upper_subr_0885),
-    ("bool-vector-union", 2, Some(3), upper_subr_0886),
-    ("bool-vector-exclusive-or", 2, Some(3), upper_subr_0887),
-    ("bool-vector-subsetp", 2, Some(2), upper_subr_0888),
-    ("make-char-table", 1, Some(2), upper_subr_0889),
-    ("charset-priority-list", 0, Some(1), upper_subr_0890),
-    ("set-charset-priority", 1, None, upper_subr_0891),
-    ("char-charset", 1, Some(2), upper_subr_0892),
-    ("charset-id-internal", 0, Some(1), upper_subr_0893),
-    ("declare-equiv-charset", 4, Some(4), upper_subr_0894),
-    ("find-charset-string", 1, Some(2), upper_subr_0895),
-    ("decode-big5-char", 1, Some(1), upper_subr_0896),
-    ("decode-char", 2, Some(2), upper_subr_0897),
-    ("decode-sjis-char", 1, Some(1), upper_subr_0898),
-    ("encode-big5-char", 1, Some(1), upper_subr_0899),
-    ("encode-char", 2, Some(2), upper_subr_0900),
-    ("encode-sjis-char", 1, Some(1), upper_subr_0901),
-    ("get-unused-iso-final-char", 2, Some(2), upper_subr_0902),
-    ("clear-charset-maps", 0, Some(0), upper_subr_0903),
-    ("set-text-conversion-style", 1, Some(2), upper_subr_0904),
-    ("text-quoting-style", 0, Some(0), upper_subr_0905),
-    ("yes-or-no-p", 1, Some(1), upper_subr_0906),
-    ("redraw-display", 0, Some(0), upper_subr_0907),
-    ("open-termscript", 1, Some(1), upper_subr_0908),
-    ("ding", 0, Some(1), upper_subr_0909),
-    ("frame--z-order-lessp", 2, Some(2), upper_subr_0910),
-    ("force-window-update", 0, Some(1), upper_subr_0911),
-    #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-export-frames", 0, Some(2), upper_subr_0912),
-    #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-backspace-delete-keys-p", 0, Some(1), upper_subr_0913),
+    ("x-backspace-delete-keys-p", 0, Some(1), upper_subr_0601),
     #[cfg(not(target_os = "macos"))]
-    ("x-change-window-property", 2, Some(7), upper_subr_0914),
-    ("x-focus-frame", 1, Some(2), upper_subr_0915),
+    ("x-change-window-property", 2, Some(7), upper_subr_0602),
+    ("x-focus-frame", 1, Some(2), upper_subr_0603),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-get-local-selection", 0, Some(2), upper_subr_0916),
+    ("x-get-local-selection", 0, Some(2), upper_subr_0604),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-get-modifier-masks", 0, Some(1), upper_subr_0917),
+    ("x-get-modifier-masks", 0, Some(1), upper_subr_0605),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-get-selection-internal", 2, Some(4), upper_subr_0918),
-    ("x-display-list", 0, Some(0), upper_subr_0919),
+    ("x-get-selection-internal", 2, Some(4), upper_subr_0606),
+    ("x-display-list", 0, Some(0), upper_subr_0607),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-disown-selection-internal", 1, Some(3), upper_subr_0920),
+    ("x-disown-selection-internal", 1, Some(3), upper_subr_0608),
     #[cfg(not(target_os = "macos"))]
-    ("x-delete-window-property", 1, Some(3), upper_subr_0921),
+    ("x-delete-window-property", 1, Some(3), upper_subr_0609),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-frame-edges", 0, Some(2), upper_subr_0922),
+    ("x-frame-edges", 0, Some(2), upper_subr_0610),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-frame-geometry", 0, Some(1), upper_subr_0923),
+    ("x-frame-geometry", 0, Some(1), upper_subr_0611),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-frame-list-z-order", 0, Some(1), upper_subr_0924),
+    ("x-frame-list-z-order", 0, Some(1), upper_subr_0612),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-frame-restack", 2, Some(3), upper_subr_0925),
-    ("x-family-fonts", 0, Some(2), upper_subr_0926),
+    ("x-frame-restack", 2, Some(3), upper_subr_0613),
+    ("x-family-fonts", 0, Some(2), upper_subr_0614),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-get-atom-name", 1, Some(2), upper_subr_0927),
+    ("x-get-atom-name", 1, Some(2), upper_subr_0615),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-mouse-absolute-pixel-position", 0, Some(0), upper_subr_0928),
+    ("x-mouse-absolute-pixel-position", 0, Some(0), upper_subr_0616),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-own-selection-internal", 2, Some(3), upper_subr_0929),
-    ("x-parse-geometry", 1, Some(1), upper_subr_0930),
-    ("x-popup-dialog", 2, Some(3), upper_subr_0931),
-    ("x-popup-menu", 2, Some(2), upper_subr_0932),
+    ("x-own-selection-internal", 2, Some(3), upper_subr_0617),
+    ("x-parse-geometry", 1, Some(1), upper_subr_0618),
+    ("x-popup-dialog", 2, Some(3), upper_subr_0619),
+    ("x-popup-menu", 2, Some(2), upper_subr_0620),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-register-dnd-atom", 1, Some(2), upper_subr_0933),
+    ("x-register-dnd-atom", 1, Some(2), upper_subr_0621),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-selection-exists-p", 0, Some(2), upper_subr_0934),
+    ("x-selection-exists-p", 0, Some(2), upper_subr_0622),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-selection-owner-p", 0, Some(2), upper_subr_0935),
-    ("x-hide-tip", 0, Some(0), upper_subr_0936),
+    ("x-selection-owner-p", 0, Some(2), upper_subr_0623),
+    ("x-hide-tip", 0, Some(0), upper_subr_0624),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-internal-focus-input-context", 1, Some(1), upper_subr_0937),
+    ("x-internal-focus-input-context", 1, Some(1), upper_subr_0625),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-send-client-message", 6, Some(6), upper_subr_0938),
-    ("x-show-tip", 1, Some(6), upper_subr_0939),
+    ("x-send-client-message", 6, Some(6), upper_subr_0626),
+    ("x-show-tip", 1, Some(6), upper_subr_0627),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-set-mouse-absolute-pixel-position", 2, Some(2), upper_subr_0940),
+    ("x-set-mouse-absolute-pixel-position", 2, Some(2), upper_subr_0628),
     #[cfg(not(target_os = "macos"))]
-    ("x-synchronize", 1, Some(2), upper_subr_0941),
+    ("x-synchronize", 1, Some(2), upper_subr_0629),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-translate-coordinates", 1, Some(6), upper_subr_0942),
+    ("x-translate-coordinates", 1, Some(6), upper_subr_0630),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-uses-old-gtk-dialog", 0, Some(0), upper_subr_0943),
+    ("x-uses-old-gtk-dialog", 0, Some(0), upper_subr_0631),
     #[cfg(not(target_os = "macos"))]
-    ("x-window-property", 1, Some(6), upper_subr_0944),
+    ("x-window-property", 1, Some(6), upper_subr_0632),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-window-property-attributes", 1, Some(3), upper_subr_0945),
+    ("x-window-property-attributes", 1, Some(3), upper_subr_0633),
     #[cfg(not(any(windows, target_os = "macos")))]
-    ("x-wm-set-size-hint", 0, Some(1), upper_subr_0946),
-    ("terminal-list", 0, Some(0), upper_subr_0947),
-    ("delete-terminal", 0, Some(2), upper_subr_0948),
-    ("make-terminal-frame", 1, Some(1), upper_subr_0949),
-    ("image-size", 1, Some(3), upper_subr_0950),
-    ("image-mask-p", 1, Some(2), upper_subr_0951),
-    ("image-flush", 1, Some(2), upper_subr_0952),
-    ("clear-image-cache", 0, Some(2), upper_subr_0953),
-    ("image-cache-size", 0, Some(0), upper_subr_0954),
-    ("image-metadata", 1, Some(2), upper_subr_0955),
-    ("neomacs-image-extent", 1, Some(2), upper_subr_0956),
-    ("imagep", 1, Some(1), upper_subr_0957),
-    ("image-transforms-p", 0, Some(1), upper_subr_0958),
-    ("invisible-p", 1, Some(1), upper_subr_0959),
-    ("line-pixel-height", 0, Some(0), upper_subr_0960),
-    ("move-point-visually", 1, Some(1), upper_subr_0961),
-    ("lookup-image-map", 3, Some(3), upper_subr_0962),
-    ("current-bidi-paragraph-direction", 0, Some(1), upper_subr_0963),
-    ("bidi-resolved-levels", 0, Some(1), upper_subr_0964),
-    ("bidi-find-overridden-directionality", 3, Some(4), upper_subr_0965),
-    ("move-to-window-line", 1, Some(1), upper_subr_0966),
-    ("long-line-optimizations-p", 0, Some(0), upper_subr_0967),
-    ("libxml-parse-html-region", 0, Some(4), upper_subr_0968),
-    ("libxml-parse-xml-region", 0, Some(4), upper_subr_0969),
-    ("libxml-available-p", 0, Some(0), upper_subr_0970),
-    ("zlib-available-p", 0, Some(0), upper_subr_0971),
-    ("zlib-decompress-region", 2, Some(3), upper_subr_0972),
-    ("json-serialize", 1, None, upper_subr_0973),
-    ("json-parse-string", 1, None, upper_subr_0974),
-    ("markerp", 1, Some(1), upper_subr_0975),
-    ("get-load-suffixes", 0, Some(0), upper_subr_0976),
-    ("read-coding-system", 1, Some(2), upper_subr_0977),
-    ("read-non-nil-coding-system", 1, Some(1), upper_subr_0978),
-    ("base64-encode-string", 1, Some(2), upper_subr_0979),
-    ("base64-decode-string", 1, Some(3), upper_subr_0980),
-    ("base64url-encode-string", 1, Some(2), upper_subr_0981),
+    ("x-wm-set-size-hint", 0, Some(1), upper_subr_0634),
+    ("terminal-list", 0, Some(0), upper_subr_0635),
+    ("delete-terminal", 0, Some(2), upper_subr_0636),
+    ("make-terminal-frame", 1, Some(1), upper_subr_0637),
+    ("image-size", 1, Some(3), upper_subr_0638),
+    ("image-mask-p", 1, Some(2), upper_subr_0639),
+    ("image-flush", 1, Some(2), upper_subr_0640),
+    ("clear-image-cache", 0, Some(2), upper_subr_0641),
+    ("image-cache-size", 0, Some(0), upper_subr_0642),
+    ("image-metadata", 1, Some(2), upper_subr_0643),
+    ("neomacs-image-extent", 1, Some(2), upper_subr_0644),
+    ("imagep", 1, Some(1), upper_subr_0645),
+    ("image-transforms-p", 0, Some(1), upper_subr_0646),
+    ("invisible-p", 1, Some(1), upper_subr_0647),
+    ("line-pixel-height", 0, Some(0), upper_subr_0648),
+    ("move-point-visually", 1, Some(1), upper_subr_0649),
+    ("lookup-image-map", 3, Some(3), upper_subr_0650),
+    ("current-bidi-paragraph-direction", 0, Some(1), upper_subr_0651),
+    ("bidi-resolved-levels", 0, Some(1), upper_subr_0652),
+    ("bidi-find-overridden-directionality", 3, Some(4), upper_subr_0653),
+    ("move-to-window-line", 1, Some(1), upper_subr_0654),
+    ("long-line-optimizations-p", 0, Some(0), upper_subr_0655),
+    ("read-coding-system", 1, Some(2), upper_subr_0656),
+    ("read-non-nil-coding-system", 1, Some(1), upper_subr_0657),
+    ("base64-encode-string", 1, Some(2), upper_subr_0658),
     #[cfg(windows)]
-    ("w32-short-file-name", 1, Some(1), upper_subr_0982),
+    ("w32-short-file-name", 1, Some(1), upper_subr_0659),
     #[cfg(windows)]
-    ("w32-long-file-name", 1, Some(1), upper_subr_0983),
+    ("w32-long-file-name", 1, Some(1), upper_subr_0660),
     #[cfg(windows)]
-    ("w32-get-valid-codepages", 0, Some(0), upper_subr_0984),
+    ("w32-get-valid-codepages", 0, Some(0), upper_subr_0661),
     #[cfg(windows)]
-    ("w32-get-console-codepage", 0, Some(0), upper_subr_0985),
+    ("w32-get-console-codepage", 0, Some(0), upper_subr_0662),
     #[cfg(windows)]
-    ("w32-set-console-codepage", 1, Some(1), upper_subr_0986),
+    ("w32-set-console-codepage", 1, Some(1), upper_subr_0663),
     #[cfg(windows)]
-    ("w32-get-console-output-codepage", 0, Some(0), upper_subr_0987),
+    ("w32-get-console-output-codepage", 0, Some(0), upper_subr_0664),
     #[cfg(windows)]
-    ("w32-set-console-output-codepage", 1, Some(1), upper_subr_0988),
+    ("w32-set-console-output-codepage", 1, Some(1), upper_subr_0665),
     #[cfg(windows)]
-    ("w32-get-codepage-charset", 1, Some(1), upper_subr_0989),
+    ("w32-get-codepage-charset", 1, Some(1), upper_subr_0666),
     #[cfg(windows)]
-    ("w32-shell-execute", 2, Some(4), upper_subr_0990),
-    ("compose-region-internal", 2, Some(4), upper_subr_0991),
-    ("compose-string-internal", 3, Some(5), upper_subr_0992),
-    ("find-composition-internal", 4, Some(4), upper_subr_0993),
-    ("composition-get-gstring", 4, Some(4), upper_subr_0994),
-    ("clear-composition-cache", 0, Some(0), upper_subr_0995),
-    ("composition-sort-rules", 1, Some(1), upper_subr_0996),
-    ("neomacs-terminal-create", 3, Some(4), upper_subr_0997),
-    ("neomacs-terminal-write", 2, Some(2), upper_subr_0998),
-    ("neomacs-terminal-resize", 3, Some(3), upper_subr_0999),
-    ("neomacs-terminal-destroy", 1, Some(1), upper_subr_1000),
-    ("neomacs-terminal-set-float", 4, Some(4), upper_subr_1001),
-    ("neomacs-terminal-get-text", 1, Some(1), upper_subr_1002),
-    ("neomacs-surface-create", 0, None, upper_subr_1003),
-    ("neomacs-surface-set-uniform", 3, Some(3), upper_subr_1004),
-    ("neomacs-surface-destroy", 1, Some(1), upper_subr_1005),
-    ("neomacs-surface-available-p", 0, Some(0), upper_subr_1006),
-    ("neomacs-frame-shader", 1, Some(3), upper_subr_1007),
-    ("neomacs-frame-shader-set-uniform", 2, Some(2), upper_subr_1008),
-    ("neomacs-video-p", 1, Some(1), upper_subr_1009),
-    ("neomacs-video-load", 1, Some(3), upper_subr_1010),
-    ("neomacs-video-play", 1, Some(1), upper_subr_1011),
-    ("neomacs-video-pause", 1, Some(1), upper_subr_1012),
-    ("neomacs-video-stop", 1, Some(1), upper_subr_1013),
-    ("neomacs-video-set-loop", 2, Some(2), upper_subr_1014),
-    ("neomacs-video-destroy", 1, Some(1), upper_subr_1015),
-    ("neomacs-video-diagnostics", 0, Some(1), upper_subr_1016),
-    ("neomacs-video-begin-measurement-epoch", 0, Some(0), upper_subr_1017),
-    ("make-xwidget", 4, Some(7), upper_subr_1018),
-    ("xwidgetp", 1, Some(1), upper_subr_1019),
-    ("xwidget-view-p", 1, Some(1), upper_subr_1020),
-    ("xwidget-live-p", 1, Some(1), upper_subr_1021),
-    ("xwidget-info", 1, Some(1), upper_subr_1022),
-    ("xwidget-view-info", 1, Some(1), upper_subr_1023),
-    ("xwidget-view-model", 1, Some(1), upper_subr_1024),
-    ("xwidget-view-window", 1, Some(1), upper_subr_1025),
-    ("xwidget-view-lookup", 1, Some(2), upper_subr_1026),
-    ("delete-xwidget-view", 1, Some(1), upper_subr_1027),
-    ("xwidget-plist", 1, Some(1), upper_subr_1028),
-    ("set-xwidget-plist", 2, Some(2), upper_subr_1029),
-    ("xwidget-buffer", 1, Some(1), upper_subr_1030),
-    ("set-xwidget-buffer", 2, Some(2), upper_subr_1031),
-    ("xwidget-query-on-exit-flag", 1, Some(1), upper_subr_1032),
-    ("set-xwidget-query-on-exit-flag", 2, Some(2), upper_subr_1033),
-    ("get-buffer-xwidgets", 1, Some(1), upper_subr_1034),
-    ("kill-xwidget", 1, Some(1), upper_subr_1035),
-    ("xwidget-resize", 3, Some(3), upper_subr_1036),
-    ("xwidget-size-request", 1, Some(1), upper_subr_1037),
-    ("xwidget-webkit-uri", 1, Some(1), upper_subr_1038),
-    ("xwidget-webkit-title", 1, Some(1), upper_subr_1039),
-    ("xwidget-webkit-goto-uri", 2, Some(2), upper_subr_1040),
-    ("xwidget-webkit-execute-script", 2, Some(3), upper_subr_1041),
-    ("xwidget-webkit-estimated-load-progress", 1, Some(1), upper_subr_1042),
-    ("current-indentation", 0, Some(0), upper_subr_1043),
-    ("indent-to", 1, Some(2), upper_subr_1044),
-    ("current-column", 0, Some(0), upper_subr_1045),
-    ("move-to-column", 1, Some(2), upper_subr_1046),
-    ("line-number-display-width", 0, Some(1), upper_subr_1047),
-    ("vertical-motion", 1, Some(3), upper_subr_1048),
-    ("compute-motion", 7, Some(7), upper_subr_1049),
+    ("w32-shell-execute", 2, Some(4), upper_subr_0667),
+    ("compose-region-internal", 2, Some(4), upper_subr_0668),
+    ("compose-string-internal", 3, Some(5), upper_subr_0669),
+    ("find-composition-internal", 4, Some(4), upper_subr_0670),
+    ("composition-get-gstring", 4, Some(4), upper_subr_0671),
+    ("clear-composition-cache", 0, Some(0), upper_subr_0672),
+    ("composition-sort-rules", 1, Some(1), upper_subr_0673),
+    ("neomacs-terminal-create", 3, Some(4), upper_subr_0674),
+    ("neomacs-terminal-write", 2, Some(2), upper_subr_0675),
+    ("neomacs-terminal-resize", 3, Some(3), upper_subr_0676),
+    ("neomacs-terminal-destroy", 1, Some(1), upper_subr_0677),
+    ("neomacs-terminal-set-float", 4, Some(4), upper_subr_0678),
+    ("neomacs-terminal-get-text", 1, Some(1), upper_subr_0679),
+    ("neomacs-surface-create", 0, None, upper_subr_0680),
+    ("neomacs-surface-set-uniform", 3, Some(3), upper_subr_0681),
+    ("neomacs-surface-destroy", 1, Some(1), upper_subr_0682),
+    ("neomacs-surface-available-p", 0, Some(0), upper_subr_0683),
+    ("neomacs-frame-shader", 1, Some(3), upper_subr_0684),
+    ("neomacs-frame-shader-set-uniform", 2, Some(2), upper_subr_0685),
+    ("neomacs-video-p", 1, Some(1), upper_subr_0686),
+    ("neomacs-video-load", 1, Some(3), upper_subr_0687),
+    ("neomacs-video-play", 1, Some(1), upper_subr_0688),
+    ("neomacs-video-pause", 1, Some(1), upper_subr_0689),
+    ("neomacs-video-stop", 1, Some(1), upper_subr_0690),
+    ("neomacs-video-set-loop", 2, Some(2), upper_subr_0691),
+    ("neomacs-video-destroy", 1, Some(1), upper_subr_0692),
+    ("neomacs-video-diagnostics", 0, Some(1), upper_subr_0693),
+    ("neomacs-video-begin-measurement-epoch", 0, Some(0), upper_subr_0694),
+    ("make-xwidget", 4, Some(7), upper_subr_0695),
+    ("xwidgetp", 1, Some(1), upper_subr_0696),
+    ("xwidget-view-p", 1, Some(1), upper_subr_0697),
+    ("xwidget-live-p", 1, Some(1), upper_subr_0698),
+    ("xwidget-info", 1, Some(1), upper_subr_0699),
+    ("xwidget-view-info", 1, Some(1), upper_subr_0700),
+    ("xwidget-view-model", 1, Some(1), upper_subr_0701),
+    ("xwidget-view-window", 1, Some(1), upper_subr_0702),
+    ("xwidget-view-lookup", 1, Some(2), upper_subr_0703),
+    ("delete-xwidget-view", 1, Some(1), upper_subr_0704),
+    ("xwidget-plist", 1, Some(1), upper_subr_0705),
+    ("set-xwidget-plist", 2, Some(2), upper_subr_0706),
+    ("xwidget-buffer", 1, Some(1), upper_subr_0707),
+    ("set-xwidget-buffer", 2, Some(2), upper_subr_0708),
+    ("xwidget-query-on-exit-flag", 1, Some(1), upper_subr_0709),
+    ("set-xwidget-query-on-exit-flag", 2, Some(2), upper_subr_0710),
+    ("get-buffer-xwidgets", 1, Some(1), upper_subr_0711),
+    ("kill-xwidget", 1, Some(1), upper_subr_0712),
+    ("xwidget-resize", 3, Some(3), upper_subr_0713),
+    ("xwidget-size-request", 1, Some(1), upper_subr_0714),
+    ("xwidget-webkit-uri", 1, Some(1), upper_subr_0715),
+    ("xwidget-webkit-title", 1, Some(1), upper_subr_0716),
+    ("xwidget-webkit-goto-uri", 2, Some(2), upper_subr_0717),
+    ("xwidget-webkit-execute-script", 2, Some(3), upper_subr_0718),
+    ("xwidget-webkit-estimated-load-progress", 1, Some(1), upper_subr_0719),
+    ("current-indentation", 0, Some(0), upper_subr_0720),
+    ("indent-to", 1, Some(2), upper_subr_0721),
+    ("current-column", 0, Some(0), upper_subr_0722),
+    ("move-to-column", 1, Some(2), upper_subr_0723),
+    ("line-number-display-width", 0, Some(1), upper_subr_0724),
+    ("vertical-motion", 1, Some(3), upper_subr_0725),
+    ("compute-motion", 7, Some(7), upper_subr_0726),
     #[cfg(neomacs_have_dbus)]
-    ("dbus--init-bus", 1, Some(2), upper_subr_1050),
+    ("dbus--init-bus", 1, Some(2), upper_subr_0727),
     #[cfg(neomacs_have_dbus)]
-    ("dbus-get-unique-name", 1, Some(1), upper_subr_1051),
+    ("dbus-get-unique-name", 1, Some(1), upper_subr_0728),
     #[cfg(neomacs_have_dbus)]
-    ("dbus-message-internal", 3, None, upper_subr_1052),
+    ("dbus-message-internal", 3, None, upper_subr_0729),
     #[cfg(neomacs_have_dbus)]
-    ("dbus--fd-open", 1, Some(1), upper_subr_1053),
+    ("dbus--fd-open", 1, Some(1), upper_subr_0730),
     #[cfg(neomacs_have_dbus)]
-    ("dbus--fd-close", 1, Some(1), upper_subr_1054),
+    ("dbus--fd-close", 1, Some(1), upper_subr_0731),
     #[cfg(neomacs_have_dbus)]
-    ("dbus--registered-fds", 0, Some(0), upper_subr_1055),
+    ("dbus--registered-fds", 0, Some(0), upper_subr_0732),
     #[cfg(feature = "sqlite")]
-    ("sqlite-open", 0, Some(3), upper_subr_1056),
+    ("sqlite-open", 0, Some(3), upper_subr_0733),
     #[cfg(feature = "sqlite")]
-    ("sqlite-close", 1, Some(1), upper_subr_1057),
+    ("sqlite-close", 1, Some(1), upper_subr_0734),
     #[cfg(feature = "sqlite")]
-    ("sqlite-execute", 2, Some(3), upper_subr_1058),
+    ("sqlite-execute", 2, Some(3), upper_subr_0735),
     #[cfg(feature = "sqlite")]
-    ("sqlite-select", 2, Some(4), upper_subr_1059),
+    ("sqlite-select", 2, Some(4), upper_subr_0736),
     #[cfg(feature = "sqlite")]
-    ("sqlite-execute-batch", 2, Some(2), upper_subr_1060),
+    ("sqlite-execute-batch", 2, Some(2), upper_subr_0737),
     #[cfg(feature = "sqlite")]
-    ("sqlite-transaction", 1, Some(1), upper_subr_1061),
+    ("sqlite-transaction", 1, Some(1), upper_subr_0738),
     #[cfg(feature = "sqlite")]
-    ("sqlite-commit", 1, Some(1), upper_subr_1062),
+    ("sqlite-commit", 1, Some(1), upper_subr_0739),
     #[cfg(feature = "sqlite")]
-    ("sqlite-rollback", 1, Some(1), upper_subr_1063),
+    ("sqlite-rollback", 1, Some(1), upper_subr_0740),
     #[cfg(feature = "sqlite")]
-    ("sqlite-pragma", 2, Some(2), upper_subr_1064),
+    ("sqlite-pragma", 2, Some(2), upper_subr_0741),
     #[cfg(feature = "sqlite")]
-    ("sqlite-load-extension", 2, Some(2), upper_subr_1065),
+    ("sqlite-load-extension", 2, Some(2), upper_subr_0742),
     #[cfg(feature = "sqlite")]
-    ("sqlite-next", 1, Some(1), upper_subr_1066),
+    ("sqlite-next", 1, Some(1), upper_subr_0743),
     #[cfg(feature = "sqlite")]
-    ("sqlite-columns", 1, Some(1), upper_subr_1067),
+    ("sqlite-columns", 1, Some(1), upper_subr_0744),
     #[cfg(feature = "sqlite")]
-    ("sqlite-more-p", 1, Some(1), upper_subr_1068),
+    ("sqlite-more-p", 1, Some(1), upper_subr_0745),
     #[cfg(feature = "sqlite")]
-    ("sqlite-finalize", 1, Some(1), upper_subr_1069),
+    ("sqlite-finalize", 1, Some(1), upper_subr_0746),
     #[cfg(feature = "sqlite")]
-    ("sqlite-version", 0, Some(0), upper_subr_1070),
-    ("sqlitep", 1, Some(1), upper_subr_1071),
-    ("sqlite-available-p", 0, Some(0), upper_subr_1072),
-    ("fontp", 1, Some(2), upper_subr_1073),
-    ("font-spec", 0, None, upper_subr_1074),
-    ("font-get", 2, Some(2), upper_subr_1075),
-    ("font-face-attributes", 1, Some(2), upper_subr_1076),
-    ("font-put", 3, Some(3), upper_subr_1077),
-    ("list-fonts", 1, Some(4), upper_subr_1078),
-    ("font-family-list", 0, Some(1), upper_subr_1079),
-    ("find-font", 1, Some(2), upper_subr_1080),
-    ("font-xlfd-name", 1, Some(3), upper_subr_1081),
-    ("clear-font-cache", 0, Some(0), upper_subr_1082),
-    ("font-shape-gstring", 2, Some(2), upper_subr_1083),
-    ("font-variation-glyphs", 2, Some(2), upper_subr_1084),
-    ("internal-char-font", 1, Some(2), upper_subr_1085),
-    ("close-font", 1, Some(2), upper_subr_1086),
-    ("query-font", 1, Some(1), upper_subr_1087),
-    ("font-get-glyphs", 3, Some(4), upper_subr_1088),
-    ("font-has-char-p", 2, Some(3), upper_subr_1089),
-    ("font-match-p", 2, Some(2), upper_subr_1090),
-    ("font-at", 1, Some(3), upper_subr_1091),
-    ("font-info", 1, Some(2), upper_subr_1092),
-    ("neomacs--effect-set", 1, None, upper_subr_1093),
-    ("neomacs-effect-get", 1, Some(1), upper_subr_1094),
-    ("neomacs--effects-apply", 1, Some(1), upper_subr_1095),
-    ("neomacs-effect-schema", 1, Some(1), upper_subr_1096),
-    ("neomacs-effect-names", 0, Some(1), upper_subr_1097),
-    ("neomacs-set-modifier-policy", 0, Some(0), upper_subr_1098),
-    ("neomacs-set-scroll-indicators", 1, Some(1), upper_subr_1099),
-    ("neomacs-set-extra-spacing", 2, Some(2), upper_subr_1100),
+    ("sqlite-version", 0, Some(0), upper_subr_0747),
+    ("sqlitep", 1, Some(1), upper_subr_0748),
+    ("sqlite-available-p", 0, Some(0), upper_subr_0749),
+    ("fontp", 1, Some(2), upper_subr_0750),
+    ("font-spec", 0, None, upper_subr_0751),
+    ("font-get", 2, Some(2), upper_subr_0752),
+    ("font-face-attributes", 1, Some(2), upper_subr_0753),
+    ("font-put", 3, Some(3), upper_subr_0754),
+    ("list-fonts", 1, Some(4), upper_subr_0755),
+    ("font-family-list", 0, Some(1), upper_subr_0756),
+    ("find-font", 1, Some(2), upper_subr_0757),
+    ("font-xlfd-name", 1, Some(3), upper_subr_0758),
+    ("clear-font-cache", 0, Some(0), upper_subr_0759),
+    ("font-shape-gstring", 2, Some(2), upper_subr_0760),
+    ("font-variation-glyphs", 2, Some(2), upper_subr_0761),
+    ("internal-char-font", 1, Some(2), upper_subr_0762),
+    ("close-font", 1, Some(2), upper_subr_0763),
+    ("query-font", 1, Some(1), upper_subr_0764),
+    ("font-get-glyphs", 3, Some(4), upper_subr_0765),
+    ("font-has-char-p", 2, Some(3), upper_subr_0766),
+    ("font-match-p", 2, Some(2), upper_subr_0767),
+    ("font-at", 1, Some(3), upper_subr_0768),
+    ("font-info", 1, Some(2), upper_subr_0769),
+    ("neomacs--effect-set", 1, None, upper_subr_0770),
+    ("neomacs-effect-get", 1, Some(1), upper_subr_0771),
+    ("neomacs--effects-apply", 1, Some(1), upper_subr_0772),
+    ("neomacs-effect-schema", 1, Some(1), upper_subr_0773),
+    ("neomacs-effect-names", 0, Some(1), upper_subr_0774),
+    ("neomacs-set-modifier-policy", 0, Some(0), upper_subr_0775),
+    ("neomacs-set-scroll-indicators", 1, Some(1), upper_subr_0776),
+    ("neomacs-set-extra-spacing", 2, Some(2), upper_subr_0777),
 ];

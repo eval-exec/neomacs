@@ -2487,6 +2487,1936 @@ crate::emacs_core::subr::define_subrs! {
         NativeFn::ContextVec(crate::emacs_core::doc::builtin_snarf_documentation),
         SubrArity::new(1, Some(1)),
     )),
+    // == Declarations localized from the core compatibility manifest ==
+    // Each entry below was declared inline in neovm-core's `register_subrs`
+    // although its entry point lives in this crate or in a layer it depends on
+    // (neovm-edit, neovm-text, neovm-value). Moved body-identically, in their
+    // original relative order; the manifest's section headers come along.
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "find-buffer",
+        NativeFn::ContextVec(|ctx, args| builtin_find_buffer(ctx, args)),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-live-p",
+        NativeFn::ContextSlice(|ctx, args| builtin_buffer_live_p(&mut ctx.edit.buffers, args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-name",
+        NativeFn::ContextSlice(|ctx, args| builtin_buffer_name(&mut ctx.edit.buffers, args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-file-name",
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_file_name(&mut ctx.edit.buffers, args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-base-buffer",
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_base_buffer(&mut ctx.edit.buffers, args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-last-name",
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_last_name(&mut ctx.edit.buffers, args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-string",
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_string(ctx, args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
+        "buffer-substring",
+        |ctx, start, end| builtin_buffer_substring_2(ctx, start, end),
+        FixedMin2::Two,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "field-beginning",
+        NativeFn::ContextVec(|ctx, args| builtin_field_beginning(ctx, args)),
+        SubrArity::new(0, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "field-end",
+        NativeFn::ContextVec(|ctx, args| builtin_field_end(ctx, args)),
+        SubrArity::new(0, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "field-string",
+        NativeFn::ContextVec(|ctx, args| builtin_field_string(ctx, args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "field-string-no-properties",
+        NativeFn::ContextVec(|ctx, args| builtin_field_string_no_properties(ctx, args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "constrain-to-field",
+        NativeFn::ContextVec(|ctx, args| builtin_constrain_to_field(ctx, args)),
+        SubrArity::new(2, Some(5)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "insert-and-inherit",
+        NativeFn::ContextVec(|ctx, args| builtin_insert_and_inherit(ctx, args)),
+        SubrArity::new(0, None),
+    ))
+    .requires_eval_state(),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "insert-before-markers-and-inherit",
+        NativeFn::ContextVec(|ctx, args| builtin_insert_before_markers_and_inherit(ctx, args)),
+        SubrArity::new(0, None),
+    ))
+    .requires_eval_state(),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "insert-buffer-substring",
+        NativeFn::ContextVec(|ctx, args| builtin_insert_buffer_substring(ctx, args)),
+        SubrArity::new(1, Some(3)),
+    ))
+    .requires_eval_state(),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "insert-char",
+        NativeFn::ContextVec(|ctx, args| builtin_insert_char(ctx, args)),
+        SubrArity::new(1, Some(3)),
+    ))
+    .interactive(
+        crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::Form(
+            insert_char_interactive_spec,
+        ),
+    ),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-swap-text",
+        NativeFn::ContextVec(builtin_buffer_swap_text),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "delete-and-extract-region",
+        NativeFn::ContextVec(neovm_edit::emacs_core::editfns::builtin_delete_and_extract_region),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "subst-char-in-region",
+        NativeFn::ContextVec(builtin_subst_char_in_region),
+        SubrArity::new(4, Some(5)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "delete-field",
+        NativeFn::ContextVec(|ctx, args| builtin_delete_field(ctx, args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "delete-all-overlays",
+        NativeFn::ContextVec(|ctx, args| builtin_delete_all_overlays(&mut ctx.edit.buffers, args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-enable-undo",
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_enable_undo(
+            &mut ctx.edit.buffers,
+            args
+        )),
+        SubrArity::new(0, Some(1)),
+    ))
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-size",
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_size(&mut ctx.edit.buffers, args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "buffer-modified-p",
+        |ctx, arg| builtin_buffer_modified_p_1(&mut ctx.edit.buffers, arg),
+        FixedMin1::Zero
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-buffer-modified-p",
+        NativeFn::ContextVec(|ctx, args| builtin_set_buffer_modified_p(ctx, args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-modified-tick",
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_modified_tick(&mut ctx.edit.buffers, args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-chars-modified-tick",
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_chars_modified_tick(
+            &mut ctx.edit.buffers,
+            args
+        )),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "generate-new-buffer-name",
+        NativeFn::ContextVec(|ctx, args| builtin_generate_new_buffer_name(ctx, args)),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "char-before",
+        |ctx, arg| builtin_char_before_1(&mut ctx.edit.buffers, arg),
+        FixedMin1::Zero
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "byte-to-position",
+        |ctx, arg| builtin_byte_to_position_1(&mut ctx.edit.buffers, arg),
+        FixedMin1::One
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "position-bytes",
+        |ctx, arg| builtin_position_bytes_1(&mut ctx.edit.buffers, arg),
+        FixedMin1::One
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "get-byte",
+        NativeFn::ContextVec(|ctx, args| builtin_get_byte(ctx, args)),
+        SubrArity::new(0, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "find-charset-region",
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_find_charset_region),
+        SubrArity::new(2, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "charset-after",
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_charset_after),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "modify-syntax-entry",
+        NativeFn::ContextVec(neovm_text::emacs_core::syntax::builtin_modify_syntax_entry),
+        SubrArity::new(2, Some(3)),
+    ))
+    .interactive(
+        crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String(
+            "cSet syntax for character: \nsSet syntax for %s to: ",
+        ),
+    ),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
+        "syntax-table",
+        neovm_text::emacs_core::syntax::builtin_syntax_table_0,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "char-syntax",
+        neovm_text::emacs_core::syntax::builtin_char_syntax_1,
+        FixedMin1::One,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "matching-paren",
+        NativeFn::ContextVec(neovm_text::emacs_core::syntax::builtin_matching_paren),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed3(
+        "scan-lists",
+        neovm_text::emacs_core::syntax::builtin_scan_lists_3,
+        FixedMin3::Three,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
+        "scan-sexps",
+        neovm_text::emacs_core::syntax::builtin_scan_sexps_2,
+        FixedMin2::Two,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed6(
+        "parse-partial-sexp",
+        neovm_text::emacs_core::syntax::builtin_parse_partial_sexp_6,
+        FixedMin6::Two,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
+        "skip-syntax-forward",
+        neovm_text::emacs_core::syntax::builtin_skip_syntax_forward_2,
+        FixedMin2::One,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
+        "skip-syntax-backward",
+        neovm_text::emacs_core::syntax::builtin_skip_syntax_backward_2,
+        FixedMin2::One,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "next-overlay-change",
+        NativeFn::ContextVec(
+            |ctx, args| neovm_edit::emacs_core::buffer::builtin_next_overlay_change(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "previous-overlay-change",
+        NativeFn::ContextVec(|ctx, args| {
+            neovm_edit::emacs_core::buffer::builtin_previous_overlay_change(&mut ctx.edit.buffers, args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "make-overlay",
+        NativeFn::ContextVec(|ctx, args| neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut ctx.edit.buffers,
+            args
+        )),
+        SubrArity::new(2, Some(5)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "delete-overlay",
+        NativeFn::ContextVec(
+            |ctx, args| neovm_edit::emacs_core::buffer::builtin_delete_overlay(ctx, args)
+        ),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "overlay-put",
+        NativeFn::ContextVec(|ctx, args| neovm_edit::emacs_core::buffer::builtin_overlay_put(ctx, args)),
+        SubrArity::new(3, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "overlay-get",
+        NativeFn::ContextVec(|ctx, args| neovm_edit::emacs_core::buffer::builtin_overlay_get(ctx, args)),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "overlays-at",
+        NativeFn::ContextVec(|ctx, args| neovm_edit::emacs_core::buffer::builtin_overlays_at(ctx, args)),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "overlays-in",
+        NativeFn::ContextVec(|ctx, args| neovm_edit::emacs_core::buffer::builtin_overlays_in(
+            &mut ctx.edit.buffers,
+            args
+        )),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "move-overlay",
+        NativeFn::ContextVec(|ctx, args| neovm_edit::emacs_core::buffer::builtin_move_overlay(
+            ctx, args
+        )),
+        SubrArity::new(3, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "overlay-start",
+        NativeFn::ContextVec(
+            |ctx, args| neovm_edit::emacs_core::buffer::builtin_overlay_start(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "overlay-end",
+        NativeFn::ContextVec(|ctx, args| neovm_edit::emacs_core::buffer::builtin_overlay_end(
+            &mut ctx.edit.buffers,
+            args
+        )),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "overlay-buffer",
+        NativeFn::ContextVec(
+            |ctx, args| neovm_edit::emacs_core::buffer::builtin_overlay_buffer(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "overlay-properties",
+        NativeFn::ContextVec(
+            |ctx, args| neovm_edit::emacs_core::buffer::builtin_overlay_properties(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "overlayp",
+        NativeFn::ContextSlice(|ctx, args| neovm_edit::emacs_core::buffer::builtin_overlayp(ctx, args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
+        "eobp",
+        |ctx: &mut crate::emacs_core::eval::Context| {
+            neovm_edit::emacs_core::navigation::builtin_eobp_0(&ctx.edit.buffers)
+        },
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
+        "eolp",
+        |ctx: &mut crate::emacs_core::eval::Context| {
+            neovm_edit::emacs_core::navigation::builtin_eolp_0(&ctx.edit.buffers)
+        },
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "line-end-position",
+        neovm_edit::emacs_core::navigation::builtin_line_end_position_1,
+        FixedMin1::Zero,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "line-number-at-pos",
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            neovm_edit::emacs_core::navigation::builtin_line_number_at_pos(&ctx.edit.buffers, args)
+        }),
+        SubrArity::new(0, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "forward-line",
+        neovm_edit::emacs_core::navigation::builtin_forward_line_1,
+        FixedMin1::Zero,
+    ))
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("^p")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "beginning-of-line",
+        neovm_edit::emacs_core::navigation::builtin_beginning_of_line_1,
+        FixedMin1::Zero,
+    ))
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("^p")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "end-of-line",
+        neovm_edit::emacs_core::navigation::builtin_end_of_line_1,
+        FixedMin1::Zero,
+    ))
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("^p")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "backward-char",
+        NativeFn::ContextVec(neovm_edit::emacs_core::navigation::builtin_backward_char),
+        SubrArity::new(0, Some(1)),
+    ))
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("^p")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
+        "skip-chars-forward",
+        |ctx: &mut crate::emacs_core::eval::Context, string, lim| {
+            neovm_edit::emacs_core::navigation::builtin_skip_chars_forward_2(
+                &mut ctx.edit.buffers,
+                string,
+                lim,
+            )
+        },
+        FixedMin2::One,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
+        "skip-chars-backward",
+        |ctx: &mut crate::emacs_core::eval::Context, string, lim| {
+            neovm_edit::emacs_core::navigation::builtin_skip_chars_backward_2(
+                &mut ctx.edit.buffers,
+                string,
+                lim,
+            )
+        },
+        FixedMin2::One,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "mark-marker",
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            neovm_edit::emacs_core::marker::builtin_mark_marker(&mut ctx.edit.buffers, args)
+        }),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "region-beginning",
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            neovm_edit::emacs_core::navigation::builtin_region_beginning(&ctx.edit.buffers, args)
+        }),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "region-end",
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            neovm_edit::emacs_core::navigation::builtin_region_end(&ctx.edit.buffers, args)
+        }),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "undo-boundary",
+        NativeFn::ContextSlice(neovm_edit::emacs_core::undo::builtin_undo_boundary),
+        SubrArity::new(0, Some(0)),
+    ))
+    .requires_eval_state(),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed3(
+        "set-marker",
+        |ctx: &mut crate::emacs_core::eval::Context, marker, position, buffer| {
+            neovm_edit::emacs_core::marker::builtin_set_marker_in_buffers(
+                &mut ctx.edit.buffers,
+                &[marker, position, buffer],
+            )
+        },
+        FixedMin3::Two,
+    )),
+    // No `move-marker' here: GNU has no DEFUN of that name.  It is
+    // `(defalias 'move-marker #'set-marker)' at lisp/subr.el:2280, so the
+    // function cell holds the SYMBOL `set-marker' (DIVERGENCES.md 148).
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "marker-position",
+        |ctx: &mut crate::emacs_core::eval::Context, marker| {
+            neovm_edit::emacs_core::marker::builtin_marker_position_1(&ctx.edit.buffers, marker)
+        },
+        FixedMin1::One,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "marker-buffer",
+        NativeFn::ContextSlice(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            neovm_edit::emacs_core::marker::builtin_marker_buffer_in_buffers(&ctx.edit.buffers, args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "point-marker",
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            neovm_edit::emacs_core::marker::builtin_point_marker_in_buffers(&mut ctx.edit.buffers, args)
+        }),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "point-min-marker",
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            neovm_edit::emacs_core::marker::builtin_point_min_marker_in_buffers(
+                &mut ctx.edit.buffers,
+                args,
+            )
+        }),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "point-max-marker",
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            neovm_edit::emacs_core::marker::builtin_point_max_marker_in_buffers(
+                &mut ctx.edit.buffers,
+                args,
+            )
+        }),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "current-case-table",
+        NativeFn::ContextVec(crate::emacs_core::eval::case_table_adapter::builtin_current_case_table),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "standard-case-table",
+        NativeFn::ContextVec(crate::emacs_core::eval::case_table_adapter::builtin_standard_case_table),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-case-table",
+        NativeFn::ContextVec(crate::emacs_core::eval::case_table_adapter::builtin_set_case_table),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "define-category",
+        NativeFn::ContextVec(neovm_text::emacs_core::category::builtin_define_category),
+        SubrArity::new(2, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "category-docstring",
+        NativeFn::ContextVec(neovm_text::emacs_core::category::builtin_category_docstring),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "modify-category-entry",
+        NativeFn::ContextVec(neovm_text::emacs_core::category::builtin_modify_category_entry),
+        SubrArity::new(2, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "char-category-set",
+        NativeFn::ContextVec(neovm_text::emacs_core::category::builtin_char_category_set),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "category-table",
+        NativeFn::ContextVec(neovm_text::emacs_core::category::builtin_category_table),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-category-table",
+        NativeFn::ContextVec(neovm_text::emacs_core::category::builtin_set_category_table),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "map-char-table",
+        NativeFn::ContextVec(neovm_text::emacs_core::chartable::builtin_map_char_table),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "json-parse-buffer",
+        NativeFn::ContextVec(neovm_text::emacs_core::json::builtin_json_parse_buffer),
+        SubrArity::new(0, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "json-insert",
+        NativeFn::ContextVec(neovm_text::emacs_core::json::builtin_json_insert),
+        SubrArity::new(1, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "insert-before-markers",
+        NativeFn::ContextVec(|ctx, args| builtin_insert_before_markers(ctx, args)),
+        SubrArity::new(0, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "delete-char",
+        NativeFn::ContextSlice(neovm_edit::emacs_core::editfns::builtin_delete_char),
+        SubrArity::new(1, Some(2)),
+    ))
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("p\nP")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "preceding-char",
+        NativeFn::ContextVec(|eval, args| {
+            neovm_edit::emacs_core::editfns::builtin_preceding_char(eval, args)
+        }),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "find-coding-systems-region-internal",
+        NativeFn::ContextVec(
+            neovm_text::emacs_core::coding::builtin_find_coding_systems_region_internal,
+        ),
+        SubrArity::new(2, Some(3)),
+    ))
+    .requires_eval_state(),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "integer-or-marker-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_integer_or_marker_p(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "number-or-marker-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_number_or_marker_p(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "vector-or-char-table-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_vector_or_char_table_p(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "marker-insertion-type",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_edit::emacs_core::marker::builtin_marker_insertion_type(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "make-marker",
+        NativeFn::ContextSlice(|_ctx, args| neovm_edit::emacs_core::marker::builtin_make_marker(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "bool-vector-p",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_bool_vector_p(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "make-category-set",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::category::builtin_make_category_set(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "function-equal",
+        NativeFn::ContextVec(|_ctx, args| builtin_function_equal(args)),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "module-function-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_module_function_p(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "user-ptrp",
+        NativeFn::ContextVec(|_ctx, args| builtin_user_ptrp(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "length<",
+        NativeFn::ContextVec(|_ctx, args| builtin_length_lt(args)),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "length=",
+        NativeFn::ContextVec(|_ctx, args| builtin_length_eq(args)),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "length>",
+        NativeFn::ContextVec(|_ctx, args| builtin_length_gt(args)),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "substring-no-properties",
+        NativeFn::ContextVec(|_ctx, args| builtin_substring_no_properties(args)),
+        SubrArity::new(1, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "atan",
+        NativeFn::ContextVec(|_ctx, args| builtin_atan(args)),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "log",
+        NativeFn::ContextVec(|_ctx, args| builtin_log(args)),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "random",
+        NativeFn::ContextVec(|_ctx, args| builtin_random(args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "isnan",
+        NativeFn::ContextVec(|_ctx, args| builtin_isnan(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "string",
+        NativeFn::ContextSlice(|_ctx, args| builtin_string_slice(args)),
+        SubrArity::new(0, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "ngettext",
+        NativeFn::ContextVec(|_ctx, args| builtin_ngettext(args)),
+        SubrArity::new(3, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "secure-hash-algorithms",
+        NativeFn::ContextVec(|_ctx, args| builtin_secure_hash_algorithms(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "prefix-numeric-value",
+        NativeFn::ContextVec(|_ctx, args| builtin_prefix_numeric_value(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "charsetp",
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_charsetp_in_state),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "charset-plist",
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_charset_plist_in_state),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "string-to-syntax",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::syntax::builtin_string_to_syntax(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "syntax-class-to-char",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::syntax::builtin_syntax_class_to_char(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "syntax-table-p",
+        NativeFn::ContextVec(neovm_text::emacs_core::syntax::builtin_syntax_table_p_in_state),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "current-cpu-time",
+        NativeFn::ContextVec(|_ctx, args| builtin_current_cpu_time(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "get-internal-run-time",
+        NativeFn::ContextVec(|_ctx, args| builtin_get_internal_run_time(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "flush-standard-output",
+        NativeFn::ContextVec(|_ctx, args| builtin_flush_standard_output(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "get-truename-buffer",
+        NativeFn::ContextVec(
+            |ctx, args| neovm_edit::emacs_core::buffer::builtin_get_truename_buffer(ctx, args)
+        ),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "single-key-description",
+        NativeFn::ContextVec(|ctx, args| builtin_single_key_description(args, ctx.symbol_mode())),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "key-description",
+        NativeFn::ContextVec(|ctx, args| builtin_key_description(args, ctx.symbol_mode())),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "event-convert-list",
+        NativeFn::ContextVec(|ctx, args| builtin_event_convert_list(args, ctx.symbol_mode())),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "text-char-description",
+        NativeFn::ContextVec(|_ctx, args| builtin_text_char_description(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "group-name",
+        NativeFn::ContextVec(|_ctx, args| neovm_edit::emacs_core::editfns::builtin_group_name(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "load-average",
+        NativeFn::ContextVec(|_ctx, args| neovm_edit::emacs_core::editfns::builtin_load_average(args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "logcount",
+        NativeFn::ContextVec(|_ctx, args| neovm_edit::emacs_core::editfns::builtin_logcount(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "display--line-is-continued-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_display_line_is_continued_p(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "fontset-info",
+        NativeFn::ContextVec(|_ctx, args| builtin_fontset_info(args)),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "fontset-list",
+        NativeFn::ContextVec(|_ctx, args| builtin_fontset_list(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "frame-fringe-width",
+        NativeFn::ContextVec(|_ctx, args| builtin_frame_fringe_width(args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "frame-pointer-visible-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_frame_pointer_visible_p(args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "garbage-collect-heapsize",
+        NativeFn::ContextVec(|_ctx, args| builtin_garbage_collect_heapsize(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "get-unicode-property-internal",
+        NativeFn::ContextVec(
+            neovm_text::emacs_core::chartable::builtin_get_unicode_property_internal_in_state,
+        ),
+        SubrArity::new(2, Some(2)),
+    )),
+    #[cfg(not(any(windows, target_os = "macos")))]
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "handle-save-session",
+        NativeFn::ContextVec(|_ctx, args| builtin_handle_save_session(args)),
+        SubrArity::new(1, Some(1)),
+    ))
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("e")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "internal--obarray-buckets",
+        NativeFn::ContextVec(|_ctx, args| builtin_internal_obarray_buckets(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "internal--set-buffer-modified-tick",
+        NativeFn::ContextVec(|ctx, args| builtin_internal_set_buffer_modified_tick(
+            &mut ctx.edit.buffers,
+            args
+        )),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "internal-stack-stats",
+        NativeFn::ContextVec(|_ctx, args| builtin_internal_stack_stats(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "internal-subr-documentation",
+        NativeFn::ContextVec(|_ctx, args| builtin_internal_subr_documentation(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "decode-coding-region",
+        NativeFn::ContextVec(neovm_text::encoding::builtin_decode_coding_region),
+        SubrArity::new(3, Some(4)),
+    ))
+    .interactive(
+        crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("r\nzCoding system: "),
+    ),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "dump-emacs-portable--sort-predicate",
+        NativeFn::ContextVec(|_ctx, args| builtin_dump_emacs_portable_sort_predicate(args)),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "dump-emacs-portable--sort-predicate-copied",
+        NativeFn::ContextVec(|_ctx, args| builtin_dump_emacs_portable_sort_predicate_copied(args)),
+        SubrArity::new(2, Some(2)),
+    )),
+    // `emacs-repository-get-version' (lisp/version.el:183) and
+    // `emacs-repository-get-branch' (:231) are not here.  They were
+    // registered as "gap-fill stubs for loadup.el", but loadup loads
+    // version.el at :128 and only calls them at :429 (DIVERGENCES.md 152).
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "encode-coding-region",
+        NativeFn::ContextVec(neovm_text::encoding::builtin_encode_coding_region),
+        SubrArity::new(3, Some(4)),
+    ))
+    .interactive(
+        crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("r\nzCoding system: "),
+    ),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "iso-charset",
+        NativeFn::ContextVec(|_ctx, args| builtin_iso_charset(args)),
+        SubrArity::new(3, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "lread--substitute-object-in-subtree",
+        NativeFn::ContextVec(|_ctx, args| builtin_lread_substitute_object_in_subtree(args)),
+        SubrArity::new(3, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "malloc-info",
+        NativeFn::ContextVec(|_ctx, args| builtin_malloc_info(args)),
+        SubrArity::new(0, Some(0)),
+    ))
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "malloc-trim",
+        NativeFn::ContextVec(|_ctx, args| builtin_malloc_trim(args)),
+        SubrArity::new(0, Some(1)),
+    ))
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "make-char",
+        NativeFn::ContextVec(charset::builtin_make_char_in_state),
+        SubrArity::new(1, Some(5)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "marker-last-position",
+        NativeFn::ContextVec(|_ctx, args| builtin_marker_last_position(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "make-interpreted-closure",
+        NativeFn::ContextVec(|_ctx, args| builtin_make_interpreted_closure(args)),
+        SubrArity::new(3, Some(5)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "make-record",
+        NativeFn::ContextVec(|_ctx, args| builtin_make_record(args)),
+        SubrArity::new(3, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "memory-info",
+        NativeFn::ContextVec(|_ctx, args| builtin_memory_info(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "menu-or-popup-active-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_menu_or_popup_active_p(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "newline-cache-check",
+        NativeFn::ContextVec(|_ctx, args| builtin_newline_cache_check(args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "native-comp-available-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_native_comp_available_p(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "obarray-clear",
+        NativeFn::ContextVec(|_ctx, args| builtin_obarray_clear(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "open-font",
+        NativeFn::ContextVec(|ctx, args| builtin_open_font(args, ctx.symbol_mode())),
+        SubrArity::new(1, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "optimize-char-table",
+        NativeFn::ContextVec(|ctx, args| builtin_optimize_char_table(args, ctx.symbol_mode())),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "overlay-lists",
+        NativeFn::ContextVec(
+            |ctx, args| neovm_edit::emacs_core::buffer::builtin_overlay_lists(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "overlay-recenter",
+        NativeFn::ContextVec(
+            |ctx, args| neovm_edit::emacs_core::buffer::builtin_overlay_recenter(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "pdumper-stats",
+        NativeFn::ContextVec(|_ctx, args| builtin_pdumper_stats(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "put-unicode-property-internal",
+        NativeFn::ContextVec(
+            neovm_text::emacs_core::chartable::builtin_put_unicode_property_internal_in_state,
+        ),
+        SubrArity::new(3, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "raise-frame",
+        NativeFn::ContextVec(|_ctx, args| builtin_raise_frame(args)),
+        SubrArity::new(0, Some(1)),
+    ))
+    .placeholder(NoEvalPlaceholder::Nil)
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "re--describe-compiled",
+        NativeFn::ContextVec(|_ctx, args| builtin_re_describe_compiled(args)),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "recent-auto-save-p",
+        NativeFn::ContextVec(
+            |ctx, args| neovm_edit::emacs_core::buffer::builtin_recent_auto_save_p(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "remove-pos-from-symbol",
+        NativeFn::ContextVec(|_ctx, args| builtin_remove_pos_from_symbol(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "restore-buffer-modified-p",
+        NativeFn::ContextVec(|ctx, args| {
+            neovm_edit::emacs_core::buffer::builtin_restore_buffer_modified_p(ctx, args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-buffer-auto-saved",
+        NativeFn::ContextVec(
+            |ctx, args| neovm_edit::emacs_core::buffer::builtin_set_buffer_auto_saved(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-charset-plist",
+        NativeFn::ContextVec(|ctx, args| builtin_set_charset_plist(args, ctx.symbol_mode())),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "sort-charsets",
+        NativeFn::ContextVec(|_ctx, args| builtin_sort_charsets(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "split-char",
+        NativeFn::ContextVec(|_ctx, args| neovm_text::emacs_core::charset::builtin_split_char(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "string-distance",
+        NativeFn::ContextVec(|_ctx, args| builtin_string_distance(args)),
+        SubrArity::new(2, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "subr-native-lambda-list",
+        NativeFn::ContextVec(|_ctx, args| builtin_subr_native_lambda_list(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "subr-type",
+        NativeFn::ContextVec(|_ctx, args| builtin_subr_type(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "suspend-emacs",
+        NativeFn::ContextVec(|_ctx, args| builtin_suspend_emacs(args)),
+        SubrArity::new(0, Some(1)),
+    ))
+    .placeholder(NoEvalPlaceholder::Nil)
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("")),
+    #[cfg(not(any(windows, target_os = "macos")))]
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "tool-bar-get-system-style",
+        NativeFn::ContextVec(|_ctx, args| builtin_tool_bar_get_system_style(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "translate-region-internal",
+        NativeFn::ContextVec(neovm_edit::emacs_core::editfns::builtin_translate_region_internal),
+        SubrArity::new(3, Some(3)),
+    ))
+    .requires_eval_state(),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "tty--output-buffer-size",
+        NativeFn::ContextVec(|_ctx, args| builtin_tty_output_buffer_size(args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "tty--set-output-buffer-size",
+        NativeFn::ContextVec(|_ctx, args| builtin_tty_set_output_buffer_size(args)),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "tty-frame-restack",
+        NativeFn::ContextVec(|_ctx, args| builtin_tty_frame_restack(args)),
+        SubrArity::new(2, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "tty-suppress-bold-inverse-default-colors",
+        NativeFn::ContextVec(|_ctx, args| builtin_tty_suppress_bold_inverse_default_colors(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "unencodable-char-position",
+        NativeFn::ContextVec(neovm_text::emacs_core::coding::builtin_unencodable_char_position),
+        SubrArity::new(3, Some(5)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "unify-charset",
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_unify_charset_in_state),
+        SubrArity::new(1, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "unix-sync",
+        NativeFn::ContextVec(|_ctx, args| builtin_unix_sync(args)),
+        SubrArity::new(0, Some(0)),
+    ))
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "x-begin-drag",
+        NativeFn::ContextVec(|_ctx, args| builtin_x_begin_drag(args)),
+        SubrArity::new(1, Some(6)),
+    )),
+    #[cfg(not(any(windows, target_os = "macos")))]
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "x-double-buffered-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_x_double_buffered_p(args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    #[cfg(not(any(windows, target_os = "macos")))]
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "x-menu-bar-open-internal",
+        NativeFn::ContextVec(|_ctx, args| builtin_x_menu_bar_open_internal(args)),
+        SubrArity::new(0, Some(1)),
+    ))
+    .interactive(crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::String("i")),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "lossage-size",
+        NativeFn::ContextVec(|_ctx, args| builtin_lossage_size(args)),
+        SubrArity::new(0, Some(1)),
+    ))
+    .interactive(
+        crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec::Form(
+            lossage_size_interactive_spec,
+        ),
+    ),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "treesit-available-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_treesit_available_p(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "treesit-compiled-query-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_treesit_compiled_query_p(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "treesit-library-abi-version",
+        NativeFn::ContextVec(|_ctx, args| builtin_treesit_library_abi_version(args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "treesit-node-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_treesit_node_p(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "treesit-node-parser",
+        NativeFn::ContextVec(|_ctx, args| builtin_treesit_node_parser(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "treesit-parser-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_treesit_parser_p(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "treesit-query-language",
+        NativeFn::ContextVec(|_ctx, args| builtin_treesit_query_language(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "treesit-query-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_treesit_query_p(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "treesit-query-source",
+        NativeFn::ContextVec(|_ctx, args| builtin_treesit_query_source(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "fillarray",
+        NativeFn::ContextVec(|_ctx, args| builtin_fillarray(args)),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "hash-table-test",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_value::hashtab::builtin_hash_table_test(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "hash-table-size",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_value::hashtab::builtin_hash_table_size(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "hash-table-rehash-size",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_value::hashtab::builtin_hash_table_rehash_size(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "hash-table-rehash-threshold",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_value::hashtab::builtin_hash_table_rehash_threshold(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "hash-table-weakness",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_value::hashtab::builtin_hash_table_weakness(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "copy-hash-table",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_value::hashtab::builtin_copy_hash_table(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "sxhash-eq",
+        NativeFn::ContextVec(|ctx, args| {
+            neovm_value::hashtab::builtin_sxhash_eq_with_mode(args, ctx.symbol_mode())
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "sxhash-eql",
+        NativeFn::ContextVec(|ctx, args| {
+            neovm_value::hashtab::builtin_sxhash_eql_with_mode(args, ctx.symbol_mode())
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "sxhash-equal",
+        NativeFn::ContextVec(|ctx, args| {
+            neovm_value::hashtab::builtin_sxhash_equal_with_mode(args, ctx.symbol_mode())
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "sxhash-equal-including-properties",
+        NativeFn::ContextVec(|ctx, args| {
+            neovm_value::hashtab::builtin_sxhash_equal_including_properties_with_mode(
+                args,
+                ctx.symbol_mode(),
+            )
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "internal--hash-table-buckets",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_value::hashtab::builtin_internal_hash_table_buckets(
+                args,
+                crate::emacs_core::print::print_value,
+            )
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "internal--hash-table-histogram",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_value::hashtab::builtin_internal_hash_table_histogram(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "internal--hash-table-index-size",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_value::hashtab::builtin_internal_hash_table_index_size(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "neomacs-frame-geometry",
+        NativeFn::ContextVec(|_ctx, args| builtin_neomacs_frame_geometry(args)),
+        SubrArity::new(0, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "neomacs-mouse-absolute-pixel-position",
+        NativeFn::ContextVec(|_ctx, args| builtin_neomacs_mouse_absolute_pixel_position(args)),
+        SubrArity::new(0, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "neomacs-set-mouse-absolute-pixel-position",
+        NativeFn::ContextVec(|_ctx, args| builtin_neomacs_set_mouse_absolute_pixel_position(args)),
+        SubrArity::new(0, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "neomacs-core-backend",
+        NativeFn::ContextVec(|_ctx, args| builtin_neomacs_core_backend(args)),
+        SubrArity::new(0, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "debugger-trap",
+        NativeFn::ContextVec(|_ctx, args| builtin_debugger_trap(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "frame-windows-min-size",
+        NativeFn::ContextVec(|_ctx, args| builtin_frame_windows_min_size(args)),
+        SubrArity::new(4, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "obarrayp",
+        NativeFn::ContextVec(|_ctx, args| builtin_obarrayp(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "documentation-stringp",
+        NativeFn::ContextVec(|_ctx, args| builtin_documentation_stringp(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "line-beginning-position",
+        neovm_edit::emacs_core::navigation::builtin_line_beginning_position_1,
+        FixedMin1::Zero,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-marker-insertion-type",
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            neovm_edit::emacs_core::marker::builtin_set_marker_insertion_type_in_buffers(
+                &mut ctx.edit.buffers,
+                args,
+            )
+        }),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-standard-case-table",
+        NativeFn::ContextVec(crate::emacs_core::eval::case_table_adapter::builtin_set_standard_case_table),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "get-unused-category",
+        NativeFn::ContextVec(neovm_text::emacs_core::category::builtin_get_unused_category),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "standard-category-table",
+        NativeFn::ContextVec(neovm_text::emacs_core::category::builtin_standard_category_table),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "buffer-substring-no-properties",
+        NativeFn::ContextVec(|eval, args| {
+            neovm_edit::emacs_core::editfns::builtin_buffer_substring_no_properties(eval, args)
+        }),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "abs",
+        NativeFn::ContextSlice(|_ctx, args| builtin_abs(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    // -- Logical / bitwise --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "logior",
+        NativeFn::ContextSlice(|_ctx, args| builtin_logior_slice(args)),
+        SubrArity::new(0, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "logxor",
+        NativeFn::ContextSlice(|_ctx, args| builtin_logxor_slice(args)),
+        SubrArity::new(0, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "lognot",
+        NativeFn::ContextVec(|_ctx, args| builtin_lognot(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "characterp",
+        NativeFn::ContextVec(|_ctx, args| builtin_characterp(args)),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "hash-table-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_hash_table_p(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "sequencep",
+        NativeFn::ContextVec(|_ctx, args| builtin_sequencep(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "arrayp",
+        NativeFn::ContextSlice(|_ctx, args| builtin_arrayp(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    // `ignore' is not here: it is a `defun' at lisp/subr.el:501, and the
+    // byte compiler names it itself -- `(byte-defop-compiler-1 ignore)',
+    // lisp/emacs-lisp/bytecomp.el:4429 -- so a compiled `(ignore X)' emits
+    // Bconstant nil and never reads the cell (DIVERGENCES.md 152).
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "cl-type-of",
+        NativeFn::ContextVec(|_ctx, args| builtin_cl_type_of(&args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "copy-alist",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::misc::builtin_copy_alist(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "safe-length",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::misc::builtin_safe_length(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "char-to-string",
+        NativeFn::ContextVec(|_ctx, args| builtin_char_to_string(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "string-to-char",
+        NativeFn::ContextVec(|_ctx, args| builtin_string_to_char(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "clear-string",
+        NativeFn::ContextVec(|_ctx, args| builtin_clear_string(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "string-make-multibyte",
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::fns::builtin_string_make_multibyte(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "string-make-unibyte",
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::fns::builtin_string_make_unibyte(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "string-as-unibyte",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::misc::builtin_string_as_unibyte(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "string-as-multibyte",
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::misc::builtin_string_as_multibyte(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "unibyte-char-to-multibyte",
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::misc::builtin_unibyte_char_to_multibyte(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "multibyte-char-to-unibyte",
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::misc::builtin_multibyte_char_to_unibyte(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "vconcat",
+        NativeFn::ContextSlice(|_ctx, args| builtin_vconcat_slice(args)),
+        SubrArity::new(0, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "clrhash",
+        NativeFn::ContextVec(|_ctx, args| builtin_clrhash(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    // -- Float / math / conversion --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "copysign",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::floatfns::builtin_copysign(args)),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "frexp",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::floatfns::builtin_frexp(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "ldexp",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::floatfns::builtin_ldexp(args)),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "logb",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::floatfns::builtin_logb(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "fceiling",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::floatfns::builtin_fceiling(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "ffloor",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::floatfns::builtin_ffloor(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "fround",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::floatfns::builtin_fround(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "ftruncate",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::floatfns::builtin_ftruncate(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    // -- Misc pure --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "bitmap-spec-p",
+        NativeFn::ContextVec(|_ctx, args| builtin_bitmap_spec_p(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "byte-to-string",
+        NativeFn::ContextVec(|_ctx, args| builtin_byte_to_string(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "clear-buffer-auto-save-failure",
+        NativeFn::ContextVec(builtin_clear_buffer_auto_save_failure),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "locale-info",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::misc::builtin_locale_info(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    // -- Subr introspection --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "subr-name",
+        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::subr_info::builtin_subr_name(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "native-comp-function-p",
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::subr_info::builtin_native_comp_function_p(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "interpreted-function-p",
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::subr_info::builtin_interpreted_function_p(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    // -- Character encoding --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "char-width",
+        NativeFn::ContextVec(|ctx, args| neovm_text::encoding::builtin_char_width_in_context(ctx, args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "string-bytes",
+        neovm_text::encoding::builtin_string_bytes_1,
+        FixedMin1::One,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "multibyte-string-p",
+        neovm_text::encoding::builtin_multibyte_string_p_1,
+        FixedMin1::One,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "encode-coding-string",
+        NativeFn::ContextVec(neovm_text::encoding::builtin_encode_coding_string_in_context),
+        SubrArity::new(2, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "decode-coding-string",
+        NativeFn::ContextVec(neovm_text::encoding::builtin_decode_coding_string_in_context),
+        SubrArity::new(2, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
+        "char-or-string-p",
+        neovm_text::encoding::builtin_char_or_string_p_1,
+        FixedMin1::One,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "max-char",
+        NativeFn::ContextVec(|_ctx, args| neovm_text::encoding::builtin_max_char(args)),
+        SubrArity::new(0, Some(1)),
+    )),
+    // -- Search --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "regexp-quote",
+        NativeFn::ContextVec(|_ctx, args| neovm_text::emacs_core::search::builtin_regexp_quote(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    // -- Case/char --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "char-resolve-modifiers",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::casefiddle::builtin_char_resolve_modifiers(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    // -- Case table --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "case-table-p",
+        NativeFn::ContextVec(neovm_text::emacs_core::casetab::builtin_case_table_p_in_state),
+        SubrArity::new(1, Some(1)),
+    )),
+    // -- Category --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "category-table-p",
+        NativeFn::ContextVec(neovm_text::emacs_core::category::builtin_category_table_p_in_state),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "copy-category-table",
+        NativeFn::ContextVec(neovm_text::emacs_core::category::builtin_copy_category_table_in_state),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "make-category-table",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::category::builtin_make_category_table(args)
+        }),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "category-set-mnemonics",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::category::builtin_category_set_mnemonics(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    // -- Char-table / bool-vector --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "char-table-p",
+        NativeFn::ContextVec(|_ctx, args| neovm_text::emacs_core::chartable::builtin_char_table_p(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "char-table-range",
+        NativeFn::ContextVec(neovm_text::emacs_core::chartable::builtin_char_table_range_in_state),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "char-table-parent",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_char_table_parent(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-char-table-parent",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_set_char_table_parent(args)
+        }),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "char-table-extra-slot",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_char_table_extra_slot(args)
+        }),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-char-table-extra-slot",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_set_char_table_extra_slot(args)
+        }),
+        SubrArity::new(3, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "bool-vector",
+        NativeFn::ContextVec(|_ctx, args| neovm_text::emacs_core::chartable::builtin_bool_vector(args)),
+        SubrArity::new(0, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "bool-vector-count-population",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_bool_vector_count_population(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "bool-vector-count-consecutive",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_bool_vector_count_consecutive(args)
+        }),
+        SubrArity::new(3, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "bool-vector-intersection",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_bool_vector_intersection(args)
+        }),
+        SubrArity::new(2, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "bool-vector-not",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_bool_vector_not(args)
+        }),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "bool-vector-set-difference",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_bool_vector_set_difference(args)
+        }),
+        SubrArity::new(2, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "bool-vector-union",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_bool_vector_union(args)
+        }),
+        SubrArity::new(2, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "bool-vector-exclusive-or",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_bool_vector_exclusive_or(args)
+        }),
+        SubrArity::new(2, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "bool-vector-subsetp",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::chartable::builtin_bool_vector_subsetp(args)
+        }),
+        SubrArity::new(2, Some(2)),
+    )),
+    // -- Charset --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "charset-priority-list",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::charset::builtin_charset_priority_list(args)
+        }),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-charset-priority",
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_set_charset_priority_in_state),
+        SubrArity::new(1, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "char-charset",
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_char_charset_in_state),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "charset-id-internal",
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_charset_id_internal_in_state),
+        SubrArity::new(0, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "declare-equiv-charset",
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_declare_equiv_charset_in_state),
+        SubrArity::new(4, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "find-charset-string",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::charset::builtin_find_charset_string(args)
+        }),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "decode-big5-char",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::charset::builtin_decode_big5_char(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "decode-char",
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_decode_char_in_state),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "decode-sjis-char",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::charset::builtin_decode_sjis_char(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "encode-big5-char",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::charset::builtin_encode_big5_char(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "encode-char",
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_encode_char_in_state),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "encode-sjis-char",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::charset::builtin_encode_sjis_char(args)
+        }),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "get-unused-iso-final-char",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::charset::builtin_get_unused_iso_final_char(args)
+        }),
+        SubrArity::new(2, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "clear-charset-maps",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::charset::builtin_clear_charset_maps(args)
+        }),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-text-conversion-style",
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::coding::builtin_set_text_conversion_style(args)
+        }),
+        SubrArity::new(1, Some(2)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "text-quoting-style",
+        NativeFn::ContextVec(|ctx, args| {
+            neovm_text::emacs_core::coding::builtin_text_quoting_style(ctx, args)
+        }),
+        SubrArity::new(0, Some(0)),
+    )),
+    // -- XML/decompress --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "libxml-parse-html-region",
+        NativeFn::ContextVec(neovm_text::emacs_core::xml::builtin_libxml_parse_html_region),
+        SubrArity::new(0, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "libxml-parse-xml-region",
+        NativeFn::ContextVec(neovm_text::emacs_core::xml::builtin_libxml_parse_xml_region),
+        SubrArity::new(0, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "libxml-available-p",
+        NativeFn::ContextVec(|_ctx, args| neovm_text::emacs_core::xml::builtin_libxml_available_p(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "zlib-available-p",
+        NativeFn::ContextVec(|_ctx, args| neovm_text::emacs_core::zlib::builtin_zlib_available_p(args)),
+        SubrArity::new(0, Some(0)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "zlib-decompress-region",
+        NativeFn::ContextVec(neovm_text::emacs_core::zlib::builtin_zlib_decompress_region),
+        SubrArity::new(2, Some(3)),
+    )),
+    // -- JSON --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "json-serialize",
+        NativeFn::ContextVec(neovm_text::emacs_core::json::builtin_json_serialize_in_state),
+        SubrArity::new(1, None),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "json-parse-string",
+        NativeFn::ContextVec(neovm_text::emacs_core::json::builtin_json_parse_string_in_state),
+        SubrArity::new(1, None),
+    )),
+    // -- Marker --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "markerp",
+        NativeFn::ContextVec(|_ctx, args| neovm_edit::emacs_core::marker::builtin_markerp(args)),
+        SubrArity::new(1, Some(1)),
+    )),
+    // -- Lread --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "get-load-suffixes",
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::lread::builtin_get_load_suffixes(ctx.variables(), args)
+        }),
+        SubrArity::new(0, Some(0)),
+    )),
+    // -- Base64/hash --
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "base64-decode-string",
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::fns::builtin_base64_decode_string(args)
+        }),
+        SubrArity::new(1, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "base64url-encode-string",
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::fns::builtin_base64url_encode_string(args)
+        }),
+        SubrArity::new(1, Some(2)),
+    )),
 }
 
 fn evaluator_subr(name: &str) -> Option<EvaluatorSubr> {

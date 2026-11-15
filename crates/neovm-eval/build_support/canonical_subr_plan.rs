@@ -2386,8 +2386,8 @@ mod provider_tests {
             (
                 "command-modes",
                 "COMMAND_MODES_SUBR",
-                "get-byte",
-                "find-charset-region",
+                "char-after",
+                "new-fontset",
                 1,
                 Some(1),
             ),
@@ -2504,8 +2504,8 @@ mod provider_tests {
             direct.iter().filter(|spec| spec.name == "identity").count(),
             1
         );
-        assert_eq!(direct[index - 1].name, "string");
-        assert_eq!(direct[index + 1].name, "ngettext");
+        assert_eq!(direct[index - 1].name, "expt");
+        assert_eq!(direct[index + 1].name, "propertize");
         assert_eq!(
             (
                 direct[index].min,
@@ -2544,8 +2544,8 @@ mod provider_tests {
             direct.iter().filter(|spec| spec.name == "reverse").count(),
             1
         );
-        assert_eq!(direct[index - 1].name, "cl-type-of");
-        assert_eq!(direct[index + 1].name, "copy-alist");
+        assert_eq!(direct[index - 1].name, "bufferp");
+        assert_eq!(direct[index + 1].name, "make-list");
         assert_eq!(
             (
                 direct[index].min,
@@ -2577,7 +2577,7 @@ mod provider_tests {
             .collect();
         let index = direct.iter().position(|spec| spec.name == "subrp").unwrap();
         assert_eq!(direct.iter().filter(|spec| spec.name == "subrp").count(), 1);
-        assert_eq!(direct[index - 1].name, "buffer-substring-no-properties");
+        assert_eq!(direct[index - 1].name, "upcase-initials-region");
         assert_eq!(direct[index + 1].name, "*");
         assert_eq!(
             (
@@ -2620,7 +2620,7 @@ mod provider_tests {
                 .count(),
             1
         );
-        assert_eq!(direct[index - 1].name, "clrhash");
+        assert_eq!(direct[index - 1].name, "string-to-unibyte");
         assert_eq!(direct[index + 1].name, "float");
         assert_eq!(
             (
@@ -2662,7 +2662,7 @@ mod provider_tests {
                 .count(),
             1
         );
-        assert_eq!(direct[index - 1].name, "string-make-unibyte");
+        assert_eq!(direct[index - 1].name, "number-to-string");
         assert_eq!(direct[index + 1].name, "string-to-unibyte");
         assert_eq!(
             (
@@ -2701,8 +2701,8 @@ mod provider_tests {
             direct.iter().filter(|spec| spec.name == "bufferp").count(),
             1
         );
-        assert_eq!(direct[index - 1].name, "hash-table-p");
-        assert_eq!(direct[index + 1].name, "sequencep");
+        assert_eq!(direct[index - 1].name, "ash");
+        assert_eq!(direct[index + 1].name, "reverse");
         assert_eq!(
             (
                 direct[index].min,
@@ -2744,7 +2744,7 @@ mod provider_tests {
             1
         );
         assert_eq!(direct[index - 1].name, "unibyte-string");
-        assert_eq!(direct[index + 1].name, "char-to-string");
+        assert_eq!(direct[index + 1].name, "string-to-multibyte");
         assert_eq!(
             (
                 direct[index].min,
@@ -2778,7 +2778,7 @@ mod provider_tests {
                 .count(),
             1
         );
-        assert_eq!(direct[index - 1].name, "safe-length");
+        assert_eq!(direct[index - 1].name, "make-list");
         assert_eq!(direct[index + 1].name, "concat");
         assert_eq!(
             (
@@ -2822,7 +2822,7 @@ mod provider_tests {
             1
         );
         assert_eq!(direct[index - 1].name, "get-buffer");
-        assert_eq!(direct[index + 1].name, "find-buffer");
+        assert_eq!(direct[index + 1].name, "get-file-buffer");
         assert_eq!(
             (
                 direct[index].min,
