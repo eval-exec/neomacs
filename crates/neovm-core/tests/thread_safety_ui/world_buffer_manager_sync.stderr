@@ -17,6 +17,16 @@ error[E0599]: the associated function or constant `share` exists for struct `Thr
    | pub trait ColdRetained: 'static {}
    | ------------------------------- doesn't satisfy `_: Send` or `_: Sync`
    |
+  ::: $RUST/core/src/cell.rs
+   |
+   | pub struct UnsafeCell<T: ?Sized> {
+   | -------------------------------- doesn't satisfy `_: Sync`
+   |
+  ::: $RUST/core/src/ptr/non_null.rs
+   |
+   | pub struct NonNull<T: PointeeSized> {
+   | ----------------------------------- doesn't satisfy `_: Sync`
+   |
    = note: the following trait bounds were not satisfied:
            `NonNull<neovm_core::buffer::buffer::BufferStorage>: std::marker::Sync`
            which is required by `BufferManager: std::marker::Sync`

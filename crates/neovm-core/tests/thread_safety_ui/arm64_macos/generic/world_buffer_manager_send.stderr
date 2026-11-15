@@ -1,21 +1,40 @@
 error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<BufferManager>`, but its trait bounds were not satisfied
  --> tests/thread_safety_ui/arm64_macos/generic/../../world_buffer_manager_send.rs
   |
-  | struct ThreadTransfer<T>(PhantomData<T>);
-  | ------------------------ associated function or constant `transfer` not found for this struct
+  |   struct ThreadTransfer<T>(PhantomData<T>);
+  |   ------------------------ associated function or constant `transfer` not found for this struct
 ...
-  |     ThreadTransfer::<BufferManager>::transfer();
-  |                                      ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<BufferManager>` due to unsatisfied trait bounds
+  |       ThreadTransfer::<BufferManager>::transfer();
+  |                                        ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<BufferManager>` due to unsatisfied trait bounds
   |
  ::: $WORKSPACE/crates/neovm-edit/src/buffer/buffer.rs
   |
-  | pub struct BufferManager {
-  | ------------------------ doesn't satisfy `BufferManager: Send`
+  |   pub struct BufferManager {
+  |   ------------------------ doesn't satisfy `BufferManager: Send`
   |
  ::: $WORKSPACE/crates/neovm-value/src/cold_retained.rs
   |
-  | pub trait ColdRetained: 'static {}
-  | ------------------------------- doesn't satisfy `_: Send` or `_: Sync`
+  |   pub trait ColdRetained: 'static {}
+  |   ------------------------------- doesn't satisfy `_: Send` or `_: Sync`
+  |
+ ::: $RUST/alloc/src/rc.rs
+  |
+  | / pub struct Rc<
+  | |     T: ?Sized,
+  | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+  | | > {
+  | |_- doesn't satisfy 7 bounds
+...
+  | / pub struct Weak<
+  | |     T: ?Sized,
+  | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+  | | > {
+  | |_- doesn't satisfy `_: Send`
+  |
+ ::: $RUST/core/src/ptr/non_null.rs
+  |
+  |   pub struct NonNull<T: PointeeSized> {
+  |   ----------------------------------- doesn't satisfy `NonNull<MarkerObj>: Send`, `NonNull<neovm_core::buffer::Buffer>: Send` or `_: Send`
   |
   = note: the following trait bounds were not satisfied:
           `NonNull<neovm_core::buffer::buffer::BufferStorage>: Send`
@@ -27,6 +46,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           `(dyn neovm_value::cold_retained::ColdRetained + 'static): Send`
           which is required by `BufferManager: Send`
           `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
+          which is required by `BufferManager: Send`
+          `std::rc::Weak<RefCell<neovm_core::buffer::buffer::buffer_list_cursor::BufferListLinks>>: Send`
           which is required by `BufferManager: Send`
           `*const (): Send`
           which is required by `BufferManager: Send`

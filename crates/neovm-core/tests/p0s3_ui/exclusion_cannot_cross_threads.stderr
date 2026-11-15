@@ -1,18 +1,26 @@
 error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<FacadeMarkExclusion>`, but its trait bounds were not satisfied
  --> tests/p0s3_ui/exclusion_cannot_cross_threads.rs:8:44
   |
-8 |     ThreadTransfer::<FacadeMarkExclusion>::transfer(exclusion);
-  |                                            ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<FacadeMarkExclusion>` due to unsatisfied trait bounds
+8 |       ThreadTransfer::<FacadeMarkExclusion>::transfer(exclusion);
+  |                                              ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<FacadeMarkExclusion>` due to unsatisfied trait bounds
   |
  ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/facade_mark.rs
   |
-  | pub struct FacadeMarkExclusion {
-  | ------------------------------ doesn't satisfy `FacadeMarkExclusion: Send`
+  |   pub struct FacadeMarkExclusion {
+  |   ------------------------------ doesn't satisfy `FacadeMarkExclusion: Send`
+  |
+ ::: $RUST/alloc/src/rc.rs
+  |
+  | / pub struct Rc<
+  | |     T: ?Sized,
+  | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+  | | > {
+  | |_- doesn't satisfy `Rc<()>: Send`
   |
  ::: tests/p0s3_ui/../thread_safety_ui/support/thread_bounds.rs
   |
-  | pub struct ThreadTransfer<T>(PhantomData<T>);
-  | ---------------------------- associated function or constant `transfer` not found for this struct
+  |   pub struct ThreadTransfer<T>(PhantomData<T>);
+  |   ---------------------------- associated function or constant `transfer` not found for this struct
   |
   = note: the following trait bounds were not satisfied:
           `Rc<()>: Send`
