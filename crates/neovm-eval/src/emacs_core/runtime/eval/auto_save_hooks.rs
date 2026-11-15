@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 /// The caller resolves absent optionals to nil. The result is the primitive's
 /// Lisp return value (GNU returns nil); a failure propagates exactly as the
 /// canonical subr's `Flow`.
-pub type DoAutoSave = fn(&mut Context, Value, Value) -> EvalResult;
+pub(crate) type DoAutoSave = fn(&mut Context, Value, Value) -> EvalResult;
 
 /// The one cold auto-save body.
 #[derive(Clone, Copy)]
@@ -37,7 +37,7 @@ impl AutoSaveHooks {
     }
 
     /// The installed `do-auto-save` body.
-    pub fn do_auto_save(&self) -> DoAutoSave {
+    pub(crate) fn do_auto_save(&self) -> DoAutoSave {
         self.do_auto_save
     }
 }
@@ -70,7 +70,7 @@ fn auto_save_hooks() -> &'static AutoSaveHooks {
 }
 
 /// Run GNU's canonical `Fdo_auto_save` through the installed table.
-pub fn do_auto_save(ctx: &mut Context, no_message: Value, current: Value) -> EvalResult {
+pub(crate) fn do_auto_save(ctx: &mut Context, no_message: Value, current: Value) -> EvalResult {
     #[cfg(any(test, feature = "test-support"))]
     if let Some(body) = test_body_override::current_thread_body() {
         return body(ctx, no_message, current);

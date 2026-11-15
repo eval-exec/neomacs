@@ -676,3 +676,4 @@ crates/neovm-system/src/emacs_core/system/process/mod.rs	use	use bootstrap_vars:
 crates/neovm-system/src/emacs_core/system/process/mod.rs	use	use builtins::*
 crates/neovm-system/src/emacs_core/system/process/mod.rs	use	use types::*
 crates/neovm-system/src/emacs_core/system/process/types.rs	use	use neovm_eval::emacs_core::eval::data::process_state::*
+crates/neovm-system/src/emacs_core/system/fileio/mod.rs	fn	fn canonical_auto_save_hooks

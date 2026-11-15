@@ -4633,3 +4633,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer_entry.rs	fn	fn lis
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	FrameLayoutInputState field smallest_opened_font_height
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowDisplayState field glyph_matrix_row_scale
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field glyph_matrix_row_scale
+crates/neovm-eval/src/emacs_core/runtime/eval/auto_save_hooks.rs	struct	struct AutoSaveHooks
+crates/neovm-eval/src/emacs_core/runtime/eval/auto_save_hooks.rs	fn	fn impl AutoSaveHooks::new
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	mod	mod auto_save_hooks
