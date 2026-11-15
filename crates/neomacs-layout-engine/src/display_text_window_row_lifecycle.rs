@@ -1092,14 +1092,6 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
             point_beyond_visible_span,
             &byte_at_charpos,
         )
-        .map_or(ViewportDecision::Keep, |window_start| {
-            ViewportDecision::Commit {
-                window_start:
-                    crate::buffer_source::window_source::ResolvedWindowStart::from_layout_charpos(
-                        window_start,
-                    ),
-            }
-        })
     }
 
     fn scroll_down_from_available_rows(
@@ -1108,7 +1100,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         visible_end_lisp: Option<LispCharPos1>,
         point_beyond_visible_span: bool,
         byte_at_charpos: &impl Fn(i64) -> Option<u8>,
-    ) -> Option<i64> {
+    ) -> ViewportDecision {
         // GNU measures display height, including rows entirely produced by a
         // string. Buffer anchors say where a later walk can resume; they do
         // not say how many display rows are visible. Keep those two measures
@@ -1136,11 +1128,11 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                 );
                 (laid_out_rows + extra_lines, bounded)
             }
-            None => return None,
+            None => return ViewportDecision::Keep,
         };
         let dy = point_row - bottom_row;
         if dy <= 0 {
-            return None;
+            return ViewportDecision::Keep;
         }
 
         let advance = |lines: i64| {
@@ -1157,26 +1149,63 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
             ))
         };
 
+        let commit = |window_start: i64| ViewportDecision::Commit {
+            window_start:
+                crate::buffer_source::window_source::ResolvedWindowStart::from_layout_charpos(
+                    window_start,
+                ),
+        };
         match self.scroll_policy.forward_scroll(
             dy,
             bounded,
             laid_out_rows as usize,
             self.scroll_margin,
         ) {
-            ForwardScroll::Advance { lines } => advance(lines),
-            // `line_start_above` counts BUFFER lines, so on a single logical
-            // line wrapped over many rows it walks back to the line start —
-            // behind the current window. Recentering that way would leave point
-            // off screen forever (the retry only accepts a start that advances),
-            // so fall back to the measured display-row scroll.
-            ForwardScroll::Recenter { lines_above_point } => Some(line_start_above(
-                self.point_charpos,
-                lines_above_point,
-                self.accessible_start,
-                byte_at_charpos,
-            ))
-            .filter(|start| *start > self.window_start)
-            .or_else(|| advance(dy)),
+            ForwardScroll::Advance { lines } => {
+                advance(lines).map_or(ViewportDecision::Keep, commit)
+            }
+            // GNU `recenter:` moves back from point by DISPLAY rows
+            // (`move_it_vertically_backward`, src/xdisp.c:21128-21223).
+            ForwardScroll::Recenter { lines_above_point } => {
+                // A start that does not recenter still has to make progress,
+                // as the measured display-row scroll does.
+                let progress = advance(dy);
+                if let Some(row) = point_row_in_rows {
+                    // Point's row was measured, so the row `lines_above_point`
+                    // above it is already known: start there.
+                    let rows_to_scroll = row as i64 - lines_above_point;
+                    return Some(rows_to_scroll)
+                        .filter(|&rows| {
+                            rows > 0 && scrollable_row_count(self.rows, self.window_start) >= rows
+                        })
+                        .and_then(|rows| {
+                            next_window_start_from_visible_rows(self.rows, self.window_start, rows)
+                        })
+                        .or(progress)
+                        .map_or(ViewportDecision::Keep, commit);
+                }
+                // Point is below the measured rows. Counting BUFFER lines is
+                // exact when no line between the two wraps. On wrapped lines it
+                // lands too far back, usually at or behind the start just laid
+                // out, and only display motion from point can place it.
+                Some(line_start_above(
+                    self.point_charpos,
+                    lines_above_point,
+                    self.accessible_start,
+                    byte_at_charpos,
+                ))
+                .filter(|&start| start > self.window_start)
+                .map_or(
+                    ViewportDecision::PlaceRelativeToPoint {
+                        lines_above_point,
+                        fallback_window_start:
+                            crate::buffer_source::window_source::ResolvedWindowStart::from_layout_charpos(
+                                progress.unwrap_or(self.window_start),
+                            ),
+                    },
+                    commit,
+                )
+            }
         }
     }
 }
@@ -1230,9 +1259,13 @@ impl TextWindowVisibilityRetryOutcome {
     pub(crate) fn scroll_down_window_start(&self) -> Option<i64> {
         match self.scroll_down {
             ViewportDecision::Commit { window_start } => Some(window_start.get()),
-            ViewportDecision::Keep
-            | ViewportDecision::NeedMoreMeasurement(_)
-            | ViewportDecision::PlaceRelativeToPoint { .. } => None,
+            // A forced start never resolves the placement; its fallback still
+            // says point is below the window, so point moves into it.
+            ViewportDecision::PlaceRelativeToPoint {
+                fallback_window_start,
+                ..
+            } => Some(fallback_window_start.get()),
+            ViewportDecision::Keep | ViewportDecision::NeedMoreMeasurement(_) => None,
         }
     }
 
