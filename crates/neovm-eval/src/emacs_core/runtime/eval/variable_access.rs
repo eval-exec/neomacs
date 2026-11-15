@@ -767,6 +767,24 @@ pub fn buffer_local_value_in(eval: &Context, variable: Value, buffer: Value) -> 
     if let Some(sym_slot) = eval.obarray().get_by_id(resolved_id)
         && sym_slot.redirect() == SymbolRedirect::Localized
     {
+        use neovm_value::value::buffer_vocab::BufferLocalView;
+        // A counter-backed variable's counter belongs to the loaded binding,
+        // so GNU reads an unloaded one from its cell and loads nothing
+        // (`buffer_local_value`, `src/buffer.c:1376-1399`).
+        if let Some(blv) = eval.obarray().blv(resolved_id)
+            && let Some(fwd) = blv.fwd.filter(|fwd| fwd.reads_allocation_counter())
+        {
+            let cell = buf.local_binding_cell(resolved_id).unwrap_or(Value::NIL);
+            let value = if cell.is_nil() {
+                eval.obarray()
+                    .canonical_default_value(CanonicalAccess::STORAGE, resolved_id)
+            } else if neovm_value::value::eq_value(&cell, &blv.valcell.get()) {
+                fwd.load()
+            } else {
+                Some(cell.cons_cdr())
+            };
+            return value.ok_or_else(|| signal(LispCondition::VoidVariable, vec![original_arg]));
+        }
         let target_buf = Value::make_buffer(buf.id());
         if let Some(value) =
             eval.obarray()

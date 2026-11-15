@@ -575,9 +575,9 @@ impl Obarray {
                             } else {
                                 (*blv_ptr).defcell.get()
                             };
-                            (*blv_ptr).valcell.store_atomic(valcell);
+                            super::load_binding(&*blv_ptr, valcell);
                             (*blv_ptr).alist_epoch = super::blv_alist_epoch();
-                            valcell.cons_cdr()
+                            super::localized_value(&*blv_ptr)
                         }
                     }
                 }

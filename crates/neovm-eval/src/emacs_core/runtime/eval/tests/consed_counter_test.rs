@@ -11,6 +11,21 @@ fn holds(eval: &mut Context, form: &str) -> bool {
         .is_truthy()
 }
 
+/// Evaluate FORM and compare its printed value with EXPECTED.
+fn assert_returns(eval: &mut Context, form: &str, expected: &str) {
+    assert!(
+        holds(
+            eval,
+            &format!("(progn (setq consed-counter-result {form}) t)")
+        ),
+        "{form}"
+    );
+    let printed = eval
+        .eval_str("(prin1-to-string consed-counter-result)")
+        .unwrap_or_else(|error| panic!("{form}: {error:?}"));
+    assert_eq!(printed.as_utf8_str(), Some(expected), "{form}");
+}
+
 /// Every variable with its `memory-use-counts` field.
 const FIELDS: [(&str, usize); 7] = [
     ("cons-cells-consed", 0),
@@ -58,10 +73,12 @@ fn consed_variables_advance_with_allocation() {
     }
 }
 
-/// `make-local-variable` keeps a forwarded variable's default live while its
-/// explicit local value remains a separate cell.
+/// GNU's forwarded variable holds the loaded binding (`swap_in_symval_forwarding`,
+/// `src/data.c:1574-1604`), so while a buffer's local binding is loaded the
+/// allocator counts into it and the default keeps the value it was unloaded
+/// with (`default_value`, `src/data.c:1962-1983`).
 #[test]
-fn localized_consed_default_follows_counter_and_keeps_local_binding() {
+fn localized_consed_loaded_local_binding_takes_the_count() {
     let _context = Context::new(crate::test_utils::unit_runtime());
     let mut obarray = neovm_value::symbol::Obarray::new();
     let symbol = neovm_value::intern::intern("cons-cells-consed");
@@ -86,7 +103,6 @@ fn localized_consed_default_follows_counter_and_keeps_local_binding() {
         .into_value();
 
     let before_default = obarray.default_value_id_copied(symbol).unwrap();
-    let before_count = Value::memory_use_counts_snapshot()[0];
     let _allocated = Value::cons(Value::fixnum(1), Value::NIL);
     let after_count = Value::memory_use_counts_snapshot()[0];
     let after_default = obarray.default_value_id_copied(symbol).unwrap();
@@ -94,10 +110,9 @@ fn localized_consed_default_follows_counter_and_keeps_local_binding() {
         .read_localized_for_buffer(symbol, buffer_id, local_alist)
         .unwrap();
 
-    assert!(after_count > before_count);
-    assert_eq!(after_default, Value::fixnum(after_count as i64));
-    assert!(after_default > before_default);
-    assert_eq!(local_value, Value::fixnum(777));
+    assert!(after_count > 777);
+    assert_eq!(local_value, Value::fixnum(after_count as i64));
+    assert_eq!(after_default, before_default);
 }
 
 /// A counter declaration that runs after Lisp has already localized the
@@ -222,4 +237,46 @@ fn assigning_a_consed_variable_assigns_the_counter() {
         ),
         "a let binding assigns the counter and restores it"
     );
+}
+
+/// Allocation counts into the binding that is loaded: a buffer's local
+/// binding while that buffer is current, the default while a buffer without
+/// one is, and an unloaded local binding keeps its value until it is loaded
+/// again. `make-local-variable` loads the new binding at once
+/// (`src/data.c:2334-2342`; `swap_in_symval_forwarding`, `src/data.c:1574-1604`;
+/// `buffer_local_value` reads an unloaded cell, `src/buffer.c:1376-1399`).
+const LOCAL_BINDING_COUNTS_FORM: &str = "
+(let ((a (get-buffer-create \" *consed-local-a*\"))
+      (b (get-buffer-create \" *consed-local-b*\"))
+      created local-before local-low local-field local-high
+      default-before default-after saved-1 saved-2 back)
+  (set-buffer a)
+  (setq created cons-cells-consed)
+  (make-local-variable 'cons-cells-consed)
+  (make-list 1000 nil)
+  (setq local-before cons-cells-consed)
+  (make-list 1000 nil)
+  (setq local-low cons-cells-consed
+        local-field (car (memory-use-counts))
+        local-high cons-cells-consed)
+  (set-buffer b)
+  (setq default-before cons-cells-consed
+        saved-1 (buffer-local-value 'cons-cells-consed a))
+  (make-list 1000 nil)
+  (setq default-after cons-cells-consed
+        saved-2 (buffer-local-value 'cons-cells-consed a))
+  (set-buffer a)
+  (setq back cons-cells-consed)
+  (list (>= (- local-before created) 1000)
+        (>= (- local-low local-before) 1000)
+        (<= local-low local-field local-high)
+        (>= (- default-after default-before) 1000)
+        (= saved-1 saved-2)
+        (<= saved-1 back)
+        (< (- back saved-1) 1000)))";
+
+#[test]
+fn localized_consed_local_binding_counts_while_its_buffer_is_current() {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    assert_returns(&mut eval, LOCAL_BINDING_COUNTS_FORM, "(t t t t t t t)");
 }

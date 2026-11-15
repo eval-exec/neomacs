@@ -565,36 +565,57 @@ fn swap_in_blv(
     } else {
         blv.defcell.get()
     };
-    blv.valcell.store_atomic(new_valcell);
+    load_binding(blv, new_valcell);
     blv.alist_epoch = epoch;
 }
 
-/// Read the value selected in the BLV cache, forwarding its default cell
-/// through the descriptor while leaving an explicit local cell untouched.
-fn localized_value(blv: &LispBufferLocalValue) -> Value {
-    let valcell = blv.valcell.get();
-    if crate::value::eq_value(&valcell, &blv.defcell.get()) {
-        blv.fwd
-            .filter(|fwd| fwd.reads_allocation_counter())
-            .and_then(|fwd| fwd.load())
-            .unwrap_or_else(|| valcell.cons_cdr())
-    } else {
-        valcell.cons_cdr()
+/// The allocation-counter descriptor of a localized `*-consed` variable.
+fn counter_forwarder(blv: &LispBufferLocalValue) -> Option<crate::forward::FwdRef> {
+    blv.fwd.filter(|fwd| fwd.reads_allocation_counter())
+}
+
+/// Make `cell` the loaded binding. A counter-backed variable's counter holds
+/// the loaded binding's value, as GNU's forwarded C variable does: unload the
+/// counter into the cell being left and load the new cell's value into it
+/// (`swap_in_symval_forwarding`, `src/data.c:1574-1604`;
+/// `swap_in_global_binding`, `:1548-1564`).
+fn load_binding(blv: &LispBufferLocalValue, cell: Value) {
+    let unloaded = blv.valcell.get();
+    blv.valcell.store_atomic(cell);
+    if let Some(fwd) = counter_forwarder(blv)
+        && !crate::value::eq_value(&unloaded, &cell)
+    {
+        if let Some(count) = fwd.load()
+            && unloaded.is_cons()
+        {
+            unloaded.set_cdr(count);
+        }
+        store_localized_forwarder(blv, cell.cons_cdr());
     }
 }
 
-/// Read a localized symbol's global default through its forwarder when it has
-/// one. The cell remains the fallback for ordinary Lisp-localized symbols.
+/// Read the loaded binding: the counter for a counter-backed variable, whose
+/// cell is only written when the binding is unloaded (GNU
+/// `find_symbol_value`, `src/data.c:1631-1637`), else the cell.
+fn localized_value(blv: &LispBufferLocalValue) -> Value {
+    counter_forwarder(blv)
+        .and_then(|fwd| fwd.load())
+        .unwrap_or_else(|| blv.valcell.get().cons_cdr())
+}
+
+/// Read a localized symbol's global default: the counter while the default
+/// binding is loaded, else the default cell (GNU `default_value`,
+/// `src/data.c:1974-1983`).
 fn localized_default_value(blv: &LispBufferLocalValue) -> Value {
-    blv.fwd
-        .filter(|fwd| fwd.reads_allocation_counter())
+    counter_forwarder(blv)
+        .filter(|_| crate::value::eq_value(&blv.valcell.get(), &blv.defcell.get()))
         .and_then(|fwd| fwd.load())
         .unwrap_or_else(|| blv.defcell.get().cons_cdr())
 }
 
 /// Mirror GNU's `store_symval_forwarding` for writes to a localized symbol.
 fn store_localized_forwarder(blv: &LispBufferLocalValue, value: Value) {
-    if let Some(fwd) = blv.fwd.filter(|fwd| fwd.reads_allocation_counter()) {
+    if let Some(fwd) = counter_forwarder(blv) {
         match fwd.store(value) {
             Ok(store) => {
                 fwd.commit(store);
@@ -3260,7 +3281,7 @@ impl Obarray {
             };
             (*blv_ptr).set_where(target_buf);
             (*blv_ptr).found = found;
-            (*blv_ptr).valcell.store_atomic(valcell);
+            load_binding(&*blv_ptr, valcell);
             (*blv_ptr).alist_epoch = epoch;
             localized_value(&*blv_ptr)
         }
@@ -3308,7 +3329,7 @@ impl Obarray {
         if let Some(blv) = self.blv_mut(id) {
             blv.set_where(Value::NIL);
             blv.found = false;
-            blv.valcell.store_atomic(blv.defcell.get());
+            load_binding(blv, blv.defcell.get());
         }
     }
 
@@ -3320,7 +3341,7 @@ impl Obarray {
         {
             blv.set_where(Value::NIL);
             blv.found = false;
-            blv.valcell.store_atomic(blv.defcell.get());
+            load_binding(blv, blv.defcell.get());
         }
     }
 
@@ -3954,29 +3975,14 @@ impl Obarray {
                 new_alist = Value::cons(cell, new_alist);
             }
         }
-        blv.valcell.store_atomic(cell);
+        load_binding(blv, cell);
 
         // Step 2: actually write the new value into valcell's cdr.
         // The BLV's valcell is a shared cons whose cdr lives in the
-        // tagged heap; mutate it via Value::set_cdr. Copy the forwarder
-        // before ending the BLV borrow, then mirror GNU's descriptor store.
-        let valcell = blv.valcell.get();
-        let fwd = blv.fwd;
-        let _ = blv;
-        valcell.set_cdr(value);
-        if let Some(fwd) = fwd.filter(|fwd| fwd.reads_allocation_counter()) {
-            match fwd.store(value) {
-                Ok(store) => {
-                    fwd.commit(store);
-                }
-                Err(error) => {
-                    debug_assert!(
-                        false,
-                        "localized forwarder refused an internal write: {error:?}"
-                    )
-                }
-            }
-        }
+        // tagged heap; mutate it via Value::set_cdr, then mirror GNU's
+        // descriptor store.
+        blv.valcell.get().set_cdr(value);
+        store_localized_forwarder(blv, value);
 
         // Phase F: the legacy SymbolValue::BufferLocal mirror is no
         // longer written; symbol_value_id reads directly from the BLV
