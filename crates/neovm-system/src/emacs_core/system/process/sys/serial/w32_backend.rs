@@ -16,12 +16,11 @@
 //! arms themselves live beside the `Device` in the evaluator
 //! (`process_state.rs`), which owns the `OVERLAPPED` blocks.
 
-use neovm_eval::emacs_core::eval::data::process_state::{Device, SerialReadAhead};
+use neovm_eval::emacs_core::eval::data::process_state::Device;
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::sync::Mutex;
+use std::os::windows::io::{FromRawHandle, OwnedHandle};
 
 use polling::os::iocp::PollerIocpExt;
 
@@ -44,7 +43,7 @@ use windows_sys::Win32::System::Threading::CreateEventW;
 /// A local `DCB` copy: GNU's `DCB dcb` on `serial_configure`'s stack
 /// (src/w32.c:11143), with the keyword arithmetic in [`super::dcb_settings`].
 #[derive(Debug)]
-pub struct Attributes(pub(crate) SerialDcbSettings);
+pub(crate) struct Attributes(pub(crate) SerialDcbSettings);
 
 /// GNU `serial_open`, src/w32.c:11098-11136: `CreateFile (port,
 /// GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, FILE_FLAG_OVERLAPPED,
@@ -53,7 +52,7 @@ pub struct Attributes(pub(crate) SerialDcbSettings);
 /// GNU's CRT-fd step (`_open_osfhandle`) and its child_process slot have no
 /// counterpart: the `Device` owns the handle, and the reader thread is
 /// replaced by the poller waiting on the read event (see the module docs).
-pub fn open(path: &OsStr) -> Result<Device, SerialOpenFailure> {
+pub(crate) fn open(path: &OsStr) -> Result<Device, SerialOpenFailure> {
     let wide: Vec<u16> = path.encode_wide().chain(std::iter::once(0)).collect();
     // SAFETY: `wide` is NUL-terminated and outlives the call.
     let handle = unsafe {
@@ -75,21 +74,12 @@ pub fn open(path: &OsStr) -> Result<Device, SerialOpenFailure> {
 
     // GNU's `cp->ovl_read.hEvent = CreateEvent (NULL, TRUE, FALSE, NULL)`
     // (manual reset, initially unset) and the same for `ovl_write`
-    // (src/w32.c:11127-11133).
+    // (src/w32.c:11127-11133). The Device assembles its read-ahead around
+    // the read event; this backend only arms it, at register time.
     let read_event = create_manual_reset_event().ok_or(SerialOpenFailure::CreateReadEvent)?;
     let write_event = create_manual_reset_event().ok_or(SerialOpenFailure::CreateWriteEvent)?;
 
-    let read_ahead = SerialReadAhead {
-        event: read_event,
-        overlapped: unsafe { std::mem::zeroed() },
-        byte: 0,
-        posted: false,
-    };
-    Ok(Device {
-        handle,
-        read: Mutex::new(Box::new(read_ahead)),
-        write_event,
-    })
+    Ok(Device::new_serial(handle, read_event, write_event))
 }
 
 /// `CreateEventW(NULL, TRUE /*manual reset*/, FALSE, NULL)`, closing the
@@ -129,7 +119,7 @@ pub(crate) trait DeviceIo {
 
 impl DeviceIo for Device {
     fn read_attributes(&self) -> Result<Attributes, SerialDeviceFailure> {
-        let handle = self.handle.as_raw_handle();
+        let handle = self.serial_handle_raw();
         let mut ct: windows_sys::Win32::Devices::Communication::COMMTIMEOUTS =
             unsafe { std::mem::zeroed() };
         // SAFETY: `ct` is a valid out-param of the right type.
@@ -162,7 +152,7 @@ impl DeviceIo for Device {
     }
 
     fn write_attributes(&self, attributes: &Attributes) -> Result<(), SerialDeviceFailure> {
-        let handle = self.handle.as_raw_handle();
+        let handle = self.serial_handle_raw();
         let dcb = to_dcb(&attributes.0);
         // SAFETY: `dcb` is fully initialized from the local settings copy.
         if unsafe { SetCommState(handle, &raw const dcb) } == 0 {
@@ -206,10 +196,11 @@ impl DeviceIo for Device {
         // `modify_waitable` takes an owned-handle wrapper (`AsWaitable`), not a
         // raw HANDLE, so it borrows the read-ahead's event rather than the raw
         // handle `add_waitable` accepts.
-        let state = self.lock_read_ahead();
-        poller
-            .modify_waitable(&state.event, event, polling::PollMode::Level)
-            .map_err(|err| format!("Failed to modify serial read event interest: {err}"))
+        self.with_serial_read_event(|read_event| {
+            poller
+                .modify_waitable(read_event, event, polling::PollMode::Level)
+                .map_err(|err| format!("Failed to modify serial read event interest: {err}"))
+        })
     }
 
     fn unregister(&self, poller: &polling::Poller) {
@@ -218,8 +209,7 @@ impl DeviceIo for Device {
         // overlapped read must not complete into a Device being torn down
         // (GNU's delete_child teardown, src/w32proc.c:1910-1935).
         self.cancel_serial_read_ahead();
-        let state = self.lock_read_ahead();
-        let _ = poller.remove_waitable(&state.event);
+        let _ = self.with_serial_read_event(|read_event| poller.remove_waitable(read_event));
     }
 }
 
@@ -227,24 +217,24 @@ impl Attributes {
     /// w32 stores the fixnum raw; no speed table, no failure
     /// (src/w32.c:11170-11176). The signature keeps the termios shape so the
     /// caller's keyword window is shared.
-    pub fn set_speed(&mut self, speed: i64) -> Result<(), SerialSpeedError> {
+    pub(crate) fn set_speed(&mut self, speed: i64) -> Result<(), SerialSpeedError> {
         set_w32_speed(&mut self.0, speed);
         Ok(())
     }
 
-    pub fn set_byte_size(&mut self, size: SerialByteSize) {
+    pub(crate) fn set_byte_size(&mut self, size: SerialByteSize) {
         set_w32_byte_size(&mut self.0, size);
     }
 
-    pub fn set_parity(&mut self, parity: SerialParity) {
+    pub(crate) fn set_parity(&mut self, parity: SerialParity) {
         set_w32_parity(&mut self.0, parity);
     }
 
-    pub fn set_stop_bits(&mut self, bits: SerialStopBits) {
+    pub(crate) fn set_stop_bits(&mut self, bits: SerialStopBits) {
         set_w32_stop_bits(&mut self.0, bits);
     }
 
-    pub fn set_flow_control(&mut self, flow: SerialFlowControl) {
+    pub(crate) fn set_flow_control(&mut self, flow: SerialFlowControl) {
         set_w32_flow_control(&mut self.0, flow);
     }
 }

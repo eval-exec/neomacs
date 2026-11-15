@@ -112,7 +112,7 @@ pub enum SerialConfigureStep {
 /// `serial_open`s can produce; each platform's backend returns the ones its
 /// source can reach.
 #[derive(Debug)]
-pub enum SerialOpenFailure {
+pub(crate) enum SerialOpenFailure {
     /// The `open(2)` itself failed; the caller classifies by errno, exactly
     /// as `report_file_error` does (src/sysdep.c:2984).
     #[cfg(not(windows))]
@@ -167,9 +167,9 @@ impl SerialOpenFailure {
 /// `GetLastError` code it failed with (the w32 error texts do not print the
 /// code, but the errno half of the unix messages does, so both are carried).
 #[derive(Clone, Copy, Debug)]
-pub struct SerialDeviceFailure {
-    pub step: SerialConfigureStep,
-    pub errno: i32,
+pub(crate) struct SerialDeviceFailure {
+    pub(crate) step: SerialConfigureStep,
+    pub(crate) errno: i32,
 }
 
 impl SerialDeviceFailure {

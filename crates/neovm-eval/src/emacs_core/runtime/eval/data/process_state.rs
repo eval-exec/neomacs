@@ -906,32 +906,32 @@ pub struct Device {
 #[cfg(windows)]
 pub struct Device {
     /// The COM-port handle, opened with `FILE_FLAG_OVERLAPPED` (w32.c:11100).
-    pub handle: OwnedHandle,
+    handle: OwnedHandle,
     /// GNU `fd_info[fd].cp->ovl_read` + `cp->chr`: the one-char read-ahead.
     /// Boxed so the `OVERLAPPED` -- which the kernel writes into while the
     /// read is posted -- never moves, whatever moves the enclosing `Process`.
     /// `Mutex` because the poll registration methods take `&self` while
     /// `io::Read` takes `&mut`; both run on the main thread, so the lock is
     /// uncontended.
-    pub read: std::sync::Mutex<Box<SerialReadAhead>>,
+    read: std::sync::Mutex<Box<SerialReadAhead>>,
     /// GNU `cp->ovl_write.hEvent` (w32.c:11131-11133).
-    pub write_event: OwnedHandle,
+    write_event: OwnedHandle,
 }
 
 /// The posted one-char overlapped read that gives the port its readable edge,
 /// the equivalent of GNU's `_sys_read_ahead` state (src/w32.c:8969-9005).
 #[cfg(windows)]
-pub struct SerialReadAhead {
+struct SerialReadAhead {
     /// Completion event: `ovl_read.hEvent`, manual reset. Signalled when the
     /// byte arrives; reset when it is consumed. This is the handle registered
     /// with the wait poller.
-    pub event: OwnedHandle,
+    event: OwnedHandle,
     /// The kernel writes into this while the read is posted.
-    pub overlapped: windows_sys::Win32::System::IO::OVERLAPPED,
+    overlapped: windows_sys::Win32::System::IO::OVERLAPPED,
     /// GNU `cp->chr`: the byte the read-ahead buffers.
-    pub byte: u8,
+    byte: u8,
     /// Whether an overlapped read is currently posted in `overlapped`.
-    pub posted: bool,
+    posted: bool,
 }
 
 /// Platforms with no serial backend at all (the `_` arm of `sys/serial.rs`'s
@@ -978,10 +978,46 @@ pub struct SerialPort(pub Device);
 ///   completes instead. (Noted limitation, not a silent divergence.)
 #[cfg(windows)]
 impl Device {
+    /// Assemble the device from the pieces the platform backend opens: the
+    /// COM handle and the two manual-reset completion events GNU's
+    /// `serial_open` creates (src/w32.c:11120-11133). The read-ahead starts
+    /// unposted; the backend arms it when it registers the port readable.
+    pub fn new_serial(
+        handle: OwnedHandle,
+        read_event: OwnedHandle,
+        write_event: OwnedHandle,
+    ) -> Self {
+        Self {
+            handle,
+            read: std::sync::Mutex::new(Box::new(SerialReadAhead {
+                event: read_event,
+                overlapped: unsafe { std::mem::zeroed() },
+                byte: 0,
+                posted: false,
+            })),
+            write_event,
+        }
+    }
+
+    /// The COM handle, for the platform backend's `GetCommState`-family calls
+    /// (src/w32.c:11138-11290). Those calls borrow the port's line state, not
+    /// its I/O machinery, so the raw handle is all they need.
+    pub fn serial_handle_raw(&self) -> windows_sys::Win32::Foundation::HANDLE {
+        self.handle.as_raw_handle()
+    }
+
     /// The readable-edge handle to register with a poller: the read-ahead's
     /// manual-reset completion event, GNU's `char_avail`.
     pub fn serial_read_event_raw(&self) -> windows_sys::Win32::Foundation::HANDLE {
         self.lock_read_ahead().event.as_raw_handle()
+    }
+
+    /// Borrow the read-ahead's completion event while holding its lock, for
+    /// poller calls that need the owned-handle wrapper (`modify_waitable` /
+    /// `remove_waitable` take `AsWaitable`, unlike `add_waitable`'s raw
+    /// handle). The closure shape keeps the borrow and the lock one scope.
+    pub fn with_serial_read_event<R>(&self, borrow: impl FnOnce(&OwnedHandle) -> R) -> R {
+        borrow(&self.lock_read_ahead().event)
     }
 
     /// Arm the one-char read-ahead if none is posted. Returns whether the port
@@ -1036,7 +1072,7 @@ impl Device {
     }
 
     /// `sys_read`'s FILE_SERIAL arm, src/w32.c:9126-9234.
-    pub fn read_serial(&self, buffer: &mut [u8]) -> io::Result<usize> {
+    fn read_serial(&self, buffer: &mut [u8]) -> io::Result<usize> {
         if buffer.is_empty() {
             return Ok(0);
         }
@@ -1156,7 +1192,7 @@ impl Device {
     }
 
     /// `sys_write`'s FILE_SERIAL arm, src/w32.c:9399-9460.
-    pub fn write_serial(&self, buffer: &[u8]) -> io::Result<usize> {
+    fn write_serial(&self, buffer: &[u8]) -> io::Result<usize> {
         let handle = self.handle.as_raw_handle();
         // Stack OVERLAPPED is fine: the frame outlives the wait that follows,
         // and the kernel only touches the block while the write is pending.
@@ -1215,7 +1251,7 @@ impl Device {
     /// Borrow the read-ahead state. Also the seam the w32 backend's
     /// poll-registration methods use to reach the event as an owned-handle
     /// wrapper (the `AsWaitable` the poller's modify/remove calls take).
-    pub fn lock_read_ahead(&self) -> std::sync::MutexGuard<'_, Box<SerialReadAhead>> {
+    fn lock_read_ahead(&self) -> std::sync::MutexGuard<'_, Box<SerialReadAhead>> {
         self.read.lock().unwrap_or_else(|error| error.into_inner())
     }
 }

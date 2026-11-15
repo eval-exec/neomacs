@@ -20,59 +20,59 @@ use super::{SerialByteSize, SerialFlowControl, SerialParity, SerialStopBits};
 
 /// `DTR_CONTROL_DISABLE` / `RTS_CONTROL_DISABLE` / handshake values, exactly
 /// the four constants GNU names (src/w32.c:11250-11260, via winbase.h).
-pub const DTR_CONTROL_DISABLE: u32 = 0;
-pub const DTR_CONTROL_HANDSHAKE: u32 = 2;
-pub const RTS_CONTROL_DISABLE: u32 = 0;
-pub const RTS_CONTROL_HANDSHAKE: u32 = 2;
+pub(crate) const DTR_CONTROL_DISABLE: u32 = 0;
+pub(crate) const DTR_CONTROL_HANDSHAKE: u32 = 2;
+pub(crate) const RTS_CONTROL_DISABLE: u32 = 0;
+pub(crate) const RTS_CONTROL_HANDSHAKE: u32 = 2;
 
 /// `NOPARITY` / `ODDPARITY` / `EVENPARITY` (winbase.h; w32.c:11224-11236).
-pub const NOPARITY: u8 = 0;
-pub const ODDPARITY: u8 = 1;
-pub const EVENPARITY: u8 = 2;
+pub(crate) const NOPARITY: u8 = 0;
+pub(crate) const ODDPARITY: u8 = 1;
+pub(crate) const EVENPARITY: u8 = 2;
 
 /// `ONESTOPBIT` / `TWOSTOPBITS` (winbase.h; w32.c:11247-11249).
-pub const ONESTOPBIT: u8 = 0;
-pub const TWOSTOPBITS: u8 = 2;
+pub(crate) const ONESTOPBIT: u8 = 0;
+pub(crate) const TWOSTOPBITS: u8 = 2;
 
 /// GNU's local copy of the `DCB` (`struct _DCB dcb`, w32.c:11143) with the
 /// bitfield members broken out into named fields.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SerialDcbSettings {
+pub(crate) struct SerialDcbSettings {
     /// `dcb.DCBlength` is `sizeof (DCB)` on Windows; the mirror keeps the
     /// field so the round-trip never loses it, but it carries no keyword
     /// meaning.
-    pub dcb_length: u32,
-    pub baud_rate: u32,
-    pub f_binary: bool,
-    pub f_parity: bool,
-    pub f_outx_cts_flow: bool,
-    pub f_outx_dsr_flow: bool,
-    pub f_dtr_control: u32,
-    pub f_dsr_sensitivity: bool,
-    pub f_tx_continue_on_xoff: bool,
-    pub f_out_x: bool,
-    pub f_in_x: bool,
-    pub f_error_char: bool,
-    pub f_null: bool,
-    pub f_rts_control: u32,
-    pub f_abort_on_error: bool,
-    pub xon_lim: u16,
-    pub xoff_lim: u16,
-    pub byte_size: u8,
-    pub parity: u8,
-    pub stop_bits: u8,
-    pub xon_char: i8,
-    pub xoff_char: i8,
-    pub error_char: i8,
-    pub eof_char: i8,
-    pub evt_char: i8,
+    pub(crate) dcb_length: u32,
+    pub(crate) baud_rate: u32,
+    pub(crate) f_binary: bool,
+    pub(crate) f_parity: bool,
+    pub(crate) f_outx_cts_flow: bool,
+    pub(crate) f_outx_dsr_flow: bool,
+    pub(crate) f_dtr_control: u32,
+    pub(crate) f_dsr_sensitivity: bool,
+    pub(crate) f_tx_continue_on_xoff: bool,
+    pub(crate) f_out_x: bool,
+    pub(crate) f_in_x: bool,
+    pub(crate) f_error_char: bool,
+    pub(crate) f_null: bool,
+    pub(crate) f_rts_control: u32,
+    pub(crate) f_abort_on_error: bool,
+    pub(crate) xon_lim: u16,
+    pub(crate) xoff_lim: u16,
+    pub(crate) byte_size: u8,
+    pub(crate) parity: u8,
+    pub(crate) stop_bits: u8,
+    pub(crate) xon_char: i8,
+    pub(crate) xoff_char: i8,
+    pub(crate) error_char: i8,
+    pub(crate) eof_char: i8,
+    pub(crate) evt_char: i8,
 }
 
 /// GNU's read-side defaults, applied right after `GetCommState` fills the
 /// struct from the device (w32.c:11161-11168). `XonLim`/`XoffLim` and the
 /// speeds GNU never touches keep whatever `GetCommState` produced; the comment
 /// at w32.c:11167 says so explicitly.
-pub fn apply_w32_read_defaults(settings: &mut SerialDcbSettings) {
+pub(crate) fn apply_w32_read_defaults(settings: &mut SerialDcbSettings) {
     settings.f_binary = true;
     settings.f_null = false;
     settings.f_abort_on_error = false;
@@ -85,14 +85,14 @@ pub fn apply_w32_read_defaults(settings: &mut SerialDcbSettings) {
 /// no `cfsetspeed` conversion on Windows and no table, so any integer (in C, a
 /// possibly-wrapping `DWORD` cast) reaches the driver, which accepts or
 /// rejects it at `SetCommState`.
-pub fn set_w32_speed(settings: &mut SerialDcbSettings, speed: i64) {
+pub(crate) fn set_w32_speed(settings: &mut SerialDcbSettings, speed: i64) {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let baud = speed as u32;
     settings.baud_rate = baud;
 }
 
 /// GNU's `ByteSize` arm, w32.c:11183-11192.
-pub fn set_w32_byte_size(settings: &mut SerialDcbSettings, size: SerialByteSize) {
+pub(crate) fn set_w32_byte_size(settings: &mut SerialDcbSettings, size: SerialByteSize) {
     settings.byte_size = match size {
         SerialByteSize::Seven => 7,
         SerialByteSize::Eight => 8,
@@ -103,7 +103,7 @@ pub fn set_w32_byte_size(settings: &mut SerialDcbSettings, size: SerialByteSize)
 /// value (including `nil`), then `even`/`odd` set their own. GNU reports the
 /// character for the process `:summary` in the same arm; that stays in the
 /// caller, which owns the contact plist.
-pub fn set_w32_parity(settings: &mut SerialDcbSettings, parity: SerialParity) {
+pub(crate) fn set_w32_parity(settings: &mut SerialDcbSettings, parity: SerialParity) {
     settings.f_parity = false;
     settings.parity = NOPARITY;
     settings.f_error_char = false;
@@ -123,7 +123,7 @@ pub fn set_w32_parity(settings: &mut SerialDcbSettings, parity: SerialParity) {
 }
 
 /// GNU's stopbits arm, w32.c:11240-11249.
-pub fn set_w32_stop_bits(settings: &mut SerialDcbSettings, bits: SerialStopBits) {
+pub(crate) fn set_w32_stop_bits(settings: &mut SerialDcbSettings, bits: SerialStopBits) {
     settings.stop_bits = match bits {
         SerialStopBits::One => ONESTOPBIT,
         SerialStopBits::Two => TWOSTOPBITS,
@@ -133,7 +133,7 @@ pub fn set_w32_stop_bits(settings: &mut SerialDcbSettings, bits: SerialStopBits)
 /// GNU's flowcontrol arm, w32.c:11251-11276: the whole handshake block is
 /// zeroed for every value (nil included), `XonChar`/`XoffChar` are set to
 /// Ctrl-Q/Ctrl-S unconditionally, then `hw`/`sw` set their bits.
-pub fn set_w32_flow_control(settings: &mut SerialDcbSettings, flow: SerialFlowControl) {
+pub(crate) fn set_w32_flow_control(settings: &mut SerialDcbSettings, flow: SerialFlowControl) {
     settings.f_outx_cts_flow = false;
     settings.f_outx_dsr_flow = false;
     settings.f_dtr_control = DTR_CONTROL_DISABLE;
@@ -190,7 +190,7 @@ const MASK_F_RTS_CONTROL: u32 = 0b11 << SHIFT_F_RTS_CONTROL;
 const BIT_F_ABORT_ON_ERROR: u32 = 1 << 14;
 
 /// Pack the named members into the `DCB._bitfield` dword.
-pub fn pack_flags(settings: &SerialDcbSettings) -> u32 {
+pub(crate) fn pack_flags(settings: &SerialDcbSettings) -> u32 {
     let mut bits = 0;
     if settings.f_binary {
         bits |= BIT_F_BINARY;
@@ -231,7 +231,7 @@ pub fn pack_flags(settings: &SerialDcbSettings) -> u32 {
 }
 
 /// Unpack a `DCB._bitfield` dword into the named members.
-pub fn unpack_flags(bits: u32, settings: &mut SerialDcbSettings) {
+pub(crate) fn unpack_flags(bits: u32, settings: &mut SerialDcbSettings) {
     settings.f_binary = bits & BIT_F_BINARY != 0;
     settings.f_parity = bits & BIT_F_PARITY != 0;
     settings.f_outx_cts_flow = bits & BIT_F_OUTX_CTS_FLOW != 0;

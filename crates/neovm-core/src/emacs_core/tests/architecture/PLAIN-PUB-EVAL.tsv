@@ -1377,6 +1377,12 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	WaitNo
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	WaitNotifier field poller
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn default_process_tty_name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ChildOwnership::has_child
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl Device::cancel_serial_read_ahead
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl Device::new_serial
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl Device::post_serial_read_ahead
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl Device::serial_handle_raw
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl Device::serial_read_event_raw
+crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl Device::with_serial_read_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ExitQueryPolicy::from_lisp_query_flag
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ExitQueryPolicy::queries_on_exit
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl LiveProcessIo::terminate_and_defer_children
