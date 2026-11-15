@@ -2060,7 +2060,7 @@ fn vm_x_connection_builtins_use_shared_runtime_state() {
                   (condition-case err (x-close-connection "x") (error err))
                   (condition-case err (x-open-connection "x") (error err))))"#
         ),
-        r#"OK ((wrong-type-argument stringp nil) (error "Window system frame should be used") (error "Display x can’t be opened") nil)"#
+        r#"OK ((wrong-type-argument stringp nil) (error "Window system frame should be used") (error "Display x can’t be opened") (error "Display x can’t be opened"))"#
     );
 }
 
