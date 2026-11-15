@@ -699,6 +699,8 @@ mod emacs_core_runtime_bytecode_tests_vm_syntax_motion_runtime_test_rs;
 mod emacs_core_runtime_bytecode_tests_vm_replace_region_runtime_test_rs;
 #[path = "emacs_core/runtime/bytecode/tests/vm_reader_message_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_reader_message_runtime_test_rs;
+#[path = "emacs_core/runtime/bytecode/tests/vm_time_builtins_runtime_test.rs"]
+mod emacs_core_runtime_bytecode_tests_vm_time_builtins_runtime_test_rs;
 #[path = "emacs_core/runtime/bytecode/tests/vm_shared_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_shared_runtime_test_rs;
 
