@@ -7525,13 +7525,28 @@ impl BufferManager {
     /// collection. Returns the Lisp values each one holds, keyed by id, for
     /// the heap to mark only once the buffer object is reached, and the
     /// records to hand back to [`Self::restore_reached_killed_buffers`].
+    ///
+    /// A killed buffer an active buffer-list cursor can still step onto
+    /// stays a root: the cursor holds its id, not its object, where GNU's
+    /// walk holds the removed cons and so the buffer.
     #[doc(hidden)]
     pub fn take_killed_buffers_for_gc(
         &mut self,
     ) -> (Vec<(BufferId, Vec<Value>)>, Vec<(BufferId, Buffer)>) {
-        let killed: Vec<(BufferId, Buffer)> = mem::take(&mut self.storage_mut().dead_buffers)
-            .into_iter()
-            .collect();
+        let storage = self.storage_mut();
+        let links = storage
+            .buffer_order_observer
+            .as_ref()
+            .and_then(Weak::upgrade);
+        let (cursor_held, killed): (Vec<(BufferId, Buffer)>, Vec<(BufferId, Buffer)>) =
+            mem::take(&mut storage.dead_buffers)
+                .into_iter()
+                .partition(|(id, _)| {
+                    links
+                        .as_ref()
+                        .is_some_and(|links| links.borrow().retains(*id))
+                });
+        storage.dead_buffers.extend(cursor_held);
         let ephemerons = killed
             .iter()
             .map(|(id, buffer)| {

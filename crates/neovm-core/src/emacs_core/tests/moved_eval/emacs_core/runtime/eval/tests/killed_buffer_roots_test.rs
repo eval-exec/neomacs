@@ -98,3 +98,39 @@ fn two_thousand_create_and_kill_cycles_leave_no_killed_buffer_records_after_garb
         "no registry entry may outlive its killed buffer"
     );
 }
+
+#[test]
+fn garbage_collect_keeps_killed_buffers_an_active_buffer_list_cursor_can_reach() {
+    // GNU's FOR_EACH_LIVE_BUFFER walk (e.g. unlock_all_files) holds the
+    // removed cons of a buffer killed under it, so a collection during the
+    // walk cannot free that buffer. The native cursor holds only ids.
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    let create = |ev: &mut Context, name: &str| {
+        ev.eval_str(&format!("(get-buffer-create {name:?})"))
+            .expect("get-buffer-create should evaluate")
+            .as_buffer_id()
+            .expect("get-buffer-create returns a buffer")
+    };
+    let a = create(&mut ev, "killed-roots-cursor-a");
+    let b = create(&mut ev, "killed-roots-cursor-b");
+    let mut cursor = ev.buffer_manager_mut().buffer_list_cursor();
+    assert!(cursor.any(|id| id == a));
+
+    ev.eval_str(
+        r#"(progn
+             (kill-buffer "killed-roots-cursor-a")
+             (kill-buffer "killed-roots-cursor-b")
+             (garbage-collect))"#,
+    )
+    .expect("kill and collect should evaluate");
+    assert_eq!(retained(&ev, a), (true, true));
+    assert_eq!(cursor.next(), Some(b));
+    assert_eq!(retained(&ev, b), (true, true));
+
+    drop(cursor);
+    ev.eval_str("(garbage-collect)")
+        .expect("garbage-collect should evaluate");
+    assert_eq!(retained(&ev, a), (false, false));
+    assert_eq!(retained(&ev, b), (false, false));
+}
