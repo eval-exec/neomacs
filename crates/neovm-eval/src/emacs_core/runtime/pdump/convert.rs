@@ -3778,6 +3778,9 @@ fn dump_obarray(encoder: &mut DumpEncoder, eval: &Context, session: DumpSession)
                 )
             })
             .collect(),
+        // Membership order: `from_dump` rebuilds the obarray's completion
+        // order from this list, and the list order must be GNU's `intern_sym`
+        // order.
         global_members: eval.obarray.global_member_ids().map(dump_sym_id).collect(),
         function_unbound: eval
             .obarray
