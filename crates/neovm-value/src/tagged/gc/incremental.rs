@@ -204,7 +204,7 @@ impl TaggedHeap {
         let forced = self.forced_termination_pending;
         self.forced_termination_pending = false;
         self.pace_close_mark_window(pace_wall_us, pace_alloc, forced);
-        if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+        if knobs::gc_trace_on() {
             eprintln!(
                 "NEOVM_GC mark_window alloc={}B wall={}us start_bytes={} forced={} \
                  rate_ewma={}B/s dur_ewma={}us lead={}B",
@@ -528,7 +528,7 @@ impl TaggedHeap {
         self.sweep_slice_count += 1;
         self.sweep_cons_blocks_swept += swept_blocks;
         self.sweep_noncons_freed += noncons_freed + float_freed;
-        if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+        if knobs::gc_trace_on() {
             eprintln!(
                 "NEOVM_GC sweep_slice {slice_us}us cons={}/{} noncons_left={} done={done}",
                 self.sweep_cons_cursor,
@@ -648,7 +648,7 @@ impl TaggedHeap {
         self.sweep_lifetime_slices += self.sweep_slice_count;
         self.sweep_lifetime_cons_blocks_swept += self.sweep_cons_blocks_swept;
         self.sweep_lifetime_noncons_freed += self.sweep_noncons_freed;
-        if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+        if knobs::gc_trace_on() {
             let (mapped_total, mapped_marked) = self.mapped_object_stats();
             eprintln!(
                 "NEOVM_GC gc#{} [incremental mark={}us sweep_total={}us slices={} blocks={} \

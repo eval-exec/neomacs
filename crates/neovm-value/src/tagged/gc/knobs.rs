@@ -124,6 +124,14 @@ pub(crate) fn chunk_map_on() -> bool {
     })
 }
 
+/// `NEOVM_GC_TRACE=1`, read once per process for the deferred sweep's
+/// trace lines (termination, every slice, completion): a sweep runs
+/// thousands of slices, and each one read the environment.
+pub(crate) fn gc_trace_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1"))
+}
+
 /// `NEOVM_GC_SWEEP_PACING`.
 pub(crate) fn sweep_pacing() -> SweepPacing {
     static PACING: OnceLock<SweepPacing> = OnceLock::new();
