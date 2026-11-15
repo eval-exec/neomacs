@@ -802,6 +802,7 @@ TaggedValue::with_hash_table_mut_concurrent	method	pub(restricted)	crates/neovm-
 TaggedValue::to_eq_key	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:4175	value	BULK (PC11-M)
 TaggedValue::to_equal_key_depth_swp	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:4232	value	BULK (PC11-M)
 TaggedValue::memory_use_counts_snapshot	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:4370	value	BULK (PC11-M)
+TaggedValue::cons_live_count_snapshot	method	new	crates/neovm-value/src/value/mod.rs:4483	value	GitHub issue 775 garbage-collect conses row; read-only live cons count (TaggedHeap::cons_live_count_exact) for crates/neovm-eval/src/emacs_core/lisp/native/builtins_extra/mod.rs::builtin_garbage_collect_stats; no hook binding, observer API, or mutator authority
 EqualSeenPair::new	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:4552	value	BULK (PC11-M)
 LispHashTable::switch_target	method	pub(restricted)	crates/neovm-value/src/value/switch_plan.rs:288	value::switch_plan	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:10003; crates/neovm-core/src/emacs_core/runtime/jit/compile/dispatch.rs:3930
 LispHashTable::switch_inline_plan	method	pub(restricted)	crates/neovm-value/src/value/switch_plan.rs:368	value::switch_plan	BULK (PC11-M)

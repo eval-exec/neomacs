@@ -623,6 +623,30 @@ fn garbage_collect_shape_and_arity() {
 }
 
 #[test]
+fn garbage_collect_cons_row_reports_live_cells() {
+    crate::test_utils::init_test_tracing();
+    let row_used = || {
+        let stats = builtin_garbage_collect_stats().expect("GC stats are available");
+        let buckets = neovm_value::value::list_to_vec(&stats).expect("GC stats return a list");
+        let conses = neovm_value::value::list_to_vec(&buckets[0]).expect("conses row is a list");
+        conses[2].as_int().expect("USED is an integer")
+    };
+
+    let before = row_used();
+    let allocated_before = Value::memory_use_counts_snapshot()[0];
+    let unreachable = Value::cons(Value::fixnum(1), Value::NIL);
+    drop(unreachable);
+    neovm_value::tagged::gc::with_tagged_heap(|heap| heap.collect_exact(std::iter::empty()));
+
+    assert_eq!(
+        Value::memory_use_counts_snapshot()[0],
+        allocated_before + 1,
+        "memory-use-counts remains cumulative",
+    );
+    assert_eq!(row_used(), before, "collected conses are not live");
+}
+
+#[test]
 fn memory_use_counts_shape_and_arity() {
     crate::test_utils::init_test_tracing();
     let counts = builtin_memory_use_counts(vec![]).unwrap();
