@@ -312,7 +312,7 @@ fn fixture() -> Context {
         let _ = crate::emacs_core::jit::cache::prepopulate_aot_leaves(Vec::new());
     }
     for name in ["vft-obj", "vft-kbd", "vft-lobj"] {
-        ev.obarray.intern(name);
+        ev.obarray.intern_member(name);
     }
     ev.obarray
         .install_objfwd(intern("vft-obj"), alloc_objfwd(Value::symbol("obj0")));

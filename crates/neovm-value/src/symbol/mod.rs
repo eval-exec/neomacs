@@ -2124,18 +2124,24 @@ impl Obarray {
         }
     }
 
-    /// Intern a symbol: look up by name, creating if absent.
-    /// Returns the symbol name (which is the key for identity).
-    pub fn intern(&mut self, name: &str) -> String {
+    /// GNU `intern`: the symbol named NAME as a member of this obarray,
+    /// created if absent.
+    ///
+    /// This is the member-producing funnel. The free
+    /// [`crate::intern::intern`] resolves a canonical name id without
+    /// touching any obarray; a symbol created only that way is not
+    /// Lisp-visible and must come through here (or
+    /// `make_uninterned_symbol` where GNU uses `make-symbol`).
+    pub fn intern_member(&mut self, name: &str) -> SymId {
         let id = intern(name);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
-        name.to_string()
+        id
     }
 
     /// Intern a symbol from an exact Lisp-string name, preserving raw
     /// unibyte and multibyte storage.
-    pub fn intern_lisp_string(&mut self, name: &LispString) -> SymId {
+    pub fn intern_member_lisp_string(&mut self, name: &LispString) -> SymId {
         let id = intern_lisp_string(name);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
@@ -2144,9 +2150,10 @@ impl Obarray {
 
     /// Intern a symbol from a Lisp string OBJECT, which becomes the symbol's
     /// name when this call creates it -- GNU `intern`. Use this rather than
-    /// [`Self::intern_lisp_string`] whenever the name came from Lisp, so
+    /// [`Self::intern_member_lisp_string`] whenever the name came from Lisp,
+    /// so
     /// `symbol-name` gives that object back with its text properties.
-    pub fn intern_lisp_value(&mut self, name_value: crate::tagged::value::TaggedValue) -> SymId {
+    pub fn intern_member_lisp_value(&mut self, name_value: crate::tagged::value::TaggedValue) -> SymId {
         let id = crate::intern::intern_lisp_value(name_value);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
@@ -5358,6 +5365,10 @@ mod copied_value_tests;
 #[cfg(test)]
 #[path = "tests/plist_epoch_test.rs"]
 mod plist_epoch_tests;
+
+#[cfg(test)]
+#[path = "tests/member_funnel_test.rs"]
+mod member_funnel_tests;
 
 /// The pre-`CanonicalAccess` spellings, for tests, which set up and inspect
 /// canonical storage. Production code names its reason

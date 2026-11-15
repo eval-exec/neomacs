@@ -7,7 +7,7 @@
 //! its 3000-line ceiling and assertion; only the file path resolves to the
 //! value crate.
 use crate::emacs_core::eval::SubrValueExt;
-use crate::emacs_core::intern::{intern, intern_uninterned};
+use crate::emacs_core::intern::{intern, make_uninterned_symbol};
 use crate::tagged::header::{SubrDispatchKind, VecLikeType};
 use crate::tagged::value::TaggedValue;
 use neovm_eval::test_support::authority::{lookup_global_subr_entry, subr_entry_dispatch_kind};
@@ -63,7 +63,7 @@ fn subr_object_resolves_by_public_name() {
 
     assert_eq!(canonical_subr.as_subr_id(), Some(canonical));
 
-    let uninterned = intern_uninterned("car");
+    let uninterned = make_uninterned_symbol("car");
     let uninterned_subr = TaggedValue::subr(uninterned);
     assert_eq!(uninterned_subr.as_subr_id(), Some(canonical));
     assert_eq!(canonical_subr.bits(), uninterned_subr.bits());

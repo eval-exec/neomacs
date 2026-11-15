@@ -1344,7 +1344,7 @@ fn entity_listing_restricts_the_driver_before_enumeration() {
     for driver in [
         intern("neomacs-missing-driver"),
         intern("ns"),
-        neovm_core::emacs_core::intern::intern_uninterned("ftcrhb"),
+        neovm_core::emacs_core::intern::make_uninterned_symbol("ftcrhb"),
     ] {
         let foreign = FontEntityListConstraints {
             driver: Some(driver),

@@ -1,7 +1,7 @@
 use super::*;
 use neovm_value::heap_types::{GnuDeclaredCharacterCount, LispString};
 use neovm_value::intern::{
-    intern, intern_calls, intern_lisp_string, intern_uninterned, is_canonical_id,
+    intern, intern_calls, intern_lisp_string, make_uninterned_symbol, is_canonical_id,
     reset_intern_calls, unintern_canonical_id,
 };
 use neovm_value::value::ProducerSymbolName;
@@ -107,7 +107,7 @@ fn uninterned_face_symbol_misses_the_canonical_eq_entry() {
     let defined = foreground(name, Color::rgb(5, 6, 7));
     table.define(name, defined.clone());
     let canonical = Value::symbol(name);
-    let value = Value::from_sym_id(intern_uninterned(name));
+    let value = Value::from_sym_id(make_uninterned_symbol(name));
     assert_ne!(value.bits(), canonical.bits());
     let producer = ProducerSymbolName::from_value(value).unwrap();
     reset_intern_calls();
@@ -214,7 +214,7 @@ fn non_utf8_face_name_stays_outside_named_producer_admission() {
 
 #[test]
 fn depth_refusal_precedes_noncanonical_face_name_fallback() {
-    let value = Value::from_sym_id(intern_uninterned("cont9-face-depth-refusal"));
+    let value = Value::from_sym_id(make_uninterned_symbol("cont9-face-depth-refusal"));
     let producer = ProducerSymbolName::from_value(value).unwrap();
     let table = FaceTable::new();
     reset_intern_calls();
@@ -251,7 +251,7 @@ fn face_producer_resolution_preserves_lists_plists_depth_and_source_identity() {
             Value::T,
         ])),
         Value::NIL,
-        Value::from_sym_id(intern_uninterned("nil")),
+        Value::from_sym_id(make_uninterned_symbol("nil")),
         Value::symbol("cont9-face-missing"),
         Value::fixnum(23),
     ] {
@@ -306,10 +306,10 @@ fn producer_constructor_preserves_symbol_accounting_and_object_identity() {
         );
     }
     for value in [
-        Value::from_sym_id(intern_uninterned("cont9-account-object")),
-        Value::from_sym_id(intern_uninterned(":cont9-account-keyword-object")),
-        Value::from_sym_id(intern_uninterned("nil")),
-        Value::from_sym_id(intern_uninterned("t")),
+        Value::from_sym_id(make_uninterned_symbol("cont9-account-object")),
+        Value::from_sym_id(make_uninterned_symbol(":cont9-account-keyword-object")),
+        Value::from_sym_id(make_uninterned_symbol("nil")),
+        Value::from_sym_id(make_uninterned_symbol("t")),
     ] {
         let producer = ProducerSymbolName::from_value(value).unwrap();
         reset_intern_calls();
@@ -333,7 +333,7 @@ fn public_face_producer_resolver_matches_existing_name_entry() {
         table.define(name, foreground(name, Color::rgb(13, 24, 35)));
         let value = Value::symbol(name);
         assert_eq!(table.resolve_producer(value), Some(table.resolve(name)));
-        let uninterned = Value::from_sym_id(intern_uninterned(name));
+        let uninterned = Value::from_sym_id(make_uninterned_symbol(name));
         let resolved = table.resolve_producer(uninterned).unwrap();
         assert_ne!(resolved, table.resolve(name));
         assert_eq!(resolved.foreground, None);

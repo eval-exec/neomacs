@@ -163,7 +163,7 @@ fn reads_survive_obarray_growth_and_absent_symbols() {
     let f = reader(Value::symbol("vri-grow"));
     let leaf = compile_bytecode_function(&f).expect("compiles");
     for i in 0..12_000 {
-        eval.obarray.intern(&format!("vri-growth-filler-{i}"));
+        eval.obarray.intern_member(&format!("vri-growth-filler-{i}"));
     }
     eval_ok(&mut eval, "(setq vri-grow 'after)");
     VARREF_SHIM_CALLS.with(|c| c.set(0));

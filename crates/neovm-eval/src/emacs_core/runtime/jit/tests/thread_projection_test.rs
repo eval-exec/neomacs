@@ -37,7 +37,7 @@ fn fixture() -> Context {
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::jit::cache::clear();
-    ev.obarray.intern("tpj-obj");
+    ev.obarray.intern_member("tpj-obj");
     ev.obarray
         .install_objfwd(intern("tpj-obj"), alloc_objfwd(Value::fixnum(4343)));
     ev.obarray.define_int_variable("tpj-int", 4444);

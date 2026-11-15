@@ -1128,12 +1128,12 @@ impl SymbolRegistry {
         self.alloc_symbol(name, true, NewSymbolName::AtomOnly)
     }
 
-    fn intern_uninterned(&mut self, s: &str) -> SymId {
+    fn make_uninterned_symbol(&mut self, s: &str) -> SymId {
         let name = self.names.intern(s);
         self.alloc_symbol(name, false, NewSymbolName::AtomOnly)
     }
 
-    fn intern_uninterned_lisp_string(&mut self, s: &LispString) -> SymId {
+    fn make_uninterned_symbol_lisp_string(&mut self, s: &LispString) -> SymId {
         let name = self.names.intern_lisp_string(s);
         self.alloc_symbol(name, false, NewSymbolName::AtomOnly)
     }
@@ -1764,16 +1764,16 @@ pub(crate) fn lookup_interned_name_query(query: SymbolNameQuery<'_>) -> Option<S
 /// Create an uninterned symbol using the global runtime symbol registry.
 /// Always creates a new unique SymId, never reuses an existing one.
 #[inline]
-pub fn intern_uninterned(s: &str) -> SymId {
+pub fn make_uninterned_symbol(s: &str) -> SymId {
     let mut registry = global_symbol_registry().write();
-    registry.intern_uninterned(s)
+    registry.make_uninterned_symbol(s)
 }
 
 /// Create an uninterned symbol using an exact Lisp-string name.
 #[inline]
-pub fn intern_uninterned_lisp_string(s: &LispString) -> SymId {
+pub fn make_uninterned_symbol_lisp_string(s: &LispString) -> SymId {
     let mut registry = global_symbol_registry().write();
-    registry.intern_uninterned_lisp_string(s)
+    registry.make_uninterned_symbol_lisp_string(s)
 }
 
 /// Intern NAME_VALUE in the global obarray, adopting it as the new symbol's

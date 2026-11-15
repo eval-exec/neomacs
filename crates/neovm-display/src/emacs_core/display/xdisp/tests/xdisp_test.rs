@@ -7100,7 +7100,7 @@ fn display_prop_replacing_p_takes_only_a_literal_t_when_form_under_disable_eval(
             assert!(
                 !display_prop_replacing_p(
                     disable_eval(shape(when_string(Value::from_sym_id(
-                        neovm_value::intern::intern_uninterned("t")
+                        neovm_value::intern::make_uninterned_symbol("t")
                     )))),
                     frame_window_p
                 ),

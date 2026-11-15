@@ -1,6 +1,6 @@
 use super::*;
 use crate::emacs_core::builtins::symbols::{builtin_set, builtin_symbol_value};
-use neovm_value::intern::intern_uninterned;
+use neovm_value::intern::make_uninterned_symbol;
 
 fn test_obarray() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
@@ -73,7 +73,7 @@ fn uninterned_value_cells_ignore_buffer_local_namesakes() {
     crate::test_utils::init_test_tracing();
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let canonical = intern("depth-alist");
-    let uninterned = intern_uninterned("depth-alist");
+    let uninterned = make_uninterned_symbol("depth-alist");
     ctx.edit
         .buffers
         .current_buffer_mut()

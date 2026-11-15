@@ -4,7 +4,7 @@ use crate::emacs_core::builtins::symbols::builtin_unintern;
 use crate::emacs_core::builtins::{
     builtin_gethash, builtin_hash_table_count, builtin_puthash, builtin_remhash,
 };
-use crate::emacs_core::intern::{intern, intern_uninterned, lookup_interned};
+use crate::emacs_core::intern::{intern, make_uninterned_symbol, lookup_interned};
 use crate::heap_types::LispString;
 
 #[test]
@@ -309,7 +309,7 @@ fn sxhash_float_matches_oracle_fixnum_values() {
 fn unintern_with_nil_obarray_targets_initial_obarray() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.obarray_mut().intern("vm-unintern-single");
+    eval.obarray_mut().intern_member("vm-unintern-single");
     assert!(eval.obarray().intern_soft("vm-unintern-single").is_some());
 
     // GNU `unintern` requires the OBARRAY arg (arity 2,2); a nil OBARRAY targets
@@ -330,7 +330,7 @@ fn unintern_symbol_argument_removes_only_the_exact_symbol() {
     let mut eval = crate::test_utils::new_context();
     let name = "vm-unintern-exact-symbol";
     let canonical = intern(name);
-    let uninterned = intern_uninterned(name);
+    let uninterned = make_uninterned_symbol(name);
     eval.obarray_mut().ensure_interned_global_id(canonical);
 
     let removed_shadow = builtin_unintern(&mut eval, vec![Value::symbol(uninterned), Value::NIL])
@@ -354,7 +354,7 @@ fn intern_after_unintern_allocates_fresh_symbol_like_gnu() {
     let name = "vm-unintern-fresh-symbol-after-remove";
     let original = eval
         .obarray_mut()
-        .intern_lisp_string(&LispString::from_utf8(name));
+        .intern_member_lisp_string(&LispString::from_utf8(name));
 
     let removed = builtin_unintern(&mut eval, vec![Value::from_sym_id(original), Value::NIL])
         .expect("unintern should remove exact canonical symbol");
@@ -362,7 +362,7 @@ fn intern_after_unintern_allocates_fresh_symbol_like_gnu() {
 
     let reinterned = eval
         .obarray_mut()
-        .intern_lisp_string(&LispString::from_utf8(name));
+        .intern_member_lisp_string(&LispString::from_utf8(name));
     assert_ne!(
         original, reinterned,
         "GNU unintern marks the old symbol uninterned; a later intern creates a new object"

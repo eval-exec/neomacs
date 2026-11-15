@@ -58,7 +58,7 @@ use neovm_edit::emacs_core::editfns::{
 };
 use neovm_text::emacs_core::regex::compute_buffer_replacement_with_syntax;
 use neovm_value::intern::intern;
-use neovm_value::intern::intern_uninterned;
+use neovm_value::intern::make_uninterned_symbol;
 use neovm_value::strings_core::lisp_string_char_codes;
 use neovm_value::value::{
     HashTableTest, LambdaData, LambdaParams, StringTextPropertyRun, Value, ValueKind,
@@ -76,7 +76,7 @@ use tree_sitter::Language;
 fn empty_function_cell_does_not_synthesize_builtin_alias() {
     crate::test_utils::init_test_tracing();
     let mut obarray = neovm_value::symbol::Obarray::new();
-    obarray.intern("string<");
+    obarray.intern_member("string<");
     let symbol = neovm_value::intern::intern("string<");
 
     assert_eq!(
@@ -13983,7 +13983,7 @@ fn prin1_to_string_reuses_print_number_table_positive_label() {
 fn prin1_to_string_preserves_gensym_lambda_parameter_identity_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let sym = neovm_value::intern::intern_uninterned("stack");
+    let sym = neovm_value::intern::make_uninterned_symbol("stack");
     let lambda = Value::make_lambda(LambdaData {
         params: LambdaParams::simple(vec![sym]).into(),
         body: vec![Value::from_sym_id(sym)],
@@ -14124,7 +14124,7 @@ fn prin1_loaddefs_docstring_layout_matches_gnu_print_form() {
 fn prin1_to_string_respects_print_gensym_binding() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let sym = Value::symbol(intern_uninterned("vm-print-gensym"));
+    let sym = Value::symbol(make_uninterned_symbol("vm-print-gensym"));
 
     let default_text = dispatch_builtin(&mut eval, "prin1-to-string", vec![sym])
         .expect("prin1-to-string should resolve")
@@ -14143,7 +14143,7 @@ fn prin1_to_string_preserves_raw_unibyte_symbol_bytes() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     let raw_name = neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'a']);
-    let sym = Value::symbol(neovm_value::intern::intern_uninterned_lisp_string(
+    let sym = Value::symbol(neovm_value::intern::make_uninterned_symbol_lisp_string(
         &raw_name,
     ));
 
@@ -17559,7 +17559,7 @@ fn boundp_buffer_local_lookup_uses_symbol_identity() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
 
-    let uninterned = neovm_value::intern::intern_uninterned("vm-bound-shadow");
+    let uninterned = neovm_value::intern::make_uninterned_symbol("vm-bound-shadow");
     let interned = intern("vm-bound-shadow");
     let current = eval
         .edit

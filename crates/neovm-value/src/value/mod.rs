@@ -2825,11 +2825,6 @@ impl TaggedValue {
         s.into_symbol()
     }
 
-    /// Create a symbol by interning a name string, with nil/t/keyword canonicalization.
-    pub fn make_symbol(s: impl AsRef<str>) -> Self {
-        s.as_ref().into_symbol()
-    }
-
     /// Create a keyword by interning a canonical `:name` symbol.
     pub fn keyword(s: impl AsRef<str>) -> Self {
         add_wrapping(MemoryUseCountSlot::Symbols, 1);

@@ -598,7 +598,7 @@ fn list_keymap_marker_requires_the_canonical_symbol_object() {
     crate::test_utils::init_test_tracing();
     let canonical = Value::list(vec![Value::symbol("keymap")]);
     let same_name = Value::list(vec![Value::from_sym_id(
-        crate::emacs_core::intern::intern_uninterned("keymap"),
+        crate::emacs_core::intern::make_uninterned_symbol("keymap"),
     )]);
 
     assert!(is_list_keymap(&canonical, crate::tagged::SymbolMode::Bare));

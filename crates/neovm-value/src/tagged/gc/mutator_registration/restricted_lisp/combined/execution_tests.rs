@@ -179,7 +179,7 @@ fn fixture<H: CombinedParts>(
         |obarray, ids| {
             // Serial fixture-only nonce: no previous fixture can supply this
             // spelling's winner. The full spelling itself is never interned here.
-            let nonce = crate::intern::intern_uninterned("c6-mixed-name-nonce");
+            let nonce = crate::intern::make_uninterned_symbol("c6-mixed-name-nonce");
             let name = match graph {
                 Graph::Name => TaggedValue::string(format!("p3sym-c6-mixed-name-{}", nonce.0)),
                 Graph::Keyword => TaggedValue::string(":p3sym-c6-mixed-keyword"),

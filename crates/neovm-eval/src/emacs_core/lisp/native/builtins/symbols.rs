@@ -1956,7 +1956,7 @@ pub fn builtin_intern_fn(eval: &mut super::eval::Context, args: Vec<Value>) -> E
     let name_value = rewritten
         .map(|name| Value::heap_string(name.into_lisp_string()))
         .unwrap_or(args[0]);
-    let sym = eval.obarray_mut().intern_lisp_value(name_value);
+    let sym = eval.obarray_mut().intern_member_lisp_value(name_value);
     Ok(Value::from_sym_id(sym))
 }
 

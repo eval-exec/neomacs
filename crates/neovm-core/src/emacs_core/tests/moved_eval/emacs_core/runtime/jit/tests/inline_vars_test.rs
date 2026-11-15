@@ -232,7 +232,7 @@ fn fixture() -> Context {
     // grows it (its first push is the shim's), and a session's first `let`
     // made it long ago.
     jit_bind_stack_reserve_for_test(&mut ev, 16);
-    ev.obarray_mut().intern("ivt-obj");
+    ev.obarray_mut().intern_member("ivt-obj");
     ev.obarray_mut()
         .install_objfwd(intern("ivt-obj"), alloc_objfwd(Value::symbol("obj0")));
     ev.obarray_mut()

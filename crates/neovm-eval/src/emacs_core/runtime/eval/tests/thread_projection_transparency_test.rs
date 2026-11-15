@@ -77,7 +77,7 @@ fn context(shape: Shape, name: &str, projected: bool) -> Context {
                 .define_bool_variable(name, true, ByteBooleanVars::ErasedByLreadInit);
         }
         Shape::Obj => {
-            ev.obarray.intern(name);
+            ev.obarray.intern_member(name);
             ev.obarray
                 .install_objfwd(intern(name), alloc_objfwd(Value::fixnum(5)));
         }

@@ -71,7 +71,7 @@ mod moved_eval_prelude {
     pub use neovm_value::error::*;
     pub use neovm_value::gc_trace::GcTrace;
     pub use neovm_value::intern::{
-        SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,
+        SymId, WellKnown, format_symbol_name_for_diagnostic, intern, make_uninterned_symbol,
         is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
     };
     pub use neovm_value::kmacro::KmacroManager;
@@ -9910,7 +9910,7 @@ fn canonical_subr_survives_rebinding_and_gc() {
 fn dispatch_subr_id_uses_name_identity_not_symbol_slot_identity() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    let namesake = neovm_value::intern::intern_uninterned("car");
+    let namesake = neovm_value::intern::make_uninterned_symbol("car");
     let args = vec![Value::list(vec![Value::fixnum(1), Value::fixnum(2)])];
     let result = ev
         .dispatch_subr_id(namesake, args)
@@ -22696,7 +22696,7 @@ fn jit_bench_cons() {
 fn direct_context_apply_accepts_uninterned_symbol_function_designators() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    let fun = intern_uninterned("vm-apply-uninterned");
+    let fun = make_uninterned_symbol("vm-apply-uninterned");
     let callable = ev
         .eval_str("(lambda (x) (+ x 1))")
         .expect("lambda should evaluate");
@@ -26181,7 +26181,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     // precondition holds on any build.
     let mut topup = 0u64;
     while ev.obarray_mut().current_slot_len() < 2 * 4096 {
-        ev.obarray_mut().intern(&format!("t23-topup-{topup}"));
+        ev.obarray_mut().intern_member(&format!("t23-topup-{topup}"));
         topup += 1;
     }
     assert!(ev.obarray().current_slot_len() >= 2 * 4096);
@@ -26229,7 +26229,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
         //     of the snapshotted obarray.
         if fresh < MAX_FRESH {
             for _ in 0..16 {
-                ev.obarray_mut().intern(&format!("t23-fill-{fresh}"));
+                ev.obarray_mut().intern_member(&format!("t23-fill-{fresh}"));
                 fresh += 1;
             }
         }

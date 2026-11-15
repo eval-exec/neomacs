@@ -3,7 +3,7 @@
 use super::super::cold_gc::ConcurrentHashMutatorState;
 use super::super::{TaggedHeap, clear_tagged_heap_if_installed, knobs, set_tagged_heap};
 use super::*;
-use crate::intern::intern_uninterned;
+use crate::intern::make_uninterned_symbol;
 use crate::tagged::header::ImageResident;
 use crate::tagged::header::VecLikeHeader;
 use crate::value::{HashKey, HashTableTest, HashTableWeakness, LispHashTable};
@@ -996,7 +996,7 @@ fn tier_h_old_table_remembers_young_child_for_next_minor() {
 fn tier_h_snapshot_symbol_handoff_keeps_only_strongly_held_weak_keys() {
     for generational in [false, true] {
         let mut heap = real_heap(generational);
-        let symbol = TaggedValue::from_sym_id(intern_uninterned("u35-tier-h-weak-symbol"));
+        let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u35-tier-h-weak-symbol"));
         let id = symbol.as_bare_symbol_id().unwrap();
         let strong = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
         insert(strong, TaggedValue::fixnum(1), symbol);

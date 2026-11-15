@@ -363,13 +363,13 @@ fn major_retraces_old_children_when_mark_parity_repeats() {
 }
 
 fn major_retraces_old_uninterned_symbol_owner_without_recent_r() {
-    use crate::intern::{intern_uninterned, is_canonical_id};
+    use crate::intern::{make_uninterned_symbol, is_canonical_id};
 
     for positioned in [false, true] {
         let mut heap = heap(true);
         heap.install();
         let roots = Roots::new();
-        let id = intern_uninterned("u34b-major-old-owner-symbol");
+        let id = make_uninterned_symbol("u34b-major-old-owner-symbol");
         assert!(!is_canonical_id(id));
         let symbol = TaggedValue::from_sym_id(id);
         let value = if positioned {
@@ -765,7 +765,7 @@ impl Drop for SymbolInsertionWorkerGuard {
 }
 
 fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: bool, jit: bool) {
-    use crate::intern::{intern_uninterned, is_canonical_id};
+    use crate::intern::{make_uninterned_symbol, is_canonical_id};
 
     let mut heap = heap(true);
     heap.install();
@@ -796,12 +796,12 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
         weak.user_cmp_function = Some(owner);
     });
     // An unrelated weak key checks that the repair does not retain all IDs.
-    let dead = TaggedValue::from_sym_id(intern_uninterned("u34b-dead-weak-symbol"));
+    let dead = TaggedValue::from_sym_id(make_uninterned_symbol("u34b-dead-weak-symbol"));
     let dead_root = roots.keep(dead);
     insert(table, dead, TaggedValue::fixnum(181));
     roots.clear(dead_root);
     if !fresh {
-        let existing = TaggedValue::from_sym_id(intern_uninterned("u34b-existing-weak-symbol"));
+        let existing = TaggedValue::from_sym_id(make_uninterned_symbol("u34b-existing-weak-symbol"));
         let existing_root = roots.keep(existing);
         insert(table, existing, TaggedValue::fixnum(179));
         roots.clear(existing_root);
@@ -822,7 +822,7 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
     );
 
     let symbol = if fresh {
-        TaggedValue::from_sym_id(intern_uninterned("u34b-fresh-inserted-symbol"))
+        TaggedValue::from_sym_id(make_uninterned_symbol("u34b-fresh-inserted-symbol"))
     } else {
         // Obtain an existing ID weakly after claim. No strong start root held it.
         let weak = table.as_hash_table().unwrap();

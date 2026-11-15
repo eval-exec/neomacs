@@ -4,7 +4,7 @@ use crate::emacs_core::print::{
     print_value_stateful_bytes_with_buffers,
 };
 use neovm_value::heap_types::LispString;
-use neovm_value::intern::{intern_lisp_string, intern_uninterned, intern_uninterned_lisp_string};
+use neovm_value::intern::{intern_lisp_string, make_uninterned_symbol, make_uninterned_symbol_lisp_string};
 use neovm_value::value::{HashTableTest, Value};
 
 fn character_codes(bytes: Vec<u8>) -> Value {
@@ -26,9 +26,9 @@ fn custom_hash_test_names_preserve_raw_bytes_escaping_and_symbol_identity() {
     let name = LispString::from_emacs_bytes(vec![0xc0, 0x80]);
     let ids = [
         intern_lisp_string(&name),
-        intern_uninterned_lisp_string(&name),
-        intern_uninterned("a b"),
-        intern_uninterned("eql"),
+        make_uninterned_symbol_lisp_string(&name),
+        make_uninterned_symbol("a b"),
+        make_uninterned_symbol("eql"),
     ];
     let actual = Value::list(
         ids.into_iter()
