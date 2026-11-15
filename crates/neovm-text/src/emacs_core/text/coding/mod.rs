@@ -19,7 +19,7 @@
 pub(crate) mod read_detection;
 
 use super::text_host::{TextHost, TextVariableStore};
-use neovm_edit::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
+use neovm_edit::buffer::{Buffer, BufferManager, EmacsByteRange, LispCharPos1};
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
 use neovm_value::emacs_char::EmacsChar;
 use neovm_value::error::LispCondition;
@@ -6560,6 +6560,25 @@ pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
         .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    safe_coding_systems_for_region(
+        eval.coding_systems(),
+        buffer,
+        (start, end),
+        &args,
+        eval.symbol_mode(),
+    )
+}
+
+/// The buffer branch of `find-coding-systems-region-internal`: START and END
+/// are the resolved positions of `args[0]` and `args[1]`, which also form the
+/// `args-out-of-range` data.
+fn safe_coding_systems_for_region(
+    mgr: &CodingSystemManager,
+    buffer: &Buffer,
+    (start, end): (i64, i64),
+    args: &[Value],
+    mode: SymbolMode,
+) -> Result<Value, Flow> {
     if !buffer.get_multibyte() {
         return Ok(Value::T);
     }
@@ -6578,12 +6597,7 @@ pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(end)),
     );
     let text = buffer.buffer_substring_lisp_string_range(byte_range);
-    safe_coding_systems_for_text(
-        eval.coding_systems(),
-        &text,
-        args.get(2).copied(),
-        eval.symbol_mode(),
-    )
+    safe_coding_systems_for_text(mgr, &text, args.get(2).copied(), mode)
 }
 
 // ===========================================================================
