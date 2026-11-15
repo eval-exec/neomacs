@@ -899,10 +899,11 @@ pub struct HashTableEntry {
 /// Compact backing store for a Lisp hash table.
 ///
 /// The hash index files each entry under the hash computed when it was made
-/// (GNU `h->hash[i]`), beside the key as then materialized and a stable slot
-/// number; slot order provides GNU-compatible iteration while storing only
-/// the original Lisp key and value. See [`hash_index`] for how an `equal`
-/// table finds a key.
+/// (GNU `h->hash[i]`), beside the key as then materialized (or
+/// [`HashKey::LiveKey`], an `equal` table's structural key, which the slot
+/// holds) and a stable slot number; slot order provides GNU-compatible
+/// iteration while storing only the original Lisp key and value. See
+/// [`hash_index`] for how an `equal` table finds a key.
 ///
 /// `Clone` is manual: the proof-2 authority word at the end is zeroed on
 /// every copy rather than copied (see the field's comment).
@@ -1115,11 +1116,11 @@ impl HashTableStorage {
     /// Whether an entry's materialized key is `key`. A structural `equal`
     /// key is found by a scan here; look those up by value instead.
     pub fn contains_key(&self, key: &HashKey) -> bool {
-        self.index.find_key(key).is_some()
+        self.index.find_key(key, &self.slots).is_some()
     }
 
     pub fn get(&self, key: &HashKey) -> Option<&Value> {
-        let slot = self.index.find_key(key)?.slot;
+        let slot = self.index.find_key(key, &self.slots)?.slot;
         self.slot_value(slot)
     }
 
@@ -1194,9 +1195,10 @@ impl HashTableStorage {
             Some(hasher) => self.index.find(hasher.finish(), |entry| {
                 value_matches(value, test, &entry.key)
             }),
-            None => self
-                .index
-                .find_key(&value.to_hash_key_swp(&test, symbols_with_pos_enabled)),
+            None => self.index.find_key(
+                &value.to_hash_key_swp(&test, symbols_with_pos_enabled),
+                &self.slots,
+            ),
         }?;
         Some((entry.hash, entry.slot))
     }
@@ -1380,7 +1382,7 @@ impl HashTableStorage {
                     }
                     None => {
                         let key = value.to_hash_key_swp(&test, symbols_with_pos_enabled);
-                        match self.index.find_key(&key) {
+                        match self.index.find_key(&key, &self.slots) {
                             Some(entry) => HashProbe::Found(entry.slot),
                             None => HashProbe::Absent(fx_hash_key(&key)),
                         }
@@ -1450,12 +1452,12 @@ impl HashTableStorage {
     }
 
     pub fn get_mut(&mut self, key: &HashKey) -> Option<&mut Value> {
-        let slot = self.index.find_key(key)?.slot;
+        let slot = self.index.find_key(key, &self.slots)?.slot;
         self.slot_value_mut(slot)
     }
 
     pub fn key_snapshot(&self, key: &HashKey) -> Option<&Value> {
-        let slot = self.index.find_key(key)?.slot;
+        let slot = self.index.find_key(key, &self.slots)?.slot;
         self.slots
             .get(slot)
             .and_then(Option::as_ref)
@@ -1478,7 +1480,11 @@ impl HashTableStorage {
     }
 
     pub fn replace_key_snapshot(&mut self, key: &HashKey, key_value: Value) {
-        let Some(slot) = self.index.find_key(key).map(|entry| entry.slot) else {
+        let Some(slot) = self
+            .index
+            .find_key(key, &self.slots)
+            .map(|entry| entry.slot)
+        else {
             return;
         };
         self.slots[slot]
@@ -1492,7 +1498,7 @@ impl HashTableStorage {
     /// filed under.
     fn slot_of_new_key(&self, hash: u64, hash_key: &HashKey) -> Option<usize> {
         self.index
-            .find(hash, |entry| entry.key == *hash_key)
+            .find(hash, |entry| entry_has_key(entry, hash_key, &self.slots))
             .map(|entry| entry.slot)
     }
 
@@ -1541,7 +1547,7 @@ impl HashTableStorage {
     }
 
     pub fn remove(&mut self, key: &HashKey) -> Option<Value> {
-        let removed = self.index.remove_key(key)?;
+        let removed = self.index.remove_key(key, &self.slots)?;
         self.forget_user_hash(key);
         self.remove_slot(removed.slot)
     }
@@ -1702,7 +1708,9 @@ impl HashTableStorage {
 
     /// Every live entry with its materialized key, in slot (insertion)
     /// order: what a walk of [`Self::live_hash_keys_in_slot_order`] followed
-    /// by a [`Self::get`] per key reads, without looking any key up.
+    /// by a [`Self::get`] per key reads, without looking any key up. An entry
+    /// filed by its key object carries [`HashKey::LiveKey`]; the entry's
+    /// `key` is that object.
     pub fn keyed_entries_in_slot_order(&self) -> Vec<(&HashKey, &HashTableEntry)> {
         let mut keyed = vec![None; self.slots.len()];
         for entry in self.index.iter() {
@@ -1776,7 +1784,7 @@ impl HashTableStorage {
             self.user_hashes.is_empty(),
             "replace_pointer_key on a table carrying user hashes would strand a bucket entry"
         );
-        let Some(removed) = self.index.remove_key(&HashKey::Ptr(old_ptr)) else {
+        let Some(removed) = self.index.remove_key(&HashKey::Ptr(old_ptr), &self.slots) else {
             return;
         };
         let key = HashKey::Ptr(new_ptr);
@@ -2101,6 +2109,15 @@ pub enum HashKey {
     /// Boxed as a pair, like `Marker` and `Overlay`: `HashKey` sits inline in
     /// every bucket, and a test pins it at three words or fewer.
     StringContent(Box<(Box<[u8]>, usize)>),
+    /// An `equal` table's index entry for a cons, vector, record or string
+    /// key, filed under the key OBJECT, which the entry's slot holds: GNU
+    /// `hash_put` (src/fns.c) stores `key` beside its hash. Materializing
+    /// such a key copied it whole on every insertion.
+    ///
+    /// Only the index stores it, and no value materializes to it: a reader
+    /// that needs the key reads the entry's key object
+    /// ([`HashTableEntry::key`]).
+    LiveKey,
 }
 
 /// Hash a [`Value`] in place for an `eq` or `eql` table, the way GNU
@@ -2308,10 +2325,11 @@ impl std::hash::Hash for HashKey {
             HashKey::Marker(_) => 18,
             HashKey::Overlay(_) => 19,
             HashKey::BoolVector(_) => 24,
+            HashKey::LiveKey => 25,
         };
         tag.hash(state);
         match self {
-            HashKey::Nil | HashKey::True => {}
+            HashKey::Nil | HashKey::True | HashKey::LiveKey => {}
             HashKey::Int(n) => n.hash(state),
             HashKey::Bignum(limbs) => limbs.hash(state),
             HashKey::Float(bits) => bits.hash(state),
@@ -2365,7 +2383,9 @@ impl std::hash::Hash for HashKey {
 impl PartialEq for HashKey {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (HashKey::Nil, HashKey::Nil) | (HashKey::True, HashKey::True) => true,
+            (HashKey::Nil, HashKey::Nil)
+            | (HashKey::True, HashKey::True)
+            | (HashKey::LiveKey, HashKey::LiveKey) => true,
             (HashKey::Int(a), HashKey::Int(b)) => a == b,
             (HashKey::Bignum(a), HashKey::Bignum(b)) => a == b,
             (HashKey::Float(a), HashKey::Float(b)) => a == b,
@@ -5949,7 +5969,7 @@ mod hash_index;
 pub mod switch_plan;
 
 pub(crate) use hash_index::equal_value_hash;
-use hash_index::{HashIndex, fx_hash_key, stored_hash};
+use hash_index::{HashIndex, entry_has_key, fx_hash_key, stored_hash};
 
 // ---------------------------------------------------------------------------
 // Tests

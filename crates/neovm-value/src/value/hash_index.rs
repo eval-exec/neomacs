@@ -21,7 +21,9 @@
 //!
 //! The materialized [`HashKey`] is still stored beside each entry: the
 //! iteration, dump and user-defined-test consumers read it. It no longer
-//! decides `equal`-table membership.
+//! decides `equal`-table membership. An entry may instead hold
+//! [`HashKey::LiveKey`], whose key is the slot's key object; a reader that
+//! wants its materialized form builds it from that object.
 use super::*;
 
 /// GNU `SXHASH_MAX_DEPTH` (src/fns.c): the deepest level `sxhash_obj`
@@ -66,7 +68,9 @@ pub(super) struct IndexEntry {
     /// `h->hash[i]`): a resize never re-hashes, and a key mutated after
     /// insertion stays where it was filed.
     pub(super) hash: u64,
-    /// The key as materialized when the entry was made.
+    /// The key as materialized when the entry was made, or
+    /// [`HashKey::LiveKey`] when the entry's slot holds the key object it
+    /// was filed by.
     pub(super) key: HashKey,
     /// The entry's slot in the storage's slot vector.
     pub(super) slot: usize,
@@ -150,29 +154,44 @@ impl HashIndex {
     }
 
     /// The entry whose materialized key is `key`, when only the key is at
-    /// hand. A key whose hash its materialized form decides is found by
-    /// hash; any other (a structural `equal` key) by a scan, which is why
-    /// the storage's own callers look structural keys up by VALUE.
-    pub(super) fn find_key(&self, key: &HashKey) -> Option<&IndexEntry> {
+    /// hand; `slots` holds the key objects of live-key entries. A key whose
+    /// hash its materialized form decides is found by hash; any other (a
+    /// structural `equal` key) by a scan, which is why the storage's own
+    /// callers look structural keys up by VALUE. [`HashKey::LiveKey`] names
+    /// no entry.
+    pub(super) fn find_key(
+        &self,
+        key: &HashKey,
+        slots: &[Option<HashTableEntry>],
+    ) -> Option<&IndexEntry> {
+        if matches!(key, HashKey::LiveKey) {
+            return None;
+        }
         match key_index_hash(key) {
-            Some(hash) => self.table.find(hash, |entry| entry.key == *key),
-            None => self.scan_for_key(key),
+            Some(hash) => self
+                .table
+                .find(hash, |entry| entry_has_key(entry, key, slots)),
+            None => self.scan_for_key(key, slots),
         }
     }
 
     /// [`Self::find_key`], unlinking the entry.
-    pub(super) fn remove_key(&mut self, key: &HashKey) -> Option<IndexEntry> {
-        let hash = match key_index_hash(key) {
-            Some(hash) => hash,
-            None => self.scan_for_key(key)?.hash,
-        };
-        self.remove_matching(hash, |entry| entry.key == *key)
+    pub(super) fn remove_key(
+        &mut self,
+        key: &HashKey,
+        slots: &[Option<HashTableEntry>],
+    ) -> Option<IndexEntry> {
+        let found = self.find_key(key, slots)?;
+        let (hash, slot) = (found.hash, found.slot);
+        self.remove_matching(hash, |entry| entry.slot == slot)
     }
 
     #[cold]
     #[inline(never)]
-    fn scan_for_key(&self, key: &HashKey) -> Option<&IndexEntry> {
-        self.table.iter().find(|entry| entry.key == *key)
+    fn scan_for_key(&self, key: &HashKey, slots: &[Option<HashTableEntry>]) -> Option<&IndexEntry> {
+        self.table
+            .iter()
+            .find(|entry| entry_has_key(entry, key, slots))
     }
 
     /// Keep the entries `keep` accepts, in iteration order.
@@ -189,17 +208,52 @@ pub(super) fn fx_hash_key(key: &HashKey) -> u64 {
     hasher.finish()
 }
 
+/// Whether `entry` is the entry whose materialized key is `key`: for a
+/// live-key entry, whether its key object, read from `slots`, materializes
+/// to `key` under `equal` (only an `equal` table files live keys).
+pub(super) fn entry_has_key(
+    entry: &IndexEntry,
+    key: &HashKey,
+    slots: &[Option<HashTableEntry>],
+) -> bool {
+    match &entry.key {
+        HashKey::LiveKey => slots
+            .get(entry.slot)
+            .and_then(Option::as_ref)
+            .is_some_and(|stored| {
+                live_key_can_be(stored.key, key)
+                    && stored.key.to_hash_key(&HashTableTest::Equal) == *key
+            }),
+        stored => stored == key,
+    }
+}
+
+/// Whether the key object `value` can materialize to `key` at all: the
+/// cheap test that spares a scan materializing every live key it passes.
+fn live_key_can_be(value: Value, key: &HashKey) -> bool {
+    match key {
+        HashKey::EqualCons(..) => value.is_cons(),
+        HashKey::EqualVec(_) => value.is_veclike(),
+        HashKey::StringContent(_) => value.is_string(),
+        // A leaf, an identity key or a nested marker (`Cycle`): no cons,
+        // vector, record or string materializes to one as a whole.
+        _ => false,
+    }
+}
+
 impl HashKey {
     /// Whether an `equal` table files this key under the hash of the key
     /// OBJECT ([`equal_value_hash`]) rather than of this materialized form.
     ///
-    /// These are the keys `to_equal_key` builds from structure; every other
-    /// key is a leaf whose `Hash` stream the value walker reproduces.
+    /// These are the keys `to_equal_key` builds from structure, and the
+    /// live-key marker; every other key is a leaf whose `Hash` stream the
+    /// value walker reproduces.
     #[inline]
     pub(super) fn is_structural(&self) -> bool {
         matches!(
             self,
-            HashKey::EqualCons(..)
+            HashKey::LiveKey
+                | HashKey::EqualCons(..)
                 | HashKey::EqualVec(_)
                 | HashKey::ByteCode(_)
                 | HashKey::Marker(_)
