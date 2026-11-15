@@ -418,7 +418,15 @@ impl Context {
     pub fn read_localized_cached(&self, sym: &LispSymbol) -> Option<Value> {
         let buf = self.edit.buffers.current_buffer()?;
         let hit = sym.blv_cache_hit(buf.id())?;
-        let value = hit.valcell().cons_cdr();
+        let valcell = hit.valcell();
+        let value = if valcell.bits() == hit.defcell().bits() {
+            hit.fwd()
+                .filter(|fwd| fwd.reads_allocation_counter())
+                .and_then(|fwd| fwd.load())
+                .unwrap_or_else(|| valcell.cons_cdr())
+        } else {
+            valcell.cons_cdr()
+        };
         if value.is_unbound() {
             return None;
         }

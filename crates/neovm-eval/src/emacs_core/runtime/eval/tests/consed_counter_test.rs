@@ -126,6 +126,43 @@ fn localized_consed_counter_declared_after_localization_uses_live_slot() {
     );
 }
 
+/// The current-value fast path reads the forwarded default while the current
+/// buffer has no local binding, but leaves an explicit local cell unchanged.
+#[test]
+fn localized_consed_read_without_local_binding_follows_counter() {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    assert!(holds(
+        &mut eval,
+        "(progn
+           (setq consed-counter-buffer-a (get-buffer-create \" *consed-counter-a*\")
+                 consed-counter-buffer-b (get-buffer-create \" *consed-counter-b*\"))
+           (set-buffer consed-counter-buffer-a)
+           (make-local-variable 'cons-cells-consed)
+           (set-buffer consed-counter-buffer-b)
+           (setq consed-counter-before cons-cells-consed
+                 consed-counter-local-before
+                   (buffer-local-value 'cons-cells-consed consed-counter-buffer-a))
+           (make-list 12000 nil)
+           (setq consed-counter-after cons-cells-consed
+                 consed-counter-memory-after (nth 0 (memory-use-counts))
+                 consed-counter-local-after
+                   (buffer-local-value 'cons-cells-consed consed-counter-buffer-a))
+           t)"
+    ));
+    assert!(holds(
+        &mut eval,
+        "(> consed-counter-after consed-counter-before)"
+    ));
+    assert!(holds(
+        &mut eval,
+        "(= consed-counter-after consed-counter-memory-after)"
+    ));
+    assert!(holds(
+        &mut eval,
+        "(= consed-counter-local-after consed-counter-local-before)"
+    ));
+}
+
 /// The field is read between two reads of the variable, so the comparison
 /// does not depend on what evaluating the form itself allocates.
 #[test]

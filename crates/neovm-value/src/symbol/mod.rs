@@ -3204,7 +3204,7 @@ impl Obarray {
             (*blv_ptr).found = found;
             (*blv_ptr).valcell.store_atomic(valcell);
             (*blv_ptr).alist_epoch = epoch;
-            valcell.cons_cdr()
+            localized_value(&*blv_ptr)
         }
     }
 
