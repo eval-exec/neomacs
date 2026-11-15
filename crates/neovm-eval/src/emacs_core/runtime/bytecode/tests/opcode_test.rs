@@ -46,3 +46,72 @@ fn op_records_its_dispatch_fetch_width() {
         "Op grew past 16 bytes ({size}); the dispatch loop loads this per instruction"
     );
 }
+
+/// GNU disass.el:290 binds `print-escape-newlines` around the constant
+/// `prin1`, so a string constant's newline is escaped on one line.
+#[test]
+fn op_disasm_constant_escapes_newlines_like_gnu_disass() {
+    let _harness = crate::test_utils::unit_harness();
+    let constants = vec![Value::string("a\nb")];
+    let text = Op::Constant(0).disasm(&constants);
+    assert_eq!(text, "constant 0 ; \"a\\nb\"");
+    assert!(!text.contains('\n'));
+}
+
+/// GNU disass.el:260-275 prints a compiled-code constant as
+/// `<byte-code-function>` and disassembles it recursively.
+#[test]
+fn op_disasm_byte_code_function_constant_recurses() {
+    use crate::emacs_core::bytecode::ByteCodeFunction;
+    use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt as _;
+    use neovm_value::value::LambdaParams;
+    let _harness = crate::test_utils::unit_harness();
+    let mut child = ByteCodeFunction::new(LambdaParams::simple(vec![]));
+    child.add_constant(Value::fixnum(7));
+    child.emit(Op::Constant(0));
+    child.emit(Op::Return);
+    let constants = vec![Value::make_bytecode(child)];
+    let text = Op::Constant(0).disasm(&constants);
+    assert!(
+        text.starts_with("constant 0 ; <byte-code-function>\n"),
+        "{text}"
+    );
+    assert!(text.contains("constant 0 ; 7"), "{text}");
+}
+
+/// A `(macro . <byte-code-function>)` constant is `<compiled macro>`.
+#[test]
+fn op_disasm_compiled_macro_constant_recurses() {
+    use crate::emacs_core::bytecode::ByteCodeFunction;
+    use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt as _;
+    use neovm_value::value::LambdaParams;
+    let _harness = crate::test_utils::unit_harness();
+    let mut child = ByteCodeFunction::new(LambdaParams::simple(vec![]));
+    child.emit(Op::Nil);
+    child.emit(Op::Return);
+    let constants = vec![Value::cons(
+        Value::symbol("macro"),
+        Value::make_bytecode(child),
+    )];
+    let text = Op::Constant(0).disasm(&constants);
+    assert!(
+        text.starts_with("constant 0 ; <compiled macro>\n"),
+        "{text}"
+    );
+}
+
+/// GNU disass.el:249-258: the constant feeding a `byte-switch` prints the
+/// jump table (`<jump-table-TEST (V TAG ...)>`), not the table object.
+#[test]
+fn op_disasm_constant_before_switch_prints_jump_table() {
+    use neovm_value::value::HashTableTest;
+    let _harness = crate::test_utils::unit_harness();
+    let table = Value::hash_table(HashTableTest::Eq);
+    let _ = table.with_hash_table_mut(|ht| {
+        let key = Value::symbol("vsw-foo");
+        ht.insert(key.to_hash_key(&ht.test), key, Value::fixnum(8));
+    });
+    let constants = vec![table];
+    let text = Op::Constant(0).disasm_in(&constants, Some(&Op::Switch));
+    assert_eq!(text, "constant 0 ; <jump-table-eq (vsw-foo 8)>");
+}

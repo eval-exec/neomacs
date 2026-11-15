@@ -488,13 +488,25 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         ));
 
         out.push_str("constants:\n");
+        // Same GNU `prin1` (print-escape-newlines t) the code lines use,
+        // never the value layer's `<Value>` Display placeholder.
         for (i, c) in self.constants.iter().enumerate() {
-            out.push_str(&format!("  {}: {}\n", i, c));
+            out.push_str(&format!(
+                "  {}: {}\n",
+                i,
+                crate::emacs_core::bytecode::opcode::disasm_value_text(c)
+            ));
         }
 
         out.push_str("code:\n");
         for (i, op) in ops.iter().enumerate() {
-            out.push_str(&format!("  {:4}: {}\n", i, op.disasm(&self.constants)));
+            // GNU disass.el prints the jump table on the CONSTANT line that
+            // precedes `byte-switch`, so the renderer needs the next op.
+            out.push_str(&format!(
+                "  {:4}: {}\n",
+                i,
+                op.disasm_in(&self.constants, ops.get(i + 1))
+            ));
         }
         out
     }

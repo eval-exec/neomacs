@@ -8,6 +8,8 @@ crate::emacs_core::subr::world_registry!(Op);
 
 pub use neovm_value::tagged::bytecode::opcode::Op;
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt as _;
+
 // Branch classification serves only JIT compilation and its tests.
 #[cfg(any(test, feature = "jit"))]
 mod branch_targets;
@@ -17,22 +19,189 @@ pub(crate) use branch_targets::{BranchTargets, OpBranchTargetsExt};
 /// Upper disassembly on the lowered [`Op`] (human-readable diagnostics only).
 pub(crate) trait OpDisasmExt {
     fn disasm(&self, constants: &[neovm_value::value::Value]) -> String;
+
+    /// Like [`Self::disasm`], with the following instruction available for
+    /// the context-sensitive arms GNU `disass.el` prints on the constant
+    /// line (the jump table of a following `byte-switch`).
+    fn disasm_in(&self, constants: &[neovm_value::value::Value], next: Option<&Op>) -> String;
+}
+
+/// GNU `prin1` of a constant with `print-escape-newlines` bound (disass.el:290).
+pub(crate) fn disasm_value_text(value: &neovm_value::value::Value) -> String {
+    crate::emacs_core::print::print_value_with_options(value, disasm_print_options())
+}
+
+/// GNU `disassemble-recursive-indent` (disass.el:51).
+const DISASSEMBLE_RECURSIVE_INDENT: usize = 3;
+
+/// GNU binds `print-escape-newlines` to t around the constant `prin1`
+/// (disass.el:290); everything else keeps `prin1`'s defaults, so unlike
+/// `print_value` a disassembly does not force `print-escape-nonascii`.
+fn disasm_print_options() -> crate::emacs_core::print::PrintOptions {
+    let mut options = crate::emacs_core::print::PrintOptions::default();
+    options.print_escape_newlines = true;
+    options
+}
+
+/// Indent a nested disassembly by one GNU recursive indent per level.
+fn indent_disassembly(text: &str) -> String {
+    let pad = " ".repeat(DISASSEMBLE_RECURSIVE_INDENT);
+    text.lines()
+        .map(|line| format!("{pad}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The `%s` of a hash-table key in GNU's jump-table line. GNU switch tables
+/// key on symbols; the remaining Lisp scalar cases are spelled the way
+/// `princ` would. Structural/pointer keys cannot arise from `byte-switch`.
+fn hash_key_text(key: &neovm_value::value::HashKey) -> String {
+    use neovm_value::value::HashKey;
+    match key {
+        HashKey::Nil => "nil".to_string(),
+        HashKey::True => "t".to_string(),
+        HashKey::Int(value) => value.to_string(),
+        HashKey::Char(value) => value.to_string(),
+        HashKey::Symbol(id) => neovm_value::intern::resolve_sym(*id).to_string(),
+        HashKey::Keyword(id) => format!(":{}", neovm_value::intern::resolve_sym(*id)),
+        _ => "<key>".to_string(),
+    }
+}
+
+/// GNU `hash-table-test` as the symbol printed in `<jump-table-TEST ...>`.
+fn hash_table_test_text(table: &neovm_value::value::LispHashTable) -> String {
+    if let Some(id) = table.test_name {
+        return neovm_value::intern::resolve_sym(id).to_string();
+    }
+    match table.test {
+        neovm_value::value::HashTableTest::Eq => "eq".to_string(),
+        neovm_value::value::HashTableTest::Eql => "eql".to_string(),
+        neovm_value::value::HashTableTest::Equal => "equal".to_string(),
+    }
+}
+
+/// GNU jump-table arm (disass.el:249-258): the constant before `byte-switch`
+/// prints the switch table it feeds.
+fn jump_table_text(table: &neovm_value::value::LispHashTable) -> String {
+    let options = disasm_print_options();
+    let mut out = format!("<jump-table-{} (", hash_table_test_text(table));
+    let mut first = true;
+    for (key, target) in table.data.iter() {
+        if !first {
+            out.push(' ');
+        }
+        first = false;
+        out.push_str(&hash_key_text(key));
+        out.push(' ');
+        out.push_str(&crate::emacs_core::print::print_value_with_options(
+            target, options,
+        ));
+    }
+    out.push_str(")>");
+    out
+}
+
+/// GNU disass.el:260-284 arms for a `byte-constant` whose value is compiled
+/// code: `<byte-code-function>` / `<compiled macro>` / `<byte code>` /
+/// `(<byte code>...)`, each followed by the recursive disassembly.
+fn disasm_constant(
+    constants: &[neovm_value::value::Value],
+    idx: usize,
+    next: Option<&Op>,
+) -> String {
+    use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt as _;
+    use neovm_value::value::Value;
+
+    let Some(value) = constants.get(idx).copied() else {
+        return "???".to_string();
+    };
+    // disass.el:249: a following byte-switch prints the jump table it uses.
+    if matches!(next, Some(Op::Switch))
+        && let Some(table) = value.as_hash_table()
+    {
+        return jump_table_text(table);
+    }
+    if value.is_bytecode()
+        && let Some(function) = value.get_bytecode_data()
+    {
+        return format!(
+            "<byte-code-function>\n{}",
+            indent_disassembly(&function.disassemble())
+        );
+    }
+    if value.is_cons() {
+        let head = value.cons_car();
+        let tail = value.cons_cdr();
+        if head.as_bare_symbol_name() == Some("macro")
+            && tail.is_bytecode()
+            && let Some(function) = tail.get_bytecode_data()
+        {
+            return format!(
+                "<compiled macro>\n{}",
+                indent_disassembly(&function.disassemble())
+            );
+        }
+        if head.as_bare_symbol_name() == Some("byte-code") {
+            return match byte_code_list_function(value) {
+                Some(function) => format!(
+                    "<byte code>\n{}",
+                    indent_disassembly(&function.disassemble())
+                ),
+                None => "<byte code>".to_string(),
+            };
+        }
+        // disass.el:277: a list whose first element is a byte-code object.
+        if head.is_cons() && head.cons_car().as_bare_symbol_name() == Some("byte-code") {
+            let mut out = String::from("(<byte code>...)\n");
+            let mut items = Some(value);
+            while let Some(cell) = items {
+                if !cell.is_cons() {
+                    break;
+                }
+                let item = cell.cons_car();
+                if let Some(function) = byte_code_list_function(item) {
+                    out.push_str(&indent_disassembly(&function.disassemble()));
+                    out.push('\n');
+                }
+                items = Some(cell.cons_cdr()).filter(|rest| rest.is_cons());
+            }
+            return out.trim_end().to_string();
+        }
+    }
+    disasm_value_text(&value)
+}
+
+/// Build the byte-code function a raw `(byte-code BYTES CONSTS DEPTH)` list
+/// carries (the only shape GNU's compiler emits; disass.el:271-276).
+fn byte_code_list_function(
+    value: neovm_value::value::Value,
+) -> Option<crate::emacs_core::bytecode::ByteCodeFunction> {
+    let mut items = Vec::new();
+    let mut cell = value;
+    while cell.is_cons() && items.len() < 4 {
+        items.push(cell.cons_car());
+        cell = cell.cons_cdr();
+    }
+    let [_, bytes, constants, depth, ..] = items.as_slice() else {
+        return None;
+    };
+    crate::emacs_core::builtins::byte_code_for_immediate_call(bytes, constants, depth).ok()
 }
 
 impl OpDisasmExt for Op {
     /// Human-readable disassembly of this instruction.
     fn disasm(&self, constants: &[neovm_value::value::Value]) -> String {
+        self.disasm_in(constants, None)
+    }
+
+    fn disasm_in(&self, constants: &[neovm_value::value::Value], next: Option<&Op>) -> String {
         match self {
             Op::Constant(idx) => {
-                // Diagnostics use the printer directly, not the value
-                // layer's `Display` seam: that seam renders `<Value>` until a
-                // Context installs the formatter, and a disassembly must not
-                // depend on one having been constructed.
-                let val = constants
-                    .get(*idx as usize)
-                    .map(crate::emacs_core::print::print_value)
-                    .unwrap_or_else(|| "???".to_string());
-                format!("constant {} ; {}", idx, val)
+                format!(
+                    "constant {} ; {}",
+                    idx,
+                    disasm_constant(constants, *idx as usize, next)
+                )
             }
             Op::TrapOutOfRangeConstant(idx) => {
                 format!("constant {} ; <out of range>", idx)

@@ -647,11 +647,24 @@ mod unit_runtime {
         s::process_terminate_and_defer_reaping,
     );
 
-    /// The eval unit runtime has no OS-signal latch: a layer-less runtime
-    /// never receives a POSIX signal, so no signal is ever pending. This is
-    /// the documented no-op counterpart of core's `os_signal::pending`;
-    /// production installs the real system latch.
+    /// The eval unit runtime has no OS-signal INSTALLATION: `unit_harness`
+    /// never runs core's `os_signal::install`, so there is no signal handler,
+    /// no signal self-pipe, no command loop, and no SIGINT/SIGTERM delivery
+    /// path into this evaluator. GNU's exact answer for those states is "no
+    /// signal pending" -- the OS-signal bit of `ASYNC_ATTENTION` (the same
+    /// process-wide state `system::os_signal::pending` reads) is clear when
+    /// no handler can raise it.
+    ///
+    /// A raised bit is outside the covered states: this runtime has no drain
+    /// path (the drain slot is ABSENT), so it refuses loudly instead of
+    /// answering false for a genuinely pending signal.
     fn unit_os_signal_pending() -> bool {
+        assert!(
+            !neovm_value::quit::ASYNC_ATTENTION.is_raised(neovm_value::quit::AsyncSource::OsSignal),
+            "ABSENT-LAYER system::input.os_signal_pending: the unit runtime has no \
+             OS-signal install or drain path, so a real pending signal cannot be \
+             answered here"
+        );
         false
     }
 
