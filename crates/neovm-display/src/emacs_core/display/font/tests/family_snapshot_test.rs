@@ -113,24 +113,26 @@ fn frozen_families_match_exact_name_bytes_with_ascii_case_folding_only() {
 #[test]
 fn real_family_setter_publishes_a_new_epoch_and_preserves_old_snapshot() {
     crate::test_utils::init_test_tracing();
-    let _eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let before = crate::emacs_core::fontset::fontset_generation();
-    crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(vec![
-        Value::list(vec![Value::list(vec![
+    crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(
+        &mut eval,
+        vec![Value::list(vec![Value::list(vec![
             Value::string("Fixture"),
             Value::string("Before"),
-        ])]),
-    ])
+        ])])],
+    )
     .unwrap();
     let captured = capture_alternative_font_families("fixture").unwrap();
     let first_epoch = crate::emacs_core::fontset::fontset_generation();
     assert_ne!(before, first_epoch);
-    crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(vec![
-        Value::list(vec![Value::list(vec![
+    crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(
+        &mut eval,
+        vec![Value::list(vec![Value::list(vec![
             Value::string("Fixture"),
             Value::string("After"),
-        ])]),
-    ])
+        ])])],
+    )
     .unwrap();
     let current = capture_alternative_font_families("fixture").unwrap();
     let second_epoch = crate::emacs_core::fontset::fontset_generation();

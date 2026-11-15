@@ -31,6 +31,23 @@ pub fn is_active_gnu_defsym_spelling(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `name` is a GNU `DEFSYM` spelling that this build's profile does
+/// not compile in.
+///
+/// The fixed-id `WellKnown` table exists for internal identity, not for
+/// obarray membership: a spelling whose defining sources belong to another
+/// profile (`fontsize` is `nss`-only, `xwidgetp` needs `--with-xwidgets`)
+/// must keep its id but stay out of this build's obarray, exactly as GNU's
+/// compiled `defsym_name[]` does not contain it.
+#[doc(hidden)]
+pub fn is_gnu_defsym_spelling_absent_for_this_profile(name: &str) -> bool {
+    let table = gnu_defsyms_generated::GNU_DEFSYMS_BY_SPELLING;
+    table
+        .binary_search_by(|(spelling, _)| (*spelling).cmp(name))
+        .map(|index| !table[index].1.is_active())
+        .unwrap_or(false)
+}
+
 /// Whether `name` is a DEFSYM spelling GNU removes, or never interns, before
 /// the startup obarray is complete.
 ///

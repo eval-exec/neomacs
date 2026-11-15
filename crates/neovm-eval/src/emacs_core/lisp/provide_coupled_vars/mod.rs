@@ -557,9 +557,22 @@ pub static PROVIDE_COUPLED_VARIABLES: &[ProvideCoupledVariable] = &[
     bound_by("x-window-top-right-corner-cursor", &[Android, X], "androidfns.c:3631 xfns.c:10397", X_SURFACE).ns_absent(),
     bound_by("x-window-vertical-drag-cursor", &[Android, W32, X], "androidfns.c:3611 w32fns.c:11831 xfns.c:10369", X_SURFACE).ns_absent(),
     bound_by("xft-settings", &[DynamicSetting], "xsettings.c:1402", XSETTINGS_ORACLE_PIN).ns_absent(),
+    // GNU ties `syms_of_xwidget` to `HAVE_XWIDGETS`; the port ties the same
+    // variables to the `xwidgets` cargo feature. Without it the source set is
+    // not compiled, so the names are absent from the obarray (xwidget-list
+    // and xwidget-view-list are uninterned in the reference GNU too).
+    #[cfg(feature = "xwidgets")]
     bound_by("xwidget-list", &[XwidgetInternal], "xwidget.c:3988", XWIDGET_LAYER),
+    #[cfg(not(feature = "xwidgets"))]
+    absent("xwidget-list", &[XwidgetInternal], "xwidget.c:3988"),
+    #[cfg(feature = "xwidgets")]
     bound_by("xwidget-view-list", &[XwidgetInternal], "xwidget.c:3992", XWIDGET_LAYER),
+    #[cfg(not(feature = "xwidgets"))]
+    absent("xwidget-view-list", &[XwidgetInternal], "xwidget.c:3992"),
+    #[cfg(feature = "xwidgets")]
     bound_by("xwidget-webkit-disable-javascript", &[XwidgetInternal], "xwidget.c:3996", XWIDGET_LAYER),
+    #[cfg(not(feature = "xwidgets"))]
+    absent("xwidget-webkit-disable-javascript", &[XwidgetInternal], "xwidget.c:3996"),
 ];
 
 /// The row for `name`, if GNU's coupling makes it impossible in this build.

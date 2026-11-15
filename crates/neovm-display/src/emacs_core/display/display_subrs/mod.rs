@@ -16,12 +16,14 @@ use neovm_eval::emacs_core::builtins::{
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::subr::{FixedMin1, NativeFn, NoEvalPlaceholder, SubrArity, SubrSpec};
 
-/// Canonical display step `terminal_shader_video_xwidget` (46 registrations).
+/// Canonical display step `terminal_shader_video_xwidget` (46 registrations;
+/// the xwidget batch is present only with the `xwidgets` feature).
 #[doc(hidden)]
 pub fn register_terminal_shader_video_xwidget(ctx: &mut Context) {
     crate::emacs_core::neo::terminal::register_subrs(ctx);
     crate::emacs_core::shader_surface::register_subrs(ctx);
     crate::emacs_core::video::register_subrs(ctx);
+    #[cfg(feature = "xwidgets")]
     crate::emacs_core::xwidget::register_subrs(ctx);
 }
 
