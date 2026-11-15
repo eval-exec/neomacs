@@ -28,7 +28,10 @@ fn div_cx423_process_send_eof() {
     (process-send-eof proc)
     ;; The child starts only after READY is deleted, while this form is waiting.
     (delete-file ready)
-    (while (process-live-p proc) (accept-process-output proc 1))
+    ;; A terminal status does not imply the final filter bytes or the
+    ;; default sentinel have been delivered; the post-terminal observation
+    ;; drains them (GNU proc.c).
+    (neovm--oracle-settle-process proc 600)
     (prog1 (with-current-buffer buf
              (string-trim-right (buffer-string)))
       (kill-buffer buf))))
