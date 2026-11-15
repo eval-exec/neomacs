@@ -353,7 +353,8 @@ fn minor_or_full(context: &mut Context) {
         if !context.tagged_heap.sweep_in_progress() {
             break;
         }
-        context.gc_safe_point_exact();
+        // A safe point paces sweep slices by allocation; drive them.
+        context.gc_collect_from_current_roots();
     }
     assert!(!context.tagged_heap.sweep_in_progress());
     assert!(!context.tagged_heap.mark_in_progress());

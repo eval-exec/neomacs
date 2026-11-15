@@ -212,7 +212,8 @@ fn start_public_minor(ctx: &mut Context) -> MinorCounts {
 fn finish_public_minor(ctx: &mut Context, before: MinorCounts) {
     assert!(ctx.tagged_heap().sweep_in_progress());
     for _ in 0..10_000 {
-        ctx.gc_safe_point();
+        // A safe point paces sweep slices by allocation; drive them.
+        ctx.gc_collect_from_current_roots();
         if !ctx.tagged_heap().sweep_in_progress() {
             assert!(!ctx.tagged_heap().mark_in_progress());
             assert!(!ctx.tagged_heap().concurrent_mark_running());

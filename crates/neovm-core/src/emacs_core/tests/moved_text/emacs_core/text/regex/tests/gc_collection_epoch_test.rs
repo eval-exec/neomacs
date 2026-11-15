@@ -123,7 +123,8 @@ fn gc_collection_epoch_regex_same_thread_concurrent_keeps_warm_entries() {
             if !ctx.tagged_heap().sweep_in_progress() {
                 break;
             }
-            ctx.gc_safe_point();
+            // A safe point paces sweep slices by allocation; drive them.
+            ctx.gc_collect_from_current_roots();
         }
         assert!(!ctx.tagged_heap().sweep_in_progress());
         ctx.setup_thread_locals();
