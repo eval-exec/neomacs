@@ -64,7 +64,16 @@ jobs:
       - name: Prefetch pinned Tree-sitter grammars
         env:
           NEOVM_FORCE_ORACLE_PATH: /opt/gnu-emacs-oracle/bin/emacs
-        run: cargo xtask treesit-grammars
+        # Verified entries short-circuit, so each retry re-fetches only the
+        # grammars whose GitHub clone failed (TLS EOFs are transient).
+        run: |
+          for attempt in 1 2 3 4 5; do
+            cargo xtask treesit-grammars && exit 0
+            echo "::warning::Tree-sitter grammar prefetch attempt $attempt failed; retrying"
+            sleep $((attempt * 15))
+          done
+          echo "::error::Tree-sitter grammar prefetch failed after 5 attempts"
+          exit 1
 
       # The release-pdump integration tests spawn target/release/neomacs with
       # the pdump fresh-build just produced; a debug-profile test harness is
