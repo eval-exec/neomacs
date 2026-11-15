@@ -65,6 +65,11 @@ impl CommandLoopHook {
     }
 }
 
+/// Deferred-sweep slices the idle command loop runs between input polls
+/// (`command_loop_1_idle_sweep`); a slice averages about half a millisecond
+/// on a large heap.
+const IDLE_SWEEP_SLICES_PER_INPUT_POLL: usize = 16;
+
 /// Evaluator-driver methods of the GNU keyboard.c command loop.
 ///
 /// The loop body and the interactive input/quit boundary bind keyboard
@@ -85,6 +90,7 @@ pub(crate) trait CommandLoopHost {
     fn command_loop_1(&mut self) -> EvalResult;
     fn command_loop_1_entry_prologue(&mut self) -> EvalResult;
     fn command_loop_1_maybe_auto_save(&mut self);
+    fn command_loop_1_idle_sweep(&mut self);
     fn input_pending_for_auto_save(&mut self) -> bool;
     fn dispatch_command_in_loop(&mut self, command: Value) -> EvalResult;
     fn execute_kbd_macro_iteration_via_command_loop(&mut self) -> EvalResult;
@@ -1021,6 +1027,7 @@ impl CommandLoopHost for Context {
             // interval — we approximate that with a "no pending
             // events in the unread queue" probe.
             self.command_loop_1_maybe_auto_save();
+            self.command_loop_1_idle_sweep();
             if let Some(observation) = command_observation.as_mut() {
                 observation.complete_finalization();
             }
@@ -1113,6 +1120,31 @@ impl CommandLoopHost for Context {
             return;
         }
         self.run_command_loop_auto_save("input interval");
+    }
+
+    /// Finish a deferred sweep while no input is pending.
+    ///
+    /// Safe points run sweep slices only as the mutator allocates
+    /// (`TaggedHeap::sweep_slice_due`), so a session that goes idle right
+    /// after a mark terminates would keep the cycle's completion work --
+    /// `gcs-done`, the doomed finalizers, `post-gc-hook`, the swept GPU
+    /// handles -- until it allocates again.  GNU `read_char` asks for a
+    /// collection before it waits, when no input is pending (keyboard.c:2975-2977,
+    /// `if (!detect_input_pending_run_timers (0)) maybe_gc ();`).
+    /// Input is polled between batches of slices, so a key pressed
+    /// meanwhile waits for one batch at most.
+    fn command_loop_1_idle_sweep(&mut self) {
+        while self.tagged_heap().sweep_in_progress() {
+            if self.input_pending_for_auto_save() {
+                return;
+            }
+            for _ in 0..IDLE_SWEEP_SLICES_PER_INPUT_POLL {
+                if !self.tagged_heap().sweep_in_progress() {
+                    break;
+                }
+                self.gc_collect_from_current_roots();
+            }
+        }
     }
 
     /// Approximation of GNU `detect_input_pending_run_timers (0)`

@@ -83,3 +83,66 @@ fn tty_erase_char_defaults_to_nil_and_is_special_like_gnu() {
         "a let of tty-erase-char must bind dynamically, as DEFVAR_LISP makes it special"
     );
 }
+
+#[test]
+fn an_idle_command_loop_finishes_a_paced_deferred_sweep() {
+    use super::command_loop::CommandLoopHost;
+    use neovm_value::heap_types::LispString;
+    // Select the concurrent (non-generational) collector for this heap only:
+    // the knob is read per heap, when the constructor runs, and the previous
+    // value is restored right after it.
+    let previous = std::env::var_os("NEOVM_GC_GENERATIONAL");
+    // SAFETY: nextest isolates each test in its own process; the variable is
+    // restored before any other code of this test runs.
+    unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
+    let mut context = crate::test_utils::new_context();
+    // SAFETY: as above.
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var("NEOVM_GC_GENERATIONAL", value),
+            None => std::env::remove_var("NEOVM_GC_GENERATIONAL"),
+        }
+    }
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut context, false);
+    context.gc_collect_exact();
+    // Unrooted strings fill arena pages the sweep visits a few per slice.
+    for i in 0..200_000u32 {
+        // SAFETY: test-only owner-thread allocation through the non-swappable
+        // mutable accessor; the view is used in place and never moved.
+        let _ = unsafe { context.tagged_heap_mut() }
+            .alloc_string(LispString::from_utf8(&format!("idle garbage {i:08}")));
+    }
+    // SAFETY: as above.
+    unsafe { context.tagged_heap_mut() }.set_gc_threshold(1);
+    // SAFETY: as above.
+    unsafe { context.tagged_heap_mut() }.alloc_cons(Value::NIL, Value::NIL);
+    let mut sweeping = false;
+    for _ in 0..100_000 {
+        context.gc_safe_point();
+        if context.tagged_heap().sweep_in_progress() {
+            sweeping = true;
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(sweeping, "concurrent marking did not enter deferred sweep");
+    // A threshold far above anything allocated from here on: the paced
+    // sweep owes no slice to a mutator that does not allocate.
+    context.set_gc_threshold(1 << 40);
+    let completed = context.gc_count_for_test();
+    for _ in 0..1_000 {
+        context.gc_safe_point();
+    }
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "idle safe points finished the paced sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+    context.command_loop_1_idle_sweep();
+    assert!(!context.tagged_heap().sweep_in_progress());
+    assert_eq!(
+        context.gc_count_for_test(),
+        completed + 1,
+        "the idle command loop completes the cycle"
+    );
+}
