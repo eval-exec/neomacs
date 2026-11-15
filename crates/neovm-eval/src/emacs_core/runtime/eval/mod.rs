@@ -316,17 +316,28 @@ fn initial_feature_names() -> Vec<&'static str> {
     neovm_value::system_vocab::c_features::initial_feature_names()
 }
 
-fn initial_features_value() -> Value {
+fn initial_features_value(obarray: &mut Obarray) -> Value {
     Value::list(
         initial_feature_names()
             .into_iter()
-            .map(Value::symbol)
+            .map(|name| {
+                let id = intern(name);
+                obarray.ensure_interned_global_id(id);
+                Value::from_sym_id(id)
+            })
             .collect(),
     )
 }
 
-fn initial_feature_ids() -> Vec<SymId> {
-    initial_feature_names().into_iter().map(intern).collect()
+fn initial_feature_ids(obarray: &mut Obarray) -> Vec<SymId> {
+    initial_feature_names()
+        .into_iter()
+        .map(|name| {
+            let id = intern(name);
+            obarray.ensure_interned_global_id(id);
+            id
+        })
+        .collect()
 }
 
 /// GNU's `echo_buffer[2]`: the two buffers the echo area is allowed to display

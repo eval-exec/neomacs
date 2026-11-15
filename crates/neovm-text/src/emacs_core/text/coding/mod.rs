@@ -1800,6 +1800,24 @@ impl CodingSystemManager {
         names
     }
 
+    /// Every coding-system name GNU interns at startup: the registered
+    /// canonical names, their aliases, and the generated EOL subsidiaries
+    /// (all of which live in `systems`). GNU `coding.c` creates each through
+    /// `intern_c_string`, so each is an obarray member; the eval boot path
+    /// uses this list to give the names the same membership here.
+    #[doc(hidden)]
+    pub fn lisp_visible_names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self
+            .systems
+            .keys()
+            .chain(self.aliases.keys())
+            .map(|id| resolve_sym(*id))
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
     #[doc(hidden)]
     pub fn keyboard_coding_sym(&self) -> SymId {
         self.keyboard_coding
