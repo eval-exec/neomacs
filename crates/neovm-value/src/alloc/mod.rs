@@ -5,6 +5,7 @@
 //! on the same low-level variables during runtime and bootstrap.
 
 use crate::symbol::Obarray;
+use crate::tagged::gc::MemoryUseCountSlot;
 use crate::value::Value;
 
 use crate::error::{Flow, LispCondition, signal, signal_with_data};
@@ -68,12 +69,30 @@ pub fn register_bootstrap_vars(obarray: &mut Obarray) {
     obarray.make_special("gc-elapsed");
     obarray.define_int_variable("gcs-done", 0);
     obarray.define_int_variable("pure-bytes-used", 0);
-    // `src/alloc.c:7448' DEFVAR_INT, no initializer -- the C global starts at 0
-    // and `allocate_string' counts up from there.  Neomacs does not track it
-    // yet, like its five siblings in `eval.rs' (`cons-cells-consed' and
-    // friends), so it reads 0 where GNU reads whatever it has allocated.
-    obarray.define_int_variable("strings-consed", 0);
+    // `src/alloc.c:7429-7449' DEFVAR_INTs, no initializers -- each C global
+    // starts at 0 and the allocator counts up from there.
+    for (name, counter) in ALLOCATION_COUNTER_VARIABLES {
+        obarray.define_counter_variable(name, counter);
+    }
 }
+
+/// GNU's allocation-counter variables (`src/alloc.c:7429-7449`), each with
+/// the `memory-use-counts` field that reports the same C global
+/// (`Fmemory_use_counts`, `src/alloc.c:7190-7196`).
+///
+/// One table for the declaration above and for the portable-dump loader,
+/// which rebuilds these descriptors by name: an image cannot carry which
+/// counter a descriptor reads.
+#[doc(hidden)]
+pub const ALLOCATION_COUNTER_VARIABLES: [(&str, MemoryUseCountSlot); 7] = [
+    ("cons-cells-consed", MemoryUseCountSlot::ConsCells),
+    ("floats-consed", MemoryUseCountSlot::Floats),
+    ("vector-cells-consed", MemoryUseCountSlot::VectorCells),
+    ("symbols-consed", MemoryUseCountSlot::Symbols),
+    ("string-chars-consed", MemoryUseCountSlot::StringChars),
+    ("intervals-consed", MemoryUseCountSlot::Intervals),
+    ("strings-consed", MemoryUseCountSlot::Strings),
+];
 
 // Definitions are private here; the old core paths retain their visibility.
 mod data;

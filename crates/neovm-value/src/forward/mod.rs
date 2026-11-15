@@ -65,6 +65,7 @@
 //! that way since 132, and `LispFwd::owned_value` now decides membership so
 //! a new variant cannot be added and left untraced.
 
+use crate::tagged::gc::MemoryUseCountSlot;
 use crate::value::Value;
 use crate::value::buffer_vocab::BufferSlotPredicateError;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -420,7 +421,9 @@ impl FwdRef {
             // `Bool` owns a native `bool`; `BufferObj`'s storage is the
             // buffer's slot array, traced with the buffer.
             ForwardSlot::Bool(_) | ForwardSlot::BufferObj(_) => None,
-            ForwardSlot::Int(int_fwd) => Some(int_fwd.get()),
+            // A counter-backed descriptor owns no Lisp value: its storage is
+            // the heap's allocation counter.
+            ForwardSlot::Int(int_fwd) => int_fwd.counter.is_none().then(|| int_fwd.get()),
             ForwardSlot::Obj(obj_fwd) => Some(obj_fwd.get()),
             ForwardSlot::KboardObj(kbd_fwd) => Some(kbd_fwd.get()),
         }
@@ -438,12 +441,24 @@ impl FwdRef {
             // Re-wrapping without re-checking is sound only here, inside the
             // module that owns the invariant: the value being copied came out
             // of a slot that `LispInteger::check` already passed.
-            ForwardSlot::Int(int_fwd) => Some(alloc_intfwd(LispInteger(int_fwd.get())).header()),
+            ForwardSlot::Int(int_fwd) => Some(match int_fwd.counter {
+                Some(counter) => alloc_counter_intfwd(counter).header(),
+                None => alloc_intfwd(LispInteger(int_fwd.get())).header(),
+            }),
             ForwardSlot::Bool(bool_fwd) => Some(alloc_boolfwd(bool_fwd.get()).header()),
             ForwardSlot::Obj(obj_fwd) => Some(alloc_objfwd(obj_fwd.get()).header()),
             ForwardSlot::KboardObj(kbd_fwd) => Some(kbd_fwd.clone_owned().header()),
             ForwardSlot::BufferObj(_) => None,
         }
+    }
+
+    /// Whether this is an integer forwarder that reads an allocation counter
+    /// rather than its own word (see [`alloc_counter_intfwd`]). Generated code
+    /// must not load or store such a descriptor's word in place.
+    #[doc(hidden)]
+    pub fn reads_allocation_counter(self) -> bool {
+        self.as_int_fwd()
+            .is_some_and(|int_fwd| int_fwd.counter.is_some())
     }
 
     /// The descriptor as an integer forwarder, if that is what it is.
@@ -689,6 +704,17 @@ impl std::fmt::Debug for AtomicValue {
 #[repr(C)]
 pub struct LispIntFwd {
     ty: LispFwdType,
+    /// The allocation counter this variable reads and assigns, for GNU's
+    /// `*-consed` variables; `None` when the storage is `value`.
+    ///
+    /// GNU's `cons_cells_consed` and its siblings are the C globals
+    /// `Fmemory_use_counts` itself reads (`src/alloc.c:7190-7196`), so the
+    /// variable and the function cannot disagree. Here those counters belong to the
+    /// heap and its mutators, so the descriptor names one instead of holding
+    /// a copy that every allocation would have to update. The byte sits in
+    /// the padding before `value`; the layout generated code bakes is pinned
+    /// below.
+    counter: Option<MemoryUseCountSlot>,
     /// Always an integer inside `intmax_t` range -- see [`LispInteger`].
     /// Concurrent root scans and the mutator use the same atomic word.
     value: AtomicValue,
@@ -710,7 +736,10 @@ impl LispIntFwd {
     /// which wraps the C slot back up with `make_int`.
     #[inline]
     pub fn get(&self) -> Value {
-        self.value.load()
+        match self.counter {
+            None => self.value.load(),
+            Some(counter) => Value::make_int(Value::memory_use_count(counter)),
+        }
     }
 
     /// The slot as GNU's C reads it: a plain `intmax_t`, no Lisp object.
@@ -737,7 +766,10 @@ impl LispIntFwd {
     /// so there is no spelling of this call that stores a non-integer.
     #[inline]
     pub fn set(&self, value: LispInteger) {
-        self.value.store(value.value());
+        match self.counter {
+            None => self.value.store(value.value()),
+            Some(counter) => Value::set_memory_use_count(counter, value.as_i64()),
+        }
     }
 }
 
@@ -1023,6 +1055,8 @@ const _: () = {
     assert!(size_of::<PhantomData<*const ()>>() == 0);
     assert!(align_of::<PhantomData<*const ()>>() == 1);
     assert!(LISP_INT_FWD_VALUE_OFFSET == 8);
+    assert!(size_of::<Option<MemoryUseCountSlot>>() == 1);
+    assert!(offset_of!(LispIntFwd, counter) == 1);
     assert!(LISP_OBJ_FWD_VALUE_OFFSET == 8);
     assert!(LISP_KBOARD_OBJ_FWD_VALUE_OFFSET == 8);
     assert!(LISP_BOOL_FWD_VALUE_OFFSET == 1);
@@ -1053,6 +1087,7 @@ const _: () = {
 impl std::fmt::Debug for LispIntFwd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LispIntFwd")
+            .field("counter", &self.counter)
             .field("value", &self.value)
             .finish()
     }
@@ -1349,7 +1384,25 @@ pub fn alloc_kboard_objfwd(initial: Value) -> &'static LispKboardObjFwd {
 pub fn alloc_intfwd(initial: LispInteger) -> &'static LispIntFwd {
     Box::leak(Box::new(LispIntFwd {
         ty: LispFwdType::Int,
+        counter: None,
         value: AtomicValue::new(initial.value()),
+        _mutator: PhantomData,
+    }))
+}
+
+/// Allocate the forwarder of one of GNU's `*-consed` variables: a
+/// `DEFVAR_INT` (`src/alloc.c:7429-7449`) whose C global is the allocation
+/// counter `Fmemory_use_counts` reports in the same position.
+///
+/// A read returns that counter and an assignment sets it, so the variable
+/// and `memory-use-counts` agree the way they do in GNU, where both name one
+/// C global. The descriptor's own word is never read.
+#[doc(hidden)]
+pub fn alloc_counter_intfwd(counter: MemoryUseCountSlot) -> &'static LispIntFwd {
+    Box::leak(Box::new(LispIntFwd {
+        ty: LispFwdType::Int,
+        counter: Some(counter),
+        value: AtomicValue::new(Value::fixnum(0)),
         _mutator: PhantomData,
     }))
 }

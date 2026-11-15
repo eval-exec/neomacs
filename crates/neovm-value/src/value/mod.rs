@@ -4478,6 +4478,20 @@ impl TaggedValue {
         ]
     }
 
+    /// One field of [`Self::memory_use_counts_snapshot`]: what the matching
+    /// `*-consed` variable reads.
+    pub(crate) fn memory_use_count(counter: MemoryUseCountSlot) -> i64 {
+        Self::memory_use_counts_snapshot()[counter.index()]
+    }
+
+    /// Assign one allocation counter, as a Lisp assignment to a `*-consed`
+    /// variable assigns GNU's C global: later allocations count on from
+    /// VALUE, and `memory-use-counts` reports the same number.
+    pub(crate) fn set_memory_use_count(counter: MemoryUseCountSlot, value: i64) {
+        let delta = value.wrapping_sub(Self::memory_use_count(counter));
+        add_wrapping(counter, delta as u64);
+    }
+
     /// Return the live cons-cell count for `(garbage-collect)` statistics.
     #[doc(hidden)]
     pub fn cons_live_count_snapshot() -> i64 {

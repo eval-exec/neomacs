@@ -441,6 +441,35 @@ fn a_class_change_after_compile_takes_the_shim() {
     }
 }
 
+/// A `*-consed' variable is an Int forwarder whose word is the allocator's
+/// counter, not the descriptor's slot.  An inline load of the slot would
+/// answer a stale zero, so every op takes its shim and native code sees the
+/// counter `memory-use-counts' reports.
+#[test]
+fn an_allocation_counter_variable_takes_the_shim() {
+    let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
+    let integer = |text: String| -> i64 {
+        text.parse()
+            .unwrap_or_else(|_| panic!("an integer, got {text}"))
+    };
+    let leaf = compile(&ev, ALL, &Prog::read(), "cons-cells-consed");
+    let floor = Value::memory_use_counts_snapshot()[0];
+    assert!(floor > 0, "the fixture allocated conses");
+    let (got, called) = run(&mut ev, &leaf, &[]);
+    assert!(integer(got) >= floor, "a read answers the live counter");
+    assert_eq!(called.varref, 1, "a read is not an inline slot load");
+
+    let target = Value::memory_use_counts_snapshot()[0] + 1_000_000;
+    let leaf = compile(&ev, ALL, &Prog::setq(), "cons-cells-consed");
+    let (got, called) = run(&mut ev, &leaf, &[Value::make_int(target)]);
+    assert!(integer(got) >= target, "a setq assigns the counter");
+    assert_eq!((called.varset, called.varref), (1, 1), "{called:?}");
+    assert!(
+        Value::memory_use_counts_snapshot()[0] >= target,
+        "memory-use-counts reports the assigned counter"
+    );
+}
+
 /// A buffer-local variable's cache loaded for another buffer, or before a
 /// structural alist change, is a miss: the shim swaps it in, and the next
 /// run hits again.
