@@ -663,8 +663,7 @@ impl TaggedHeap {
         (self.jit.float_cur.get(), self.jit.float_lim.get())
     }
 
-    /// Test hook: the live-cons count, exact while a region is open.
-    #[cfg(any(test, feature = "test-support"))]
+    /// Return the live-cons count, excluding unused cells in an open region.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn cons_live_count_exact(&self) -> usize {
         self.cons_live_count - self.open_cons_unused()

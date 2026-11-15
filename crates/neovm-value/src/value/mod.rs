@@ -4477,6 +4477,12 @@ impl TaggedValue {
             as_neovm_int(counts[MemoryUseCountSlot::Strings.index()]),
         ]
     }
+
+    /// Return the live cons-cell count for `(garbage-collect)` statistics.
+    #[doc(hidden)]
+    pub fn cons_live_count_snapshot() -> i64 {
+        with_tagged_heap(|heap| heap.cons_live_count_exact() as i64)
+    }
 }
 
 // ---------------------------------------------------------------------------
