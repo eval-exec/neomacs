@@ -3919,22 +3919,20 @@ fn vm_buffer_metrics_and_swap_builtins_use_shared_runtime_state() {
                  (erase-buffer)
                  (insert "A\né\n")
                  (let ((left-hash (buffer-hash))
-                       (left-stats (buffer-line-statistics))
-                       (left-pixels (buffer-text-pixel-size nil nil t)))
+                       (left-stats (buffer-line-statistics)))
                    (set-buffer right)
                    (erase-buffer)
                    (insert "xyz")
                    (let ((right-hash (buffer-hash)))
                      (buffer-swap-text left)
                      (list left-stats
-                           left-pixels
                            (progn (set-buffer left) (buffer-string))
                            (progn (set-buffer right) (buffer-string))
                            (equal (progn (set-buffer left) (buffer-hash)) right-hash)
                            (equal (progn (set-buffer right) (buffer-hash)) left-hash)
                            (progn (set-buffer right) (buffer-line-statistics))))))"#
         ),
-        "OK ((2 2 1.5) (1 . 2) \"xyz\" \"A\né\n\" t t (2 2 1.5))"
+        "OK ((2 2 1.5) \"xyz\" \"A\né\n\" t t (2 2 1.5))"
     );
 }
 

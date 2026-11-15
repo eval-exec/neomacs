@@ -491,3 +491,22 @@ fn vm_handle_switch_frame_round_trips_the_selected_frame() {
         "OK t"
     );
 }
+
+/// The `left-pixels` row of vm_buffer_metrics_and_swap_builtins: the same
+/// freshly created, erased buffer holding "A\n\u{e9}\n" that the eval-side
+/// test measured. The row and expectation are unchanged.
+#[test]
+fn vm_buffer_text_pixel_size_measures_the_buffer_text() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        vm_eval_with_init_str(
+            r#"(let ((left (get-buffer-create "*vm-buf-metrics-left*")))
+                 (set-buffer left)
+                 (erase-buffer)
+                 (insert "A\né\n")
+                 (buffer-text-pixel-size nil nil t))"#,
+            |_| {}
+        ),
+        "OK (1 . 2)"
+    );
+}
