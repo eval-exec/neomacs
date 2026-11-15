@@ -2820,6 +2820,80 @@ impl Context {
         self.apply(function, args)
     }
 
+    /// The byte-code in DESIGNATOR's function cell, when DESIGNATOR is a
+    /// canonical bare symbol and no compiler override can shadow that cell:
+    /// exactly the case where the generic named call resolves DESIGNATOR to
+    /// the cell's value and dispatches it as byte-code. Every other cell
+    /// (alias, autoload, macro, void, subr, closure) answers `None`.
+    #[inline]
+    pub(crate) fn named_bytecode_cell(&self, designator: Value) -> Option<Value> {
+        let ValueKind::Symbol(sym_id) = designator.kind() else {
+            return None;
+        };
+        if self.compiler_function_overrides_active()
+            || !super::builtins::is_canonical_symbol_id(sym_id)
+        {
+            return None;
+        }
+        match self.obarray.function_cell_snapshot(sym_id) {
+            neovm_value::symbol::FunctionCellSnapshot::Bound(function)
+                if function.veclike_type() == Some(VecLikeType::ByteCode) =>
+            {
+                Some(function)
+            }
+            _ => None,
+        }
+    }
+
+    /// `(funcall DESIGNATOR ARGS...)` for a symbol whose function cell holds
+    /// byte-code (`(mapcar #'f l)`, `(apply 'f args)`, a hook function): GNU
+    /// `Ffuncall` -> `funcall_general`, one load of the function cell, then
+    /// the call. [`Self::apply_internal`]'s prologue in its order, with a
+    /// backtrace frame naming DESIGNATOR; then the cell, read after that
+    /// prologue as GNU reads it (the debugger and `post-gc-hook` run inside
+    /// it and may redefine DESIGNATOR), is entered directly. The generic
+    /// path re-resolved the name on every call (canonical check, named-call
+    /// cache probe, autoload test, callability snapshot) and dispatched on
+    /// the value's kind a second time. A cell that is no longer byte-code
+    /// takes that generic path.
+    #[inline(never)]
+    pub(crate) fn apply_named_bytecode(
+        &mut self,
+        designator: Value,
+        args: LispArgVec,
+    ) -> EvalResult {
+        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("apply");
+        self.maybe_quit_before_gc()?;
+        self.enter_interpreted_eval_depth()?;
+        let bt_count = self.specpdl.len();
+        self.push_backtrace_frame(designator, &args);
+        let result = {
+            if self.gc_safe_point_exact_should_collect() {
+                self.gc_collect_from_current_roots();
+            }
+            let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
+                Some(arm) => self.do_debug_on_call(arm),
+                None => Ok(()),
+            };
+            match entered {
+                Err(flow) => Err(flow),
+                Ok(()) => self.maybe_grow_eval_stack(|ctx| {
+                    match ctx.named_bytecode_cell(designator) {
+                        // As `funcall_general_untraced`: fetched after the
+                        // safe point (it may materialize a dump stub).
+                        Some(function) => {
+                            let bc_data = function.get_bytecode_data().unwrap();
+                            ctx.execute_bytecode_call(bc_data, args, function)
+                        }
+                        None => ctx.funcall_general_untraced(designator, args),
+                    }
+                }),
+            }
+        };
+        self.depth -= 1;
+        self.finish_traced_call(bt_count, result)
+    }
+
     /// For a mapping builtin's callback: when FUNCTION is a canonical symbol
     /// naming its own builtin subr -- the `#'car` shape, nearly every
     /// `mapcar` callback -- that subr, plus the function epoch it stays valid
