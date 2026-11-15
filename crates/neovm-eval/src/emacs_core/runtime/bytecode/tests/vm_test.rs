@@ -3964,35 +3964,6 @@ fn vm_waiting_for_user_input_builtin_rejects_arguments() {
     );
 }
 
-#[test]
-fn vm_reader_message_and_completion_builtins_use_shared_runtime_entry() {
-    crate::test_utils::init_test_tracing();
-    assert_eq!(
-        vm_eval_with_init_str(
-            r#"(let ((buf (get-buffer "vm-message-buffer")))
-                 (list
-                  (format "%s" buf)
-                  (format "%S" buf)
-                  (format-message "%s" buf)
-                  (progn (message "%s" buf) (current-message))
-                  (progn (message-box "%S" buf) (current-message))
-                  (progn (message-or-box "%S" buf) (current-message))
-                  (try-completion "app" '("application" "apple"))
-                  (test-completion "alpha" '("alpha" "beta"))
-                  (read-from-string "(a . b)")
-                  (read "(1 2)")))"#,
-            |eval| {
-                eval.edit.buffers.create_buffer("vm-message-buffer");
-                // GNU populates `current-message` only on the interactive
-                // echo-area path (xdisp.c `message3_frame_nolog`); the default
-                // VM test Context is noninteractive.
-                eval.set_variable("noninteractive", Value::NIL);
-            },
-        ),
-        r##"OK ("vm-message-buffer" "#<buffer vm-message-buffer>" "vm-message-buffer" "vm-message-buffer" "vm-message-buffer" "vm-message-buffer" "appl" t ((a . b) . 7) (1 2))"##
-    );
-}
-
 /// Exercise generic VM calls to the shared completion entries.
 #[test]
 fn vm_completion_builtins_use_shared_runtime_entry() {

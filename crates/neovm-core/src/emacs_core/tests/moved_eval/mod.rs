@@ -323,6 +323,11 @@ mod emacs_core_lisp_print_tests_graph_tail_units_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/print/tests/printer_quit_units.rs"]
 mod emacs_core_lisp_print_tests_printer_quit_units_rs;
+// Re-homed print-circle candidate test: the fixture round-trips through
+// `read`, a core-owned reader command.
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/print_circle_candidate_runtime_test.rs"]
+mod emacs_core_lisp_print_tests_print_circle_candidate_runtime_test_rs;
 
 // Remaining printer re-homes of the same P1 EVAL wave F1 batch (boot/oracle
 // helpers live in this crate).  Bodies byte-identical; only use paths and
@@ -692,6 +697,8 @@ mod emacs_core_runtime_jit_tests_green_release_class_b_test_rs;
 mod emacs_core_runtime_bytecode_tests_vm_syntax_motion_runtime_test_rs;
 #[path = "emacs_core/runtime/bytecode/tests/vm_replace_region_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_replace_region_runtime_test_rs;
+#[path = "emacs_core/runtime/bytecode/tests/vm_reader_message_runtime_test.rs"]
+mod emacs_core_runtime_bytecode_tests_vm_reader_message_runtime_test_rs;
 #[path = "emacs_core/runtime/bytecode/tests/vm_shared_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_shared_runtime_test_rs;
 
