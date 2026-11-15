@@ -725,3 +725,37 @@ fn minor_sweep_work_estimate_is_bounded_by_the_young_list_not_the_old_boxes() {
     );
     heap.finish_incremental_sweep_now();
 }
+
+/// Live bytes after a minor whose sweep window allocates `garbage` strings
+/// into the free slots that the previous cycle left in unswept pages.
+fn live_bytes_after_minor_with_sweep_window_garbage(garbage: usize) -> usize {
+    let mut heap = heap_with_generations(true);
+    set_tagged_heap(&mut heap);
+    let roots = ScratchRoots::new();
+    let strings: Vec<TaggedValue> = (0..4_096)
+        .map(|i| heap.alloc_string(LispString::from_utf8(&format!("string {i:08}"))))
+        .collect();
+    let kept: Vec<TaggedValue> = strings.iter().copied().step_by(2).collect();
+    for &string in &kept {
+        roots.keep(string);
+    }
+    minor(&mut heap, &kept);
+    heap.begin_minor_collection().unwrap();
+    heap.complete_minor_collection();
+    assert!(heap.sweep_in_progress());
+    for i in 0..garbage {
+        let _ = heap.alloc_string(LispString::from_utf8(&format!("garbage {i:08}")));
+    }
+    heap.finish_incremental_sweep_now();
+    heap.live_bytes
+}
+
+#[test]
+fn sweep_window_allocation_does_not_count_as_live() {
+    let quiet = live_bytes_after_minor_with_sweep_window_garbage(0);
+    let busy = live_bytes_after_minor_with_sweep_window_garbage(2_048);
+    assert!(
+        busy <= quiet,
+        "2,048 dead strings allocated during the sweep raised live bytes {quiet} -> {busy}"
+    );
+}

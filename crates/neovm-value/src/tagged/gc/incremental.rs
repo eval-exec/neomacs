@@ -623,9 +623,13 @@ impl TaggedHeap {
         // allocation rate: elb nbody's "live" climbed 13 MB -> 438 MB over
         // eight cycles at a flat 75K live conses. A stop-the-world
         // collection allocates nothing while it runs, so its live count is
-        // GNU's; this brings the incremental one to the same measure. It
-        // undercounts what the mark window allocated that stays live, which
-        // only paces the next cycle sooner.
+        // GNU's; this brings the incremental one to the same measure. The
+        // sweep window is taken out the same way: a slot allocated during it
+        // in a page the cursor had not reached is counted as a survivor when
+        // the page is visited, and a paced sweep spans up to half a
+        // threshold of allocation. `bytes_since_gc` (reset at termination)
+        // bounds that from above. Both undercount what the windows
+        // allocated that stays live, which only paces the next cycle sooner.
         let cons_live_bytes = self
             .sweep_cons_live_cells
             .saturating_add(mapped_cons_live)
@@ -636,6 +640,7 @@ impl TaggedHeap {
             .saturating_add(mapped_object_live_bytes)
             .saturating_add(self.old_noncons_bytes())
             .saturating_sub(self.sweep_mark_window_alloc_bytes)
+            .saturating_sub(self.bytes_since_gc())
             .max(mapped_object_live_bytes);
 
         self.gc_collections += 1;
