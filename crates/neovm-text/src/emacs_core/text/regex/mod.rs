@@ -3400,6 +3400,12 @@ fn next_search_char_boundary(text: &[u8], pos: usize) -> Option<usize> {
 // Buffer search primitives
 // ---------------------------------------------------------------------------
 
+/// Bytes [`with_buffer_emacs_bytes`] has copied out of a buffer because the
+/// range was not contiguous.  Test-only: the literal-search gap tests assert
+/// that a search loop copies nothing.
+#[cfg(test)]
+static SEARCH_COPIED_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn with_buffer_emacs_bytes<R>(
     buf: &Buffer,
     range: EmacsByteRange,
@@ -3413,10 +3419,12 @@ fn with_buffer_emacs_bytes<R>(
 
     let mut text = Vec::new();
     buf.copy_emacs_byte_range_to(range, &mut text);
+    #[cfg(test)]
+    SEARCH_COPIED_BYTES.fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
     f(&text)
 }
 
-/// [`with_buffer_emacs_bytes`] for the regex-engine search paths.
+/// [`with_buffer_emacs_bytes`] for the regex-engine and literal search paths.
 ///
 /// When the gap-buffer gap sits inside the searched range, every search
 /// used to copy the whole accessible region (audit #17).  GNU never
@@ -3718,14 +3726,12 @@ pub fn search_forward_into_with_symbols(
     // keep the fast hardwired ASCII/Unicode folding.
     let translation = buffer_search_translation_with_symbols(buf, case_fold, mode);
     let found =
-        with_buffer_emacs_bytes(
-            buf,
-            EmacsByteRange::new(start, limit),
-            |text| match &translation {
+        with_buffer_emacs_bytes_for_search(buf, EmacsByteRange::new(start, limit), |text| {
+            match &translation {
                 Some(trt) => canon_fold_literal_find(text, &literal, multibyte, trt),
                 None => literal_find_emacs_bytes(text, &literal, multibyte, case_fold),
-            },
-        );
+            }
+        });
 
     if let Some(found) = found {
         let matched = found.shift(start.get());
@@ -3815,15 +3821,12 @@ pub fn search_backward_into_with_symbols(
     let multibyte = buf.get_multibyte();
     let literal = coerce_pattern_to_buffer_bytes(pattern, multibyte);
     let translation = buffer_search_translation_with_symbols(buf, case_fold, mode);
-    let found =
-        with_buffer_emacs_bytes(
-            buf,
-            EmacsByteRange::new(limit, end),
-            |text| match &translation {
-                Some(trt) => canon_fold_literal_rfind(text, &literal, multibyte, trt),
-                None => literal_rfind_emacs_bytes(text, &literal, multibyte, case_fold),
-            },
-        );
+    let found = with_buffer_emacs_bytes_for_search(buf, EmacsByteRange::new(limit, end), |text| {
+        match &translation {
+            Some(trt) => canon_fold_literal_rfind(text, &literal, multibyte, trt),
+            None => literal_rfind_emacs_bytes(text, &literal, multibyte, case_fold),
+        }
+    });
 
     if let Some(found) = found {
         let matched = found.shift(limit.get());
