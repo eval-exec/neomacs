@@ -477,3 +477,17 @@ fn vm_save_window_excursion_restores_selected_window() {
         selected_window
     );
 }
+
+/// `selected-frame` and `handle-switch-frame` are display-owned subrs, so
+/// the row moved here from eval's vm_test.rs. The row is unchanged.
+#[test]
+fn vm_handle_switch_frame_round_trips_the_selected_frame() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        vm_eval_with_init_str(
+            "(eq (handle-switch-frame (selected-frame)) (selected-frame))",
+            |_| {}
+        ),
+        "OK t"
+    );
+}

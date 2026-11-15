@@ -4416,7 +4416,6 @@ fn vm_base64_json_ccl_and_runtime_clusters_use_direct_dispatch() {
                  (null (fboundp 'gpm-mouse-start))
                  (null (fboundp 'gpm-mouse-stop))
                  (null (handle-save-session nil))
-                 (eq (handle-switch-frame (selected-frame)) (selected-frame))
                  (null (init-image-library nil))
                  (condition-case nil (clear-image-cache nil) (error t))
                  (null (internal--track-mouse (lambda () nil)))
@@ -4433,7 +4432,7 @@ fn vm_base64_json_ccl_and_runtime_clusters_use_direct_dispatch() {
                     if cfg!(neomacs_have_dbus) { "t" } else { "nil" }
                 )
         ),
-        r#"OK (t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t)"#
+        r#"OK (t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t)"#
     );
 }
 
