@@ -844,12 +844,42 @@ mod unit_runtime {
     static PERF: PerfHooks =
         PerfHooks::new(s::perf_record, s::perf_reset, PERF_CARRIER_FINGERPRINT);
 
+    /// The eval unit runtime's deadline wait: one Green select slice; with no
+    /// Green seat, block the OS thread to the shared timer deadline. There is
+    /// no process-output backend below eval to service here.
+    fn unit_wait_for_duration_until_timer_deadline(
+        ctx: &mut Context,
+        duration: std::time::Duration,
+        timer_deadline: crate::emacs_core::eval::GnuTimerTimestamp,
+    ) -> Result<(), neovm_value::error::Flow> {
+        match ctx.green_select_switch(duration)? {
+            crate::emacs_core::eval::SelectTurn::Switched => Ok(()),
+            crate::emacs_core::eval::SelectTurn::Block(wait_time) => {
+                let now = crate::emacs_core::eval::GnuTimerTimestamp::now();
+                if timer_deadline > now {
+                    let sleep_for = wait_time.min(timer_deadline.duration_until(now));
+                    // GNU `thread_select` (src/thread.c:613-643) releases the
+                    // global lock before the timeout block, and
+                    // `post_acquire_global_lock` (:141-154) delivers a pending
+                    // thread-signal when the select returns.
+                    ctx.sim_release_point(crate::emacs_core::threads::SimReleasePoint::Select)?;
+                    if !sleep_for.is_zero() {
+                        std::thread::sleep(sleep_for);
+                    }
+                    ctx.deliver_pending_sim_signal()?;
+                }
+                Ok(())
+            }
+        }
+    }
+
     static WAIT: WaitServiceHooks = WaitServiceHooks {
         service_input_pending_with_timers: s::wait_service_input_pending_with_timers,
         service_read_char_preliminary_redisplay: s::wait_service_read_char_preliminary_redisplay,
         service_timers_without_redisplay: s::wait_service_timers_without_redisplay,
         wait_for_command_input_with_idle_policy: s::wait_for_command_input_with_idle_policy,
         wait_for_resize_ack_until: s::wait_for_resize_ack_until,
+        wait_for_duration_until_timer_deadline: unit_wait_for_duration_until_timer_deadline,
     };
 
     static TIMER: TimerServiceHooks = TimerServiceHooks {
@@ -1069,6 +1099,7 @@ mod unit_runtime {
                 crate::emacs_core::builtins::misc_pure::STANDARD_SYNTAX_TABLE_SUBR
             }
             "copy-marker" => crate::emacs_core::builtins::misc_eval::COPY_MARKER_SUBR,
+            "sleep-for" => crate::emacs_core::builtins::misc_eval::SLEEP_FOR_SUBR,
             "char-table-subtype" => crate::emacs_core::builtins::misc_pure::CHAR_TABLE_SUBTYPE_SUBR,
             "set-char-table-range" => {
                 crate::emacs_core::builtins::misc_eval::SET_CHAR_TABLE_RANGE_SUBR
@@ -2210,6 +2241,118 @@ mod unit_runtime {
         assert_eq!(
             marker_logical_fields(&numeric),
             Some((Some(current), Some(full_end), false))
+        );
+    }
+
+    macro_rules! same_subr_entry {
+        ($expected:expr, $actual:expr) => {{
+            use crate::emacs_core::eval::subr_abi::SubrFn;
+            match ($expected.function(), $actual.function()) {
+                (Some(SubrFn::Many(a)), Some(SubrFn::Many(b))) => a as usize == b as usize,
+                (Some(SubrFn::ManyNoContext(a)), Some(SubrFn::ManyNoContext(b))) => {
+                    a as usize == b as usize
+                }
+                (Some(SubrFn::ManySlice(a)), Some(SubrFn::ManySlice(b))) => {
+                    a as usize == b as usize
+                }
+                (Some(SubrFn::A0(a)), Some(SubrFn::A0(b))) => a as usize == b as usize,
+                (Some(SubrFn::A1(a)), Some(SubrFn::A1(b))) => a as usize == b as usize,
+                (Some(SubrFn::A2(a)), Some(SubrFn::A2(b))) => a as usize == b as usize,
+                (Some(SubrFn::A3(a)), Some(SubrFn::A3(b))) => a as usize == b as usize,
+                (Some(SubrFn::A4(a)), Some(SubrFn::A4(b))) => a as usize == b as usize,
+                (Some(SubrFn::A5(a)), Some(SubrFn::A5(b))) => a as usize == b as usize,
+                (Some(SubrFn::A6(a)), Some(SubrFn::A6(b))) => a as usize == b as usize,
+                (Some(SubrFn::A7(a)), Some(SubrFn::A7(b))) => a as usize == b as usize,
+                (Some(SubrFn::A8(a)), Some(SubrFn::A8(b))) => a as usize == b as usize,
+                _ => false,
+            }
+        }};
+    }
+
+    macro_rules! same_registered_subr_entry {
+        ($expected:expr, $actual:expr) => {{
+            use crate::emacs_core::eval::subr_abi::SubrFn;
+            match ($expected.function(), $actual.function) {
+                (Some(SubrFn::Many(a)), Some(SubrFn::Many(b))) => a as usize == b as usize,
+                (Some(SubrFn::ManyNoContext(a)), Some(SubrFn::ManyNoContext(b))) => {
+                    a as usize == b as usize
+                }
+                (Some(SubrFn::ManySlice(a)), Some(SubrFn::ManySlice(b))) => {
+                    a as usize == b as usize
+                }
+                (Some(SubrFn::A0(a)), Some(SubrFn::A0(b))) => a as usize == b as usize,
+                (Some(SubrFn::A1(a)), Some(SubrFn::A1(b))) => a as usize == b as usize,
+                (Some(SubrFn::A2(a)), Some(SubrFn::A2(b))) => a as usize == b as usize,
+                (Some(SubrFn::A3(a)), Some(SubrFn::A3(b))) => a as usize == b as usize,
+                (Some(SubrFn::A4(a)), Some(SubrFn::A4(b))) => a as usize == b as usize,
+                (Some(SubrFn::A5(a)), Some(SubrFn::A5(b))) => a as usize == b as usize,
+                (Some(SubrFn::A6(a)), Some(SubrFn::A6(b))) => a as usize == b as usize,
+                (Some(SubrFn::A7(a)), Some(SubrFn::A7(b))) => a as usize == b as usize,
+                (Some(SubrFn::A8(a)), Some(SubrFn::A8(b))) => a as usize == b as usize,
+                _ => false,
+            }
+        }};
+    }
+
+    #[test]
+    fn unit_sleep_for_uses_canonical_descriptor_and_registered_entry() {
+        use crate::emacs_core::builtins::misc_eval::SLEEP_FOR_SUBR;
+        use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+        use neovm_value::intern::intern;
+        use neovm_value::value::Value;
+
+        let expected = SLEEP_FOR_SUBR;
+        let descriptor = misc_family_subr("sleep-for").expect("real unit sleep-for descriptor");
+        assert_eq!(expected.name(), "sleep-for");
+        assert_eq!(descriptor.name(), "sleep-for");
+        assert_eq!(descriptor.arity(), expected.arity());
+        assert_eq!(expected.arity(), SubrArity::new(1, Some(2)));
+        assert!(
+            same_subr_entry!(expected, descriptor),
+            "unit family does not copy the canonical sleep-for static"
+        );
+        assert_eq!(descriptor.dispatch_kind(), expected.dispatch_kind());
+        assert_eq!(
+            expected.dispatch_kind(),
+            neovm_value::tagged::header::SubrDispatchKind::Builtin
+        );
+        assert!(descriptor.interactive_spec().is_none());
+        assert_eq!(descriptor.no_eval_policy(), expected.no_eval_policy());
+        assert_eq!(expected.no_eval_policy(), NoEvalPolicy::Native);
+        assert!(descriptor.leaf_spec().is_none());
+        assert_eq!(expected.command_default(), CommandDefault::Enabled);
+
+        let mut context = Context::new(unit_runtime());
+        let id = intern("sleep-for");
+        let actual = crate::emacs_core::eval::lookup_global_subr_entry(id)
+            .expect("registered unit sleep-for");
+        assert!(
+            same_registered_subr_entry!(expected, actual),
+            "registered entry is not the canonical sleep-for static"
+        );
+        assert_eq!((actual.min_args, actual.max_args), (1, Some(2)));
+        assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+        assert!(actual.interactive_spec.is_none());
+        assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+        assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+
+        assert_eq!(
+            context.eval_str("(sleep-for 0)").expect("zero sleep"),
+            Value::NIL
+        );
+        assert!(
+            context.eval_str("(sleep-for \"x\")").is_err(),
+            "sleep-for rejects a non-number"
+        );
+        let started = std::time::Instant::now();
+        assert_eq!(
+            context.eval_str("(sleep-for 0.02)").expect("short sleep"),
+            Value::NIL
+        );
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(10),
+            "the eval-only wait did not wait: {:?}",
+            started.elapsed()
         );
     }
 

@@ -115,6 +115,14 @@ fn wait_for_resize_ack_until(
     ctx.wait_for_resize_ack_until(deadline)
 }
 
+fn wait_for_duration_until_timer_deadline(
+    ctx: &mut crate::emacs_core::eval::Context,
+    duration: std::time::Duration,
+    timer_deadline: crate::emacs_core::eval::GnuTimerTimestamp,
+) -> Result<(), neovm_value::error::Flow> {
+    ctx.wait_for_duration_until_timer_deadline(duration, timer_deadline)
+}
+
 fn timer_next_ordinary_gnu_timer_timeout_before(
     ctx: &crate::emacs_core::eval::Context,
 ) -> Option<std::time::Duration> {
@@ -161,6 +169,7 @@ static CANONICAL_WAIT_SERVICE: WaitServiceHooks = WaitServiceHooks {
     service_timers_without_redisplay: wait_service_timers_without_redisplay,
     wait_for_command_input_with_idle_policy: wait_for_command_input_with_idle_policy,
     wait_for_resize_ack_until: wait_for_resize_ack_until,
+    wait_for_duration_until_timer_deadline: wait_for_duration_until_timer_deadline,
 };
 
 static CANONICAL_TIMER_SERVICE: TimerServiceHooks = TimerServiceHooks {

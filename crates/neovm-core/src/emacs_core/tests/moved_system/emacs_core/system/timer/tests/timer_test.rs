@@ -3,6 +3,7 @@ use neovm_value::value::Value;
 fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
 }
+use neovm_eval::emacs_core::builtins::misc_eval::builtin_sleep_for;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_system::emacs_core::timer::*;
 use neovm_value::error::{FlowRef, FlowResultExt};

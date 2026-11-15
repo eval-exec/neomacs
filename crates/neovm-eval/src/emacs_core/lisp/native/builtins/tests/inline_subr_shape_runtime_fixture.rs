@@ -54,6 +54,7 @@ pub(crate) fn run_inline_subr_kinds_follow_the_gnu_inline_opcode_shape_fixture(
     assert_core_make_char_table_matches_canonical_descriptor(&mut eval);
     assert_core_standard_syntax_table_matches_canonical_descriptor(&mut eval);
     assert_core_copy_marker_matches_canonical_descriptor(&mut eval);
+    assert_core_sleep_for_matches_canonical_descriptor(&mut eval);
     assert_core_char_table_subtype_matches_canonical_descriptor(&mut eval);
     assert_core_set_char_table_range_matches_canonical_descriptor(&mut eval);
     assert_core_set_syntax_table_matches_canonical_descriptor(&mut eval);
@@ -889,6 +890,74 @@ fn assert_core_copy_marker_matches_canonical_descriptor(context: &mut Context) {
     assert_eq!(
         marker_logical_fields(&numeric),
         Some((Some(current), Some(full_end), false))
+    );
+}
+
+macro_rules! same_core_subr_entry {
+    ($expected:expr, $actual:expr) => {{
+        use crate::emacs_core::eval::subr_abi::SubrFn;
+        match ($expected.function(), $actual.function) {
+            (Some(SubrFn::Many(a)), Some(SubrFn::Many(b))) => a as usize == b as usize,
+            (Some(SubrFn::ManyNoContext(a)), Some(SubrFn::ManyNoContext(b))) => {
+                a as usize == b as usize
+            }
+            (Some(SubrFn::ManySlice(a)), Some(SubrFn::ManySlice(b))) => a as usize == b as usize,
+            (Some(SubrFn::A0(a)), Some(SubrFn::A0(b))) => a as usize == b as usize,
+            (Some(SubrFn::A1(a)), Some(SubrFn::A1(b))) => a as usize == b as usize,
+            (Some(SubrFn::A2(a)), Some(SubrFn::A2(b))) => a as usize == b as usize,
+            (Some(SubrFn::A3(a)), Some(SubrFn::A3(b))) => a as usize == b as usize,
+            (Some(SubrFn::A4(a)), Some(SubrFn::A4(b))) => a as usize == b as usize,
+            (Some(SubrFn::A5(a)), Some(SubrFn::A5(b))) => a as usize == b as usize,
+            (Some(SubrFn::A6(a)), Some(SubrFn::A6(b))) => a as usize == b as usize,
+            (Some(SubrFn::A7(a)), Some(SubrFn::A7(b))) => a as usize == b as usize,
+            (Some(SubrFn::A8(a)), Some(SubrFn::A8(b))) => a as usize == b as usize,
+            _ => false,
+        }
+    }};
+}
+
+fn assert_core_sleep_for_matches_canonical_descriptor(context: &mut Context) {
+    use crate::emacs_core::builtins::misc_eval::SLEEP_FOR_SUBR;
+    use crate::emacs_core::eval::lookup_global_subr_entry;
+    use crate::emacs_core::subr::{CommandDefault, NoEvalPolicy, SubrArity, no_eval_policy};
+
+    let expected = SLEEP_FOR_SUBR;
+    let id = intern("sleep-for");
+    let actual = lookup_global_subr_entry(id).expect("core registered sleep-for");
+    assert!(
+        same_core_subr_entry!(expected, actual),
+        "core registration is not the canonical sleep-for static"
+    );
+    assert_eq!(expected.name(), "sleep-for");
+    assert_eq!(expected.arity(), SubrArity::new(1, Some(2)));
+    assert_eq!(
+        (actual.min_args, actual.max_args),
+        (expected.arity().min(), expected.arity().max())
+    );
+    assert_eq!(actual.dispatch_kind, expected.dispatch_kind());
+    assert_eq!(
+        expected.dispatch_kind(),
+        neovm_value::tagged::header::SubrDispatchKind::Builtin
+    );
+    assert!(actual.interactive_spec.is_none());
+    assert!(expected.interactive_spec().is_none());
+    assert_eq!(no_eval_policy(id), expected.no_eval_policy());
+    assert_eq!(no_eval_policy(id), NoEvalPolicy::Native);
+    assert!(expected.leaf_spec().is_none());
+    assert_eq!(expected.command_default(), CommandDefault::Enabled);
+    assert!(crate::emacs_core::subr::leaf::subr_leaf(id).is_none());
+    assert!(
+        context
+            .obarray_view()
+            .get_property("sleep-for", "disabled")
+            .is_none_or(|value| value.is_nil())
+    );
+
+    assert_eq!(
+        context
+            .eval_str("(sleep-for 0)")
+            .expect("production zero-length sleep"),
+        neovm_value::value::Value::NIL
     );
 }
 

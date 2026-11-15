@@ -89,6 +89,12 @@ pub struct WaitServiceHooks {
         ) -> Result<input_hooks::CommandInputWaitOutcome, Flow>,
     #[doc(hidden)]
     pub wait_for_resize_ack_until: fn(&mut Context, Instant) -> Result<bool, Flow>,
+    /// One slice of a deadline-bounded wait that services timers and process
+    /// output (GNU `wait_reading_process_output`): production supplies the
+    /// system wait backend, the eval unit runtime supplies a Green-only wait.
+    #[doc(hidden)]
+    pub wait_for_duration_until_timer_deadline:
+        fn(&mut Context, Duration, GnuTimerTimestamp) -> Result<(), Flow>,
 }
 
 /// Timer-deadline upcalls, read once per input-wait decision.
@@ -339,6 +345,14 @@ pub(crate) mod wait {
         deadline: Instant,
     ) -> Result<bool, Flow> {
         (installed().wait.wait_for_resize_ack_until)(ctx, deadline)
+    }
+
+    pub(crate) fn wait_for_duration_until_timer_deadline(
+        ctx: &mut Context,
+        duration: Duration,
+        timer_deadline: GnuTimerTimestamp,
+    ) -> Result<(), Flow> {
+        (installed().wait.wait_for_duration_until_timer_deadline)(ctx, duration, timer_deadline)
     }
 }
 

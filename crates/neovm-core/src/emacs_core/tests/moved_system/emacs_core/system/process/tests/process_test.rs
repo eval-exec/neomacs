@@ -7919,8 +7919,11 @@ fn sleep_for_uses_shared_wait_request_for_process_output_and_timers() {
         )]),
     );
 
-    crate::emacs_core::timer::builtin_sleep_for(&mut ev, vec![Value::make_float(0.05)])
-        .expect("sleep-for should use the shared wait request");
+    neovm_eval::emacs_core::builtins::misc_eval::builtin_sleep_for(
+        &mut ev,
+        vec![Value::make_float(0.05)],
+    )
+    .expect("sleep-for should use the shared wait request");
 
     assert_eq!(
         ev.eval_symbol("sleep-shared-output")

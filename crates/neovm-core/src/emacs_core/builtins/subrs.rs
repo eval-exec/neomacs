@@ -674,11 +674,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::process::builtin_process_buffer),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "sleep-for",
-        NativeFn::ContextVec(crate::emacs_core::timer::builtin_sleep_for),
-        SubrArity::new(1, Some(2)),
-    )));
+    ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::SLEEP_FOR_SUBR);
     ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::SET_SYNTAX_TABLE_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "forward-comment",

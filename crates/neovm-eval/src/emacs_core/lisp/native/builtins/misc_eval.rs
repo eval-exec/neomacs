@@ -1,15 +1,23 @@
 use super::*;
+use crate::emacs_core::eval::GnuTimerTimestamp;
 use crate::emacs_core::subr::{FixedMin1, NativeFn, SubrArity, SubrSpec};
+use crate::emacs_core::threads::make_sleep_blocker;
+use malachite::base::num::conversion::traits::RoundingFrom;
+use malachite::base::rounding_modes::RoundingMode;
 use neovm_edit::buffer::text_props::PropertyPlistApplication;
 use neovm_edit::buffer::{CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, LispCharPos1};
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
+use neovm_value::error::{EvalResult, Flow, LispCondition, signal};
 #[doc(hidden)]
 pub use neovm_value::error::{
     expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
 };
 use neovm_value::symbol::Obarray;
+use neovm_value::system_vocab::time::WaitTimeout;
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::time_core::{LispTimeOutput, current_time_value};
+use neovm_value::value::{Value, ValueKind, VecLikeType};
+use std::time::Duration;
 
 /// The production `make-indirect-buffer` descriptor, shared by core and the unit runtime.
 #[doc(hidden)]
@@ -210,6 +218,107 @@ pub static COPY_SYNTAX_TABLE_SUBR: SubrSpec = crate::emacs_core::subr::world_sub
     NativeFn::ContextVec(neovm_text::emacs_core::syntax::builtin_copy_syntax_table_in_state),
     SubrArity::new(0, Some(1))
 ));
+
+/// The shared production/unit descriptor for the evaluator-owned sleep builtin.
+/// Keep GNU dispnew.c's one-or-two-argument shape and the existing ContextVec ABI.
+#[doc(hidden)]
+pub static SLEEP_FOR_SUBR: SubrSpec = crate::emacs_core::subr::world_subr!(SubrSpec::new(
+    "sleep-for",
+    NativeFn::ContextVec(builtin_sleep_for),
+    SubrArity::new(1, Some(2)),
+));
+
+fn expect_sleep_number(value: &Value) -> Result<f64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(n) => Ok(n as f64),
+        ValueKind::Float => Ok(value.xfloat()),
+        ValueKind::Veclike(VecLikeType::Bignum) => {
+            Ok(f64::rounding_from(value.as_bignum().unwrap(), RoundingMode::Nearest).0)
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("numberp"), *value],
+        )),
+    }
+}
+
+fn expect_sleep_fixnum_like(value: &Value) -> Result<i64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(n) => Ok(n),
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("fixnump"), *value],
+        )),
+    }
+}
+
+fn sleep_duration_from_secs(seconds: f64) -> Duration {
+    match WaitTimeout::from(seconds) {
+        WaitTimeout::Poll => Duration::ZERO,
+        WaitTimeout::For(duration) => duration,
+        WaitTimeout::Forever => Duration::MAX,
+    }
+}
+
+/// `(sleep-for SECONDS &optional MILLISECONDS)` — GNU `Fsleep_for`
+/// (dispnew.c): pause, reading process output, without redisplay or servicing
+/// command input. The per-slice wait is the installed WaitServiceHooks slot;
+/// production supplies the system `wait_reading_process_output` path.
+#[doc(hidden)]
+pub fn builtin_sleep_for(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("sleep-for", &args, 1)?;
+    if args.len() > 2 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![Value::symbol("sleep-for"), Value::fixnum(args.len() as i64)],
+        ));
+    }
+
+    let secs = expect_sleep_number(&args[0])?;
+    let millis = if args.len() > 1 {
+        if args[1].is_nil() {
+            0.0
+        } else {
+            // GNU Emacs requires a fixnum for the MILLISECONDS argument.
+            expect_sleep_fixnum_like(&args[1])? as f64
+        }
+    } else {
+        0.0
+    };
+
+    let total_secs = secs + millis / 1000.0;
+    if total_secs > 0.0 {
+        if eval.threads().current_thread_id() != 0 && !eval.green_threads_running() {
+            // The worker is already running because its caller released the
+            // global lock (`thread_select`, src/thread.c:613-643). Parking
+            // returns that OS thread for the deadline. `thread-signal` does
+            // not wake the park (src/thread.c:974-982); the signal is raised
+            // when the select returns (src/thread.c:141-154).
+            return Err(Flow::thread_blocked(
+                make_sleep_blocker(total_secs),
+                Value::NIL,
+            ));
+        }
+        let total = sleep_duration_from_secs(total_secs);
+        let end_time = GnuTimerTimestamp::now().add_duration(total);
+
+        loop {
+            let now = GnuTimerTimestamp::now();
+            if now >= end_time {
+                break;
+            }
+            let remaining = end_time.duration_until(now);
+            crate::emacs_core::eval::hooks_proof::wait::wait_for_duration_until_timer_deadline(
+                eval, remaining, end_time,
+            )?;
+        }
+    }
+
+    Ok(Value::NIL)
+}
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_pos_property(

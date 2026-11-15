@@ -1342,6 +1342,7 @@ mod unit_runtime {
         service_timers_without_redisplay: s::wait_service_timers_without_redisplay,
         wait_for_command_input_with_idle_policy: s::wait_for_command_input_with_idle_policy,
         wait_for_resize_ack_until: s::wait_for_resize_ack_until,
+        wait_for_duration_until_timer_deadline: s::wait_for_duration_until_timer_deadline,
     };
 
     static TIMER: TimerServiceHooks = TimerServiceHooks {

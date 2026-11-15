@@ -2824,4 +2824,36 @@ mod provider_tests {
             ("misc_eval", "MAKE_INDIRECT_BUFFER_SUBR")
         );
     }
+
+    #[test]
+    fn core_sleep_for_source_resolves_the_single_production_descriptor() {
+        const CALL: &str = "neovm_eval::emacs_core::builtins::misc_eval::SLEEP_FOR_SUBR";
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert_eq!(read(&root, CORE_MANIFEST).unwrap().matches(CALL).count(), 1);
+        let (events, _) = manifest_events(&root).unwrap();
+        let direct: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Direct { spec, .. } => Some(spec),
+                _ => None,
+            })
+            .collect();
+        let hits: Vec<_> = direct
+            .iter()
+            .filter(|spec| spec.name == "sleep-for")
+            .collect();
+        assert_eq!(hits.len(), 1, "sleep-for direct declaration multiplicity");
+        assert_eq!(
+            (hits[0].min, hits[0].max, hits[0].cfg.as_str()),
+            (1, Some(2), "always")
+        );
+        let home = hits[0]
+            .static_home
+            .as_ref()
+            .expect("real sleep-for static source home");
+        assert_eq!(
+            (home.module.as_str(), home.static_ident.as_str()),
+            ("misc_eval", "SLEEP_FOR_SUBR")
+        );
+    }
 }

@@ -34,6 +34,18 @@ use crate::emacs_core::wait::WaitContextExt;
 use neovm_edit::emacs_core::edit_host::EditHost;
 pub(crate) use neovm_value::system_vocab::time::WaitTimeout;
 
+/// The saturating GNU timeout conversion the moved timer-boundary test pins
+/// (`numeric_boundaries.rs`). The `sleep-for` body now lives in eval; this
+/// test-support surface keeps its original home and ledger row.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+fn gnu_sleep_duration_from_secs(seconds: f64) -> Duration {
+    match WaitTimeout::from(seconds) {
+        WaitTimeout::Poll => Duration::ZERO,
+        WaitTimeout::For(duration) => duration,
+        WaitTimeout::Forever => Duration::MAX,
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct PendingGnuTimer {
@@ -326,96 +338,6 @@ impl TimerContextExt for neovm_eval::emacs_core::eval::Context {
 
 // The default bodies above are the implementation; this binds them to the
 // upper-layer type that owns the state.
-
-fn expect_number(value: &Value) -> Result<f64, Flow> {
-    match value.kind() {
-        ValueKind::Fixnum(n) => Ok(n as f64),
-        ValueKind::Float => Ok(value.xfloat()),
-        ValueKind::Veclike(VecLikeType::Bignum) => {
-            Ok(f64::rounding_from(value.as_bignum().unwrap(), RoundingMode::Nearest).0)
-        }
-        _ => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("numberp"), *value],
-        )),
-    }
-}
-
-fn expect_fixnum_like(value: &Value) -> Result<i64, Flow> {
-    match value.kind() {
-        ValueKind::Fixnum(n) => Ok(n),
-        _ => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("fixnump"), *value],
-        )),
-    }
-}
-
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-fn gnu_sleep_duration_from_secs(seconds: f64) -> Duration {
-    match WaitTimeout::from(seconds) {
-        WaitTimeout::Poll => Duration::ZERO,
-        WaitTimeout::For(duration) => duration,
-        WaitTimeout::Forever => Duration::MAX,
-    }
-}
-
-/// `(sleep-for SECONDS &optional MILLISECONDS)` — GNU `Fsleep_for`
-/// (dispnew.c): pause, reading process output, without redisplay or servicing
-/// command input.
-#[doc(hidden)]
-pub fn builtin_sleep_for(
-    eval: &mut neovm_eval::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_min_args("sleep-for", &args, 1)?;
-    if args.len() > 2 {
-        return Err(signal(
-            LispCondition::WrongNumberOfArguments,
-            vec![Value::symbol("sleep-for"), Value::fixnum(args.len() as i64)],
-        ));
-    }
-
-    let secs = expect_number(&args[0])?;
-    let millis = if args.len() > 1 {
-        if args[1].is_nil() {
-            0.0
-        } else {
-            // GNU Emacs requires a fixnum for the MILLISECONDS argument.
-            expect_fixnum_like(&args[1])? as f64
-        }
-    } else {
-        0.0
-    };
-
-    let total_secs = secs + millis / 1000.0;
-    if total_secs > 0.0 {
-        if eval.threads().current_thread_id() != 0 && !eval.green_threads_running() {
-            // The worker is already running because its caller released the
-            // global lock (`thread_select`, src/thread.c:613-643). Parking
-            // returns that OS thread for the deadline. `thread-signal` does
-            // not wake the park (src/thread.c:974-982); the signal is raised
-            // when the select returns (src/thread.c:141-154).
-            return Err(Flow::thread_blocked(
-                neovm_eval::emacs_core::threads::make_sleep_blocker(total_secs),
-                Value::NIL,
-            ));
-        }
-        let total = gnu_sleep_duration_from_secs(total_secs);
-        let end_time = GnuTimerTimestamp::now().add_duration(total);
-
-        loop {
-            let now = GnuTimerTimestamp::now();
-            if now >= end_time {
-                break;
-            }
-            let remaining = end_time.duration_until(now);
-            eval.wait_for_duration_until_timer_deadline(remaining, end_time)?;
-        }
-    }
-
-    Ok(Value::NIL)
-}
 
 // ===========================================================================
 // Tests

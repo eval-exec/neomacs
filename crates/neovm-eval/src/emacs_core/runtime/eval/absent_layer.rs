@@ -838,6 +838,10 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER core::wait.wait_for_resize_ack_until");
             }
 
+            pub(crate) fn wait_for_duration_until_timer_deadline(ctx: &mut Context, duration: std::time::Duration, timer_deadline: $crate::emacs_core::eval::GnuTimerTimestamp) -> Result<(), Flow> {
+                absent_layer_panic("ABSENT-LAYER core::wait.wait_for_duration_until_timer_deadline");
+            }
+
             pub(crate) fn timer_next_ordinary_gnu_timer_timeout_before(ctx: &Context) -> Option<std::time::Duration> {
                 absent_layer_panic("ABSENT-LAYER core::timer.next_ordinary_gnu_timer_timeout_before");
             }
