@@ -6491,7 +6491,7 @@ fn safe_coding_systems_for_text(
     exclude: Option<Value>,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
-    if !text.is_multibyte() || text.as_bytes().is_ascii() {
+    if !text.is_multibyte() || text.schars() == text.sbytes() {
         return Ok(Value::T);
     }
 
@@ -6596,6 +6596,11 @@ fn safe_coding_systems_for_region(
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(start)),
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(end)),
     );
+    // Every non-ASCII character takes at least two bytes, so a region with as
+    // many bytes as characters is ASCII: answer before copying it.
+    if byte_range.len().get() as i64 == end - start {
+        return Ok(Value::T);
+    }
     let text = buffer.buffer_substring_lisp_string_range(byte_range);
     safe_coding_systems_for_text(mgr, &text, args.get(2).copied(), mode)
 }
@@ -6706,6 +6711,10 @@ pub fn register_bootstrap_vars<S: TextVariableStore>(vars: &mut S) {
 #[cfg(test)]
 #[path = "tests/coding_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/allocation_test.rs"]
+mod allocation_tests;
 
 /// VIS write route (lead #1052): the priorities field stays pub(crate) for
 /// this crate; the authority fence delegates here instead of touching it.
