@@ -36,16 +36,24 @@ fn the_ledger_keeps_the_make_docfile_order_and_gate_split() {
 
     // One row per spelling, in make-docfile order (Qnil, Qt, Qunbound, Qerror,
     // Qlambda first, then strcmp of the C identifier).
-    let mut previous: Option<(u8, String)> = None;
+    // make-docfile order is (commonsym rank, C identifier); two spellings can
+    // share one identifier across profiles (`Qsans_serif` is "sans-serif" on
+    // Linux and "sans_serif" on Windows), so the spelling is the tie-break.
+    let mut previous: Option<(u8, String, String)> = None;
     for row in &rows {
         let (rank, c_name) = generator::sort_key(row);
-        if let Some((previous_rank, previous_c_name)) = previous.as_ref() {
+        if let Some((previous_rank, previous_c_name, previous_name)) = previous.as_ref() {
             assert!(
-                (*previous_rank, previous_c_name.as_str()) < (rank, c_name),
-                "ledger is not in make-docfile order: `{previous_c_name}` then `{c_name}`"
+                (
+                    *previous_rank,
+                    previous_c_name.as_str(),
+                    previous_name.as_str()
+                ) <= (rank, c_name, row.name.as_str()),
+                "ledger is not in make-docfile order: `{previous_c_name}`/`{previous_name}` then `{c_name}`/`{}`",
+                row.name
             );
         }
-        previous = Some((rank, c_name.to_string()));
+        previous = Some((rank, c_name.to_string(), row.name.clone()));
     }
 
     let emitted = rows.iter().filter(|row| row.gate.is_emitted()).count();
@@ -55,21 +63,25 @@ fn the_ledger_keeps_the_make_docfile_order_and_gate_split() {
         "the generated table and the ledger disagree on the emitted row count"
     );
 
-    // The classification is measured, not aspirational: the common platform
-    // set, the Windows-only spellings, the Cocoa-only spellings, the backends
-    // this port does not build, and the spellings GNU uninterns must all be
+    // The classification is measured, not aspirational: every profile, the
+    // never-compiled spellings, and the spellings GNU uninterns must all be
     // represented, so a generator change that drops a class is loud here.
-    for gate in [
-        generator::Gate::Common,
-        generator::Gate::Windows,
-        generator::Gate::Macos,
-        generator::Gate::Unsupported,
-        generator::Gate::Uninterned,
-    ] {
+    use generator::{Gate, Profile};
+    for profile in Profile::ALL {
         assert!(
-            rows.iter().any(|row| row.gate == gate),
-            "ledger has no `{}` rows",
-            gate.as_str()
+            rows.iter()
+                .any(|row| matches!(row.gate, Gate::Profiles(mask) if mask.contains(profile))),
+            "ledger has no rows for the `{}` profile",
+            profile.name()
         );
     }
+    assert!(
+        rows.iter()
+            .any(|row| matches!(row.gate, Gate::Profiles(mask) if mask.is_empty())),
+        "ledger has no never-compiled (`none`) rows"
+    );
+    assert!(
+        rows.iter().any(|row| row.gate == Gate::Uninterned),
+        "ledger has no `uninterned` rows"
+    );
 }

@@ -2254,7 +2254,12 @@ struct CoreEvalSymbols {
 }
 
 fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) -> CoreEvalSymbols {
-    obarray.intern("internal-interpreter-environment");
+    // The evaluation environment lives on the process-interned HIDDEN symbol
+    // below; the spelling must not be an obarray member. GNU creates
+    // `Qinternal_interpreter_environment` in `syms_of_eval` and immediately
+    // `Funintern`s it (`src/eval.c:4597`), so `(intern-soft
+    // "internal-interpreter-environment")` is nil at startup. This used to
+    // call `obarray.intern(...)` here and re-expose it.
     let internal_interpreter_environment_symbol = hidden_internal_interpreter_environment_symbol();
     obarray.seed_value_id(internal_interpreter_environment_symbol, Value::NIL);
     obarray.make_special_id(internal_interpreter_environment_symbol);

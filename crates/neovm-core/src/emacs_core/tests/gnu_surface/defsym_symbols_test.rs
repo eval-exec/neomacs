@@ -77,9 +77,10 @@ fn defsym_only_spellings_are_unbound_and_have_no_function() {
     );
 }
 
-/// GNU interns these spellings and then removes them again, so Lisp must not
-/// see them (lread.c:5872-5873, editfns.c:4866, and `Qunbound`'s deliberate
-/// uninterned state in `define_symbol`).
+/// GNU interns these spellings and then removes them again, or never interns
+/// them at all, so Lisp must not see them: the five startup `Funintern`s
+/// (lread.c:5872-5873, editfns.c:4866, eval.c:4597, print.c:3063) and
+/// `Qunbound`'s deliberate uninterned state in `define_symbol`.
 #[test]
 fn explicitly_uninterned_gnu_defsym_spellings_are_absent() {
     let mut eval = crate::test_utils::new_context();
@@ -88,10 +89,12 @@ fn explicitly_uninterned_gnu_defsym_spellings_are_absent() {
             r#"(list (intern-soft "get-file-char")
                      (intern-soft "get-emacs-mule-file-char")
                      (intern-soft "outermost-restriction")
+                     (intern-soft "internal-interpreter-environment")
+                     (intern-soft "print--unreadable-callback-buffer")
                      (intern-soft "unbound"))"#,
         )
         .expect("GNU uninterned spelling oracle");
-    assert_eq!(list_to_vec(&result), Some(vec![Value::NIL; 4]));
+    assert_eq!(list_to_vec(&result), Some(vec![Value::NIL; 6]));
 }
 
 /// GNU defines `file-locked` in `lisp/userlock.el` (`define-error` at

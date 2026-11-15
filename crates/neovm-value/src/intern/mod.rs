@@ -14,6 +14,22 @@
 /// gnu-defsyms` from `gnu_defsyms.snapshot.tsv`.
 #[path = "gnu_defsyms.generated.rs"]
 pub(crate) mod gnu_defsyms_generated;
+
+/// Whether `name` is a GNU `DEFSYM` spelling that this build interns at boot.
+///
+/// `make-docfile` gives GNU's initial obarray every spelling the build
+/// compiles, and `Funintern` never removes one during dump construction. The
+/// dump's transient-source normalizer asks this before it drops a symbol that
+/// a since-unloaded Lisp file happened to read, so a DEFSYM-only symbol such
+/// as `call` or `strings` survives into the dumped image.
+#[doc(hidden)]
+pub fn is_active_gnu_defsym_spelling(name: &str) -> bool {
+    let table = gnu_defsyms_generated::GNU_DEFSYMS_BY_SPELLING;
+    table
+        .binary_search_by(|(spelling, _)| (*spelling).cmp(name))
+        .map(|index| table[index].1.is_active())
+        .unwrap_or(false)
+}
 #[cfg(feature = "test-support")]
 pub mod parallel;
 #[cfg(not(feature = "test-support"))]
