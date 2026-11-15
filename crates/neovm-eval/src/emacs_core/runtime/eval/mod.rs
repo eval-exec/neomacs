@@ -7594,6 +7594,9 @@ use dispatch_class::{CallTarget, EvalDispatch, FormHead};
 pub(crate) use form_head_cache::FormHeadCache;
 
 #[cfg(test)]
+#[path = "tests/consed_counter_test.rs"]
+mod consed_counter_test;
+#[cfg(test)]
 #[path = "tests/saved_state_scope_test.rs"]
 mod saved_state_scope_test;
 

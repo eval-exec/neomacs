@@ -3522,6 +3522,40 @@ impl Obarray {
         self.install_intfwd(id, fwd);
     }
 
+    /// Define a global Lisp variable with GNU `DEFVAR_INT` storage whose C
+    /// global is one of the allocator's counters (`src/alloc.c:7429-7449`,
+    /// `cons-cells-consed' and its six siblings).
+    ///
+    /// GNU's allocator increments the very word the variable forwards to, so
+    /// the variable and the matching `memory-use-counts' field are one number.
+    /// The descriptor installed here reads and assigns that counter instead of
+    /// a word of its own.
+    #[doc(hidden)]
+    pub fn define_counter_variable(
+        &mut self,
+        name: &str,
+        counter: crate::tagged::gc::MemoryUseCountSlot,
+    ) {
+        let id = intern(name);
+        self.mark_global_member(id);
+        if self.blv(id).is_some() {
+            // Localized after the fact: keep the BLV, as `define_int_variable`
+            // does.  Its descriptor is rebuilt as a plain integer slot.
+            self.reattach_localized_forwarder(id, LocalizedForwarderKind::Int);
+            return;
+        }
+        // Idempotent, like `define_int_variable`: several bootstrap tables and
+        // the portable-dump loader declare the same variable.
+        if self
+            .forwarder(id)
+            .is_some_and(|fwd| fwd.reads_allocation_counter())
+        {
+            return;
+        }
+        let fwd = crate::forward::alloc_counter_intfwd(counter);
+        self.install_intfwd(id, fwd);
+    }
+
     /// Read a symbol's value via the redirect dispatch. Mirrors GNU
     /// `find_symbol_value` (`src/data.c:1584-1609`).
     ///

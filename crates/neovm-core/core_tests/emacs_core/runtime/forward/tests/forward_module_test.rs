@@ -648,7 +648,12 @@ fn the_remaining_gnu_defvar_int_variables_are_declared_with_gnus_values() {
         ),
         "OK t"
     );
-    assert_eq!(format_eval_result(&eval.eval_str("strings-consed")), "OK 0");
+    // A running allocation counter (`src/alloc.c:7448`): the evaluator has
+    // made strings by now, so only the shape is stable.
+    assert_eq!(
+        format_eval_result(&eval.eval_str("(and (integerp strings-consed) (>= strings-consed 0))")),
+        "OK t"
+    );
     // Each one is a real forwarder, not a plain cell that happens to hold an
     // integer: `(setq X "x")` is GNU's `wrong-type-argument`.
     let mut forwarders = vec![

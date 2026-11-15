@@ -3699,6 +3699,13 @@ fn dump_forwarded_val(
     use neovm_value::forward::ForwardSlot;
     match fwd.slot() {
         ForwardSlot::Bool(bool_fwd) => DumpSymbolVal::BoolForwarded(bool_fwd.get()),
+        // A `*-consed' variable's descriptor reads the allocator's counter;
+        // the loader rebuilds it over the loading process's counters by name
+        // and ignores the dumped word, so a fixed zero keeps what the
+        // producer happened to allocate out of the image.
+        ForwardSlot::Int(_) if fwd.reads_allocation_counter() => {
+            DumpSymbolVal::IntForwarded(DumpValue::Int(0))
+        }
         ForwardSlot::Int(int_fwd) => {
             DumpSymbolVal::IntForwarded(value_source.encode(encoder, &int_fwd.get()))
         }
@@ -5749,7 +5756,20 @@ pub(crate) fn load_obarray(
     // still an integer inside `intmax_t` range on the way back in; a corrupt
     // image falls back to the slot's zero rather than smuggling a non-integer
     // into a `DEFVAR_INT` variable.
+    //
+    // The `*-consed' variables are the exception to "rebuilt from the value":
+    // GNU relocates the forwarding pointer back to the allocator's C global
+    // (`src/pdumper.c:2323-2324`), and here the descriptor names the
+    // allocation counter it reads, which an image cannot carry.  Rebuild
+    // those by name so they keep counting in the loading process.
+    let counter_variables = neovm_value::alloc::ALLOCATION_COUNTER_VARIABLES
+        .map(|(name, counter)| (neovm_value::intern::lookup_interned(name), counter));
     for (sym_id, value) in int_forwarded_entries {
+        if let Some((_, counter)) = counter_variables.iter().find(|(id, _)| *id == Some(sym_id)) {
+            let fwd = neovm_value::forward::alloc_counter_intfwd(*counter);
+            obarray.install_intfwd(sym_id, fwd);
+            continue;
+        }
         let checked = neovm_value::forward::LispInteger::check(value)
             .unwrap_or_else(|_| neovm_value::forward::LispInteger::from_i64(0));
         let fwd = neovm_value::forward::alloc_intfwd(checked);

@@ -458,6 +458,60 @@ fn deterministic_order_restart_gc_stats_exclude_history_without_mutating_live_st
     );
 }
 
+/// A `*-consed' variable forwards to the allocator's counter, which no image
+/// can carry.  The dumped word is a fixed zero whatever the producer
+/// allocated, and the loader rebuilds the descriptor over the loading
+/// process's counter, not as an integer slot holding that zero.
+#[test]
+fn deterministic_order_consed_counters_are_rebuilt_over_the_live_counter() {
+    let eval = Context::new(crate::test_utils::unit_runtime());
+    let read = |context: &Context| {
+        context
+            .obarray
+            .symbol_value_copied("cons-cells-consed")
+            .and_then(|value| value.as_fixnum())
+            .expect("cons-cells-consed holds a fixnum")
+    };
+    let _producer_history = Value::cons(Value::fixnum(1), Value::NIL);
+    assert!(Value::memory_use_counts_snapshot()[0] > 0);
+    let live = convert::dump_evaluator(&eval);
+    let dumped = live
+        .obarray
+        .symbols
+        .iter()
+        .find(|(id, _)| id.0 == intern("cons-cells-consed").to_raw())
+        .expect("cons-cells-consed is a dumped symbol");
+    assert!(
+        matches!(
+            dumped.1.val,
+            types::DumpSymbolVal::IntForwarded(types::DumpValue::Int(0))
+        ),
+        "the producer's allocation history is not image state"
+    );
+
+    let dir = tempfile::tempdir().expect("private dump directory");
+    let path = dir.path().join("counters.pdump");
+    super::dump_to_file(&eval, &path).expect("write image");
+    let loaded =
+        super::load_from_dump_with_proof(&path, eval.hooks_installed()).expect("load image");
+    assert_eq!(
+        loaded.obarray.forward_type(intern("cons-cells-consed")),
+        Some(neovm_value::forward::LispFwdType::Int)
+    );
+    let before = read(&loaded);
+    assert_eq!(
+        before,
+        Value::memory_use_counts_snapshot()[0],
+        "the loaded variable reads the counter memory-use-counts reports"
+    );
+    let _cell = Value::cons(Value::fixnum(1), Value::NIL);
+    assert_eq!(
+        read(&loaded),
+        before + 1,
+        "the loaded variable counts the loading process's allocations"
+    );
+}
+
 #[test]
 fn deterministic_order_overlay_serials_survive_dump_and_resume_the_counter() {
     use neovm_value::heap_types::{OverlayDataInit, OverlaySerial, OverlaySerialSource};
