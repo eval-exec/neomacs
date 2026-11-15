@@ -107,6 +107,9 @@ mod process_tests_signal_number_rs;
 #[path = "emacs_core/system/process/tests/timeout.rs"]
 mod process_tests_timeout_rs;
 
+#[path = "emacs_core/system/process/tests/w32_serial_test.rs"]
+mod process_tests_w32_serial_test_rs;
+
 #[path = "emacs_core/system/process/tests/green_select_rehome.rs"]
 mod process_tests_green_select_rehome_rs;
 

@@ -2719,23 +2719,23 @@ pub(super) fn serial_value_eq_symbol(value: Value, symbol: &str) -> bool {
     neovm_value::value::eq_value(&value, &Value::symbol(symbol))
 }
 
-/// GNU `serial_open`, src/sysdep.c:2980-2990, plus its error boundary.
+/// GNU `serial_open`, src/sysdep.c:2980-2990 (termios) / src/w32.c:11098
+/// (COM handle), plus its error boundary.
 ///
-/// `report_file_error ("Opening serial port", port)` (:2984) is the same
-/// errno classification every other failed open in Emacs gets, so a missing
-/// device is `file-missing`, an unreadable one is `permission-denied` and
-/// everything else is `file-error` -- all three measured against GNU 31.0.90.
+/// The two sources disagree on the error SHAPE, so the boundary is the sys
+/// layer's: sysdep.c's `report_file_error ("Opening serial port", port)`
+/// (:2984) is the errno classification every other failed open in Emacs gets
+/// (a missing device is `file-missing`, an unreadable one is
+/// `permission-denied`, anything else is `file-error` -- all three measured
+/// against GNU 31.0.90), while w32.c raises plain `error ("Could not open
+/// %s", port)` (:11102).
 pub(super) fn open_serial_port(
     port: Value,
     port_name: &LispString,
 ) -> Result<sys::SerialPort, Flow> {
-    sys::SerialPort::open(&lisp_string_to_os_string(port_name)).map_err(|err| {
-        signal_file_errno(
-            "Opening serial port",
-            port,
-            err.raw_os_error().unwrap_or(libc::EIO),
-        )
-    })
+    let port_os = lisp_string_to_os_string(port_name);
+    sys::SerialPort::open(&port_os)
+        .map_err(|failure| failure.into_lisp_error(port, &port_os.to_string_lossy()))
 }
 
 /// GNU `serial_configure`, src/sysdep.c:3151-3309: the keyword half, run in the
@@ -2769,15 +2769,7 @@ pub(super) fn configure_serial_device(
     match outcome {
         Ok(()) => Ok(childp),
         Err(sys::SerialConfigureFailure::Settings(flow)) => Err(flow),
-        Err(sys::SerialConfigureFailure::Device { step, errno }) => {
-            // GNU names the failing call and passes `Qnil` as the file name for
-            // both (src/sysdep.c:3165-3166, :3304-3305).
-            let message = match step {
-                sys::SerialConfigureStep::ReadAttributes => "Failed tcgetattr",
-                sys::SerialConfigureStep::WriteAttributes => "Failed tcsetattr",
-            };
-            Err(signal_file_errno(message, Value::NIL, errno))
-        }
+        Err(sys::SerialConfigureFailure::Device(failure)) => Err(failure.into_lisp_error()),
     }
 }
 

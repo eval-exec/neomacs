@@ -9,11 +9,12 @@ use neovm_eval::emacs_core::eval::data::process_state::Device;
 use std::ffi::{CString, OsStr};
 use crate::emacs_core::process::SystemProcessExt;
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 
 use super::{
-    SerialByteSize, SerialFlowControl, SerialParity, SerialSpeedError, SerialStopBits,
+    SerialByteSize, SerialConfigureStep, SerialDeviceFailure, SerialFlowControl, SerialOpenFailure,
+    SerialParity, SerialSpeedError, SerialStopBits,
 };
 use crate::emacs_core::process::{ProcessId, ProcessManager};
 
@@ -23,12 +24,14 @@ use crate::emacs_core::process::{ProcessId, ProcessManager};
 pub struct Attributes(libc::termios);
 
 /// GNU `serial_open`, src/sysdep.c:2980-2990.
-pub fn open(path: &OsStr) -> io::Result<Device> {
+pub fn open(path: &OsStr) -> Result<Device, SerialOpenFailure> {
     // A port name with an interior NUL cannot be handed to `open(2)`; GNU's
     // `SSDATA` would silently truncate it. Refuse instead, with the errno the
     // truncated name would almost certainly have produced anyway.
     let Ok(c_path) = CString::new(path.as_bytes()) else {
-        return Err(io::Error::from_raw_os_error(libc::ENOENT));
+        return Err(SerialOpenFailure::Open(io::Error::from_raw_os_error(
+            libc::ENOENT,
+        )));
     };
     // SAFETY: `c_path` is a valid NUL-terminated string for the call's duration.
     let fd = unsafe {
@@ -38,7 +41,7 @@ pub fn open(path: &OsStr) -> io::Result<Device> {
         )
     };
     if fd < 0 {
-        return Err(io::Error::last_os_error());
+        return Err(SerialOpenFailure::Open(io::Error::last_os_error()));
     }
     // SAFETY: `open` returned a fresh descriptor this process now owns.
     let fd = unsafe { OwnedFd::from_raw_fd(fd) };
@@ -57,9 +60,9 @@ pub(crate) trait DeviceIo {
     ///
     /// The three are one step because GNU makes them one: there is no point at
     /// which the caller can see a read-but-not-yet-raw attribute set.
-    fn read_attributes(&self) -> Result<Attributes, i32>;
+    fn read_attributes(&self) -> Result<Attributes, SerialDeviceFailure>;
     /// GNU `tcsetattr (p->outfd, TCSANOW, &attr)`, src/sysdep.c:3303.
-    fn write_attributes(&self, attributes: &Attributes) -> Result<(), i32>;
+    fn write_attributes(&self, attributes: &Attributes) -> Result<(), SerialDeviceFailure>;
     fn register_readable(
         &self,
         poller: &polling::Poller,
@@ -79,12 +82,15 @@ impl DeviceIo for Device {
     ///
     /// The three are one step because GNU makes them one: there is no point at
     /// which the caller can see a read-but-not-yet-raw attribute set.
-    fn read_attributes(&self) -> Result<Attributes, i32> {
+    fn read_attributes(&self) -> Result<Attributes, SerialDeviceFailure> {
         let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
         // SAFETY: `tcgetattr` initialises the whole struct on success.
         let mut attributes = unsafe {
             if libc::tcgetattr(self.fd.as_raw_fd(), attributes.as_mut_ptr()) != 0 {
-                return Err(last_errno());
+                return Err(SerialDeviceFailure {
+                    step: SerialConfigureStep::ReadAttributes,
+                    errno: last_errno(),
+                });
             }
             attributes.assume_init()
         };
@@ -95,12 +101,15 @@ impl DeviceIo for Device {
     }
 
     /// GNU `tcsetattr (p->outfd, TCSANOW, &attr)`, src/sysdep.c:3303.
-    fn write_attributes(&self, attributes: &Attributes) -> Result<(), i32> {
+    fn write_attributes(&self, attributes: &Attributes) -> Result<(), SerialDeviceFailure> {
         // SAFETY: `tcsetattr` only reads through the provided pointer.
         let result =
             unsafe { libc::tcsetattr(self.fd.as_raw_fd(), libc::TCSANOW, &raw const attributes.0) };
         if result != 0 {
-            return Err(last_errno());
+            return Err(SerialDeviceFailure {
+                step: SerialConfigureStep::WriteAttributes,
+                errno: last_errno(),
+            });
         }
         Ok(())
     }

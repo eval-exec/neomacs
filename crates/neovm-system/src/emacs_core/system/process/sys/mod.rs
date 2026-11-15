@@ -57,8 +57,8 @@ pub use fs::executable_path_access;
 
 pub(crate) mod serial;
 pub use serial::{
-    SerialAttributes, SerialByteSize, SerialConfigureFailure, SerialConfigureStep,
-    SerialFlowControl, SerialParity, SerialPort, SerialStopBits,
+    SerialAttributes, SerialByteSize, SerialConfigureFailure, SerialFlowControl, SerialParity,
+    SerialPort, SerialStopBits,
 };
 
 /// `serial_open` for a re-homed test. `SerialPortIo` stays `pub(crate)`;
@@ -66,7 +66,16 @@ pub use serial::{
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn open_serial_port_for_test(path: &std::ffi::OsStr) -> std::io::Result<SerialPort> {
-    <SerialPort as serial::SerialPortIo>::open(path)
+    <SerialPort as serial::SerialPortIo>::open(path).map_err(|failure| {
+        // The moved tests exercise the unix arm, whose single variant is the
+        // raw open error; the re-homed seams speak `io::Result`.
+        match failure {
+            #[cfg(not(windows))]
+            serial::SerialOpenFailure::Open(err) => err,
+            #[cfg(windows)]
+            _ => std::io::Error::from_raw_os_error(5), /* EIO, unreachable in tests */
+        }
+    })
 }
 
 // K1 narrowing (lead 02:3xZ): every net item is used only by sibling

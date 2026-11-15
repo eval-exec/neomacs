@@ -19,6 +19,8 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -890,10 +892,406 @@ pub struct Device {
     pub fd: OwnedFd,
 }
 
-#[cfg(not(unix))]
+/// The Win32 serial device: GNU's `fd_info[fd]` + `child_process` pair for a
+/// `FILE_SERIAL` fd, folded into one owned value (src/w32.c:11098-11136).
+///
+/// GNU keeps a CRT fd, a `child_process` slot with a reader THREAD that blocks
+/// in one-char overlapped reads, and `char_avail`/`char_consumed` events that
+/// thread and `sys_select` hand the fd over with (src/w32proc.c:1688-1726).
+/// There is no CRT fd here, and the thread is unnecessary: the read-ahead's
+/// manual-reset completion event IS `char_avail`, and the poller can wait on a
+/// waitable handle directly (`polling`'s IOCP backend), so the main thread can
+/// both arm and consume the read-ahead and the handshake events collapse into
+/// one.
+#[cfg(windows)]
+pub struct Device {
+    /// The COM-port handle, opened with `FILE_FLAG_OVERLAPPED` (w32.c:11100).
+    pub handle: OwnedHandle,
+    /// GNU `fd_info[fd].cp->ovl_read` + `cp->chr`: the one-char read-ahead.
+    /// Boxed so the `OVERLAPPED` -- which the kernel writes into while the
+    /// read is posted -- never moves, whatever moves the enclosing `Process`.
+    /// `Mutex` because the poll registration methods take `&self` while
+    /// `io::Read` takes `&mut`; both run on the main thread, so the lock is
+    /// uncontended.
+    pub read: std::sync::Mutex<Box<SerialReadAhead>>,
+    /// GNU `cp->ovl_write.hEvent` (w32.c:11131-11133).
+    pub write_event: OwnedHandle,
+}
+
+/// The posted one-char overlapped read that gives the port its readable edge,
+/// the equivalent of GNU's `_sys_read_ahead` state (src/w32.c:8969-9005).
+#[cfg(windows)]
+pub struct SerialReadAhead {
+    /// Completion event: `ovl_read.hEvent`, manual reset. Signalled when the
+    /// byte arrives; reset when it is consumed. This is the handle registered
+    /// with the wait poller.
+    pub event: OwnedHandle,
+    /// The kernel writes into this while the read is posted.
+    pub overlapped: windows_sys::Win32::System::IO::OVERLAPPED,
+    /// GNU `cp->chr`: the byte the read-ahead buffers.
+    pub byte: u8,
+    /// Whether an overlapped read is currently posted in `overlapped`.
+    pub posted: bool,
+}
+
+/// Platforms with no serial backend at all (the `_` arm of `sys/serial.rs`'s
+/// module selection): uninhabited, exactly as before the w32 backend existed.
+#[cfg(not(any(unix, windows)))]
 pub enum Device {}
 
+/// A posted overlapped read must be cancelled before its OVERLAPPED block and
+/// event are closed -- GNU does the same teardown in `delete_child`
+/// (src/w32proc.c:1910-1935) before closing the fd's handles.
+#[cfg(windows)]
+impl Drop for Device {
+    fn drop(&mut self) {
+        // Best effort: `cancel_serial_read_ahead` takes &self, and drop has
+        // exclusive access, so the lock cannot be held elsewhere.
+        self.cancel_serial_read_ahead();
+    }
+}
+
 pub struct SerialPort(pub Device);
+
+/// The Win32 serial I/O and readiness machinery, the port of GNU's
+/// `fd_info`/`child_process` dance for a `FILE_SERIAL` fd.
+///
+/// The three functions below correspond one-to-one to GNU's split:
+///
+/// * [`Device::post_read_ahead`] is `_sys_read_ahead`'s FILE_SERIAL arm
+///   (src/w32.c:8969-9005): flip the timeouts to a blocking one-byte read and
+///   post it overlapped. GNU runs it on a reader thread because its
+///   `sys_select` can only wait on events; here the completion event IS the
+///   poller source, so the main thread posts it.
+/// * [`Device::read_serial`] is `sys_read`'s FILE_SERIAL arm (src/w32.c:9126,
+///   :9171-9234): consume the read-ahead byte if the event says it is ready,
+///   then flip the timeouts to immediate-return and drain the rest of the
+///   driver buffer with one more overlapped read, then re-arm the read-ahead
+///   (which GNU does at the NEXT `sys_select`, w32proc.c:3175-3187, after the
+///   consumed status round-trips through the reader thread -- the event makes
+///   the same handshake local).
+/// * [`Device::write_serial`] is `sys_write`'s FILE_SERIAL arm
+///   (src/w32.c:9399-9460): post the write overlapped and wait for its event.
+///   GNU also watches its SIGINT-emulation event there and aborts the write
+///   with `PurgeComm`/`CancelIo` on C-g; no interrupt handle crosses this
+///   layer, so a C-g during a blocked write is delivered after the write
+///   completes instead. (Noted limitation, not a silent divergence.)
+#[cfg(windows)]
+impl Device {
+    /// The readable-edge handle to register with a poller: the read-ahead's
+    /// manual-reset completion event, GNU's `char_avail`.
+    pub fn serial_read_event_raw(&self) -> windows_sys::Win32::Foundation::HANDLE {
+        self.lock_read_ahead().event.as_raw_handle()
+    }
+
+    /// Arm the one-char read-ahead if none is posted. Returns whether the port
+    /// ended up armed.
+    pub fn post_serial_read_ahead(&self) -> bool {
+        let handle = self.handle.as_raw_handle();
+        let mut state = self.lock_read_ahead();
+        if state.posted {
+            return true;
+        }
+        // GNU `_sys_read_ahead`: blocking-read timeouts before the post
+        // (src/w32.c:8975-8995).
+        if !flip_read_timeouts(handle, ReadTimeouts::BlockingOneByte) {
+            return false;
+        }
+        reset_event(state.event.as_raw_handle());
+        let mut read = 0u32;
+        // SAFETY: `overlapped` is stable in its Box and owned by `state` for
+        // the duration of the posted read; `byte` is a valid 1-byte target.
+        let ok = unsafe {
+            windows_sys::Win32::Storage::FileSystem::ReadFile(
+                handle,
+                &raw mut state.byte,
+                1,
+                &raw mut read,
+                &raw mut state.overlapped,
+            )
+        };
+        if ok == 0 && last_error() != windows_sys::Win32::Foundation::ERROR_IO_PENDING {
+            return false;
+        }
+        state.posted = true;
+        true
+    }
+
+    /// Cancel a posted read-ahead, e.g. before unregistering the port from a
+    /// poller (GNU `delete_child`'s teardown, src/w32proc.c:1910-1935).
+    pub fn cancel_serial_read_ahead(&self) {
+        let mut state = self.lock_read_ahead();
+        if !state.posted {
+            return;
+        }
+        // SAFETY: `overlapped` is the exact block the pending read used; the
+        // Box target stays put while the kernel processes the cancel.
+        unsafe {
+            windows_sys::Win32::System::IO::CancelIoEx(
+                self.handle.as_raw_handle(),
+                &raw const state.overlapped,
+            );
+        }
+        state.posted = false;
+    }
+
+    /// `sys_read`'s FILE_SERIAL arm, src/w32.c:9126-9234.
+    pub fn read_serial(&self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        let handle = self.handle.as_raw_handle();
+        let mut state = self.lock_read_ahead();
+        let mut nchars = 0usize;
+
+        // Consume the read-ahead byte when its event is signalled
+        // (`STATUS_READ_SUCCEEDED` -> take `cp->chr`, reset `char_avail`,
+        // src/w32.c:9171-9184).
+        if state.posted {
+            match wait_signalled(state.event.as_raw_handle()) {
+                Some(true) => {
+                    let mut read = 0u32;
+                    // SAFETY: the event says the overlapped read completed;
+                    // `overlapped` is the same stable Box target.
+                    let ok = unsafe {
+                        windows_sys::Win32::System::IO::GetOverlappedResult(
+                            handle,
+                            &raw const state.overlapped,
+                            &raw mut read,
+                            0,
+                        )
+                    };
+                    reset_event(state.event.as_raw_handle());
+                    state.posted = false;
+                    if ok == 0 {
+                        // GNU reports the read-ahead's failure as EOF
+                        // (`STATUS_READ_FAILED` -> 0, src/w32proc.c:1977-1980).
+                        return Ok(0);
+                    }
+                    buffer[0] = state.byte;
+                    nchars = 1;
+                }
+                // Read still in progress: `errno = EWOULDBLOCK`
+                // (src/w32.c:9166-9170). The read-ahead stays posted.
+                Some(false) => return Err(io::ErrorKind::WouldBlock.into()),
+                // Event wait failed; treat like the error paths around it.
+                None => return Err(io::Error::from_raw_os_error(EIO)),
+            }
+        }
+
+        // Immediate-return timeouts, then one overlapped read of the whole
+        // buffer (src/w32.c:9205-9234). The read-ahead is consumed, so its
+        // OVERLAPPED block is free for this read, exactly as GNU reuses
+        // `cp->ovl_read` here.
+        if !flip_read_timeouts(handle, ReadTimeouts::Immediate) {
+            return Err(io::Error::from_raw_os_error(EIO));
+        }
+        reset_event(state.event.as_raw_handle());
+        let mut direct = 0u32;
+        // SAFETY: `overlapped` is free (no read posted) and stable in its Box;
+        // the buffer is a valid slice for the call.
+        let ok = unsafe {
+            windows_sys::Win32::Storage::FileSystem::ReadFile(
+                handle,
+                buffer[nchars..].as_mut_ptr(),
+                (buffer.len() - nchars) as u32,
+                &raw mut direct,
+                &raw mut state.overlapped,
+            )
+        };
+        if ok == 0 {
+            if last_error() != windows_sys::Win32::Foundation::ERROR_IO_PENDING {
+                return Err(io::Error::from_raw_os_error(EIO));
+            }
+            let mut completed = 0u32;
+            // SAFETY: the pending overlapped read belongs to this call's
+            // (still stable) block; TRUE waits for completion, as GNU does
+            // even under immediate-return timeouts (src/w32.c:9226-9233).
+            let ok = unsafe {
+                windows_sys::Win32::System::IO::GetOverlappedResult(
+                    handle,
+                    &raw const state.overlapped,
+                    &raw mut completed,
+                    1,
+                )
+            };
+            if ok == 0 {
+                return Err(io::Error::from_raw_os_error(EIO));
+            }
+            direct = completed;
+        }
+        reset_event(state.event.as_raw_handle());
+        nchars += direct as usize;
+
+        // Re-arm the read-ahead for the next readable edge (the handshake
+        // GNU's sys_select + reader thread do between rounds,
+        // src/w32proc.c:3175-3187).
+        if !flip_read_timeouts(handle, ReadTimeouts::BlockingOneByte) {
+            return Err(io::Error::from_raw_os_error(EIO));
+        }
+        reset_event(state.event.as_raw_handle());
+        let mut read = 0u32;
+        // SAFETY: as in `post_serial_read_ahead`; `posted` is false here.
+        let ok = unsafe {
+            windows_sys::Win32::Storage::FileSystem::ReadFile(
+                handle,
+                &raw mut state.byte,
+                1,
+                &raw mut read,
+                &raw mut state.overlapped,
+            )
+        };
+        if ok == 0 && last_error() != windows_sys::Win32::Foundation::ERROR_IO_PENDING {
+            return Err(io::Error::from_raw_os_error(EIO));
+        }
+        state.posted = true;
+
+        if nchars == 0 {
+            // Nothing was available after all: a spurious edge. GNU cannot
+            // see this (its select only fires on a completed read-ahead), so
+            // report the same EWOULDBLOCK its in-progress arm would.
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(nchars)
+    }
+
+    /// `sys_write`'s FILE_SERIAL arm, src/w32.c:9399-9460.
+    pub fn write_serial(&self, buffer: &[u8]) -> io::Result<usize> {
+        let handle = self.handle.as_raw_handle();
+        // Stack OVERLAPPED is fine: the frame outlives the wait that follows,
+        // and the kernel only touches the block while the write is pending.
+        let mut overlapped: windows_sys::Win32::System::IO::OVERLAPPED =
+            unsafe { std::mem::zeroed() };
+        overlapped.hEvent = self.write_event.as_raw_handle();
+        reset_event(self.write_event.as_raw_handle());
+        let mut written = 0u32;
+        // SAFETY: `buffer` is valid for `buffer.len()` bytes; `overlapped` is
+        // initialized and lives past the wait below.
+        let ok = unsafe {
+            windows_sys::Win32::Storage::FileSystem::WriteFile(
+                handle,
+                buffer.as_ptr(),
+                buffer.len() as u32,
+                &raw mut written,
+                &raw mut overlapped,
+            )
+        };
+        if ok == 0 {
+            if last_error() != windows_sys::Win32::Foundation::ERROR_IO_PENDING {
+                return Err(io::Error::from_raw_os_error(EIO));
+            }
+            // Wait for the write's own event (GNU waits on this and its
+            // SIGINT event together, src/w32.c:9425-9432; see the note above
+            // on C-g).
+            // SAFETY: the event is owned by this Device.
+            if unsafe {
+                windows_sys::Win32::System::Threading::WaitForSingleObject(
+                    self.write_event.as_raw_handle(),
+                    windows_sys::Win32::Foundation::INFINITE,
+                )
+            } != windows_sys::Win32::Foundation::WAIT_OBJECT_0
+            {
+                return Err(io::Error::from_raw_os_error(EIO));
+            }
+            let mut completed = 0u32;
+            // SAFETY: the event says the write completed; `overlapped` is
+            // still this frame's block.
+            let ok = unsafe {
+                windows_sys::Win32::System::IO::GetOverlappedResult(
+                    handle,
+                    &raw const overlapped,
+                    &raw mut completed,
+                    0,
+                )
+            };
+            if ok == 0 {
+                return Err(io::Error::from_raw_os_error(EIO));
+            }
+            written = completed;
+        }
+        Ok(written as usize)
+    }
+
+    /// Borrow the read-ahead state. Also the seam the w32 backend's
+    /// poll-registration methods use to reach the event as an owned-handle
+    /// wrapper (the `AsWaitable` the poller's modify/remove calls take).
+    pub fn lock_read_ahead(&self) -> std::sync::MutexGuard<'_, Box<SerialReadAhead>> {
+        self.read.lock().unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+/// GNU's two COMMTIMEOUTS postures for reads. `BlockingOneByte` is
+/// `_sys_read_ahead`'s (all zeros, src/w32.c:8975-8994): a one-byte read that
+/// waits for the byte. `Immediate` is `sys_read`'s (ReadIntervalTimeout =
+/// MAXDWORD, src/w32.c:9205-9219): return whatever is buffered, now.
+#[cfg(windows)]
+enum ReadTimeouts {
+    BlockingOneByte,
+    Immediate,
+}
+
+#[cfg(windows)]
+fn flip_read_timeouts(
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    timeouts: ReadTimeouts,
+) -> bool {
+    let mut ct: windows_sys::Win32::Devices::Communication::COMMTIMEOUTS =
+        unsafe { std::mem::zeroed() };
+    // SAFETY: `ct` is a valid out-param of the right type.
+    if unsafe { windows_sys::Win32::Devices::Communication::GetCommTimeouts(handle, &raw mut ct) }
+        == 0
+    {
+        return false;
+    }
+    match timeouts {
+        ReadTimeouts::BlockingOneByte => {
+            ct.ReadIntervalTimeout = 0;
+            ct.ReadTotalTimeoutMultiplier = 0;
+            ct.ReadTotalTimeoutConstant = 0;
+        }
+        ReadTimeouts::Immediate => {
+            ct.ReadIntervalTimeout = u32::MAX;
+            ct.ReadTotalTimeoutMultiplier = 0;
+            ct.ReadTotalTimeoutConstant = 0;
+        }
+    }
+    // SAFETY: `ct` is fully initialized.
+    unsafe {
+        windows_sys::Win32::Devices::Communication::SetCommTimeouts(handle, &raw const ct) != 0
+    }
+}
+
+#[cfg(windows)]
+fn reset_event(event: windows_sys::Win32::Foundation::HANDLE) {
+    // SAFETY: the event handle is owned by the caller's Device.
+    unsafe {
+        windows_sys::Win32::System::Threading::ResetEvent(event);
+    }
+}
+
+/// Probe a manual-reset event without waiting: `Some(true)` signalled,
+/// `Some(false)` not, `None` the wait call failed.
+#[cfg(windows)]
+fn wait_signalled(event: windows_sys::Win32::Foundation::HANDLE) -> Option<bool> {
+    // SAFETY: the event handle is owned by the caller's Device.
+    match unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(event, 0) } {
+        windows_sys::Win32::Foundation::WAIT_OBJECT_0 => Some(true),
+        windows_sys::Win32::Foundation::WAIT_TIMEOUT => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn last_error() -> u32 {
+    // SAFETY: GetLastError reads thread-local state.
+    unsafe { windows_sys::Win32::Foundation::GetLastError() }
+}
+
+/// GNU maps every serial device failure on this path to `EIO` (src/w32.c:9211,
+/// :9421, :9437); mirror the constant so the io::Error construction reads the
+/// same way both here and in the backend.
+#[cfg(windows)]
+const EIO: i32 = 5;
 
 // The std-trait impls stay beside the owned types (stage-4 W5/E13): `Device`
 // and `SerialPort` live in the evaluator, so their `AsRawFd`/`io::Read`/
@@ -962,10 +1360,32 @@ impl std::io::Write for SerialPort {
     }
 }
 
-// Off Unix, `Device` is uninhabited (`unsupported_backend::open` never returns
-// `Ok`). The call sites still name `Read`/`Write`; these bodies are the same
-// `match *device {}` the backend uses, so Windows type-checks without a fd.
-#[cfg(not(unix))]
+// The w32 arms port GNU's `sys_read`/`sys_write` FILE_SERIAL branches
+// (src/w32.c:9126-9234 / :9399-9460) from the CRT-fd shape to this Device.
+// Every device-call failure there maps to EIO, so these do too.
+#[cfg(windows)]
+impl std::io::Read for SerialPort {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read_serial(buffer)
+    }
+}
+
+#[cfg(windows)]
+impl std::io::Write for SerialPort {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.0.write_serial(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+// Platforms with no serial backend: `Device` is uninhabited
+// (`unsupported_backend::open` never returns `Ok`). The call sites still name
+// `Read`/`Write`; these bodies are the same `match *device {}` the backend
+// uses, so such a target type-checks without a fd.
+#[cfg(not(any(unix, windows)))]
 impl std::io::Read for SerialPort {
     fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
         let device = &self.0;
@@ -973,7 +1393,7 @@ impl std::io::Read for SerialPort {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 impl std::io::Write for SerialPort {
     fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
         let device = &self.0;

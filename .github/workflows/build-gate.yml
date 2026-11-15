@@ -107,6 +107,21 @@ jobs:
             --no-tests=fail 2>&1 | tee nextest-w32-rows.txt
           grep -E 'Summary \[.*\] 7 tests run:' nextest-w32-rows.txt
 
+      # make-serial-process on Windows reports w32.c's plain `error` texts
+      # (GNU src/w32.c:11098-11136), not the termios arm's file-error. The
+      # rows run only here: the open-failure path needs no COM hardware, but
+      # it does need CreateFileW.
+      - name: Test Windows serial error shapes
+        if: ${{ !cancelled() && matrix.label == 'windows-msvc-x86_64' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TERM_COLOR=never
+          cargo nextest run -p neovm-core --lib \
+            -E 'test(process_tests_w32_serial_test_rs::)' \
+            --no-tests=fail 2>&1 | tee nextest-w32-serial.txt
+          grep -E 'Summary \[.*\] 3 tests run:' nextest-w32-serial.txt
+
       - name: Test CoreText Thin-only font matching
         if: ${{ !cancelled() && runner.os == 'macOS' }}
         run: >-
