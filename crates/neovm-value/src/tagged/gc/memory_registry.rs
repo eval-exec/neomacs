@@ -91,6 +91,21 @@ impl TaggedHeap {
         self.buffer_registry[idx] = Some(value);
     }
 
+    /// Arm killed-buffer fields as ephemerons for the next full collection.
+    #[doc(hidden)]
+    pub fn arm_killed_buffer_ephemerons(
+        &mut self,
+        killed: Vec<(crate::value::buffer_vocab::BufferId, Vec<TaggedValue>)>,
+    ) {
+        self.killed_buffer_ephemerons = killed.into_iter().collect();
+    }
+
+    /// Take the buffer ids reclaimed by the last full collection.
+    #[doc(hidden)]
+    pub fn take_reclaimed_buffer_ids(&mut self) -> Vec<crate::value::buffer_vocab::BufferId> {
+        std::mem::take(&mut self.reclaimed_buffer_ids)
+    }
+
     pub fn window_value(&self, id: u64) -> Option<TaggedValue> {
         self.window_registry.get(&id).copied()
     }

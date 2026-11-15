@@ -60,16 +60,7 @@ impl BufferStorage {
             }
         }
         for buffer in self.dead_buffers.values() {
-            visit(buffer.name);
-            visit(buffer.last_name);
-            buffer.text.trace_text_prop_roots_with(visit);
-            visit(buffer.undo_state.list());
-            buffer.overlays.trace_roots_with(visit);
-            for slot in &buffer.slots {
-                visit(*slot);
-            }
-            visit(buffer.local_var_alist.as_lisp_alist());
-            visit(buffer.keymap);
+            buffer.trace_killed_roots_with(visit);
         }
         // Phase 10D: `buffer_defaults` holds the global default
         // values for every per-buffer slot. Mirrors GNU's

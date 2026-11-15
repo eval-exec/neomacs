@@ -1637,8 +1637,14 @@ impl TaggedHeap {
         let roots: Vec<(TaggedValue, &'static str)> = self
             .buffer_registry
             .iter()
-            .flatten()
-            .map(|value| (*value, "buffer-registry"))
+            .enumerate()
+            .filter(|(idx, _)| {
+                self.killed_buffer_ephemerons.is_empty()
+                    || !self
+                        .killed_buffer_ephemerons
+                        .contains_key(&crate::value::buffer_vocab::BufferId(*idx as u64))
+            })
+            .filter_map(|(_, value)| value.map(|value| (value, "buffer-registry")))
             .chain(
                 self.window_registry
                     .values()
@@ -1702,16 +1708,23 @@ impl TaggedHeap {
         //    so heap access is exclusive (no concurrency hazard here). --
         let mark_t0 = std::time::Instant::now();
         self.mark_all_on_gc_thread();
+        while self.mark_reached_killed_buffers() {
+            self.mark_all();
+        }
         // Queue doomed finalizers before the weak sweep (GNU
         // `queue_doomed_finalizers` runs before
         // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
         // functions are re-marked so both the weak sweep and the object sweep
         // see them as live.
         self.mark_and_queue_doomed_finalizers();
+        while self.mark_reached_killed_buffers() {
+            self.mark_all();
+        }
         // Resolve weak hash tables now that the main mark has drained. Both the
         // sync and concurrent paths converge here with the mutator stopped, so
         // this is single-threaded and path-agnostic.
         self.mark_and_sweep_weak_tables();
+        self.reclaim_unreached_killed_buffers();
         let mark_us = mark_t0.elapsed().as_micros() as u64;
 
         // The mark has drained and the sweep has not started: the one moment
@@ -1827,6 +1840,10 @@ impl TaggedHeap {
             }
         }
 
+        while self.mark_reached_killed_buffers() {
+            self.mark_all();
+        }
+
         if self.weak_hash_tables.is_empty() {
             return;
         }
@@ -1867,6 +1884,7 @@ impl TaggedHeap {
                     })
                 };
             }
+            marked |= self.mark_reached_killed_buffers();
             // Drain whatever those surviving entries reached, then re-check.
             self.mark_all();
             if !marked {
@@ -1893,6 +1911,39 @@ impl TaggedHeap {
                     });
                 })
             };
+        }
+    }
+
+    /// Mark fields of killed buffers whose buffer objects were reached.
+    /// Returns true when it adds work to the gray queue; the caller drains and
+    /// repeats so chains of killed buffers reach a fixpoint.
+    fn mark_reached_killed_buffers(&mut self) -> bool {
+        let reached: Vec<_> = self
+            .killed_buffer_ephemerons
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.buffer_value(*id)
+                    .is_some_and(|value| self.is_value_marked(value))
+            })
+            .collect();
+        for id in &reached {
+            let fields = self.killed_buffer_ephemerons.remove(id).unwrap_or_default();
+            for field in fields {
+                self.mark_or_push_child(field, "killed-buffer-field");
+            }
+        }
+        !reached.is_empty()
+    }
+
+    /// Drop registry roots for killed buffers that no other root reached.
+    fn reclaim_unreached_killed_buffers(&mut self) {
+        let unreached = std::mem::take(&mut self.killed_buffer_ephemerons);
+        for id in unreached.into_keys() {
+            if let Some(slot) = self.buffer_registry.get_mut(id.0 as usize) {
+                *slot = None;
+            }
+            self.reclaimed_buffer_ids.push(id);
         }
     }
 

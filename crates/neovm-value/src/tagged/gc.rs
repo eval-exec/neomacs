@@ -1079,6 +1079,10 @@ pub struct TaggedHeap {
     /// is N-mutator ready. Appended after the frozen store ABI fields, so no
     /// pinned offset moves.
     overlay_serial: crate::heap_types::OverlaySerialCounter,
+    /// Killed-buffer fields armed for the next stop-the-world full cycle.
+    killed_buffer_ephemerons: FxHashMap<crate::value::buffer_vocab::BufferId, Vec<TaggedValue>>,
+    /// Buffer ids whose ephemeron keys were unreachable in the last full cycle.
+    reclaimed_buffer_ids: Vec<crate::value::buffer_vocab::BufferId>,
 }
 
 impl Default for TaggedHeap {
@@ -1213,6 +1217,8 @@ impl TaggedHeap {
             #[cfg(any(test, feature = "test-support"))]
             mapped_veclike_traces: 0,
             overlay_serial: crate::heap_types::OverlaySerialCounter::new(),
+            killed_buffer_ephemerons: FxHashMap::default(),
+            reclaimed_buffer_ids: Vec::new(),
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,

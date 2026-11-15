@@ -1417,12 +1417,20 @@ impl Context {
                         return;
                     }
                 }
+                // Arm killed-buffer ephemerons before begin_stw_collection
+                // seeds the buffer registry as an internal root.
+                let (ephemerons, killed_buffers) = self.edit.buffers.take_killed_buffers_for_gc();
+                (*heap_ptr).arm_killed_buffer_ephemerons(ephemerons);
                 // Disarms a concurrent first cycle drained above, so this
                 // cycle traces the whole image before it promotes (see
                 // `begin_stw_collection`).
                 (*heap_ptr).begin_stw_collection();
                 self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                 (*heap_ptr).complete_collection();
+                let reclaimed_buffers = (*heap_ptr).take_reclaimed_buffer_ids();
+                self.edit
+                    .buffers
+                    .restore_reached_killed_buffers(killed_buffers, &reclaimed_buffers);
                 cycle_completed = true;
             } else {
                 match (*heap_ptr).mark_phase() {
