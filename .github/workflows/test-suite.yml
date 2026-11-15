@@ -660,6 +660,34 @@ jobs:
           stage_release citest archlib
           stage_release citestlegacy legacy
 
+      # The treesit oracle/TUI rows and the MELPA grammar parity tests read
+      # their grammars through a cache-only reader that fails loudly on a
+      # cold cache and never touches the network, and every one of their
+      # jobs unpacks this shared runtime tar into the workspace -- so prime
+      # the grammar cache once here, with the same GNU oracle emacs that
+      # builds it on every consumer's behalf otherwise, and ship it inside
+      # the tar below.  A shard compiles nothing by design; this is the one
+      # priming step all of them share.  (The runner races the gnu-emacs-
+      # oracle warmer on a cold per-commit cache: both may build the oracle
+      # in parallel rather than put this job, which every test job waits
+      # on, behind a serial warm.)
+      - name: Set up GNU Emacs oracle
+        uses: ./.github/actions/setup-gnu-emacs
+
+      - name: Prefetch pinned Tree-sitter grammars
+        env:
+          NEOVM_FORCE_ORACLE_PATH: /opt/gnu-emacs-oracle/bin/emacs
+        # Verified entries short-circuit, so each retry re-fetches only the
+        # grammars whose GitHub clone failed (TLS EOFs are transient).
+        run: |
+          for attempt in 1 2 3 4 5; do
+            cargo xtask treesit-grammars && exit 0
+            echo "::warning::Tree-sitter grammar prefetch attempt $attempt failed; retrying"
+            sleep $((attempt * 15))
+          done
+          echo "::error::Tree-sitter grammar prefetch failed after 5 attempts"
+          exit 1
+
       - name: Package shared test runtime
         run: |
           test -x target/release/neomacs
@@ -672,11 +700,21 @@ jobs:
           # oracle harnesses refuse a runtime without it.  Package it with the
           # pair it belongs to.
           test -f target/release/neomacs.fresh-build-stamp
+          # The grammar cache travels with the runtime for the same reason:
+          # the treesit rows refuse a runtime without it.  Its cache reader
+          # verifies the ready marker, the built library, and the parser.c
+          # SHA-256 on every read, so tar round-tripping is safe; the git
+          # object stores under source/ are prefetch provenance the reader
+          # never opens, and leaving them out keeps the tar tens of MB
+          # smaller.
+          test -f target/melpa/tree-sitter-grammar-cache/go/*/ready
           tar czf neomacs-test-runtime-linux-x86_64.tar.gz \
+            --exclude '*/source/.git' \
             target/release/neomacs \
             target/release/neomacsclient \
             target/release/neomacs.pdump \
             target/release/neomacs.fresh-build-stamp \
+            target/melpa/tree-sitter-grammar-cache \
             lisp \
             etc
 

@@ -1,9 +1,23 @@
+//! Pinned Tree-sitter grammars: explicit prefetch, cache-only test reads.
+//!
+//! A grammar fixture is pinned by repository, full revision, and the SHA-256
+//! of the generated `parser.c` that revision must contain. [`TreeSitterGrammarCase::prefetch`]
+//! (driven by `cargo xtask treesit-grammars`) fetches, hash-verifies, and
+//! builds the grammar through GNU Emacs's native installer; tests then read
+//! the cache through [`TreeSitterGrammarCase::prepare`], which verifies the
+//! marker, the library, and the hash on every use and never touches the
+//! network -- a cold cache is a loud error naming the prefetch command, not a
+//! clone attempt that can flake on a TLS hiccup.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod matrix;
-pub use matrix::{GNU31_TREE_SITTER_GRAMMARS, GrammarSourceDirectory, TreeSitterGrammarCase};
+pub use matrix::{
+    EXTRA_TREE_SITTER_GRAMMAR_PINS, ExtraTreeSitterGrammarPin, GNU31_TREE_SITTER_GRAMMARS,
+    GrammarSourceDirectory, TreeSitterGrammarCase, extra_tree_sitter_grammar_pin,
+};
 
 use crate::{
     CommandError, EmacsRuntime, elisp_string, output_with_timeout, output_with_timeout_pinned,
@@ -16,6 +30,18 @@ struct GrammarSourceSpec<'a> {
     repository: &'a str,
     revision: &'a str,
     source_directory: Option<&'a str>,
+    source_sha256: &'a str,
+}
+
+impl GrammarSourceSpec<'_> {
+    /// The generated parser source this pin describes: the hash of these
+    /// bytes is what makes a revision's content a pin, and it is
+    /// host-independent, unlike the compiled library.
+    fn parser_source(&self, checkout: &Path) -> PathBuf {
+        checkout
+            .join(self.source_directory.unwrap_or("src"))
+            .join("parser.c")
+    }
 }
 
 struct GrammarCachePaths {
@@ -29,7 +55,13 @@ struct GrammarCachePaths {
 
 impl GrammarCachePaths {
     fn for_source(source: GrammarSourceSpec<'_>) -> Self {
-        let root = neomacs_infra::melpa_cache_root()
+        Self::below(&neomacs_infra::melpa_cache_root(), source)
+    }
+
+    /// The same layout below an arbitrary cache root, so the cache-only
+    /// reader stays testable against a temporary directory.
+    fn below(root: &Path, source: GrammarSourceSpec<'_>) -> Self {
+        let root = root
             .join("tree-sitter-grammar-cache")
             .join(source.language)
             .join(source.revision);
@@ -75,54 +107,65 @@ impl GrammarCachePaths {
     }
 }
 
-/// Build one exact Tree-sitter grammar into a cross-process cache below
-/// `<melpa cache root>/tree-sitter-grammar-cache`.
+/// Fetch, hash-verify, and build one exact Tree-sitter grammar into the
+/// shared cache below `<melpa cache root>/tree-sitter-grammar-cache`.
 ///
 /// GNU Emacs performs the build through its native grammar installer so the
 /// compiler and shared-library conventions match the host platform. The
-/// returned directory can be added to `treesit-extra-load-path` by any editor
-/// adapter using this shared preparation module.
-pub fn prepare_cached_tree_sitter_grammar(
+/// fetched `parser.c` must hash to `source_sha256` before anything is
+/// installed or published; the marker is written only after the built
+/// library is in place. [`cached_tree_sitter_grammar`] reads the result.
+pub fn prefetch_cached_tree_sitter_grammar(
     gnu_emacs: &EmacsRuntime,
     language: &str,
     repository: &str,
     revision: &str,
+    source_sha256: &str,
 ) -> Result<PathBuf, String> {
-    prepare_cached_tree_sitter_grammar_with_source_directory(
-        gnu_emacs, language, repository, revision, None,
+    prefetch_cached_tree_sitter_grammar_with_source_directory(
+        gnu_emacs,
+        language,
+        repository,
+        revision,
+        None,
+        source_sha256,
     )
 }
 
-/// Build one exact Tree-sitter grammar whose generated sources live below a
-/// repository subdirectory.
-pub fn prepare_cached_tree_sitter_grammar_from_subdirectory(
+/// [`prefetch_cached_tree_sitter_grammar`] for a grammar whose generated
+/// sources live below a repository subdirectory.
+pub fn prefetch_cached_tree_sitter_grammar_from_subdirectory(
     gnu_emacs: &EmacsRuntime,
     language: &str,
     repository: &str,
     revision: &str,
     source_directory: &str,
+    source_sha256: &str,
 ) -> Result<PathBuf, String> {
-    prepare_cached_tree_sitter_grammar_with_source_directory(
+    prefetch_cached_tree_sitter_grammar_with_source_directory(
         gnu_emacs,
         language,
         repository,
         revision,
         Some(source_directory),
+        source_sha256,
     )
 }
 
-fn prepare_cached_tree_sitter_grammar_with_source_directory(
+fn prefetch_cached_tree_sitter_grammar_with_source_directory(
     gnu_emacs: &EmacsRuntime,
     language: &str,
     repository: &str,
     revision: &str,
     source_directory: Option<&str>,
+    source_sha256: &str,
 ) -> Result<PathBuf, String> {
     let source = GrammarSourceSpec {
         language,
         repository,
         revision,
         source_directory,
+        source_sha256,
     };
     validate_grammar_source(source)?;
     let paths = GrammarCachePaths::for_source(source);
@@ -156,10 +199,7 @@ fn prepare_cached_tree_sitter_grammar_with_source_directory(
     let source_directory_marker = source_directory.unwrap_or("");
     let expected_marker =
         format!("{language}\t{repository}\t{revision}\t{source_directory_marker}\n");
-    let cache_is_ready = grammar_library_exists(&paths.grammar_directory, language)
-        && fs::read_to_string(&paths.ready_marker)
-            .is_ok_and(|contents| contents == expected_marker);
-    if cache_is_ready {
+    if cache_entry_matches(&paths, source) {
         return Ok(paths.grammar_directory);
     }
 
@@ -181,6 +221,7 @@ fn prepare_cached_tree_sitter_grammar_with_source_directory(
     }
 
     prepare_grammar_checkout(gnu_emacs, source, &paths)?;
+    verify_parser_source_hash(source, &paths)?;
     install_grammar(gnu_emacs, source, &paths)?;
 
     let marker_tmp = paths.root.join(format!("ready.{}.tmp", std::process::id()));
@@ -199,12 +240,121 @@ fn prepare_cached_tree_sitter_grammar_with_source_directory(
     Ok(paths.grammar_directory)
 }
 
+/// Read an already-prefetched grammar and verify its pin.
+///
+/// This cache-only path checks the ready marker, the built library, and the
+/// SHA-256 of the cached `parser.c` on every use, and never launches git,
+/// GNU Emacs, or a network request. A missing or stale entry is an error
+/// naming the prefetch command, so a cold cache fails loudly instead of
+/// silently skipping or flaking on a clone.
+pub fn cached_tree_sitter_grammar(
+    language: &str,
+    revision: &str,
+    source_directory: Option<&str>,
+    source_sha256: &str,
+) -> Result<PathBuf, String> {
+    cached_tree_sitter_grammar_in(
+        &neomacs_infra::melpa_cache_root(),
+        language,
+        revision,
+        source_directory,
+        source_sha256,
+    )
+}
+
+/// [`cached_tree_sitter_grammar`] below an arbitrary cache root.
+pub(crate) fn cached_tree_sitter_grammar_in(
+    cache_root: &Path,
+    language: &str,
+    revision: &str,
+    source_directory: Option<&str>,
+    source_sha256: &str,
+) -> Result<PathBuf, String> {
+    let source = GrammarSourceSpec {
+        language,
+        repository: "",
+        revision,
+        source_directory,
+        source_sha256,
+    };
+    let paths = GrammarCachePaths::below(cache_root, source);
+    let entry_present = grammar_library_exists(&paths.grammar_directory, source.language)
+        && marker_names_this_pin(&paths, source);
+    if !entry_present {
+        return Err(format!(
+            "pinned Tree-sitter grammar cache entry for `{language}` at revision {revision} is \
+             missing or stale below {}; run `cargo xtask treesit-grammars` to prefetch it",
+            neomacs_infra::melpa_cache_root().display()
+        ));
+    }
+    // The entry claims to be this pin; hold it to the pin's bytes. A hash
+    // mismatch means the cache holds different content than the pin
+    // describes -- a louder diagnosis than "missing", and one a bare
+    // re-prefetch will heal by removing the stale entry first.
+    verify_parser_source_hash(source, &paths)?;
+    Ok(paths.grammar_directory)
+}
+
+/// A cache entry is reusable only when its ready marker names exactly this
+/// pin's language, revision, and source directory, the built library is
+/// present, and the cached `parser.c` still hashes to the pin -- the cached
+/// bytes are what the pin describes.
+///
+/// The marker's repository field is provenance, not identity: the cache
+/// directory is already keyed by language and revision, and the `parser.c`
+/// hash is what the content is verified against.
+fn cache_entry_matches(paths: &GrammarCachePaths, source: GrammarSourceSpec<'_>) -> bool {
+    grammar_library_exists(&paths.grammar_directory, source.language)
+        && marker_names_this_pin(paths, source)
+        && verify_parser_source_hash(source, paths).is_ok()
+}
+
+/// The ready marker names exactly this pin's language, revision, and source
+/// directory. Only the line terminator is trimmed, never tabs: the final
+/// field is the source directory, which is legitimately the empty string for
+/// grammars whose `parser.c` sits at the repository root's `src/`.
+fn marker_names_this_pin(paths: &GrammarCachePaths, source: GrammarSourceSpec<'_>) -> bool {
+    fs::read_to_string(&paths.ready_marker).is_ok_and(|contents| {
+        let mut fields = contents.trim_end_matches('\n').split('\t');
+        matches!(fields.next(), Some(language) if language == source.language)
+            && fields.next().is_some()
+            && matches!(fields.next(), Some(revision) if revision == source.revision)
+            && fields.next() == Some(source.source_directory.unwrap_or(""))
+            && fields.next().is_none()
+    })
+}
+
+/// The cached `parser.c` is the pinned bytes.
+fn verify_parser_source_hash(
+    source: GrammarSourceSpec<'_>,
+    paths: &GrammarCachePaths,
+) -> Result<(), String> {
+    let parser_source = source.parser_source(&paths.checkout);
+    let bytes = fs::read(&parser_source).map_err(|error| {
+        format!(
+            "failed to read generated parser source {}: {error}",
+            parser_source.display()
+        )
+    })?;
+    let actual = neomacs_infra::inventory::sha256_hex(&bytes);
+    if actual == source.source_sha256 {
+        Ok(())
+    } else {
+        Err(format!(
+            "Tree-sitter grammar `{}` at revision {} has parser.c SHA-256 {actual}, expected {} \
+             -- the cache no longer holds the pinned bytes",
+            source.language, source.revision, source.source_sha256
+        ))
+    }
+}
+
 fn validate_grammar_source(source: GrammarSourceSpec<'_>) -> Result<(), String> {
     let GrammarSourceSpec {
         language,
         repository,
         revision,
         source_directory,
+        source_sha256,
     } = source;
     let source_directory_is_safe = source_directory.is_none_or(|directory| {
         let path = Path::new(directory);
@@ -224,9 +374,15 @@ fn validate_grammar_source(source: GrammarSourceSpec<'_>) -> Result<(), String> 
             .chars()
             .all(|character| character.is_ascii_hexdigit())
         || !source_directory_is_safe
+        || source_sha256.len() != 64
+        || !source_sha256
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
     {
         return Err(format!(
-            "cached Tree-sitter grammar requires a safe language, GitHub repository, full revision, and optional source directory, got `{language}` `{repository}` `{revision}` `{source_directory:?}`"
+            "cached Tree-sitter grammar requires a safe language, GitHub repository, full \
+             revision, optional source directory, and parser.c SHA-256, got `{language}` \
+             `{repository}` `{revision}` `{source_directory:?}` `{source_sha256}`"
         ));
     }
     Ok(())
