@@ -3,7 +3,10 @@ use neovm_value::value::Value;
 
 #[test]
 fn op_disasm_constant() {
-    crate::test_utils::init_test_tracing();
+    // The disassembler prints constants through the Lisp printer, whose
+    // terminal lookup queries the lifecycle hook table: arm the unit runtime
+    // (production arms it at Context construction).
+    let _harness = crate::test_utils::unit_harness();
     let constants = vec![Value::fixnum(42)];
     assert_eq!(Op::Constant(0).disasm(&constants), "constant 0 ; 42");
 }

@@ -605,9 +605,16 @@ mod unit_runtime {
             s::command_unwind_minibuffer_session,
             s::command_unwind_minibuffer_buffer,
             s::command_get_char_property,
-            s::command_try_completion,
-            s::command_all_completions,
-            s::command_test_completion,
+            // The real completion seam trio, not stand-ins: these are the
+            // same functions core publishes (`minibuffer::*` re-exports them)
+            // and production registers as `try-completion`,
+            // `all-completions`, and `test-completion`.
+            crate::emacs_core::eval::data::minibuffer_entry::builtin_try_completion,
+            crate::emacs_core::eval::data::minibuffer_entry::builtin_all_completions,
+            // The real completion seam, not a stand-in: this is the same
+            // function core publishes (`minibuffer::builtin_test_completion`
+            // re-exports it) and production registers as `test-completion`.
+            crate::emacs_core::eval::data::minibuffer_entry::builtin_test_completion,
             s::command_menu_bar_top_level_items,
             s::command_key_binding,
             s::command_where_is_internal,
@@ -640,9 +647,17 @@ mod unit_runtime {
         s::process_terminate_and_defer_reaping,
     );
 
+    /// The eval unit runtime has no OS-signal latch: a layer-less runtime
+    /// never receives a POSIX signal, so no signal is ever pending. This is
+    /// the documented no-op counterpart of core's `os_signal::pending`;
+    /// production installs the real system latch.
+    fn unit_os_signal_pending() -> bool {
+        false
+    }
+
     static INPUT: InputHooks = InputHooks::new(
         s::input_interrupt_for_input_event_if_requested,
-        s::input_os_signal_pending,
+        unit_os_signal_pending,
         s::input_take_termination_signal,
         s::input_drain_pending_os_signals,
         SignalWakeSource::SelfPipe {

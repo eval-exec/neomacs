@@ -24,9 +24,13 @@ impl OpDisasmExt for Op {
     fn disasm(&self, constants: &[neovm_value::value::Value]) -> String {
         match self {
             Op::Constant(idx) => {
+                // Diagnostics use the printer directly, not the value
+                // layer's `Display` seam: that seam renders `<Value>` until a
+                // Context installs the formatter, and a disassembly must not
+                // depend on one having been constructed.
                 let val = constants
                     .get(*idx as usize)
-                    .map(|v| format!("{}", v))
+                    .map(crate::emacs_core::print::print_value)
                     .unwrap_or_else(|| "???".to_string());
                 format!("constant {} ; {}", idx, val)
             }

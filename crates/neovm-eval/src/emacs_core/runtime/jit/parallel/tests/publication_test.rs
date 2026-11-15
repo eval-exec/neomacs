@@ -536,6 +536,10 @@ fn verify_committed<'era>(
     Ok(())
 }
 fn history(size: CohortSize) {
+    // The exact-child harness re-enters this test through the unit-test
+    // binary, so it must arm the eval hook set itself: `isolated` never runs
+    // the parent test's fixture. Production arms it at Context construction.
+    let _harness = crate::test_utils::unit_harness();
     for backing in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,

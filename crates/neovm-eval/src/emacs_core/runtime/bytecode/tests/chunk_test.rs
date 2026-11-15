@@ -37,7 +37,10 @@ fn patch_jump() {
 
 #[test]
 fn disassemble_output() {
-    crate::test_utils::init_test_tracing();
+    // The disassembler prints constants through the Lisp printer, whose
+    // terminal lookup queries the lifecycle hook table: arm the unit runtime
+    // (production arms it at Context construction).
+    let _harness = crate::test_utils::unit_harness();
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     func.add_constant(Value::fixnum(42));
     func.emit(Op::Constant(0));
