@@ -2002,6 +2002,55 @@ fn read_char_reswitches_to_cached_frame_when_selected_tty_is_different() {
 }
 
 #[test]
+fn read_char_rechecks_source_frame_for_each_byte_of_a_tty_batch() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    let buf = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let first = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F1", 7, 80, 25, buf);
+    let second = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F2", 8, 80, 25, buf);
+    ev.observe_keyboard_input_frame(first);
+    ev.frame_manager_mut().select_frame(second);
+
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    ev.init_input_system();
+    tx.send(
+        crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(vec![b'a', b'b'], first.0),
+    )
+    .expect("queue a two-byte batch for the first TTY frame");
+
+    let switch_to_first = Value::list(vec![
+        Value::symbol("switch-frame"),
+        Value::make_frame(first.0),
+    ]);
+    assert_eq!(
+        ev.read_char().expect("switch-frame before the batch"),
+        switch_to_first
+    );
+    ev.frame_manager_mut().select_frame(first);
+    assert_eq!(
+        ev.read_char().expect("first byte after the switch"),
+        Value::fixnum('a' as i64)
+    );
+
+    // A command run on `a' selects the other terminal's frame. The second
+    // byte still comes from F1, so it must switch back before delivery.
+    ev.frame_manager_mut().select_frame(second);
+    assert_eq!(
+        ev.read_char()
+            .expect("second byte rechecks its source frame"),
+        switch_to_first
+    );
+    assert_eq!(
+        ev.read_char().expect("second byte stays queued"),
+        Value::fixnum('b' as i64)
+    );
+}
+
+#[test]
 fn read_char_returns_unread_emacs_event_value_without_reencoding() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();

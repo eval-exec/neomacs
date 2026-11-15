@@ -4261,15 +4261,16 @@ impl crate::emacs_core::eval::Context {
                 true,
             ),
             InputEvent::RawTtyBytes { bytes, target } => {
-                if !frame_already_routed {
-                    self.route_tty_keyboard_input(target);
-                }
-                let frame_switch_deferred =
-                    frame_already_routed || self.command_loop.keyboard.has_unread_selection_event();
-                for byte in bytes.into_iter().rev() {
+                self.route_tty_keyboard_input(target);
+                // GNU stores each TTY byte as its own keyboard event
+                // (tty_read_avail_input). A switch-frame raised here belongs
+                // to the first byte; later bytes recheck their source frame
+                // against the selection when they are read.
+                let first_byte_deferred = self.command_loop.keyboard.has_unread_selection_event();
+                for (index, byte) in bytes.into_iter().enumerate().rev() {
                     let event = InputEvent::TtyByte { byte, target };
                     self.command_loop.keyboard.pending_input_events.push_front(
-                        if frame_switch_deferred {
+                        if index == 0 && first_byte_deferred {
                             InputEvent::FrameSwitchDeferred(Box::new(event))
                         } else {
                             event
