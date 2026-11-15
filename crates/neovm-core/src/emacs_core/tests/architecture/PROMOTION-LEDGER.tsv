@@ -730,6 +730,7 @@ TaggedHeap::reseed_runtime_and_remembered_roots	method	pub(restricted)	crates/ne
 TaggedHeap::gc_locks_poisoned	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:235	tagged::gc::incremental	BULK (PC11-M)
 TaggedHeap::retains_veclike	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:2442	tagged::gc::incremental	BULK (PC11-M)
 TaggedHeap::incremental_sweep_slice	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:262	tagged::gc::incremental	m1-approved
+TaggedHeap::sweep_slice_due	method	(new fn)	crates/neovm-value/src/tagged/gc/incremental.rs:241	tagged::gc::incremental	sweep pacing: the evaluator safe point asks whether a deferred-sweep slice is owed; the remaining work it reads is collector-private
 TaggedHeap::incremental_drain_all	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:42	tagged::gc::incremental	m1-approved
 TaggedHeap::finish_incremental_sweep_now	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:456	tagged::gc::incremental	m1-approved
 TaggedHeap::incremental_finish	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:55	tagged::gc::incremental	m1-approved

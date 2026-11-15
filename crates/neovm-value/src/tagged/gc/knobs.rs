@@ -15,6 +15,7 @@
 //! | `NEOVM_GC_MAJOR_GROWTH_PERCENT` | `15` | major growth limit, with an 8 MiB floor; generational only |
 //! | `NEOVM_GC_MAJOR_MAX_MINORS` | `64` | maximum completed minors between majors; generational only |
 //! | `NEOVM_GC_STRESS_MAJOR_EVERY` | `8` | stressed cycle stride, normalized to at least one; generational only |
+//! | `NEOVM_GC_SWEEP_PACING` | on (`=0` disables) | a deferred sweep runs a slice only when allocation has caught up with its progress; off restores one slice per safe point (`incremental.rs`); cached per process at the first sweep safe point, like the legacy switches |
 //! | `NEOVM_GC_VEC_SCAN=defer` | `snapshot` | MEASUREMENT ONLY (falsifier F-G (c), P3.2 F1b): no Tier-B vector snapshot and no vector claims, so page vectors defer to the stop-the-world termination and are traced by reachability |
 //!
 //! A heap reads the knobs once, in `TaggedHeap::new`. Legacy test overrides
@@ -32,6 +33,17 @@ pub(crate) enum CensusMode {
     /// Survivors plus the remembered-set estimate (every store reaches the
     /// census, which perturbs time but not counts).
     SurvivorsAndRemset,
+}
+
+/// When a safe point runs a deferred-sweep slice (`NEOVM_GC_SWEEP_PACING`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SweepPacing {
+    /// A slice runs once the allocation since mark termination has caught
+    /// up with the sweep's share of its allocation horizon
+    /// (`TaggedHeap::sweep_slice_due`).
+    Allocation,
+    /// One slice at every safe point, however little the mutator allocated.
+    EverySafePoint,
 }
 
 /// How the concurrent marker handles page vectors (`NEOVM_GC_VEC_SCAN`).
@@ -110,6 +122,20 @@ pub(crate) fn chunk_map_on() -> bool {
         }
         on
     })
+}
+
+/// `NEOVM_GC_SWEEP_PACING`.
+pub(crate) fn sweep_pacing() -> SweepPacing {
+    static PACING: OnceLock<SweepPacing> = OnceLock::new();
+    *PACING.get_or_init(
+        || match std::env::var("NEOVM_GC_SWEEP_PACING").ok().as_deref() {
+            Some("0" | "off" | "false" | "no") => {
+                note_knob("NEOVM_GC_SWEEP_PACING", "0");
+                SweepPacing::EverySafePoint
+            }
+            _ => SweepPacing::Allocation,
+        },
+    )
 }
 
 /// `NEOVM_GC_VEC_SCAN`.

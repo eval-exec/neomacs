@@ -5,6 +5,14 @@
 
 use super::*;
 
+/// Pending non-cons objects a sweep slice reclaims per unit of its budget.
+const NONCONS_OBJECTS_PER_SLICE_UNIT: usize = 256;
+
+/// Least live count a paced sweep's horizon derives from: GNU's default
+/// `gc-cons-threshold` (100,000 words), so a small heap still spreads its
+/// sweep over some allocation.
+const SWEEP_HORIZON_FLOOR_BYTES: usize = 100_000 * size_of::<usize>();
+
 impl TaggedHeap {
     /// True while a mark is underway (between the start handshake and sweep).
     pub fn mark_in_progress(&self) -> bool {
@@ -224,6 +232,96 @@ impl TaggedHeap {
         self.sweep_in_progress
     }
 
+    /// Whether a safe point owes the deferred sweep a slice of `budget`.
+    ///
+    /// The sweep's work is fixed at mark termination; only its placement is
+    /// paced. Allocation since termination (`bytes_since_gc`, reset there)
+    /// is the clock: the sweep must be done by the time half a threshold
+    /// has been allocated, well before the next cycle is due and the
+    /// overdue drain in the evaluator finishes it at once. A slice is owed
+    /// when the allocated share of that horizon has reached the share of
+    /// slices already run, so the first slice runs at once and a mutator
+    /// that does not allocate is not interrupted again.
+    ///
+    /// The threshold is live: `(setq gc-cons-threshold most-positive-fixnum)`
+    /// during the sweep raises it at once, and the overdue drain then never
+    /// fires. So the horizon is also bounded by the live count the cycle
+    /// started from (`sweep_bytes_before`, fixed at termination, floored at
+    /// the default threshold): a raised threshold cannot postpone the
+    /// sweep past about half that much allocation.
+    #[doc(hidden)]
+    pub fn sweep_slice_due(&self, budget: usize) -> bool {
+        debug_assert!(self.sweep_in_progress, "no deferred sweep to pace");
+        match knobs::sweep_pacing() {
+            knobs::SweepPacing::EverySafePoint => true,
+            knobs::SweepPacing::Allocation => {
+                let done = self.sweep_slice_count as u128;
+                let total = done + self.sweep_slices_remaining(budget) as u128;
+                let horizon = self
+                    .gc_threshold
+                    .min(self.sweep_bytes_before.max(SWEEP_HORIZON_FLOOR_BYTES))
+                    / 2;
+                let horizon = horizon as u128;
+                self.bytes_since_gc() as u128 * total >= done * horizon
+            }
+        }
+    }
+
+    /// Slices of `budget` still needed to finish the deferred sweep. Cons
+    /// blocks and each arena class advance `budget` per slice behind their
+    /// cursors, so their part is exact. The pending object lists have no
+    /// length, so they are bounded from above; an overestimate only
+    /// finishes earlier. Every object on them is in `non_cons_object_addrs`.
+    /// A generational minor sweeps only the young list, and the tenured
+    /// objects in that set would swamp it: young survivors are promoted at
+    /// every termination, so the young list holds only objects linked since
+    /// the previous one, each charged at least a header to the allocation
+    /// counter, which bounds it by the allocation since then.
+    pub(super) fn sweep_slices_remaining(&self, budget: usize) -> usize {
+        let budget = budget.max(1);
+        let units = [
+            (self.sweep_cons_cursor, self.sweep_cons_end),
+            (self.sweep_float_page_cursor, self.sweep_float_page_end),
+            (self.sweep_string_page_cursor, self.sweep_string_page_end),
+            (self.sweep_vector_page_cursor, self.sweep_vector_page_end),
+            (
+                self.sweep_bytecode_page_cursor,
+                self.sweep_bytecode_page_end,
+            ),
+            (self.sweep_lambda_page_cursor, self.sweep_lambda_page_end),
+            (self.sweep_macro_page_cursor, self.sweep_macro_page_end),
+            (self.sweep_record_page_cursor, self.sweep_record_page_end),
+            (
+                self.sweep_symbol_with_pos_page_cursor,
+                self.sweep_symbol_with_pos_page_end,
+            ),
+            (self.sweep_marker_page_cursor, self.sweep_marker_page_end),
+            (self.sweep_bignum_page_cursor, self.sweep_bignum_page_end),
+        ]
+        .into_iter()
+        .map(|(cursor, end)| end.saturating_sub(cursor))
+        .max()
+        .unwrap_or(0);
+        let listed = if self.sweep_noncons_pending.is_null()
+            && self.generational.old_sweep_pending.is_null()
+        {
+            0
+        } else {
+            let mut objects = self.non_cons_object_addrs.len();
+            if self.generational.enabled && !self.generational.major_in_progress {
+                // `bytes_since_gc` at termination, before its reset there.
+                let allocated = self
+                    .pace_mark_start_bytes
+                    .saturating_add(self.sweep_mark_window_alloc_bytes);
+                objects = objects.min(allocated / size_of::<GcHeader>());
+            }
+            objects
+                .div_ceil(budget.saturating_mul(NONCONS_OBJECTS_PER_SLICE_UNIT))
+                .max(1)
+        };
+        units.div_ceil(budget).max(listed)
+    }
+
     /// True if a panic ever unwound while one of the collector's own locks was
     /// held. Those critical sections live entirely inside GC machinery, so
     /// poison proves a panic escaped mid-protocol and the heap's invariants
@@ -364,7 +462,7 @@ impl TaggedHeap {
         // -- non-cons: reclaim more objects per slice than cons blocks, since a
         //    cons block holds thousands of cells while a non-cons node is one
         //    object (with a heavier per-object free). --
-        let noncons_budget = budget.saturating_mul(256);
+        let noncons_budget = budget.saturating_mul(NONCONS_OBJECTS_PER_SLICE_UNIT);
         let mut processed = 0usize;
         let mut noncons_freed = if self.generational.major_in_progress {
             self.sweep_old_objects_slice(noncons_budget)

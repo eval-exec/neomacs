@@ -694,3 +694,34 @@ fn generational_partition_verifier_checks_unmarked_old_cons_children() {
     heap.incremental_drain_all();
     heap.verify_dump_partition();
 }
+
+#[test]
+fn minor_sweep_work_estimate_is_bounded_by_the_young_list_not_the_old_boxes() {
+    use crate::value::{HashTableTest, LispHashTable};
+    let mut heap = heap_with_generations(true);
+    set_tagged_heap(&mut heap);
+    let roots = ScratchRoots::new();
+    let tenured: Vec<TaggedValue> = (0..20_000)
+        .map(|_| heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq)))
+        .collect();
+    for &table in &tenured {
+        roots.keep(table);
+    }
+    minor(&mut heap, &tenured);
+    assert!(header(tenured[0]).tenured);
+    for _ in 0..16 {
+        let _ = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
+    }
+    heap.begin_minor_collection().unwrap();
+    heap.complete_minor_collection();
+    assert!(heap.sweep_in_progress());
+    assert!(heap.non_cons_object_addrs.len() > 20_000);
+    // The old boxes alone would read as ten slices of 2,048 objects; this
+    // minor's young list holds 16.
+    let remaining = heap.sweep_slices_remaining(8);
+    assert!(
+        remaining <= 2,
+        "a 16-object young list estimated at {remaining} slices"
+    );
+    heap.finish_incremental_sweep_now();
+}
