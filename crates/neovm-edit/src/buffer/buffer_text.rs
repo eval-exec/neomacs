@@ -86,6 +86,17 @@ pub(crate) fn char_pos_to_emacs_byte_pos_call_count() -> usize {
     CHAR_POS_TO_EMACS_BYTE_POS_CALLS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Bytes copied out of buffer text by [`BufferText::text_emacs_byte_range`]
+/// and [`BufferText::copy_emacs_byte_range_to`]: lets a test prove a reader
+/// scans in place instead of copying.
+#[cfg(test)]
+static TEXT_BYTES_COPIED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn text_bytes_copied() -> usize {
+    TEXT_BYTES_COPIED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Last successful char↔byte conversion. Reused on a subsequent query if the
 /// buffer text has not changed since the entry was stored. Mirrors GNU
 /// `marker.c:202-203` but uses a `BufferText` content epoch rather than
@@ -1257,6 +1268,8 @@ impl BufferText {
     }
 
     pub(crate) fn text_emacs_byte_range(&self, range: EmacsByteRange) -> String {
+        #[cfg(test)]
+        TEXT_BYTES_COPIED.fetch_add(range.len().get(), std::sync::atomic::Ordering::Relaxed);
         self.storage.borrow().backend.text_emacs_byte_range(range)
     }
 
@@ -1268,6 +1281,8 @@ impl BufferText {
     }
 
     pub fn copy_emacs_byte_range_to(&self, range: EmacsByteRange, out: &mut Vec<u8>) {
+        #[cfg(test)]
+        TEXT_BYTES_COPIED.fetch_add(range.len().get(), std::sync::atomic::Ordering::Relaxed);
         self.storage
             .borrow()
             .backend
