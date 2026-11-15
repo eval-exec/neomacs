@@ -673,7 +673,9 @@ impl<'a> BufferLinePrefixRenderRequest<'a> {
             return position;
         }
 
-        let text_props = RustTextPropAccess::new(buffer);
+        // GNU `get_it_property` calls `Fget_char_property (position, prop,
+        // it->window)`, so an overlay bound to another window is skipped.
+        let text_props = RustTextPropAccess::new_for_window(buffer, self.params.window_id as u64);
         let line_property = text_props.get_property(
             anchor_charpos,
             Value::symbol(&crate::fixed_symbols::LINE_PREFIX),
