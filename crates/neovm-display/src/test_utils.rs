@@ -1292,9 +1292,7 @@ mod unit_runtime {
     /// which was modified since its last auto-save, mirroring
     /// `Fdo_auto_save`'s candidate test. The premise is asserted; production
     /// installs the real system body.
-    fn display_auto_save_candidate_exists(
-        ctx: &neovm_eval::emacs_core::eval::Context,
-    ) -> bool {
+    fn display_auto_save_candidate_exists(ctx: &neovm_eval::emacs_core::eval::Context) -> bool {
         ctx.edit.buffers.buffer_list().into_iter().any(|id| {
             let Some(buffer) = ctx.edit.buffers.get(id) else {
                 return false;

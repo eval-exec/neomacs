@@ -645,9 +645,7 @@ mod unit_runtime {
     /// test ever seats a live process here, the no-op would silently skip
     /// real teardown, so it refuses instead. Production installs the real
     /// system body.
-    fn unit_process_shutdown_noop(
-        ctx: &mut Context,
-    ) -> Result<(), neovm_value::error::Flow> {
+    fn unit_process_shutdown_noop(ctx: &mut Context) -> Result<(), neovm_value::error::Flow> {
         let live = ctx.processes().live_process_ids();
         assert!(
             live.is_empty(),
@@ -720,8 +718,7 @@ mod unit_runtime {
     /// the premise is asserted rather than silently folded. The counter is
     /// test-only evidence that the shutdown and command-loop seams actually
     /// reach this slot.
-    static AUTO_SAVE_CALLS: std::sync::atomic::AtomicUsize =
-        std::sync::atomic::AtomicUsize::new(0);
+    static AUTO_SAVE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     /// True when any live buffer meets GNU's auto-save candidate test
     /// (`STRINGP (auto_save_file_name)` and modified since the last
@@ -737,11 +734,7 @@ mod unit_runtime {
         })
     }
 
-    fn unit_auto_save_noop(
-        ctx: &mut Context,
-        _no_message: Value,
-        _current: Value,
-    ) -> EvalResult {
+    fn unit_auto_save_noop(ctx: &mut Context, _no_message: Value, _current: Value) -> EvalResult {
         if auto_save_candidate_exists(ctx) {
             panic!(
                 "ABSENT layer: do-auto-save has a candidate buffer in the eval unit runtime; run this test in core"

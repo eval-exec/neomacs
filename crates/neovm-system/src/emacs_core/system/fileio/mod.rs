@@ -8116,8 +8116,8 @@ static CANONICAL_AUTO_SAVE_HOOKS: neovm_eval::emacs_core::eval::auto_save_hooks:
     neovm_eval::emacs_core::eval::auto_save_hooks::AutoSaveHooks::new(canonical_do_auto_save);
 
 /// The one canonical auto-save descriptor core publishes in its eval hook set.
-pub fn canonical_auto_save_hooks(
-) -> &'static neovm_eval::emacs_core::eval::auto_save_hooks::AutoSaveHooks {
+pub fn canonical_auto_save_hooks()
+-> &'static neovm_eval::emacs_core::eval::auto_save_hooks::AutoSaveHooks {
     &CANONICAL_AUTO_SAVE_HOOKS
 }
 
