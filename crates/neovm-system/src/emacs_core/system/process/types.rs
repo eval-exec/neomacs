@@ -4461,7 +4461,11 @@ impl SystemProcessExt for ProcessManager {
 
         // EOF/EIO removed this PTY from the read set independently of its
         // filter. A filter change must not rearm a drain-only descriptor.
+        // Nor may anything rearm a stopped connection: GNU adds a read
+        // descriptor only while `p->command' is not t (src/process.c:1393-1397,
+        // :3751, :6166) and `continue-process' clears it first.
         let enabled = enabled
+            && !process_stopped_for_io(proc)
             && proc
                 .live_io
                 .pty_reader
@@ -6417,7 +6421,9 @@ impl SystemProcessExt for ProcessManager {
             return Ok(());
         }
 
-        if !process_filter_accepts_output(proc) {
+        // GNU `connect_network_socket` (src/process.c:3751-3753): a `:stop t`
+        // connection is opened but not read until `continue-process'.
+        if process_stopped_for_io(proc) || !process_filter_accepts_output(proc) {
             return Ok(());
         }
         if let Some(poller) = self.wait_backend.poller() {

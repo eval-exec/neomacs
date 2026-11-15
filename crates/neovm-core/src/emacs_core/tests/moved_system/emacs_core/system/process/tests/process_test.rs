@@ -9649,6 +9649,111 @@ fn make_network_process_stop_client_still_allows_send_like_gnu() {
     );
 }
 
+/// The keys the process manager's poller reports ready right now.
+#[cfg(unix)]
+fn ready_poller_keys(pm: &ProcessManager) -> Vec<usize> {
+    let poller = pm.wait_backend.poller().expect("poller");
+    let mut events = polling::Events::new();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll without blocking");
+    events.iter().map(|event| event.key).collect()
+}
+
+/// A network process whose socket holds unread input, registered for reading.
+#[cfg(unix)]
+fn readable_network_process(
+    pm: &mut ProcessManager,
+    name: &str,
+    stopped: bool,
+) -> (u64, std::os::unix::net::UnixStream) {
+    use std::io::Write;
+
+    let id = pm.create_process_with_kind(
+        name.into(),
+        Value::NIL,
+        "network".into(),
+        vec![],
+        ProcessKindWithoutDevice::Network,
+        crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
+    );
+    let (socket, mut peer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+    let proc = pm.get_mut(id).expect("connection record");
+    proc.live_io.network_socket =
+        Some(neovm_eval::emacs_core::eval::data::process_state::NetworkSocket::UnixStream(socket));
+    if stopped {
+        // What `make-network-process :stop t` stores before it registers.
+        proc.command = Value::T;
+    }
+    pm.register_socket_fd(id).expect("register the connection");
+    peer.write_all(b"unread").expect("leave input unread");
+    (id, peer)
+}
+
+/// GNU `Fstop_process` drops a connection's descriptor from the read set
+/// (`delete_read_fd`, src/process.c:7273-7275), nothing re-adds it while
+/// `p->command' is t (`Fset_process_filter` :1390-1397), and
+/// `Fcontinue_process` adds it back (:7301-7305).  A stopped connection
+/// left registered level-triggered with unread input makes every wait
+/// return at once with nothing to read, so the wait spins to its deadline.
+#[cfg(unix)]
+#[test]
+fn stopped_connection_with_unread_input_is_not_polled_until_continued() {
+    crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
+    let mut pm = ProcessManager::new();
+    let buffers = neovm_edit::buffer::BufferManager::new();
+    let (id, _peer) = readable_network_process(&mut pm, "stopped-connection", false);
+    let process = Value::make_process(id);
+    let key = id as usize;
+    assert!(
+        ready_poller_keys(&pm).contains(&key),
+        "a running connection is polled"
+    );
+
+    builtin_stop_process_impl(&mut pm, &buffers, vec![process]).expect("stop-process");
+    assert!(
+        !ready_poller_keys(&pm).contains(&key),
+        "stop-process left the connection's descriptor in the read set"
+    );
+    builtin_set_process_filter_impl(&mut pm, vec![process, Value::T]).expect("filter t");
+    builtin_set_process_filter_impl(&mut pm, vec![process, Value::NIL]).expect("filter nil");
+    assert!(
+        !ready_poller_keys(&pm).contains(&key),
+        "resuming the filter re-armed a stopped connection's reads"
+    );
+
+    builtin_continue_process_impl(&mut pm, &buffers, vec![process]).expect("continue-process");
+    assert!(
+        ready_poller_keys(&pm).contains(&key),
+        "continue-process did not resume reading"
+    );
+}
+
+/// GNU `connect_network_socket` does not add a `:stop t` connection to the
+/// read set (src/process.c:3751-3753); `continue-process` starts reading it.
+#[cfg(unix)]
+#[test]
+fn connection_created_stopped_is_not_polled_until_continued() {
+    crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
+    let mut pm = ProcessManager::new();
+    let buffers = neovm_edit::buffer::BufferManager::new();
+    let (id, _peer) = readable_network_process(&mut pm, "created-stopped", true);
+    let key = id as usize;
+    assert!(
+        !ready_poller_keys(&pm).contains(&key),
+        "a `:stop t` connection was registered for reading"
+    );
+
+    builtin_continue_process_impl(&mut pm, &buffers, vec![Value::make_process(id)])
+        .expect("continue-process");
+    assert!(
+        ready_poller_keys(&pm).contains(&key),
+        "continue-process did not start reading a `:stop t` connection"
+    );
+}
+
 #[test]
 fn make_network_process_datagram_udp_loopback_like_gnu() {
     crate::test_utils::init_test_tracing();

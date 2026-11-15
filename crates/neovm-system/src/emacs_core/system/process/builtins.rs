@@ -3665,11 +3665,15 @@ pub(crate) fn builtin_continue_process_impl(
     // rejects it at :7087-7089.
     let is_live = processes.get(id).is_some();
     let mut continued = false;
+    let mut resumed_reading = None;
     if let Some(proc) = processes.get_any_mut(id) {
         if matches!(
             proc.kind,
             ProcessKind::Network | ProcessKind::Pipe | ProcessKind::Serial
         ) {
+            if proc.command == Value::T {
+                resumed_reading = Some(process_filter_accepts_output(proc));
+            }
             proc.command = Value::NIL;
             if proc.kind == ProcessKind::Serial {
                 proc.status = ProcessStatusSymbol::Open.value();
@@ -3686,6 +3690,11 @@ pub(crate) fn builtin_continue_process_impl(
                 deliver_process_signal(proc, libc::SIGCONT, ProcessSignalRecipient::ProcessGroup);
             continued = true;
         }
+    }
+    if let Some(accepts_output) = resumed_reading {
+        // GNU's `add_process_read_fd (p->infd)` for a stopped connection
+        // (:7301-7305).
+        processes.set_process_output_read_interest(id, accepts_output);
     }
     if continued {
         // GNU's `p->tick = ++process_tick;` at src/process.c:7178, between the
@@ -3870,16 +3879,24 @@ pub(crate) fn builtin_stop_process_impl(
     // `p->command' to t and returns the process, with no liveness test at all.
     let is_live = processes.get(id).is_some();
     let recipient = process_signal_recipient(&args);
+    let mut stopped_reading = false;
     if let Some(proc) = processes.get_any_mut(id) {
         if matches!(
             proc.kind,
             ProcessKind::Network | ProcessKind::Pipe | ProcessKind::Serial
         ) {
+            stopped_reading = proc.command != Value::T;
             proc.command = Value::T;
         } else if is_live {
             #[cfg(unix)]
             let _ = deliver_process_signal(proc, libc::SIGTSTP, recipient);
         }
+    }
+    if stopped_reading {
+        // GNU's `delete_read_fd (p->infd)` (:7273-7275).  A level-triggered
+        // descriptor left registered with unread input wakes every wait with
+        // nothing the stopped connection may read.
+        processes.set_process_output_read_interest(id, false);
     }
     Ok(ret)
 }
