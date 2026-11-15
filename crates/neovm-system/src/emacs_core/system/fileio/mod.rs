@@ -7993,8 +7993,10 @@ pub fn builtin_do_auto_save(
     // GNU `Fdo_auto_save` walks the LIVE buffer alist twice
     // (`fileio.c:6402`): pass 0 saves every buffer whose auto-save file
     // name has no `write-region' file-name-handler -- pure C writes in
-    // GNU, so no Lisp runs -- and pass 1 saves the handler buffers, whose
-    // `write-region' dispatch may run arbitrary Lisp. Handler Lisp only
+    // GNU, so no Lisp runs -- and pass 1 saves every still-eligible buffer
+    // (`fileio.c:6438-6440`: the handler gate applies only in pass 0),
+    // including handler buffers whose `write-region' dispatch may run
+    // arbitrary Lisp. Handler Lisp only
     // ever observes a completed handler-less pass: a buffer it kills was
     // saved first (if it was handler-less), and a buffer it appends is
     // visited by the still-running pass 1. `FOR_EACH_LIVE_BUFFER`
@@ -8092,15 +8094,17 @@ pub fn builtin_do_auto_save(
 
             // GNU auto_save_1 always passes auto_save_file_name to Fwrite_region.
             // auto-save-visited-file-name changes VISIT (lambda/t), not this name.
-            // The name also selects the pass (`fileio.c:6439-6440`): pass 0
-            // saves only buffers without a `write-region' handler, pass 1 only
-            // buffers with one.
+            // The name also selects the pass (`fileio.c:6438-6440`): only pass
+            // without handlers skips a buffer whose auto-save name has a
+            // `write-region' handler. Pass 1 re-examines every still-eligible
+            // buffer, including handler-less buffers created during pass 0's
+            // saves, so a late buffer is not left unsaved.
             let Some(auto_save_name) = auto_save_name else {
                 continue;
             };
             let has_write_region_handler =
                 !find_file_name_handler_lisp_for_eval(eval, &auto_save_name, write_region).is_nil();
-            if has_write_region_handler != do_handled_files {
+            if !do_handled_files && has_write_region_handler {
                 continue;
             }
 
