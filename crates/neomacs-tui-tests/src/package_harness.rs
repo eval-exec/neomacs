@@ -69,6 +69,11 @@ pub fn invoke_with_prompt_timeout(
 }
 
 /// The message text of a caught panic payload.
+///
+/// A payload thrown with `panic_any` carries no message. Stable Rust cannot
+/// print a `dyn Any` value, so the report keeps what identity the payload
+/// has, the way `prin1` prints an opaque object: `#<...>`. String-shaped
+/// payloads -- `String`, `&str`, `Box<str>` -- print verbatim.
 pub fn panic_text(payload: Box<dyn Any + Send>) -> String {
     payload
         .downcast_ref::<String>()
@@ -78,7 +83,12 @@ pub fn panic_text(payload: Box<dyn Any + Send>) -> String {
                 .downcast_ref::<&str>()
                 .map(|value| (*value).to_owned())
         })
-        .unwrap_or_else(|| "non-string panic payload".to_owned())
+        .or_else(|| {
+            payload
+                .downcast_ref::<Box<str>>()
+                .map(|value| (**value).to_owned())
+        })
+        .unwrap_or_else(|| format!("#<non-string panic payload {:?}>", payload.type_id()))
 }
 
 /// Run `phase`, turning a panic into a `String` labelled with `label`.
