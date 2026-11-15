@@ -114,8 +114,10 @@ fn request(
     )
 }
 
-fn byte_at_charpos(text: &'static [u8]) -> impl Fn(i64) -> Option<u8> {
-    move |charpos| text.get(charpos as usize).copied()
+/// `text` as the line searches read it: unibyte ASCII, so character and
+/// byte positions coincide.
+fn byte_at_charpos(text: &'static [u8]) -> &'static [u8] {
+    text
 }
 
 #[test]

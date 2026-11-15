@@ -2557,6 +2557,12 @@ impl<'a, B: LayoutBufferView> RustBufferAccess<'a, B> {
     }
 }
 
+impl<B: LayoutBufferView> crate::scroll_policy::LineText for RustBufferAccess<'_, B> {
+    fn byte_at_charpos(&self, charpos: i64) -> Option<u8> {
+        self.byte_at(self.charpos_to_bytepos(charpos))
+    }
+}
+
 /// Soft cap (in emacs bytes) on how far ahead the display `invisible` scan
 /// walks the text-property interval tree per redisplay. Beyond this the scan
 /// returns a soft boundary and the checkpoint cache re-scans a screenful later;

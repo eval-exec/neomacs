@@ -9,8 +9,10 @@ fn margin(lines: i64) -> ScrollMargin {
 /// newline at `2*(N-1)+1`. Charpos 26 is line 14 ("n").
 const LINES16: &[u8] = b"a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\no\np\n";
 
-fn byte_at(text: &'static [u8]) -> impl Fn(i64) -> Option<u8> {
-    move |charpos| text.get(charpos as usize).copied()
+/// `text` as the line searches read it: unibyte ASCII, so character and
+/// byte positions coincide.
+fn byte_at(text: &'static [u8]) -> &'static [u8] {
+    text
 }
 
 #[test]

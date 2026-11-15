@@ -194,6 +194,12 @@ pub(crate) fn last_usable_row(window_rows: usize, scroll_margin: ScrollMargin) -
     scroll_margin.last_usable_line(window_rows as i64)
 }
 
+/// Buffer text as the line-boundary searches below read it.
+pub(crate) trait LineText {
+    /// The byte at character position `charpos`.
+    fn byte_at_charpos(&self, charpos: i64) -> Option<u8>;
+}
+
 /// Count newlines in `from..to`, stopping once `limit` is exceeded.
 ///
 /// Returns `(count, bounded)`; `bounded` is false when the scan hit `limit`
@@ -204,12 +210,12 @@ pub(crate) fn count_lines_bounded(
     from: i64,
     to: i64,
     limit: i64,
-    byte_at_charpos: &impl Fn(i64) -> Option<u8>,
+    text: &(impl LineText + ?Sized),
 ) -> (i64, bool) {
     let mut lines = 0i64;
     let mut pos = from;
     while pos < to {
-        if byte_at_charpos(pos) == Some(b'\n') {
+        if text.byte_at_charpos(pos) == Some(b'\n') {
             lines += 1;
             if lines > limit {
                 return (lines, false);
@@ -230,11 +236,11 @@ pub(crate) fn line_start_above(
     point: i64,
     lines_above: i64,
     accessible_start: i64,
-    byte_at_charpos: &impl Fn(i64) -> Option<u8>,
+    text: &(impl LineText + ?Sized),
 ) -> i64 {
     let mut pos = point.max(accessible_start);
     let is_line_start =
-        |pos: i64| pos <= accessible_start || byte_at_charpos(pos - 1) == Some(b'\n');
+        |pos: i64| pos <= accessible_start || text.byte_at_charpos(pos - 1) == Some(b'\n');
     while !is_line_start(pos) {
         pos -= 1;
     }
@@ -258,17 +264,25 @@ pub(crate) fn line_start_below(
     from: i64,
     lines: i64,
     accessible_end: i64,
-    byte_at_charpos: &impl Fn(i64) -> Option<u8>,
+    text: &(impl LineText + ?Sized),
 ) -> i64 {
     let mut pos = from;
     let mut moved = 0;
     while moved < lines && pos < accessible_end {
-        if byte_at_charpos(pos) == Some(b'\n') {
+        if text.byte_at_charpos(pos) == Some(b'\n') {
             moved += 1;
         }
         pos += 1;
     }
     pos
+}
+
+/// Unibyte ASCII test text: character and byte positions coincide.
+#[cfg(test)]
+impl LineText for &[u8] {
+    fn byte_at_charpos(&self, charpos: i64) -> Option<u8> {
+        self.get(charpos as usize).copied()
+    }
 }
 
 #[cfg(test)]
