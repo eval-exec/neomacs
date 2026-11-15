@@ -364,7 +364,7 @@ impl OverlayList {
         let _ = copy.with_overlay_data_mut(|data| {
             data.plist = plist;
         });
-        self.absent_properties.set([None; 8]);
+        self.invalidate_snapshot();
         self.index.overlay_properties_changed(copy);
         true
     }
@@ -385,6 +385,7 @@ impl OverlayList {
     fn adjust_for_text_edit(&mut self, edit: OverlayTextEdit) {
         let order = self.apply_text_edit(edit);
         self.retain_snapshot_if(|_, snapshot| {
+            snapshot.invalidate_snapshot();
             order == OverlayEditOrder::Preserved
                 && snapshot.apply_text_edit(edit) == OverlayEditOrder::Preserved
         });

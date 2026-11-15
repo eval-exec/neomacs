@@ -323,3 +323,30 @@ fn overlay_put_on_overlays_sharing_a_range_does_not_scan_every_copy() {
          and {large} for 1000"
     );
 }
+
+#[test]
+fn nested_snapshot_of_the_cached_snapshot_sees_in_place_updates() {
+    crate::test_utils::init_test_tracing();
+    let mut list = face_overlays(10);
+    let face = Value::symbol("face");
+    // The cached copy caches a snapshot of its own (`OverlaySnapshot` derefs
+    // to `OverlayList`).
+    drop(list.snapshot().snapshot());
+
+    let target = overlays_at(&list, 7 * 4)[0];
+    list.overlay_put(target, face, Value::symbol("warning"))
+        .unwrap();
+    let nested = list.snapshot().snapshot();
+    assert_eq!(observe(&nested), observe(&list), "after overlay-put");
+    let copy = overlays_at(&nested, 7 * 4)[0];
+    assert_eq!(
+        nested.overlay_get_named(copy, face),
+        Some(Value::symbol("warning"))
+    );
+    drop(nested);
+
+    list.adjust_for_insert_at_emacs_byte_pos(emacs_byte_pos(0), emacs_byte_len(3), false);
+    let nested = list.snapshot().snapshot();
+    assert_eq!(observe(&nested), observe(&list), "after an insertion");
+    assert_eq!(serials_at(&nested, 7 * 4 + 3), serials_at(&list, 7 * 4 + 3));
+}
