@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use super::*;
 use crate::emacs_core::builtins::*;
-use crate::emacs_core::subr::{FixedMin1, FixedMin2, FixedMin3, FixedMin4};
+use crate::emacs_core::subr::{FixedMin1, FixedMin2, FixedMin3, FixedMin4, FixedMin5};
 #[doc(hidden)]
 pub use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 
@@ -2206,6 +2206,77 @@ crate::emacs_core::subr::define_subrs! {
         "equal-including-properties",
         crate::emacs_core::fns::builtin_equal_including_properties_2,
         FixedMin2::Two,
+    )),
+    // -- Text properties (GNU textprop.c; implementations live in neovm-edit) --
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed5(
+        "put-text-property",
+        neovm_edit::emacs_core::textprop::builtin_put_text_property_5,
+        FixedMin5::Four,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed3(
+        "get-text-property",
+        neovm_edit::emacs_core::textprop::builtin_get_text_property_3,
+        FixedMin3::Two,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "add-face-text-property",
+        NativeFn::ContextVec(neovm_edit::emacs_core::textprop::builtin_add_face_text_property),
+        SubrArity::new(3, Some(5)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed4(
+        "add-text-properties",
+        neovm_edit::emacs_core::textprop::builtin_add_text_properties_4,
+        FixedMin4::Three,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "set-text-properties",
+        NativeFn::ContextVec(neovm_edit::emacs_core::textprop::builtin_set_text_properties),
+        SubrArity::new(3, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "remove-text-properties",
+        NativeFn::ContextSlice(neovm_edit::emacs_core::textprop::builtin_remove_text_properties),
+        SubrArity::new(3, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
+        "text-properties-at",
+        neovm_edit::emacs_core::textprop::builtin_text_properties_at_2,
+        FixedMin2::One,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "get-display-property",
+        NativeFn::ContextVec(neovm_edit::emacs_core::textprop::builtin_get_display_property),
+        SubrArity::new(2, Some(4)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "next-property-change",
+        NativeFn::ContextVec(neovm_edit::emacs_core::textprop::builtin_next_property_change),
+        SubrArity::new(1, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "text-property-any",
+        NativeFn::ContextSlice(neovm_edit::emacs_core::textprop::builtin_text_property_any),
+        SubrArity::new(4, Some(5)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed5(
+        "text-property-not-all",
+        neovm_edit::emacs_core::textprop::builtin_text_property_not_all_5,
+        FixedMin5::Four,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed4(
+        "remove-list-of-text-properties",
+        neovm_edit::emacs_core::textprop::builtin_remove_list_of_text_properties_4,
+        FixedMin4::Three,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed4(
+        "next-single-property-change",
+        neovm_edit::emacs_core::textprop::builtin_next_single_property_change_4,
+        FixedMin4::Two,
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::fixed4(
+        "previous-single-property-change",
+        neovm_edit::emacs_core::textprop::builtin_previous_single_property_change_4,
+        FixedMin4::Two,
     )),
     // -- Vector --
     crate::emacs_core::subr::world_subr!(SubrSpec::new(

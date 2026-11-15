@@ -987,16 +987,6 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::kmacro::builtin_store_kbd_macro_event),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed5(
-        "put-text-property",
-        crate::emacs_core::textprop::builtin_put_text_property_5,
-        FixedMin5::Four,
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed3(
-        "get-text-property",
-        crate::emacs_core::textprop::builtin_get_text_property_3,
-        FixedMin3::Two,
-    )));
     ctx.register_subr(
         const {
             crate::emacs_core::subr::world_subr!(SubrSpec::fixed3(
@@ -1007,51 +997,6 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
             .leaf(&leaves::GET_CHAR_PROPERTY)
         },
     );
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "add-face-text-property",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_add_face_text_property),
-        SubrArity::new(3, Some(5)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed4(
-        "add-text-properties",
-        crate::emacs_core::textprop::builtin_add_text_properties_4,
-        FixedMin4::Three,
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-text-properties",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_set_text_properties),
-        SubrArity::new(3, Some(4)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "remove-text-properties",
-        NativeFn::ContextSlice(crate::emacs_core::textprop::builtin_remove_text_properties),
-        SubrArity::new(3, Some(4)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
-        "text-properties-at",
-        crate::emacs_core::textprop::builtin_text_properties_at_2,
-        FixedMin2::One,
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "get-display-property",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_get_display_property),
-        SubrArity::new(2, Some(4)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "next-property-change",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_next_property_change),
-        SubrArity::new(1, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "text-property-any",
-        NativeFn::ContextSlice(crate::emacs_core::textprop::builtin_text_property_any),
-        SubrArity::new(4, Some(5)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed5(
-        "text-property-not-all",
-        crate::emacs_core::textprop::builtin_text_property_not_all_5,
-        FixedMin5::Four,
-    )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "next-overlay-change",
         NativeFn::ContextVec(
@@ -3436,27 +3381,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_datagram_address),
         SubrArity::new(2, Some(2)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed4(
-        "remove-list-of-text-properties",
-        crate::emacs_core::textprop::builtin_remove_list_of_text_properties_4,
-        FixedMin4::Three,
-    )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "get-char-property-and-overlay",
         NativeFn::ContextVec(
             crate::emacs_core::textprop_entries::builtin_get_char_property_and_overlay
         ),
         SubrArity::new(2, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed4(
-        "next-single-property-change",
-        crate::emacs_core::textprop::builtin_next_single_property_change_4,
-        FixedMin4::Two,
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed4(
-        "previous-single-property-change",
-        crate::emacs_core::textprop::builtin_previous_single_property_change_4,
-        FixedMin4::Two,
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
         "line-beginning-position",
