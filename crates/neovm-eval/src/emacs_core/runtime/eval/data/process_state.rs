@@ -1187,7 +1187,7 @@ impl Device {
             if unsafe {
                 windows_sys::Win32::System::Threading::WaitForSingleObject(
                     self.write_event.as_raw_handle(),
-                    windows_sys::Win32::Foundation::INFINITE,
+                    windows_sys::Win32::System::Threading::INFINITE,
                 )
             } != windows_sys::Win32::Foundation::WAIT_OBJECT_0
             {
