@@ -7401,6 +7401,7 @@ mod absent_layer;
 pub(crate) mod boot_vars;
 #[cfg(feature = "test-support")]
 pub use boot_vars::xdisp::register_bootstrap_vars as register_xdisp_bootstrap_vars_for_test;
+pub mod auto_save_hooks;
 pub mod buffer_kill;
 pub mod call_interactively;
 pub mod case_table_adapter;

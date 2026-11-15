@@ -736,6 +736,7 @@ fn a_stale_condition_index_reports_the_scheduler_invariant_at_the_deadlock_verdi
 #[test]
 fn kill_emacs_in_a_thread_exits_from_main_without_cleanups() {
     let mut ev = green();
+    crate::test_utils::reset_auto_save_slot_calls_for_test();
     eval(&mut ev, "(setq tgx-cleanup nil tgx-m (make-mutex))");
     let outcome = eval(
         &mut ev,
@@ -754,6 +755,10 @@ fn kill_emacs_in_a_thread_exits_from_main_without_cleanups() {
     assert_eq!(
         ev.shutdown_request().map(|request| request.exit_code),
         Some(7)
+    );
+    assert!(
+        crate::test_utils::auto_save_slot_calls_for_test() >= 1,
+        "GNU shut_down_emacs must reach Fdo_auto_save through the installed auto-save slot"
     );
     assert!(ev.visible_variable_value_or_nil("tgx-cleanup").is_nil());
     ev.green_teardown();

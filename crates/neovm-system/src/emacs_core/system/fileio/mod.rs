@@ -8099,6 +8099,28 @@ pub fn builtin_do_auto_save(
     Ok(Value::NIL)
 }
 
+/// The production auto-save upcall: the exact canonical `do-auto-save` body.
+///
+/// Eval's shutdown and command-loop boundaries reach this through the
+/// eval-owned `AutoSaveHooks` table, which core installs at construction.
+/// The Lisp arguments arrive with absent optionals already resolved to nil.
+fn canonical_do_auto_save(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    no_message: Value,
+    current: Value,
+) -> EvalResult {
+    builtin_do_auto_save(eval, vec![no_message, current])
+}
+
+static CANONICAL_AUTO_SAVE_HOOKS: neovm_eval::emacs_core::eval::auto_save_hooks::AutoSaveHooks =
+    neovm_eval::emacs_core::eval::auto_save_hooks::AutoSaveHooks::new(canonical_do_auto_save);
+
+/// The one canonical auto-save descriptor core publishes in its eval hook set.
+pub fn canonical_auto_save_hooks(
+) -> &'static neovm_eval::emacs_core::eval::auto_save_hooks::AutoSaveHooks {
+    &CANONICAL_AUTO_SAVE_HOOKS
+}
+
 // ===========================================================================
 // Bootstrap variables
 // ===========================================================================

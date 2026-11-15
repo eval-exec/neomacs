@@ -170,7 +170,6 @@ impl CommandLoopSymbol {
 // `Qidentity`, `Qonly`, `Vtransient_mark_mode`, `Vinput_pending_p_filter_events`).
 static INPUT_PENDING_FILTER_EVENTS: WellKnown = WellKnown::InputPendingPFilterEvents;
 static DEBUG_ON_EVENT: WellKnown = WellKnown::DebugOnEvent;
-static DO_AUTO_SAVE: WellKnown = WellKnown::DoAutoSave;
 
 // Hooks the command loop runs itself, pre-resolved to fixed DEFSYM ids.
 
@@ -284,21 +283,13 @@ impl Context {
         // and process teardown precedes the canonical shutdown auto-save.
         super::process_hooks::shutdown_processes_for_exit(self)?;
         // GNU calls `Fdo_auto_save (Qt, Qnil)` directly after disabling
-        // hooks (`emacs.c:3107-3110`, `:3157`). Resolve the canonical subr,
-        // independently of a redefined or unbound Lisp function cell.
-        // A handler's nonlocal exit leaves before publishing this request,
-        // including a throw or a nested shutdown with its own exit code.
-        crate::emacs_core::builtins::dispatch_builtin_by_id(
-            self,
-            DO_AUTO_SAVE.id(),
-            vec![Value::T, Value::NIL],
-        )
-        .ok_or_else(|| {
-            signal(
-                LispCondition::VoidFunction,
-                vec![Value::symbol(&DO_AUTO_SAVE)],
-            )
-        })??;
+        // hooks (`emacs.c:3107-3110`, `:3157`). The canonical body is reached
+        // through the eval-owned auto-save table core installs at
+        // construction, independently of a redefined or unbound Lisp
+        // function cell. A handler's nonlocal exit leaves before publishing
+        // this request, including a throw or a nested shutdown with its own
+        // exit code.
+        super::auto_save_hooks::do_auto_save(self, Value::T, Value::NIL)?;
         // GNU emacs.c:3157-3159: auto-save, then unlock_all_files. An
         // escaping unlock handler keeps Dying but leaves before publishing;
         // a later deliberate kill repeats both operations. The deliberate
@@ -444,7 +435,7 @@ impl Context {
         } else {
             Value::NIL
         };
-        if let Err(flow) = self.apply(Value::symbol(&DO_AUTO_SAVE), vec![no_message, Value::NIL]) {
+        if let Err(flow) = super::auto_save_hooks::do_auto_save(self, no_message, Value::NIL) {
             let rendered = crate::emacs_core::print::format_flow_with_eval(self, &flow);
             tracing::warn!("auto-save from {trigger} failed: {rendered}");
         }

@@ -1285,6 +1285,41 @@ mod unit_runtime {
 
     static BUFFER_KILL: BufferKillHooks = BufferKillHooks::new(s::buffer_kill_before);
 
+    /// Documented no-op auto-save body for the display unit runtime.
+    ///
+    /// The no-op is exact only while the runtime has no auto-save candidate
+    /// buffer: a buffer whose `buffer-auto-save-file-name` is a string and
+    /// which was modified since its last auto-save, mirroring
+    /// `Fdo_auto_save`'s candidate test. The premise is asserted; production
+    /// installs the real system body.
+    fn display_auto_save_candidate_exists(
+        ctx: &neovm_eval::emacs_core::eval::Context,
+    ) -> bool {
+        ctx.edit.buffers.buffer_list().into_iter().any(|id| {
+            let Some(buffer) = ctx.edit.buffers.get(id) else {
+                return false;
+            };
+            buffer.auto_save_file_name_value().is_string()
+                && buffer.base_buffer().is_none()
+                && buffer.autosave_modified_tick() < buffer.modified_tick()
+        })
+    }
+
+    fn unit_auto_save_noop(
+        ctx: &mut neovm_eval::emacs_core::eval::Context,
+        _no_message: Value,
+        _current: Value,
+    ) -> EvalResult {
+        assert!(
+            !display_auto_save_candidate_exists(ctx),
+            "ABSENT layer: do-auto-save has a candidate buffer in the display unit runtime; run this test in core"
+        );
+        Ok(Value::NIL)
+    }
+
+    static AUTO_SAVE: neovm_eval::emacs_core::eval::auto_save_hooks::AutoSaveHooks =
+        neovm_eval::emacs_core::eval::auto_save_hooks::AutoSaveHooks::new(unit_auto_save_noop);
+
     static KMACRO: KmacroHooks = KmacroHooks::new(
         s::kmacro_start,
         s::kmacro_end,
@@ -1348,6 +1383,7 @@ mod unit_runtime {
                 &CALL_INTERACTIVELY,
                 &CASE_TABLES,
                 &BUFFER_KILL,
+                &AUTO_SAVE,
                 &KMACRO,
                 crate::emacs_core::xdisp::canonical_display_query_hooks(),
                 false,

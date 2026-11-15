@@ -47,6 +47,7 @@ pub struct EvalHookSet {
     call_interactively: &'static call_interactively::CallInteractivelyHooks,
     case_tables: &'static case_tables::CaseTableHooks,
     buffer_kill: &'static buffer_kill::BufferKillHooks,
+    auto_save: &'static auto_save_hooks::AutoSaveHooks,
     kmacro: &'static kmacro_hooks::KmacroHooks,
     display_query: &'static display_query_hooks::DisplayQueryHooks,
     perf_enabled: bool,
@@ -146,6 +147,7 @@ impl EvalHookSet {
         call_interactively: &'static call_interactively::CallInteractivelyHooks,
         case_tables: &'static case_tables::CaseTableHooks,
         buffer_kill: &'static buffer_kill::BufferKillHooks,
+        auto_save: &'static auto_save_hooks::AutoSaveHooks,
         kmacro: &'static kmacro_hooks::KmacroHooks,
         display_query: &'static display_query_hooks::DisplayQueryHooks,
         perf_enabled: bool,
@@ -165,6 +167,7 @@ impl EvalHookSet {
             call_interactively,
             case_tables,
             buffer_kill,
+            auto_save,
             kmacro,
             display_query,
             perf_enabled,
@@ -232,6 +235,7 @@ pub fn install_eval_hooks(
     )?);
     accept_hook_status(case_tables::install_case_table_hooks(set.case_tables)?);
     accept_hook_status(buffer_kill::install_buffer_kill_hooks(set.buffer_kill)?);
+    accept_hook_status(auto_save_hooks::install_auto_save_hooks(set.auto_save)?);
     accept_hook_status(kmacro_hooks::install_kmacro_hooks(set.kmacro)?);
     // 4. Display policy queries.
     accept_hook_status(display_query_hooks::install_display_query_hooks(

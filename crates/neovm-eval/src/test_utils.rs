@@ -637,10 +637,29 @@ mod unit_runtime {
         s::sqlite_reset,
     );
 
+    /// Documented no-op process shutdown for the eval unit runtime.
+    ///
+    /// Process creation is a system-layer primitive, so a well-formed unit
+    /// runtime has an empty live process table and GNU's `shut_down_emacs`
+    /// "shut down every process" fold is exact. The premise is asserted: if a
+    /// test ever seats a live process here, the no-op would silently skip
+    /// real teardown, so it refuses instead. Production installs the real
+    /// system body.
+    fn unit_process_shutdown_noop(
+        ctx: &mut Context,
+    ) -> Result<(), neovm_value::error::Flow> {
+        let live = ctx.processes().live_process_ids();
+        assert!(
+            live.is_empty(),
+            "ABSENT layer: unit process table is not empty ({live:?}); run this test in core"
+        );
+        Ok(())
+    }
+
     static PROCESS: ProcessHooks = ProcessHooks::new(
         s::process_unlink,
         s::process_delete,
-        s::process_shutdown,
+        unit_process_shutdown_noop,
         s::process_open_channel,
         s::process_print_handle,
         s::process_wait_notifier,
@@ -691,6 +710,97 @@ mod unit_runtime {
     );
 
     static BUFFER_KILL: BufferKillHooks = BufferKillHooks::new(s::buffer_kill_before);
+
+    /// Documented no-op auto-save body for the eval unit runtime.
+    ///
+    /// The no-op is exact only while the runtime has no auto-save candidate
+    /// buffer: a buffer whose `buffer-auto-save-file-name` is a string and
+    /// which was modified since its last auto-save. The unit runtime CAN make
+    /// such a buffer, and GNU would then call the system auto-save body, so
+    /// the premise is asserted rather than silently folded. The counter is
+    /// test-only evidence that the shutdown and command-loop seams actually
+    /// reach this slot.
+    static AUTO_SAVE_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    /// True when any live buffer meets GNU's auto-save candidate test
+    /// (`STRINGP (auto_save_file_name)` and modified since the last
+    /// auto-save; indirect buffers are skipped by `Fdo_auto_save`).
+    fn auto_save_candidate_exists(ctx: &Context) -> bool {
+        ctx.edit.buffers.buffer_list().into_iter().any(|id| {
+            let Some(buffer) = ctx.edit.buffers.get(id) else {
+                return false;
+            };
+            buffer.auto_save_file_name_value().is_string()
+                && buffer.base_buffer().is_none()
+                && buffer.autosave_modified_tick() < buffer.modified_tick()
+        })
+    }
+
+    fn unit_auto_save_noop(
+        ctx: &mut Context,
+        _no_message: Value,
+        _current: Value,
+    ) -> EvalResult {
+        if auto_save_candidate_exists(ctx) {
+            panic!(
+                "ABSENT layer: do-auto-save has a candidate buffer in the eval unit runtime; run this test in core"
+            );
+        }
+        AUTO_SAVE_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Value::NIL)
+    }
+
+    /// Number of times the unit auto-save slot was entered (test evidence).
+    pub(crate) fn auto_save_slot_calls_for_test() -> usize {
+        AUTO_SAVE_CALLS.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Reset the unit auto-save slot counter before a seam assertion.
+    pub(crate) fn reset_auto_save_slot_calls_for_test() {
+        AUTO_SAVE_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    static AUTO_SAVE: crate::emacs_core::eval::auto_save_hooks::AutoSaveHooks =
+        crate::emacs_core::eval::auto_save_hooks::AutoSaveHooks::new(unit_auto_save_noop);
+
+    /// A buffer the unit runtime made file-visiting and modified must refuse
+    /// the "empty fold" no-op: its premise (no auto-save candidate) is false,
+    /// so GNU would have called the system body. The test proves the ABSENT
+    /// panic rather than a silent nil.
+    #[test]
+    fn unit_auto_save_slot_refuses_a_candidate_buffer() {
+        let mut context = Context::new(unit_runtime());
+        context
+            .eval_str("(setq unit-auto-save-b (get-buffer-create \"unit-auto-save-candidate\"))")
+            .expect("candidate buffer");
+        let buffer = context
+            .eval_str("unit-auto-save-b")
+            .expect("candidate buffer value");
+        let id = buffer.as_buffer_id().expect("candidate buffer object");
+        context
+            .edit
+            .buffers
+            .get_mut(id)
+            .expect("candidate buffer live")
+            .set_auto_save_file_name_value(Value::string("unit-auto-save-candidate.auto"));
+        context
+            .eval_str("(save-current-buffer (set-buffer unit-auto-save-b) (insert \"x\"))")
+            .expect("candidate buffer mutation");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            unit_auto_save_noop(&mut context, Value::T, Value::NIL)
+        }));
+        let payload = outcome.expect_err("a candidate buffer must refuse the unit no-op");
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("");
+        assert!(
+            message.contains("ABSENT layer"),
+            "unexpected panic message: {message}"
+        );
+    }
 
     static KMACRO: KmacroHooks = KmacroHooks::new(
         s::kmacro_start,
@@ -773,6 +883,7 @@ mod unit_runtime {
         &CALL_INTERACTIVELY,
         &CASE_TABLES,
         &BUFFER_KILL,
+        &AUTO_SAVE,
         &KMACRO,
         &DISPLAY_QUERY,
         false,
@@ -3287,6 +3398,7 @@ mod unit_runtime {
 pub(crate) use unit_runtime::unit_runtime;
 #[cfg(test)]
 pub(crate) use unit_runtime::{
+    auto_save_slot_calls_for_test, reset_auto_save_slot_calls_for_test,
     terminal_delete_noelisp_slot_is_absent, terminal_live_ids_slot_is_absent,
 };
 
