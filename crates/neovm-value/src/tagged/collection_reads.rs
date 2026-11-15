@@ -1236,7 +1236,7 @@ mod tests;
 
 #[cfg(test)]
 #[path = "collection_reads/tests/allocation_test.rs"]
-mod allocation_tests;
+pub(crate) mod allocation_tests;
 
 #[cfg(test)]
 #[path = "collection_reads/tests/recent_clear_test.rs"]

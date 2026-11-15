@@ -2192,6 +2192,10 @@ pub(crate) fn plist_member_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bo
 mod aset_string_in_place_test;
 
 #[cfg(test)]
+#[path = "tests/puthash_equal_live_key_test.rs"]
+mod puthash_equal_live_key_test;
+
+#[cfg(test)]
 #[path = "tests/gc_tls_collections_test.rs"]
 mod gc_tls_ownership_tests;
 

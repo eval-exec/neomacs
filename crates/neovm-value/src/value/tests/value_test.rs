@@ -821,3 +821,6 @@ fn list_iter_terminates_on_a_circular_list() {
 
 #[path = "hash_probe_test.rs"]
 mod hash_probe;
+
+#[path = "hash_live_key_test.rs"]
+mod hash_live_key;
