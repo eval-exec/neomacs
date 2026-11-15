@@ -123,6 +123,21 @@ impl TaggedHeap {
         self.process_registry.insert(id, value);
     }
 
+    /// Arm retired process fields as ephemerons for the next full collection.
+    #[doc(hidden)]
+    pub fn arm_retired_process_ephemerons(
+        &mut self,
+        retired: Vec<(crate::heap_types::ProcessId, Vec<TaggedValue>)>,
+    ) {
+        self.retired_process_ephemerons = retired.into_iter().collect();
+    }
+
+    /// Take the process ids reclaimed by the last full collection.
+    #[doc(hidden)]
+    pub fn take_reclaimed_process_ids(&mut self) -> Vec<crate::heap_types::ProcessId> {
+        std::mem::take(&mut self.reclaimed_process_ids)
+    }
+
     /// Register cons cells whose storage is owned by the loaded pdump image.
     ///
     /// # Safety

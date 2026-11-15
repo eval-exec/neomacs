@@ -1428,9 +1428,17 @@ impl Context {
                 // Disarms a concurrent first cycle drained above, so this
                 // cycle traces the whole image before it promotes (see
                 // `begin_stw_collection`).
+                // Arm process ephemerons before begin_stw_collection seeds the
+                // process registry as an internal root.
+                let (ephemerons, retired_processes) =
+                    self.processes.take_retired_processes_for_gc();
+                (*heap_ptr).arm_retired_process_ephemerons(ephemerons);
                 (*heap_ptr).begin_stw_collection();
                 self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                 (*heap_ptr).complete_collection();
+                let reclaimed_processes = (*heap_ptr).take_reclaimed_process_ids();
+                self.processes
+                    .restore_reached_retired_processes(retired_processes, reclaimed_processes);
                 cycle_completed = true;
             } else {
                 match (*heap_ptr).mark_phase() {

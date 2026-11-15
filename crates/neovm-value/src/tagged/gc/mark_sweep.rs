@@ -1656,8 +1656,9 @@ impl TaggedHeap {
             )
             .chain(
                 self.process_registry
-                    .values()
-                    .map(|value| (*value, "process-registry")),
+                    .iter()
+                    .filter(|(id, _)| !self.retired_process_ephemerons.contains_key(id))
+                    .map(|(_, value)| (*value, "process-registry")),
             )
             .chain(
                 self.canonical_empty_strings
@@ -1702,16 +1703,23 @@ impl TaggedHeap {
         //    so heap access is exclusive (no concurrency hazard here). --
         let mark_t0 = std::time::Instant::now();
         self.mark_all_on_gc_thread();
+        while self.mark_reached_retired_processes() {
+            self.mark_all();
+        }
         // Queue doomed finalizers before the weak sweep (GNU
         // `queue_doomed_finalizers` runs before
         // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
         // functions are re-marked so both the weak sweep and the object sweep
         // see them as live.
         self.mark_and_queue_doomed_finalizers();
+        while self.mark_reached_retired_processes() {
+            self.mark_all();
+        }
         // Resolve weak hash tables now that the main mark has drained. Both the
         // sync and concurrent paths converge here with the mutator stopped, so
         // this is single-threaded and path-agnostic.
         self.mark_and_sweep_weak_tables();
+        self.reclaim_unreached_retired_processes();
         let mark_us = mark_t0.elapsed().as_micros() as u64;
 
         // The mark has drained and the sweep has not started: the one moment
@@ -1827,6 +1835,10 @@ impl TaggedHeap {
             }
         }
 
+        while self.mark_reached_retired_processes() {
+            self.mark_all();
+        }
+
         if self.weak_hash_tables.is_empty() {
             return;
         }
@@ -1867,6 +1879,7 @@ impl TaggedHeap {
                     })
                 };
             }
+            marked |= self.mark_reached_retired_processes();
             // Drain whatever those surviving entries reached, then re-check.
             self.mark_all();
             if !marked {
@@ -1893,6 +1906,41 @@ impl TaggedHeap {
                     });
                 })
             };
+        }
+    }
+
+    /// Mark fields of retired processes whose process objects were reached.
+    /// Returns true when it adds work to the gray queue; the caller drains and
+    /// repeats so chains of retired processes reach a fixpoint.
+    fn mark_reached_retired_processes(&mut self) -> bool {
+        let reached: Vec<_> = self
+            .retired_process_ephemerons
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.process_registry
+                    .get(id)
+                    .is_some_and(|value| self.is_value_marked(*value))
+            })
+            .collect();
+        for id in &reached {
+            let fields = self
+                .retired_process_ephemerons
+                .remove(id)
+                .unwrap_or_default();
+            for field in fields {
+                self.mark_or_push_child(field, "retired-process-field");
+            }
+        }
+        !reached.is_empty()
+    }
+
+    /// Drop registry roots for retired processes that no other root reached.
+    fn reclaim_unreached_retired_processes(&mut self) {
+        let unreached = std::mem::take(&mut self.retired_process_ephemerons);
+        for id in unreached.into_keys() {
+            self.process_registry.remove(&id);
+            self.reclaimed_process_ids.push(id);
         }
     }
 
