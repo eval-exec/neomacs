@@ -827,6 +827,53 @@ fn do_auto_save_pass_zero_saves_handlerless_buffers_before_handlers_run() {
     );
 }
 
+// Buffer-list order is stable across auto-save and write-region.
+//
+// GNU 31.1 never reorders Vbuffer_alist while saving: Fdo_auto_save visits
+// buffers with set_buffer_internal (fileio.c:6466/6480) and write-region's
+// post-annotation loop uses Fset_buffer (fileio.c:5805-5816). record_buffer
+// (buffer.c:2205) fires only from the window display path (window.c:582).
+// Neo's post-annotation loop used the recorded switch, moving every saved
+// buffer to the head of buffer-order. The write-region leg visits the same
+// site directly, the do-auto-save leg through auto_save_1's Fwrite_region.
+#[test]
+fn auto_save_and_write_region_keep_the_buffer_list_order() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name nil)
+  (defun as-ord-names (targets)
+    (delq nil (mapcar (lambda (b)
+                        (let ((tail (member (buffer-name b) targets)))
+                          (and tail (car tail))))
+                      (buffer-list))))
+  (dolist (nm '("as-ord-a" "as-ord-b" "as-ord-c"))
+    (let ((b (get-buffer-create nm)))
+      (with-current-buffer b
+        (insert "content of " nm)
+        (setq buffer-auto-save-file-name
+              (expand-file-name (concat "#" nm "#") temporary-file-directory)))))
+  (let ((before (as-ord-names '("as-ord-a" "as-ord-b" "as-ord-c"))))
+    (do-auto-save t)
+    (let ((after (as-ord-names '("as-ord-a" "as-ord-b" "as-ord-c"))))
+      (with-current-buffer (get-buffer-create "as-ord-w") (insert "w"))
+      (set-buffer "*scratch*")
+      (let ((before-w (as-ord-names '("as-ord-a" "as-ord-b" "as-ord-c" "as-ord-w"))))
+        (set-buffer "as-ord-w")
+        (write-region (point-min) (point-max)
+                      (expand-file-name "#as-ord-w#" temporary-file-directory)
+                      nil 'lambda)
+        (let ((after-w (as-ord-names '("as-ord-a" "as-ord-b" "as-ord-c" "as-ord-w"))))
+          (list 'das-order after
+                'das-stable (equal before after)
+                'wr-order after-w
+                'wr-stable (equal before-w after-w)))))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        form,
+        expect_test::expect![[
+            r##""VALUE OK (das-order (\"as-ord-a\" \"as-ord-b\" \"as-ord-c\") das-stable t wr-order (\"as-ord-a\" \"as-ord-b\" \"as-ord-c\" \"as-ord-w\") wr-stable t)""##
+        ]],
+    );
+}
+
 // Canonical write-region dispatch from explicit and native-shutdown auto-save.
 // GNU 31.1 fileio.c:6249-6273/6478-6482 and emacs.c:3107-3157;
 // expectation evidence: pinned GNU auto-save-handler r1 and r3.

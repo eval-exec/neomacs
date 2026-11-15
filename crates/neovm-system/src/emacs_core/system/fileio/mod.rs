@@ -5643,12 +5643,15 @@ impl PreparedWriteRegion {
         let result = (|| {
             // GNU conses each newly selected annotation buffer onto the front,
             // so cleanup visits the most recent buffer first and the original
-            // buffer last (`src/fileio.c:5804-5819`).
+            // buffer last (`src/fileio.c:5804-5819`).  Each switch is
+            // `Fset_buffer`, never `record_buffer`: saving must not reorder
+            // `Vbuffer_alist`, which only the window display path
+            // (`set_window_buffer`, `window.c:582`) reorders.
             for buffer in self.annotation_buffers.iter().rev().copied() {
                 if eval.edit.buffers.get(buffer).is_none() {
                     continue;
                 }
-                eval.switch_current_buffer(buffer)?;
+                eval.set_current_buffer_unrecorded(buffer)?;
                 let function =
                     eval.visible_variable_value_or_nil("write-region-post-annotation-function");
                 if neovm_eval::emacs_core::builtins::value_is_function(eval, function) {
