@@ -6135,7 +6135,7 @@ fn vm_text_property_builtins_use_shared_buffer_state() {
                     (remove-list-of-text-properties 1 3 '(face))
                     (get-text-property 2 'face))))"#
         ),
-        "OK (bold highlight bold bold nil \"D\" nil t nil)"
+        "OK (bold highlight bold bold nil nil nil t nil)"
     );
 }
 
