@@ -1048,6 +1048,26 @@ pub mod authority {
         context.arm_main_connect_select_park_for_test(process)
     }
 
+    /// Fence delegate: arm the next Main select park as an ordinary park.
+    /// Same channel contract as the connect arm above.
+    pub fn arm_main_ordinary_select_park_for_test(
+        context: &mut crate::emacs_core::eval::Context,
+    ) -> (
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<Result<(), String>>,
+        Box<dyn Fn() + Send>,
+    ) {
+        context.arm_main_ordinary_select_park_for_test()
+    }
+
+    /// Fence delegate: whether Main's scheduler peer set reads Blocked.
+    pub fn main_select_peers_blocked_for_test(
+        context: &mut crate::emacs_core::eval::Context,
+    ) -> bool {
+        context.main_select_peers_blocked_for_test()
+    }
+
     /// Fence delegates for the JIT tiering test knobs (writes to the
     /// function's runtime state; no &mut Runtime escapes).
     #[cfg(feature = "jit")]

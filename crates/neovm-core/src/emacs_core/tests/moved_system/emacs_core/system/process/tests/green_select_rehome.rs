@@ -272,6 +272,83 @@ fn install_native_select_leaf(context: &mut Context) {
     });
 }
 
+/// The same descriptor publication reaches main when every other Green
+/// owner has exited. The writer requires the actual Select witness before
+/// writing; a Baton-held ordinary backend block cannot satisfy that gate.
+///
+/// Re-homed from neovm-eval's `green_switch_test.rs`: `make-network-process`
+/// is a system-owned subr, so the row can only execute where the production
+/// process backend is installed. The assertions are the ones the eval test
+/// had; the park gate is armed through the eval test-support fences.
+#[test]
+fn fd_readiness_wakes_a_green_select_without_a_ready_peer() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut ev = green_context();
+    let connect = format!(
+        r#"(progn
+          (thread-join (make-thread (lambda () nil)))
+          (setq s2r3-no-peer-output nil)
+          (setq s2r3-no-peer-process
+            (make-network-process :name "s2r3-no-peer" :host "127.0.0.1"
+              :service {port} :noquery t
+              :filter (lambda (_p text) (setq s2r3-no-peer-output text))))
+          'connected)"#
+    );
+    assert_eq!(eval_print(&mut ev, &connect), "connected");
+    assert!(neovm_eval::test_support::authority::main_select_peers_blocked_for_test(&mut ev));
+    let (parked, ack, completion, wake) =
+        neovm_eval::test_support::authority::arm_main_ordinary_select_park_for_test(&mut ev);
+    // The writer keeps the accepted stream open until the evaluator is done,
+    // standing in for the original test's held `stream` value.
+    let (release, until_finished) = mpsc::channel::<()>();
+    let server = std::thread::spawn(move || {
+        let result = (|| -> std::io::Result<()> {
+            write_ready_after_park(listener, parked, ack)?;
+            match until_finished.recv_timeout(Duration::from_secs(5)) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => Ok(()),
+                Err(mpsc::RecvTimeoutError::Timeout) => Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "evaluator did not release its Green peer",
+                )),
+            }
+        })();
+        if result.is_err() {
+            wake();
+        }
+        result
+    });
+    let selected = ev.green_select_switch(Duration::from_secs(30));
+    assert_eq!(
+        completion
+            .recv_timeout(Duration::from_secs(5))
+            .expect("actual Select/write acknowledgement"),
+        Ok(())
+    );
+    assert!(matches!(
+        selected,
+        Ok(neovm_eval::emacs_core::eval::SelectTurn::Switched)
+    ));
+    assert_eq!(
+        eval_print(
+            &mut ev,
+            "(progn
+               (accept-process-output s2r3-no-peer-process 0)
+               s2r3-no-peer-output)"
+        ),
+        "\"ready\""
+    );
+    assert_eq!(
+        eval_print(&mut ev, "(delete-process s2r3-no-peer-process)"),
+        "nil"
+    );
+    drop(release);
+    server
+        .join()
+        .expect("descriptor writer joined")
+        .expect("descriptor bytes published after canonical park");
+}
+
 /// Compiled Green select keeps its fine deadline while the peer is idle.
 #[test]
 #[cfg(feature = "jit")]

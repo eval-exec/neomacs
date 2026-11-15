@@ -995,6 +995,90 @@ impl Context {
         (parked_rx, ack_tx, completed_rx, wake)
     }
 
+    /// Arm the next Main select park for an ordinary (no pending connect)
+    /// park. Same channel contract as [`Self::arm_main_connect_select_park_for_test`];
+    /// the witness must be an ordinary Main park, not a connect phase.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn arm_main_ordinary_select_park_for_test(
+        &mut self,
+    ) -> (
+        mpsc::Receiver<()>,
+        mpsc::Sender<()>,
+        mpsc::Receiver<Result<(), String>>,
+        Box<dyn Fn() + Send>,
+    ) {
+        self.eval_str("(thread-join (make-thread (lambda () nil)))")
+            .expect("seat the owned Green scheduler");
+        let control = Arc::clone(&self.green_seat().expect("Green main seat").control);
+        let (parked_tx, parked_rx) = mpsc::channel();
+        let (ack_tx, ack_rx) = mpsc::channel();
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let cancel = self.quit_requested.clone();
+        let weak = Arc::downgrade(&control);
+        let wake_cancel = cancel.clone();
+        let wake_weak = weak.clone();
+        let wake: Box<dyn Fn() + Send> = Box::new(move || {
+            wake_cancel.request();
+            if let Some(control) = wake_weak.upgrade() {
+                control.wake(ThreadKey::Main);
+            }
+        });
+        control.after_next_select_park_for_test(
+            ThreadKey::Main,
+            super::scheduler::SelectParkExpectation::Ordinary,
+            move |witness| {
+                let outcome = (|| {
+                    if witness.owner() != ThreadKey::Main {
+                        return Err("unexpected Main Select owner".to_string());
+                    }
+                    match witness.into_facts() {
+                        super::scheduler::SelectParkFacts::Ordinary => {}
+                        super::scheduler::SelectParkFacts::MainConnectPending(_) => {
+                            return Err("wrong Main Select phase".to_string());
+                        }
+                    }
+                    parked_tx
+                        .send(())
+                        .map_err(|_| "Main Select witness receiver closed".to_string())?;
+                    match ack_rx.recv_timeout(Duration::from_secs(5)) {
+                        Ok(()) => Ok(()),
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            Err("real output write acknowledgement missing".to_string())
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            Err("real output writer disconnected".to_string())
+                        }
+                    }
+                })();
+                if outcome.is_err() {
+                    cancel.request();
+                    match weak.upgrade() {
+                        Some(control) => control.wake(ThreadKey::Main),
+                        None => {
+                            let _ = completed_tx
+                                .send(Err("Main Select owner closed before failure cancellation"
+                                    .to_string()));
+                            return;
+                        }
+                    }
+                }
+                let _ = completed_tx.send(outcome);
+            },
+        );
+        (parked_rx, ack_tx, completed_rx, wake)
+    }
+
+    /// Whether Main's scheduler peer set reads Blocked right now. Read-only
+    /// projection of `Control::peers` for the re-homed select tests.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn main_select_peers_blocked_for_test(&mut self) -> bool {
+        let control = Arc::clone(&self.green_seat().expect("Green main seat").control);
+        matches!(
+            control.peers(ThreadKey::Main, Instant::now()),
+            super::scheduler::Peers::Blocked
+        )
+    }
+
     #[cold]
     #[inline(never)]
     pub(crate) fn green_select_turn(&mut self, wait_time: Duration) -> Result<SelectTurn, Flow> {
