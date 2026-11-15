@@ -5728,7 +5728,12 @@ pub(crate) fn load_obarray(
             // `DEFVAR_BOOL`/`DEFVAR_INT` variable Lisp localized would come
             // back as an ordinary buffer-local cell that neither coerces nor
             // type-checks.
-            if let Some(kind) = forwarder {
+            if let Some((name, counter)) = neovm_value::alloc::ALLOCATION_COUNTER_VARIABLES
+                .into_iter()
+                .find(|(name, _)| neovm_value::intern::lookup_interned(name) == Some(*sym_id))
+            {
+                obarray.define_counter_variable(name, counter);
+            } else if let Some(kind) = forwarder {
                 obarray.reattach_localized_forwarder(*sym_id, localized_forwarder_kind(*kind));
             }
             // Restore non-redirect flags from the dump — make_symbol_localized

@@ -3,6 +3,7 @@
 //! variable and the matching `memory-use-counts` field are one number.
 
 use crate::emacs_core::eval::Context;
+use neovm_value::value::{Value, buffer_vocab::BufferId};
 
 fn holds(eval: &mut Context, form: &str) -> bool {
     eval.eval_str(form)
@@ -55,6 +56,74 @@ fn consed_variables_advance_with_allocation() {
             "{variable} is cumulative across a collection"
         );
     }
+}
+
+/// `make-local-variable` keeps a forwarded variable's default live while its
+/// explicit local value remains a separate cell.
+#[test]
+fn localized_consed_default_follows_counter_and_keeps_local_binding() {
+    let _context = Context::new(crate::test_utils::unit_runtime());
+    let mut obarray = neovm_value::symbol::Obarray::new();
+    let symbol = neovm_value::intern::intern("cons-cells-consed");
+    obarray.seed_value("cons-cells-consed", Value::fixnum(0));
+    let _blv = obarray.make_symbol_localized(symbol, Value::fixnum(0));
+    obarray.define_counter_variable(
+        "cons-cells-consed",
+        neovm_value::tagged::gc::MemoryUseCountSlot::ConsCells,
+    );
+
+    obarray.set_blv_local_if_set(symbol, true);
+    let buffer_id = BufferId(7001);
+    let local_alist = obarray
+        .set_internal_localized(
+            symbol,
+            Value::fixnum(777),
+            Value::make_buffer(buffer_id),
+            Value::NIL,
+            neovm_value::symbol::SetInternalBind::Set,
+            false,
+        )
+        .into_value();
+
+    let before_default = obarray.default_value_id_copied(symbol).unwrap();
+    let before_count = Value::memory_use_counts_snapshot()[0];
+    let _allocated = Value::cons(Value::fixnum(1), Value::NIL);
+    let after_count = Value::memory_use_counts_snapshot()[0];
+    let after_default = obarray.default_value_id_copied(symbol).unwrap();
+    let local_value = obarray
+        .read_localized_for_buffer(symbol, buffer_id, local_alist)
+        .unwrap();
+
+    assert!(after_count > before_count);
+    assert_eq!(after_default, Value::fixnum(after_count as i64));
+    assert!(after_default > before_default);
+    assert_eq!(local_value, Value::fixnum(777));
+}
+
+/// A counter declaration that runs after Lisp has already localized the
+/// symbol must replace the BLV's missing descriptor with the live counter.
+#[test]
+fn localized_consed_counter_declared_after_localization_uses_live_slot() {
+    let _context = Context::new(crate::test_utils::unit_runtime());
+    let mut obarray = neovm_value::symbol::Obarray::new();
+    let symbol = neovm_value::intern::intern("cons-cells-consed");
+    obarray.seed_value("cons-cells-consed", Value::fixnum(0));
+    assert!(
+        obarray
+            .make_symbol_localized(symbol, Value::fixnum(0))
+            .is_some()
+    );
+
+    obarray.define_counter_variable(
+        "cons-cells-consed",
+        neovm_value::tagged::gc::MemoryUseCountSlot::ConsCells,
+    );
+    assert!(
+        obarray
+            .blv(symbol)
+            .and_then(|blv| blv.fwd)
+            .is_some_and(|fwd| fwd.reads_allocation_counter())
+    );
 }
 
 /// The field is read between two reads of the variable, so the comparison

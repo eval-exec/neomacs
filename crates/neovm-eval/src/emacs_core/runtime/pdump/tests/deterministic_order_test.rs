@@ -458,13 +458,11 @@ fn deterministic_order_restart_gc_stats_exclude_history_without_mutating_live_st
     );
 }
 
-/// A `*-consed' variable forwards to the allocator's counter, which no image
-/// can carry.  The dumped word is a fixed zero whatever the producer
-/// allocated, and the loader rebuilds the descriptor over the loading
-/// process's counter, not as an integer slot holding that zero.
+/// A localized `*-consed' variable's image carries its forwarder kind, not
+/// the process-local descriptor; the loader reconnects it to its own counter.
 #[test]
 fn deterministic_order_consed_counters_are_rebuilt_over_the_live_counter() {
-    let eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let read = |context: &Context| {
         context
             .obarray
@@ -472,6 +470,9 @@ fn deterministic_order_consed_counters_are_rebuilt_over_the_live_counter() {
             .and_then(|value| value.as_fixnum())
             .expect("cons-cells-consed holds a fixnum")
     };
+    let symbol = intern("cons-cells-consed");
+    eval.obarray
+        .make_symbol_localized(symbol, Value::fixnum(read(&eval)));
     let _producer_history = Value::cons(Value::fixnum(1), Value::NIL);
     assert!(Value::memory_use_counts_snapshot()[0] > 0);
     let live = convert::dump_evaluator(&eval);
@@ -484,9 +485,12 @@ fn deterministic_order_consed_counters_are_rebuilt_over_the_live_counter() {
     assert!(
         matches!(
             dumped.1.val,
-            types::DumpSymbolVal::IntForwarded(types::DumpValue::Int(0))
+            types::DumpSymbolVal::Localized {
+                forwarder: Some(types::DumpLocalizedForwarder::Int),
+                ..
+            }
         ),
-        "the producer's allocation history is not image state"
+        "the localized image retains the forwarder kind, not its descriptor"
     );
 
     let dir = tempfile::tempdir().expect("private dump directory");
@@ -494,10 +498,6 @@ fn deterministic_order_consed_counters_are_rebuilt_over_the_live_counter() {
     super::dump_to_file(&eval, &path).expect("write image");
     let loaded =
         super::load_from_dump_with_proof(&path, eval.hooks_installed()).expect("load image");
-    assert_eq!(
-        loaded.obarray.forward_type(intern("cons-cells-consed")),
-        Some(neovm_value::forward::LispFwdType::Int)
-    );
     let before = read(&loaded);
     assert_eq!(
         before,
