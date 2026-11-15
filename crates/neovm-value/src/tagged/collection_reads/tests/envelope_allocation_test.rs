@@ -51,13 +51,14 @@ fn collection_reads_envelope_turnover_allocation_counters() {
                 assert_eq!(envelope.owners.len(), count);
                 assert_eq!(envelope.addresses.len(), count);
                 assert_eq!(envelope.slot_addresses.len(), count / 2);
-                assert!(
-                    envelope
-                        .addresses
-                        .iter()
-                        .zip(envelope.addresses.iter().skip(1))
-                        .all(|(left, right)| left < right)
-                );
+                // Both runs stay sorted and disjoint; the hot run may hold the
+                // whole population until it reaches the merge limit.
+                let (bulk, hot) = envelope.addresses.runs();
+                assert!(bulk.windows(2).all(|pair| pair[0] < pair[1]));
+                assert!(hot.windows(2).all(|pair| pair[0] < pair[1]));
+                let mut observed: Vec<usize> = envelope.addresses.iter().collect();
+                observed.sort_unstable();
+                assert!(observed.windows(2).all(|pair| pair[0] < pair[1]));
                 if epoch >= WARMUP {
                     assert_eq!(
                         allocations,

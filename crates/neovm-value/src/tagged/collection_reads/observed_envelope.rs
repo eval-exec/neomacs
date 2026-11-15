@@ -13,7 +13,6 @@ use super::super::header::ConsCell;
 use super::super::value::{TAG_CONS, TAG_MASK, TAG_VECLIKE};
 use super::NativeWindowCollectionOwner;
 use rustc_hash::FxHashSet;
-use std::collections::BTreeSet;
 use std::mem::{align_of, size_of};
 
 const EMPTY_BOUNDS: (usize, usize) = (usize::MAX, 0);
@@ -25,10 +24,10 @@ pub(super) struct ObservedEnvelope {
     // Cached native-store eligibility from live publication. A Buffer/Window/
     // Frame/Bytecode/String owner is still marked/replay-qualified in `owners`,
     // but cannot widen a native write gate or bound its empty intervals.
-    addresses: Vec<usize>,
+    addresses: SortedAddressLedger,
     // Vector/Record eligibility is also cached at live publication. Native
     // slot stores use these bounds independently of observed Cons addresses.
-    slot_addresses: Vec<usize>,
+    slot_addresses: SortedAddressLedger,
     epoch: Option<u64>,
     dump: BarrierWindow,
     full: (usize, usize),
@@ -55,8 +54,10 @@ const _: () = {
     #[allow(dead_code)]
     struct LegacyEnvelope {
         owners: FxHashSet<usize>,
-        addresses: BTreeSet<usize>,
-        slot_addresses: BTreeSet<usize>,
+        addresses: Vec<usize>,
+        addresses_hot: Vec<usize>,
+        slot_addresses: Vec<usize>,
+        slot_addresses_hot: Vec<usize>,
         epoch: Option<u64>,
         dump: BarrierWindow,
         full: (usize, usize),
@@ -87,8 +88,8 @@ impl ObservedEnvelope {
     pub(super) fn new() -> Self {
         Self {
             owners: FxHashSet::default(),
-            addresses: Vec::new(),
-            slot_addresses: Vec::new(),
+            addresses: SortedAddressLedger::new(),
+            slot_addresses: SortedAddressLedger::new(),
             epoch: Some(collection_observation_epoch()),
             dump: BarrierWindow::NONE,
             full: EMPTY_BOUNDS,
@@ -173,8 +174,8 @@ impl ObservedEnvelope {
         // before epoch filtering removes our old identity. A real projection
         // must still promote Other -> Slots; positive membership alone may
         // remain conservative across reuse and never reads a stale header.
-        let newly_native = insert_address(&mut self.addresses, address);
-        let newly_slot = slot_geometry && insert_address(&mut self.slot_addresses, address);
+        let newly_native = self.addresses.insert(address);
+        let newly_slot = slot_geometry && self.slot_addresses.insert(address);
         if !newly_native && !newly_slot {
             return newly_owned;
         }
@@ -197,9 +198,7 @@ impl ObservedEnvelope {
     /// Positive eligibility is cached from a live projection, independently
     /// of complete identity membership. It may conservatively survive reuse.
     pub(super) fn has_slot_geometry(&self, bits: usize) -> bool {
-        self.slot_addresses
-            .binary_search(&(bits & !TAG_MASK))
-            .is_ok()
+        self.slot_addresses.contains(bits & !TAG_MASK)
     }
 
     /// A completed local publication remains valid throughout a stable
@@ -256,21 +255,16 @@ impl ObservedEnvelope {
     pub(super) fn exclude_unobserved(&mut self, bits: usize) -> bool {
         let address = bits & !TAG_MASK;
         if self.owners.contains(&bits)
-            || self.addresses.binary_search(&address).is_ok()
+            || self.addresses.contains(address)
             || self.dump.covers(address)
             || self.single_cons == address
             || self.excluded.is_some_and(|gap| gap.covers(address))
         {
             return false;
         }
-        let next = self
-            .addresses
-            .partition_point(|&candidate| candidate < address);
-        let mut lo = next
-            .checked_sub(1)
-            .and_then(|previous| self.addresses.get(previous))
-            .map_or(0, |previous| previous + 1);
-        let mut hi = self.addresses.get(next).copied().unwrap_or(usize::MAX);
+        let (previous, next) = self.addresses.neighbors(address);
+        let mut lo = previous.map_or(0, |previous| previous + 1);
+        let mut hi = next.unwrap_or(usize::MAX);
         if self.dump.len() != 0 {
             if address < self.dump.lo() {
                 hi = hi.min(self.dump.lo());
@@ -329,18 +323,18 @@ impl ObservedEnvelope {
         // address buffer. Full ledger filtering above establishes lifetime;
         // these tag-only membership checks never read a possibly freed header.
         // A dump-span change preserves the same classification and buffer capacity.
-        self.addresses.retain(|&address| {
+        self.addresses.retain(|address| {
             self.owners.contains(&(address | TAG_CONS))
                 || self.owners.contains(&(address | TAG_VECLIKE))
         });
         self.slot_addresses
-            .retain(|&address| self.owners.contains(&(address | TAG_VECLIKE)));
+            .retain(|address| self.owners.contains(&(address | TAG_VECLIKE)));
         self.full = EMPTY_BOUNDS;
         self.below = EMPTY_BOUNDS;
         self.above = EMPTY_BOUNDS;
         self.slot_below = EMPTY_BOUNDS;
         self.slot_above = EMPTY_BOUNDS;
-        for &address in &self.addresses {
+        for address in self.addresses.iter() {
             include(&mut self.full, address);
             if dump.len() == 0 || address < dump.lo() {
                 include(&mut self.below, address);
@@ -348,7 +342,7 @@ impl ObservedEnvelope {
                 include(&mut self.above, address);
             }
         }
-        for &address in &self.slot_addresses {
+        for address in self.slot_addresses.iter() {
             if dump.len() == 0 || address < dump.lo() {
                 include(&mut self.slot_below, address);
             } else if !dump.covers(address) {
@@ -393,14 +387,148 @@ mod disjoint_refinement_tests;
 #[path = "tests/envelope_allocation_test.rs"]
 mod allocation_tests;
 
-// Only cold live publication inserts addresses. Sorted numeric buffers retain
-// capacity across pruning while preserving exact predecessor/successor queries.
-fn insert_address(addresses: &mut Vec<usize>, address: usize) -> bool {
-    match addresses.binary_search(&address) {
-        Ok(_) => false,
-        Err(index) => {
-            addresses.insert(index, address);
-            true
+#[cfg(test)]
+#[path = "tests/observed_address_ledger.rs"]
+mod address_ledger_tests;
+
+/// Sorted address ledger with a bounded hot run.
+///
+/// A single retained sorted `Vec` makes live publication O(n): an address that
+/// sorts below the retained bulk shifts every later address. The observed
+/// workload inserts around index 81k of a ~1.15M-entry ledger, so every
+/// observation moved ~8.5 MB (issue #767).
+///
+/// New addresses enter a small sorted hot run instead. Membership and
+/// predecessor/successor queries search both runs; when the hot run fills it
+/// merges into the bulk in one linear pass. Bulk capacity is retained across
+/// reclamation, so steady-state publication reuses its warmed allocation.
+struct SortedAddressLedger {
+    bulk: Vec<usize>,
+    hot: Vec<usize>,
+}
+
+/// Bounds both the per-insert shift and the amortized bulk merges. At ~1.1M
+/// addresses one observation moves about `HOT_ADDRESS_LIMIT / 2 + n / HOT_ADDRESS_LIMIT`
+/// elements (~1.6k, ~13 KB) instead of the whole tail.
+const HOT_ADDRESS_LIMIT: usize = 1024;
+
+impl SortedAddressLedger {
+    fn new() -> Self {
+        Self {
+            bulk: Vec::new(),
+            hot: Vec::new(),
         }
     }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.bulk.len() + self.hot.len()
+    }
+
+    fn insert(&mut self, address: usize) -> bool {
+        self.insert_inner::<false>(address).0
+    }
+
+    /// Returns whether the address was inserted and how many address slots
+    /// moved. Only the issue #767 regression test asks for the count; the
+    /// const generic removes the arithmetic from release builds.
+    fn insert_inner<const COUNT: bool>(&mut self, address: usize) -> (bool, usize) {
+        if self.bulk.binary_search(&address).is_ok() {
+            return (false, 0);
+        }
+        let index = match self.hot.binary_search(&address) {
+            Ok(_) => return (false, 0),
+            Err(index) => index,
+        };
+        let shifted = if COUNT { self.hot.len() - index } else { 0 };
+        self.hot.insert(index, address);
+        let mut moved = shifted;
+        if self.hot.len() >= HOT_ADDRESS_LIMIT {
+            let merged = self.merge_hot();
+            if COUNT {
+                moved += merged;
+            }
+        }
+        (true, moved)
+    }
+
+    #[cfg(test)]
+    fn insert_moved(&mut self, address: usize) -> (bool, usize) {
+        self.insert_inner::<true>(address)
+    }
+
+    fn contains(&self, address: usize) -> bool {
+        self.bulk.binary_search(&address).is_ok() || self.hot.binary_search(&address).is_ok()
+    }
+
+    /// Nearest observed address strictly below and at-or-above `address`.
+    /// The caller has already established that `address` itself is absent.
+    fn neighbors(&self, address: usize) -> (Option<usize>, Option<usize>) {
+        let (bulk_previous, bulk_next) = run_neighbors(&self.bulk, address);
+        let (hot_previous, hot_next) = run_neighbors(&self.hot, address);
+        (
+            match (bulk_previous, hot_previous) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            },
+            match (bulk_next, hot_next) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            },
+        )
+    }
+
+    /// Iterates both runs in insertion-free order. Bounds only need each
+    /// address once; sorted order is not required here.
+    fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.bulk.iter().copied().chain(self.hot.iter().copied())
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(usize) -> bool) {
+        self.bulk.retain(|&address| keep(address));
+        self.hot.retain(|&address| keep(address));
+    }
+
+    #[cfg(test)]
+    fn runs(&self) -> (&[usize], &[usize]) {
+        (&self.bulk, &self.hot)
+    }
+
+    /// Merge the sorted hot run into the sorted bulk in place. Reads and writes
+    /// never cross: the destination index stays at or above the unread bulk
+    /// element because the hot run always contributes at least one element per
+    /// step. Capacity is expected to be warm in steady state; growth here is
+    /// the same amortized allocation a growing `Vec` already performs.
+    fn merge_hot(&mut self) -> usize {
+        if self.hot.is_empty() {
+            return 0;
+        }
+        let bulk_len = self.bulk.len();
+        let hot_len = self.hot.len();
+        self.bulk.resize(bulk_len + hot_len, 0);
+        let mut bulk = bulk_len;
+        let mut hot = hot_len;
+        let mut destination = bulk_len + hot_len;
+        while hot > 0 {
+            destination -= 1;
+            if bulk > 0 && self.bulk[bulk - 1] > self.hot[hot - 1] {
+                self.bulk[destination] = self.bulk[bulk - 1];
+                bulk -= 1;
+            } else {
+                self.bulk[destination] = self.hot[hot - 1];
+                hot -= 1;
+            }
+        }
+        self.hot.clear();
+        bulk_len + hot_len
+    }
+}
+
+fn run_neighbors(run: &[usize], address: usize) -> (Option<usize>, Option<usize>) {
+    let next = run.partition_point(|&candidate| candidate < address);
+    (
+        next.checked_sub(1)
+            .and_then(|previous| run.get(previous).copied()),
+        run.get(next).copied(),
+    )
 }
