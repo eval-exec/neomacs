@@ -323,3 +323,46 @@ fn mapcar_symbol_callee_other_cell_kinds_keep_their_signals() {
         ]
     );
 }
+
+#[test]
+fn apply1_symbol_callee_bytecode_skips_generic_named_call() {
+    let mut ctx = context();
+    let function = named(&mut ctx, "symcallee-applied", None);
+    let before = (ctx.depth, ctx.specpdl.len());
+
+    assert_eq!(
+        outcome(ctx.apply(function, vec![Value::fixnum(8), Value::fixnum(9)])),
+        "signal wrong-number-of-arguments [\"(1 . 1)\", \"2\"]"
+    );
+
+    forget_resolution(&mut ctx, "symcallee-applied");
+    assert_eq!(outcome(ctx.apply1(function, Value::fixnum(7))), "7");
+    assert!(
+        !resolved_generically(&ctx, "symcallee-applied"),
+        "apply1 re-resolved a byte-code callee through the generic named call"
+    );
+
+    forget_resolution(&mut ctx, "symcallee-applied");
+    assert_eq!(outcome(ctx.apply(function, vec![Value::fixnum(8)])), "8");
+    assert!(
+        !resolved_generically(&ctx, "symcallee-applied"),
+        "apply re-resolved a byte-code callee through the generic named call"
+    );
+
+    // Lisp `apply` and `funcall` enter through `apply_from_lisp_funcall`.
+    forget_resolution(&mut ctx, "symcallee-applied");
+    assert_eq!(
+        print_value(
+            &ctx.eval_str(
+                "(list (apply 'symcallee-applied '(10)) (funcall 'symcallee-applied 11))"
+            )
+            .unwrap()
+        ),
+        "(10 11)"
+    );
+    assert!(
+        !resolved_generically(&ctx, "symcallee-applied"),
+        "Lisp apply/funcall re-resolved a byte-code callee through the generic named call"
+    );
+    assert_eq!((ctx.depth, ctx.specpdl.len()), before);
+}

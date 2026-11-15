@@ -2440,13 +2440,19 @@ impl Context {
         self.finish_traced_call(bt_count, result)
     }
 
-    /// Apply a function value to evaluated arguments.
+    /// Apply a function value to evaluated arguments. A symbol naming
+    /// byte-code (`(apply 'f args)`, `apply1` of `#'f`) is called through
+    /// its function cell by [`Self::apply_named_bytecode`].
     #[doc(hidden)]
     pub fn apply<A>(&mut self, function: Value, args: A) -> EvalResult
     where
         A: Into<LispArgVec>,
     {
-        self.apply_internal(function, args.into(), true)
+        let args = args.into();
+        if self.named_bytecode_cell(function).is_some() {
+            return self.apply_named_bytecode(function, args);
+        }
+        self.apply_internal(function, args, true)
     }
 
     /// Call Lisp while suppressing signaled conditions, matching GNU Emacs's
@@ -2547,7 +2553,7 @@ impl Context {
     where
         A: Into<LispArgVec>,
     {
-        self.apply_internal(function, args.into(), true)
+        self.apply(function, args)
     }
 
     #[inline]
