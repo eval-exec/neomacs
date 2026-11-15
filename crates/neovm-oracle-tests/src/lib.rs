@@ -97,6 +97,7 @@ mod defalias_fset_patterns;
 mod default;
 mod define;
 mod defmacro;
+mod defsym_obarray_census;
 mod defun_comprehensive_patterns;
 mod defvar;
 mod defvar_bool_byte_boolean_vars;

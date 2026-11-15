@@ -1694,9 +1694,12 @@ fn judge_commit(
 }
 
 /// A merge's own resolution may not raise the ceiling: its value must be at
-/// most its first parent's, or equal to one of its parents' values (the side
-/// whose commits were judged individually). Parents without the file carry no
-/// value; when no parent has it the merge is an anchor.
+/// most its first parent's, or equal to a non-first parent's value ONLY when
+/// that side actually decided a ceiling in `M^1..M^k`. A side that forked
+/// before a main-line decrease has no ceiling commit of its own, so its stale
+/// fork-point value must not authorize an evil merge that restores the
+/// pre-decrease ceiling. Parents without the file carry no value; when no
+/// parent has it the merge is an anchor.
 fn judge_merge_result(
     workspace: &Path,
     revision: &str,
@@ -1709,18 +1712,54 @@ fn judge_merge_result(
     for parent in parents {
         values.push(ceiling_at(workspace, parent, ceiling_path)?);
     }
-    if values.iter().all(Option::is_none)
-        || values[0].is_some_and(|first| value <= first)
-        || values.contains(&Some(value))
-    {
+    if values.iter().all(Option::is_none) || values[0].is_some_and(|first| value <= first) {
         return Ok(());
     }
-    let previous = values.iter().flatten().max().copied().unwrap_or(value);
+    for (index, parent_value) in values.iter().enumerate().skip(1) {
+        if parent_value.is_some_and(|parent| parent == value)
+            && side_contributed_ceiling(workspace, &parents[0], &parents[index], ceiling_path)?
+        {
+            return Ok(());
+        }
+    }
+    let previous = values
+        .iter()
+        .flatten()
+        .copied()
+        .filter(|parent| *parent != value)
+        .max()
+        .or(values[0])
+        .unwrap_or(value);
     Err(format!(
         "B3_RATCHET silent ceiling increase {} -> {} in the resolution of merge {revision}; \
          a merge may only carry a parent's ceiling",
         previous.0, value.0
     ))
+}
+
+/// True when SIDE contributed at least one commit touching `ceiling_path`
+/// outside FIRST's history (`git log ^FIRST SIDE -- ceiling_path`). Those are
+/// the commits `judge_merge` judges individually; without one the side's value
+/// is only an inherited fork-point value and cannot authorize the merge
+/// result. This closes the stale-side evil merge: a side forked before a
+/// main-line ceiling decrease has no ceiling commit, so restoring its higher
+/// pre-decrease value is rejected.
+fn side_contributed_ceiling(
+    workspace: &Path,
+    first: &str,
+    side: &str,
+    ceiling_path: &str,
+) -> Result<bool, String> {
+    let exclude = format!("^{first}");
+    let args = [
+        "log",
+        "--format=%H",
+        exclude.as_str(),
+        side,
+        "--",
+        ceiling_path,
+    ];
+    Ok(!git(workspace, &args)?.trim().is_empty())
 }
 
 /// A first-parent merge is not judged by its own subject and (empty) diff:
@@ -2249,6 +2288,35 @@ fn architecture_pc11_mutation_evil_merge_ceiling_raise_is_rejected() {
     let error = repo.ratchet(3).unwrap_err();
     assert!(
         error.contains("silent ceiling increase 2 -> 3 in the resolution of merge"),
+        "{error}"
+    );
+}
+
+#[test]
+fn architecture_pc11_mutation_evil_merge_restores_stale_side_ceiling() {
+    // `side` forks at ceiling 5 and carries work but no ceiling decision of
+    // its own; main then DECREASES the ceiling to 3. Restoring the side's
+    // stale pre-decrease value in the merge resolution must be rejected: the
+    // side contributed no judged ceiling commit authorizing 5.
+    let repo = RatchetRepo::new();
+    repo.commit(
+        "init",
+        &[(RatchetRepo::CEILING, "5\n"), ("other.rs", "a\n")],
+    );
+    repo.git(&["checkout", "-q", "-b", "side"]);
+    repo.commit("side work", &[("other.rs", "s\n")]);
+    repo.git(&["checkout", "-q", "main"]);
+    repo.commit(
+        "PC11 PROMOTION-LEDGER ceiling decrease: 5 -> 3",
+        &[(RatchetRepo::CEILING, "3\n")],
+    );
+    repo.git(&["merge", "-q", "--no-ff", "--no-commit", "side"]);
+    repo.write(&[(RatchetRepo::CEILING, "5\n")]);
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "--no-edit"]);
+    let error = repo.ratchet(5).unwrap_err();
+    assert!(
+        error.contains("silent ceiling increase 3 -> 5 in the resolution of merge"),
         "{error}"
     );
 }

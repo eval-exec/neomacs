@@ -7,6 +7,60 @@ error[E0277]: `Rc<()>` cannot be sent between threads safely
   = help: within `SymbolMut<'static, 'static, 'static>`, the trait `Send` is not implemented for `Rc<()>`
 note: required because it appears within the type `PhantomData<Rc<()>>`
  --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `Mutator<'static>`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
+  |
+  | pub struct Mutator<'era> {
+  |            ^^^^^^^
+  = note: required because it appears within the type `&'static mut Mutator<'static>`
+note: required because it appears within the type `RunAccess<'static, 'static>`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
+  |
+  | pub struct RunAccess<'owner, 'era> {
+  |            ^^^^^^^^^
+  = note: required because it appears within the type `&'static mut RunAccess<'static, 'static>`
+note: required because it appears within the type `SymbolMut<'static, 'static, 'static>`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs
+  |
+  | pub struct SymbolMut<'lease, 'owner, 'era> {
+  |            ^^^^^^^^^
+note: required by a bound in `require_send`
+ --> tests/p1rv_ui/p3sym_guard_send.rs:2:20
+  |
+2 | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`
+
+error[E0277]: `(dyn FnOnce() + 'static)` cannot be sent between threads safely
+ --> tests/p1rv_ui/p3sym_guard_send.rs:4:20
+  |
+4 |     require_send::<SymbolMut<'static, 'static, 'static>>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(dyn FnOnce() + 'static)` cannot be sent between threads safely
+  |
+  = help: the trait `Send` is not implemented for `(dyn FnOnce() + 'static)`
+  = note: required for `std::ptr::Unique<(dyn FnOnce() + 'static)>` to implement `Send`
+note: required because it appears within the type `std::boxed::Box<(dyn FnOnce() + 'static)>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `Option<std::boxed::Box<(dyn FnOnce() + 'static)>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `mutator_registration::rendezvous::owner_test_hooks::Hooks`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs
+  |
+  |     pub(in crate::tagged::gc::mutator_registration) struct Hooks {
+  |                                                            ^^^^^
+note: required because it appears within the type `mutator_registration::rendezvous::OwnerLocal`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs
+  |
+  | pub(super) struct OwnerLocal {
+  |                   ^^^^^^^^^^
 note: required because it appears within the type `Mutator<'static>`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
   |
@@ -44,6 +98,9 @@ note: required because it appears within the type `gc::cons_storage::CatalogRegi
   |                   ^^^^^^^^^^^^^
 note: required because it appears within the type `Option<gc::cons_storage::CatalogRegion>`
  --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
 note: required because it appears within the type `mutator_registration::image::OwnerGcState`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/image.rs
   |
@@ -52,8 +109,14 @@ note: required because it appears within the type `mutator_registration::image::
   = note: required for `std::ptr::Unique<mutator_registration::image::OwnerGcState>` to implement `Send`
 note: required because it appears within the type `std::boxed::Box<mutator_registration::image::OwnerGcState>`
  --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
 note: required because it appears within the type `Option<std::boxed::Box<mutator_registration::image::OwnerGcState>>`
  --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
 note: required because it appears within the type `Mutator<'static>`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
   |
@@ -86,10 +149,19 @@ error[E0277]: `*mut GcHeader` cannot be sent between threads safely
   = help: within `mutator_registration::image::OwnerGcState`, the trait `Send` is not implemented for `*mut GcHeader`
 note: required because it appears within the type `PhantomData<*mut GcHeader>`
  --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
 note: required because it appears within the type `alloc::raw_vec::RawVec<*mut GcHeader>`
  --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
 note: required because it appears within the type `Vec<*mut GcHeader>`
  --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
 note: required because it appears within the type `gc::mutator_gc::MutatorGcState`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_gc.rs
   |
@@ -103,8 +175,14 @@ note: required because it appears within the type `mutator_registration::image::
   = note: required for `std::ptr::Unique<mutator_registration::image::OwnerGcState>` to implement `Send`
 note: required because it appears within the type `std::boxed::Box<mutator_registration::image::OwnerGcState>`
  --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
 note: required because it appears within the type `Option<std::boxed::Box<mutator_registration::image::OwnerGcState>>`
  --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
 note: required because it appears within the type `Mutator<'static>`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
   |
@@ -137,6 +215,9 @@ error[E0277]: `*const ()` cannot be sent between threads safely
   = help: within `mutator_registration::image::OwnerGcState`, the trait `Send` is not implemented for `*const ()`
 note: required because it appears within the type `PhantomData<*const ()>`
  --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
 note: required because it appears within the type `TaggedValue`
  --> $WORKSPACE/crates/neovm-value/src/tagged/value.rs
   |
@@ -144,10 +225,19 @@ note: required because it appears within the type `TaggedValue`
   |            ^^^^^^^^^^^
 note: required because it appears within the type `PhantomData<TaggedValue>`
  --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
 note: required because it appears within the type `alloc::raw_vec::RawVec<TaggedValue>`
  --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
 note: required because it appears within the type `Vec<TaggedValue>`
  --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
 note: required because it appears within the type `gc::mutator_gc::MutatorGcState`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_gc.rs
   |
@@ -161,8 +251,14 @@ note: required because it appears within the type `mutator_registration::image::
   = note: required for `std::ptr::Unique<mutator_registration::image::OwnerGcState>` to implement `Send`
 note: required because it appears within the type `std::boxed::Box<mutator_registration::image::OwnerGcState>`
  --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
 note: required because it appears within the type `Option<std::boxed::Box<mutator_registration::image::OwnerGcState>>`
  --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
 note: required because it appears within the type `Mutator<'static>`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
   |

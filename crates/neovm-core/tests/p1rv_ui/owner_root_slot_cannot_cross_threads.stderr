@@ -1,18 +1,26 @@
 error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<OwnerRootSlot<'static>>`, but its trait bounds were not satisfied
  --> tests/p1rv_ui/owner_root_slot_cannot_cross_threads.rs:8:47
   |
-8 |     ThreadTransfer::<OwnerRootSlot<'static>>::transfer(slot);
-  |                                               ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<OwnerRootSlot<'static>>` due to unsatisfied trait bounds
+8 |       ThreadTransfer::<OwnerRootSlot<'static>>::transfer(slot);
+  |                                                 ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<OwnerRootSlot<'static>>` due to unsatisfied trait bounds
   |
  ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/root_slot.rs
   |
-  | pub struct OwnerRootSlot<'era> {
-  | ------------------------------ doesn't satisfy `OwnerRootSlot<'static>: Send`
+  |   pub struct OwnerRootSlot<'era> {
+  |   ------------------------------ doesn't satisfy `OwnerRootSlot<'static>: Send`
+  |
+ ::: $RUST/alloc/src/rc.rs
+  |
+  | / pub struct Rc<
+  | |     T: ?Sized,
+  | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+  | | > {
+  | |_- doesn't satisfy `Rc<()>: Send`
   |
  ::: tests/p1rv_ui/../thread_safety_ui/support/thread_bounds.rs
   |
-  | pub struct ThreadTransfer<T>(PhantomData<T>);
-  | ---------------------------- associated function or constant `transfer` not found for this struct
+  |   pub struct ThreadTransfer<T>(PhantomData<T>);
+  |   ---------------------------- associated function or constant `transfer` not found for this struct
   |
   = note: the following trait bounds were not satisfied:
           `Rc<()>: Send`

@@ -745,6 +745,88 @@ fn nested_kill_emacs_hook_reenters_with_the_inner_exit_code() {
     );
 }
 
+// GNU `Fdo_auto_save` walks the live buffer alist TWICE (`fileio.c:6402`):
+// pass 0 saves every buffer whose auto-save file name has no `write-region'
+// file-name-handler (`:6439-6440`, pure C writes in GNU), and pass 1 saves the
+// handler buffers, so handler Lisp only ever observes a completed
+// handler-less pass. `FOR_EACH_LIVE_BUFFER` (`buffer.h:1329`) follows
+// retained cons links: a buffer killed by an earlier handler is skipped, and
+// a buffer appended during the walk is visited in that same pass once the
+// walk reaches its predecessor. A one-shot buffer-id snapshot visits the
+// handler buffer first, so the killed buffer dies unsaved and the appended
+// buffer is never reached.
+//
+// Probe: buffers A B C D in alist order (creation appends). Only A and E
+// route `write-region' through a handler. A's handler kills D (later,
+// handler-less) and creates E (handler) on its first call. Pinned GNU 31.1:
+// at the handler D is already auto-saved (`d t`), D's auto-save file keeps
+// its content, and E -- appended mid-walk -- is saved by the same pass-1
+// walk (second AT line, D now dead).
+#[test]
+fn do_auto_save_pass_zero_saves_handlerless_buffers_before_handlers_run() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name nil)
+  (setq as-walk-trace (expand-file-name "as-walk-trace" temporary-file-directory)
+        as-walk-target-a (expand-file-name "#as-walk-a#" temporary-file-directory)
+        as-walk-target-e (expand-file-name "#as-walk-e#" temporary-file-directory)
+        as-walk-count 0)
+  (defun as-walk-note (value)
+    (write-region (format "%S\n" value) nil as-walk-trace t 'silent))
+  (defun as-walk-handler (operation &rest arguments)
+    (if (eq operation 'write-region)
+        (progn
+          (setq as-walk-count (1+ as-walk-count))
+          (as-walk-note
+           (list 'AT as-walk-count
+                 'b (with-current-buffer "as-walk-b" (recent-auto-save-p))
+                 'c (with-current-buffer "as-walk-c" (recent-auto-save-p))
+                 'd (and (get-buffer "as-walk-d")
+                         (with-current-buffer "as-walk-d" (recent-auto-save-p)))))
+          (when (= as-walk-count 1)
+            (kill-buffer "as-walk-d")
+            (let ((ebuf (get-buffer-create "as-walk-e")))
+              (with-current-buffer ebuf
+                (insert "content of as-walk-e")
+                (setq buffer-auto-save-file-name as-walk-target-e))))
+          'handled)
+      (let ((inhibit-file-name-handlers
+             (cons 'as-walk-handler
+                   (and (eq inhibit-file-name-operation operation)
+                        inhibit-file-name-handlers)))
+            (inhibit-file-name-operation operation))
+        (apply operation arguments))))
+  (setq file-name-handler-alist
+        (cons (cons (concat "\\`" (regexp-quote as-walk-target-a) "\\'")
+                    'as-walk-handler)
+              (cons (cons (concat "\\`" (regexp-quote as-walk-target-e) "\\'")
+                          'as-walk-handler)
+                    file-name-handler-alist)))
+  (dolist (nm '("as-walk-a" "as-walk-b" "as-walk-c" "as-walk-d"))
+    (let ((b (get-buffer-create nm)))
+      (with-current-buffer b
+        (insert "content of " nm)
+        (setq buffer-auto-save-file-name
+              (expand-file-name (concat "#" nm "#") temporary-file-directory)))))
+  (do-auto-save t)
+  (list 'trace (with-temp-buffer (insert-file-contents as-walk-trace)
+                 (buffer-string))
+        'd-file (let ((f (expand-file-name "#as-walk-d#" temporary-file-directory)))
+                  (and (file-exists-p f)
+                       (with-temp-buffer (insert-file-contents f)
+                         (buffer-string))))
+        'e-saved (and (get-buffer "as-walk-e")
+                      (with-current-buffer "as-walk-e" (recent-auto-save-p)))
+        'b-saved (with-current-buffer "as-walk-b" (recent-auto-save-p))
+        'c-saved (with-current-buffer "as-walk-c" (recent-auto-save-p))
+        'd-live (buffer-live-p (get-buffer "as-walk-d"))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        form,
+        expect_test::expect![[
+            r##""VALUE OK (trace \"(AT 1 b t c t d t)\\n(AT 2 b t c t d nil)\\n\" d-file \"content of as-walk-d\" e-saved t b-saved t c-saved t d-live nil)""##
+        ]],
+    );
+}
+
 // Canonical write-region dispatch from explicit and native-shutdown auto-save.
 // GNU 31.1 fileio.c:6249-6273/6478-6482 and emacs.c:3107-3157;
 // expectation evidence: pinned GNU auto-save-handler r1 and r3.

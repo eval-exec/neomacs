@@ -747,72 +747,47 @@ mod unit_runtime {
         s::process_terminate_and_defer_reaping,
     );
 
-    /// The eval unit runtime installs NO OS-signal source: `unit_harness`
-    /// never runs core's `os_signal::install`, so there is no signal handler,
-    /// no signal self-pipe, no command loop, and no SIGINT/SIGTERM delivery
-    /// path into this evaluator. GNU's exact answer for that state is "no
-    /// signal pending".
+    /// GNU's `pending_signals` (src/keyboard.c:105), read exactly as the
+    /// production slot reads it: one load of the evaluator's
+    /// `ASYNC_ATTENTION` word's `OsSignal` bit (system `os_signal::pending`).
     ///
-    /// This answers `false` EVEN WHEN a test raises `ASYNC_ATTENTION`'s
-    /// OsSignal bit: that raw bit is a safe-point control, not an installed
-    /// source, so there is nothing pending to process and no drain is
-    /// attempted. Only an installed source (a self-pipe read fd) would make a
-    /// pending signal possible.
-    ///
-    /// The premise is asserted dynamically once per process: a POSIX signal
-    /// source is the only thing that installs the self-pipe, so the
-    /// descriptor's read end must be absent; installing one trips the assert.
+    /// The eval unit runtime installs no OS-signal source (`unit_harness`
+    /// never runs core's `os_signal::install`), so in product use the bit
+    /// stays clear and the answer is false. A test that raises the bit is
+    /// controlling the same word production reads, NOT a different predicate:
+    /// the slot must never answer differently from production for the same
+    /// state (peer 5786). What to do with the raised bit is the drain's job,
+    /// exactly as on the production path.
     fn unit_os_signal_pending() -> bool {
-        static PREMISE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-        PREMISE
-            .get_or_init(|| assert_no_signal_source_installed(s::input_signal_wake_pipe_read_fd()));
-        false
+        crate::emacs_core::eval::ASYNC_ATTENTION
+            .is_raised(crate::emacs_core::eval::AsyncSource::OsSignal)
     }
 
-    /// Panic unless the descriptor carries NO OS-signal source. A POSIX
-    /// signal source is what installs the self-pipe, so a `Some(read_fd)`
-    /// here would mean a source exists and the no-signal answer is a lie.
-    fn assert_no_signal_source_installed(read_fd: Option<i32>) {
-        assert!(
-            read_fd.is_none(),
-            "ABSENT layer: an OS-signal source is installed in the unit runtime \
-             (self-pipe read fd {read_fd:?}); the no-signal answer would hide it"
-        );
-    }
-
-    #[cfg(test)]
-    mod os_signal_pending_premise {
-        use super::assert_no_signal_source_installed;
-
-        /// 6170 condition: installing a self-pipe (a real read fd) in the
-        /// unit runtime must trip the no-source premise assert.
-        #[test]
-        fn installing_a_self_pipe_trips_the_no_source_assert() {
-            let payload = std::panic::catch_unwind(|| assert_no_signal_source_installed(Some(7)))
-                .expect_err("a planted self-pipe must trip the premise");
-            let message = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .unwrap_or("");
-            assert!(
-                message.contains("OS-signal source is installed"),
-                "unexpected premise panic: {message}"
-            );
-        }
-
-        /// The descriptor's absent read end is the covered state.
-        #[test]
-        fn the_absent_read_end_satisfies_the_premise() {
-            assert_no_signal_source_installed(None);
-        }
+    /// The exact empty fold of GNU's `process_pending_signals`
+    /// (`os_signal::drain_pending_os_signals`), for a runtime with no signal
+    /// source:
+    ///
+    /// 1. clear the pending flag first -- production's first statement takes
+    ///    the same `ASYNC_ATTENTION` bit, so a delivery cannot make every
+    ///    later safe point take the cold path;
+    /// 2. consume a captured termination signal -- structurally absent here
+    ///    (`input_take_termination_signal` is ASSERT-EMPTY `None`);
+    /// 3. walk the per-signal `PENDING` slots -- no handler exists to fill
+    ///    them, so the fold has nothing to deliver.
+    ///
+    /// Nothing else is skipped: the unit runtime has no source that could
+    /// produce a delivery, so the fold is exact rather than a stub.
+    fn unit_drain_pending_os_signals(_ctx: &mut Context) -> Result<(), neovm_value::error::Flow> {
+        crate::emacs_core::eval::ASYNC_ATTENTION
+            .take(crate::emacs_core::eval::AsyncSource::OsSignal);
+        Ok(())
     }
 
     static INPUT: InputHooks = InputHooks::new(
         s::input_interrupt_for_input_event_if_requested,
         unit_os_signal_pending,
         s::input_take_termination_signal,
-        s::input_drain_pending_os_signals,
+        unit_drain_pending_os_signals,
         SignalWakeSource::SelfPipe {
             read_fd: s::input_signal_wake_pipe_read_fd,
             drain: s::input_drain_signal_wake_pipe,

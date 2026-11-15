@@ -279,6 +279,21 @@ fn value_matches(a: &Value, b: &Value, mode: SymbolMode) -> bool {
 /// the allocator and ~7% in `memmove`, and made `json-serialize` 3.3x to 8.3x
 /// slower than GNU, widening with size. GNU appends into one growing buffer
 /// (`json_out_t`, src/json.c); so does this now.
+/// GNU `json_out_nest` (src/json.c): `maxdepth` starts at 50 and every
+/// object or array entry decrements it, so entering the 51st container
+/// signals `error "Maximum JSON serialization depth exceeded"`. `depth` here
+/// is the container's zero-based nesting level (the root container is 0),
+/// so the 51st container arrives with depth 50.
+fn check_container_depth(depth: usize) -> Result<(), Flow> {
+    if depth >= 50 {
+        return Err(signal(
+            "error",
+            vec![Value::string("Maximum JSON serialization depth exceeded")],
+        ));
+    }
+    Ok(())
+}
+
 fn serialize_to_json(value: &Value, opts: &SerializeOpts, depth: usize) -> Result<String, Flow> {
     let mut out = String::new();
     serialize_into(&mut out, value, opts, depth)?;
@@ -291,13 +306,6 @@ fn serialize_into(
     opts: &SerializeOpts,
     depth: usize,
 ) -> Result<(), Flow> {
-    if depth > 512 {
-        return Err(signal(
-            JsonError::Serialize.symbol(),
-            vec![Value::string("Nesting too deep")],
-        ));
-    }
-
     // Check for null sentinel.
     if value_matches(value, &opts.null_object, opts.symbol_mode) {
         out.push_str("null");
@@ -338,8 +346,7 @@ fn serialize_into(
                 // GNU `json_out_float` calls `signal_error ("JSON does not
                 // allow Inf or NaN", f)`, which signals a plain `error` whose
                 // data is `(MESSAGE FLOAT)` (signal_error wraps the non-list
-                // FLOAT in a one-element list).  Mirror that exactly rather
-                // than raising a neomacs-only json-serialize-error.
+                // FLOAT in a one-element list). Mirror that exactly.
                 return Err(signal(
                     "error",
                     vec![Value::string("JSON does not allow Inf or NaN"), *value],
@@ -358,6 +365,7 @@ fn serialize_into(
         ValueKind::String => json_out_lisp_string(out, value),
 
         ValueKind::Veclike(VecLikeType::Vector) => {
+            check_container_depth(depth)?;
             let items = value.as_vector_data().unwrap().clone();
             out.push('[');
             for (index, item) in items.iter().enumerate() {
@@ -371,6 +379,7 @@ fn serialize_into(
         }
 
         ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_container_depth(depth)?;
             let table = value.as_hash_table().unwrap().clone();
             // GNU's `json_out_object_hash` walks the table with `DOHASH`
             // (src/json.c), i.e. the slot order `maphash` visits.  The
@@ -402,7 +411,10 @@ fn serialize_into(
 
         // Alist (list of (KEY . VALUE) conses) or plist (flat KEY VALUE …)
         // → JSON object.
-        ValueKind::Cons => serialize_cons_object(out, value, opts, depth),
+        ValueKind::Cons => {
+            check_container_depth(depth)?;
+            serialize_cons_object(out, value, opts, depth)
+        }
 
         ValueKind::Nil => {
             out.push_str("{}");
@@ -648,9 +660,6 @@ enum JsonError {
     EscapeSequence,
     /// `json-number-out-of-range-error` — numeric literal outside range.
     NumberOutOfRange,
-    /// `json-serialize-error` — neomacs serialization failure. GNU signals
-    /// a plain `error` here; neomacs keeps a dedicated `json-error` subtype.
-    Serialize,
 }
 
 impl JsonError {
@@ -664,7 +673,6 @@ impl JsonError {
             JsonError::InvalidSurrogate => "json-invalid-surrogate-error",
             JsonError::EscapeSequence => "json-escape-sequence-error",
             JsonError::NumberOutOfRange => "json-number-out-of-range-error",
-            JsonError::Serialize => "json-serialize-error",
         }
     }
 }
