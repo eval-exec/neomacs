@@ -55,6 +55,32 @@ pub(super) enum OverlayTextEdit {
     },
 }
 
+/// Whether a text edit re-ranked any overlay through GNU's front-advance
+/// reinsertion.  That path reads the red-black topology mirror, which a
+/// batch-built observer copy does not share, so only an order-preserving
+/// edit can be replayed on such a copy with the same result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OverlayEditOrder {
+    Preserved,
+    Reinserted,
+}
+
+/// Object-side writes and ordering consequence of one text edit.
+#[derive(Debug)]
+pub(super) struct OverlayTextEditOutcome {
+    pub(super) effects: Vec<OverlayEditEffect>,
+    pub(super) order: OverlayEditOrder,
+}
+
+impl OverlayTextEditOutcome {
+    fn preserved(effects: Vec<OverlayEditEffect>) -> Self {
+        Self {
+            effects,
+            order: OverlayEditOrder::Preserved,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum OverlayEditEffect {
     Resized {
@@ -779,14 +805,14 @@ impl OverlayIndex {
     /// shifted by lazy subtree tags.  Only boundary-crossing intervals are
     /// removed and reinserted so endpoint gravity and evaporation remain
     /// GNU-compatible.
-    pub(super) fn adjust_for_text_edit(&mut self, edit: OverlayTextEdit) -> Vec<OverlayEditEffect> {
+    pub(super) fn adjust_for_text_edit(&mut self, edit: OverlayTextEdit) -> OverlayTextEditOutcome {
         // Most buffers carry no overlays, and every insertion and deletion
         // comes through here: with nothing to shift, the queries and vectors
         // below cost more than the edit itself (479 instructions per edit on
         // an empty index). GNU's `adjust_overlays_for_insert' likewise walks
         // a tree that is empty.
         if self.is_empty() {
-            return Vec::new();
+            return OverlayTextEditOutcome::preserved(Vec::new());
         }
         match edit {
             OverlayTextEdit::Insert {
@@ -794,7 +820,9 @@ impl OverlayIndex {
                 length,
                 before_markers,
             } => self.adjust_for_insert(position, length, before_markers),
-            OverlayTextEdit::Delete { range } => self.adjust_for_delete(range),
+            OverlayTextEdit::Delete { range } => {
+                OverlayTextEditOutcome::preserved(self.adjust_for_delete(range))
+            }
         }
     }
 
@@ -803,9 +831,9 @@ impl OverlayIndex {
         position: EmacsBytePos,
         length: EmacsByteLen,
         before_markers: bool,
-    ) -> Vec<OverlayEditEffect> {
+    ) -> OverlayTextEditOutcome {
         if length.is_empty() {
-            return Vec::new();
+            return OverlayTextEditOutcome::preserved(Vec::new());
         }
         let mut exceptions = self.overlays_touching(position);
         // An overlay that STRICTLY contains the insertion keeps its start and
@@ -861,7 +889,7 @@ impl OverlayIndex {
             if let Some(endpoints) = self.endpoints.get_mut() {
                 endpoints.shift_at_or_after(position, before_markers, delta);
             }
-            return grown_effects;
+            return OverlayTextEditOutcome::preserved(grown_effects);
         }
         sort_and_dedup_overlay_identities(&mut exceptions);
 
@@ -881,6 +909,11 @@ impl OverlayIndex {
             })
             .collect();
         let front_preorder = self.gnu_order.subset_in_preorder(&front_candidates);
+        let order = if front_preorder.is_empty() {
+            OverlayEditOrder::Preserved
+        } else {
+            OverlayEditOrder::Reinserted
+        };
         for identity in &front_preorder {
             assert!(
                 self.gnu_order.remove(*identity).is_ok(),
@@ -972,7 +1005,7 @@ impl OverlayIndex {
             self.restore_after_text_edit(overlay, new_range, TextEditReattachment::Reinsert);
         }
         debug_assert!(front_updates.is_empty());
-        effects
+        OverlayTextEditOutcome { effects, order }
     }
 
     fn adjust_for_delete(&mut self, range: EmacsByteRange) -> Vec<OverlayEditEffect> {

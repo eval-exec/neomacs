@@ -23,8 +23,8 @@ use neovm_value::value::{Value, ValueKind, eq_value};
 
 pub use super::overlay_index::OverlayPropertyFilter;
 use super::overlay_index::{
-    EndpointKind, OverlayBatchOrder, OverlayEditEffect, OverlayEndpoint, OverlayEndpointRecords,
-    OverlayIdentity, OverlayIndex, OverlayTextEdit,
+    EndpointKind, OverlayBatchOrder, OverlayEditEffect, OverlayEditOrder, OverlayEndpoint,
+    OverlayEndpointRecords, OverlayIdentity, OverlayIndex, OverlayTextEdit,
 };
 use super::position::{CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange};
 use super::text::{TextEditRange, TextInsertion, TextReplacement};
@@ -207,6 +207,20 @@ pub(crate) use neovm_value::heap_types::overlay_storage::instrumentation::{
 #[cfg(test)]
 pub(crate) use neovm_value::test_support::authority::reset_overlay_full_enumeration_visit_count;
 
+#[cfg(test)]
+static OVERLAY_SNAPSHOT_COPIES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_overlay_snapshot_copy_count() {
+    OVERLAY_SNAPSHOT_COPIES.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn overlay_snapshot_copy_count() -> usize {
+    OVERLAY_SNAPSHOT_COPIES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[cfg(not(any(test, feature = "test-support")))]
 pub struct OverlayList {
     index: OverlayIndex,
@@ -262,6 +276,12 @@ impl OverlayList {
     /// The live buffer roots the cached Lisp objects; callers never receive a
     /// mutable handle to the cached index. Mutation drops the cache without
     /// changing an observer already using the previous snapshot.
+    ///
+    /// Text edits are the exception while no observer holds the cache: they
+    /// apply the same shift to the cached copy, so typing in a buffer with
+    /// many overlays does not re-create every overlay object. A copy kept
+    /// this way keeps its object identity, as the live overlay it mirrors
+    /// does, so `bits()` of a snapshot copy no longer changes on every edit.
     pub fn snapshot(&self) -> OverlaySnapshot {
         if let Some(snapshot) = self.snapshot.borrow().as_ref() {
             return snapshot.clone();
@@ -274,6 +294,46 @@ impl OverlayList {
     fn invalidate_snapshot(&mut self) {
         self.absent_properties.set([None; 8]);
         self.snapshot.get_mut().take();
+    }
+
+    /// Keep the cached snapshot only if no observer shares it and `update`
+    /// brought it to the live state; otherwise drop it. A shared snapshot
+    /// belongs to a walk whose Lisp callback is mutating this buffer, and
+    /// that walk must keep seeing what it captured. `update` receives the
+    /// live index and runs only when there is an unshared cache to update.
+    fn retain_snapshot_if(&mut self, update: impl FnOnce(&OverlayIndex, &mut OverlayList) -> bool) {
+        let Self {
+            index, snapshot, ..
+        } = self;
+        let cache = snapshot.get_mut();
+        let retained = cache
+            .as_mut()
+            .and_then(|snapshot| Rc::get_mut(&mut snapshot.0))
+            .is_some_and(|snapshot| update(index, snapshot));
+        if !retained {
+            cache.take();
+        }
+    }
+
+    /// Apply a text edit to this list's index and overlay objects.
+    fn apply_text_edit(&mut self, edit: OverlayTextEdit) -> OverlayEditOrder {
+        self.absent_properties.set([None; 8]);
+        let outcome = self.index.adjust_for_text_edit(edit);
+        self.apply_edit_effects(outcome.effects);
+        outcome.order
+    }
+
+    /// GNU adjusts overlays in place on every insertion and deletion. The
+    /// cached snapshot holds the same ranges, advance flags and plists in the
+    /// same query order, so an order-preserving edit gives it the live result
+    /// without re-creating its overlays. A front-advance reinsertion consults
+    /// the live tree's topology, which the batch-built copy does not share.
+    fn adjust_for_text_edit(&mut self, edit: OverlayTextEdit) {
+        let order = self.apply_text_edit(edit);
+        self.retain_snapshot_if(|_, snapshot| {
+            order == OverlayEditOrder::Preserved
+                && snapshot.apply_text_edit(edit) == OverlayEditOrder::Preserved
+        });
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -354,6 +414,10 @@ impl OverlayList {
                     rear_advance: data.rear_advance,
                 });
                 push_scratch_gc_root(copy);
+                #[cfg(test)]
+                if matches!(identity, OverlayCloneIdentity::PreservePrecedence) {
+                    OVERLAY_SNAPSHOT_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 (copy, range)
             })
             .collect();
@@ -1600,14 +1664,11 @@ impl OverlayList {
         if len.is_empty() {
             return;
         }
-        let effects = self
-            .index_mut()
-            .adjust_for_text_edit(OverlayTextEdit::Insert {
-                position: pos,
-                length: len,
-                before_markers,
-            });
-        self.apply_edit_effects(effects);
+        self.adjust_for_text_edit(OverlayTextEdit::Insert {
+            position: pos,
+            length: len,
+            before_markers,
+        });
     }
 
     pub fn adjust_for_inserted_text(&mut self, insertion: TextInsertion, before_markers: bool) {
@@ -1622,10 +1683,7 @@ impl OverlayList {
         if range.is_empty() {
             return;
         }
-        let effects = self
-            .index_mut()
-            .adjust_for_text_edit(OverlayTextEdit::Delete { range });
-        self.apply_edit_effects(effects);
+        self.adjust_for_text_edit(OverlayTextEdit::Delete { range });
     }
 
     fn apply_edit_effects(&mut self, effects: Vec<OverlayEditEffect>) {
