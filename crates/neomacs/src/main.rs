@@ -2581,6 +2581,18 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         )
     }
 
+    fn synchronize_symbol_font_policy(
+        &mut self,
+        use_primary_font: bool,
+        char_script_table: Option<Value>,
+    ) {
+        // The same GNU symbol-reuse rule the layout engine's font service
+        // applies; this host's service is the evaluator-path counterpart and
+        // has no other source for the policy.
+        self.synchronized_font_metrics()
+            .synchronize_symbol_font_policy(use_primary_font, char_script_table);
+    }
+
     fn resolve_font_for_char(
         &mut self,
         request: FontResolveRequest,

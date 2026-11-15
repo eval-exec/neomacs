@@ -430,6 +430,37 @@ impl DisplayHost for CapturingFontAtDisplayHost {
     }
 }
 
+struct SymbolPolicyCapturingHost {
+    published: Rc<RefCell<Vec<(bool, Option<Value>)>>>,
+}
+
+impl DisplayHost for SymbolPolicyCapturingHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn synchronize_symbol_font_policy(
+        &mut self,
+        use_primary_font: bool,
+        char_script_table: Option<Value>,
+    ) {
+        self.published
+            .borrow_mut()
+            .push((use_primary_font, char_script_table));
+    }
+
+    fn resolve_font_for_char(
+        &mut self,
+        _request: FontResolveRequest,
+    ) -> Result<Option<ResolvedFontMatch>, String> {
+        Ok(None)
+    }
+}
+
 struct CapturingFindFontDisplayHost {
     last_request: Rc<RefCell<Option<FontSpecResolveRequest>>>,
     matched: Option<ResolvedFontSpecMatch>,
@@ -1524,6 +1555,47 @@ fn internal_char_font_uses_explicit_character_at_a_buffer_position() {
     .unwrap();
     assert!(result.cons_car().is_font_object());
     assert_eq!(result.cons_cdr(), Value::fixnum(0x2A));
+}
+
+#[test]
+fn char_font_resolution_publishes_the_live_symbol_font_policy_to_the_host() {
+    // GNU `face_for_char` decides primary-font reuse for symbols from the
+    // live `use-default-font-for-symbols` and `char-script-table` on every
+    // character lookup (src/fontset.c:930-948 at
+    // a360712c9d272d950d8d8255ef74570f7e90b7d9), keeping the ASCII face's
+    // font and opening nothing. The display host owns a separate
+    // font-selection state with no other policy source, so the evaluator
+    // must publish both inputs where GNU reads them. Without this sync a
+    // covered symbol falls through to fontset fallback, which materializes
+    // another font and changes the connection's smallest-opened-font height.
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    let published: Rc<RefCell<Vec<(bool, Option<Value>)>>> = Rc::default();
+    eval.set_display_host(Box::new(SymbolPolicyCapturingHost {
+        published: Rc::clone(&published),
+    }));
+
+    internal_char_font(&mut eval, vec![Value::NIL, Value::fixnum(0x2018)]).unwrap();
+    let live_table = neovm_eval::emacs_core::builtins::symbols::builtin_symbol_value_1(
+        &mut eval,
+        Value::symbol(neovm_value::intern::WellKnown::CharScriptTable),
+    )
+    .expect("char-script-table is registered");
+    assert_eq!(
+        published.borrow().as_slice(),
+        &[(true, Some(live_table))],
+        "the DEFVAR_BOOL default must publish symbol reuse with the live table"
+    );
+
+    eval.eval_str("(setq use-default-font-for-symbols nil)")
+        .expect("disable the symbol reuse policy");
+    internal_char_font(&mut eval, vec![Value::NIL, Value::fixnum(0x2018)]).unwrap();
+    assert_eq!(
+        published.borrow().last(),
+        Some(&(false, Some(live_table))),
+        "a live setq must reach the host on the next character lookup"
+    );
 }
 
 #[test]

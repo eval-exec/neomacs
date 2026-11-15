@@ -513,6 +513,23 @@ pub trait DisplayHost {
     ) -> Result<Vec<AvailableFontFamilyName>, String> {
         Ok(Vec::new())
     }
+    /// Publish the live inputs of GNU's symbol-font reuse rule so host-side
+    /// character font selection applies it before fontset fallback.
+    ///
+    /// GNU `face_for_char` reads `use-default-font-for-symbols` and
+    /// `char-script-table` on every character lookup (src/fontset.c:930-948
+    /// at a360712c9d272d950d8d8255ef74570f7e90b7d9) and keeps the ASCII
+    /// face's font when the rule fires, opening nothing. The evaluator owns
+    /// those globals and the host owns font selection, so the evaluator
+    /// publishes them at the same point GNU reads them. Steady state inside
+    /// the host is an identity/generation check, as with the layout engine's
+    /// copy of the same policy. `None` marks an unreadable table.
+    fn synchronize_symbol_font_policy(
+        &mut self,
+        _use_primary_font: bool,
+        _char_script_table: Option<neovm_value::value::Value>,
+    ) {
+    }
     fn resolve_font_for_char(
         &mut self,
         _request: FontResolveRequest,

@@ -3917,15 +3917,41 @@ fn otf_side_to_lisp(side: &neovm_eval::emacs_core::eval::OtfSideCapability) -> V
     Value::list(scripts)
 }
 
+/// GNU `face_for_char` consults `use-default-font-for-symbols` and
+/// `char-script-table` live on every character lookup (src/fontset.c:930-948
+/// at a360712c9d272d950d8d8255ef74570f7e90b7d9) before the fontset
+/// fallback. The display host owns a separate font-selection state, so the
+/// evaluator publishes those inputs at the same point GNU reads them. An
+/// unbound `use-default-font-for-symbols` keeps the DEFVAR_BOOL default,
+/// like GNU's C global outliving any Lisp `makunbound`.
+fn symbol_font_policy_inputs(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+) -> (bool, Option<Value>) {
+    let use_primary_font = neovm_eval::emacs_core::builtins::symbols::builtin_symbol_value_1(
+        eval,
+        Value::symbol(neovm_value::intern::WellKnown::UseDefaultFontForSymbols),
+    )
+    .map(|value| !value.is_nil())
+    .unwrap_or(true);
+    let char_script_table = neovm_eval::emacs_core::builtins::symbols::builtin_symbol_value_1(
+        eval,
+        Value::symbol(neovm_value::intern::WellKnown::CharScriptTable),
+    )
+    .ok();
+    (use_primary_font, char_script_table)
+}
+
 pub(crate) fn resolve_font_match(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame_id: FrameId,
     character: neovm_value::emacs_char::EmacsChar,
     face: &RuntimeFace,
 ) -> Option<neovm_eval::emacs_core::eval::ResolvedFontMatch> {
+    let (use_primary_font, char_script_table) = symbol_font_policy_inputs(eval);
     eval.display_host
         .as_mut()
         .and_then(|host| {
+            host.synchronize_symbol_font_policy(use_primary_font, char_script_table);
             host.resolve_font_for_char(super::display_host::FontResolveRequest {
                 frame_id,
                 character,
