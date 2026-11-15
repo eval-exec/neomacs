@@ -196,3 +196,116 @@ fn hash_leaf_keys_keep_their_materialized_form() {
         assert!(storage.get(stored).is_some());
     }
 }
+
+/// With `symbols-with-pos-enabled` set, the materialized key strips
+/// positioned symbols, so the key is stored materialized as before.
+#[test]
+fn hash_keys_put_with_symbols_with_pos_enabled_keep_their_materialized_form() {
+    let test = HashTableTest::Equal;
+    let key = list(&[Value::symbol("np-swp"), Value::fixnum(1)]);
+    let mut storage = HashTableStorage::with_capacity(4);
+    let HashProbe::Absent(hash) = storage
+        .try_probe_for_insert(key, test, true)
+        .expect("probing a non-circular key signals nothing")
+    else {
+        panic!("a fresh table holds no key");
+    };
+    storage.insert_absent(hash, test, true, key, Value::T);
+    let keyed = storage.keyed_entries_in_slot_order();
+    assert_eq!(keyed.len(), 1);
+    assert_eq!(*keyed[0].0, key.to_hash_key_swp(&test, true));
+}
+
+/// A jump table of `keys` put as `puthash` puts them, each targeting the
+/// byte offset `8 * (i + 1)`.
+fn jump_table(keys: &[Value]) -> LispHashTable {
+    let mut table = LispHashTable::new(HashTableTest::Equal);
+    for (i, key) in keys.iter().enumerate() {
+        put(&mut table.data, *key, Value::fixnum(8 * (i as i64 + 1)));
+    }
+    table
+}
+
+/// What the switch plan and the hashed lookup answer for `value`, after the
+/// two dispatches that build the plan.
+fn dispatch(table: &LispHashTable, value: Value) -> (Option<usize>, Option<usize>) {
+    table.switch_target(Value::NIL, false);
+    table.switch_target(Value::NIL, false);
+    (
+        table.switch_target(value, false).map(Value::bits),
+        table
+            .data
+            .lookup(value, HashTableTest::Equal, false)
+            .map(|target| target.bits()),
+    )
+}
+
+/// A key mutated after `puthash` and before the plan is built now hashes
+/// elsewhere than its entry: the plan must not answer from its new shape,
+/// which the hashed lookup (and GNU `Bswitch`) misses.
+#[test]
+fn hash_a_live_key_mutated_before_planning_is_not_planned_by_its_new_shape() {
+    let key = list(&[Value::symbol("a")]);
+    let table = jump_table(&[key, list(&[Value::symbol("z")])]);
+    key.set_car(Value::symbol("b"));
+    let (plan, lookup) = dispatch(&table, list(&[Value::symbol("b")]));
+    assert_eq!(lookup, None);
+    assert_eq!(plan, lookup);
+}
+
+/// `((((leaf))))`: `equal_value_hash`, like GNU `sxhash_obj`, folds in
+/// nothing below `SXHASH_MAX_DEPTH`, so `leaf` is not part of the hash.
+fn nested(leaf: i64) -> Value {
+    list(&[list(&[list(&[list(&[Value::fixnum(leaf)])])])])
+}
+
+/// Set the leaf of a [`nested`] key in place.
+fn set_leaf(key: Value, leaf: i64) {
+    key.cons_car()
+        .cons_car()
+        .cons_car()
+        .set_car(Value::fixnum(leaf));
+}
+
+/// A key mutated before planning, but still under its entry's hash, is
+/// found by its new shape through both the plan and the lookup.
+#[test]
+fn hash_a_live_key_mutated_under_its_hash_before_planning_answers_by_its_new_shape() {
+    let key = nested(5);
+    let table = jump_table(&[key, list(&[Value::fixnum(0)])]);
+    let hash = equal_value_hash(key);
+    set_leaf(key, 6);
+    assert_eq!(equal_value_hash(key), hash, "the mutation keeps the hash");
+    let hit = Some(Value::fixnum(8).bits());
+    assert_eq!(dispatch(&table, nested(6)), (hit, hit));
+    assert_eq!(dispatch(&table, nested(5)), (None, None));
+    assert_eq!(table.shape(), Some(switch_plan::PlanShape::Nodes));
+}
+
+/// Two keys mutated into `equal` ones before planning: the plan declines,
+/// so the hashed lookup decides which entry answers.
+#[test]
+fn hash_live_keys_mutated_into_equal_keys_are_not_planned() {
+    let first = nested(5);
+    let table = jump_table(&[first, nested(6)]);
+    set_leaf(first, 6);
+    let (plan, lookup) = dispatch(&table, nested(6));
+    assert!(lookup.is_some());
+    assert_eq!(plan, lookup);
+    assert_eq!(table.shape(), Some(switch_plan::PlanShape::Generic));
+}
+
+/// A key mutated in place AFTER the plan is built, under its hash: the plan
+/// still answers for the key's old shape (the module doc's one exception),
+/// and the debug check, which compares every dispatch with the lookup,
+/// recognizes the mutation rather than reporting a divergence.
+#[test]
+fn hash_a_live_key_mutated_after_planning_answers_from_the_plan() {
+    let key = nested(5);
+    let table = jump_table(&[key, list(&[Value::fixnum(0)])]);
+    let hit = Some(Value::fixnum(8).bits());
+    assert_eq!(dispatch(&table, nested(5)), (hit, hit));
+    set_leaf(key, 6);
+    assert_eq!(dispatch(&table, nested(5)), (hit, None));
+    assert_eq!(dispatch(&table, nested(6)), (None, hit));
+}
