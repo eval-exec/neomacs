@@ -285,6 +285,75 @@ fn graphical_terminal_adopts_its_display_name() {
     );
 }
 
+/// GNU's `x-display-list` (xfns.c:7692) walks the open-connection chain, so
+/// the answer is the live display connections' names -- never frames, never
+/// the DISPLAY variable. A batch or TTY session has no connection, hence nil;
+/// a GUI session lists its graphical terminal, display-less terminals
+/// (bootstrap, GUI startup) excluded.
+#[test]
+fn x_display_list_names_the_live_graphical_connection_only() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+    reset_terminal_runtime();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    assert_eq!(
+        crate::emacs_core::display::builtin_x_display_list(vec![]).unwrap(),
+        Value::NIL
+    );
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":42",
+        )
+        .unwrap(),
+    ));
+    // The display-less startup terminal that GUI startup keeps must not leak
+    // into the connection list.
+    ensure_terminal_runtime_owner(1, "startup_terminal", TerminalRuntimeConfig::inactive());
+    let names = crate::emacs_core::display::builtin_x_display_list(vec![]).unwrap();
+    assert_eq!(names, Value::list(vec![Value::string(":42")]));
+    // Consistency row from the display-name design: the connection list names
+    // the same display the terminal reports.
+    assert_eq!(
+        builtin_terminal_name(&mut eval, vec![]).unwrap(),
+        Value::string(":42")
+    );
+}
+
+/// A TTY session has no display connection: GNU keeps `x-display-list` nil
+/// on text terminals, and so does the bootstrap-only (batch/daemon) runtime.
+#[test]
+fn x_display_list_stays_nil_for_tty_and_bootstrap_sessions() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+    reset_terminal_runtime();
+    configure_terminal_runtime(
+        TerminalRuntimeConfig::interactive(Some("xterm-256color".to_string()), neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256))
+            .with_name("/dev/tty"),
+    );
+    assert_eq!(
+        crate::emacs_core::display::builtin_x_display_list(vec![]).unwrap(),
+        Value::NIL
+    );
+}
+
+/// An inherited Wayland connection is anonymous; its terminal name is the
+/// backend label, and that label is what the connection list reports.
+#[test]
+fn x_display_list_keeps_an_anonymous_wayland_connection_under_its_label() {
+    use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+    reset_terminal_runtime();
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland),
+    ));
+    assert_eq!(
+        crate::emacs_core::display::builtin_x_display_list(vec![]).unwrap(),
+        Value::list(vec![Value::string("wayland")])
+    );
+}
+
 /// An inherited connection has no socket pathname to adopt, but is still a
 /// named graphical terminal to both GNU's kind predicate and Lisp packages.
 #[test]

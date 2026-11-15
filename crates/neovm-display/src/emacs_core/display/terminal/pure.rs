@@ -915,6 +915,24 @@ fn terminal_name_for_id(id: u64) -> Option<String> {
     with_terminal_manager(|slot| slot.borrow().get(id).map(|terminal| terminal.name.clone()))
 }
 
+/// Names of the live display connections, in registry order.
+///
+/// GNU's `Fx_display_list` (xfns.c:7692) walks its open-connection chain
+/// (`x_display_list`), and the terminal registry is Neo's counterpart: only
+/// window-system terminals hold display connections, so bootstrap, GUI
+/// startup, and TTY terminals are all excluded. The chain — not frames and
+/// not the DISPLAY variable — is the source, because a display connection
+/// outlives its last frame.
+pub(crate) fn graphical_display_names() -> Vec<String> {
+    with_terminal_manager(|slot| {
+        slot.borrow()
+            .live_terminals()
+            .filter(|terminal| matches!(terminal.output_method, TerminalOutputMethod::WindowSystem))
+            .map(|terminal| terminal.name.clone())
+            .collect()
+    })
+}
+
 /// Read one terminal runtime synchronously under its existing manager borrow.
 /// The result cannot borrow the runtime. Callers project native fields and
 /// release the borrow before callbacks or Lisp allocation; each thread reads

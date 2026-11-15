@@ -1346,11 +1346,22 @@ pub fn builtin_display_supports_face_attributes_p(
 // X display builtins (compatibility stubs)
 // ---------------------------------------------------------------------------
 
-/// (x-display-list) -> nil in batch-style vm context.
+/// Return the list of display names that Emacs has connections to.
+///
+/// GNU `Fx_display_list` (xfns.c:7692) walks the open-connection chain; the
+/// live window-system terminals are Neo's connection registry, so the answer
+/// is their names. Nil in batch and TTY sessions (no display connection), and
+/// never derived from frames or the DISPLAY variable — a connection outlives
+/// its last frame.
 #[doc(hidden)]
 pub fn builtin_x_display_list(args: Vec<Value>) -> EvalResult {
     expect_max_args("x-display-list", &args, 0)?;
-    Ok(Value::NIL)
+    Ok(Value::list(
+        super::terminal::pure::graphical_display_names()
+            .into_iter()
+            .map(Value::string)
+            .collect(),
+    ))
 }
 
 /// (x-frame-edges &optional FRAME TYPE) -> nil in batch/no-X context.

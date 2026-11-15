@@ -198,10 +198,13 @@ fn assert_inherited_wayland_identity(unused_display: Option<&str>) {
   (let* ((name (terminal-name (selected-frame)))
          (eligible (and (stringp name) (> (length name) 0)
                         (not (equal name "initial_terminal"))))
+         (display-list (x-display-list))
          (result (list :graphical (and (display-graphic-p) t)
                        :initial (frame-initial-p)
                        :eligible eligible :windows (length (window-list))
-                       :name name :display (frame-parameter nil 'display))))
+                       :name name :display (frame-parameter nil 'display)
+                       :display-list display-list
+                       :dl-name-match (equal display-list (list name)))))
     (with-temp-file (getenv "NEOMACS_TEST_RESULT")
       (prin1 result (current-buffer)))
     {INITIAL_IDENTITY_FORM}
@@ -232,7 +235,8 @@ fn assert_inherited_wayland_identity(unused_display: Option<&str>) {
     let observed = fs::read_to_string(&result).unwrap_or_default();
     assert_eq!(
         observed,
-        "(:graphical t :initial nil :eligible t :windows 2 :name \"wayland\" :display \"wayland\")",
+        "(:graphical t :initial nil :eligible t :windows 2 :name \"wayland\" :display \"wayland\" \
+         :display-list (\"wayland\") :dl-name-match t)",
         "status={status}; logs={}\n{}",
         artifacts.join("stderr.log").display(),
         fs::read_to_string(artifacts.join("stderr.log")).unwrap_or_default()
