@@ -64,15 +64,36 @@ const ACCEPT_OUTPUT_RELEASE_FORM: &str = r#"
 "#;
 
 /// The command-input wait (`read-event` with a timeout) is the idle wait
-/// class. GNU: `(nil t)`.
+/// class. GNU computes the SECONDS timeout as an ABSOLUTE deadline at entry
+/// (`read_filtered_event`, keyboard.c, before `read_char`), and
+/// `wait_reading_process_output` returns TIMEOUT before any select when
+/// preliminary timer/redisplay service consumed the deadline (process.c
+/// 5470-5476 "Exit if already run out"; timers run in the loop at
+/// 5483-5500). The global-lock release is only inside `thread_select`'s
+/// pselect, so one short read is NOT guaranteed to reach the release
+/// point. GNU 31.1 oracle (a360712c9d), 3/3: with a zero-delay timer whose
+/// handler spins ~250ms, `(read-event nil nil 0.02)` returns nil with the
+/// worker not yet run — the probe prints `(nil nil t t)` (timer ran; the
+/// worker only runs at the next genuine release). The same deadline
+/// arithmetic let this single-shot form fail once under full-suite load
+/// (actual `[nil, nil]`, preexisting-bugs threadsig-read-event20ms).
+///
+/// The form therefore retries with a FRESH 0.05s budget per `read-event`
+/// until the worker runs, bounded by 5s of wall clock. GNU prints
+/// `(nil t)` (3/3): the first read that actually waits releases the lock
+/// and the worker runs. A regressed release point leaves `gnu-rp-x` nil
+/// through every retry, so the second element fails after the 5s bound
+/// instead of hanging.
 const READ_EVENT_RELEASE_FORM: &str = r#"
 (progn
   (setq gnu-rp-x nil)
   (make-thread (lambda () (setq gnu-rp-x t)))
   (list gnu-rp-x
-        (condition-case e
-            (progn (read-event nil nil 0.02) gnu-rp-x)
-          (error (list 'err e)))))
+        (progn
+          (setq gnu-rp-until (+ (float-time) 5))
+          (while (and (null gnu-rp-x) (< (float-time) gnu-rp-until))
+            (read-event nil nil 0.05))
+          gnu-rp-x)))
 "#;
 
 /// A worker blocking on a mutex the main thread owns: GNU parks it on the
