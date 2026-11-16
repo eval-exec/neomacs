@@ -231,9 +231,8 @@ fn worker_errors_are_resignaled_with_their_data() {
     assert_eq!(
         eval(
             &mut ctx,
-            "(progn (define-error 'isolate-test-custom \"custom\") \
-             (condition-case err (neomacs-worker-wait (neomacs-worker-run (lambda () (signal 'isolate-test-custom '(1 two))))) \
-               (isolate-test-custom (list (car err) (cdr err)))))"
+            "(condition-case err (neomacs-worker-wait (neomacs-worker-run (lambda () (define-error 'isolate-test-custom \"custom\") (signal 'isolate-test-custom '(1 two))))) \
+               (t (list (car err) (cdr err))))"
         ),
         "OK (isolate-test-custom (1 two))"
     );
@@ -244,6 +243,160 @@ fn worker_errors_are_resignaled_with_their_data() {
         ),
         "ERR (wrong-type-argument (listp 1))"
     );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-wait (neomacs-worker-run (lambda () (define-error 'foo \"foo\") (signal 'foo '(1 . 2))))) (foo (cadr err)))"
+        ),
+        "OK (1 . 2)"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-wait (neomacs-worker-run (lambda () (signal 'error (list \"line1\\n\\\"quoted\\\"\"))))) (error (cadr err)))"
+        ),
+        "OK \"line1\n\\\"quoted\\\"\""
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-wait (neomacs-worker-run (lambda () (signal 'error (list (expt 2 100)))))) (error (cadr err)))"
+        ),
+        "OK 1267650600228229401496703205376"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-wait (neomacs-worker-run (lambda () (signal 'error '((a (b . c)) d))))) (error (cdr err)))"
+        ),
+        "OK ((a (b . c)) d)"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-wait (neomacs-worker-run (lambda () (signal 'error (list (intern \"symbol with space\")))))) (error (cadr err)))"
+        ),
+        "OK symbol\\ with\\ space"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-wait (neomacs-worker-run (lambda () (signal 'error (list (current-buffer)))))) (error (list (car err) (stringp (cadr err)) (not (null (string-match-p \"buffer\" (cadr err)))))))"
+        ),
+        "OK (error t t)"
+    );
+    // The worker's condition definition is private to its isolate.
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-wait (neomacs-worker-run (lambda () (define-error 'worker-only-condition \"worker-only message\") (signal 'worker-only-condition '(x))))) (t (error-message-string err)))"
+        ),
+        "OK \"peculiar error: x\""
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-wait (neomacs-worker-run 7)) (invalid-function (car err)))"
+        ),
+        "OK invalid-function"
+    );
+}
+
+#[test]
+fn waits_accept_lists_share_timeout_and_keep_unwaited_tasks() {
+    let mut ctx = main_isolate();
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(let ((a (neomacs-worker-run #'+ 1 2)) (b (neomacs-worker-run #'+ 3 4))) (neomacs-worker-wait (list a b)))"
+        ),
+        "OK (3 7)"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(let* ((bad (neomacs-worker-run (lambda () (error \"first\")))) (later (neomacs-worker-run #'+ 40 2))) (list (condition-case err (neomacs-worker-wait (list bad later)) (error 'first-error)) (neomacs-worker-wait later)))"
+        ),
+        "OK (first-error 42)"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-wait nil -0.1) (args-out-of-range (car err)))"
+        ),
+        "OK args-out-of-range"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-wait nil 'bad) (wrong-type-argument (cadr err)))"
+        ),
+        "OK numberp"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-wait nil 0.0e+NaN) (args-out-of-range (car err)))"
+        ),
+        "OK args-out-of-range"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(condition-case err (neomacs-worker-run) (wrong-number-of-arguments (car err)))"
+        ),
+        "OK wrong-number-of-arguments"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(progn (setq neomacs-worker-pool-size 0) (condition-case err (neomacs-worker-run #'identity 1) (neomacs-worker-error (car err))))"
+        ),
+        "OK neomacs-worker-error"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(progn (setq neomacs-worker-pool-size nil) (stringp (documentation 'neomacs-worker-run)))"
+        ),
+        "OK t"
+    );
+    assert_eq!(
+        eval(&mut ctx, "(special-variable-p 'neomacs-worker-pool-size)"),
+        "OK t"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(and (stringp (documentation 'neomacs-worker-run)) (stringp (documentation 'neomacs-worker-wait)) (stringp (documentation 'neomacs-worker-cancel)) (stringp (documentation 'neomacs-worker-status)) (stringp (documentation 'neomacs-worker-pool-size)) (stringp (documentation 'neomacs-worker-stats)))"
+        ),
+        "OK t"
+    );
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(let ((a (neomacs-worker-run (lambda () (sleep-for 0.2) 'done))) (b (neomacs-worker-run (lambda () (sleep-for 0.4) 'done)))) (condition-case err (neomacs-worker-wait (list a b) 0.3) (neomacs-worker-timeout 'timed-out)))"
+        ),
+        "OK timed-out"
+    );
+}
+
+#[test]
+fn quit_during_wait_does_not_consume_the_task() {
+    let mut ctx = main_isolate();
+    let request = ctx.quit_requested.clone();
+    let helper = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        request.request();
+    });
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(let ((task (neomacs-worker-run (lambda () (sleep-for 0.2) 42)))) (list (condition-case err (neomacs-worker-wait task) (quit 'quit)) (neomacs-worker-wait task)))"
+        ),
+        "OK (quit 42)"
+    );
+    helper.join().expect("quit helper thread");
 }
 
 #[test]
@@ -366,7 +519,8 @@ fn many_tasks_complete_on_two_owners() {
     assert_eq!(
         eval(
             &mut ctx,
-            "(progn (while (< (plist-get (neomacs-worker-stats) :ready) 2)) \
+            "(progn (let ((attempts 0)) (while (and (< (plist-get (neomacs-worker-stats) :ready) 2) (< attempts 100000)) (setq attempts (1+ attempts))) \
+                    (unless (= (plist-get (neomacs-worker-stats) :ready) 2) (error \"worker startup poll exceeded 100000 iterations\"))) \
              (plist-get (neomacs-worker-stats) :ready))"
         ),
         "OK 2"
@@ -442,7 +596,8 @@ fn status_timeout_cancel_and_handles() {
         eval(
             &mut ctx,
             "(let ((spinner (neomacs-worker-run (symbol-function 'isolate-test-spin)))) \
-             (while (not (eq (neomacs-worker-status spinner) 'running))) \
+             (let ((attempts 0)) (while (and (not (eq (neomacs-worker-status spinner) 'running)) (< attempts 100000)) (setq attempts (1+ attempts))) \
+               (unless (eq (neomacs-worker-status spinner) 'running) (error \"spinner did not start within 100000 polls\"))) \
              (neomacs-worker-cancel spinner) \
              (list (condition-case err (neomacs-worker-wait spinner) (neomacs-worker-cancelled 'cancelled)) \
                    (neomacs-worker-wait (neomacs-worker-run #'+ 1 1)) \

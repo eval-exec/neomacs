@@ -15,6 +15,11 @@
 //! error the function signals is re-signaled by the wait with the same
 //! condition and (printed, re-read) data. A task is the record
 //! `#s(neomacs-worker-task ID)`.
+//! Condition properties are isolate-local. For a condition unknown to the
+//! waiter, it installs only the condition name and `error` parent so the
+//! original signal can be delivered; `error-message-string` uses the generic
+//! `peculiar error` message because the worker's error-message property is not
+//! copied.
 //!
 //! The host registers these with [`register_subrs`] after its Context
 //! boots, the way a dynamic module adds primitives: they are not in the
@@ -83,8 +88,44 @@ fn arg(args: &[Value], index: usize) -> Value {
 
 /// Install the primitives and their conditions into `ctx`.
 pub fn register_subrs(ctx: &mut Context) {
+    ctx.obarray_mut()
+        .define_special_variable("neomacs-worker-pool-size", Value::NIL);
     for spec in SUBRS {
         ctx.register_subr(spec);
+    }
+    for (name, doc) in [
+        (
+            "neomacs-worker-run",
+            "Run FUNCTION with ARGS in a worker isolate and return a task handle.",
+        ),
+        (
+            "neomacs-worker-wait",
+            "Wait for TASK or a list of TASKS and return the result or results.\n\
+             TIMEOUT is the maximum number of seconds for the whole wait; nil means wait forever.\n\
+             A list result preserves task order. The first task error is re-signaled and later tasks keep running.\n\
+             A task handle is consumed when its task finishes, including errors and cancellation. Waiting again signals neomacs-worker-error.\n\
+             A timeout or quit leaves the task available for a later wait.",
+        ),
+        (
+            "neomacs-worker-cancel",
+            "Cancel TASK if it has not finished and return non-nil if it was pending.",
+        ),
+        (
+            "neomacs-worker-status",
+            "Return the status of TASK, or nil if its handle has been consumed.",
+        ),
+        (
+            "neomacs-worker-pool-size",
+            "Return the number of worker isolates in the installed pool.",
+        ),
+        (
+            "neomacs-worker-stats",
+            "Return statistics for the worker isolate pool as a property list.",
+        ),
+    ] {
+        let _ = ctx
+            .obarray_mut()
+            .put_property(name, "function-documentation", Value::string(doc));
     }
     define_error(ctx, ERROR_SYMBOL, "Worker isolate error", &["error"]);
     define_error(
@@ -165,6 +206,10 @@ fn transfer_in(ctx: &Context, value: Value) -> Result<transfer::Transfer, neovm_
 /// (neomacs-worker-run FUNCTION &rest ARGS) -> task
 fn builtin_run(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     let pool = pool()?;
+    let requested_width = ctx.visible_variable_value_or_nil("neomacs-worker-pool-size");
+    if requested_width.as_fixnum() == Some(0) {
+        return Err(pool_error("Worker pool size must be greater than zero"));
+    }
     let mut args = args.into_iter();
     let function = args.next().unwrap_or(Value::NIL);
     let call = Call {
@@ -208,7 +253,12 @@ fn timeout_from(value: Value) -> Result<Option<Duration>, neovm_core::Flow> {
                 vec![Value::symbol("numberp"), value],
             )
         })?;
-    Ok(Some(Duration::from_secs_f64(seconds.max(0.0))))
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(signal(LispCondition::ArgsOutOfRange, vec![value]));
+    }
+    Duration::try_from_secs_f64(seconds)
+        .map(Some)
+        .map_err(|_| signal(LispCondition::ArgsOutOfRange, vec![value]))
 }
 
 /// Re-raise the worker's signal here: the condition by name, the data read
@@ -220,6 +270,18 @@ fn resignal(ctx: &mut Context, signal_in_worker: Signal) -> neovm_core::Flow {
     } else {
         symbol
     };
+    if symbol != "error"
+        && symbol != "quit"
+        && ctx
+            .obarray()
+            .get_property(&symbol, "error-conditions")
+            .is_none()
+    {
+        let conditions = Value::list(vec![Value::symbol(&symbol), Value::symbol("error")]);
+        let _ = ctx
+            .obarray_mut()
+            .put_property(&symbol, "error-conditions", conditions);
+    }
     let data = match data {
         None => Vec::new(),
         Some(text) => match read_all(&text, ctx.variables()) {
@@ -233,13 +295,32 @@ fn resignal(ctx: &mut Context, signal_in_worker: Signal) -> neovm_core::Flow {
     signal(symbol.as_str(), data)
 }
 
-/// (neomacs-worker-wait TASK &optional TIMEOUT) -> value
-fn builtin_wait(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
-    let (task, timeout) = (arg(&args, 0), arg(&args, 1));
-    let pool = pool()?;
-    let handle = task_handle(task)?;
-    let deadline = timeout_from(timeout)?.map(|timeout| Instant::now() + timeout);
-    let runtime = pool.runtime();
+/// Convert one task handle or a proper list of handles into the wait order.
+fn wait_handles(value: Value) -> Result<(bool, Vec<TaskHandle>), neovm_core::Flow> {
+    if value.as_record_data().is_some() {
+        return Ok((false, vec![task_handle(value)?]));
+    }
+    let tasks = list_to_vec(&value).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("neomacs-worker-task-p"), value],
+        )
+    })?;
+    tasks
+        .into_iter()
+        .map(task_handle)
+        .collect::<Result<Vec<_>, _>>()
+        .map(|handles| (true, handles))
+}
+
+/// Wait for one task until the shared deadline, preserving it if quit is raised.
+fn wait_one(
+    ctx: &mut Context,
+    handle: TaskHandle,
+    task: Value,
+    deadline: Option<Instant>,
+) -> EvalResult {
+    let runtime = pool()?.runtime();
     if runtime.task_status(handle).is_none() {
         return Err(pool_error("No such worker task"));
     }
@@ -274,6 +355,36 @@ fn builtin_wait(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
             "Worker task called kill-emacs (exit code {})",
             order.exit_code
         ))),
+    }
+}
+
+/// (neomacs-worker-wait TASK-OR-TASKS &optional TIMEOUT) -> value or list
+fn builtin_wait(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    let pool = pool()?;
+    let task = arg(&args, 0);
+    let (is_list, handles) = wait_handles(task)?;
+    for handle in &handles {
+        if pool.runtime().task_status(*handle).is_none() {
+            return Err(pool_error("No such worker task"));
+        }
+    }
+    let timeout_value = arg(&args, 1);
+    let deadline = match timeout_from(timeout_value)? {
+        Some(timeout) => Some(
+            Instant::now()
+                .checked_add(timeout)
+                .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![timeout_value]))?,
+        ),
+        None => None,
+    };
+    let mut values = Vec::with_capacity(handles.len());
+    for handle in handles {
+        values.push(wait_one(ctx, handle, task_value(handle), deadline)?);
+    }
+    if is_list {
+        Ok(Value::list(values))
+    } else {
+        Ok(values.into_iter().next().unwrap_or(Value::NIL))
     }
 }
 
