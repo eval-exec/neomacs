@@ -2855,7 +2855,8 @@ fn max_compiled_id() -> u64 {
 /// stays valid for the whole call; the caller holds the dormant-Context
 /// contract described above.
 #[inline(never)]
-pub unsafe fn try_run_compiled(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) unsafe fn try_run_compiled(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3865,7 +3866,7 @@ pub(crate) static SEAM_INTERP_FALLBACK_COUNT: std::sync::atomic::AtomicU64 =
 
 /// Called by the eval dispatch seam on an `Ok(None)` native attempt.
 #[inline]
-pub fn note_seam_interp_fallback() {
+pub(crate) fn note_seam_interp_fallback() {
     SEAM_INTERP_FALLBACK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 

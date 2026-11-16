@@ -3141,17 +3141,9 @@ crates/neovm-eval/src/emacs_core/runtime/gc_stats/mod.rs	field	GcStatsSnapshot f
 crates/neovm-eval/src/emacs_core/runtime/gc_stats/mod.rs	field	GcStatsSnapshot field vector_cells
 crates/neovm-eval/src/emacs_core/runtime/gc_stats/mod.rs	fn	fn snapshot
 crates/neovm-eval/src/emacs_core/runtime/gc_stats/mod.rs	struct	struct GcStatsSnapshot
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	const	const PRELOAD_DRY_RUN_ENV
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	const	const PRELOAD_ENABLE_ENV
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	const	const PRELOAD_MANIFEST_NAME
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	const	const PRELOAD_SO_NAME
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	AotDescriptor field meta
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	AotDescriptor field pool_indices
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	AotDescriptor field reloc_count
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	AotDescriptor field reloc_recipe
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	AotDescriptor field spec_sites
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	AotSpecSite field callee_reloc_idx
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	AotSpecSite field kind_disc
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	AotSpecSite field nargs
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	AotSpecSite field which
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	LoadupLeaf field arity
@@ -3161,55 +3153,26 @@ crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	LoadupLeaf field ops
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	PreloadBuildStats field candidates
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	PreloadBuildStats field deduped
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	PreloadBuildStats field prepared
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	PreloadBuildStats field skipped_unsupported
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	PreloadBuildStats field unique_emitted
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	PrepopulateStats field candidates
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	PrepopulateStats field inserted
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	PrepopulateStats field loaded
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	field	PrepopulateStats field missed
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	fn	fn build_and_link_preload
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	fn	fn build_object_for_leaf
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	fn	fn build_preload_object
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	fn	fn drain_aot_pgo
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	fn	fn enumerate_loadup_leaves
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	fn	fn is_d0_aot_candidate
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	fn	fn mark_preload_members_prewarmed
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	fn	fn preload_manifest_path_for_executable
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	fn	fn preload_so_path_for_executable
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	fn	fn prepopulate_aot_from_preload
 crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	fn	fn run_dump_time_preload
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	struct	struct LoadupLeaf
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	struct	struct PreloadBuildStats
-crates/neovm-eval/src/emacs_core/runtime/jit/aot.rs	struct	struct PrepopulateStats
-crates/neovm-eval/src/emacs_core/runtime/jit/backend.rs	enum	enum BackendError
-crates/neovm-eval/src/emacs_core/runtime/jit/backend.rs	fn	fn smoke_compile_add
-crates/neovm-eval/src/emacs_core/runtime/jit/cache.rs	fn	fn note_seam_interp_fallback
-crates/neovm-eval/src/emacs_core/runtime/jit/cache.rs	fn	fn try_run_compiled
 crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	field	BaselineAotMeta field arity
 crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	field	BaselineAotMeta field has_binds
-crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	field	BaselineAotMeta field has_handlers
 crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	field	BaselineAotMeta field max_depth
-crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	field	BaselineAotMeta field spec_sites
-crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	field	CompileRequest field bypass_profit_gate
-crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	fn	fn compile_bytecode_function
-crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	fn	fn compile_bytecode_function_requested
-crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	fn	fn compile_bytecode_function_with
-crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	fn	fn lower_leaf
-crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	fn	fn lower_leaf_full
-crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	fn	fn lower_leaf_full_osr
-crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	fn	fn lower_leaf_with_map
-crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	struct	struct CompileRequest
 crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	use	use dispatch::*
 crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	use	use leaf::*
 crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	use	use lowering::*
 crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	use	use shims::*
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/array_profile.rs	fn	fn neovm_jit_t2_record_array_use
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/calls.rs	field	NamedBuiltinCall field effects
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/calls.rs	field	NamedBuiltinCall field fast_effects
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/calls.rs	field	NamedBuiltinCall field kind
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/calls.rs	use	use Effects
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/collection_journal.rs	fn	fn neovm_jit_string_collection_write
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/dispatch.rs	const	const VALUE_SHIM_SIGNAL
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/dispatch.rs	fn	fn neovm_jit_aref
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/dispatch.rs	fn	fn neovm_jit_arith_generic
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/dispatch.rs	fn	fn neovm_jit_arith_spec
@@ -3258,26 +3221,16 @@ crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptAdmit fie
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptAdmit field handlers
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptAdmit field switch
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptAdmit field vars
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptPasses field bool_rep
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptPasses field fold
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptPasses field gvn
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptPasses field licm
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptPasses field range
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptPasses field reads
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptPasses field reps
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/knobs.rs	field	OptPasses field sink
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	enum	enum CompileError
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	enum	enum NativeRun
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	AotLeafMeta field arity
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	AotLeafMeta field has_binds
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	AotLeafMeta field has_handlers
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	AotLeafMeta field has_precise_deopt
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	AotLeafMeta field has_rest
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	AotLeafMeta field has_side_effects
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	AotLeafMeta field max_depth
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	AotLeafMeta field required
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	DeoptResume field binds
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	DeoptResume field cond_base
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	DeoptResume field handlers
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	DeoptResume field pc
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	DeoptResume field spec_base
@@ -3285,48 +3238,19 @@ crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	field	DeoptResume f
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	fn	fn impl CompiledLeaf::accepts
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	fn	fn impl CompiledLeaf::arity
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	fn	fn impl CompiledLeaf::call
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	fn	fn impl CompiledLeaf::call_consts
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	struct	struct CompiledLeaf
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/leaf.rs	struct	struct DeoptResume
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs	fn	fn lower_nullary_leaf
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field abi
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field aot
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field backedge_counter
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field blocks
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field cfg
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field constants
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field consts_base
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field deopt_refs
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field dynamic_prefix
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field fb
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field func
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field known_fixnum_slots
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field numeric_facts
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field ops
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field out_present
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field out_var
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field point
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field reloc_base
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field reloc_index
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field rt
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field seed_vars
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field signal_exit
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field sink_produced
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field spec_expected_base
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field spec_sites
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field spec_slot_base
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field spec_slots
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field sqrt_witnesses
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field stored_values
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field values
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field variable_raw
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field verified_arrays
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/opt_emission.rs	field	EmitContext field verified_sink
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	const	const STATUS_DEOPT
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	const	const STATUS_DEOPT_AT
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	const	const STATUS_NEED_GENERIC
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	const	const STATUS_OK
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	const	const STATUS_SIGNAL
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn neovm_jit_apply
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn neovm_jit_call
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn neovm_jit_cons
@@ -3346,9 +3270,6 @@ crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn neovm_jit_va
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn neovm_jit_varref
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn neovm_jit_varset
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn neovm_jit_varset_collection
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn take_pending_flow
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	use	use neovm_jit_sqrt_binding_valid
-crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	use	use neovm_jit_t2_record_array_use
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/sqrt_binding.rs	fn	fn neovm_jit_sqrt_binding_valid
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/t2_profile.rs	fn	fn neovm_jit_t2_apply_use_prof
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/t2_profile.rs	fn	fn neovm_jit_t2_call_feedback_census
@@ -3357,69 +3278,33 @@ crates/neovm-eval/src/emacs_core/runtime/jit/compile/t2_profile.rs	fn	fn neovm_j
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/t2_profile.rs	fn	fn neovm_jit_t2_call_subr_prof
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/t2_profile.rs	fn	fn neovm_jit_t2_call_use_prof
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/t2_profile.rs	fn	fn neovm_jit_t2_record_call_use_target
-crates/neovm-eval/src/emacs_core/runtime/jit/feedback.rs	enum	enum FeedbackMode
-crates/neovm-eval/src/emacs_core/runtime/jit/feedback.rs	fn	fn feedback_mode
 crates/neovm-eval/src/emacs_core/runtime/jit/feedback.rs	fn	fn impl FeedbackMode::name
 crates/neovm-eval/src/emacs_core/runtime/jit/feedback.rs	fn	fn impl FeedbackMode::records
-crates/neovm-eval/src/emacs_core/runtime/jit/feedback.rs	fn	fn impl FeedbackMode::records_compiled
 crates/neovm-eval/src/emacs_core/runtime/jit/feedback.rs	fn	fn impl FeedbackMode::uses
 crates/neovm-eval/src/emacs_core/runtime/jit/feedback.rs	fn	fn impl FeedbackMode::windowed
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	enum	enum BinKind
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	enum	enum CmpKind
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	enum	enum LispType
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	enum	enum MirOp
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	enum	enum MirTerm
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	enum	enum PredKind
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	enum	enum UnaryKind
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirBlockData field bytecode_pc
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirBlockData field insts
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirBlockData field params
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirBlockData field term
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirFunction field arity
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirFunction field block_for
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirFunction field blocks
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirFunction field constants
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirFunction field dead_leaders
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirFunction field value_types
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirInst field effect
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirInst field op
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirInst field pc
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirInst field pre_stack
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirInst field result
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	field	MirInst field ty
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	fn	fn build_mir
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	fn	fn impl LispType::join
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	fn	fn impl LispType::never_needs_gc_root
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	fn	fn impl LispType::of_value
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	fn	fn impl LispType::provably_heap
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	fn	fn impl MirFunction::value_type
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	fn	fn infer_value_types
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	fn	fn inline_pure_single_block_callees
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	struct	struct MirBlockData
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	struct	struct MirBlockId
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	struct	struct MirFunction
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	struct	struct MirInst
-crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	struct	struct MirValue
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	use	use Effects as Effect
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	enum	enum Plan
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	enum	enum ReoptLevel
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	enum	enum Tier
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	contract_fixture::fn fixture_runtime
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn call_feedback_collection_enabled
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn hot_threshold
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn impl ReoptLevel::from_u8
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn impl ReoptLevel::name
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn impl ReoptLevel::next
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn jit_bcall_cache_forced
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn jit_bcall_tier_skipped
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn jit_osr_on
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn jit_runtime_enabled
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn loop_heat_per_wrap
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn max_tier_ops
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn profit_defer_factor
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn retier_factor
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn retier_heat
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn size_unit
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	mod	mod aot
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	mod	mod backend
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	mod	mod cache
@@ -3433,13 +3318,9 @@ crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use FeedbackVec
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use NumericFeedback
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use Runtime
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use RuntimeState
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use note_seam_interp_fallback
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use set_compiled_id_word
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use set_leaf_slot_word
-crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use try_run_compiled
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	BlockData field cold
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	BlockData field insts
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	BlockData field loop_header
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	BlockData field params
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	BlockData field pc
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	BlockData field preds
@@ -3453,18 +3334,13 @@ crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	FrameState field pc
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	FrameState field site
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	FrameState field stack
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field arity
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field array_reads
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field blocks
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field census
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field consts
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field dynamic_prefix
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field entry
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field entry_stacks
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field frames
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field insts
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field osr
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field sink_recipes
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field source_states
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	Func field values
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	InstData field args
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	InstData field eff
@@ -3476,13 +3352,9 @@ crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	InstData field resu
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field arrays
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field blocks
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field bools
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field critical_edges
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field dead_leaders
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field fold
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field frames
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field gvn
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field insts
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field licm
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field phis
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field range
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field reads
@@ -3490,9 +3362,7 @@ crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field ref
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field reps
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OptCensus field sink
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OsrEntry field depth
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OsrEntry field entry_pc
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	OsrEntry field header
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	ParamShape field has_rest
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	ParamShape field optional
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	ParamShape field required
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	RepsCensus field lift
@@ -3506,40 +3376,13 @@ crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	SwitchCase field ke
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	ValueData field def
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	ValueData field rep
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	ValueData field ty
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/passes/reps_lift.rs	field	LiftStats field lifted_arithmetic
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/passes/reps_lift.rs	field	LiftStats field lifted_comparisons
-crates/neovm-eval/src/emacs_core/runtime/jit/opt/passes/reps_lift.rs	field	LiftStats field type_guards
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/types.rs	field	Range field hi
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/types.rs	field	Range field lo
 crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field aot_loads
 crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field cold_exits
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field compiled_ok
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field deopt_causes
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field deopt_osr
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field dispatch_consulted
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field dispatch_said_compiled
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field histogram_us
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field max_fn_len
 crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field max_us
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field mir_build_failed
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field mir_dead_leaders
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field mir_gate_optional
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field mir_gate_prefix
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field mir_gate_reopt
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field mir_gate_rest
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field mir_inlined_callees
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field mir_lower_failed
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field mir_reach_dead
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field mir_taken
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field mir_tier_rejected
 crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field native_entries
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field not_compilable
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field not_profitable
 crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field origins
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field phase_ns
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field reopt_levels
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field reopt_stale
-crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field retiers
 crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field total_compiles
 crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	field	CompileStats field total_us
 crates/neovm-eval/src/emacs_core/runtime/jit/stats.rs	fn	fn mark_command_loop_entry

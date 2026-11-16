@@ -25,7 +25,7 @@ use cranelift_module::{Linkage, Module, default_libcall_names};
 /// Matched exhaustively at call sites (no catch-all), in keeping with the JIT
 /// subsystem's compiler-enforced-completeness rule.
 #[derive(Debug)]
-pub enum BackendError {
+pub(crate) enum BackendError {
     /// Constructing the JIT builder/module failed (e.g. unsupported target).
     ModuleInit(String),
     /// Declaring or defining the function in the module failed.
@@ -53,7 +53,7 @@ impl std::error::Error for BackendError {}
 /// parameter, an entry block, `iconst` + `iadd`, `return`, `finalize_definitions`,
 /// and a real indirect call into freshly-committed executable memory. A success
 /// (`Ok(arg + addend)`) is the proof that Cranelift codegen is usable here.
-pub fn smoke_compile_add(arg: i64, addend: i64) -> Result<i64, BackendError> {
+pub(crate) fn smoke_compile_add(arg: i64, addend: i64) -> Result<i64, BackendError> {
     // 1. Build the JIT module — it owns the executable-memory allocator and the
     //    native ISA selected for the host.
     let builder = JITBuilder::new(default_libcall_names())

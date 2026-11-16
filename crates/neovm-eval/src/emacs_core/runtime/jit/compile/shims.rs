@@ -154,20 +154,22 @@ std::thread_local! {
 }
 
 /// Native return code: success, result bits written through `out`.
-pub const STATUS_OK: i64 = 1;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const STATUS_OK: i64 = 1;
 /// Native return code: a speculation guard failed before any side effect ran —
 /// rerun the body on the Tier-0 interpreter.
-pub const STATUS_DEOPT: i64 = 0;
+pub(crate) const STATUS_DEOPT: i64 = 0;
 /// Native return code: a runtime call raised a non-local `Flow`; take it with
 /// [`take_pending_flow`] and propagate.
-pub const STATUS_SIGNAL: i64 = 2;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const STATUS_SIGNAL: i64 = 2;
 
 /// Native return code: a speculation guard failed at a PRECISE bytecode pc —
 /// the live operand stack was spilled into the leaf's deopt buffer and the
 /// frame's binds/handlers were left REGISTERED (no frame unwind): the caller
 /// resumes the Tier-0 interpreter mid-function via `Vm::run_resumed_frame`.
 /// Unlike [`STATUS_DEOPT`], this is sound even after side effects ran.
-pub const STATUS_DEOPT_AT: i64 = 3;
+pub(crate) const STATUS_DEOPT_AT: i64 = 3;
 /// Native return code: a compiled leaf's entry stack guard measured the
 /// native stack below its red zone. The callee did NOT run; the caller must
 /// re-run this call on the Tier-0 interpreter, whose probes grow stacker
@@ -186,7 +188,8 @@ pub(crate) const STATUS_STACK_FALLBACK: i64 = 5;
 /// like the other STATUS codes (`aot::compute_abi_tag`), although AOT leaves
 /// can never contain subr spec sites (speculation requires `Some(obarray)`;
 /// AOT compiles at `None`).
-pub const STATUS_NEED_GENERIC: i64 = 4;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const STATUS_NEED_GENERIC: i64 = 4;
 
 /// Test/debug-build counter of speculated direct-call shim entries (evidence
 /// that `find_spec_sites` + the spec lowering actually engage). Release unit
@@ -343,7 +346,8 @@ pub(crate) fn cbsym_spec_generic_count_for_test() -> u64 {
 /// thread's re-dispatch is abandoned along with the rest of that extent and
 /// the panic error is what propagates. Accepted, documented trade-off.
 #[inline(never)]
-pub fn take_pending_flow() -> Option<Flow> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn take_pending_flow() -> Option<Flow> {
     let flow = PENDING_FLOW.with(|p| p.borrow_mut().take());
     match PENDING_SHIM_PANIC.with(|p| p.borrow_mut().take()) {
         Some(message) => Some(signal("error", vec![Value::string(&message)])),
@@ -1733,8 +1737,8 @@ pub unsafe extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
 }
 
 // Selected array observer; no change to main exports or registration order.
-pub use super::array_profile::neovm_jit_t2_record_array_use;
-pub use super::sqrt_binding::neovm_jit_sqrt_binding_valid;
+pub(crate) use super::array_profile::neovm_jit_t2_record_array_use;
+pub(crate) use super::sqrt_binding::neovm_jit_sqrt_binding_valid;
 
 /// Carrier park: drop shim scratch and pending panic state.
 pub(crate) fn reset_carrier_tls() {

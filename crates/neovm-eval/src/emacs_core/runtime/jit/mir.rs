@@ -42,11 +42,11 @@ use neovm_value::value::Value;
 /// An SSA value handle — an index into [`MirFunction`]'s value table. Each MIR
 /// instruction result and each block parameter is one `MirValue`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MirValue(pub u32);
+pub(crate) struct MirValue(pub u32);
 
 /// A basic-block handle — an index into [`MirFunction::blocks`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MirBlockId(pub u32);
+pub(crate) struct MirBlockId(pub u32);
 
 /// The lisp-type lattice attached to every [`MirValue`]. `Unknown` is the
 /// bottom (no information yet), `Any` the top (could be anything). Concrete
@@ -54,7 +54,7 @@ pub struct MirBlockId(pub u32);
 /// keep it unboxed), a cons (skip the consp guard on `car`), etc. — the narrowing
 /// the unboxing + guard-elision passes consume.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LispType {
+pub(crate) enum LispType {
     /// No information (a fresh block parameter before inference).
     Unknown,
     Fixnum,
@@ -74,7 +74,7 @@ pub enum LispType {
 
 impl LispType {
     /// Classify a compile-time constant `Value`.
-    pub fn of_value(v: Value) -> LispType {
+    pub(crate) fn of_value(v: Value) -> LispType {
         if v.is_nil() {
             LispType::Nil
         } else if v == Value::T {
@@ -100,7 +100,7 @@ impl LispType {
     /// nil, t, predicate booleans) are never heap-allocated, and symbols are
     /// kept live by the obarray (always a GC root), not the operand stack.
     /// `Unknown`/`Any` and every heap type conservatively return false.
-    pub fn never_needs_gc_root(self) -> bool {
+    pub(crate) fn never_needs_gc_root(self) -> bool {
         matches!(
             self,
             LispType::Fixnum
@@ -120,7 +120,7 @@ impl LispType {
     /// test. Only `Unknown`/`Any` (neither provably immediate nor provably
     /// heap) are worth an inlined runtime tag test — and both return `false`
     /// from BOTH methods, which is how the codegen distinguishes them.
-    pub fn provably_heap(self) -> bool {
+    pub(crate) fn provably_heap(self) -> bool {
         matches!(
             self,
             LispType::Cons | LispType::Str | LispType::Float | LispType::Veclike
@@ -146,7 +146,7 @@ pub use super::compile::calls::Effects as Effect;
 
 /// A comparison kind for the fixnum-comparison MIR op.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CmpKind {
+pub(crate) enum CmpKind {
     NumEq,
     Lt,
     Gt,
@@ -156,7 +156,7 @@ pub enum CmpKind {
 
 /// A one-argument predicate kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PredKind {
+pub(crate) enum PredKind {
     Null,
     Not,
     Consp,
@@ -169,7 +169,7 @@ pub enum PredKind {
 
 /// A one-argument fixnum unary kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnaryKind {
+pub(crate) enum UnaryKind {
     Add1,
     Sub1,
     Negate,
@@ -177,7 +177,7 @@ pub enum UnaryKind {
 
 /// A two-argument fixnum binary kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BinKind {
+pub(crate) enum BinKind {
     Add,
     Sub,
     Mul,
@@ -195,7 +195,7 @@ pub enum BinKind {
 /// modelling the op's semantics; later phases promote opaque ops to explicit
 /// ones as the optimizer learns to handle them.
 #[derive(Clone, Debug)]
-pub enum MirOp {
+pub(crate) enum MirOp {
     /// Function argument `i` (`0..arity`), seeding the entry block's stack.
     Arg(usize),
     /// The original call boundary before an inlined body, including an
@@ -230,7 +230,7 @@ pub enum MirOp {
 /// A complete MIR instruction: the operation plus its SSA result, type fact, and
 /// effect fact.
 #[derive(Clone, Debug)]
-pub struct MirInst {
+pub(crate) struct MirInst {
     pub result: MirValue,
     pub op: MirOp,
     pub ty: LispType,
@@ -252,7 +252,7 @@ pub struct MirInst {
 /// lists (block-params-as-phis): each `*_args` vector matches the target block's
 /// parameter list one-for-one.
 #[derive(Clone, Debug)]
-pub enum MirTerm {
+pub(crate) enum MirTerm {
     /// Return the top of stack.
     Return(MirValue),
     /// Unconditional branch.
@@ -279,13 +279,13 @@ pub enum MirTerm {
 /// A basic block: its parameters (the operand stack at entry — phis), its
 /// straight-line instructions, and its terminator.
 #[derive(Clone, Debug)]
-pub struct MirBlockData {
+pub(crate) struct MirBlockData {
     /// The bytecode index this block starts at (its leader) — the anchor for
     /// deopt framestates.
-    pub bytecode_pc: usize,
+    pub(crate) bytecode_pc: usize,
     /// Entry operand stack = block parameters (one `MirValue` per slot).
     pub params: Vec<MirValue>,
-    pub insts: Vec<MirInst>,
+    pub(crate) insts: Vec<MirInst>,
     pub term: MirTerm,
 }
 
@@ -297,9 +297,9 @@ pub struct MirFunction {
     pub blocks: Vec<MirBlockData>,
     /// Type fact per SSA value (block params + instruction results), indexed by
     /// `MirValue`.
-    pub value_types: Vec<LispType>,
+    pub(crate) value_types: Vec<LispType>,
     /// Map from a bytecode leader index to its [`MirBlockId`].
-    pub block_for: HashMap<usize, MirBlockId>,
+    pub(crate) block_for: HashMap<usize, MirBlockId>,
     /// The body's constant pool: an [`MirOp::Opaque`] keeps its bytecode `op`
     /// verbatim, and a `VarRef(idx)`/`CallBuiltinSym(idx, ..)` indexes THIS
     /// pool when the baseline's emitter lowers it. (An inlined callee never
@@ -310,7 +310,7 @@ pub struct MirFunction {
     pub(crate) inline_epoch: Option<u64>,
     /// Unreachable block leaders the builder skipped ([`MirReach::dead`]);
     /// always 0 without that bit, where such a body bails instead.
-    pub dead_leaders: usize,
+    pub(crate) dead_leaders: usize,
 }
 
 impl MirFunction {
@@ -365,7 +365,8 @@ impl Builder {
 ///
 /// No reach admissions ([`MirReach::OFF`]): the AOT paths and inline
 /// callees build exactly as before the reach bits existed.
-pub fn build_mir(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn build_mir(
     ops: &[Op],
     constants: &[Value],
     offset_map: Option<&[GnuByteOffsetMapEntry]>,
@@ -1030,7 +1031,7 @@ pub(crate) fn successor_edges(term: &MirTerm) -> impl Iterator<Item = (MirBlockI
 /// (the `Float` rule, [`build_mir_with_feedback`]). Runs on the INLINED
 /// function: it reads no pc, and a `Fixnum` flows through an inlined callee's
 /// substituted return value.
-pub fn infer_value_types(m: &MirFunction) -> Vec<LispType> {
+pub(crate) fn infer_value_types(m: &MirFunction) -> Vec<LispType> {
     let mut ty = m.value_types.clone();
     loop {
         let mut changed = false;
@@ -1111,7 +1112,7 @@ fn callee_inlinable(c: &MirFunction, max_insts: usize) -> bool {
 /// Each splice retains an `InlineEntry` marker. Production compilation arms
 /// `inline_epoch`: reentrant bodies guard each marker and deopt to the original
 /// call; pure bodies rely on the cache's entry validation.
-pub fn inline_pure_single_block_callees(
+pub(crate) fn inline_pure_single_block_callees(
     m: &mut MirFunction,
     // The call site's pc (a deopt may have barred it) and the callee symbol.
     resolve: &impl Fn(usize, Value) -> Option<MirFunction>,

@@ -341,7 +341,7 @@ pub unsafe extern "C" fn neovm_jit_builtin2(
 /// [`stash_pending_flow`], so take the site's signal edge. Every other word
 /// such a shim returns is the result's own bits, and no Lisp value carries
 /// tag `0b001`, so one tag test tells the two apart.
-pub const VALUE_SHIM_SIGNAL: i64 = 0b0001;
+pub(crate) const VALUE_SHIM_SIGNAL: i64 = 0b0001;
 const _: () = {
     use neovm_value::tagged::value::{TAG_FLOAT, TAG_VECLIKE};
     let tag = VALUE_SHIM_SIGNAL as usize & TAG_MASK;
