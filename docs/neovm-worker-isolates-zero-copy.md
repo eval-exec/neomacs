@@ -107,7 +107,7 @@ recommended in this slice.
 
 ## Measurements and recommendation
 
-[`scripts/bench-worker-isolates-json.el`](scripts/bench-worker-isolates-json.el)
+the `worker-isolates-json` scenario in `crates/neomacs-perf` (`cargo xtask perf run worker-isolates-json`)
 is the copy-path baseline harness: it builds a 200 KB JSON string, runs one
 serial task and one isolate task per configured worker owner, with 20 parses per
 task, checks the results for equality, and only then prints absolute times and
