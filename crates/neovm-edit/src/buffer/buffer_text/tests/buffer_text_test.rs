@@ -1380,3 +1380,50 @@ fn a_nested_syntax_parse_body_take_panics() {
         text.with_syntax_parse_body(|_inner, _| {});
     });
 }
+
+#[test]
+fn text_property_writes_convert_byte_ranges_through_the_anchored_cache() {
+    crate::test_utils::init_test_tracing();
+    // 1 MB of 70-char lines with a two-byte character every 10 chars, so no
+    // span between far-apart positions is single-byte.
+    let line: String = (0..70)
+        .map(|i| match i {
+            69 => '\n',
+            i if i % 10 == 5 => 'é',
+            i => char::from(b'a' + (i % 26) as u8),
+        })
+        .collect();
+    let text = BufferText::from_str(&line.repeat(1_000_000 / line.len()));
+    let char_len = text.metrics().char_len().get();
+    let name = Value::symbol("tbprop");
+    let _ = super::take_byte_to_char_scanned_bytes();
+
+    // Ten far-apart regions in rotation, more than any small recent-anchor
+    // ring holds. The char->byte conversion stands in for the Lisp entry
+    // points, which validate character positions before handing down bytes.
+    for round in 0..20 {
+        for region in 0..10 {
+            let start = region * (char_len / 10) + round;
+            let range = EmacsByteRange::new(
+                text.char_pos_to_emacs_byte_pos(CharPos0::new(start)),
+                text.char_pos_to_emacs_byte_pos(CharPos0::new(start + 5)),
+            );
+            let value = Value::fixnum(((round + region) % 7) as i64);
+            if round % 2 == 0 {
+                text.text_props_put_property_in_emacs_byte_range(range, name, value);
+            } else {
+                text.text_props_set_properties_in_emacs_byte_range(range, vec![(name, value)]);
+            }
+            assert_eq!(
+                text.text_props_get_property_at_char_pos(CharPos0::new(start + 2), name),
+                Some(value)
+            );
+        }
+    }
+
+    let scanned = super::take_byte_to_char_scanned_bytes();
+    assert!(
+        scanned < 64 * 1024,
+        "text-property writes scanned {scanned} bytes converting byte ranges to char ranges"
+    );
+}
