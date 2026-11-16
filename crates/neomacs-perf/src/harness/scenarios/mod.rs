@@ -13,6 +13,7 @@ pub(crate) mod scrolling;
 pub(crate) mod search_shape;
 pub(crate) mod sustained_native_video;
 pub(crate) mod vm_loop;
+pub(crate) mod worker_isolates;
 
 /// Omitted fields are legacy; a present field must be an unsigned integer.
 /// In particular, six explicit nulls must not look like a legacy record.
