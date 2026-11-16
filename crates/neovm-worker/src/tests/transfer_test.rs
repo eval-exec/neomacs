@@ -381,3 +381,18 @@ fn wire_decoder_rejects_bool_vectors_with_inconsistent_word_counts() {
 
     assert!(matches!(transfer::decode(&bytes), Err(TransferError::Decode(_))));
 }
+
+#[test]
+fn wire_decoder_rejects_nested_values_beyond_the_transfer_depth_limit() {
+    let mut bytes = Vec::new();
+    for _ in 0..=4096 {
+        bytes.push(8); // TAG_VECTOR
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+    }
+    bytes.push(0); // TAG_NIL
+
+    assert!(matches!(
+        transfer::decode(&bytes),
+        Err(TransferError::TooDeep)
+    ));
+}
