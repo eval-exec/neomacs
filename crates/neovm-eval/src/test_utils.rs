@@ -703,9 +703,7 @@ mod unit_runtime {
             s::command_where_is_internal,
         ),
         WindowTreeHooks::new(
-            s::window_tree_char_property_window_lookup,
             s::window_tree_window_resize_check,
-            s::window_tree_window_resize_apply,
             s::window_tree_apply_mini_window_resize,
             s::window_tree_frame_resize_pixelwise,
             s::window_tree_frame_parameter_entry,
@@ -738,8 +736,6 @@ mod unit_runtime {
     }
 
     static PROCESS: ProcessHooks = ProcessHooks::new(
-        s::process_unlink,
-        s::process_delete,
         unit_process_shutdown_noop,
         s::process_open_channel,
         s::process_print_handle,

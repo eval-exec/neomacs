@@ -13,9 +13,9 @@ changed.
   The original survey covered 131 distinct markers (132 entries;
   `display::fontset.alias_alist_startup_value` is named by both the marker
   helper and the slot function). The eight stand-ins that no unit table
-  installed were then deleted; this table documents the remaining 123
-  distinct markers (123 rows; the original 132 entries contained one
-  duplicate marker row for the fontset alias).
+  installed were then deleted, and (a1) removed the four no-caller slots,
+  leaving 119 distinct markers (119 rows; the original 132 entries contained
+  one duplicate marker row for the fontset alias).
 - Install status: cross-checked against the hook tables in
   `crates/neovm-eval/src/test_utils.rs` (`LIFECYCLE`, `INPUT`, `PROCESS`,
   `CASE_TABLES`, `KMACRO`, `DISPLAY_QUERY`, `DISPLAY_WINDOW`, `PERF`, `SET`,
@@ -65,8 +65,8 @@ changed.
   plainly contains `ABSENT-LAYER` and no eval test asserts on the value; both
   are verified below.
 
-Counts after the PEER 5795 reclassification: (a) 50, (b) 42, (c) 29, (p) 2
-(123 rows). The eight deleted stand-ins were classed (a) in the original
+Counts after the PEER 5795 reclassification and the (a1) deletions:
+(a) 46, (b) 42, (c) 29, (p) 2 (119 rows). The eight deleted stand-ins were classed (a) in the original
 survey; they were the three completion seams and the five case-table seams,
 and `neovm-display`'s unit runtime now installs the real eval functions in
 their place. `display::terminal.frame_terminal` moved (c) -> (b) per F-1;
@@ -97,8 +97,6 @@ per F-3.
 | system::fileio.unlink_file_path | panic | lifecycle.rs:1138 | kill-emacs auto-save-list unlink (command_loop.rs:394), raw system fileio | b |
 | system::timefns.reset | unlinked | lifecycle.rs:999 | pdump load hook on every Context::new heap reset (pdump/runtime.rs:91); exact state: no time-zone TLS | c |
 | system::sqlite.reset | unlinked | lifecycle.rs:1105 | reset_builtins_thread_locals (stubs.rs:222, pdump/runtime.rs:88); exact state: no SQLite TLS | c |
-| system::process.unlink | panic | process_hooks.rs:250 | no caller of the accessor | a |
-| system::process.delete | panic | process_hooks.rs:255 | no caller of the accessor | a |
 | system::process.shutdown | panic | process_hooks.rs:261 | NOT-INSTALLED: unit table installs `unit_process_shutdown_noop`, which asserts the empty process table | a |
 | system::process.open_channel | panic | process_hooks.rs:266 | only the unlinked system dynamic-module loader (system/dynamic_module/mod.rs:1868) | a |
 | system::process.print_handle | panic | process_hooks.rs:271 | Lisp printer for a `Process` value (lisp/print/mod.rs:2354,3834); handle text is system-owned | b |
@@ -147,9 +145,7 @@ per F-3.
 | display::fontset.list_value | panic | lifecycle.rs:1366 | Lisp `fontset-list` (eval stub, stubs.rs:1093) delegates to the display-owned fontset registry | b |
 | display::fontset.reset | unlinked | lifecycle.rs:1371 | every Context::new reset_builtins_thread_locals (builtins/mod.rs:114, symbols.rs:4391); no registry | c |
 | display::fontset.restore (non-empty registry) | ASSERT-EMPTY | lifecycle.rs:1381 | eval pdump restore_active_runtime (pdump/convert.rs:7061, pdump/mod.rs:766) with the empty snapshot | c |
-| display::window_tree.char_property_window_lookup | panic | lifecycle.rs:1258 | no caller of the hook accessor; live code uses data/window_state::char_property_window_lookup | a |
 | display::window_tree.window_resize_check | panic | lifecycle.rs:1268 | redisplay mini-window resize staging (redisplay_hooks.rs:551) only | a |
-| display::window_tree.window_resize_apply | panic | lifecycle.rs:1300 | no caller of the hook accessor; display builtins call crate::window::window_resize_apply directly | a |
 | display::window_tree.apply_mini_window_resize | panic | lifecycle.rs:1386 | redisplay mini-window preparation (redisplay_hooks.rs:517) only | a |
 | display::window_tree.frame_resize_pixelwise | panic | lifecycle.rs:1280 | native GUI resize events / opening-frame size sync (keyboard.rs:1609,1831) | a |
 | display::window_tree.frame_parameter_entry | panic | lifecycle.rs:1295 | system selected-frame-display/`display` fallback (system/environment/mod.rs:355); core `frame-parameter` implementation | b |
@@ -232,9 +228,10 @@ per F-3.
   are the (a2) deletions; the unit substitutions remain. The
   wait-for-duration substitution still owes the F-4 premise asserts (empty
   live process table, no wait-notifier source).
-- (a) stays panics (PEER 5795): (a1) delete the four no-caller hook
+- (a) stays panics (PEER 5795): (a1) deleted the four no-caller hook
   fields/accessors/stand-ins (`process.unlink`, `process.delete`,
-  `window_tree.char_property_window_lookup`, `window_tree.window_resize_apply`);
+  `window_tree.char_property_window_lookup`, `window_tree.window_resize_apply`)
+  together with their PLAIN-PUB and PROMOTION-LEDGER rows;
   (a2) delete the not-installed stand-ins; (a3) make every remaining (a)
   panic message name the reaching path. The table's "reaching path" column
   already carries the text for (a3).

@@ -547,16 +547,8 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER core::command.where_is_internal");
             }
 
-            pub(crate) fn window_tree_char_property_window_lookup(frames: Option<&FrameManager>, window: WindowId) -> WindowBufferLookup {
-                absent_layer_panic("ABSENT-LAYER display::window_tree.char_property_window_lookup");
-            }
-
             pub(crate) fn window_tree_window_resize_check(tree: &WindowTree, window: WindowId, direction: SplitDirection, size: WindowBodyCellSize) -> bool {
                 absent_layer_panic("ABSENT-LAYER display::window_tree.window_resize_check");
-            }
-
-            pub(crate) fn window_tree_window_resize_apply(tree: &mut WindowTree, window: WindowId, horizontal: bool, width: f32, height: f32) {
-                absent_layer_panic("ABSENT-LAYER display::window_tree.window_resize_apply");
             }
 
             pub(crate) fn window_tree_apply_mini_window_resize(frame: &mut Frame, resize: MiniWindowResize) {
@@ -602,14 +594,6 @@ macro_rules! eval_absent_layer_slots {
 
             pub(crate) fn sqlite_reset() {
                 absent_layer_unlinked("ABSENT-LAYER system::sqlite.reset");
-            }
-
-            pub(crate) fn process_unlink(ctx: &mut Context, id: ProcessId) {
-                absent_layer_panic("ABSENT-LAYER system::process.unlink");
-            }
-
-            pub(crate) fn process_delete(ctx: &mut Context, id: ProcessId) -> bool {
-                absent_layer_panic("ABSENT-LAYER system::process.delete");
             }
 
             pub(crate) fn process_shutdown(ctx: &mut Context) -> Result<(), Flow> {

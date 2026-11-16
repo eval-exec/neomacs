@@ -2765,7 +2765,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn all_completions
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn apply_lread_constants
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn apply_mini_window_resize
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn apply_post_image_init
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn char_property_window_lookup
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn clear_created_lisp_face
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn clear_font_cache_state
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn collect_dynamic_module_active_gc_roots
@@ -2863,7 +2862,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn unwind_minibuff
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn where_is_internal
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn window_configuration_capture
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn window_configuration_restore
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn window_resize_apply
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn window_resize_check
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn xfaces_carrier_tls_fingerprint
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn xfaces_park_carrier_tls
@@ -3213,7 +3211,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	type	type PerfCarrierReset
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	type	type PerfRecord
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	enum	enum MainWaitPreparation
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	enum	enum SelectArm
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn delete_process
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl NativeWaitGuard::from_raw
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl NativeWaitGuard::wait_with
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl NativeWaitToken::from_raw
@@ -3234,7 +3231,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn select_noti
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn select_nudge
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn select_wait_until
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn terminate_and_defer_reaping
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn unlink_owned_unix_listener_for_exit
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn wait_notifier
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct NativeWaitGuard
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct NativeWaitToken

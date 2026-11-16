@@ -1088,20 +1088,6 @@ mod unit_runtime {
         crate::emacs_core::terminal::pure::live_terminal_ids_in_keyboard_poll_order()
     }
 
-    fn char_property_window_lookup(
-        frames: Option<&neovm_eval::emacs_core::eval::data::window_state::FrameManager>,
-        window: neovm_edit::emacs_core::display_metrics::WindowId,
-    ) -> neovm_edit::emacs_core::textprop::WindowBufferLookup {
-        match frames {
-            Some(frames) => {
-                neovm_eval::emacs_core::eval::data::window_state::char_property_window_buffer(
-                    frames, window,
-                )
-            }
-            None => neovm_edit::emacs_core::textprop::WindowBufferLookup::NotAvailable,
-        }
-    }
-
     fn apply_mini_window_resize(
         frame: &mut neovm_eval::emacs_core::eval::data::window_state::Frame,
         resize: neovm_eval::emacs_core::eval::data::window_state::MiniWindowResize,
@@ -1249,9 +1235,7 @@ mod unit_runtime {
             s::command_where_is_internal,
         ),
         WindowTreeHooks::new(
-            char_property_window_lookup,
             crate::window::window_resize_check,
-            crate::window::window_resize_apply,
             apply_mini_window_resize,
             crate::window::resize_pixelwise_with_buffer_constraints,
             frame_parameter_entry,
@@ -1267,8 +1251,6 @@ mod unit_runtime {
     );
 
     static PROCESS: ProcessHooks = ProcessHooks::new(
-        s::process_unlink,
-        s::process_delete,
         s::process_shutdown,
         s::process_open_channel,
         s::process_print_handle,
