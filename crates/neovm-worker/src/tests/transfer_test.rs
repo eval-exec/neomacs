@@ -399,3 +399,12 @@ fn wire_decoder_rejects_nested_values_beyond_the_transfer_depth_limit() {
         Err(TransferError::TooDeep)
     ));
 }
+
+#[test]
+fn wire_decoder_rejects_non_bytecode_values_under_the_bytecode_tag() {
+    let bytes = transfer::encode(&Transfer::ByteCode("42".to_string()));
+    assert!(matches!(
+        transfer::decode(&bytes),
+        Err(TransferError::ByteCodeLiteral(_))
+    ));
+}
