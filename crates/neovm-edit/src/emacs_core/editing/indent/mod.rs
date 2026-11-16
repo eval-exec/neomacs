@@ -3572,33 +3572,56 @@ struct MotionLimits {
 /// The scan reached TOPOS before the end of its span.
 struct ReachedTopos;
 
+/// What a `compute-motion` scan reads at one buffer position.
+#[derive(Clone, Copy, Debug)]
+enum MotionChar {
+    /// A character with a Unicode scalar, or U+FFFD for an Emacs code above
+    /// U+10FFFF that is not a raw byte.
+    Char(char),
+    /// An eight-bit raw byte, or any byte >= 0x80 of a unibyte buffer.
+    RawByte,
+}
+
+/// Columns of a raw byte, which GNU displays as `\NNN`: `CHARACTER_WIDTH`
+/// of an eight-bit character, and `(ctl_arrow && c < 0200) ? 2 : 4` for a
+/// unibyte byte (indent.c `compute_motion`).
+const RAW_BYTE_COLUMNS: i64 = 4;
+
 impl MotionScan {
     fn reached(&self, limits: &MotionLimits) -> bool {
         self.vpos > limits.to_vpos || (self.vpos == limits.to_vpos && self.hpos >= limits.to_hpos)
     }
 
     /// Advance over CH, LEN bytes long, or stop when TOPOS is already reached.
-    fn step(&mut self, ch: char, len: usize, limits: &MotionLimits) -> Result<(), ReachedTopos> {
+    fn step(
+        &mut self,
+        ch: MotionChar,
+        len: usize,
+        limits: &MotionLimits,
+    ) -> Result<(), ReachedTopos> {
         if self.reached(limits) {
             return Err(ReachedTopos);
         }
         self.prev_hpos = self.hpos;
         self.pos = self.pos.add_len(EmacsByteLen::new(len));
         match ch {
-            '\n' => {
+            MotionChar::Char('\n') => {
                 self.vpos += 1;
                 self.hpos = 0;
                 self.contin = false;
             }
-            '\t' => {
+            MotionChar::Char('\t') => {
                 self.hpos += limits.tab_width - (self.hpos % limits.tab_width);
             }
-            _ => {
+            MotionChar::Char(ch) => {
                 self.hpos += neovm_value::emacs_char::char_width(ch) as i64;
+            }
+            MotionChar::RawByte => {
+                self.hpos += RAW_BYTE_COLUMNS;
             }
         }
         // Line continuation (wrapping).
-        if self.hpos >= limits.width && ch != '\n' {
+        if self.hpos >= limits.width && !matches!(ch, MotionChar::Char('\n')) {
             self.vpos += 1;
             self.contin = true;
             self.hpos -= limits.width;
@@ -3608,9 +3631,9 @@ impl MotionScan {
 }
 
 /// Scan SPAN of BUF from START, reading the text in place one physical chunk
-/// at a time.  A character with no Unicode scalar (an eight-bit raw byte, or
-/// any byte >= 0x80 of a unibyte buffer) counts as U+FFFD, one column, and
-/// advances by its own byte length.
+/// at a time.  An eight-bit raw byte, or any byte >= 0x80 of a unibyte
+/// buffer, is a [`MotionChar::RawByte`]; every character advances by its own
+/// byte length.
 fn scan_compute_motion(
     buf: &Buffer,
     span: EmacsByteRange,
@@ -3621,7 +3644,11 @@ fn scan_compute_motion(
     if !buf.get_multibyte() {
         let _ = buf.try_for_each_emacs_byte_range_chunk(span, |chunk| {
             chunk.iter().try_for_each(|&b| {
-                let ch = if b < 0x80 { b as char } else { '\u{FFFD}' };
+                let ch = if b < 0x80 {
+                    MotionChar::Char(b as char)
+                } else {
+                    MotionChar::RawByte
+                };
                 scan.step(ch, 1, &limits)
             })
         });
@@ -3639,7 +3666,11 @@ fn scan_compute_motion(
                 "a buffer chunk ends inside a character"
             );
             let (code, len) = neovm_value::emacs_char::string_char(&chunk[i..]);
-            let ch = char::from_u32(code.code()).unwrap_or('\u{FFFD}');
+            let ch = if code.is_byte8() {
+                MotionChar::RawByte
+            } else {
+                MotionChar::Char(char::from_u32(code.code()).unwrap_or('\u{FFFD}'))
+            };
             scan.step(ch, len, &limits)?;
             i += len;
         }

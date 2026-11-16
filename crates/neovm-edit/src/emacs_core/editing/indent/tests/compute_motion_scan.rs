@@ -114,10 +114,20 @@ fn compute_motion_counts_a_raw_byte_by_its_own_length() {
 }
 
 #[test]
+fn compute_motion_counts_a_raw_byte_inside_the_span_as_four_columns() {
+    // GNU displays the raw byte #x3FFF80 as `\200`: CHARACTER_WIDTH is 4
+    // (indent.c MULTIBYTE_BYTES_WIDTH), so the TAB after it lands at 16.
+    let mut buf = buffer_with("");
+    buf.insert_lisp_string(&LispString::from_emacs_bytes(b"abc\xC0\x80d\tef".to_vec()));
+    assert_eq!(scan_all(&buf, limits(80)), at(9, 18, 0, 17, false));
+}
+
+#[test]
 fn compute_motion_reads_unibyte_text_byte_by_byte() {
-    // The byte 0xE9 is one column and one byte.
+    // The byte 0xE9 is one byte and, displayed as `\351`, four columns
+    // (indent.c: `hpos += (ctl_arrow && c < 0200) ? 2 : 4`).
     let mut buf = buffer_with("");
     buf.set_multibyte_value(false);
     buf.insert_lisp_string(&LispString::from_unibyte(b"a\t\xE9b".to_vec()));
-    assert_eq!(scan_all(&buf, limits(80)), at(4, 10, 0, 9, false));
+    assert_eq!(scan_all(&buf, limits(80)), at(4, 13, 0, 12, false));
 }
