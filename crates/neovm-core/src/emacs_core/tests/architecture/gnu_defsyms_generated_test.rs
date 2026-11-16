@@ -8,7 +8,11 @@
 //! This test lives in core's architecture tests so it runs even while
 //! neovm-value's own lib-test target is not in a gate recipe.
 
+// The generator is shared with neovm-value's build script and xtask; this
+// test reads only its ledger parsers and renderer, so the extractors it
+// also carries are dead in this crate.
 #[cfg(test)]
+#[allow(dead_code)]
 #[path = "../../../../../neovm-value/build_support/gnu_defsyms.rs"]
 mod generator;
 
