@@ -1311,6 +1311,15 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "TEST_HEAP_GRAVEYARD",
         TlsClass::SourceOnly,
     ),
+    // Test-support package harness (tui package_harness.rs): the caught-panic
+    // report annotates where the panic started, which a message-less payload
+    // cannot say for itself.  SourceOnly: instrumentation only, holds no Lisp
+    // Value, and this test-support crate is not part of the shipped binary.
+    (
+        "neomacs-tui-tests/src/package_harness.rs",
+        "PANIC_ORIGIN",
+        TlsClass::SourceOnly,
+    ),
     (BINARY_CENSUS, "TEXT", TlsClass::CarrierIntrinsic),
     (BINARY_CENSUS, "THREAD", TlsClass::CarrierIntrinsic),
     (
