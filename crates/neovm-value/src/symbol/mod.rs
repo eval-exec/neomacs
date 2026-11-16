@@ -2112,6 +2112,15 @@ impl Obarray {
                 self.ensure_global_member_if_canonical(id);
             }
         }
+        // Then the DEFUN subr names every compiled GNU object interns through
+        // `defsubr`; the port declines a few of those subrs, and GNU's
+        // obarray still carries their names (members with no function).
+        for (name, gate) in crate::intern::gnu_defsyms_generated::GNU_C_DEFUNS {
+            if gate.is_active() {
+                let id = crate::intern::intern(name);
+                self.ensure_global_member_if_canonical(id);
+            }
+        }
         for symbol in crate::intern::WellKnown::VARIANTS {
             // A fixed id is not membership: GNU's build only interns the
             // spellings its compiled `defsym_name[]` carries, so a spelling

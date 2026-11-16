@@ -4959,6 +4959,7 @@ fn keeps_gnu_defsym_initial_member(name: &str, id: neovm_value::intern::SymId) -
     neovm_value::intern::WellKnown::is_table_id(id)
         || neovm_value::intern::is_active_gnu_defsym_spelling(name)
         || neovm_value::intern::is_active_gnu_c_intern_spelling(name)
+        || neovm_value::intern::is_active_gnu_c_defun_spelling(name)
 }
 
 fn is_gnu_preloaded_syntax_symbol(name: &str) -> bool {

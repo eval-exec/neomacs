@@ -48,6 +48,23 @@ pub fn is_active_gnu_c_intern_spelling(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `name` is a literal `DEFUN ("...", ...)` subr name of a compiled
+/// GNU object, which `defsubr` interns at startup.
+///
+/// GNU's image carries the names of every subr its objects declare. This port
+/// declines a few of them (the X toolkit dialogs, D-Bus, other window-system
+/// surfaces); their names stay members without a function. The generator
+/// scans the literal DEFUN names of each compiled object behind that
+/// profile's in-file `#if` guards (`gnu_c_defuns.snapshot.tsv`).
+#[doc(hidden)]
+pub fn is_active_gnu_c_defun_spelling(name: &str) -> bool {
+    let table = gnu_defsyms_generated::GNU_C_DEFUNS_BY_SPELLING;
+    table
+        .binary_search_by(|(spelling, _)| (*spelling).cmp(name))
+        .map(|index| table[index].1.is_active())
+        .unwrap_or(false)
+}
+
 /// Whether `name` is a GNU `DEFSYM` spelling that this build's profile does
 /// not compile in.
 ///

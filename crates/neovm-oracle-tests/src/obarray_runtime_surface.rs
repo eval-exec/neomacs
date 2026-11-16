@@ -148,3 +148,26 @@ fn oracle_prop_c_intern_spellings_follow_the_profile() {
     );
     assert_oracle_parity_expect(form, expect);
 }
+
+/// Declined X toolkit DEFUN names are obarray members where GNU compiles them.
+///
+/// GNU's `defsubr` interns every compiled DEFUN, including the X toolkit
+/// dialogs this port declines as subrs (DIVERGENCES 190/192). The names are
+/// members on Linux (xfns.c) and absent where the reference does not compile
+/// xfns.c (macOS NS, Windows); the port's generated DEFUN ledger follows the
+/// same object lists. Only membership is asserted: the subr itself stays
+/// declined, which the subr-surface ledger records.
+#[test]
+fn oracle_prop_declined_x_toolkit_defun_names_follow_the_profile() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"(list (and (intern-soft "x-gtk-debug") t)
+       (and (intern-soft "x-page-setup-dialog") t)
+       (and (intern-soft "x-get-page-setup") t)
+       (and (intern-soft "x-print-frames-dialog") t))"#;
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let expect = expect_test::expect![[r#""OK (t t t t)""#]];
+    #[cfg(any(windows, target_os = "macos"))]
+    let expect = expect_test::expect![[r#""OK (nil nil nil nil)""#]];
+    assert_oracle_parity_expect(form, expect);
+}
