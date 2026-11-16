@@ -104,7 +104,14 @@ fn async_proc_process_filter_default_buffer() {
         r##"(let ((buf (generate-new-buffer " neo-pfd-xxx")))
   (let ((proc (start-process "neo-pfd-xxx" buf "printf" "X%sY" "MID")))
     (set-process-query-on-exit-flag proc nil)
-    (while (process-live-p proc) (accept-process-output proc 1))
+    ;; A terminal status does not imply the final filter bytes or the
+    ;; default sentinel have been delivered.  SIGCHLD can be processed at
+    ;; a safepoint before the first `process-live-p' (GNU handle_child_signal
+    ;; records the status and defers sentinels to the next event iteration),
+    ;; so a bare live-status loop can observe death with an empty buffer.
+    ;; The post-terminal observation drains them (GNU proc.c).  Generous
+    ;; bound: the default 20 x 0.05s is itself a flake risk at gate load.
+    (neovm--oracle-settle-process proc 600)
     (prog1 (with-current-buffer buf (list (buffer-string) (= (point) (point-max))))
       (kill-buffer buf))))"##,
         expect,
@@ -156,7 +163,9 @@ fn async_proc_process_send_string_cat() {
                :filter (lambda (_p s) (setq acc (concat acc s))))))
     (set-process-query-on-exit-flag proc nil)
     (process-send-string proc "hello\nworld\n") (process-send-eof proc)
-    (while (process-live-p proc) (accept-process-output proc 1))
+    ;; A terminal status does not imply the final filter bytes arrived;
+    ;; the post-terminal observation drains them (GNU proc.c).
+    (neovm--oracle-settle-process proc 600)
     (list (string= acc "hello\nworld\n") (length acc))))"##,
         expect,
     );
@@ -264,7 +273,9 @@ fn async_proc_process_chunked_lines() {
                            (push (substring acc 0 (match-beginning 0)) lines)
                            (setq acc (substring acc (match-end 0))))))))
     (set-process-query-on-exit-flag proc nil)
-    (while (process-live-p proc) (accept-process-output proc 1))
+    ;; A terminal status does not imply the final filter bytes arrived;
+    ;; the post-terminal observation drains them (GNU proc.c).
+    (neovm--oracle-settle-process proc 600)
     (list (nreverse lines) (length lines) acc)))"##,
         expect,
     );
@@ -318,7 +329,9 @@ fn async_proc_process_utf8_roundtrip() {
                :filter (lambda (_p s) (setq acc (concat acc s))))))
     (set-process-query-on-exit-flag proc nil)
     (process-send-string proc "héllo ⚡ wörld\n") (process-send-eof proc)
-    (while (process-live-p proc) (accept-process-output proc 1))
+    ;; A terminal status does not imply the final filter bytes arrived;
+    ;; the post-terminal observation drains them (GNU proc.c).
+    (neovm--oracle-settle-process proc 600)
     (list (string= acc "héllo ⚡ wörld\n") (length acc) (string-bytes acc))))"##,
         expect,
     );
@@ -412,7 +425,9 @@ fn async_proc_process_sort_roundtrip() {
                :filter (lambda (_p s) (setq acc (concat acc s))))))
     (set-process-query-on-exit-flag proc nil)
     (process-send-string proc "banana\napple\ncherry\n") (process-send-eof proc)
-    (while (process-live-p proc) (accept-process-output proc 1))
+    ;; A terminal status does not imply the final filter bytes arrived;
+    ;; the post-terminal observation drains them (GNU proc.c).
+    (neovm--oracle-settle-process proc 600)
     (list acc (string= acc "apple\nbanana\ncherry\n"))))"##,
         expect,
     );

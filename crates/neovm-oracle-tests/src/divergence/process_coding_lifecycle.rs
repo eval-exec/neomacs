@@ -20,7 +20,9 @@ fn divergence_proc_send_unibyte_highbyte_latin1() {
     (set-process-query-on-exit-flag proc nil)
     (process-send-string proc (unibyte-string 72 233 108 108 111 10))
     (process-send-eof proc)
-    (while (process-live-p proc) (accept-process-output proc 1))
+    ;; A terminal status does not imply the final filter bytes arrived;
+    ;; the post-terminal observation drains them (GNU proc.c).
+    (neovm--oracle-settle-process proc 600)
     (list (length acc) (multibyte-string-p acc) (append (string-to-unibyte acc) nil))))"##,
         expect,
     );
@@ -82,7 +84,9 @@ fn proc_send_then_close() {
     (set-process-query-on-exit-flag proc nil)
     (process-send-string proc "12345")
     (process-send-eof proc)
-    (while (process-live-p proc) (accept-process-output proc 1))
+    ;; A terminal status does not imply the final filter bytes arrived;
+    ;; the post-terminal observation drains them (GNU proc.c).
+    (neovm--oracle-settle-process proc 600)
     (string-to-number (string-trim acc))))"##,
         expect,
     );

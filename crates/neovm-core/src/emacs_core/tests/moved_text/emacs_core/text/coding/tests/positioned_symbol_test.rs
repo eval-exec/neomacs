@@ -349,6 +349,54 @@ fn positioned_coding_iso_descriptors_and_quoting_style_honor_mode() {
     );
 }
 
+/// PEER 5790 W1a: every name the coding-system define path publishes on the
+/// `coding-system-list` VARIABLE is an obarray member. GNU creates the
+/// `-unix`/`-dos`/`-mac` subsidiaries with `intern`
+/// (src/coding.c:10968-10984), while the port created the ids in the name
+/// registry only.
+#[test]
+fn coding_system_subsidiaries_are_obarray_members() {
+    let mut ctx = crate::test_utils::new_context();
+    let args = definition(
+        Value::symbol("issue-5790-subsidiary"),
+        Value::symbol("utf-8"),
+        Value::symbol("ascii"),
+        Value::NIL,
+        Value::NIL,
+    );
+    // SAFETY: registration is complete; this noncalling recorder writes
+    // coding metadata values/properties and obarray membership, preserving
+    // canonical dispatch state.
+    unsafe {
+        ctx.obarray_view_mut().with_legacy_value_write(|obarray| {
+            let mut vars = crate::emacs_core::eval::VariableStore::new(obarray, None);
+            record_lisp_define_coding_system_internal(&mut vars, &args, SymbolMode::Bare);
+        });
+    }
+    let variable_names = list_to_vec(
+        &ctx.obarray()
+            .symbol_value_copied("coding-system-list")
+            .expect("coding-system-list must be bound after a definition"),
+    )
+    .expect("coding-system-list is a proper list");
+    for name in [
+        "issue-5790-subsidiary",
+        "issue-5790-subsidiary-unix",
+        "issue-5790-subsidiary-dos",
+        "issue-5790-subsidiary-mac",
+    ] {
+        let id = intern(name);
+        assert!(
+            ctx.obarray().is_global_member(id),
+            "{name} must be an obarray member (GNU interns every coding-system-list entry)"
+        );
+        assert!(
+            variable_names.contains(&Value::symbol(name)),
+            "{name} missing from the coding-system-list variable"
+        );
+    }
+}
+
 fn positioned(ctx: &mut Context, name: &str) -> Value {
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(Value::symbol(name), Value::fixnum(11))

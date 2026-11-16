@@ -1995,24 +1995,24 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 /// 22:54:30Z H2/H2a, peer 00:15:30Z T1-T4).
 ///
 /// The signed table lives as one macro_rules body: `eval_absent_layer_slots!`
-/// expands a fixed `absent_layer_slots` module of 142 slot functions (103
-/// marker PANICs, 17 absent-by-construction UNLINKED slots — fourteen unit no-ops
-/// plus three valued T7 slots: the signal self-pipe and the terminal
-/// print-handle return `None`, and the case-table sync returns
-/// `CASE_TABLES_SYNC_OK` — 11 ASSERT-EMPTY contracts (2 structural
-/// checks, 4 exact state bodies from peers 5687/5708, and the zero-identity
-/// fingerprint fold from peer 5711, the 2 exact folds from peer 5714,
-/// the absent perf-counter fold from peer 5717, and the exact absent
+/// expands a fixed `absent_layer_slots` module of 127 slot functions (89
+/// marker PANICs, 16 absent-by-construction UNLINKED slots — fourteen unit no-ops
+/// plus two valued T7 slots: the signal self-pipe and the terminal
+/// print-handle return `None`; the completion and case-table stand-ins were
+/// removed because no unit table installs them — 11 ASSERT-EMPTY contracts
+/// (2 structural checks, 4 exact state bodies from peers 5687/5708, and the
+/// zero-identity fingerprint fold from peer 5711, the 2 exact folds from peer
+/// 5714, the absent perf-counter fold from peer 5717, and the exact absent
 /// fontset generation from peer 5719), 2 T2 per-thread
 /// handle slots, 1 T3 marker slot, and 8 typed empty carried-state slots
 /// (peer 5685/5690)). This
 /// guard parses that body and proves, statically:
 /// - every slot body is exactly a marker panic, an exactly-one-call unlinked
 ///   no-op, a recorded unlinked call followed by the honest absent value (a
-///   plain path such as `None` or the const `CASE_TABLES_SYNC_OK`), a single
+///   plain path such as `None`), a single
 ///   marker-carrying assert-empty check, or the signed
 ///   handle/marker wrapper shape (a bare empty/default body is red);
-/// - the 17 UNLINKED names, markers and honest values, the 11 ASSERT-EMPTY
+/// - the 16 UNLINKED names, markers and honest values, the 11 ASSERT-EMPTY
 ///   names and markers, and the 2+1 handle/marker slots are exactly the
 ///   signed ones; every marker is unique and carries the `ABSENT-LAYER `
 ///   prefix;
@@ -2461,6 +2461,24 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
                 continue;
             }
         }
+        // F-2: a premise-asserted construction no-op asserts the upper state is
+        // empty, records the Unlinked hit, and returns its honest absent value
+        // (the terminal print-handle's empty registry).
+        if asserts.len() == 1
+            && unlinked.len() == 1
+            && panics.is_empty()
+            && stmts.len() >= 3
+            && absent_layer_call(&stmts[stmts.len() - 2])
+                .is_some_and(|(call, _)| call == "absent_layer_unlinked")
+        {
+            if let Some(value) = unlinked_honest_value(&stmts[stmts.len() - 1]) {
+                let marker = unlinked[0].1.clone().ok_or_else(|| {
+                    format!("{name}: the unlinked marker is not a string literal")
+                })?;
+                summary.unlinked.push((name, marker, Some(value)));
+                continue;
+            }
+        }
         if asserts.len() == 1 && panics.is_empty() && unlinked.is_empty() {
             let marker = asserts[0].1.clone().ok_or_else(|| {
                 format!("{name}: the assert-empty marker is not a string literal")
@@ -2494,15 +2512,15 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
 }
 
 fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Result<(), String> {
-    if summary.panic.len() != 103
-        || summary.unlinked.len() != 17
+    if summary.panic.len() != 89
+        || summary.unlinked.len() != 16
         || summary.assert_empty.len() != 11
         || summary.handle.len() != 2
         || summary.marker.len() != 1
         || summary.carried.len() != 8
     {
         return Err(format!(
-            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 103/17/11/2/1/8)",
+            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER, {} CARRIED (pinned 89/16/11/2/1/8)",
             summary.panic.len(),
             summary.unlinked.len(),
             summary.assert_empty.len(),
@@ -2530,9 +2548,8 @@ fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Resul
         .collect();
     // The signed T1 unit no-ops plus the T7 slots reached by construction and
     // by runtime paths: the eval construction census (terminal/fontset/xfaces
-    // registry hooks) are no-ops, the signal self-pipe and the terminal
-    // print-handle return their honest absent value None, and the case-table
-    // sync returns its honest absent value CASE_TABLES_SYNC_OK.
+    // registry hooks) are no-ops, and the signal self-pipe and the terminal
+    // print-handle return their honest absent value None.
     let expected_unlinked = [
         ("perf_reset", "ABSENT-LAYER system::perf.reset", None),
         (
@@ -2597,11 +2614,6 @@ fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Resul
             "terminal_print_handle",
             "ABSENT-LAYER display::terminal.print_handle",
             Some("None"),
-        ),
-        (
-            "case_tables_sync",
-            "ABSENT-LAYER core::case_tables.sync",
-            Some("CASE_TABLES_SYNC_OK"),
         ),
     ];
     for (name, marker, value) in expected_unlinked {

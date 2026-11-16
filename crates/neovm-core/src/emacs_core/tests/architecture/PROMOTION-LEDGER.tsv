@@ -1309,6 +1309,7 @@ decode_declared_multibyte_char	reexport	pub(crate)	crates/neovm-value/src/emacs_
 decode_declared_multibyte_char	reexport	pub(crate)	crates/neovm-value/src/heap_types.rs:1573	neovm_value::heap_types	bulk (source bijection reconciliation)
 has_collection_observations	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2782	neovm_value::tagged::gc	bulk (source bijection reconciliation)
 is_active_gnu_defsym_spelling	fn	pub	crates/neovm-value/src/intern/mod.rs:26	intern	batch-4 peer audit F1: dump surface normalizer keeps GNU DEFSYM initial members; caller neovm-eval/src/emacs_core/lisp/load/mod.rs keeps_gnu_defsym_initial_member
+is_gnu_defsym_spelling_absent_for_this_profile	fn	pub	crates/neovm-value/src/intern/mod.rs:43	intern	peer 5786: a WellKnown spelling whose defining sources this profile does not compile (fontsize on Linux) keeps its id but stays out of the obarray seed; caller neovm-value/src/symbol/mod.rs seed_well_known_members
 is_gnu_startup_uninterned_spelling	fn	pub	crates/neovm-value/src/intern/mod.rs:44	intern	peer 5786 step-2: shared startup-uninterned list for the census allowlist; generated from the ledger's `uninterned` gate
 is_observed	reexport	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:842	neovm_value::tagged::collection_reads	bulk (source bijection reconciliation)
 leave_projection_scope	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:75	neovm_value::symbol	bulk (source bijection reconciliation)

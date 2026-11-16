@@ -866,8 +866,41 @@ fn every_subr_gnus_c_has_no_defun_for_is_accounted_for() {
         unaccounted
     );
 
+    // The xwidget subrs live in a batch gated on the port's `xwidgets` cargo
+    // feature (GNU's HAVE_XWIDGETS); without the feature their table rows
+    // have no subr to explain and are not stale.
+    const XWIDGET_GATED: &[&str] = &[
+        "delete-xwidget-view",
+        "get-buffer-xwidgets",
+        "kill-xwidget",
+        "make-xwidget",
+        "set-xwidget-buffer",
+        "set-xwidget-plist",
+        "set-xwidget-query-on-exit-flag",
+        "xwidget-buffer",
+        "xwidget-info",
+        "xwidget-live-p",
+        "xwidget-plist",
+        "xwidget-query-on-exit-flag",
+        "xwidget-resize",
+        "xwidget-size-request",
+        "xwidget-view-info",
+        "xwidget-view-lookup",
+        "xwidget-view-model",
+        "xwidget-view-p",
+        "xwidget-view-window",
+        "xwidget-webkit-execute-script",
+        "xwidget-webkit-estimated-load-progress",
+        "xwidget-webkit-goto-uri",
+        "xwidget-webkit-title",
+        "xwidget-webkit-uri",
+        "xwidgetp",
+    ];
     let mut stale = Vec::new();
     for row in declared_here_rows() {
+        if !cfg!(feature = "xwidgets") && XWIDGET_GATED.contains(&row.name) {
+            continue;
+        }
         if !names.contains(&row.name) {
             stale.push(row.name);
         }
