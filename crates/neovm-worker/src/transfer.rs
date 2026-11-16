@@ -103,7 +103,7 @@ impl TransferError {
         match self {
             Self::Unsupported(type_name) => vec![
                 Value::symbol("unsupported-object"),
-                Value::symbol(type_name),
+                Value::symbol(*type_name),
             ],
             Self::Circular => vec![Value::symbol("circular-object")],
             Self::TooDeep => vec![Value::symbol("too-deep")],
@@ -415,6 +415,19 @@ impl Walker<'_> {
     }
 }
 
+/// The symbol named `name`, as `Value::symbol` builds it for a static
+/// spelling: nil and t are the immediates, a `:` spelling is a keyword, the
+/// rest is interned in the process registry.
+pub fn symbol_named(name: &str) -> Value {
+    use neovm_core::emacs_core::intern::intern;
+    match name {
+        "nil" => Value::NIL,
+        "t" => Value::T,
+        _ if name.starts_with(':') => Value::from_kw_id(intern(name)),
+        _ => Value::from_sym_id(intern(name)),
+    }
+}
+
 /// Copy `value` out of `ctx`'s heap.
 pub fn from_value(ctx: &Context, value: Value) -> Result<Transfer, TransferError> {
     let mut walker = Walker {
@@ -443,7 +456,7 @@ pub fn to_value(ctx: &mut Context, transfer: &Transfer) -> Result<Value, Transfe
             };
             Ok(Value::heap_string(string))
         }
-        Transfer::Symbol(name) => Ok(Value::symbol(name.as_str())),
+        Transfer::Symbol(name) => Ok(symbol_named(name)),
         Transfer::Subr(name) => ctx
             .obarray()
             .symbol_function(name)

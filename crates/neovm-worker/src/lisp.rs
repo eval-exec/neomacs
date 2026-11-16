@@ -153,7 +153,7 @@ fn define_error(ctx: &mut Context, name: &str, message: &str, parents: &[&str]) 
     let conditions = Value::list(
         std::iter::once(name)
             .chain(parents.iter().copied())
-            .map(Value::symbol)
+            .map(transfer::symbol_named)
             .collect(),
     );
     let _ = ctx
@@ -280,7 +280,10 @@ fn resignal(ctx: &mut Context, signal_in_worker: Signal) -> neovm_core::Flow {
             .get_property(&symbol, "error-conditions")
             .is_none()
     {
-        let conditions = Value::list(vec![Value::symbol(&symbol), Value::symbol("error")]);
+        let conditions = Value::list(vec![
+            transfer::symbol_named(&symbol),
+            Value::symbol("error"),
+        ]);
         let _ = ctx
             .obarray_mut()
             .put_property(&symbol, "error-conditions", conditions);
