@@ -14,6 +14,7 @@ use crate::emacs_core::jit::RuntimeStateArmedLeafExt;
 use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::cache;
 use neovm_value::intern::SymId;
+use neovm_value::intern::intern;
 use neovm_value::value::{LambdaParams, Value, ValueKind};
 
 fn bc(
@@ -59,8 +60,8 @@ fn bc_with(
 
 /// Bind `name`'s function cell to `bytecode` (roots it in the obarray) and
 /// return the callable symbol and the bytecode object.
-fn bind_fn(ev: &mut Context, name: &str, bytecode: ByteCodeFunction) -> (Value, Value) {
-    let sym = Value::symbol(name);
+fn bind_fn(ev: &mut Context, name: &'static str, bytecode: ByteCodeFunction) -> (Value, Value) {
+    let sym = Value::from_sym_id(intern(name));
     let ValueKind::Symbol(id) = sym.kind() else {
         panic!("symbol")
     };

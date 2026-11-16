@@ -1,7 +1,7 @@
 //! Real pinned JSON nodes retain their intrinsic type and parser identity.
 use crate::common;
 use common::return_if_neovm_enable_oracle_proptest_not_set;
-use neomacs_melpa_test_support::{EmacsRuntime, GNU31_TREE_SITTER_GRAMMARS, elisp_string};
+use neomacs_melpa_test_support::{GNU31_TREE_SITTER_GRAMMARS, elisp_string};
 
 #[test]
 fn real_json_node_keeps_type_and_parser_through_gc_and_deletion() {
@@ -16,8 +16,8 @@ fn real_json_node_keeps_type_and_parser_through_gc_and_deletion() {
     // as treesit_grammar_loading.rs. An unavailable grammar is a failure, not
     // a skipped positive case.
     let grammar = case
-        .prepare(&EmacsRuntime::gnu_emacs())
-        .expect("prepare the real pinned JSON grammar with the checked oracle");
+        .prepare()
+        .expect("read the real pinned JSON grammar from the prefetched cache");
     let grammar_path = elisp_string(&grammar.to_string_lossy());
     let sample = elisp_string(case.sample);
     let form = format!(

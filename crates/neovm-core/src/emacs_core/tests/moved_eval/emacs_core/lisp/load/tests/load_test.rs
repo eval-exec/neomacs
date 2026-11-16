@@ -1733,7 +1733,7 @@ fn finalize_cached_bootstrap_eval_strips_transient_compile_features() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     for feature in TRANSIENT_RUNTIME_FEATURES {
-        eval.provide_value(Value::symbol(feature), None)
+        eval.provide_value(Value::from_sym_id(intern((feature).as_ref())), None)
             .expect("provide transient feature");
     }
 
@@ -15561,7 +15561,7 @@ fn runtime_cleanup_preserves_symbols_referenced_by_live_values() {
     let symbol = Value::from_sym_id(symbol_id);
     let live_value = Value::list(vec![symbol]);
 
-    eval.obarray_mut().materialize_read_symbols(live_value);
+    eval.obarray_mut().intern_member_symbols_in(live_value);
     eval.obarray_mut()
         .set_symbol_value("custom-face-attributes", live_value);
 

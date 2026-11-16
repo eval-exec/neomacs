@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
@@ -133,7 +134,7 @@ fn mir_inline_identity_honors_debug_override_quit_and_depth() {
                 Op::Call(1),
                 Op::Return,
             ],
-            vec![value, Value::symbol(variable), id],
+            vec![value, Value::from_sym_id(intern(variable)), id],
             1,
         );
         let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).unwrap();

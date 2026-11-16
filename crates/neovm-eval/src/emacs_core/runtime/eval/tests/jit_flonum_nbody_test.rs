@@ -22,6 +22,7 @@ use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::{FlonumMode, force_flonum_mode_for_test, lowering};
+use neovm_value::intern::intern;
 use neovm_value::tagged::gc::MemoryUseCountSlot;
 use neovm_value::value::{Value, ValueKind};
 
@@ -139,13 +140,14 @@ fn floats_consed(ev: &Context) -> u64 {
 /// Run 1,000 nbody steps with a JIT and an interpreter copy of the bodies
 /// under `mode`; return the float allocations of one compiled call and
 /// the census of the compile.
-fn run_nbody(mode: FlonumMode, probe_name: &str) -> (u64, lowering::FlonumCensus) {
+fn run_nbody(mode: FlonumMode, probe_name: &'static str) -> (u64, lowering::FlonumCensus) {
     force_flonum_mode_for_test(Some(mode));
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let jit_fn = Value::make_bytecode(applyforces());
     let interp_fn = applyforces();
     // Bind the JIT copy to a symbol: that roots it for the whole test.
-    let neovm_value::value::ValueKind::Symbol(id) = Value::symbol(probe_name).kind() else {
+    let neovm_value::value::ValueKind::Symbol(id) = Value::from_sym_id(intern(probe_name)).kind()
+    else {
         panic!("symbol")
     };
     ev.obarray.set_symbol_function_id(id, jit_fn);

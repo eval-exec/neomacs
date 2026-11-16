@@ -4,7 +4,7 @@ use super::*;
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
-use crate::emacs_core::intern::{intern_uninterned, is_canonical_id};
+use crate::emacs_core::intern::{is_canonical_id, make_uninterned_symbol};
 use crate::emacs_core::value::{HashTableTest, LispHashTable};
 
 struct ScratchRoots(usize);
@@ -45,7 +45,7 @@ fn weak_symbol_key_survives_full_collections(mapped: bool, with_position: bool) 
     assert!(heap.dump_blackened_for_test());
     assert!(!heap.mapped_remembered_contains_for_test(owner.bits()));
 
-    let id = intern_uninterned("u34-review-weak-symbol-key");
+    let id = make_uninterned_symbol("u34-review-weak-symbol-key");
     assert!(!is_canonical_id(id));
     let symbol = TaggedValue::from_sym_id(id);
     let strong_value = if with_position {

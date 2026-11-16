@@ -36,7 +36,7 @@ fn boundary_events(eval: &mut Context) -> Vec<Value> {
     .expect("proper callback event list")
 }
 
-fn assert_before(events: &[Value], first: &str, second: &str) {
+fn assert_before(events: &[Value], first: &'static str, second: &'static str) {
     let first_index = events
         .iter()
         .position(|event| *event == Value::symbol(first))

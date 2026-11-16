@@ -24,7 +24,7 @@ use crate::display_row::walk_state::{
 use crate::display_status_line::ChromeRowRenderServices;
 use crate::neovm_bridge::{ForwardScrollMeasurement, LayoutBufferView, RustBufferAccess};
 use crate::scroll_policy::{
-    ForwardScroll, ScrollPolicy, count_lines_bounded, last_usable_row, line_start_above,
+    ForwardScroll, LineText, ScrollPolicy, count_lines_bounded, last_usable_row, line_start_above,
     line_start_below,
 };
 use crate::types::WindowParams;
@@ -1039,10 +1039,6 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         visible_end_lisp: Option<LispCharPos1>,
         point_beyond_visible_span: bool,
     ) -> ViewportDecision {
-        let byte_at_charpos = |charpos: i64| {
-            self.buf_access
-                .byte_at(self.buf_access.charpos_to_bytepos(charpos))
-        };
         if let Some(measurement) = self.forward_viewport_measurement {
             return measurement
                 .clone()
@@ -1090,7 +1086,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
             point_lisp,
             visible_end_lisp,
             point_beyond_visible_span,
-            &byte_at_charpos,
+            self.buf_access,
         )
     }
 
@@ -1099,7 +1095,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         point_lisp: LispCharPos1,
         visible_end_lisp: Option<LispCharPos1>,
         point_beyond_visible_span: bool,
-        byte_at_charpos: &impl Fn(i64) -> Option<u8>,
+        text: &(impl LineText + ?Sized),
     ) -> ViewportDecision {
         // GNU measures display height, including rows entirely produced by a
         // string. Buffer anchors say where a later walk can resume; they do
@@ -1124,7 +1120,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                     first_hidden,
                     self.point_charpos,
                     self.scroll_policy.search_limit_lines(),
-                    byte_at_charpos,
+                    text,
                 );
                 (laid_out_rows + extra_lines, bounded)
             }
@@ -1145,7 +1141,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                 start,
                 unsatisfied,
                 self.accessible_end,
-                byte_at_charpos,
+                text,
             ))
         };
 
@@ -1201,7 +1197,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                     self.point_charpos,
                     lines_above_point,
                     self.accessible_start,
-                    byte_at_charpos,
+                    text,
                 ))
                 .filter(|&start| start > self.window_start)
                 .map_or(place_relative_to_point, commit)

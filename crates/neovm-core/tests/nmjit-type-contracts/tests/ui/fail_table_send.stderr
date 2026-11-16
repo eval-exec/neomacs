@@ -7,6 +7,9 @@ error[E0277]: `Rc<()>` cannot be sent between threads safely
   = help: within `TableView<'static>`, the trait `Send` is not implemented for `Rc<()>`
 note: required because it appears within the type `PhantomData<Rc<()>>`
  --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
 note: required because it appears within the type `TableView<'static>`
  --> tests/ui/../support/sketch.rs
   |

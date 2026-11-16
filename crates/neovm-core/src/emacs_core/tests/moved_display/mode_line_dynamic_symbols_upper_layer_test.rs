@@ -13,7 +13,7 @@ use neovm_eval::emacs_core::eval::Context;
 use neovm_value::heap_types::{GnuDeclaredCharacterCount, LispString};
 use neovm_value::intern::intern;
 use neovm_value::intern::{
-    intern_call_names, intern_uninterned, reset_intern_calls, restore_runtime_interner,
+    intern_call_names, make_uninterned_symbol, reset_intern_calls, restore_runtime_interner,
     unintern_canonical_id,
 };
 use neovm_value::value::Value;
@@ -23,7 +23,7 @@ fn mode_line_symbol_object_risk_property_matches_gnu() {
     let mut ctx = context(crate::test_utils::new_context);
     let name = "mode-line-symbol-object-risk";
     let canonical = intern(name);
-    let actual = intern_uninterned(name);
+    let actual = make_uninterned_symbol(name);
     let value = ctx
         .eval_str("'(:eval (propertize \"RISK-EVAL\" 'ep33-symbol-probe-property 'present))")
         .expect("GNU probe value");

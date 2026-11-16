@@ -350,9 +350,7 @@ impl CommandSeamHooks {
 /// core window body-unit rules) but operate on eval-owned window state.
 #[derive(Clone, Copy)]
 pub struct WindowTreeHooks {
-    char_property_window_lookup: fn(Option<&FrameManager>, WindowId) -> WindowBufferLookup,
     window_resize_check: fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool,
-    window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
     apply_mini_window_resize: fn(&mut Frame, MiniWindowResize),
     frame_resize_pixelwise: fn(&mut Frame, &BufferManager, u32, u32),
     frame_parameter_entry: fn(&mut Context, Value, Value) -> EvalResult,
@@ -361,17 +359,13 @@ pub struct WindowTreeHooks {
 impl WindowTreeHooks {
     /// Build the window-tree operation group.
     pub const fn new(
-        char_property_window_lookup: fn(Option<&FrameManager>, WindowId) -> WindowBufferLookup,
         window_resize_check: fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool,
-        window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
         apply_mini_window_resize: fn(&mut Frame, MiniWindowResize),
         frame_resize_pixelwise: fn(&mut Frame, &BufferManager, u32, u32),
         frame_parameter_entry: fn(&mut Context, Value, Value) -> EvalResult,
     ) -> Self {
         Self {
-            char_property_window_lookup,
             window_resize_check,
-            window_resize_apply,
             apply_mini_window_resize,
             frame_resize_pixelwise,
             frame_parameter_entry,
@@ -842,22 +836,10 @@ impl CommandSeamHooks {
 
 impl WindowTreeHooks {
     #[doc(hidden)]
-    pub fn char_property_window_lookup(
-        &self,
-    ) -> fn(Option<&FrameManager>, WindowId) -> WindowBufferLookup {
-        self.char_property_window_lookup
-    }
-
-    #[doc(hidden)]
     pub fn window_resize_check(
         &self,
     ) -> fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool {
         self.window_resize_check
-    }
-
-    #[doc(hidden)]
-    pub fn window_resize_apply(&self) -> fn(&mut WindowTree, WindowId, bool, f32, f32) {
-        self.window_resize_apply
     }
 
     #[doc(hidden)]
@@ -1251,19 +1233,6 @@ pub fn where_is_internal(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (lifecycle_hooks().command().where_is_internal())(ctx, args)
 }
 
-/// The edit layer's char-property WINDOW lookup for a caller that owns frames.
-///
-/// The slot resolves once; the returned closure keeps the original factory
-/// shape so the text-property entry call sites are unchanged.
-pub fn char_property_window_lookup(
-    frames: Option<&FrameManager>,
-) -> impl Fn(WindowId) -> WindowBufferLookup + '_ {
-    let lookup = lifecycle_hooks()
-        .window_tree()
-        .char_property_window_lookup();
-    move |window| lookup(frames, window)
-}
-
 /// Validate a staged pixel resize plan (core window body-unit rules).
 pub fn window_resize_check(
     tree: &WindowTree,
@@ -1294,23 +1263,6 @@ pub fn resize_frame_pixelwise_with_buffer_constraints(
 /// naming the display crate upward.  Called only when no frame value resolved.
 pub fn frame_parameter_entry(eval: &mut Context, frame: Value, key: Value) -> EvalResult {
     (lifecycle_hooks().window_tree().frame_parameter_entry())(eval, frame, key)
-}
-
-/// Apply a staged pixel resize plan.
-pub fn window_resize_apply(
-    tree: &mut WindowTree,
-    id: WindowId,
-    horflag: bool,
-    char_width: f32,
-    char_height: f32,
-) {
-    (lifecycle_hooks().window_tree().window_resize_apply())(
-        tree,
-        id,
-        horflag,
-        char_width,
-        char_height,
-    )
 }
 
 /// The frame-init face hook used by the runtime FrameManager.

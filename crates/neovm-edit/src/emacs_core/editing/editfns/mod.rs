@@ -1478,7 +1478,7 @@ fn collect_overlay_change_hooks<H: crate::emacs_core::edit_host::EditHost>(
         // symbol's `insert-in-front-hooks' / `insert-behind-hooks' /
         // `modification-hooks' property.  Use the same category-resolving
         // lookup here instead of a plain plist read.
-        let mut overlay_hook = |prop: &str| -> Option<Value> {
+        let mut overlay_hook = |prop: &'static str| -> Option<Value> {
             let (edit, vars) = host.edit_and_vars();
             let value = crate::emacs_core::textprop::lookup_overlay_property(
                 vars,
@@ -2075,6 +2075,13 @@ pub(crate) fn erase_buffer_impl<'a, Vars: EditVariableRead<'a>>(
         let delete_range =
             buffer_edit_range_for_byte_range_in_manager(buffers, current_id, byte_range)?;
         let _ = buffers.delete_buffer_measured_region(current_id, delete_range);
+    }
+    // GNU `buffer.c:2486-2487`: "Use of erase-buffer implies that the
+    // future text is not really related to the past text" -- `save_length'
+    // restarts at zero so the first auto-save of the new text is never
+    // mistaken for a shrink.  Unconditional, like GNU's `XSETFASTINT'.
+    if let Some(buf) = buffers.get_mut(current_id) {
+        buf.set_buffer_local("buffer-saved-size", Value::fixnum(0));
     }
     let _ = buffers.goto_buffer_emacs_byte_pos(current_id, EmacsBytePos::new(0));
     Ok(Value::NIL)

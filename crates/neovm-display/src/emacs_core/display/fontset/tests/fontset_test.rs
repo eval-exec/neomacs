@@ -847,7 +847,7 @@ fn rendering_tries_fontset_entries_in_charset_priority_order() {
         )
         .expect("install a registry entry");
     }
-    let set_priority = |charset: &str| {
+    let set_priority = |charset: &'static str| {
         neovm_text::test_support::authority::set_charset_priority_for_test(vec![Value::symbol(
             charset,
         )])

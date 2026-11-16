@@ -643,7 +643,10 @@ fn register_test_jis() -> neovm_value::intern::SymId {
 }
 
 fn charset_prop(charset: &str) -> Value {
-    Value::list(vec![Value::symbol("charset"), Value::symbol(charset)])
+    Value::list(vec![
+        Value::symbol("charset"),
+        Value::from_sym_id(neovm_value::intern::intern(charset)),
+    ])
 }
 
 #[cfg(test)]

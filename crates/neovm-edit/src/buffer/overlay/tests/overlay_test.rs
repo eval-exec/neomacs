@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::intern::intern;
 
 use crate::buffer::BufferId;
 
@@ -637,7 +638,7 @@ fn absent_overlay_key_bloom_collision_is_scanned_only_once() {
     list.insert_overlay(first);
     let collision = (0..4096)
         .find_map(|index| {
-            let key = Value::symbol(&format!("absent-category-collision-{index}"));
+            let key = Value::from_sym_id(intern(&format!("absent-category-collision-{index}")));
             list.overlay_put(first, key, Value::T).unwrap();
             list.index.may_contain_property(category).then_some(key)
         })
@@ -1402,7 +1403,7 @@ fn content_digest_moves_for_span_property_and_deep_plist_changes() {
         for index in 0..7 {
             list.overlay_put(
                 overlay,
-                Value::symbol(format!("filler-{index}")),
+                Value::from_sym_id(intern(&format!("filler-{index}"))),
                 Value::fixnum(index),
             )
             .unwrap();
@@ -1567,6 +1568,10 @@ impl OverlayPropertyResolver for FilteredPropertyResolver<'_> {
 #[cfg(test)]
 #[path = "gnu_identity.rs"]
 mod gnu_identity;
+
+#[cfg(test)]
+#[path = "snapshot_reuse.rs"]
+mod snapshot_reuse;
 
 #[cfg(test)]
 #[path = "random_overlay_model_test.rs"]

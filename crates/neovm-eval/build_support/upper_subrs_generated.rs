@@ -265,6 +265,7 @@ fn cfg_attribute(cfg: &str) -> Result<Option<&'static str>, String> {
         "x11-only" => "not(any(windows, target_os = \"macos\"))",
         "dbus" => "neomacs_have_dbus",
         "sqlite" => "feature = \"sqlite\"",
+        "xwidgets" => "feature = \"xwidgets\"",
         other => {
             return Err(format!(
                 "cfg class {other:?} has no rendered attribute; add it here and to HostCfgClass"

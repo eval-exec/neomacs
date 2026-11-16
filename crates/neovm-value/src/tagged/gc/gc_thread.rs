@@ -2582,7 +2582,7 @@ pub(crate) mod concurrent_hash_worker_tests;
 mod worker_symbol_classification_tests {
     use super::*;
     use crate::heap_types::LispString;
-    use crate::intern::{intern, intern_uninterned};
+    use crate::intern::{intern, make_uninterned_symbol};
 
     #[test]
     fn worker_symbol_classification_preserves_namesakes_and_deduplicates_ids() {
@@ -2612,10 +2612,10 @@ mod worker_symbol_classification_tests {
 
         let ids = [
             intern("u35-worker-symbol-classification"),
-            intern_uninterned("u35-worker-symbol-classification"),
-            intern_uninterned("nil"),
-            intern_uninterned("t"),
-            intern_uninterned("unbound"),
+            make_uninterned_symbol("u35-worker-symbol-classification"),
+            make_uninterned_symbol("nil"),
+            make_uninterned_symbol("t"),
+            make_uninterned_symbol("unbound"),
         ];
         assert_ne!(ids[0], ids[1], "same name does not imply same identity");
         for _ in 0..2 {

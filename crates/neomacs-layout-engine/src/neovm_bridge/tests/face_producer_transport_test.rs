@@ -1,6 +1,6 @@
 use super::*;
 use neovm_core::emacs_core::intern::{
-    intern_lisp_string, intern_uninterned, unintern_canonical_id,
+    intern_lisp_string, make_uninterned_symbol, unintern_canonical_id,
 };
 use strum::VariantArray;
 
@@ -54,7 +54,7 @@ fn named_face_producers_keep_the_canonical_symbol_and_miss_an_uninterned_object(
             continue;
         }
         let uninterned =
-            resolver.resolve_named_face_producer(Value::from_sym_id(intern_uninterned(name)));
+            resolver.resolve_named_face_producer(Value::from_sym_id(make_uninterned_symbol(name)));
         if name == "cont9-layout-missing" {
             assert_eq!(uninterned, named, "{name}");
         } else {
@@ -89,7 +89,7 @@ fn named_face_producer_keeps_realized_basic_face_short_circuit() {
     // The cache key is the canonical symbol object. An uninterned
     // `mode-line-active` is not that object, and its pixels differ from the
     // cached basic face (0x112233 / face id 417).
-    let uninterned = Value::from_sym_id(intern_uninterned("mode-line-active"));
+    let uninterned = Value::from_sym_id(make_uninterned_symbol("mode-line-active"));
     assert_ne!(
         resolver.resolve_named_face_producer(uninterned),
         Some(cached)
@@ -146,7 +146,7 @@ fn tab_line_and_margin_roles_stay_on_the_boot_symbol_after_reintern() {
     resolver.realized_basic_faces = Some(std::sync::Arc::new(basic_faces));
     for (name, _, face) in rows {
         let original = Value::symbol(name);
-        let made = Value::from_sym_id(intern_uninterned(name));
+        let made = Value::from_sym_id(make_uninterned_symbol(name));
         assert_ne!(
             resolver.resolve_named_face_producer(made),
             Some(face.clone()),
@@ -214,7 +214,7 @@ fn window_named_face_producers_keep_canonical_symbols_on_every_remapping() {
             }
             let uninterned = resolver.resolve_remapped_named_face_producer(
                 remapping,
-                Value::from_sym_id(intern_uninterned(name)),
+                Value::from_sym_id(make_uninterned_symbol(name)),
             );
             if name == "cont9-window-missing" {
                 assert_eq!(uninterned, expected, "{label} {name}");

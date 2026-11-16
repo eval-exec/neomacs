@@ -657,6 +657,24 @@ impl DisplaySourceTextPosition {
     }
 
     pub(crate) fn consume_until_line_break(&mut self, text: &[u8]) -> bool {
+        // GNU skips to the next line with `find_newline` (src/search.c). Up to
+        // the first newline or non-ASCII byte each byte is one character, so
+        // the walk below would stop where this run ends: advance over it in
+        // one step. A plain scan, not `memchr`: the run is usually one short
+        // line, where `BufferText::next_newline_emacs_byte` measured `memchr`
+        // as the slower choice.
+        let rest = text.get(self.byte_idx..).unwrap_or_default();
+        let run = rest
+            .iter()
+            .position(|&byte| byte == b'\n' || !byte.is_ascii())
+            .unwrap_or(rest.len());
+        let found_newline = rest.get(run) == Some(&b'\n');
+        let advance = run + usize::from(found_newline);
+        self.byte_idx += advance;
+        self.charpos = self.charpos.saturating_add(advance as i64);
+        if found_newline || run == rest.len() {
+            return found_newline;
+        }
         while self.byte_idx < text.len() {
             let Some(source_char) = self.consume_step_char(text) else {
                 break;

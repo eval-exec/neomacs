@@ -4,6 +4,7 @@
 //! (like Emacs `add-variable-watcher` / `remove-variable-watcher`).
 
 use neovm_value::error::expect_args;
+use neovm_value::intern::intern;
 use rustc_hash::FxHashMap;
 
 use neovm_value::gc_trace::GcTrace;
@@ -124,7 +125,7 @@ impl VariableWatcherList {
                 let args = vec![
                     Value::from_sym_id(var_id),
                     *new_val,
-                    Value::symbol(operation),
+                    Value::from_sym_id(intern(operation)),
                     *where_val,
                 ];
                 calls.push((watcher.callback, args));
