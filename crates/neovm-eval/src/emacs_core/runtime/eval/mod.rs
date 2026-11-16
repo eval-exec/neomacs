@@ -90,9 +90,8 @@ pub(crate) use world::WorldSlot;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use world::sole_owner::SoleOwnerDriver;
-pub use world::{ContextShutdownError};
-pub use world::ObarrayWriteAccess;
-pub(crate) use world::{OutstandingWorldViews, WorldEra};
+pub use world::{ContextShutdownError, ObarrayWriteAccess, WorldEra};
+pub(crate) use world::OutstandingWorldViews;
 pub(crate) use world::{OwnedRootRegistryView, WorldView};
 
 pub(crate) mod subr_abi;

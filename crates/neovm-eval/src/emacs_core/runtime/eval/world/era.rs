@@ -4,7 +4,7 @@ use neovm_value::tagged::gc::{self, RegistrationError};
 #[cfg(test)]
 use neovm_value::tagged::value::TaggedValue;
 
-pub(crate) type WorldEra<'heap> = gc::ParallelHeapEra<'heap, Baton>;
+pub type WorldEra<'heap> = gc::ParallelHeapEra<'heap, Baton>;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) type WorldProofEra<'heap> = neovm_value::test_support::authority::ProofEra<'heap, Baton>;
 #[cfg(test)]

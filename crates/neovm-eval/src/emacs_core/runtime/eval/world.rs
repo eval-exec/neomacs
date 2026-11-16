@@ -28,7 +28,7 @@ mod era;
 #[cfg(test)]
 pub(crate) use era::ParallelHeapEraWorldCollectExt;
 pub(crate) use era::ParallelHeapEraWorldExt;
-pub(crate) use era::WorldEra;
+pub use era::WorldEra;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use era::WorldProofEra;
 #[cfg(test)]

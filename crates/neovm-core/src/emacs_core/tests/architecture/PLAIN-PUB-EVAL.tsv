@@ -3656,22 +3656,9 @@ crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::from_label
 crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::label
 crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::vocabulary_round_trips
 crates/neovm-eval/src/host_cfg_active.rs	fn	fn impl HostCfgClass::is_active
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum CompletionMilestone
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ConditionRecord
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum HostClosure
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum HostResult
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum NativeTruth
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum OwnedNativeData
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ReadDeadline
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ThreadSignalRecord
 crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::affinity
 crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::font
-crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::font_reply_for
 crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message
-crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_error_for
-crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_reply_for
-crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_signal_for
-crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn with_fixture
 crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl RegisteredRootRef::record
 crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl RegisteredRootRef::request
 crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl RegisteredRootRef::session
@@ -3684,23 +3671,39 @@ crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl TerminalResponse::into
 crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl TerminalResponse::request
 crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl TerminalResponse::session
 crates/neovm-eval/src/host_effect/contracts.rs	struct	contract_fixture::struct Fixture
-crates/neovm-eval/src/host_effect/contracts.rs	struct	sealed::struct RequestIdentity
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct HostAffinity
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RegisteredRootRef
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RejectedReply
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct ReplyPort
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RootedCondition
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RootedThreadSignal
 crates/neovm-eval/src/host_effect/contracts.rs	struct	struct Submitted
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct TerminalResponse
 crates/neovm-eval/src/host_effect/contracts.rs	trait	sealed::trait Plan
 crates/neovm-eval/src/host_effect/contracts.rs	trait	sealed::trait Record
 crates/neovm-eval/src/host_effect/contracts.rs	trait	sealed::trait Reply
-crates/neovm-eval/src/host_effect/contracts.rs	trait	trait HostPlan
-crates/neovm-eval/src/host_effect/contracts.rs	trait	trait HostReply
-crates/neovm-eval/src/host_effect/contracts.rs	trait	trait RegisteredRecord
 crates/neovm-eval/src/host_effect/mod.rs	mod	mod contracts
 crates/neovm-eval/src/host_effect/owner_step.rs	trait	sealed::trait Kind
 crates/neovm-eval/src/lib.rs	mod	mod emacs_core
 crates/neovm-eval/src/lib.rs	mod	mod host_cfg
 crates/neovm-eval/src/lib.rs	mod	mod host_effect
+crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn with_fixture
+crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_signal_for
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RejectedReply
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct HostAffinity
+crates/neovm-eval/src/host_effect/contracts.rs	trait	trait HostPlan
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct TerminalResponse
+crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_error_for
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ThreadSignalRecord
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RootedCondition
+crates/neovm-eval/src/host_effect/contracts.rs	struct	sealed::struct RequestIdentity
+crates/neovm-eval/src/emacs_core/runtime/eval/world/era.rs	type	type WorldEra
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum NativeTruth
+crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_reply_for
+crates/neovm-eval/src/host_effect/contracts.rs	trait	trait HostReply
+crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	use	use WorldEra
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RegisteredRootRef
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RootedThreadSignal
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum OwnedNativeData
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum HostResult
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ReadDeadline
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum CompletionMilestone
+crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::font_reply_for
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum HostClosure
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct ReplyPort
+crates/neovm-eval/src/host_effect/contracts.rs	trait	trait RegisteredRecord
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use WorldEra
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ConditionRecord
