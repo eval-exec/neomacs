@@ -372,3 +372,12 @@ fn hash_table_wire_variants_are_exhaustive() {
         5
     );
 }
+
+#[test]
+fn wire_decoder_rejects_bool_vectors_with_inconsistent_word_counts() {
+    let mut bytes = vec![10]; // TAG_BOOL_VECTOR
+    bytes.extend_from_slice(&65_u64.to_le_bytes()); // nbits requires two words
+    bytes.extend_from_slice(&0_u64.to_le_bytes()); // but the wire has none
+
+    assert!(matches!(transfer::decode(&bytes), Err(TransferError::Decode(_))));
+}
