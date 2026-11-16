@@ -31,9 +31,12 @@ pub(crate) use chunk::ByteCodeFunctionExt;
 pub(crate) use chunk::fresh_bytecode_source_id;
 pub use chunk::{ByteCodeFunction, ByteCodeStructuralPart};
 pub use function_slots::{
-    ArgTemplate, BytecodeSlotError, BytecodeSlotOrigin, BytecodeString, CompiledSlots,
-    ConstantsVector, DynamicArglist, FunctionParams, ParamShapeError, RestSlot, StackDepth,
-    StackDepthError, StackParamShape, UnibyteCode,
+    ArgTemplate, BytecodeSlotError, DynamicArglist, FunctionParams, ParamShapeError, RestSlot,
+    StackDepth, StackDepthError, StackParamShape,
+};
+pub(crate) use function_slots::BytecodeSlotOrigin;
+pub(crate) use function_slots::{
+    BytecodeString, CompiledSlots, ConstantsVector, UnibyteCode,
 };
 pub use opcode::Op;
 pub use vm::Vm;

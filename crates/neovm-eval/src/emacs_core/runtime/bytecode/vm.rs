@@ -2946,13 +2946,14 @@ impl<'a> Vm<'a> {
     }
 
     /// Set the current depth and max_depth (inherited from the Context).
-    pub fn set_depth(&mut self, depth: usize, max_depth: usize) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_depth(&mut self, depth: usize, max_depth: usize) {
         self.ctx.depth = depth;
         self.ctx.max_depth = max_depth;
     }
 
     /// Get the current depth (to sync back to the Context).
-    pub fn get_depth(&self) -> usize {
+    pub(crate) fn get_depth(&self) -> usize {
         self.ctx.depth
     }
 

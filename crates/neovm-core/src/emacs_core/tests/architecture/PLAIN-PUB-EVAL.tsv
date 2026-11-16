@@ -383,29 +383,14 @@ crates/neovm-eval/src/emacs_core/mod.rs	use	use print_value_with_eval
 crates/neovm-eval/src/emacs_core/runtime/bytecode/chunk.rs	use	use ByteCodeFunction
 crates/neovm-eval/src/emacs_core/runtime/bytecode/chunk.rs	use	use ByteCodeStructuralPart
 crates/neovm-eval/src/emacs_core/runtime/bytecode/chunk.rs	use	use GnuByteOffsetMapEntry
-crates/neovm-eval/src/emacs_core/runtime/bytecode/decode.rs	enum	enum DecodeError
-crates/neovm-eval/src/emacs_core/runtime/bytecode/decode.rs	fn	fn decode_gnu_bytecode
-crates/neovm-eval/src/emacs_core/runtime/bytecode/decode.rs	fn	fn decode_gnu_bytecode_for_published_pool
-crates/neovm-eval/src/emacs_core/runtime/bytecode/decode.rs	fn	fn decode_gnu_bytecode_with_offset_map
-crates/neovm-eval/src/emacs_core/runtime/bytecode/decode.rs	fn	fn parse_arglist_descriptor
-crates/neovm-eval/src/emacs_core/runtime/bytecode/decode.rs	fn	fn parse_arglist_value
-crates/neovm-eval/src/emacs_core/runtime/bytecode/decode.rs	fn	fn string_value_to_bytes
-crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	enum	enum BytecodeSlotOrigin
-crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	enum	enum CallShapeError
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	field	CompiledSlots field code
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	field	CompiledSlots field constants
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	field	CompiledSlots field depth
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	field	CompiledSlots field params
-crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	fn	fn impl BytecodeSlotOrigin::invalid_flow
-crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	fn	fn impl BytecodeString::into_unibyte
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	fn	fn impl ConstantsVector::as_slice
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	fn	fn impl ConstantsVector::value
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	fn	fn impl UnibyteCode::as_bytes
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	fn	fn impl UnibyteCode::value
-crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	struct	struct BytecodeString
-crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	struct	struct CompiledSlots
-crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	struct	struct ConstantsVector
-crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	struct	struct UnibyteCode
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use ArgTemplate
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use BytecodeSlotError
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use DynamicArglist
@@ -424,10 +409,6 @@ crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use ArgTemplate
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use ByteCodeFunction
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use ByteCodeStructuralPart
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use BytecodeSlotError
-crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use BytecodeSlotOrigin
-crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use BytecodeString
-crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use CompiledSlots
-crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use ConstantsVector
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use DynamicArglist
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use FunctionParams
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use Op
@@ -436,12 +417,9 @@ crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use RestSlot
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use StackDepth
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use StackDepthError
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use StackParamShape
-crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use UnibyteCode
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use Vm
 crates/neovm-eval/src/emacs_core/runtime/bytecode/opcode.rs	use	use Op
 crates/neovm-eval/src/emacs_core/runtime/bytecode/value_api.rs	trait	trait TaggedValueBytecodeExt
-crates/neovm-eval/src/emacs_core/runtime/bytecode/vm.rs	fn	fn impl Vm::get_depth
-crates/neovm-eval/src/emacs_core/runtime/bytecode/vm.rs	fn	fn impl Vm::set_depth
 crates/neovm-eval/src/emacs_core/runtime/bytecode/vm.rs	struct	struct Vm
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	enum	enum DebugAction
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	BacktraceFrame field args
