@@ -535,16 +535,6 @@ pub fn init_standard_errors(obarray: &mut Obarray) {
         "invalid escape sequence",
         &["json-parse-error"],
     );
-    // Neomacs extension: serialization-side failures (GNU signals a plain
-    // `error` for these). Kept as a `json-error` subtype so existing
-    // `condition-case` handlers on `json-error` still catch them.
-    register_simple(
-        obarray,
-        "json-serialize-error",
-        "JSON serialize error",
-        &["json-error"],
-    );
-
     // --- treesit-error family (GNU src/treesit.c `syms_of_treesit`) ---
     register_simple(
         obarray,
@@ -900,8 +890,6 @@ impl ErrorRegistry {
             "json-utf8-decode-error",
             "json-invalid-surrogate-error",
             "json-number-out-of-range-error",
-            // Neomacs extension (GNU uses a plain `error` here).
-            "json-serialize-error",
         ] {
             self.parents
                 .insert(intern(name), vec![intern("json-error")]);

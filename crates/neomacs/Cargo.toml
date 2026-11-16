@@ -54,6 +54,7 @@ gc-memory-telemetry = ["neovm-core/gc-memory-telemetry", "tikv-jemalloc-sys?/sta
 # GNU-compatible native SQLite support. Default-on for distributed Neomacs
 # builds, while remaining a compile-time capability for minimal builds.
 sqlite = ["neovm-core/sqlite"]
+xwidgets = ["neovm-core/xwidgets"]
 # Static-link libdbus (cross-compile / hosts without dbus-1.pc). Nix and
 # desktop Linux leave this off and pkg-config the system library.
 dbus-vendored = ["neovm-core/dbus-vendored"]

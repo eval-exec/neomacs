@@ -1569,5 +1569,9 @@ impl OverlayPropertyResolver for FilteredPropertyResolver<'_> {
 mod gnu_identity;
 
 #[cfg(test)]
+#[path = "snapshot_reuse.rs"]
+mod snapshot_reuse;
+
+#[cfg(test)]
 #[path = "random_overlay_model_test.rs"]
 mod random_overlay_model_test;

@@ -1,8 +1,7 @@
 use std::time::Duration;
 
 use crate::{
-    ADA_TS_MODE_MELPA_PIN, CachedMelpaOracle, EmacsRuntime, elisp_string,
-    prepare_cached_tree_sitter_grammar,
+    ADA_TS_MODE_MELPA_PIN, CachedMelpaOracle, elisp_string, extra_tree_sitter_grammar_pin,
 };
 
 use super::batch_support::assert_oracle_batch_cases;
@@ -13,8 +12,6 @@ pub(crate) use super::batch_support::ParityBatchCase;
 mod workflows;
 
 const ADA_TS_MODE_TEST_TIMEOUT: Duration = Duration::from_secs(180);
-const ADA_TREE_SITTER_REPOSITORY: &str = "https://github.com/briot/tree-sitter-ada";
-const ADA_TREE_SITTER_REVISION: &str = "6b58259a08b1a22ba0247a7ce30be384db618da6";
 
 /// ada-ts-mode is a tree-sitter major mode, so every workflow needs the real
 /// pinned Ada grammar: it is fetched at the exact revision above, built below
@@ -104,13 +101,9 @@ end Shop.Inventory;
 "##;
 
 fn ada_ts_mode_oracle() -> CachedMelpaOracle {
-    let grammar_dir = prepare_cached_tree_sitter_grammar(
-        &EmacsRuntime::gnu_emacs(),
-        "ada",
-        ADA_TREE_SITTER_REPOSITORY,
-        ADA_TREE_SITTER_REVISION,
-    )
-    .expect("prepare pinned Ada Tree-sitter grammar below ./tmp");
+    let grammar_dir = extra_tree_sitter_grammar_pin("ada")
+        .and_then(|pin| pin.prepare())
+        .expect("read the pinned Ada Tree-sitter grammar from the prefetched cache");
     let grammar_dir = elisp_string(&grammar_dir.to_string_lossy());
     CachedMelpaOracle::new(ADA_TS_MODE_MELPA_PIN, "ada-ts-mode.el")
         .expect("prepare pinned ada-ts-mode source below ./tmp")

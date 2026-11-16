@@ -14,6 +14,55 @@
 /// gnu-defsyms` from `gnu_defsyms.snapshot.tsv`.
 #[path = "gnu_defsyms.generated.rs"]
 pub(crate) mod gnu_defsyms_generated;
+
+/// Whether `name` is a GNU `DEFSYM` spelling that this build interns at boot.
+///
+/// `make-docfile` gives GNU's initial obarray every spelling the build
+/// compiles, and `Funintern` never removes one during dump construction. The
+/// dump's transient-source normalizer asks this before it drops a symbol that
+/// a since-unloaded Lisp file happened to read, so a DEFSYM-only symbol such
+/// as `call` or `strings` survives into the dumped image.
+#[doc(hidden)]
+pub fn is_active_gnu_defsym_spelling(name: &str) -> bool {
+    let table = gnu_defsyms_generated::GNU_DEFSYMS_BY_SPELLING;
+    table
+        .binary_search_by(|(spelling, _)| (*spelling).cmp(name))
+        .map(|index| table[index].1.is_active())
+        .unwrap_or(false)
+}
+
+/// Whether `name` is a GNU `DEFSYM` spelling that this build's profile does
+/// not compile in.
+///
+/// The fixed-id `WellKnown` table exists for internal identity, not for
+/// obarray membership: a spelling whose defining sources belong to another
+/// profile (`fontsize` is `nss`-only, `xwidgetp` needs `--with-xwidgets`)
+/// must keep its id but stay out of this build's obarray, exactly as GNU's
+/// compiled `defsym_name[]` does not contain it.
+#[doc(hidden)]
+pub fn is_gnu_defsym_spelling_absent_for_this_profile(name: &str) -> bool {
+    let table = gnu_defsyms_generated::GNU_DEFSYMS_BY_SPELLING;
+    table
+        .binary_search_by(|(spelling, _)| (*spelling).cmp(name))
+        .map(|index| !table[index].1.is_active())
+        .unwrap_or(false)
+}
+
+/// Whether `name` is a DEFSYM spelling GNU removes, or never interns, before
+/// the startup obarray is complete.
+///
+/// The set is the five `syms_of_*` `Funintern` calls (`get-file-char`,
+/// `get-emacs-mule-file-char`, `outermost-restriction`,
+/// `internal-interpreter-environment`, `print--unreadable-callback-buffer`)
+/// plus `Qunbound`, which `define_symbol` deliberately leaves uninterned.
+/// Generated from the same ledger as the boot table so a startup census can
+/// consume one list instead of maintaining a second.
+#[doc(hidden)]
+pub fn is_gnu_startup_uninterned_spelling(name: &str) -> bool {
+    gnu_defsyms_generated::GNU_UNINTERNED_SPELLINGS
+        .binary_search(&name)
+        .is_ok()
+}
 #[cfg(feature = "test-support")]
 pub mod parallel;
 #[cfg(not(feature = "test-support"))]

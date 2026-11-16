@@ -97,6 +97,23 @@ pub(crate) fn text_bytes_copied() -> usize {
     TEXT_BYTES_COPIED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Bytes walked by byte->char position scans, in both the anchored
+/// `BufferText` path and the gap backend's own anchor scan. Test-only: the
+/// cost assertions in `buffer_text_test.rs` bound conversion work by it.
+#[cfg(test)]
+static BYTE_TO_CHAR_SCANNED_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(super) fn note_byte_to_char_scanned_bytes(bytes: usize) {
+    BYTE_TO_CHAR_SCANNED_BYTES.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+fn take_byte_to_char_scanned_bytes() -> usize {
+    BYTE_TO_CHAR_SCANNED_BYTES.swap(0, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Last successful char↔byte conversion. Reused on a subsequent query if the
 /// buffer text has not changed since the entry was stored. Mirrors GNU
 /// `marker.c:202-203` but uses a `BufferText` content epoch rather than
@@ -1021,23 +1038,12 @@ impl BufferText {
         *storage.syntax_char_run_memo.borrow_mut() = [SyntaxCharRunMemoEntry::default(); 4];
     }
 
-    fn byte_range_to_char_range_with_storage(
-        storage: &BufferTextStorage,
-        range: EmacsByteRange,
-    ) -> CharRange {
-        CharRange::new(
-            storage.backend.emacs_byte_pos_to_char_pos(range.start()),
-            storage.backend.emacs_byte_pos_to_char_pos(range.end()),
-        )
-    }
-
     pub(crate) fn byte_range_to_char_range(&self, range: EmacsByteRange) -> CharRange {
         // Route through the anchored conversion (pos cache + stride anchors +
         // marker chain + CONSIDER interpolation), NOT the raw backend: the
         // backend path re-scans from its own sparse {0, gap, end} anchors,
         // and this helper sits under every byte-addressed text-property
-        // query. The `_with_storage` variant remains for callers already
-        // holding the storage borrow (edit-path bookkeeping).
+        // query and the text-property writers.
         CharRange::new(
             self.emacs_byte_pos_to_char_pos(range.start()),
             self.emacs_byte_pos_to_char_pos(range.end()),
@@ -2096,13 +2102,8 @@ impl BufferText {
     ) -> bool {
         // GNU intervals are character-indexed; BufferText owns the conversion
         // from buffer byte offsets into interval positions.
-        let (range, object_len) = {
-            let storage = self.storage.borrow();
-            (
-                Self::byte_range_to_char_range_with_storage(&storage, byte_range),
-                storage.metrics.char_len(),
-            )
-        };
+        let range = self.byte_range_to_char_range(byte_range);
+        let object_len = self.storage.borrow().metrics.char_len();
         self.mutate_text_props(range.start(), |props| {
             props.put_property_for_object_char_len(range, object_len, name, value)
         })
@@ -2484,13 +2485,8 @@ impl BufferText {
         byte_range: EmacsByteRange,
         plist: Vec<(Value, Value)>,
     ) {
-        let (range, object_len) = {
-            let storage = self.storage.borrow();
-            (
-                Self::byte_range_to_char_range_with_storage(&storage, byte_range),
-                storage.metrics.char_len(),
-            )
-        };
+        let range = self.byte_range_to_char_range(byte_range);
+        let object_len = self.storage.borrow().metrics.char_len();
         self.mutate_text_props(range.start(), |props| {
             props.set_properties_for_object_char_len(range, object_len, plist)
         });
@@ -4162,6 +4158,8 @@ fn scan_forward_bytes(
     // lead bytes is chunk-wise and vectorizes; decoding each character did
     // not (the backward twin below already counts).
     let end = target.min(backend.metrics().emacs_byte_end());
+    #[cfg(test)]
+    note_byte_to_char_scanned_bytes(end.saturating_offset_from(bp).get());
     let mut starts = 0usize;
     let _ = backend.for_each_emacs_byte_range_chunk(EmacsByteRange::new(bp, end), |chunk| {
         starts += chunk.iter().filter(|&&b| (b & 0xC0) != 0x80).count();
@@ -4191,6 +4189,8 @@ fn scan_backward_bytes(
     // byte). The count of character-start bytes in `[target, anchor)` is
     // the same number of steps, plus one when `target` sits inside a
     // character (the walk then stops at that character's start).
+    #[cfg(test)]
+    note_byte_to_char_scanned_bytes(bp.saturating_offset_from(target).get());
     let mut starts = 0usize;
     let _ = backend.for_each_emacs_byte_range_chunk(EmacsByteRange::new(target, bp), |chunk| {
         starts += chunk.iter().filter(|&&b| (b & 0xC0) != 0x80).count();

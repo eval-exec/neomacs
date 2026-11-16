@@ -4860,6 +4860,20 @@ pub(crate) fn symbol_has_runtime_surface_or_reference(
         || referenced_symbol_names.contains(neovm_value::intern::resolve_sym(id))
 }
 
+/// Whether `name`/`id` is a member GNU's initial obarray always keeps.
+///
+/// Two tables are exempt from the transient-source strip: the fixed-id
+/// `WellKnown` table and every compiled `DEFSYM` spelling. GNU interns the
+/// latter in `init_obarray_once` (`src/lread.c:5193-5203`) as statics and no
+/// `Funintern` runs on them during dump construction, so a spelling that a
+/// since-unloaded Lisp file made the reader intern - `call`, `ch`, `conses`,
+/// `current`, `d`, `entry`, `intervals`, `p`, `strings` - must stay in the
+/// dumped image.
+fn keeps_gnu_defsym_initial_member(name: &str, id: neovm_value::intern::SymId) -> bool {
+    neovm_value::intern::WellKnown::is_table_id(id)
+        || neovm_value::intern::is_active_gnu_defsym_spelling(name)
+}
+
 fn is_gnu_preloaded_syntax_symbol(name: &str) -> bool {
     // GNU's dump keeps reader, lambda-list, pattern, face-spec, cl-generic
     // specializer, frame/action-alist, and some feature-name markers interned
@@ -5274,7 +5288,7 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
         // GNU's initial obarray keeps every DEFSYM even when loadup's source
         // surface for it is gone: C holds the symbol as a static, and
         // `Funintern` never runs on it during dump construction.
-        if neovm_value::intern::WellKnown::is_table_id(id) {
+        if keeps_gnu_defsym_initial_member(name, id) {
             continue;
         }
         if !symbol_has_runtime_surface_or_reference(eval, id, &referenced_symbol_names) {
@@ -5520,7 +5534,7 @@ pub fn normalize_final_dump_runtime_surface(
         // GNU's initial obarray keeps every DEFSYM even when loadup's source
         // surface for it is gone: C holds the symbol as a static, and
         // `Funintern` never runs on it during dump construction.
-        if neovm_value::intern::WellKnown::is_table_id(id) {
+        if keeps_gnu_defsym_initial_member(name, id) {
             continue;
         }
         if !symbol_has_runtime_surface_or_reference(eval, id, &referenced_symbol_names) {

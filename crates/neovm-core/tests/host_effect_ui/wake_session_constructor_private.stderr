@@ -1,14 +1,3 @@
-warning: unexpected `cfg` condition value: `test-support`
- --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
-  |
-  |     #[cfg(any(test, feature = "test-support"))]
-  |                     ^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: expected values for `feature` are: `contract-fixtures`, `dbus-vendored`, `default`, `desktop-font-settings`, `display-stop-validate`, `fuzzing`, `gc-memory-telemetry`, `jit`, `perf-probes`, `redisplay-test-policy`, `sound`, `sqlite`, `vm-profile`, and `webview`
-  = help: consider adding `test-support` as a feature in `Cargo.toml`
-  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
-  = note: `#[warn(unexpected_cfgs)]` on by default
-
 warning: type `HostSessionIdentity` is more private than the item `ControlWake::revoke_exact_host_session`
  --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/wake.rs
   |

@@ -42,14 +42,18 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 /// Names this build declares as primitive subrs and the reference GNU does not.
 ///
-/// 23 xwidget subrs (`src/xwidget.c`, whole file behind `XWIDGETS_OBJ`,
-/// `configure.ac:4455-4507`), `x-load-color-file` (`src/xfaces.c:7583`, whose
-/// guard is `#ifndef HAVE_X_WINDOWS` -- GNU declares it in the NON-X branch,
-/// which is this build's branch), and 42 primitives of this port's own in this
-/// port's own namespace, as GNU carries `w32-`, `ns-` and `haiku-` ones.
+/// `x-load-color-file` (`src/xfaces.c:7583`, whose guard is `#ifndef
+/// HAVE_X_WINDOWS` -- GNU declares it in the NON-X branch, which is this
+/// build's branch), and 42 primitives of this port's own in this port's own
+/// namespace, as GNU carries `w32-`, `ns-` and `haiku-` ones.
+///
+/// The 23 xwidget subrs that used to live here are covered by
+/// [`XWIDGET_SUBRS`] instead: GNU compiles `src/xwidget.c` only under
+/// `HAVE_XWIDGETS` (`configure.ac:4455-4507`), and this port now keys the
+/// same Lisp surface on the `xwidgets` cargo feature, which the reference
+/// profile does not enable.
 const DECLARED_HERE_ONLY: &str = "
-  delete-xwidget-view get-buffer-xwidgets kill-xwidget
-  make-xwidget neomacs--debug-lose-device neomacs--frame-snapshot
+  neomacs--debug-lose-device neomacs--frame-snapshot
   neomacs--heap-layout-stats neomacs--write-frame-snapshot neomacs-buffer-text-backend
   neomacs-clipboard-get neomacs-clipboard-set neomacs-core-backend
   neomacs-default-buffer-text-backend neomacs-display-monitor-attributes-list neomacs-effect-get
@@ -64,13 +68,26 @@ const DECLARED_HERE_ONLY: &str = "
   neomacs-surface-destroy neomacs-surface-set-uniform neomacs-terminal-create
   neomacs-terminal-destroy neomacs-terminal-get-text neomacs-terminal-resize
   neomacs-terminal-set-float neomacs-terminal-write neomacs-tls-available-p
-  neovm--internal-panic set-xwidget-buffer set-xwidget-plist
-  set-xwidget-query-on-exit-flag x-load-color-file xwidget-buffer
-  xwidget-info xwidget-live-p xwidget-plist
-  xwidget-query-on-exit-flag xwidget-resize xwidget-size-request
-  xwidget-view-info xwidget-view-lookup xwidget-view-model
-  xwidget-view-p xwidget-view-window xwidget-webkit-goto-uri
-  xwidget-webkit-title xwidget-webkit-uri xwidgetp
+  neovm--internal-panic x-load-color-file
+";
+
+/// Every xwidget subr this repository declares, and neither editor declares
+/// on the reference profile.
+///
+/// GNU's `src/xwidget.c` is one `#ifdef HAVE_XWIDGETS` (`:4-10`, closed after
+/// `syms_of_xwidget` at `:3598`); the reference `linux-gtk3` build does not
+/// configure `--with-xwidgets`, so none of these names is a primitive subr
+/// there. The port declares them only with its `xwidgets` cargo feature,
+/// which the reference build leaves off.
+const XWIDGET_SUBRS: &str = "
+  delete-xwidget-view get-buffer-xwidgets kill-xwidget
+  make-xwidget set-xwidget-buffer set-xwidget-plist
+  set-xwidget-query-on-exit-flag xwidget-buffer xwidget-info
+  xwidget-live-p xwidgetp xwidget-plist xwidget-query-on-exit-flag
+  xwidget-resize xwidget-size-request xwidget-view-info xwidget-view-lookup
+  xwidget-view-model xwidget-view-p xwidget-view-window
+  xwidget-webkit-estimated-load-progress xwidget-webkit-execute-script
+  xwidget-webkit-goto-uri xwidget-webkit-title xwidget-webkit-uri
 ";
 
 /// Names the reference GNU declares as primitive subrs and this build does not.
@@ -178,6 +195,21 @@ fn oracle_neither_editor_declares_the_names_ledger_190_deleted() {
     crate::common::assert_oracle_parity_expect(&form, expect);
 }
 
+/// Neither editor declares any xwidget subr on the reference profile.
+///
+/// GNU compiles the whole of `src/xwidget.c` only under `HAVE_XWIDGETS`;
+/// this port keys the same names on its `xwidgets` cargo feature. In verify
+/// and live mode the GNU half is measured on the attested oracle, and the
+/// snapshot half measures the shipped neomacs binary.
+#[test]
+fn oracle_neither_editor_declares_xwidget_subrs_without_the_feature() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = probe("start-kbd-macro", XWIDGET_SUBRS);
+    let expect = expect_test::expect![[r#""OK (nil nil t)""#]];
+    crate::common::assert_oracle_parity_expect(&form, expect);
+}
+
 /// The capability answers behind the largest of those deletions agree, and are
 /// GNU's own.
 ///
@@ -269,7 +301,7 @@ fn oracle_both_editors_declare_all_six_macros_c_subrs() {
     );
 }
 
-/// This build declares all 64 of its own names and none of GNU's 12.
+/// This build declares all of its own names and none of GNU's.
 ///
 /// Runs the neomacs binary unconditionally (`run_neovm_eval`), so unlike a
 /// snapshot parity test it is a measurement of THIS build in every mode.  The
@@ -282,7 +314,7 @@ fn oracle_both_editors_declare_all_six_macros_c_subrs() {
 ///
 /// rather than pinned here, for the reason in the module header.
 #[test]
-fn oracle_this_build_declares_its_sixty_four_and_none_of_gnus_twelve() {
+fn oracle_this_build_declares_its_own_and_none_of_gnus() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let form = probe(DECLARED_HERE_ONLY, DECLARED_BY_GNU_ONLY);
@@ -290,8 +322,8 @@ fn oracle_this_build_declares_its_sixty_four_and_none_of_gnus_twelve() {
     assert_eq!(
         neovm, "OK (nil nil t)",
         "this build's subr surface moved: the first list is the name(s) of the \
-         sixty-four it no longer declares, the second is the name(s) of GNU's \
-         twelve it has started declaring, and a nil third element means the \
-         probe never saw a booted obarray.  See DIVERGENCES.md 190 and 192."
+         port-owned names it no longer declares, the second is the name(s) of \
+         GNU's names it has started declaring, and a nil third element means \
+         the probe never saw a booted obarray.  See DIVERGENCES.md 190 and 192."
     );
 }

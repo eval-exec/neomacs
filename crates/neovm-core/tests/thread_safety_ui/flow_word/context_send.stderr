@@ -1,31 +1,84 @@
 error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<neovm_core::Context>`, but its trait bounds were not satisfied
   --> tests/thread_safety_ui/flow_word/context_send.rs:11:32
    |
- 4 | struct ThreadTransfer<T>(PhantomData<T>);
-   | ------------------------ associated function or constant `transfer` not found for this struct
+ 4 |   struct ThreadTransfer<T>(PhantomData<T>);
+   |   ------------------------ associated function or constant `transfer` not found for this struct
 ...
-11 |     ThreadTransfer::<Context>::transfer();
-   |                                ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<neovm_core::Context>` due to unsatisfied trait bounds
+11 |       ThreadTransfer::<Context>::transfer();
+   |                                  ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<neovm_core::Context>` due to unsatisfied trait bounds
+   |
+  ::: $RUST/core/src/ops/function.rs
+   |
+   |   pub const trait Fn<Args: Tuple>: [const] FnMut<Args> {
+   |   ---------------------------------------------------- doesn't satisfy `_: Send`
+...
+   |   pub const trait FnMut<Args: Tuple>: FnOnce<Args> {
+   |   ------------------------------------------------ doesn't satisfy `_: Send`
    |
   ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs
    |
-   | pub struct Context {
-   | ------------------ doesn't satisfy `neovm_core::Context: Send`
+   |   pub struct Context {
+   |   ------------------ doesn't satisfy `neovm_core::Context: Send`
+   |
+  ::: $RUST/core/src/cell.rs
+   |
+   |   pub struct Cell<T: ?Sized> {
+   |   -------------------------- doesn't satisfy 9 bounds
+...
+   |   pub struct RefCell<T: ?Sized> {
+   |   ----------------------------- doesn't satisfy `RefCell<FaceAttrState>: std::marker::Sync`, `RefCell<TerminalLispRegistry>: std::marker::Sync`, `RefCell<ThreadProjectionTable>: std::marker::Sync` or `_: Sync`
+...
+   |   pub struct UnsafeCell<T: ?Sized> {
+   |   -------------------------------- doesn't satisfy 8 bounds
+   |
+  ::: $RUST/core/src/ptr/non_null.rs
+   |
+   |   pub struct NonNull<T: PointeeSized> {
+   |   ----------------------------------- doesn't satisfy 43 bounds
    |
   ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs
    |
-   | pub trait DisplayHost {
-   | --------------------- doesn't satisfy `(dyn DisplayHost + 'static): Send`
+   |   pub trait DisplayHost {
+   |   --------------------- doesn't satisfy `(dyn DisplayHost + 'static): Send`
    |
   ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/protocol/tty_host.rs
    |
-   | pub trait TtyFrameHostFactory {
-   | ----------------------------- doesn't satisfy `(dyn TtyFrameHostFactory + 'static): Send`
+   |   pub trait TtyFrameHostFactory {
+   |   ----------------------------- doesn't satisfy `(dyn TtyFrameHostFactory + 'static): Send`
    |
   ::: $WORKSPACE/crates/neovm-value/src/cold_retained.rs
    |
-   | pub trait ColdRetained: 'static {}
-   | ------------------------------- doesn't satisfy `_: Send` or `_: Sync`
+   |   pub trait ColdRetained: 'static {}
+   |   ------------------------------- doesn't satisfy `_: Send` or `_: Sync`
+   |
+  ::: $RUST/std/src/sync/mpsc.rs
+   |
+   |   pub struct Receiver<T> {
+   |   ---------------------- doesn't satisfy `_: Sync`
+   |
+  ::: $RUST/alloc/src/rc.rs
+   |
+   | / pub struct Rc<
+   | |     T: ?Sized,
+   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+   | | > {
+   | |_- doesn't satisfy 16 bounds
+...
+   | / pub struct Weak<
+   | |     T: ?Sized,
+   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+   | | > {
+   | |_- doesn't satisfy `_: Send`
+   |
+  ::: $RUST/core/src/any.rs
+   |
+   |   pub trait Any: 'static {
+   |   ---------------------- doesn't satisfy `(dyn std::any::Any + 'static): Send`
+   |
+  ::: $RUST/core/src/cell/once.rs
+   |
+   |   pub struct OnceCell<T> {
+   |   ---------------------- doesn't satisfy `_: Sync`
    |
    = note: the following trait bounds were not satisfied:
            `*mut TaggedValue: Send`
@@ -215,6 +268,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Send`
            which is required by `neovm_core::Context: Send`
            `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
+           which is required by `neovm_core::Context: Send`
+           `std::rc::Weak<RefCell<neovm_core::buffer::buffer::buffer_list_cursor::BufferListLinks>>: Send`
            which is required by `neovm_core::Context: Send`
            `Rc<RefCell<Vec<std::rc::Weak<[TaggedValue]>>>>: Send`
            which is required by `neovm_core::Context: Send`

@@ -132,6 +132,9 @@ fn parse_cfg(attr: &str) -> Result<String, String> {
     if compact.contains("feature=\"sqlite\"") {
         return Ok("sqlite".to_owned());
     }
+    if compact.contains("feature=\"xwidgets\"") {
+        return Ok("xwidgets".to_owned());
+    }
     Err(format!("unknown snapshot cfg attribute: {attr}"))
 }
 
