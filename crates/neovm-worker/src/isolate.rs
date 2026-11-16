@@ -143,6 +143,8 @@ impl IsolatePoolConfig {
 #[derive(Clone, Debug, PartialEq)]
 pub struct IsolateStats {
     pub threads: usize,
+    pub boot: IsolateBoot,
+    pub final_image_used: bool,
     pub started: bool,
     /// Owners that have reported a Context.
     pub ready: usize,
@@ -161,6 +163,8 @@ pub struct IsolatePool {
     started: OnceLock<()>,
     startup_error: Mutex<Option<String>>,
     starter: Mutex<Option<thread::JoinHandle<()>>>,
+    owners: Mutex<Vec<thread::JoinHandle<()>>>,
+    configured_threads: OnceLock<usize>,
 }
 
 static_assertions::assert_impl_all!(IsolatePool: Send, Sync);
@@ -183,6 +187,8 @@ impl IsolatePool {
             started: OnceLock::new(),
             startup_error: Mutex::new(None),
             starter: Mutex::new(None),
+            owners: Mutex::new(Vec::new()),
+            configured_threads: OnceLock::new(),
         }
     }
 
@@ -195,19 +201,42 @@ impl IsolatePool {
     }
 
     pub fn threads(&self) -> usize {
-        self.config.threads
+        self.configured_threads
+            .get()
+            .copied()
+            .unwrap_or(self.config.threads)
+    }
+
+    /// Resolve the pool width once, when the first task asks to start owners.
+    /// `None` uses `NEOMACS_WORKER_THREADS`, then available parallelism;
+    /// `Some(0)` intentionally disables the pool.
+    pub fn configured_threads(&self, from_lisp: Option<usize>) -> usize {
+        self.configured_threads
+            .get()
+            .copied()
+            .unwrap_or_else(|| from_lisp.unwrap_or(self.config.threads))
     }
 
     /// Start the owners the first time; later calls return at once. The
     /// owners boot on a helper thread, so the caller never waits for a
-    /// Context to load; a task spawned before they are ready waits in the
-    /// queue, and a startup failure fails every queued task.
+    /// Context to load; tasks wait in the queue until an owner is ready.
+    /// Failed owners are reported in stats while any ready owners keep serving.
     pub fn ensure_started(&'static self) {
+        self.ensure_started_with(None);
+    }
+
+    pub fn ensure_started_with(&'static self, from_lisp: Option<usize>) {
         self.started.get_or_init(|| {
+            let threads = self.configured_threads(from_lisp);
+            let _ = self.configured_threads.set(threads);
+            self.runtime.configure_worker_count(threads);
             let starter = thread::Builder::new()
                 .name("neomacs-worker-starter".to_string())
-                .spawn(move || {
-                    if let Err(err) = self.runtime.try_start_workers() {
+                .spawn(move || match self.runtime.try_start_workers() {
+                    Ok(owners) => {
+                        *self.owners.lock().expect("owner handles mutex poisoned") = owners;
+                    }
+                    Err(err) => {
                         *self
                             .startup_error
                             .lock()
@@ -240,6 +269,20 @@ impl IsolatePool {
         }
     }
 
+    /// Stop accepting work, cancel queued tasks, interrupt running Lisp tasks,
+    /// and join the owner threads before the host exits.
+    pub fn close(&'static self) {
+        self.runtime.close();
+        if self.started.get().is_some() {
+            self.wait_started();
+        }
+        let owners =
+            std::mem::take(&mut *self.owners.lock().expect("owner handles mutex poisoned"));
+        for owner in owners {
+            let _ = owner.join();
+        }
+    }
+
     pub fn stats(&self) -> IsolateStats {
         let boots = self.runtime.boot_times();
         let runtime = self.runtime.stats();
@@ -250,14 +293,21 @@ impl IsolatePool {
             boots.iter().sum::<Duration>() / boots.len() as u32
         };
         IsolateStats {
-            threads: self.config.threads,
+            threads: self.threads(),
+            boot: self.config.boot.clone(),
+            final_image_used: matches!(
+                &self.config.boot,
+                IsolateBoot::RuntimeImage { dump_file_override }
+                    if dump_file_override.is_some() || runtime_image_available(RuntimeImageRole::Final)
+            ),
             started: self.started.get().is_some(),
             ready: boots.len(),
             startup_error: self
                 .startup_error
                 .lock()
                 .expect("startup error mutex poisoned")
-                .clone(),
+                .clone()
+                .or_else(|| self.runtime.startup_error()),
             boot_max,
             boot_mean,
             enqueued: runtime.enqueued,
@@ -291,6 +341,13 @@ pub fn install(config: IsolatePoolConfig) -> Result<&'static IsolatePool, Alread
 /// The installed pool, if the host installed one.
 pub fn installed() -> Option<&'static IsolatePool> {
     POOL.get()
+}
+
+/// Close the installed pool during orderly host shutdown.
+pub fn close_installed() {
+    if let Some(pool) = installed() {
+        pool.close();
+    }
 }
 
 fn transfer_failure(err: &TransferError) -> TaskError {

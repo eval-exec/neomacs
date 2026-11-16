@@ -3974,7 +3974,10 @@ fn jemalloc_release_startup_slack() {}
 /// friends). The pool is installed once per process and boots its owners
 /// from the same runtime image as this Context, on the first task; here we
 /// only register the primitives, the way a dynamic module would.
+#[cfg(feature = "worker-isolates")]
 fn install_worker_isolates(eval: &mut Context, startup: &StartupOptions) {
+    eval.set_variable("neomacs-worker-pool-size", Value::NIL);
+    eval.obarray_mut().make_special("neomacs-worker-pool-size");
     let config = neovm_worker::isolate::IsolatePoolConfig::new(
         neovm_worker::isolate::IsolateBoot::RuntimeImage {
             dump_file_override: startup.dump_file_override.clone(),
@@ -3984,6 +3987,8 @@ fn install_worker_isolates(eval: &mut Context, startup: &StartupOptions) {
     // reuses the first installation.
     let _ = neovm_worker::isolate::install(config);
     neovm_worker::lisp::register_subrs(eval);
+    eval.eval_str("(provide 'neomacs-worker-isolates)")
+        .expect("worker isolate feature should be provided");
 }
 
 fn create_startup_evaluator_for_mode(mode: RuntimeMode, startup: &StartupOptions) -> Context {
@@ -4259,6 +4264,9 @@ fn run_gui_main_thread(
             std::panic::resume_unwind(payload);
         }
     };
+
+    #[cfg(feature = "worker-isolates")]
+    neovm_worker::isolate::close_installed();
 
     if evaluator_exit.restart {
         if let Some(args) = &daemon_args {
@@ -4703,6 +4711,9 @@ fn run_gui_evaluator_worker(
     if startup.daemon.is_none() {
         maybe_drain_aot_pgo(mode, &evaluator);
     }
+
+    #[cfg(feature = "worker-isolates")]
+    neovm_worker::isolate::close_installed();
 
     if let Some(request) = evaluator.shutdown_request() {
         if startup.daemon.is_some() {
@@ -6126,6 +6137,7 @@ fn bootstrap_gui_startup_terminal(eval: &mut Context) -> FrameId {
 }
 
 fn configure_gnu_startup_state(eval: &mut Context, frame_id: FrameId, startup: &StartupOptions) {
+    #[cfg(feature = "worker-isolates")]
     install_worker_isolates(eval, startup);
     // Doom and similar configs deliberately raise `gc-cons-threshold` during
     // startup. Keep the measured arena-fragmentation ceiling active through
