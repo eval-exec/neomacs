@@ -2796,6 +2796,16 @@ fn canonical_keyword_name(name: &str) -> String {
 // ---------------------------------------------------------------------------
 
 impl TaggedValue {
+    /// Record the symbol-use accounting the string symbol constructor
+    /// performs. Subsystems that compare a spelling path against a fixed-id
+    /// path (face-name producers) call this explicitly so the counters stay
+    /// equal; it creates no symbol and publishes no membership.
+    #[doc(hidden)]
+    #[inline]
+    pub fn account_symbol_name_use() {
+        add_wrapping(MemoryUseCountSlot::Symbols, 1);
+    }
+
     /// Create a symbol from a string (with nil/t/keyword canonicalization) or SymId.
     pub fn symbol(s: impl IntoSymbol) -> Self {
         s.into_symbol()

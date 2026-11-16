@@ -2555,7 +2555,7 @@ fn window_body_width(frames: &crate::window::FrameManager, fid: crate::window::F
 
 /// `(image :type png :file FILE :width W :height H ...)`, the spec
 /// `insert-image` puts in a `display` property.
-fn image_display_spec(width: u32, height: u32, extra: &[(&str, Value)]) -> Value {
+fn image_display_spec(width: u32, height: u32, extra: &[(&'static str, Value)]) -> Value {
     let mut items = vec![
         Value::symbol("image"),
         Value::keyword(":type"),
@@ -6951,7 +6951,7 @@ fn test_optional_args() {
 #[test]
 fn display_prop_replacing_p_matches_gnu_taxonomy() {
     crate::test_utils::init_test_tracing();
-    fn head(name: &str) -> Value {
+    fn head(name: &'static str) -> Value {
         Value::list(vec![Value::symbol(name)])
     }
     let sym = Value::symbol;
