@@ -21,7 +21,7 @@ pub use neovm_eval::emacs_core::eval::data::process_state::ChildStatusSource;
 use crate::emacs_core::process::{HostInterfaceEntry, ProcessId};
 
 mod signals;
-pub use signals::send_signal;
+pub(crate) use signals::send_signal;
 #[cfg(unix)]
 pub(crate) use signals::signal_number_from_description;
 pub(crate) use signals::{
@@ -52,7 +52,9 @@ pub(crate) use tty::{
 #[cfg(unix)]
 mod fd;
 #[cfg(unix)]
-pub use fd::{dup_fd, set_fd_nonblocking};
+pub(crate) use fd::dup_fd;
+#[cfg(unix)]
+pub use fd::set_fd_nonblocking;
 
 mod fs;
 pub(crate) use fs::executable_path_access;

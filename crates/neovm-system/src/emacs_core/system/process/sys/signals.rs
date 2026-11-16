@@ -185,13 +185,13 @@ pub(crate) fn signal_number_from_description(name: &str) -> Option<i32> {
 /// `kill(pid, signal_num)`; where `kill` is unavailable it degrades to a
 /// liveness probe (0 if the process exists, -1 otherwise).
 #[cfg(unix)]
-pub fn send_signal(pid: i64, signal_num: i32) -> i32 {
+pub(crate) fn send_signal(pid: i64, signal_num: i32) -> i32 {
     // SAFETY: `kill` takes no pointer arguments.
     unsafe { libc::kill(pid as libc::pid_t, signal_num) }
 }
 
 #[cfg(not(unix))]
-pub fn send_signal(pid: i64, signal_num: i32) -> i32 {
+pub(crate) fn send_signal(pid: i64, signal_num: i32) -> i32 {
     let _ = signal_num;
     if super::process_is_alive(pid) { 0 } else { -1 }
 }

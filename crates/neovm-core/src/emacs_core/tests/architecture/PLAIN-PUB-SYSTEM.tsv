@@ -40,52 +40,20 @@ crates/neovm-system/src/emacs_core/system/dbusbind/mod.rs	fn	fn swap_world_state
 crates/neovm-system/src/emacs_core/system/dbusbind/mod.rs	fn	fn world_state_placeholder
 crates/neovm-system/src/emacs_core/system/dbusbind/mod.rs	mod	mod subrs
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	enum	enum emacs_funcall_exit
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field copy_string_contents
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field eq
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field extract_big_integer
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field extract_float
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field extract_integer
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field extract_time
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field free_global_ref
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field funcall
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field get_function_finalizer
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field get_user_finalizer
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field get_user_ptr
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field intern
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field is_not_nil
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field make_big_integer
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field make_float
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field make_function
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field make_global_ref
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field make_integer
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field make_interactive
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field make_string
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field make_time
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field make_unibyte_string
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field make_user_ptr
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field non_local_exit_check
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field non_local_exit_clear
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field non_local_exit_get
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field non_local_exit_signal
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field non_local_exit_throw
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field open_channel
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field private_members
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field process_input
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field set_function_finalizer
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field set_user_finalizer
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field set_user_ptr
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field should_quit
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field size
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field type_of
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field vec_get
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field vec_set
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env field vec_size
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env_private field non_local_exit_data
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env_private field non_local_exit_symbol
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env_private field pending_non_local_exit
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_env_private field storage
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_runtime field get_environment
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_runtime field private_members
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_runtime field size
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_runtime_private field env
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	field	emacs_time field tv_nsec
@@ -105,11 +73,7 @@ crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	fn	fn module_cal
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	fn	fn reset_carrier_tls
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	struct	struct emacs_env
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	struct	struct emacs_env_private
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	struct	struct emacs_runtime
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	struct	struct emacs_runtime_private
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	struct	struct emacs_time
 crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	struct	struct emacs_value_storage
-crates/neovm-system/src/emacs_core/system/dynamic_module/mod.rs	type	type emacs_function
 crates/neovm-system/src/emacs_core/system/environment/mod.rs	fn	fn install_host_environment_snapshot
 crates/neovm-system/src/emacs_core/system/fileio/directory_stream.rs	fn	fn impl DirectoryStream::next_name
 crates/neovm-system/src/emacs_core/system/fileio/directory_stream.rs	fn	fn impl DirectoryStream::open
@@ -361,17 +325,14 @@ crates/neovm-system/src/emacs_core/system/process/sys/child_exit_event.rs	fn	fn 
 crates/neovm-system/src/emacs_core/system/process/sys/child_wait.rs	enum	enum ChildWait
 crates/neovm-system/src/emacs_core/system/process/sys/child_wait.rs	fn	fn decode_wait_status
 crates/neovm-system/src/emacs_core/system/process/sys/fallback.rs	fn	fn open
-crates/neovm-system/src/emacs_core/system/process/sys/fd.rs	fn	fn dup_fd
 crates/neovm-system/src/emacs_core/system/process/sys/fd.rs	fn	fn set_fd_nonblocking
 crates/neovm-system/src/emacs_core/system/process/sys/linux.rs	fn	fn open
 crates/neovm-system/src/emacs_core/system/process/sys/mod.rs	mod	mod net
 crates/neovm-system/src/emacs_core/system/process/sys/mod.rs	use	use ChildStatusSource
 crates/neovm-system/src/emacs_core/system/process/sys/mod.rs	use	use ChildWait
 crates/neovm-system/src/emacs_core/system/process/sys/mod.rs	use	use SerialPort
-crates/neovm-system/src/emacs_core/system/process/sys/mod.rs	use	use dup_fd
 crates/neovm-system/src/emacs_core/system/process/sys/mod.rs	use	use group_name
 crates/neovm-system/src/emacs_core/system/process/sys/mod.rs	use	use process_is_alive
-crates/neovm-system/src/emacs_core/system/process/sys/mod.rs	use	use send_signal
 crates/neovm-system/src/emacs_core/system/process/sys/mod.rs	use	use set_fd_nonblocking
 crates/neovm-system/src/emacs_core/system/process/sys/net.rs	fn	fn af_inet6
 crates/neovm-system/src/emacs_core/system/process/sys/process_attributes.rs	field	DarwinProcessMemory field threads
@@ -406,7 +367,6 @@ crates/neovm-system/src/emacs_core/system/process/sys/serial/termios_backend.rs	
 crates/neovm-system/src/emacs_core/system/process/sys/serial/unsupported_backend.rs	enum	enum Attributes
 crates/neovm-system/src/emacs_core/system/process/sys/serial/unsupported_backend.rs	fn	fn impl Attributes::set_speed
 crates/neovm-system/src/emacs_core/system/process/sys/serial/unsupported_backend.rs	fn	fn open
-crates/neovm-system/src/emacs_core/system/process/sys/signals.rs	fn	fn send_signal
 crates/neovm-system/src/emacs_core/system/process/types.rs	fn	fn impl StderrPipeWriterTransfer::commit
 crates/neovm-system/src/emacs_core/system/process/types.rs	struct	struct ProcessOutputDestination
 crates/neovm-system/src/emacs_core/system/process/types.rs	trait	trait ProcessContextExt
