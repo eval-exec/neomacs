@@ -36,6 +36,7 @@ const LOCALIZED_SUBR_CATALOG: &[SubrBatch] = &[
     crate::emacs_core::neo::terminal::SUBRS,
     crate::emacs_core::shader_surface::SUBRS,
     crate::emacs_core::video::SUBRS,
+    #[cfg(feature = "xwidgets")]
     crate::emacs_core::xwidget::SUBRS,
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     file_notify::SUBRS,
@@ -2227,8 +2228,8 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "internal-set-alternative-font-family-alist",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(args)
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(ctx, args)
         }),
         SubrArity::new(1, Some(1)),
     )));

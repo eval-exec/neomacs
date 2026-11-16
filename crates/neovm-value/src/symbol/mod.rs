@@ -2104,6 +2104,13 @@ impl Obarray {
             }
         }
         for symbol in crate::intern::WellKnown::VARIANTS {
+            // A fixed id is not membership: GNU's build only interns the
+            // spellings its compiled `defsym_name[]` carries, so a spelling
+            // whose sources this profile does not compile (`fontsize` on
+            // Linux) keeps its id but stays out of the obarray.
+            if crate::intern::is_gnu_defsym_spelling_absent_for_this_profile(symbol.name()) {
+                continue;
+            }
             self.ensure_global_member_if_canonical(symbol.id());
         }
     }

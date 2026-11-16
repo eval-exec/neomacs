@@ -76,7 +76,11 @@ fn divergence_make_process_stderr_buffer_ignored() {
   (let ((p (make-process :name "neo-se2-xxx"
             :command '("sh" "-c" "echo OUT; echo ERR 1>&2")
             :buffer obuf :stderr ebuf :noquery t)))
-    (while (process-live-p p) (accept-process-output p 0.1))
+    ;; A terminal status does not imply the final filter bytes or the
+    ;; default sentinels (this process and its stderr twin) have been
+    ;; delivered; settle p explicitly, then give the stderr process the
+    ;; same chance (GNU proc.c).
+    (neovm--oracle-settle-process p 600)
     (sit-for 0.2)
     (list (with-current-buffer obuf (buffer-string))
           (with-current-buffer ebuf (buffer-string)))))"##,

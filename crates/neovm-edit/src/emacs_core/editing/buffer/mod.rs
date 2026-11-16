@@ -825,32 +825,48 @@ pub fn builtin_buffer_substring_2<H: EditHost>(
     expect_args("buffer-substring", &args, 2)?;
     let (start, end, text) = {
         let (edit, _) = host.edit_and_vars();
-        let start = expect_integer_or_marker_in_buffers(&edit.buffers, &args[0])?;
-        let end = expect_integer_or_marker_in_buffers(&edit.buffers, &args[1])?;
-        let current_id = edit
-            .buffers
-            .current_buffer_id()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let buf = edit
-            .buffers
-            .get(current_id)
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let (start, end) = checked_accessible_lisp_range_from_raw(
-            buf,
-            start,
-            end,
-            vec![Value::make_buffer(buf.id), args[0], args[1]],
-        )?;
-        let (start, end) = if start <= end {
-            (start, end)
-        } else {
-            (end, start)
-        };
-        let byte_range = accessible_lisp_range_to_byte_range(buf, start, end);
-        let text = buf.buffer_substring_lisp_string_no_properties_range(byte_range);
-        (start, end, text)
+        current_buffer_substring_text(&edit.buffers, args)?
     };
     finish_fontified_buffer_string(host, start, end, text)
+}
+
+/// The part of `buffer-substring` before access fontification: validate
+/// START and END against the current buffer's accessible region, order
+/// them, and copy the text without properties.
+fn current_buffer_substring_text(
+    buffers: &BufferManager,
+    args: [Value; 2],
+) -> Result<
+    (
+        LispCharPos1,
+        LispCharPos1,
+        neovm_value::heap_types::LispString,
+    ),
+    Flow,
+> {
+    let start = expect_integer_or_marker_in_buffers(buffers, &args[0])?;
+    let end = expect_integer_or_marker_in_buffers(buffers, &args[1])?;
+    let current_id = buffers
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let buf = buffers
+        .get(current_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let (start, end) = checked_accessible_lisp_range_from_raw(
+        buf,
+        start,
+        end,
+        vec![Value::make_buffer(buf.id), args[0], args[1]],
+    )?;
+    let (start, end) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    let byte_range = accessible_lisp_range_to_byte_range(buf, start, end);
+    let chars = CharPos0::from_lisp(end).saturating_offset_from(CharPos0::from_lisp(start));
+    let text = buffer_text_lisp_string_with_chars(buf, byte_range, chars);
+    Ok((start, end, text))
 }
 
 #[doc(hidden)]
@@ -1161,11 +1177,15 @@ fn checked_buffer_substring_for_char_region_in_manager(
     }
 
     let byte_range = accessible_lisp_range_to_byte_range(buf, start, end);
-    Ok(buffer_slice_value(
-        buf,
-        byte_range.start().get(),
-        byte_range.end().get(),
-    ))
+    // GNU `make_buffer_string_both' (editfns.c) sizes the string from the
+    // positions it holds; the region's character count is END - START.
+    let (from, to) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    let chars = CharPos0::from_lisp(to).saturating_offset_from(CharPos0::from_lisp(from));
+    Ok(buffer_slice_value_range_with_chars(buf, byte_range, chars))
 }
 
 fn compare_buffer_substring_strings(
@@ -2640,21 +2660,13 @@ pub fn lisp_string_from_buffer_bytes(
     multibyte: bool,
 ) -> neovm_value::heap_types::LispString {
     if multibyte {
+        #[cfg(test)]
+        crate::buffer::buffer::BUFFER_SLICE_RECOUNT_BYTES
+            .fetch_add(bytes.len(), std::sync::atomic::Ordering::Relaxed);
         neovm_value::heap_types::LispString::from_emacs_bytes(bytes)
     } else {
         neovm_value::heap_types::LispString::from_unibyte(bytes)
     }
-}
-
-pub(crate) fn buffer_slice_value(
-    buf: &crate::buffer::Buffer,
-    start_byte: usize,
-    end_byte: usize,
-) -> Value {
-    buffer_slice_value_range(
-        buf,
-        EmacsByteRange::new(EmacsBytePos::new(start_byte), EmacsBytePos::new(end_byte)),
-    )
 }
 
 #[doc(hidden)]
@@ -2662,6 +2674,43 @@ pub fn buffer_slice_value_range(buf: &crate::buffer::Buffer, byte_range: EmacsBy
     let mut bytes = Vec::new();
     buf.copy_emacs_byte_range_to(byte_range, &mut bytes);
     let string = lisp_string_from_buffer_bytes(bytes, buf.get_multibyte());
+    buffer_slice_value_with_text_props(buf, byte_range, string)
+}
+
+/// The text of `byte_range`, which holds `chars` characters, as a Lisp
+/// string without properties.  The caller already knows the count, so the
+/// copied bytes are not walked again to recover it.
+fn buffer_text_lisp_string_with_chars(
+    buf: &crate::buffer::Buffer,
+    byte_range: EmacsByteRange,
+    chars: CharLen,
+) -> neovm_value::heap_types::LispString {
+    // One spare slot keeps the constructor's trailing NUL from reallocating.
+    let mut bytes = Vec::with_capacity(byte_range.len().get() + 1);
+    buf.copy_emacs_byte_range_to(byte_range, &mut bytes);
+    if buf.get_multibyte() {
+        neovm_value::heap_types::LispString::from_emacs_bytes_with_chars(bytes, chars.get())
+    } else {
+        neovm_value::heap_types::LispString::from_unibyte(bytes)
+    }
+}
+
+/// [`buffer_slice_value_range`] for a caller that holds the region's
+/// character count.
+fn buffer_slice_value_range_with_chars(
+    buf: &crate::buffer::Buffer,
+    byte_range: EmacsByteRange,
+    chars: CharLen,
+) -> Value {
+    let string = buffer_text_lisp_string_with_chars(buf, byte_range, chars);
+    buffer_slice_value_with_text_props(buf, byte_range, string)
+}
+
+fn buffer_slice_value_with_text_props(
+    buf: &crate::buffer::Buffer,
+    byte_range: EmacsByteRange,
+    string: neovm_value::heap_types::LispString,
+) -> Value {
     let value = Value::heap_string(string);
     if !buf.text_props_is_empty() {
         let sliced = buf.text_props_slice_emacs_byte_range(byte_range);

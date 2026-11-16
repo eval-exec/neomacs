@@ -159,6 +159,296 @@ fn do_auto_save_save_length_at_most_5000_does_not_disable() {
     );
 }
 
+// A space inside the auto-save file name does not disable saving.
+//
+// GNU 31.1 has no special case for space-prefixed or space-containing
+// auto-save names: the visit predicate at fileio.c:6428 is just
+// `STRINGP (BVAR (b, auto_save_file_name))`. Neo used to skip names whose
+// file component starts with a space.
+#[test]
+fn do_auto_save_saves_a_space_containing_auto_save_name() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name nil)
+  (let ((buf (generate-new-buffer "as-space"))
+        (target (expand-file-name "#as-space name#" temporary-file-directory)))
+    (with-current-buffer buf
+      (insert "space text")
+      (setq buffer-auto-save-file-name target))
+    (do-auto-save t)
+    (list 'exists (file-exists-p target)
+          'content (and (file-exists-p target)
+                        (with-temp-buffer
+                          (insert-file-contents target)
+                          (buffer-string))))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[r##""VALUE OK (exists t content \"space text\")""##]],
+    );
+}
+
+// `erase-buffer` resets `buffer-saved-size` to 0 (buffer.c:2486: "Use of
+// erase-buffer implies that the future text is not really related to the
+// past text"), so a buffer that shrank from 8000 to 4 bytes via
+// `erase-buffer` + fresh insert does NOT take the shrink arm: GNU saves it
+// and leaves `buffer-saved-size` at Z-BEG (4). The first element pins the
+// reset itself. Pinned GNU 31.1.
+#[test]
+fn erase_buffer_resets_saved_size_so_shrink_does_not_fire() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name nil)
+  (let ((reset (with-current-buffer (generate-new-buffer "as-er0")
+                 (setq buffer-saved-size 8000)
+                 (erase-buffer)
+                 buffer-saved-size))
+        (buf (generate-new-buffer "as-erase")))
+    (with-current-buffer buf
+      (setq buffer-file-name (expand-file-name "as-erase.txt" temporary-file-directory))
+      (insert (make-string 100 ?x))
+      (setq buffer-saved-size 8000)
+      (erase-buffer)
+      (insert "tiny")
+      (setq buffer-auto-save-file-name
+            (expand-file-name "#as-erase#" temporary-file-directory)))
+    (do-auto-save)
+    (list 'reset reset
+          'saved (with-current-buffer (get-buffer "as-erase") buffer-saved-size))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""Auto-saving...\nAuto-saving...done\nVALUE OK (reset 0 saved 4)""##
+        ]],
+    );
+}
+
+// The shrink arm `continue`s without restoring the previous current buffer
+// (fileio.c:6466 does `set_buffer_internal (b)` and the shrink branch at
+// :6450-6474 never switches back), so after `do-auto-save` returns, the
+// shrunk buffer is current. Pinned GNU 31.1.
+#[test]
+fn do_auto_save_shrink_leaves_the_shrunk_buffer_current() {
+    let form = format!(
+        r##"(progn
+  (setq auto-save-list-file-name nil)
+  {setup}
+  (do-auto-save)
+  (buffer-name (current-buffer)))"##,
+        setup = shrunk_filename_buffer("as-leak", 8000)
+    );
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""Buffer as-leak has shrunk a lot; auto save disabled in that buffer until next real save\nVALUE OK \"as-leak\"""##
+        ]],
+    );
+}
+
+// `auto-save-list-file-name' streams a two-line record per pass-0 visit
+// (`fileio.c:6409-6426`): visited file name (or an empty line) and the
+// auto-save name. Recording runs BEFORE the current-only, indirect,
+// saved-size, modification and handler gates, so a handler-routed buffer
+// (aslf-H, saved only in pass 1), an unmodified visiting buffer (aslf-U,
+// never saved) and an indirect buffer (aslf-I, never saved) are all
+// recorded, while a buffer without an auto-save name (aslf-N) never is.
+// The file is truncate-opened per `do-auto-save' (`fopen ... "w"',
+// `fileio.c:6391`): the pre-written JUNK line must not survive. Pinned
+// GNU 31.1.
+#[test]
+fn do_auto_save_streams_pass_zero_visits_to_the_list_file() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name (expand-file-name "as-listfile" temporary-file-directory))
+  (with-temp-buffer
+    (insert "JUNK\n")
+    (write-region (point-min) (point-max) auto-save-list-file-name nil 'silent))
+  (defvar aslf-ops 0)
+  (defun aslf-handler (operation &rest arguments)
+    (if (eq operation 'write-region)
+        (progn (setq aslf-ops (1+ aslf-ops)) 'handled)
+      (let ((inhibit-file-name-handlers
+             (cons 'aslf-handler (and (eq inhibit-file-name-operation operation)
+                                      inhibit-file-name-handlers)))
+            (inhibit-file-name-operation operation))
+        (apply operation arguments))))
+  (setq file-name-handler-alist
+        (cons (cons (concat "\\`"
+                            (regexp-quote (expand-file-name "#aslf-handled#"
+                                                            temporary-file-directory))
+                            "\\'")
+                    'aslf-handler)
+              file-name-handler-alist))
+  (dolist (nm '("aslf-H" "aslf-U" "aslf-N" "aslf-D"))
+    (with-current-buffer (get-buffer-create nm)
+      (insert "text " nm)
+      (setq buffer-auto-save-file-name
+            (expand-file-name (concat "#" nm "#") temporary-file-directory))))
+  (with-current-buffer "aslf-H"
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#aslf-handled#" temporary-file-directory)))
+  (with-current-buffer "aslf-U"
+    (setq buffer-file-name (expand-file-name "aslf-U-visited.txt" temporary-file-directory))
+    (set-buffer-modified-p nil))
+  (with-current-buffer "aslf-N" (setq buffer-auto-save-file-name nil))
+  (with-current-buffer "aslf-D"
+    (setq buffer-file-name (expand-file-name "aslf-D-visited.txt" temporary-file-directory)))
+  (with-current-buffer (make-indirect-buffer (get-buffer "aslf-D") "aslf-I")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#aslf-I#" temporary-file-directory)))
+  (do-auto-save t)
+  (list 'entries (with-temp-buffer
+                   (insert-file-contents auto-save-list-file-name)
+                   (buffer-string))
+        'handled-saves aslf-ops))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""VALUE OK (entries \"\\n[SESSION-TMPDIR]/#aslf-handled#\\n[SESSION-TMPDIR]/aslf-U-visited.txt\\n[SESSION-TMPDIR]/#aslf-U#\\n[SESSION-TMPDIR]/aslf-D-visited.txt\\n[SESSION-TMPDIR]/#aslf-D#\\n\\n[SESSION-TMPDIR]/#aslf-I#\\n\" handled-saves 1)""##
+        ]],
+    );
+}
+
+// A list file whose parent path crosses a regular file exercises the
+// swallowed-error leg: `make-directory' signals, `do_auto_save_eh'
+// (`fileio.c:6308-6312') eats it, `fopen' then fails on ENOTDIR, and the
+// pass-0 stream is silently absent -- the buffers still auto-save.  (GNU's
+// `Vrun_hooks' gate at `fileio.c:6374' is an internal shut-down flag, not
+// the Elisp `run-hooks' variable, so only the error path is reachable from
+// Lisp.)  Pinned GNU 31.1.
+#[test]
+fn do_auto_save_swallows_list_file_directory_errors() {
+    let form = r##"(progn
+  (write-region "x" nil (expand-file-name "as-a-file.txt" temporary-file-directory)
+                nil 'silent)
+  (setq auto-save-list-file-name
+        (expand-file-name "as-a-file.txt/as-listfile" temporary-file-directory))
+  (with-current-buffer (get-buffer-create "as-blocked")
+    (insert "text")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#as-blocked#" temporary-file-directory)))
+  (do-auto-save t)
+  (list 'file-exists (file-exists-p auto-save-list-file-name)
+        'saved (with-current-buffer "as-blocked" (recent-auto-save-p))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[r##""VALUE OK (file-exists nil saved t)""##]],
+    );
+}
+
+// The list file's missing parent directory is created by
+// `(make-directory DIR 'parents)' under `auto_saving_dir_umask' 077
+// (`fileio.c:6302-6304`), i.e. mode 0700 (448), and the stream then records
+// the pass-0 visits into it. Pinned GNU 31.1.
+#[test]
+fn do_auto_save_creates_the_list_file_directory_mode_700() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name
+        (expand-file-name "as-lfdir/as-listfile" temporary-file-directory))
+  (with-current-buffer (get-buffer-create "as-mk")
+    (insert "text")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#as-mk#" temporary-file-directory)))
+  (do-auto-save t)
+  (list 'dir-modes (file-modes (file-name-directory auto-save-list-file-name))
+        'file-exists (file-exists-p auto-save-list-file-name)
+        'entry (and (file-exists-p auto-save-list-file-name)
+                    (with-temp-buffer
+                      (insert-file-contents auto-save-list-file-name)
+                      (buffer-string)))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""VALUE OK (dir-modes 448 file-exists t entry \"\\n[SESSION-TMPDIR]/#as-mk#\\n\")""##
+        ]],
+    );
+}
+
+// Pass 1 saves EVERY still-eligible buffer (`fileio.c:6438-6440`: the
+// handler gate is `do_handled_files || NILP (handler)`, so only pass 0
+// skips a routed buffer). A `write-region' handler running in pass 1
+// creates a handler-less buffer "late" that needs saving; pass 1 must come
+// back to it. Peer audit 5788 R1 (autosave-pass1.el): GNU late-saved=t.
+// Pinned GNU 31.1.
+#[test]
+fn do_auto_save_pass_one_saves_late_handlerless_buffers() {
+    let form = r##"(progn
+  (defvar asp1-log nil)
+  (defun asp1-handler (operation &rest args)
+    (when (eq operation 'write-region)
+      (push 'handler asp1-log)
+      (unless (get-buffer "late")
+        (with-current-buffer (get-buffer-create "late")
+          (insert "late text")
+          (setq buffer-auto-save-file-name
+                (expand-file-name "#late#" temporary-file-directory)))))
+    (let ((inhibit-file-name-handlers
+           (cons 'asp1-handler (and (eq inhibit-file-name-operation operation)
+                                    inhibit-file-name-handlers)))
+          (inhibit-file-name-operation operation))
+      (apply operation args)))
+  (setq file-name-handler-alist
+        (cons (cons (concat "\\`"
+                            (regexp-quote (expand-file-name
+                                           "#asp1-handled#"
+                                           temporary-file-directory))
+                            "\\'")
+                    'asp1-handler)
+              file-name-handler-alist))
+  (with-current-buffer (get-buffer-create "handled")
+    (insert "handled text")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#asp1-handled#" temporary-file-directory)))
+  (do-auto-save t)
+  (list 'log (nreverse asp1-log)
+        'handled-saved (file-exists-p
+                        (expand-file-name "#asp1-handled#" temporary-file-directory))
+        'late-exists (and (get-buffer "late") t)
+        'late-saved (file-exists-p
+                     (expand-file-name "#late#" temporary-file-directory))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""VALUE OK (log (handler) handled-saved t late-exists t late-saved t)""##
+        ]],
+    );
+}
+
+// The peer audit's exact list file (5789, autosave-list.el): a visited
+// buffer records "visited\nauto-save\n"; a file-less buffer whose NAME
+// starts with a space still has an auto-save name, is saved, and records
+// "\nauto-save\n" with an empty first line. The contents are asserted
+// verbatim, in walk order. Pinned GNU 31.1.
+#[test]
+fn do_auto_save_writes_the_peers_exact_list_file() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name
+        (expand-file-name "saves-list" temporary-file-directory))
+  (with-current-buffer (get-buffer-create "visited")
+    (insert "hello")
+    (setq buffer-file-name (expand-file-name "visited.txt" temporary-file-directory))
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#visited#" temporary-file-directory)))
+  ;; A space-named buffer with an auto-save name: GNU's walk has no
+  ;; leading-space skip (peer audit 5789).
+  (with-current-buffer (get-buffer-create " space")
+    (insert "hidden")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#space#" temporary-file-directory)))
+  (do-auto-save t)
+  (list 'list-file-exists (file-exists-p auto-save-list-file-name)
+        'list-file-contents (and (file-exists-p auto-save-list-file-name)
+                                 (with-temp-buffer
+                                   (insert-file-contents auto-save-list-file-name)
+                                   (buffer-string)))
+        'visited-autosave (file-exists-p
+                           (expand-file-name "#visited#" temporary-file-directory))
+        'space-autosave (file-exists-p
+                         (expand-file-name "#space#" temporary-file-directory))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r##""VALUE OK (list-file-exists t list-file-contents \"[SESSION-TMPDIR]/visited.txt\\n[SESSION-TMPDIR]/#visited#\\n\\n[SESSION-TMPDIR]/#space#\\n\" visited-autosave t space-autosave t)""##
+        ]],
+    );
+}
+
 #[test]
 fn clear_buffer_auto_save_failure_returns_nil_and_leaves_save_length() {
     // Live GNU 31.1: the C field is not Lisp-visible. The call returns nil
@@ -823,6 +1113,53 @@ fn do_auto_save_pass_zero_saves_handlerless_buffers_before_handlers_run() {
         form,
         expect_test::expect![[
             r##""VALUE OK (trace \"(AT 1 b t c t d t)\\n(AT 2 b t c t d nil)\\n\" d-file \"content of as-walk-d\" e-saved t b-saved t c-saved t d-live nil)""##
+        ]],
+    );
+}
+
+// Buffer-list order is stable across auto-save and write-region.
+//
+// GNU 31.1 never reorders Vbuffer_alist while saving: Fdo_auto_save visits
+// buffers with set_buffer_internal (fileio.c:6466/6480) and write-region's
+// post-annotation loop uses Fset_buffer (fileio.c:5805-5816). record_buffer
+// (buffer.c:2205) fires only from the window display path (window.c:582).
+// Neo's post-annotation loop used the recorded switch, moving every saved
+// buffer to the head of buffer-order. The write-region leg visits the same
+// site directly, the do-auto-save leg through auto_save_1's Fwrite_region.
+#[test]
+fn auto_save_and_write_region_keep_the_buffer_list_order() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name nil)
+  (defun as-ord-names (targets)
+    (delq nil (mapcar (lambda (b)
+                        (let ((tail (member (buffer-name b) targets)))
+                          (and tail (car tail))))
+                      (buffer-list))))
+  (dolist (nm '("as-ord-a" "as-ord-b" "as-ord-c"))
+    (let ((b (get-buffer-create nm)))
+      (with-current-buffer b
+        (insert "content of " nm)
+        (setq buffer-auto-save-file-name
+              (expand-file-name (concat "#" nm "#") temporary-file-directory)))))
+  (let ((before (as-ord-names '("as-ord-a" "as-ord-b" "as-ord-c"))))
+    (do-auto-save t)
+    (let ((after (as-ord-names '("as-ord-a" "as-ord-b" "as-ord-c"))))
+      (with-current-buffer (get-buffer-create "as-ord-w") (insert "w"))
+      (set-buffer "*scratch*")
+      (let ((before-w (as-ord-names '("as-ord-a" "as-ord-b" "as-ord-c" "as-ord-w"))))
+        (set-buffer "as-ord-w")
+        (write-region (point-min) (point-max)
+                      (expand-file-name "#as-ord-w#" temporary-file-directory)
+                      nil 'lambda)
+        (let ((after-w (as-ord-names '("as-ord-a" "as-ord-b" "as-ord-c" "as-ord-w"))))
+          (list 'das-order after
+                'das-stable (equal before after)
+                'wr-order after-w
+                'wr-stable (equal before-w after-w)))))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        form,
+        expect_test::expect![[
+            r##""VALUE OK (das-order (\"as-ord-a\" \"as-ord-b\" \"as-ord-c\") das-stable t wr-order (\"as-ord-a\" \"as-ord-b\" \"as-ord-c\" \"as-ord-w\") wr-stable t)""##
         ]],
     );
 }
