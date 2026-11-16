@@ -74,6 +74,10 @@ neovm-core = { workspace = true, features = ["jit", "redisplay-test-policy"] }
 # the no-heap tripwire stays armed here even in a unified `--workspace` test
 # build where cargo has unified that dev-dep feature for every member.
 neovm-value = { workspace = true, features = ["test-support"] }
+# Downward eval test-support edge (TEST-SUPPORT-VIS-EVAL): the unit tests here
+# read eval items that are pub(crate) in production and pub only under
+# neovm-eval's test-support feature, so a per-crate test build enables it here.
+neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support"] }
 serde_json.workspace = true
 tracing-test.workspace = true
 
