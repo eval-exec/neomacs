@@ -64,6 +64,20 @@ fn forget_resolution(ctx: &mut Context, name: &str) {
     ctx.named_call_cache.remove(&intern(name));
 }
 
+/// Collect, then reuse whatever the sweep freed: a value the test still
+/// holds but no root keeps would now read back as junk.
+fn collect_and_reuse(ctx: &mut Context) {
+    ctx.gc_collect_exact();
+    ctx.eval_str(
+        "(let ((i 0) (junk nil))
+           (while (< i 2000)
+             (setq junk (cons (vector 'junk i) junk))
+             (setq i (1+ i)))
+           nil)",
+    )
+    .unwrap();
+}
+
 #[test]
 fn mapcar_symbol_callee_bytecode_skips_generic_named_call() {
     let mut ctx = context();
@@ -106,11 +120,14 @@ fn mapcar_symbol_callee_redefined_by_itself_is_seen_next_element() {
         "symcallee-self",
         Some(Value::symbol("symcallee-swap")),
     );
+    let roots = ctx.save_vm_roots();
     let input = Value::list(vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)]);
+    ctx.push_vm_frame_root(input);
     assert_eq!(
         outcome(builtin_mapcar_2(&mut ctx, function, input)),
         "(1 102 103)"
     );
+    collect_and_reuse(&mut ctx);
 
     // The replacement is byte-code too: the cell is still read per element.
     let replacement = bytecode(None);
@@ -131,6 +148,7 @@ fn mapcar_symbol_callee_redefined_by_itself_is_seen_next_element() {
         outcome(builtin_mapc_2(&mut ctx, function, input)),
         "(1 2 3)"
     );
+    collect_and_reuse(&mut ctx);
     named(
         &mut ctx,
         "symcallee-self",
@@ -140,6 +158,7 @@ fn mapcar_symbol_callee_redefined_by_itself_is_seen_next_element() {
         outcome(builtin_mapcar_2(&mut ctx, function, input)),
         "(101 2 3)"
     );
+    ctx.restore_vm_roots(roots);
 }
 
 #[test]
@@ -289,7 +308,9 @@ fn mapcar_symbol_callee_other_cell_kinds_keep_their_signals() {
     ctx.assign("symcallee-macro-bytecode", bytecode(None));
     ctx.eval_str("(fset 'symcallee-bytecode-macro (cons 'macro symcallee-macro-bytecode))")
         .unwrap();
+    let roots = ctx.save_vm_roots();
     let input = Value::list(vec![Value::fixnum(1), Value::fixnum(2)]);
+    ctx.push_vm_frame_root(input);
     let mut observed = Vec::new();
     for name in [
         "symcallee-alias-1",
@@ -303,7 +324,10 @@ fn mapcar_symbol_callee_other_cell_kinds_keep_their_signals() {
         let applied = outcome(ctx.apply1(Value::symbol(name), Value::fixnum(1)));
         assert_eq!((ctx.depth, ctx.specpdl.len()), before, "{name}");
         observed.push(format!("{name}: {mapped} | {applied}"));
+        collect_and_reuse(&mut ctx);
     }
+    assert_eq!(print_value(&input), "(1 2)");
+    ctx.restore_vm_roots(roots);
     // As on the generic path. GNU `funcall_general` names the symbol in a
     // macro's `invalid-function` (eval.c); the cell value named here is the
     // generic path's existing answer, kept unchanged.
