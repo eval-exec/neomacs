@@ -5370,6 +5370,12 @@ mod plist_epoch_tests;
 #[path = "tests/member_funnel_test.rs"]
 mod member_funnel_tests;
 
+#[cfg(any(test, feature = "test-support"))]
+mod membership_audit;
+
+#[cfg(any(test, feature = "test-support"))]
+pub use membership_audit::VisibilityViolation;
+
 /// The pre-`CanonicalAccess` spellings, for tests, which set up and inspect
 /// canonical storage. Production code names its reason
 /// ([`CanonicalAccess`]) or reads through the owner-aware `Context` API.
