@@ -4,6 +4,10 @@
 //! `unit_runtime` module to the per-slot refusal functions every upper-layer
 //! slot needs. The macro is the only cross-crate surface: one VIS row of
 //! kind macro at this definition, and the generated functions need none.
+//!
+//! `ABSENT-LAYER-SLOTS.md`, next to this file, classifies every generated
+//! slot by whether eval's unit runtime can reach it (documentation only; the
+//! table records no behaviour change).
 
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
