@@ -54,7 +54,7 @@ impl RootedConsInputs<'_> {
 /// Consuming initialized storage into raw root parts requires this seal.
 /// Its private field and absent constructors keep that operation confined to
 /// the immediate registration sequence below, even within the crate.
-pub(crate) struct ConsRootSeal {
+pub struct ConsRootSeal {
     _private: (),
 }
 

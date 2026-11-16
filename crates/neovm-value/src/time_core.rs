@@ -310,7 +310,6 @@ pub struct ParsedTime {
     pub hz: i64,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(crate) form: TimeInputForm,
-    pub(crate) exact_ticks_hz: Option<(Integer, Integer)>,
 }
 /// Parse a time value from a Lisp argument.
 ///
@@ -363,7 +362,6 @@ pub fn parse_time_detailed(val: &Value) -> Result<ParsedTime, Flow> {
             },
             hz: 1,
             form: TimeInputForm::Scalar,
-            exact_ticks_hz: None,
         });
     }
     match val.kind() {
@@ -371,7 +369,6 @@ pub fn parse_time_detailed(val: &Value) -> Result<ParsedTime, Flow> {
             time: TimeMicros::now(),
             hz: 1_000_000_000_000,
             form: TimeInputForm::List,
-            exact_ticks_hz: None,
         }),
         ValueKind::Fixnum(n) => Ok(ParsedTime {
             time: TimeMicros {
@@ -381,7 +378,6 @@ pub fn parse_time_detailed(val: &Value) -> Result<ParsedTime, Flow> {
             },
             hz: 1,
             form: TimeInputForm::Scalar,
-            exact_ticks_hz: Some((Integer::from(n), Integer::from(1))),
         }),
         ValueKind::Float => {
             let f = val.xfloat();
@@ -403,7 +399,6 @@ pub fn parse_time_detailed(val: &Value) -> Result<ParsedTime, Flow> {
                 time: TimeMicros::from_exact_ticks_hz(&ticks, &hz)?,
                 hz: hz_i64,
                 form: TimeInputForm::List,
-                exact_ticks_hz: Some((ticks, hz)),
             })
         }
         ValueKind::Cons => {
@@ -426,7 +421,6 @@ pub fn parse_time_detailed(val: &Value) -> Result<ParsedTime, Flow> {
                     time: TimeMicros::from_ticks_hz(ticks, hz)?,
                     hz,
                     form: TimeInputForm::TicksHz,
-                    exact_ticks_hz: Some((Integer::from(ticks), Integer::from(hz))),
                 });
             }
 
@@ -474,7 +468,6 @@ pub fn parse_time_detailed(val: &Value) -> Result<ParsedTime, Flow> {
                 },
                 hz: time_convert_default_hz(val),
                 form: TimeInputForm::List,
-                exact_ticks_hz: None,
             })
         }
         // GNU `decode_lisp_time` (`src/timefns.c:1041`) signals

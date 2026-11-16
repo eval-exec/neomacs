@@ -1782,6 +1782,7 @@ crates/neovm-value/src/tagged/pdump_image.rs	field	BytecodeExtras field n_requir
 crates/neovm-value/src/tagged/pdump_image.rs	field	BytecodeExtras field params_kind
 crates/neovm-value/src/tagged/pdump_image.rs	field	BytecodeExtras field rest_sym
 crates/neovm-value/src/tagged/transport/cons_root.rs	fn	fn impl RunAccess::root_slot
+crates/neovm-value/src/tagged/transport/cons_root.rs	struct	struct ConsRootSeal
 crates/neovm-value/src/tagged/transport/cons_root.rs	trait	sealed::trait Slot
 crates/neovm-value/src/tagged/transport/cons_root.rs	trait	trait RootedSlot
 crates/neovm-value/src/tagged/transport/immediate.rs	const	const impl ImmediateValue::NIL

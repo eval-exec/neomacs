@@ -131,10 +131,6 @@ impl PathExec {
     pub const fn source(&self) -> PathExecSource {
         self.source
     }
-
-    pub(crate) fn into_dir(self) -> PathBuf {
-        self.dir
-    }
 }
 
 /// GNU's `archlibdir` tail: `libexec/neomacs/<version>/<configuration>`,

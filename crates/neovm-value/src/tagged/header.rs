@@ -149,11 +149,6 @@ impl ConsCdrWord {
         Self(UnsafeCell::new(ConsCdrOrNext { cdr }))
     }
 
-    #[inline(always)]
-    pub(crate) const fn from_next(next: *mut ConsCell) -> Self {
-        Self(UnsafeCell::new(ConsCdrOrNext { next_free: next }))
-    }
-
     /// Plain owner read of the live `cdr` member. See [`ConsWord::get`].
     #[inline(always)]
     pub fn get(&self) -> TaggedValue {
@@ -960,51 +955,7 @@ pub enum VecLikeType {
     VideoHandle = 40,
 }
 
-impl VecLikeType {
-    pub(crate) fn gnu_pvec_type(self) -> Option<GnuPvecType> {
-        Some(match self {
-            Self::Vector => GnuPvecType::NormalVector,
-            Self::Bignum => GnuPvecType::Bignum,
-            Self::Marker => GnuPvecType::Marker,
-            Self::Overlay => GnuPvecType::Overlay,
-            Self::Finalizer => GnuPvecType::Finalizer,
-            Self::SymbolWithPos => GnuPvecType::SymbolWithPos,
-            Self::UserPtr => GnuPvecType::UserPtr,
-            Self::Process => GnuPvecType::Process,
-            Self::Frame => GnuPvecType::Frame,
-            Self::Window => GnuPvecType::Window,
-            Self::BoolVector => GnuPvecType::BoolVector,
-            Self::Buffer => GnuPvecType::Buffer,
-            Self::HashTable => GnuPvecType::HashTable,
-            Self::Obarray => GnuPvecType::Obarray,
-            Self::Terminal => GnuPvecType::Terminal,
-            Self::WindowConfiguration => GnuPvecType::WindowConfiguration,
-            Self::Subr => GnuPvecType::Subr,
-            Self::Xwidget => GnuPvecType::Xwidget,
-            Self::XwidgetView => GnuPvecType::XwidgetView,
-            Self::Thread => GnuPvecType::Thread,
-            Self::Mutex => GnuPvecType::Mutex,
-            Self::CondVar => GnuPvecType::Condvar,
-            Self::ModuleFunction => GnuPvecType::ModuleFunction,
-            Self::TsNode => GnuPvecType::TsNode,
-            Self::Sqlite => GnuPvecType::Sqlite,
-            Self::Lambda => GnuPvecType::Closure,
-            Self::CharTable => GnuPvecType::CharTable,
-            Self::SubCharTable => GnuPvecType::SubCharTable,
-            Self::Record => GnuPvecType::Record,
-            Self::Font => GnuPvecType::Font,
-            Self::Macro
-            | Self::ByteCode
-            | Self::Timer
-            | Self::SurfaceHandle
-            | Self::VideoHandle => return None,
-        })
-    }
-
-    pub(crate) fn gnu_pvec_code(self) -> Option<u8> {
-        self.gnu_pvec_type().map(GnuPvecType::gnu_code)
-    }
-}
+impl VecLikeType {}
 
 /// Complete GNU `enum pvec_type` domain (`src/lisp.h`). This records all
 /// public GNU pseudovector tag codes even when Neomacs does not yet allocate
@@ -1050,15 +1001,7 @@ pub(crate) enum GnuPvecType {
     Font = 35,
 }
 
-impl GnuPvecType {
-    pub fn from_gnu_code(code: u8) -> Option<Self> {
-        Self::try_from(code).ok()
-    }
-
-    pub fn gnu_code(self) -> u8 {
-        self.into()
-    }
-}
+impl GnuPvecType {}
 
 use std::sync::OnceLock;
 
@@ -1689,61 +1632,6 @@ impl VectorScanSnapshot {
     }
 }
 
-/// Acquire a GC-visible interior-mutable value slot. Owner reads use
-/// [`AtomicTaggedValue::get`]; immutable mapped/leased words and fields traced
-/// only by their owner use ordinary Value reads.
-///
-/// A plain shared Value cannot supply atomic publication provenance:
-///
-/// ```compile_fail,E0308
-/// use neovm_core::tagged::header::load_value_atomic;
-/// use neovm_core::tagged::value::TaggedValue;
-/// let plain = TaggedValue::NIL;
-/// let _ = load_value_atomic(&plain);
-/// ```
-///
-/// PUBLICATION-ORDERING CONTRACT (concurrent GC, task #24 fix A): every store
-/// that can make a heap pointer visible to the GC thread mid-mark (cons
-/// car/cdr, vector slots, symbol value/function/plist cells — this module's
-/// atomic store helpers, including fixed char-table cells) is `Release`, and
-/// every GC-thread load that can be
-/// the first acquisition of such a pointer (cons car/cdr, slot/field loads —
-/// this module's atomic load helpers) is `Acquire`. The pairing makes the
-/// mutator's pre-publication writes — the arena `ptr::write` of the whole
-/// `GcHeader`/constructor, including `tenured`, `kind`, and the born-black
-/// parity bit — happen-before any dereference by the claim dispatcher
-/// (`concurrent_try_mark_owned`), which may otherwise read a torn/premature
-/// header on weakly-ordered targets (real UB on ARM; x86-TSO retired the
-/// writes in order anyway). Both orderings compile to plain `mov` on x86-64,
-/// and to `stlr`/`ldar` on AArch64. Objects reached through pre-cycle
-/// channels (start-handshake snapshots, the gray-queue channel handoff, the
-/// SATB/deferred mutexes) already carry happens-before from those seams; this
-/// contract closes the one remaining path — a fresh pointer stored into an
-/// already-snapshotted cell and read back mid-cycle. The mark bits themselves
-/// (`GcHeader.marked`, cons block bitmaps) stay `Relaxed`: they never
-/// publish field data, and a claim's field reads are ordered by this
-/// contract's pointer chain, not by the bit.
-#[inline]
-pub(crate) fn load_value_atomic(slot: &AtomicTaggedValue) -> TaggedValue {
-    slot.load_atomic()
-}
-
-/// Release-publish through the actual interior-mutable cell, without a unique
-/// slot borrow. See the publication contract on [`load_value_atomic`].
-///
-/// A plain mutable Value is also insufficient storage:
-///
-/// ```compile_fail,E0308
-/// use neovm_core::tagged::header::store_value_atomic;
-/// use neovm_core::tagged::value::TaggedValue;
-/// let mut plain = TaggedValue::NIL;
-/// store_value_atomic(&mut plain, TaggedValue::T);
-/// ```
-#[inline]
-pub(crate) fn store_value_atomic(slot: &AtomicTaggedValue, value: TaggedValue) {
-    slot.store_atomic(value);
-}
-
 impl From<Vec<TaggedValue>> for LispValueVec {
     fn from(value: Vec<TaggedValue>) -> Self {
         Self::owned(value)
@@ -2238,12 +2126,6 @@ impl BoolVectorObj {
     #[inline]
     pub fn byte(&self, index: usize) -> u8 {
         (self.words[index / 8] >> ((index % 8) * 8)) as u8
-    }
-
-    /// The number of bytes of bit data: `⌈nbits/8⌉`.
-    #[inline]
-    pub(crate) fn byte_len(&self) -> usize {
-        self.nbits.div_ceil(8)
     }
 }
 

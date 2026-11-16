@@ -1897,29 +1897,6 @@ pub fn is_keyword_id(id: SymId) -> bool {
 }
 
 #[inline]
-pub(crate) fn resolve_sym_metadata(id: SymId) -> (&'static str, bool) {
-    ensure_thread_local_cache_epoch_current();
-    if let Some(is_canonical) = thread_local_is_canonical(id)
-        && is_canonical
-        && let Some(name) = thread_local_resolve(id)
-    {
-        return (name, true);
-    }
-    let registry = global_symbol_registry().read();
-    let name_value = registry.resolve_lisp_string(id);
-    let name = name_value
-        .as_utf8_str()
-        .unwrap_or_else(|| panic!("symbol name {:?} is not valid UTF-8", id));
-    let is_canonical = registry.is_canonical_id(id);
-    drop(registry);
-    thread_local_record_canonical(id, is_canonical);
-    if is_canonical {
-        thread_local_record_name(id, name_value);
-    }
-    (name, is_canonical)
-}
-
-#[inline]
 #[doc(hidden)]
 pub fn symbol_name_id(id: SymId) -> NameId {
     if let Some(name_id) = thread_local_name_id(id) {
@@ -2195,6 +2172,8 @@ pub fn map_lisp_visible_symbol_names<T>(
     mapped
 }
 
+#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+#[cfg(any(test, feature = "test-support"))]
 #[inline]
 pub(crate) fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
     let registry = global_symbol_registry().read();
@@ -2568,27 +2547,6 @@ fn thread_local_record_keyword(id: SymId, is_keyword: bool) {
         }
         cache[idx].keyword = Some(is_keyword);
     });
-}
-
-/// Resolve a SymId to its string using the global runtime symbol registry.
-///
-/// Returns `None` if the id is outside the current symbol range instead of
-/// panicking. This is useful at serialization boundaries where we want a
-/// structured error instead of aborting the process on malformed runtime data.
-#[inline]
-pub(crate) fn try_resolve_sym(id: SymId) -> Option<&'static str> {
-    let registry = global_symbol_registry().read();
-    registry
-        .slot(id)
-        .map(|slot| registry.names.resolve(slot.name))
-}
-
-#[inline]
-pub(crate) fn try_resolve_sym_lisp_string(id: SymId) -> Option<&'static LispString> {
-    let registry = global_symbol_registry().read();
-    registry
-        .slot(id)
-        .map(|slot| registry.names.resolve_lisp_string(slot.name))
 }
 
 #[cfg(test)]

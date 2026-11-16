@@ -340,15 +340,6 @@ impl BufferlessValue {
             Self::PerBufferSlot | Self::Void => None,
         }
     }
-
-    /// Only the arm that agrees with GNU unconditionally.
-    #[must_use]
-    pub(crate) fn global_only(self) -> Option<Value> {
-        match self {
-            Self::Global(value) => Some(value),
-            Self::DefaultOfLocalized(_) | Self::PerBufferSlot | Self::Void => None,
-        }
-    }
 }
 
 /// Two-bit `interned` flag. Mirrors GNU `enum symbol_interned`
@@ -649,17 +640,6 @@ impl SetInternalBind {
     }
 }
 
-/// Stub for GNU `let_shadows_buffer_binding_p`
-/// (`src/eval.c:3559-3577`). Returns `true` if the symbol is
-/// currently `let`-bound to a buffer-local binding shadowing the
-/// per-buffer slot.
-///
-/// Phase 5 stub: always `false`. Phase 7 wires this against the
-/// specpdl `LET_LOCAL` records.
-pub(crate) fn let_shadows_buffer_binding_p(_sym_id: SymId) -> bool {
-    false
-}
-
 /// Reasons [`Obarray::make_variable_alias`] can fail. Mirrors the
 /// `xsignal` callsites in GNU `Fdefvaralias` (`src/eval.c:631-726`).
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -937,6 +917,8 @@ impl CanonicalDispatchCells {
         DebuggerDescriptor(self.debug_on_next_call_cell_ref())
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg(feature = "jit")]
     #[inline(always)]
     pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
@@ -2220,14 +2202,6 @@ impl Obarray {
         self.slot(id).filter(|sym| sym.interned_global)
     }
 
-    /// Get symbol data (mutable). Crate-private: cross-crate mutation goes
-    /// through the signed narrow routes (AUTHORITY-ITEMS), never a raw
-    /// borrow of the symbol cell.
-    pub(crate) fn get_mut(&mut self, name: &str) -> Option<&mut LispSymbol> {
-        let id = lookup_interned(name)?;
-        self.slot_mut(id).filter(|sym| sym.interned_global)
-    }
-
     /// Ensure symbol storage exists for an arbitrary symbol id.
     pub fn ensure_symbol_id(&mut self, id: SymId) -> &mut LispSymbol {
         self.ensure_slot(id)
@@ -2286,57 +2260,6 @@ impl Obarray {
         self.canonical_value(access, intern(name))
     }
 
-    /// GNU's `Vfoo` / `foo` / `BVAR (current_buffer, foo)` -- the one spelling
-    /// for "what the C code reads here", given the buffer that is current.
-    ///
-    /// GNU needs no such helper because it has no choice to make: the swap-in
-    /// has already put `current_buffer`'s binding in the cell the C code
-    /// dereferences (`src/data.c:1573-1603`), and a `DEFVAR_PER_BUFFER` name
-    /// is only ever spelled `BVAR (current_buffer, ...)`. This port keeps the
-    /// two places apart, so a Rust site has to name the buffer -- and the
-    /// sites that could not were ledger 191's class.
-    ///
-    /// A `struct buffer` slot wins over the obarray unconditionally: for an
-    /// always-local slot it *is* the value, and for a conditional slot GNU's
-    /// `set-default` propagation leaves the live default in that same slot, so
-    /// reading it is right in both cases. `set_default_internal`'s
-    /// `BUFFER_OBJFWDP` arm calls `set_per_buffer_default` (`src/buffer.h:1627`)
-    /// and then walks `FOR_EACH_LIVE_BUFFER` writing the new default into every
-    /// buffer whose `PER_BUFFER_VALUE_P` is clear (`src/data.c:2087-2114`).
-    ///
-    /// `indent::dynamic_buffer_or_global_symbol_value` is the older, identical
-    /// reader; it lives in a file ledger 195 owns, so collapsing the two is
-    /// owed rather than done here (ledger 196).
-    pub(crate) fn canonical_value_in_buffer<B: BufferLocalView>(
-        &self,
-        access: CanonicalAccess,
-        buf: Option<&B>,
-        name: &str,
-    ) -> Option<Value> {
-        self.canonical_value_in_buffer_id(access, buf, intern(name))
-    }
-
-    /// [`Self::canonical_value_in_buffer`] by identity.
-    ///
-    /// The `local_var_alist` lookup is gated on [`Self::is_localized`]: a
-    /// symbol no buffer has ever localised can have no alist entry (every
-    /// insertion path marks it `Localized` first), so the walk would only ever
-    /// answer `None`. That keeps this reader roughly the cost of
-    /// [`Self::symbol_value_copied`] on the overwhelmingly common global path, which
-    /// matters where a caller reads a dozen names at once -- the `print-*`
-    /// family, for one.
-    pub(crate) fn canonical_value_in_buffer_id<B: BufferLocalView>(
-        &self,
-        _access: CanonicalAccess,
-        buf: Option<&B>,
-        id: SymId,
-    ) -> Option<Value> {
-        match self.buffer_value(buf, id) {
-            Some(value) => Some(value),
-            None => self.canonical_value(CanonicalAccess::STORAGE, id),
-        }
-    }
-
     /// [`Self::canonical_value_in_buffer_id`]'s read, with PROJECTED
     /// answering the arms [`Self::value_with`] gives it: BUF's slot and
     /// local binding are canonical storage, which no projection changes.
@@ -2370,18 +2293,6 @@ impl Obarray {
             return Some(value);
         }
         self.value_with(id, projected)
-    }
-
-    /// BUF's slot or local binding of ID, if it has one. A plain match, not
-    /// a closure for the global read: LLVM outlined that closure, storing
-    /// its captures on every call.
-    #[inline(always)]
-    fn buffer_value<B: BufferLocalView>(&self, buf: Option<&B>, id: SymId) -> Option<Value> {
-        let buf = buf?;
-        if let Some(value) = Self::buffer_slot_value(buf, id) {
-            return Some(value);
-        }
-        buf.local_binding(id, self.is_localized(id))
     }
 
     /// BUF's `struct buffer` slot of ID, when ID names one.
@@ -4173,6 +4084,7 @@ impl Obarray {
             && self.symbols.fn_unchanged_since(Self::slot_index(id), since)
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
     /// Test hook: whether `id`'s chunk has allocated its stamp array.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn chunk_has_fn_stamps_for_test(&self, id: SymId) -> bool {
@@ -4526,11 +4438,6 @@ impl Obarray {
         crate::tagged::gc::note_root_overwrite(sym.plist.get());
         store_plist_head(sym, plist);
         SymbolPropertyRevision::changed(symbol);
-    }
-
-    /// Get the symbol's full plist as a flat list.
-    pub(crate) fn symbol_plist(&self, name: &str) -> Value {
-        self.symbol_plist_id(intern(name))
     }
 
     /// Get the symbol's full plist as a flat list by identity.
@@ -4952,10 +4859,6 @@ impl Obarray {
     /// Number of interned symbols.
     pub fn len(&self) -> usize {
         self.global_member_count
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.global_member_count == 0
     }
 
     /// All interned symbol names.
