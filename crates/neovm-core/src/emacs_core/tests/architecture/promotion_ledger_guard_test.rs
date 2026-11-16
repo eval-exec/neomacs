@@ -9,6 +9,7 @@ use std::process::Command;
 use syn::parse::Parser;
 use syn::visit::{self, Visit};
 
+use super::architecture_merge_ratchet as merge_ratchet;
 use super::architecture_production_source_roots::workspace_root;
 
 const LEDGER: &str = "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER.tsv";
@@ -1543,15 +1544,18 @@ fn ceiling(text: &str) -> Result<RowCount, String> {
         .map_err(|_| "B3_RATCHET count overflow".into())
 }
 
-fn at_most(rows: RowCount, limit: RowCount) -> Result<(), String> {
-    if rows <= limit {
-        Ok(())
-    } else {
-        Err(format!(
-            "B3_RATCHET {} rows exceed ceiling {}",
-            rows.0, limit.0
-        ))
+/// The promotion-ledger view of the shared merge-aware ratchet rules.
+fn rules_for(ceiling_path: &str) -> merge_ratchet::Rules<'_> {
+    merge_ratchet::Rules {
+        ceiling_path,
+        bump_subject: BUMP_SUBJECT,
+        error_tag: "B3_RATCHET",
+        exempt: GRANDFATHERED_CEILING_BUMPS,
     }
+}
+
+fn at_most(rows: RowCount, limit: RowCount) -> Result<(), String> {
+    merge_ratchet::at_most(rows.0, limit.0, &rules_for(CEILING))
 }
 
 /// LEAD 11:0xZ ruling (c): historical ceiling bumps that were not
@@ -1592,174 +1596,17 @@ fn monotonic(
     ceiling_path: &str,
     revision: &str,
 ) -> Result<(), String> {
-    if next <= previous {
-        return Ok(());
-    }
-    if GRANDFATHERED_CEILING_BUMPS
-        .iter()
-        .any(|(path, sha)| *path == ceiling_path && *sha == revision)
-    {
-        return Ok(());
-    }
-    if subject.starts_with(BUMP_SUBJECT)
-        && !subject[BUMP_SUBJECT.len()..].trim().is_empty()
-        && changed.len() == 1
-        && changed[0] == ceiling_path
-    {
-        return Ok(());
-    }
-    Err(format!(
-        "B3_RATCHET silent ceiling increase {} -> {}; requires a named ceiling-only bump commit",
-        previous.0, next.0
-    ))
-}
-
-fn git(workspace: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .current_dir(workspace)
-        .args(args)
-        .output()
-        .map_err(|e| format!("B3_RATCHET git: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "B3_RATCHET git {:?}: {}",
-            args,
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    String::from_utf8(output.stdout).map_err(|e| format!("B3_RATCHET non-UTF8 history: {e}"))
-}
-
-/// The ceiling value at `revision`, or `None` when the file does not exist
-/// there: a revision without the file has no prior value and so acts as a
-/// history anchor, like the first revision of the walk.
-fn ceiling_at(
-    workspace: &Path,
-    revision: &str,
-    ceiling_path: &str,
-) -> Result<Option<RowCount>, String> {
-    let listed = git(
-        workspace,
-        &["ls-tree", "--name-only", revision, "--", ceiling_path],
-    )?;
-    if listed.trim().is_empty() {
-        return Ok(None);
-    }
-    ceiling(&git(
-        workspace,
-        &["show", &format!("{revision}:{ceiling_path}")],
-    )?)
-    .map(Some)
-}
-
-fn parents_of(workspace: &Path, revision: &str) -> Result<Vec<String>, String> {
-    let line = git(workspace, &["rev-list", "--parents", "-n1", revision])?;
-    Ok(line
-        .split_whitespace()
-        .skip(1)
-        .map(str::to_string)
-        .collect())
-}
-
-/// Judge one non-merge commit by the monotonic rule against its own first
-/// parent, using its own subject and changed files.
-fn judge_commit(
-    workspace: &Path,
-    revision: &str,
-    parents: &[String],
-    ceiling_path: &str,
-) -> Result<(), String> {
-    let Some(first) = parents.first() else {
-        return Ok(());
-    };
-    let Some(previous) = ceiling_at(workspace, first, ceiling_path)? else {
-        return Ok(());
-    };
-    let value = ceiling_at(workspace, revision, ceiling_path)?
-        .ok_or_else(|| format!("B3_RATCHET {revision} deletes {ceiling_path}"))?;
-    let subject = git(workspace, &["show", "-s", "--format=%s", revision])?;
-    let files = git(
-        workspace,
-        &["diff-tree", "--no-commit-id", "--name-only", "-r", revision],
-    )?;
-    let files: Vec<_> = files.lines().map(str::to_string).collect();
-    monotonic(
-        previous,
-        value,
-        subject.trim(),
-        &files,
-        ceiling_path,
+    merge_ratchet::monotonic(
+        previous.0,
+        next.0,
+        subject,
+        changed,
+        &rules_for(ceiling_path),
         revision,
     )
 }
 
-/// A merge's own resolution may not raise the ceiling: its value must be at
-/// most its first parent's, or equal to a non-first parent's value ONLY when
-/// that side actually decided an INCREASE in `M^1..M^k`: a judged named
-/// ceiling-only bump that raised the side's value at least to the result. A
-/// side that forked before a main-line decrease has no such decision of its
-/// own, so its stale fork-point value must not authorize an evil merge that
-/// restores the pre-decrease ceiling. A side DECREASE (5 -> 4) is not an
-/// increase decision either: resolving two conflicting decreases to the
-/// higher one would silently raise the first parent's judged value. Parents
-/// without the file carry no value; when no parent has it the merge is an
-/// anchor.
-fn judge_merge_result(
-    workspace: &Path,
-    revision: &str,
-    parents: &[String],
-    ceiling_path: &str,
-) -> Result<(), String> {
-    let value = ceiling_at(workspace, revision, ceiling_path)?
-        .ok_or_else(|| format!("B3_RATCHET {revision} deletes {ceiling_path}"))?;
-    let mut values = Vec::with_capacity(parents.len());
-    for parent in parents {
-        values.push(ceiling_at(workspace, parent, ceiling_path)?);
-    }
-    if values.iter().all(Option::is_none) || values[0].is_some_and(|first| value <= first) {
-        return Ok(());
-    }
-    for (index, parent_value) in values.iter().enumerate().skip(1) {
-        if parent_value.is_some_and(|parent| parent == value)
-            && side_authorized_value(
-                workspace,
-                &parents[0],
-                &parents[index],
-                ceiling_path,
-                value,
-                values[0],
-            )?
-        {
-            return Ok(());
-        }
-    }
-    // Measure the rejected increase from the highest parent value BELOW the
-    // resolution: a parent above it (an octopus side with a judged increase)
-    // is where the merge failed to carry, not the baseline it raised from.
-    let previous = values
-        .iter()
-        .flatten()
-        .copied()
-        .filter(|parent| *parent < value)
-        .max()
-        .or(values[0])
-        .unwrap_or(value);
-    Err(format!(
-        "B3_RATCHET silent ceiling increase {} -> {} in the resolution of merge {revision}; \
-         a merge may only carry a parent's ceiling",
-        previous.0, value.0
-    ))
-}
-
-/// True when SIDE contains a judged ceiling decision authorizing `value`: a
-/// named ceiling-only INCREASE commit that raised the side's ceiling at least
-/// to `value`. Such a commit is itself judged by `judge_commit`, so the merge
-/// merely carries a value the side legitimately earned. A plain decrease is
-/// not an increase decision: on a side that forked before main's 5 -> 3, its
-/// 5 -> 4 decrease must not authorize resolving the merge to 4, which would
-/// raise the first parent's judged 3. When the first parent has no ceiling at
-/// all, the side commit that anchors the file also authorizes values it
-/// covers.
+/// The promotion-ledger wrapper for the shared side-authorization rule.
 fn side_authorized_value(
     workspace: &Path,
     first: &str,
@@ -1768,155 +1615,18 @@ fn side_authorized_value(
     value: RowCount,
     first_value: Option<RowCount>,
 ) -> Result<bool, String> {
-    let exclude = format!("^{first}");
-    let args = [
-        "log",
-        "--format=%H",
-        exclude.as_str(),
+    merge_ratchet::side_authorized_value(
+        workspace,
+        first,
         side,
-        "--",
-        ceiling_path,
-    ];
-    let listed = git(workspace, &args)?;
-    for commit in listed.lines().filter(|line| !line.is_empty()) {
-        let parents = parents_of(workspace, commit)?;
-        let Some(parent) = parents.first() else {
-            continue;
-        };
-        let Some(previous) = ceiling_at(workspace, parent, ceiling_path)? else {
-            if first_value.is_none()
-                && ceiling_at(workspace, commit, ceiling_path)?
-                    .is_some_and(|current| value <= current)
-            {
-                return Ok(true);
-            }
-            continue;
-        };
-        // A side commit that deletes the ceiling is never a silent skip: a
-        // merge may not carry a value across a deletion, and the deletion
-        // must be judged as such (the anchor rule only covers recreation
-        // relative to a parent that has no file).
-        let Some(current) = ceiling_at(workspace, commit, ceiling_path)? else {
-            return Err(format!(
-                "B3_RATCHET side commit {commit} deletes {ceiling_path}; \
-                 a merge may not carry a value across a deletion"
-            ));
-        };
-        if current <= previous || current < value {
-            continue;
-        }
-        let subject = git(workspace, &["show", "-s", "--format=%s", commit])?;
-        let files = git(
-            workspace,
-            &["diff-tree", "--no-commit-id", "--name-only", "-r", commit],
-        )?;
-        let files: Vec<_> = files.lines().map(str::to_string).collect();
-        if monotonic(
-            previous,
-            current,
-            subject.trim(),
-            &files,
-            ceiling_path,
-            commit,
-        )
-        .is_ok()
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-/// A first-parent merge is not judged by its own subject and (empty) diff:
-/// every commit it brought in that touches the ceiling is judged on its own,
-/// in topological order, and then the merge result itself.
-fn judge_merge(
-    workspace: &Path,
-    revision: &str,
-    parents: &[String],
-    ceiling_path: &str,
-) -> Result<(), String> {
-    let mut args = vec![
-        "log".to_string(),
-        "--reverse".into(),
-        "--topo-order".into(),
-        // Without it, a nested merge TREESAME to one parent hides the
-        // ceiling commits reachable only through its other parents.
-        "--full-history".into(),
-        "--format=%H".into(),
-        format!("^{}", parents[0]),
-    ];
-    args.extend(parents[1..].iter().cloned());
-    args.extend(["--".into(), ceiling_path.into()]);
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let brought = git(workspace, &args)?;
-    for commit in brought.lines().filter(|line| !line.is_empty()) {
-        let commit_parents = parents_of(workspace, commit)?;
-        // A nested merge's own side commits are in this same range, so only
-        // its resolution needs judging here.
-        if commit_parents.len() > 1 {
-            judge_merge_result(workspace, commit, &commit_parents, ceiling_path)
-        } else {
-            judge_commit(workspace, commit, &commit_parents, ceiling_path)
-        }
-        .map_err(|e| format!("{e} (brought in by merge {revision} at {commit})"))?;
-    }
-    judge_merge_result(workspace, revision, parents, ceiling_path)
+        value.0,
+        first_value.map(|count| count.0),
+        &rules_for(ceiling_path),
+    )
 }
 
 fn ratchet(workspace: &Path, rows: RowCount, ceiling_path: &str) -> Result<(), String> {
-    let current = ceiling(&read(&workspace.join(ceiling_path))?)?;
-    at_most(rows, current)?;
-    let log = git(
-        workspace,
-        &[
-            "log",
-            "--first-parent",
-            "--reverse",
-            "--format=%H",
-            "HEAD",
-            "--",
-            ceiling_path,
-        ],
-    )?;
-    let revisions: Vec<_> = log.lines().filter(|line| !line.is_empty()).collect();
-    if revisions.is_empty() {
-        return Err("B3_RATCHET ceiling must have a tracked history anchor".into());
-    }
-    let mut previous = None;
-    for revision in revisions {
-        let revision_parents = parents_of(workspace, revision)?;
-        if revision_parents.len() > 1 {
-            judge_merge(workspace, revision, &revision_parents, ceiling_path)?;
-        }
-        let value = ceiling(&git(
-            workspace,
-            &["show", &format!("{revision}:{ceiling_path}")],
-        )?)?;
-        // A merge was judged above; a non-merge keeps the walk's own rule.
-        if let Some(previous) = previous.filter(|_| revision_parents.len() <= 1) {
-            let subject = git(workspace, &["show", "-s", "--format=%s", revision])?;
-            let files = git(
-                workspace,
-                &["diff-tree", "--no-commit-id", "--name-only", "-r", revision],
-            )?;
-            let files: Vec<_> = files.lines().map(str::to_string).collect();
-            monotonic(
-                previous,
-                value,
-                subject.trim(),
-                &files,
-                ceiling_path,
-                revision,
-            )?;
-        }
-        previous = Some(value);
-    }
-    let previous = previous.ok_or("B3_RATCHET missing history anchor")?;
-    if current > previous {
-        return Err("B3_RATCHET uncommitted ceiling increase".into());
-    }
-    Ok(())
+    merge_ratchet::ratchet(workspace, rows.0, &rules_for(ceiling_path))
 }
 
 #[test]

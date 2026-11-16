@@ -459,6 +459,10 @@ mod architecture_transmute_guard_test;
 mod architecture_layering_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/merge_ratchet.rs"]
+mod architecture_merge_ratchet;
+
+#[cfg(test)]
 #[path = "tests/architecture/moving_set.rs"]
 mod architecture_moving_set;
 
