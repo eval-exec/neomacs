@@ -1238,9 +1238,12 @@ mod unit_runtime {
             s::command_unwind_minibuffer_session,
             s::command_unwind_minibuffer_buffer,
             s::command_get_char_property,
-            s::command_try_completion,
-            s::command_all_completions,
-            s::command_test_completion,
+            // The real completion seam, the same functions eval's unit table
+            // and production publish -- display's unit runtime must not go
+            // through a refusal stand-in for a path it can evaluate.
+            neovm_eval::emacs_core::eval::data::minibuffer_entry::builtin_try_completion,
+            neovm_eval::emacs_core::eval::data::minibuffer_entry::builtin_all_completions,
+            neovm_eval::emacs_core::eval::data::minibuffer_entry::builtin_test_completion,
             s::command_menu_bar_top_level_items,
             s::command_key_binding,
             s::command_where_is_internal,
@@ -1288,11 +1291,13 @@ mod unit_runtime {
         CallInteractivelyHooks::new(s::call_interactively_resolve);
 
     static CASE_TABLES: CaseTableHooks = CaseTableHooks::new(
-        s::case_tables_canon,
-        s::case_tables_upcase,
-        s::case_tables_sync,
-        s::case_tables_standard,
-        s::case_tables_override_for_current_buffer,
+        // The real adapter, exactly as eval's unit table installs it; the
+        // refusal stand-ins are gone (they were never a product behaviour).
+        neovm_eval::emacs_core::eval::case_table_adapter::current_case_canon_table,
+        neovm_eval::emacs_core::eval::case_table_adapter::current_case_upcase_table,
+        neovm_eval::emacs_core::eval::case_table_adapter::sync_current_buffer_case_table_state,
+        neovm_eval::emacs_core::eval::case_table_adapter::standard_case_table_for_admission,
+        neovm_eval::emacs_core::eval::case_table_adapter::case_table_override_for_current_buffer,
     );
 
     static BUFFER_KILL: BufferKillHooks = BufferKillHooks::new(s::buffer_kill_before);

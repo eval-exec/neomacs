@@ -44,13 +44,6 @@ macro_rules! eval_absent_layer_slots {
             use std::any::Any;
             use std::sync::{Mutex, OnceLock};
 
-            /// Honest absent value for `case_tables_sync`: an eval-only
-            /// runtime has no case-table registry, so there is nothing to
-            /// sync and the operation succeeds. A const path keeps the
-            /// signed H2 two-statement slot shape (the guard's honest-value
-            /// classifier rejects a constructor call).
-            pub(crate) const CASE_TABLES_SYNC_OK: Result<(), Flow> = Ok(());
-
             /// The two hit classes (C2): a refused service call is a real
             /// incompatibility for this build; an unlinked slot is an expected
             /// absent-by-construction no-op.
@@ -542,18 +535,6 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER core::command.get_char_property");
             }
 
-            pub(crate) fn command_try_completion(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
-                absent_layer_panic("ABSENT-LAYER core::command.try_completion");
-            }
-
-            pub(crate) fn command_all_completions(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
-                absent_layer_panic("ABSENT-LAYER core::command.all_completions");
-            }
-
-            pub(crate) fn command_test_completion(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
-                absent_layer_panic("ABSENT-LAYER core::command.test_completion");
-            }
-
             pub(crate) fn command_menu_bar_top_level_items(ctx: &Context) -> Vec<(Value, String)> {
                 absent_layer_panic("ABSENT-LAYER core::command.menu_bar_top_level_items");
             }
@@ -682,27 +663,6 @@ macro_rules! eval_absent_layer_slots {
 
             pub(crate) fn call_interactively_resolve(ctx: &mut Context, plan: &mut CallInteractivelyPlan) -> Result<(Value, Vec<Value>), Flow> {
                 absent_layer_panic("ABSENT-LAYER core::call_interactively.resolve");
-            }
-
-            pub(crate) fn case_tables_canon(ctx: &mut Context) -> Result<Value, Flow> {
-                absent_layer_panic("ABSENT-LAYER core::case_tables.canon");
-            }
-
-            pub(crate) fn case_tables_upcase(ctx: &mut Context) -> Result<Value, Flow> {
-                absent_layer_panic("ABSENT-LAYER core::case_tables.upcase");
-            }
-
-            pub(crate) fn case_tables_sync(_ctx: &mut Context) -> Result<(), Flow> {
-                absent_layer_unlinked("ABSENT-LAYER core::case_tables.sync");
-                CASE_TABLES_SYNC_OK
-            }
-
-            pub(crate) fn case_tables_standard(ctx: &mut Context) -> Result<Value, Flow> {
-                absent_layer_panic("ABSENT-LAYER core::case_tables.standard");
-            }
-
-            pub(crate) fn case_tables_override_for_current_buffer(ctx: &mut Context) -> Result<neovm_text::emacs_core::casetab::CaseTableOverride, Flow> {
-                absent_layer_panic("ABSENT-LAYER core::case_tables.override_for_current_buffer");
             }
 
             pub(crate) fn buffer_kill_before(ctx: &mut Context, killed: neovm_edit::buffer::BufferId, killed_value: Value) -> Result<Option<neovm_edit::buffer::BufferId>, Flow> {

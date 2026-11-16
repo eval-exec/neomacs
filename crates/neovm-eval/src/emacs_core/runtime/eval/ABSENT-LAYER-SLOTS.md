@@ -9,9 +9,13 @@ changed.
 
 ## Method
 
-- Source of the list: every `"ABSENT-LAYER <marker>"` in `absent_layer.rs`
-  (132 entries, 131 distinct markers; `display::fontset.alias_alist_startup_value`
-  is named by both the marker helper and the slot function).
+- Source of the list: every `"ABSENT-LAYER <marker>"` in `absent_layer.rs`.
+  The original survey covered 131 distinct markers (132 entries;
+  `display::fontset.alias_alist_startup_value` is named by both the marker
+  helper and the slot function). The eight stand-ins that no unit table
+  installed were then deleted; this table documents the remaining 123
+  distinct markers (123 rows; the original 132 entries contained one
+  duplicate marker row for the fontset alias).
 - Install status: cross-checked against the hook tables in
   `crates/neovm-eval/src/test_utils.rs` (`LIFECYCLE`, `INPUT`, `PROCESS`,
   `CASE_TABLES`, `KMACRO`, `DISPLAY_QUERY`, `DISPLAY_WINDOW`, `PERF`, `SET`,
@@ -47,8 +51,10 @@ changed.
   active module env, empty process table). The fix-forward names the state and
   asserts its premise, returning the exact value instead of panicking.
 
-Counts: (a) 50, (b) 42, (c) 31, NOT-INSTALLED 8 (these eight are not live
-stand-ins; if they stay, they belong in class (a) as dead code).
+Counts after the deletion: (a) 50, (b) 42, (c) 31 (123 rows). The eight deleted stand-ins were classed (a)
+in the original survey; they were the three completion seams and the five
+case-table seams, and `neovm-display`'s unit runtime now installs the real
+eval functions in their place.
 
 ## system:: (37)
 
@@ -169,18 +175,10 @@ stand-ins; if they stay, they belong in class (a) as dead code).
 | core::command.unwind_minibuffer_session | panic | lifecycle.rs:1210 | NativeUnwindAction::run (eval/mod.rs:1539); action recorded only by core read_minibuf | a |
 | core::command.unwind_minibuffer_buffer | panic | lifecycle.rs:1215 | NativeUnwindAction::run (eval/mod.rs:1542); recorded only by core read_minibuf | a |
 | core::command.get_char_property | panic | lifecycle.rs:1220 | Context::adjust_point_for_property (vm_shared.rs:121) from core command_loop_1 (core/keyboard/command_loop.rs:956) | a |
-| core::command.try_completion | panic | lifecycle.rs:1225 | NOT-INSTALLED: unit table installs the real `builtin_try_completion` (test_utils.rs:695) | a |
-| core::command.all_completions | panic | lifecycle.rs:1230 | NOT-INSTALLED: real `builtin_all_completions` (test_utils.rs:696) | a |
-| core::command.test_completion | panic | lifecycle.rs:1235 | NOT-INSTALLED: real `builtin_test_completion` (test_utils.rs:700) | a |
 | core::command.menu_bar_top_level_items | panic | lifecycle.rs:1240 | display menu-bar navigation (neovm-display/display/mod.rs:1679) | a |
 | core::command.key_binding | panic | lifecycle.rs:1245 | display menu shortcut resolver (display/menu/shortcuts.rs:30); Lisp `key-binding` registers core builtin directly | a |
 | core::command.where_is_internal | panic | lifecycle.rs:1250 | display menu shortcut resolver (shortcuts.rs:39); Lisp `where-is-internal` registers core builtin directly | a |
 | core::call_interactively.resolve | panic | call_interactively.rs:656 | eval VM `call-interactively` dispatch (vm.rs:10548); resolver body is core callint | b |
-| core::case_tables.canon | panic | case_tables.rs:132 | NOT-INSTALLED: unit table installs the real adapter `current_case_canon_table` (test_utils.rs:800) | a |
-| core::case_tables.upcase | panic | case_tables.rs:137 | NOT-INSTALLED: real `current_case_upcase_table` | a |
-| core::case_tables.sync | unlinked | case_tables.rs:142 | NOT-INSTALLED: real `sync_current_buffer_case_table_state` | a |
-| core::case_tables.standard | panic | case_tables.rs:147 | NOT-INSTALLED: real `standard_case_table_for_admission` | a |
-| core::case_tables.override_for_current_buffer | panic | case_tables.rs:152 | NOT-INSTALLED: real `case_table_override_for_current_buffer` | a |
 | core::buffer_kill.before | panic | buffer_kill.rs:74 | green_before_buffer_killed (green/api.rs:225) from core `kill-buffer`; requires a parked green thread; unit runtime registers kill-buffer as a panicking subr | a |
 | core::kmacro.start | panic | kmacro_hooks.rs:115 | eval VM dispatch of `start-kbd-macro` (vm.rs:10437); body is core kmacro | b |
 | core::kmacro.end | panic | kmacro_hooks.rs:120 | eval VM dispatch of `end-kbd-macro` (vm.rs:10443); core-owned | b |
@@ -205,10 +203,10 @@ stand-ins; if they stay, they belong in class (a) as dead code).
 
 ## Notes for the follow-up commits
 
-- Eight stand-ins are dead in eval (`NOT-INSTALLED`): the three completion
-  seams and the five case-table seams. The unit tables install real core
-  functions there. Deleting the stand-ins is a no-behaviour-change cleanup;
-  keeping them costs nothing but they cannot be "fixed".
+- The eight never-installed stand-ins (three completion seams, five case-table
+  seams) have been deleted. `neovm-display`'s unit runtime installed those
+  stand-ins, so it now installs the real eval functions instead; the eval
+  unit table already did.
 - Five slots are already substituted by exact unit implementations
   (`unit_process_shutdown_noop`, the exact OS-signal pending/drain,
   `unit_wait_for_duration_until_timer_deadline`, `unit_boot_seed_batch_startup_frame`,
