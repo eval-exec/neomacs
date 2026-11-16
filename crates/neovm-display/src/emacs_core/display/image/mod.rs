@@ -1682,7 +1682,7 @@ pub(crate) fn builtin_image_type(args: Vec<Value>) -> EvalResult {
 /// treat this as a promise and stop supplying their own fallback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
-pub enum ImageTransform {
+pub(crate) enum ImageTransform {
     /// Resize to `:scale` / `:width` / `:height`. Implemented by
     /// `ImageScalePolicy` and `ImageRealization` in the layout engine.
     Scale,

@@ -63,7 +63,7 @@ pub(crate) use size::{
     HorizontalScroll, SplitSizeError, SplitSizes, WindowPixelOperation, WindowPixels,
     WindowSizeError,
 };
-pub use size::{NewTotalUpdate, WindowPixelStage, WindowTotal};
+pub(crate) use size::{NewTotalUpdate, WindowPixelStage, WindowTotal};
 pub mod split;
 mod string_property_input;
 mod word_wrap;
@@ -78,33 +78,36 @@ pub use part::{
     WindowPartGeometry,
 };
 use sibling_layout::{ChildExtent, sibling_bounds};
-pub use split::{CombinationLimit, DeleteOutcome, DeleteResize, ParentSeal, SplitAttachment};
+pub(crate) use split::{
+    CombinationLimit, DeleteOutcome, DeleteResize, ParentSeal, SplitAttachment,
+};
 
 mod display_ext;
 #[cfg(test)]
 pub(crate) use display_ext::DisplayFrameTestExt;
+pub(crate) use display_ext::DisplayWindowTreeExt;
 #[doc(hidden)]
 pub use display_ext::resize_pixelwise_with_buffer_constraints;
-pub use display_ext::{
-    DisplayFrameExt, DisplayFrameManagerExt, DisplayWindowExt, DisplayWindowTreeExt,
-};
+pub use display_ext::{DisplayFrameExt, DisplayFrameManagerExt, DisplayWindowExt};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use display_ext::{
     commit_redisplay_cache_for_test, prepare_and_activate_display_presentation_for_test,
     replace_redisplay_cache_for_test,
 };
 
-pub use display::{WindowBufferDisplayDefaults, WindowFringeDefaults, WindowScrollBarDefaults};
+pub(crate) use display::{
+    WindowBufferDisplayDefaults, WindowFringeDefaults, WindowScrollBarDefaults,
+};
 pub(crate) use display::{frame_config_scroll_bar_height, frame_config_scroll_bar_width};
-pub use frame_params::{
-    CursorTypeSymbol, FrameFullscreen, FrameParam, FrameParamKey, FrameToolBarPosition,
-    FrameZGroup, GNU_FRAME_PARAM_COUNT, GNU_FRAME_PARAMS,
+pub use frame_params::{CursorTypeSymbol, FrameFullscreen, FrameParam, FrameParamKey};
+pub(crate) use frame_params::{
+    FrameToolBarPosition, FrameZGroup, GNU_FRAME_PARAM_COUNT, GNU_FRAME_PARAMS,
 };
 pub(crate) use neovm_eval::emacs_core::eval::data::window_layout_query::WindowLayoutQueryAdapter;
 pub use neovm_eval::emacs_core::eval::data::window_state::WindowScrollBarGeometry;
-pub use scroll_bar::{
-    HorizontalScrollBarType, VerticalScrollBarType, is_valid_horizontal_scroll_bar_value,
-    is_valid_vertical_scroll_bar_value,
+pub use scroll_bar::{HorizontalScrollBarType, VerticalScrollBarType};
+pub(crate) use scroll_bar::{
+    is_valid_horizontal_scroll_bar_value, is_valid_vertical_scroll_bar_value,
 };
 
 // ---------------------------------------------------------------------------
@@ -157,8 +160,8 @@ pub(crate) use neovm_eval::emacs_core::eval::data::window_state::{
 pub struct RenderFrameNode {
     pub frame_id: FrameId,
     pub parent_id: Option<FrameId>,
-    pub origin_in_root_x: f32,
-    pub origin_in_root_y: f32,
+    pub(crate) origin_in_root_x: f32,
+    pub(crate) origin_in_root_y: f32,
     pub z_order: i32,
 }
 
@@ -187,13 +190,13 @@ pub use neovm_value::display_vocab::RenderFrameVisibility;
 pub use neovm_value::display_vocab::FRAME_ID_BASE;
 
 /// GNU `DEFAULT_TOOL_BAR_LABEL_SIZE` in `src/dispextern.h`.
-pub const DEFAULT_TOOL_BAR_LABEL_SIZE: f32 = 14.0;
+pub(crate) const DEFAULT_TOOL_BAR_LABEL_SIZE: f32 = 14.0;
 /// GNU `DEFAULT_TOOL_BAR_BUTTON_MARGIN` in `src/dispextern.h`.
-pub const DEFAULT_TOOL_BAR_BUTTON_MARGIN: f32 = 4.0;
+pub(crate) const DEFAULT_TOOL_BAR_BUTTON_MARGIN: f32 = 4.0;
 /// GNU `DEFAULT_TOOL_BAR_BUTTON_RELIEF` in `src/dispextern.h`.
-pub const DEFAULT_TOOL_BAR_BUTTON_RELIEF: f32 = 1.0;
+pub(crate) const DEFAULT_TOOL_BAR_BUTTON_RELIEF: f32 = 1.0;
 /// GNU `DEFAULT_TOOL_BAR_IMAGE_HEIGHT` in `src/dispextern.h`.
-pub const DEFAULT_TOOL_BAR_IMAGE_HEIGHT: f32 = 24.0;
+pub(crate) const DEFAULT_TOOL_BAR_IMAGE_HEIGHT: f32 = 24.0;
 
 pub fn default_gui_tool_bar_line_height(font_pixel_size: f32) -> u32 {
     let scale = if font_pixel_size.is_finite() && font_pixel_size > 0.0 {
@@ -306,7 +309,7 @@ impl<'a> WindowOutputUpdate<'a> {
         self.commit();
     }
 
-    pub fn finalize_with_output_fallback(
+    pub(crate) fn finalize_with_output_fallback(
         &mut self,
         logical_cursor: Option<WindowCursorPos>,
         phys_cursor: Option<WindowCursorSnapshot>,
@@ -318,7 +321,7 @@ impl<'a> WindowOutputUpdate<'a> {
         self.commit();
     }
 
-    pub fn replay_snapshot(&mut self, snapshot: &WindowDisplaySnapshot) {
+    pub(crate) fn replay_snapshot(&mut self, snapshot: &WindowDisplaySnapshot) {
         self.begin_update();
         self.install_logical_cursor(snapshot.logical_cursor_pos());
         self.replay_output_rows(&snapshot.rows);
@@ -1317,7 +1320,7 @@ fn find_first_child_in_tree(
 }
 
 /// Return the parent of WINDOW-ID inside FRAME, if any.
-pub fn window_parent_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
+pub(crate) fn window_parent_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
     if frame.minibuffer_window == Some(window_id) {
         return None;
     }
@@ -1325,7 +1328,7 @@ pub fn window_parent_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> 
 }
 
 /// Return the first child of WINDOW-ID when it is combined in DIRECTION.
-pub fn window_first_child_id(
+pub(crate) fn window_first_child_id(
     frame: &Frame,
     window_id: WindowId,
     direction: SplitDirection,
@@ -1337,7 +1340,7 @@ pub fn window_first_child_id(
 }
 
 /// Return the next sibling of WINDOW-ID, if any.
-pub fn window_next_sibling_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
+pub(crate) fn window_next_sibling_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
     if frame.minibuffer_window == Some(window_id) {
         return None;
     }
@@ -1348,7 +1351,7 @@ pub fn window_next_sibling_id(frame: &Frame, window_id: WindowId) -> Option<Wind
 }
 
 /// Return the previous sibling of WINDOW-ID, if any.
-pub fn window_prev_sibling_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
+pub(crate) fn window_prev_sibling_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
     if frame.minibuffer_window == Some(window_id) {
         return frame
             .minibuffer_leaf
@@ -1576,7 +1579,7 @@ pub fn window_resize_check(
 /// Apply only character-grid sizes and edges, like GNU window_resize_apply_total.
 /// Pixel geometry was already committed by window_resize_apply and must not
 /// be reconstructed from rounded cell counts.
-pub fn window_resize_apply_total(
+pub(crate) fn window_resize_apply_total(
     tree: &mut WindowTree,
     id: WindowId,
     horflag: bool,

@@ -34,7 +34,7 @@ pub use neovm_edit::emacs_core::edit_host::EditHost;
 pub use tooltip::{builtin_x_hide_tip_eval, builtin_x_show_tip_eval};
 
 /// Clear cached thread-local display values (must be called when heap changes).
-pub fn reset_display_thread_locals() {
+pub(crate) fn reset_display_thread_locals() {
     super::terminal::pure::reset_terminal_thread_locals();
     super::dispnew::pure::reset_dispnew_thread_locals();
 }

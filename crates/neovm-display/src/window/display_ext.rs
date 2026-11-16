@@ -59,7 +59,7 @@ impl DisplayWindowExt for Window {
 }
 
 /// Window-tree behaviour that binds the sibling layout algorithm.
-pub trait DisplayWindowTreeExt {
+pub(crate) trait DisplayWindowTreeExt {
     fn sibling_bounds_of(&self, parent: WindowId, bounds: Rect) -> Vec<Rect>;
     fn redistribute_bounds(&mut self, parent: WindowId, bounds: Rect);
 }

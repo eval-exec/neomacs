@@ -54,7 +54,7 @@ use super::SplitDirection;
 /// spreads the space across all siblings via `window--resize-siblings` — which
 /// is why re-deriving "give it to the neighbour" in Rust would be wrong too.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeleteResize {
+pub(crate) enum DeleteResize {
     /// Commit the sizes `window.el` staged in `new_pixel` — what the GNU
     /// primitive does, and what the Lisp entry point must ask for.
     ApplyStaged,
@@ -74,7 +74,7 @@ pub enum DeleteResize {
 /// recombine; addressing windows by id means the promotion knows its own
 /// grandparent and recombines there, which is where the "only then" now lives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeleteOutcome {
+pub(crate) enum DeleteOutcome {
     /// The target is not in this tree.
     NotFound,
     /// The target was removed.
@@ -98,7 +98,7 @@ impl DeleteOutcome {
 /// when it recognises its own symbol; by the time the split runs, only "is it
 /// `t`?" is left to ask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CombinationLimit {
+pub(crate) enum CombinationLimit {
     /// The variable is exactly `t`: always interpose a fresh parent window,
     /// and seal that parent against later recombination.
     ForceNewParent,
@@ -109,7 +109,7 @@ pub enum CombinationLimit {
 impl CombinationLimit {
     /// Decode the dynamic variable's value. Only the symbol `t` forces a new
     /// parent (GNU `EQ (Vwindow_combination_limit, Qt)`).
-    pub fn from_is_t(is_t: bool) -> Self {
+    pub(crate) fn from_is_t(is_t: bool) -> Self {
         if is_t {
             Self::ForceNewParent
         } else {
@@ -134,7 +134,7 @@ impl CombinationLimit {
 /// ortho-combined stays unsealed, so deleting one of its children may later
 /// splice the rest into the grandparent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ParentSeal {
+pub(crate) enum ParentSeal {
     /// `w->combination_limit` = `t`: children must never be merged upward.
     Sealed,
     /// `w->combination_limit` = `nil`: recombination is allowed.
@@ -143,7 +143,7 @@ pub enum ParentSeal {
 
 impl ParentSeal {
     /// The stored slot value, in the `bool` shape the window node uses.
-    pub fn as_stored_slot(self) -> bool {
+    pub(crate) fn as_stored_slot(self) -> bool {
         matches!(self, Self::Sealed)
     }
 }
@@ -154,11 +154,11 @@ impl ParentSeal {
 /// sentinel direction is what keeps GNU's `NILP (o->parent)` term from being
 /// silently forgotten: the caller cannot construct this value without
 /// answering the question.
-pub type ParentCombination = Option<SplitDirection>;
+pub(crate) type ParentCombination = Option<SplitDirection>;
 
 /// Where the new window attaches to the tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SplitAttachment {
+pub(crate) enum SplitAttachment {
     /// Replace the target with a fresh internal node whose children are the
     /// target and the new window (GNU `make_parent_window` +
     /// `replace_window`).
@@ -202,7 +202,7 @@ impl SplitAttachment {
     ///
     /// [`Self::ReuseParent`] interposes no parent, so the question does not
     /// arise; it answers [`ParentSeal::Unsealed`], which is inert.
-    pub fn new_parent_seal(self) -> ParentSeal {
+    pub(crate) fn new_parent_seal(self) -> ParentSeal {
         match self {
             Self::NewParent(seal) => seal,
             Self::ReuseParent => ParentSeal::Unsealed,
@@ -210,7 +210,7 @@ impl SplitAttachment {
     }
 
     /// Whether the new window joins the target's existing combination.
-    pub fn reuses_parent(self) -> bool {
+    pub(crate) fn reuses_parent(self) -> bool {
         matches!(self, Self::ReuseParent)
     }
 }

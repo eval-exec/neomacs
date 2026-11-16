@@ -28,7 +28,7 @@ use native_policy::{SharedFontsetEntries, StoredFontsetEntry};
 use strum::{EnumString, IntoStaticStr};
 
 pub const DEFAULT_FONTSET_NAME: &str = "-*-*-*-*-*-*-*-*-*-*-*-*-fontset-default";
-pub const DEFAULT_FONTSET_ALIAS: &str = "fontset-default";
+pub(crate) const DEFAULT_FONTSET_ALIAS: &str = "fontset-default";
 
 fn fontset_string_text(value: &Value) -> Option<String> {
     // Issue #131: read the value's real Emacs bytes (lossy UTF-8 view) rather than
@@ -434,7 +434,7 @@ impl StoredFontSpecExt for StoredFontSpec {
 // The default bodies above are the implementation; this binds them to the
 // upper-layer type that owns the state.
 
-pub fn repertory_target_ranges(repertory: &FontRepertory) -> Option<Vec<(u32, u32)>> {
+pub(crate) fn repertory_target_ranges(repertory: &FontRepertory) -> Option<Vec<(u32, u32)>> {
     match repertory {
         FontRepertory::Charset(name) => charset_target_ranges(resolve_sym(*name)),
         FontRepertory::CharTableRanges(ranges) => Some(ranges.clone()),
@@ -834,7 +834,10 @@ pub(crate) fn resolve_fontset_name_arg(value: &Value) -> Result<String, Flow> {
 /// entries discard encoding/repertory metadata without loading or expanding
 /// charset maps. Informational pattern queries retain that metadata through
 /// the ordinary reader.
-pub fn bounded_entries_for_char(ch: char, max_entries: usize) -> Option<(u64, Vec<FontSpecEntry>)> {
+pub(crate) fn bounded_entries_for_char(
+    ch: char,
+    max_entries: usize,
+) -> Option<(u64, Vec<FontSpecEntry>)> {
     let slot = registry().read().ok()?;
     let data = slot
         .fontsets
