@@ -17,12 +17,13 @@ use crate::transfer::{self, Call, TransferError};
 use crate::{WorkerConfig, WorkerRuntime, WorkerStartError, eval_error_to_task_error};
 use neovm_core::TaskScheduler;
 use neovm_core::emacs_core::eval::Context;
+use neovm_core::emacs_core::load::{RuntimeImageRole, runtime_image_available};
 use neovm_core::emacs_core::print::print_value_with_eval;
 use neovm_host_abi::{LispValue, Signal, TaskError};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Environment override for the pool width.
 pub const THREADS_ENV: &str = "NEOMACS_WORKER_THREADS";
@@ -31,6 +32,10 @@ pub const THREADS_ENV: &str = "NEOMACS_WORKER_THREADS";
 pub const ERROR_SYMBOL: &str = "neomacs-worker-error";
 /// The condition a value that cannot cross the boundary signals as.
 pub const TRANSFER_ERROR_SYMBOL: &str = "neomacs-worker-transfer-error";
+
+/// How long `close` waits for the owners altogether before leaving the
+/// stragglers to process exit.
+const OWNER_JOIN_BUDGET: Duration = Duration::from_secs(2);
 
 /// Stack for an owner thread: the GUI evaluator's 64 MiB, since an isolate
 /// runs the same evaluator and a shipped binary sets no `RUST_MIN_STACK`.
@@ -225,10 +230,20 @@ impl IsolatePool {
         if self.started.get().is_some() {
             self.wait_started();
         }
+        // Cancellation reaches a running task only at its next safepoint, and
+        // a primitive that never polls (a blocking read, a long native call)
+        // has none. Exit must not hang on it: owners are joined for a bounded
+        // time and the rest are left to die with the process.
         let owners =
             std::mem::take(&mut *self.owners.lock().expect("owner handles mutex poisoned"));
+        let deadline = Instant::now() + OWNER_JOIN_BUDGET;
         for owner in owners {
-            let _ = owner.join();
+            while !owner.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if owner.is_finished() {
+                let _ = owner.join();
+            }
         }
     }
 

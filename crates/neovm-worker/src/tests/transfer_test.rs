@@ -379,7 +379,10 @@ fn wire_decoder_rejects_bool_vectors_with_inconsistent_word_counts() {
     bytes.extend_from_slice(&65_u64.to_le_bytes()); // nbits requires two words
     bytes.extend_from_slice(&0_u64.to_le_bytes()); // but the wire has none
 
-    assert!(matches!(transfer::decode(&bytes), Err(TransferError::Decode(_))));
+    assert!(matches!(
+        transfer::decode(&bytes),
+        Err(TransferError::Decode(_))
+    ));
 }
 
 #[test]

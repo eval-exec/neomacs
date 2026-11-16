@@ -81,18 +81,20 @@ The intended build opt-in is the Cargo feature `worker-isolates`, off by
 default. The intended Lisp capability check is
 `(featurep 'neomacs-worker-isolates)`. The explicit worker API is the runtime
 opt-in: work runs on an owner only after a call to `neomacs-worker-run`.
-`neomacs-worker-pool-size` is intended to be the pool setting, with zero
-disabling the pool. These feature and variable details are defined by the
-slice interfaces and this POC prompt; they are not in the checked-out base
-series. **UNVERIFIED.**
+`neomacs-worker-pool-size` is the pool setting: nil selects the available
+parallelism, 0 disables the pool (every `neomacs-worker-run` signals
+`neomacs-worker-error`, checked at each call), N starts N owners; a positive
+width is decided at the first task.
 
-<!-- verify against slice S4 -->
-The package-author interface is defined by the base series and the S4
-interface: `neomacs-worker-pmap` maps a function over values in parallel,
-and `neomacs-worker-call` starts a call for later collection. When worker
-execution is unavailable, the library runs the function serially. The
-contract is the same values, with only elapsed time differing. The S4 Lisp
-library is not present in the base series. **UNVERIFIED.**
+The package-author interface lives in `lisp/neomacs-worker.el`
+(`require`d, not preloaded): `neomacs-worker-available-p`,
+`neomacs-worker-call` (a call to collect later with `neomacs-worker-wait*`)
+and `neomacs-worker-pmap` (map a function over a list, one task per
+element, values in order). When worker execution is unavailable (feature
+off, pool size 0, or `neomacs-worker--force-serial`), the same functions
+run serially on the main thread and return the same values; only elapsed
+time differs. `test/lisp/neomacs-worker-tests.el` runs each function in
+both modes and compares the results.
 
 ```elisp
 (neomacs-worker-pmap #'json-parse-string json-strings)

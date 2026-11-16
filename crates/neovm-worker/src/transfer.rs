@@ -541,7 +541,11 @@ pub fn encode_call(call: &Call) -> Vec<u8> {
 
 /// Parse one value.
 pub fn decode(bytes: &[u8]) -> Result<Transfer, TransferError> {
-    let mut reader = Reader { bytes, at: 0 };
+    let mut reader = Reader {
+        bytes,
+        at: 0,
+        depth: 0,
+    };
     let value = reader.transfer()?;
     reader.finish()?;
     Ok(value)
@@ -549,7 +553,11 @@ pub fn decode(bytes: &[u8]) -> Result<Transfer, TransferError> {
 
 /// Parse a call.
 pub fn decode_call(bytes: &[u8]) -> Result<Call, TransferError> {
-    let mut reader = Reader { bytes, at: 0 };
+    let mut reader = Reader {
+        bytes,
+        at: 0,
+        depth: 0,
+    };
     if reader.take(CALL_MAGIC.len())? != CALL_MAGIC {
         return Err(TransferError::Decode("not a call".to_string()));
     }
@@ -673,6 +681,9 @@ fn write_transfer(out: &mut Vec<u8>, transfer: &Transfer) {
 struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
+    /// Nesting of the value being decoded; bounded like the walk, so hostile
+    /// bytes cannot recurse deeper than a value the walk would have refused.
+    depth: usize,
 }
 
 impl<'a> Reader<'a> {
@@ -725,6 +736,16 @@ impl<'a> Reader<'a> {
     }
 
     fn transfer(&mut self) -> Result<Transfer, TransferError> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(TransferError::TooDeep);
+        }
+        let value = self.transfer_at_depth();
+        self.depth -= 1;
+        value
+    }
+
+    fn transfer_at_depth(&mut self) -> Result<Transfer, TransferError> {
         Ok(match self.byte()? {
             TAG_NIL => Transfer::Nil,
             TAG_T => Transfer::T,
@@ -754,6 +775,13 @@ impl<'a> Reader<'a> {
             TAG_BOOL_VECTOR => {
                 let nbits = self.u64()?;
                 let count = self.len()?;
+                // The constructor asserts the word count matches the bit
+                // count; the wire must prove it before anything is built.
+                if count as u64 != nbits.div_ceil(64) {
+                    return Err(TransferError::Decode(format!(
+                        "bool-vector of {nbits} bits with {count} words"
+                    )));
+                }
                 let mut words = Vec::with_capacity(count.min(4096));
                 for _ in 0..count {
                     words.push(self.u64()?);

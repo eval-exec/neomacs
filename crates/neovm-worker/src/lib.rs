@@ -1082,15 +1082,24 @@ impl WorkerRuntime {
                         continue;
                     }
 
-                    if !task.mark_running() {
-                        continue;
-                    }
-
+                    // The hook goes in BEFORE the task is Running: a cancel
+                    // that sees Running must find it, or the body would run
+                    // to completion uninterrupted.
                     if let Some(interrupt) = &interrupt {
                         *task
                             .interrupt
                             .lock()
                             .expect("task interrupt mutex poisoned") = Some(interrupt.clone());
+                    }
+                    if !task.mark_running() {
+                        if interrupt.is_some() {
+                            *task
+                                .interrupt
+                                .lock()
+                                .expect("task interrupt mutex poisoned") = None;
+                            executor.lower_quit();
+                        }
+                        continue;
                     }
                     let execution = executor.execute(&task.form, &task.opts, &task.context);
                     // Under the lock a cancel holds while raising; once

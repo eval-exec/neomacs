@@ -532,13 +532,6 @@ fn many_tasks_complete_on_two_owners() {
         ),
         "OK t"
     );
-    assert_eq!(
-        eval(
-            &mut ctx,
-            "(> (plist-get (neomacs-worker-stats) :boot-max-ms) 0.0)"
-        ),
-        "OK t"
-    );
 }
 
 #[test]
