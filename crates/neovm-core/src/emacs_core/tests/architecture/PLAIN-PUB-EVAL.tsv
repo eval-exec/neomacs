@@ -3553,27 +3553,15 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/mapped_heap.rs	field	MappedBytes 
 crates/neovm-eval/src/emacs_core/runtime/pdump/mapped_heap.rs	field	MappedBytes field ptr
 crates/neovm-eval/src/emacs_core/runtime/pdump/mapped_heap.rs	field	MappedHeapPayload field bytes
 crates/neovm-eval/src/emacs_core/runtime/pdump/mapped_heap.rs	field	MappedHeapPayload field relocations
-crates/neovm-eval/src/emacs_core/runtime/pdump/mapped_heap.rs	field	MappedHeapPayload field value_fixups
-crates/neovm-eval/src/emacs_core/runtime/pdump/mmap_image.rs	enum	enum DumpSectionKind
-crates/neovm-eval/src/emacs_core/runtime/pdump/mmap_image.rs	field	ImageRelocation field addend
-crates/neovm-eval/src/emacs_core/runtime/pdump/mmap_image.rs	field	ImageRelocation field location_offset
 crates/neovm-eval/src/emacs_core/runtime/pdump/mmap_image.rs	field	ImageSection field bytes
 crates/neovm-eval/src/emacs_core/runtime/pdump/mmap_image.rs	field	ImageSection field flags
 crates/neovm-eval/src/emacs_core/runtime/pdump/mmap_image.rs	field	ImageSection field kind
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	enum	enum DumpError
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	enum	enum DumpIoPhase
-crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn clone_active_evaluator
-crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn clone_evaluator
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn dump_to_file
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn fingerprint_hex
-crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn impl DumpError::write_io
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn impl DumpIoPhase::action
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn load_from_dump_with_proof
-crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn restore_active_runtime
-crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn restore_snapshot
-crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn snapshot_active_evaluator
-crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn snapshot_active_runtime
-crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn snapshot_evaluator
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	mod	mod convert
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	mod	mod runtime
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	mod	mod types
@@ -3586,54 +3574,22 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/roots_image.rs	field	DumpRootStat
 crates/neovm-eval/src/emacs_core/runtime/pdump/roots_image.rs	field	DumpRootState field loads_in_progress
 crates/neovm-eval/src/emacs_core/runtime/pdump/roots_image.rs	field	DumpRootState field require_stack
 crates/neovm-eval/src/emacs_core/runtime/pdump/roots_image.rs	field	DumpRootState field standard_category_table
-crates/neovm-eval/src/emacs_core/runtime/pdump/roots_image.rs	field	DumpRootState field standard_syntax_table
-crates/neovm-eval/src/emacs_core/runtime/pdump/roots_image.rs	field	DumpRootState field syntax_code_objects
 crates/neovm-eval/src/emacs_core/runtime/pdump/runtime_managers_image.rs	field	RuntimeManagersState field abbrevs
 crates/neovm-eval/src/emacs_core/runtime/pdump/runtime_managers_image.rs	field	RuntimeManagersState field bookmarks
 crates/neovm-eval/src/emacs_core/runtime/pdump/runtime_managers_image.rs	field	RuntimeManagersState field custom
-crates/neovm-eval/src/emacs_core/runtime/pdump/runtime_managers_image.rs	field	RuntimeManagersState field fontset_registry
 crates/neovm-eval/src/emacs_core/runtime/pdump/runtime_managers_image.rs	field	RuntimeManagersState field interactive
 crates/neovm-eval/src/emacs_core/runtime/pdump/runtime_managers_image.rs	field	RuntimeManagersState field kmacro
 crates/neovm-eval/src/emacs_core/runtime/pdump/runtime_managers_image.rs	field	RuntimeManagersState field modes
 crates/neovm-eval/src/emacs_core/runtime/pdump/runtime_managers_image.rs	field	RuntimeManagersState field rectangle
 crates/neovm-eval/src/emacs_core/runtime/pdump/runtime_managers_image.rs	field	RuntimeManagersState field registers
 crates/neovm-eval/src/emacs_core/runtime/pdump/runtime_managers_image.rs	field	RuntimeManagersState field watchers
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpAutoloadType
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpBoxStyle
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpBufferTextBackendKind
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpByteCodeInstructions
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpByteCodeKeyPart
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpByteData
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpCharsetMethod
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpEolType
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpFaceHeight
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpFontRepertory
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpFontSlant
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpFontSpecEntry
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpFontWidth
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpFunctionParams
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpFunctionParamsKind
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpHashKey
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpHashTableTest
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpHashTableWeakness
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpHeapObject
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpLocalizedForwarder
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpModeCustomType
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpRegisterContent
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpRuntimeBindingValue
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpSymbolVal
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpUnderlineStyle
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpUndoRecord
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	enum	enum DumpValue
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrev field count
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrev field expansion
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrev field hook
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrev field system
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrevManager field abbrev_mode
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrevManager field global_table_name
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrevManager field global_table_sym
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrevManager field tables
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrevManager field tables_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrevTable field abbrevs
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrevTable field case_fixed
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpAbbrevTable field enable_quoting
@@ -3660,27 +3616,21 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBookmark field
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBookmark field position
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBookmark field rear_context
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBookmarkManager field bookmarks
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBookmarkManager field bookmarks_lisp
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBookmarkManager field recent
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBoxBorder field color
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBoxBorder field style
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBoxBorder field width
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field auto_save_failure_time
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field auto_save_file_name
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field auto_save_file_name_lisp
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field autosave_modified_tick
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field base_buffer
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field begv
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field begv_char
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field chars_modified_tick
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field file_name
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field file_name_lisp
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field id
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field last_name
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field last_name_lisp
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field last_window_start
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field local_binding_names
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field local_binding_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field local_flags
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field local_map
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field local_var_alist
@@ -3690,23 +3640,16 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field m
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field markers
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field modified
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field modified_tick
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field modtime_nsec
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field modtime_sec
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field modtime_size
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field multibyte
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field name
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field name_lisp
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field overlays
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field properties
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field properties_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field pt
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field pt_char
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field read_only
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field save_modified_tick
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field slots
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field state_begv_marker
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field state_pt_marker
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field state_zv_marker
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field text
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field text_props
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field undo_list
@@ -3722,9 +3665,7 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBufferText fie
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBufferText field text
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpByteCodeFunction field arglist
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpByteCodeFunction field closure_slot_count
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpByteCodeFunction field code_object
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpByteCodeFunction field constants
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpByteCodeFunction field constants_object
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpByteCodeFunction field doc_form
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpByteCodeFunction field docstring
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpByteCodeFunction field env
@@ -3751,27 +3692,19 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo fi
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo field name
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo field name_sym
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo field plist
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo field plist_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo field supplementary_p
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo field unified_p
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetInfo field unify_map
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field alias_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field charsets
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field emacs_mule_order_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field next_id
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field priority
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field priority_identity_syms
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetRegistry field priority_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetSubsetSpec field offset
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetSubsetSpec field parent
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetSubsetSpec field parent_max_code
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetSubsetSpec field parent_min_code
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCharsetSubsetSpec field parent_sym
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field ascii_compatible_p
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field charset_list
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field charset_list_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field coding_type
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field coding_type_sym
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field default_char
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field eol_type
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field for_unibyte
@@ -3780,21 +3713,16 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemIn
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field name
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field name_sym
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field post_read_conversion
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field post_read_conversion_sym
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field pre_write_conversion
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field pre_write_conversion_sym
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field properties
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemInfo field properties_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field alias_order
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field alias_order_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field aliases
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field aliases_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field keyboard_coding
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field keyboard_coding_sym
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field priority
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field priority_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field systems
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field systems_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field terminal_coding
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCodingSystemManager field terminal_coding_sym
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpColor field a
@@ -3806,7 +3734,6 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState f
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field autoloads
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field bookmarks
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field buffers
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field charset_registry
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field coding_systems
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field current_global_map
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field current_local_map
@@ -3814,7 +3741,6 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState f
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field dynamic
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field face_table
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field features
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field fontset_registry
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field interactive
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field kmacro
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field lexenv
@@ -3825,16 +3751,13 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState f
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field registers
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field require_stack
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field standard_category_table
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field standard_syntax_table
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field symbol_table
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field syntax_code_objects
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field tagged_heap
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field watchers
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCustomManager field auto_buffer_local
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpCustomManager field auto_buffer_local_syms
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field background
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field box_border
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field box_disabled
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field doc
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field doc_value
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field extend
@@ -3842,7 +3765,6 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field fam
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field family_value
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field foreground
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field foundry
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field foundry_value
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field height
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field inherit
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field inherit_syms
@@ -3851,10 +3773,8 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field ove
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field overstrike
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field slant
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field stipple
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field stipple_value
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field strike_through
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field underline
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field underline_disabled
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFace field weight
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFaceTable field face_ids
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFaceTable field faces
@@ -3864,14 +3784,12 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontDefinition
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontLockDefaults field case_fold
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontLockDefaults field keywords
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontLockDefaults field syntax_table
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontLockDefaults field syntax_table_lisp
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontLockKeyword field face
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontLockKeyword field face_sym
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontLockKeyword field group
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontLockKeyword field laxmatch
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontLockKeyword field override_
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontLockKeyword field pattern
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontLockKeyword field pattern_lisp
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontsetData field fallback
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontsetData field ranges
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpFontsetRangeEntry field entries
@@ -3889,14 +3807,10 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpInteractiveReg
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpInteractiveSpec field spec
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpKmacroManager field counter
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpKmacroManager field counter_format
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpKmacroManager field counter_format_lisp
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpKmacroManager field current_macro
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpKmacroManager field last_macro
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpKmacroManager field macro_ring
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpLambdaParams field optional
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpLambdaParams field required
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpLambdaParams field rest
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpLispHashTable field ordered_entries
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpLispHashTable field rehash_size
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpLispHashTable field rehash_threshold
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpLispHashTable field size
@@ -3935,7 +3849,6 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpModeCustomVari
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpModeCustomVariable field set_function
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpModeCustomVariable field tag
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpModeRegistry field auto_mode_alist
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpModeRegistry field auto_mode_alist_lisp
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpModeRegistry field buffer_major_modes
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpModeRegistry field buffer_minor_modes
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpModeRegistry field custom_groups
@@ -3947,7 +3860,6 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpModeRegistry f
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpObarray field function_epoch
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpObarray field function_unbound
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpObarray field global_members
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpObarray field plain_rows
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpObarray field symbols
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpOrderedSymMap field entries
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpOverlay field buffer
@@ -4007,76 +3919,25 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpUndoList field
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpVariableWatcherList field watchers
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpVecLikeSpan field len
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpVecLikeSpan field offset
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	fn	fn impl DumpByteData::as_owned_bytes
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	fn	fn impl DumpByteData::mapped
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	fn	fn impl DumpByteData::owned
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	fn	fn impl DumpByteData::static_rodata
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpAbbrev
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpAbbrevManager
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpAbbrevTable
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpAutoloadEntry
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpAutoloadManager
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpBookmark
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpBookmarkManager
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpBoxBorder
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpBuffer
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpBufferId
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpBufferManager
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpBufferText
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpByteCodeFunction
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpByteSpan
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpCharsetInfo
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpCharsetRegistry
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpCharsetSubsetSpec
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpCodingSystemInfo
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpCodingSystemManager
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpColor
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpConsSpan
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpContextState
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpCustomManager
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpFace
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpFaceTable
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpFloatSpan
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpFontDefinitionMetadata
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpFontLockDefaults
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpFontLockKeyword
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpFontsetData
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpFontsetRangeEntry
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpFontsetRegistry
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpHeapRef
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpInteractiveRegistry
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpInteractiveSpec
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpKmacroManager
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpLambdaParams
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpLispHashTable
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpLispString
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpMajorMode
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpMarker
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpMinorMode
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpModeCustomGroup
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpModeCustomVariable
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpModeRegistry
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpNameId
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpObarray
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpOrderedSymMap
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpOverlay
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpOverlayList
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpPropertyInterval
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpRectangleState
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpRegisterManager
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpSlotSpan
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpStoredFontSpec
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpStringSpan
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpStringTextPropertyRun
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpSymId
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpSymbolData
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpSymbolEntry
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpSymbolTable
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpTaggedHeap
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpTextPropertyTable
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpUnderline
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpUndoList
-crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpVariableWatcherList
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpVecLikeSpan
 crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::all_thread_ids
 crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::any_thread_created

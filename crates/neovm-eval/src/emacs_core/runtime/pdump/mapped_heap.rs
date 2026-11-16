@@ -9,7 +9,7 @@
 use super::DumpError;
 use super::mmap_image::ImageRelocation;
 #[doc(hidden)]
-pub use super::types::{
+pub(crate) use super::types::{
     DumpByteData, DumpConsSpan, DumpContextState, DumpFloatSpan, DumpHeapObject, DumpSlotSpan,
     DumpStringSpan, DumpTaggedHeap, DumpValue, DumpVecLikeSpan,
 };
@@ -38,7 +38,7 @@ const TAG_FLOAT: u64 = 0b111;
 pub(crate) struct MappedHeapPayload {
     pub bytes: Vec<u8>,
     pub relocations: Vec<ImageRelocation>,
-    pub value_fixups: Vec<RawValueFixup>,
+    pub(crate) value_fixups: Vec<RawValueFixup>,
 }
 
 #[repr(C)]

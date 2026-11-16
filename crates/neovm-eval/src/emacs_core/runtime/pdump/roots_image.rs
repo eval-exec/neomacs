@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use super::DumpError;
 use super::object_value_codec::{Cursor, write_u32, write_u64, write_value};
 #[doc(hidden)]
-pub use super::types::{
+pub(crate) use super::types::{
     DumpLispString, DumpOrderedSymMap, DumpRuntimeBindingValue, DumpSymId, DumpValue,
 };
 
@@ -24,8 +24,8 @@ pub(crate) struct DumpRootState {
     pub features: Vec<DumpSymId>,
     pub require_stack: Vec<DumpSymId>,
     pub loads_in_progress: Vec<DumpLispString>,
-    pub standard_syntax_table: DumpValue,
-    pub syntax_code_objects: DumpValue,
+    pub(crate) standard_syntax_table: DumpValue,
+    pub(crate) syntax_code_objects: DumpValue,
     pub standard_category_table: DumpValue,
     pub current_local_map: DumpValue,
     pub current_global_map: DumpValue,

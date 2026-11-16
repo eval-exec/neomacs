@@ -353,7 +353,7 @@ impl From<std::io::Error> for DumpError {
 impl DumpError {
     /// Tag an I/O failure from the dump-output write phase: GNU reports it
     /// at `src/pdumper.c:4348` with "Could not write to dump file".
-    pub fn write_io(source: std::io::Error) -> Self {
+    pub(crate) fn write_io(source: std::io::Error) -> Self {
         DumpError::Io {
             phase: DumpIoPhase::Write,
             source,
@@ -722,7 +722,8 @@ fn load_from_mapped_image(
 /// This gives bootstrap/load code an isolated working evaluator with the same
 /// logical runtime state, without sharing heap objects that can be mutated
 /// during eager macroexpansion.
-pub fn snapshot_evaluator(eval: &Context) -> DumpContextState {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn snapshot_evaluator(eval: &Context) -> DumpContextState {
     dump_evaluator(eval)
 }
 
@@ -731,7 +732,7 @@ pub fn snapshot_evaluator(eval: &Context) -> DumpContextState {
 /// Use this entry point when multiple `Context`s may share the current thread.
 /// The pdump conversion pipeline relies on thread-local tagged-heap state, so
 /// the source evaluator must be active before we walk its heap-backed values.
-pub fn snapshot_active_evaluator(eval: &mut Context) -> DumpContextState {
+pub(crate) fn snapshot_active_evaluator(eval: &mut Context) -> DumpContextState {
     eval.setup_thread_locals();
     dump_evaluator(eval)
 }
@@ -741,7 +742,8 @@ pub fn snapshot_active_evaluator(eval: &mut Context) -> DumpContextState {
 /// Cloning an evaluator through pdump reconstructs these registries for the
 /// cloned heap. Callers that later switch the current thread back to the live
 /// evaluator must restore this snapshot as part of runtime reactivation.
-pub fn snapshot_active_runtime(eval: &mut Context) -> ActiveRuntimeSnapshot {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn snapshot_active_runtime(eval: &mut Context) -> ActiveRuntimeSnapshot {
     eval.setup_thread_locals();
     ActiveRuntimeSnapshot {
         charset_registry: snapshot_charset_registry(),
@@ -751,7 +753,8 @@ pub fn snapshot_active_runtime(eval: &mut Context) -> ActiveRuntimeSnapshot {
 
 /// Reactivate a live evaluator after using a cloned evaluator on the same
 /// thread, restoring thread-local semantic registries alongside heap state.
-pub fn restore_active_runtime(eval: &mut Context, snapshot: &ActiveRuntimeSnapshot) {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn restore_active_runtime(eval: &mut Context, snapshot: &ActiveRuntimeSnapshot) {
     eval.setup_thread_locals();
     // The other evaluator's pdump restore replaced the terminal thread-locals
     // with a fresh terminal whose handle it allocated in ITS heap, so the
@@ -769,7 +772,8 @@ pub fn restore_active_runtime(eval: &mut Context, snapshot: &ActiveRuntimeSnapsh
 }
 
 /// Reconstruct an evaluator from a previously captured in-memory pdump snapshot.
-pub fn restore_snapshot(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn restore_snapshot(
     state: &DumpContextState,
     proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
@@ -780,7 +784,7 @@ pub fn restore_snapshot(
 ///
 /// Prefer `snapshot_evaluator` + `restore_snapshot` when cloning the same
 /// template repeatedly; that avoids rebuilding the intermediate dump state.
-pub fn clone_evaluator(eval: &Context) -> Result<Context, DumpError> {
+pub(crate) fn clone_evaluator(eval: &Context) -> Result<Context, DumpError> {
     restore_snapshot(&snapshot_evaluator(eval), eval.hooks_installed())
 }
 
@@ -788,7 +792,8 @@ pub fn clone_evaluator(eval: &Context) -> Result<Context, DumpError> {
 ///
 /// Use this when cloning from a live runtime that shares the current thread
 /// with other `Context`s.
-pub fn clone_active_evaluator(eval: &mut Context) -> Result<Context, DumpError> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn clone_active_evaluator(eval: &mut Context) -> Result<Context, DumpError> {
     restore_snapshot(&snapshot_active_evaluator(eval), eval.hooks_installed())
 }
 
