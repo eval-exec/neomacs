@@ -3865,3 +3865,45 @@ fn after_overlay_resume_without_an_insertion_preserves_fresh_box_start() {
         "AFTER seating preserves fresh emitted topology"
     );
 }
+
+/// `consume_until_line_break` skips an ASCII run in one step; it must land
+/// where the per-character walk lands, on ASCII and multibyte lines, with and
+/// without a newline, after a broken lead byte, and from a position past the
+/// end of the text.
+#[test]
+fn consume_until_line_break_matches_the_per_char_walk() {
+    fn per_char(mut position: DisplaySourceTextPosition, text: &[u8]) -> (bool, usize, i64) {
+        while position.byte_idx() < text.len() {
+            let Some(source_char) = position.consume_step_char(text) else {
+                break;
+            };
+            if source_char.ch() == '\n' {
+                return (true, position.byte_idx(), position.charpos());
+            }
+        }
+        (false, position.byte_idx(), position.charpos())
+    }
+
+    let texts: [&[u8]; 8] = [
+        b"",
+        b"abc",
+        b"abc\ndef\n",
+        "aé\nbc".as_bytes(),
+        "αβγ".as_bytes(),
+        b"\n\nx",
+        "abcé".as_bytes(),
+        b"ab\xc3\ncd\n",
+    ];
+    for text in texts {
+        for byte_idx in 0..=text.len() + 1 {
+            let start = DisplaySourceTextPosition::new(byte_idx, 40);
+            let mut position = start;
+            let found = position.consume_until_line_break(text);
+            assert_eq!(
+                (found, position.byte_idx(), position.charpos()),
+                per_char(start, text),
+                "{text:?} from byte {byte_idx}"
+            );
+        }
+    }
+}

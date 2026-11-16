@@ -395,7 +395,6 @@ neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pa
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::RootSeedBreakdown	struct	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::RootSeedBreakdown::groups	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::RootSeedBreakdown::total_us	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::cons_blocks_swept	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::last_concurrent_bc_claimed	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::last_concurrent_float_claimed	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::last_concurrent_str_claimed	field	VIS	d01843729a
@@ -406,16 +405,8 @@ neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pa
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::last_termination_kinds	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::last_termination_partial_words	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::last_termination_satb	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::lifetime_cons_blocks_swept	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::lifetime_noncons_freed	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::lifetime_slices	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::lifetime_sweep_us	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::mark_us	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::max_termination_deferred	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::max_termination_kinds	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::noncons_freed	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::slice_count	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::sweep_us	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/arena_pages.rs	tagged::gc::arena_pages::SweepStats::termination_count	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/barrier_window.rs	tagged::gc::barrier_window::BarrierWindow	struct	VIS	d01843729a
 neovm-value	crates/neovm-value/src/tagged/gc/barrier_window.rs	tagged::gc::barrier_window::CompiledObservationGate	struct	VIS	d01843729a
@@ -455,10 +446,7 @@ neovm-value	crates/neovm-value/src/tagged/pdump_image.rs	tagged::pdump_image::By
 neovm-value	crates/neovm-value/src/thread_exit_leak.rs	thread_exit_leak::ThreadExitLeak::get	method	VIS	d01843729a
 neovm-value	crates/neovm-value/src/thread_exit_leak.rs	thread_exit_leak::ThreadExitLeak::new	method	VIS	d01843729a
 neovm-value	crates/neovm-value/src/time_core.rs	time_core::DecodedLispTime::th	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/time_core.rs	time_core::ParsedTime::exact_ticks_hz	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/time_core.rs	time_core::ParsedTime::form	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/time_core.rs	time_core::ParsedTime::hz	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/time_core.rs	time_core::ParsedTime::time	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/time_core.rs	time_core::TicksHz::hz	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/time_core.rs	time_core::TicksHz::ticks	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/time_core.rs	time_core::TimeMicros::psecs	field	VIS	d01843729a

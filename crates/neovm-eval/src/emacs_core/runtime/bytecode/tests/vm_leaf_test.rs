@@ -8,10 +8,11 @@ use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use neovm_value::error::{FlowKind, FlowResultExt};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 /// `(lambda (a1..an) (CALLEE a1..an))` through `Op::Call` (GNU `Bcall`).
-fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
+fn bcall_fn(callee: &'static str, nargs: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: (1..=nargs as u32)
@@ -28,7 +29,7 @@ fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
     ops.push(Op::Call(nargs as u16));
     ops.push(Op::Return);
     f.ops = ops;
-    f.constants = vec![Value::symbol(callee)].into();
+    f.constants = vec![Value::from_sym_id(intern(callee))].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }

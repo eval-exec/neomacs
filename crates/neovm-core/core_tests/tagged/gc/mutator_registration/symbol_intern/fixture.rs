@@ -178,7 +178,7 @@ pub(super) fn with_query_era<R>(
         Query::Fresh | Query::FreshBoundary | Query::TableGrowth | Query::FreshReusedAtom => {
             let spelling = format!("p3sym-c5-new-{}", NEXT.fetch_add(1, Ordering::Relaxed));
             if matches!(query, Query::FreshBoundary | Query::TableGrowth) {
-                let mut id = crate::intern::intern_uninterned("p3sym-c5-gap");
+                let mut id = crate::intern::make_uninterned_symbol("p3sym-c5-gap");
                 let added_chunks = if matches!(query, Query::TableGrowth) {
                     1
                 } else {
@@ -186,10 +186,10 @@ pub(super) fn with_query_era<R>(
                 };
                 let target = (u64::from(id.to_raw()) / 4096 + added_chunks) * 4096 + 17;
                 while u64::from(id.to_raw()) + 1 < target {
-                    id = crate::intern::intern_uninterned("p3sym-c5-gap");
+                    id = crate::intern::make_uninterned_symbol("p3sym-c5-gap");
                 }
             } else if matches!(query, Query::FreshReusedAtom) {
-                crate::intern::intern_uninterned(&spelling);
+                crate::intern::make_uninterned_symbol(&spelling);
             }
             spelling
         }
@@ -204,10 +204,10 @@ pub(super) fn with_query_era<R>(
         }
         Query::Boundary => {
             let spelling = format!("p3sym-c5-boundary-{}", NEXT.fetch_add(1, Ordering::Relaxed));
-            let mut id = crate::intern::intern_uninterned("p3sym-c5-gap");
+            let mut id = crate::intern::make_uninterned_symbol("p3sym-c5-gap");
             let target = (u64::from(id.to_raw()) / 4096 + 2) * 4096 + 17;
             while u64::from(id.to_raw()) + 1 < target {
-                id = crate::intern::intern_uninterned("p3sym-c5-gap");
+                id = crate::intern::make_uninterned_symbol("p3sym-c5-gap");
             }
             crate::intern::intern(&spelling);
             spelling

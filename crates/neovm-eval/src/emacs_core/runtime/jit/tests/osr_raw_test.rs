@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::Context;
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn raw_loop(ops: Vec<Op>) -> ByteCodeFunction {
@@ -298,7 +299,7 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
         f.lexical = true;
         f.constants = vec![
             Value::make_int(0),
-            Value::symbol(name),
+            Value::from_sym_id(intern(name)),
             Value::make_int(1024),
         ]
         .into();

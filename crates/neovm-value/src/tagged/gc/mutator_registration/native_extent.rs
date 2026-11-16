@@ -68,7 +68,7 @@ impl<'extent> NativeRoots<'extent> {
     pub fn len(&self) -> usize {
         self.words.len()
     }
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.words.is_empty()
     }
     /// One retained handle's word.

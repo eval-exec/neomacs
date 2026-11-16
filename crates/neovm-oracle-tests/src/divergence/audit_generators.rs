@@ -173,14 +173,21 @@ fn div_agen_generator_final_value_then_end() {
 #[test]
 fn div_agen_iter_next_end_of_sequence_lambda() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-variable g)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (:eos-signal (iter-end-of-sequence closure (t) nil :custom-eos))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (progn (require 'generator)
-  (let ((g (funcall (iter-lambda () (iter-yield 1))))
+  (let ((g (funcall (iter-lambda () (iter-yield 1)))))
     (iter-next g)
-    (iter-next g (lambda () :custom-eos))))
-)"##,
+    ;; iter-next's second arg is YIELD-RESULT (generator.el), not an
+    ;; end-of-sequence handler; exhaustion signals iter-end-of-sequence,
+    ;; which is deliberately outside the `error' hierarchy.
+    (condition-case e
+        (iter-next g (lambda () :custom-eos))
+      (iter-end-of-sequence (list :eos-signal e)))))
+"##,
         expect,
     );
 }

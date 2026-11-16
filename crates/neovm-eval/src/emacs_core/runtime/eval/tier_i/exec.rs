@@ -1401,7 +1401,7 @@ impl Context {
             context.bc_buf.truncate(temps_base);
             return Err(signal(
                 LispCondition::SettingConstant,
-                vec![Value::symbol(name)],
+                vec![Value::from_sym_id(intern((name).as_ref()))],
             ));
         }
         if index != op.bindings.len() {
@@ -1582,7 +1582,7 @@ impl Context {
             if let Some(name) = let_constant_error_name(&self.obarray, id, value) {
                 return Err(signal(
                     LispCondition::SettingConstant,
-                    vec![Value::symbol(&name)],
+                    vec![Value::from_sym_id(intern((&name).as_ref()))],
                 ));
             }
             if use_lexical && !self.obarray.is_special_id(id) && !self.ti_declared_special(act, id)

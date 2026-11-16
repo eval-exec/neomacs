@@ -63,6 +63,9 @@ thread_local! {
     static LOCAL_VAR_ALIST_ENTRY_PROBES: std::cell::Cell<u64> = const {
         std::cell::Cell::new(0)
     };
+    static SLOT_DEFAULT_CWD_LOOKUPS: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -311,7 +314,7 @@ pub const BUFFER_SLOT_CASE_TABLE: BufferSlot = BufferSlot::new(61);
 
 /// Default-value descriptor. Stored in the const table because
 /// `Value::string` and `Value::fixnum` aren't `const`-friendly.
-/// Materialised once at startup via [`SlotDefault::to_value`].
+/// Materialised once per buffer storage by [`materialize_slot_defaults`].
 #[derive(Copy, Clone, Debug)]
 pub enum SlotDefault {
     /// A const immediate (`nil`, `t`). The table is a process-global static,
@@ -334,9 +337,9 @@ pub enum SlotDefault {
 }
 
 impl SlotDefault {
-    /// Materialise the default into a runtime [`Value`]. Called once at
-    /// startup; the produced Value is GC-rooted by the buffer slot
-    /// table from then on.
+    /// Materialise the default into a runtime [`Value`]. A buffer storage
+    /// calls this once per slot and roots the result (`buffer_defaults`,
+    /// `slot_seeds`); buffer creation copies those Values instead.
     pub fn to_value(self) -> neovm_value::value::Value {
         use neovm_value::value::Value;
         match self {
@@ -346,6 +349,8 @@ impl SlotDefault {
             SlotDefault::LazyUnibyte(s) => Value::unibyte_string(s),
             SlotDefault::LazySymbol(s) => Value::symbol(s),
             SlotDefault::LazyCwd => {
+                #[cfg(any(test, feature = "test-support"))]
+                SLOT_DEFAULT_CWD_LOOKUPS.set(SLOT_DEFAULT_CWD_LOOKUPS.get().saturating_add(1));
                 let mut s = std::env::current_dir()
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_else(|_| "/".to_string());
@@ -356,6 +361,19 @@ impl SlotDefault {
             }
         }
     }
+}
+
+/// Every slot's install-time default, materialized once. GNU's
+/// `init_buffer_once` builds `buffer_defaults` the same way
+/// (`buffer.c:4828-4889`), and a new buffer copies values rather than
+/// recomputing them (`reset_buffer`, `buffer.c:1088`, and
+/// `reset_buffer_local_variables`, `buffer.c:1136`).
+fn materialize_slot_defaults() -> [neovm_value::value::Value; BUFFER_SLOT_COUNT] {
+    let mut values = [neovm_value::value::Value::NIL; BUFFER_SLOT_COUNT];
+    for info in BUFFER_SLOT_INFO {
+        values[info.offset.index()] = info.default.to_value();
+    }
+    values
 }
 
 /// Per-slot metadata. Mirrors a GNU `defvar_per_buffer` entry.
@@ -2059,6 +2077,27 @@ impl BufferTextSnapshot {
             .indexed_newline_count(range.start(), range.end(), build)
     }
 
+    /// Position past the `n`th `\n` in `[from, limit)`, and how many were
+    /// crossed, in one traversal.  See [`BufferText::nth_newline_emacs_byte`].
+    pub fn nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize) {
+        self.text.nth_newline_emacs_byte(from, limit, n)
+    }
+
+    /// Last `\n` in logical emacs-byte range `[floor, from)`, scanned in
+    /// place.  See [`BufferText::prev_newline_emacs_byte`].
+    pub fn prev_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        floor: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.text.prev_newline_emacs_byte(from, floor)
+    }
+
     /// Constant-time absence proof over the complete, unprojected property table.
     pub fn text_props_is_empty(&self) -> bool {
         self.text.text_props_is_empty()
@@ -2843,6 +2882,25 @@ impl Buffer {
         text_backend_kind: ImplementedBufferTextBackendKind,
         saved_point_before_command: SavedPointBeforeCommand,
     ) -> Self {
+        Self::new_with_slot_seeds(
+            id,
+            name,
+            text_backend_kind,
+            saved_point_before_command,
+            materialize_slot_defaults(),
+        )
+    }
+
+    /// Construct a buffer whose slots start as `slots`. Mirrors GNU's
+    /// `reset_buffer` (`buffer.c:1088`) and `reset_buffer_local_variables`
+    /// (`buffer.c:1136`) filling a fresh buffer from values built once.
+    fn new_with_slot_seeds(
+        id: BufferId,
+        name: Value,
+        text_backend_kind: ImplementedBufferTextBackendKind,
+        saved_point_before_command: SavedPointBeforeCommand,
+        slots: [Value; BUFFER_SLOT_COUNT],
+    ) -> Self {
         assert!(name.is_string(), "buffer name must be a Lisp string");
         Self {
             line_number_anchor: std::cell::Cell::new(None),
@@ -2868,16 +2926,7 @@ impl Buffer {
             // (`src/buffer.c:1092-1093`).
             modtime: VisitedFileModtimeSlot::default(),
             modtime_size: None,
-            slots: {
-                // Phase 10C: seed every slot from BUFFER_SLOT_INFO.
-                // Mirrors GNU's `reset_buffer` (`buffer.c:1188`)
-                // copying `buffer_defaults` into a fresh buffer.
-                let mut s = [neovm_value::value::Value::NIL; BUFFER_SLOT_COUNT];
-                for info in BUFFER_SLOT_INFO {
-                    s[info.offset.index()] = info.default.to_value();
-                }
-                s
-            },
+            slots,
             // Phase 10D: every fresh buffer starts with no conditional
             // local-flag bits set. Reads of conditional slots fall
             // through to `Context::buffer_defaults` until a write or
@@ -6302,6 +6351,14 @@ pub struct BufferStorage {
     // Keep cold observer state after the existing fields: shipping codegen
     // gates verify that hot default-slot displacements remain unchanged.
     buffer_order_observer: Option<Weak<RefCell<BufferListLinks>>>,
+    /// Install-time value of every slot, materialized once per storage,
+    /// apart from `buffer_defaults`. A new buffer starts from a copy, so
+    /// creating one computes no default (no cwd lookup, no string
+    /// allocation); the always-local slots keep these, as GNU's
+    /// `reset_buffer_local_variables` gives every buffer the one
+    /// `QSFundamental` mode name (`buffer.c:1146`). GC-rooted with
+    /// `buffer_defaults`.
+    slot_seeds: [neovm_value::value::Value; BUFFER_SLOT_COUNT],
 }
 
 /// Cold ownership is separate from the common hot storage pointer.
@@ -6509,11 +6566,12 @@ impl BufferStorage {
         let id = BufferId(self.next_id);
         self.next_id += 1;
         let name_value = Value::string(name);
-        let mut buf = Buffer::new_with_text_backend_kind(
+        let mut buf = Buffer::new_with_slot_seeds(
             id,
             name_value,
             self.default_text_backend_kind,
             self.saved_point_before_command.clone(),
+            self.slot_seeds,
         );
         buf.set_last_name_value(name_value);
         // Phase 10D: seed every conditional slot from
@@ -6521,7 +6579,7 @@ impl BufferStorage {
         // *after* a `setq-default`/`set-default` observes the live
         // global default rather than the static `BufferSlotInfo`
         // seed. Always-local slots (-1) keep their per-buffer
-        // initial value (the static seed already populated them).
+        // initial value from `slot_seeds`.
         for info in BUFFER_SLOT_INFO {
             if info.local_flags_idx >= 0 {
                 buf.slots[info.offset.index()] = self.buffer_defaults[info.offset.index()];
@@ -6559,6 +6617,7 @@ impl BufferStorage {
             default_text_backend_kind: self.default_text_backend_kind,
             buffer_defaults: self.buffer_defaults,
             saved_point_before_command: self.saved_point_before_command.clone(),
+            slot_seeds: self.slot_seeds,
         }
     }
 }
@@ -6875,10 +6934,7 @@ impl BufferManager {
         // `buffer_defaults` from the per-slot `default` literals
         // (`buffer.c:4828-4889`). Slots that are not in
         // BUFFER_SLOT_INFO start as `Value::NIL`.
-        let mut buffer_defaults = [neovm_value::value::Value::NIL; BUFFER_SLOT_COUNT];
-        for info in BUFFER_SLOT_INFO {
-            buffer_defaults[info.offset.index()] = info.default.to_value();
-        }
+        let slot_seeds = materialize_slot_defaults();
         let mut storage = BufferStorage {
             buffers: LiveBuffers::default(),
             dead_buffers: FxHashMap::default(),
@@ -6887,8 +6943,11 @@ impl BufferManager {
             next_id: 1,
             labeled_restrictions: FxHashMap::default(),
             default_text_backend_kind: ImplementedBufferTextBackendKind::GAP_BUFFER,
-            buffer_defaults,
+            // A separate materialization, so the default values are not the
+            // seed objects every new buffer shares.
+            buffer_defaults: materialize_slot_defaults(),
             saved_point_before_command: SavedPointBeforeCommand::new_editor_global(),
+            slot_seeds,
         };
         let scratch = storage.create_buffer(None, "*scratch*", BufferCreationHooks::Enabled);
         if let Some(buf) = storage.buffers.get_mut(&scratch) {
@@ -9032,10 +9091,8 @@ impl BufferManager {
         // `mode-line-format` list); the seed provides backward
         // compatibility for older dumps that didn't carry the
         // `buffer_defaults` field.
-        let mut buffer_defaults = [neovm_value::value::Value::NIL; BUFFER_SLOT_COUNT];
-        for info in BUFFER_SLOT_INFO {
-            buffer_defaults[info.offset.index()] = info.default.to_value();
-        }
+        let slot_seeds = materialize_slot_defaults();
+        let mut buffer_defaults = materialize_slot_defaults();
         if let Some(dumped) = dumped_buffer_defaults {
             for (idx, value) in dumped.iter().enumerate() {
                 if idx >= BUFFER_SLOT_COUNT {
@@ -9054,6 +9111,7 @@ impl BufferManager {
             default_text_backend_kind,
             buffer_defaults,
             saved_point_before_command,
+            slot_seeds,
         });
         manager.set_current_id(current);
         if let Some(dumped_order) = dumped_buffer_order {
@@ -9157,6 +9215,10 @@ impl GcTrace for BufferManager {
         // values for every per-buffer slot. Mirrors GNU's
         // `mark_buffer (&buffer_defaults)` in `alloc.c`.
         for slot in &self.buffer_defaults {
+            visit(*slot);
+        }
+        // Seeds for new buffers, e.g. GNU's `staticpro (&QSFundamental)`.
+        for slot in &self.slot_seeds {
             visit(*slot);
         }
         for restrictions in self.labeled_restrictions.values() {
@@ -9310,3 +9372,7 @@ mod tests;
 #[cfg(test)]
 #[path = "buffer/tests/world_storage_test.rs"]
 mod world_storage_tests;
+
+#[cfg(test)]
+#[path = "buffer/tests/slot_seeds_test.rs"]
+mod slot_seeds_tests;

@@ -11,6 +11,7 @@ use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::subr::leaf::{Containment, LEAVES, LeafEntry, LeafExit, LeafId, LeafShape};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
@@ -530,7 +531,7 @@ fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
     }
     ops.push(Op::Call(nargs as u16));
     ops.push(Op::Return);
-    let mut f = lexical_fn(nargs as u32, ops, vec![Value::symbol(callee)]);
+    let mut f = lexical_fn(nargs as u32, ops, vec![Value::from_sym_id(intern(callee))]);
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }

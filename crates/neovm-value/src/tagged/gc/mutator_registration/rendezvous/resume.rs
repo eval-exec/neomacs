@@ -53,7 +53,7 @@ impl fmt::Debug for ResumeGcImageFailure<'_, '_> {
 }
 
 impl<'era> Mutator<'era> {
-    pub fn begin_restore(
+    pub(crate) fn begin_restore(
         &mut self,
         native: bool,
     ) -> Result<ResumeGcImage<'_, 'era>, RendezvousError> {

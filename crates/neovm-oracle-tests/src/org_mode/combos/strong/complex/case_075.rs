@@ -112,14 +112,14 @@ fn combo75_org_shift_right_left_heading() {
 #[test]
 fn combo75_org_table_analyze() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:analyze-fbound t))""#]];
+    let expect = expect_test::expect![[r#""OK ((:analyze-fbound t) (:analyzed t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer (org-mode)
  (insert "| a | b |\n| 1 | 2 |\n")
  (let ((r '())) (goto-char (point-min))
   (push (list :analyze-fbound (fboundp 'org-table-analyze)) r)
   (when (fboundp 'org-table-analyze)
-    (condition-case nil (let ((result (org-table-analyze)) (push (list :analyzed t) r))) (error nil)))
+    (condition-case nil (let ((result (org-table-analyze))) (push (list :analyzed t) r)) (error nil)))
   (nreverse r)))"##,
         expect,
     );

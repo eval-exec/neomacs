@@ -9,8 +9,10 @@ fn margin(lines: i64) -> ScrollMargin {
 /// newline at `2*(N-1)+1`. Charpos 26 is line 14 ("n").
 const LINES16: &[u8] = b"a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\no\np\n";
 
-fn byte_at(text: &'static [u8]) -> impl Fn(i64) -> Option<u8> {
-    move |charpos| text.get(charpos as usize).copied()
+/// `text` as the line searches read it: unibyte ASCII, so character and
+/// byte positions coincide.
+fn byte_at(text: &'static [u8]) -> &'static [u8] {
+    text
 }
 
 #[test]
@@ -238,4 +240,86 @@ fn backward_step_moves_the_start_by_scroll_step_not_to_point() {
         policy.backward_scroll(3, true, 21, ScrollMargin::default()),
         0
     );
+}
+
+/// The per-character searches these functions replaced, kept as the reference
+/// the `memchr` searches must agree with.
+mod per_char {
+    pub(super) fn count_lines_bounded(from: i64, to: i64, limit: i64, text: &[u8]) -> (i64, bool) {
+        let mut lines = 0;
+        for pos in from..to {
+            if text.get(pos as usize) == Some(&b'\n') {
+                lines += 1;
+                if lines > limit {
+                    return (lines, false);
+                }
+            }
+        }
+        (lines, true)
+    }
+
+    pub(super) fn line_start_above(point: i64, lines_above: i64, start: i64, text: &[u8]) -> i64 {
+        let is_line_start = |pos: i64| pos <= start || text.get(pos as usize - 1) == Some(&b'\n');
+        let mut pos = point.max(start);
+        while !is_line_start(pos) {
+            pos -= 1;
+        }
+        let mut moved = 0;
+        while moved < lines_above && pos > start {
+            pos -= 1;
+            while !is_line_start(pos) {
+                pos -= 1;
+            }
+            moved += 1;
+        }
+        pos
+    }
+
+    pub(super) fn line_start_below(from: i64, lines: i64, end: i64, text: &[u8]) -> i64 {
+        let mut pos = from;
+        let mut moved = 0;
+        while moved < lines && pos < end {
+            if text.get(pos as usize) == Some(&b'\n') {
+                moved += 1;
+            }
+            pos += 1;
+        }
+        pos
+    }
+}
+
+#[test]
+fn line_searches_agree_with_the_per_char_walk() {
+    // A 9,000-byte line, plus empty lines and a missing final newline.
+    let long = "y".repeat(9_000);
+    let text = format!("ab\n\n{long}\ncd\n\n\nlast");
+    let text = text.as_bytes();
+    let len = text.len() as i64;
+    let positions: Vec<i64> = [
+        0, 1, 2, 3, 4, 5, 4_100, 8_000, 9_003, 9_004, 9_005, 9_007, 9_008,
+    ]
+    .into_iter()
+    .chain([len - 4, len - 1, len])
+    .collect();
+    for &a in &positions {
+        for &b in &positions {
+            for n in [-1, 0, 1, 2, 3, 7] {
+                assert_eq!(
+                    count_lines_bounded(a, b, n, &text),
+                    per_char::count_lines_bounded(a, b, n, text),
+                    "count_lines_bounded({a}, {b}, {n})"
+                );
+                assert_eq!(
+                    line_start_above(b, n, a, &text),
+                    per_char::line_start_above(b, n, a, text),
+                    "line_start_above({b}, {n}, {a})"
+                );
+                assert_eq!(
+                    line_start_below(a, n, b, &text),
+                    per_char::line_start_below(a, n, b, text),
+                    "line_start_below({a}, {n}, {b})"
+                );
+            }
+        }
+    }
 }

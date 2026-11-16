@@ -326,9 +326,7 @@ fn div_cx50_subword_capitalize_backward_word_then_forward_marker() {
 #[test]
 fn div_cx50_process_send_region_narrowed_filter_hash_env_exitcode_coding_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" set-process-coding-system p 'utf-8-unix 'utf-8-unix)""#
-    ]];
+    let expect = expect_test::expect![[r#""OK (\"v\" 3 \"cbeb94463beb5c5564e54bdb8f537fca\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (received env-val exit-code)
@@ -340,17 +338,17 @@ fn div_cx50_process_send_region_narrowed_filter_hash_env_exitcode_coding_mega() 
     (narrow-to-region 5 18)
     (let ((p (make-process :name "neo-cx50-sr" :command '("cat")
                            :buffer nil :connection-type 'pipe
-                           :filter (lambda (proc str) (push str received))))
+                           :filter (lambda (proc str) (push str received)))))
       (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
       (process-send-region p (point-min) (point-max))
       (process-send-eof p)
-      (accept-process-output p 1)))
+      (accept-process-output p 1))
   (setq exit-code
-        (let ((p (make-process :name "neo-cx50-ec" :command '("sh" "-c" "exit 3")))
+        (let ((p (make-process :name "neo-cx50-ec" :command '("sh" "-c" "exit 3"))))
           (accept-process-output p 2)
           (process-exit-status p)))
   (list env-val exit-code (secure-hash 'md5 (apply #'concat (nreverse received)))))
-))"##,
+)"##,
         expect,
     );
 }
@@ -358,17 +356,16 @@ fn div_cx50_process_send_region_narrowed_filter_hash_env_exitcode_coding_mega() 
 #[test]
 fn div_cx50_read_eval_backquote_destructuring_lexical_macro_multibyte_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" list (eval (car (read-from-string \"`(,(mapcar #'car (caar ,data)))\")) t) (eval (car (read-from-string \"`(,@(mapcar #'cdr (caar ,data)) end)\")) t) (eval (car (read-from-string \"`(:items ,(length (caar ,data)))\")) t))""#
-    ]];
+    let expect =
+        expect_test::expect![[r#""OK (((\"café\" \"世界\" \"😀\")) (1 2 3 end) (:items 3))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t))
-  (let ((data '((("café" . 1) ("世界" . 2) ("😀" . 3))))
-    (list (eval (car (read-from-string "`(,(mapcar #'car (caar ,data)))")) t)
-          (eval (car (read-from-string "`(,@(mapcar #'cdr (caar ,data)) end)")) t)
-          (eval (car (read-from-string "`(:items ,(length (caar ,data)))")) t))))
-)"##,
+  (let ((data '((("café" . 1) ("世界" . 2) ("😀" . 3)))))
+    (list (eval (car (read-from-string (format "`(,(mapcar #'car (car '%S)))" data))) t)
+          (eval (car (read-from-string (format "`(,@(mapcar #'cdr (car '%S)) end)" data))) t)
+          (eval (car (read-from-string (format "`(:items ,(length (car '%S)))" data))) t))))
+"##,
         expect,
     );
 }

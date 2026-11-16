@@ -343,7 +343,7 @@ impl BufferlessValue {
 
     /// Only the arm that agrees with GNU unconditionally.
     #[must_use]
-    pub fn global_only(self) -> Option<Value> {
+    pub(crate) fn global_only(self) -> Option<Value> {
         match self {
             Self::Global(value) => Some(value),
             Self::DefaultOfLocalized(_) | Self::PerBufferSlot | Self::Void => None,
@@ -656,7 +656,7 @@ impl SetInternalBind {
 ///
 /// Phase 5 stub: always `false`. Phase 7 wires this against the
 /// specpdl `LET_LOCAL` records.
-pub fn let_shadows_buffer_binding_p(_sym_id: SymId) -> bool {
+pub(crate) fn let_shadows_buffer_binding_p(_sym_id: SymId) -> bool {
     false
 }
 
@@ -2103,6 +2103,15 @@ impl Obarray {
                 self.ensure_global_member_if_canonical(id);
             }
         }
+        // Then the literal `intern_c_string`/`intern` spellings GNU's
+        // `syms_of_*` code interns directly (font tables, Fprovide names,
+        // menu and DND tables, ...), in the generated source order.
+        for (name, gate) in crate::intern::gnu_defsyms_generated::GNU_C_INTERNS {
+            if gate.is_active() {
+                let id = crate::intern::intern(name);
+                self.ensure_global_member_if_canonical(id);
+            }
+        }
         for symbol in crate::intern::WellKnown::VARIANTS {
             // A fixed id is not membership: GNU's build only interns the
             // spellings its compiled `defsym_name[]` carries, so a spelling
@@ -2115,18 +2124,24 @@ impl Obarray {
         }
     }
 
-    /// Intern a symbol: look up by name, creating if absent.
-    /// Returns the symbol name (which is the key for identity).
-    pub fn intern(&mut self, name: &str) -> String {
+    /// GNU `intern`: the symbol named NAME as a member of this obarray,
+    /// created if absent.
+    ///
+    /// This is the member-producing funnel. The free
+    /// [`crate::intern::intern`] resolves a canonical name id without
+    /// touching any obarray; a symbol created only that way is not
+    /// Lisp-visible and must come through here (or
+    /// `make_uninterned_symbol` where GNU uses `make-symbol`).
+    pub fn intern_member(&mut self, name: &str) -> SymId {
         let id = intern(name);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
-        name.to_string()
+        id
     }
 
     /// Intern a symbol from an exact Lisp-string name, preserving raw
     /// unibyte and multibyte storage.
-    pub fn intern_lisp_string(&mut self, name: &LispString) -> SymId {
+    pub fn intern_member_lisp_string(&mut self, name: &LispString) -> SymId {
         let id = intern_lisp_string(name);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
@@ -2135,9 +2150,13 @@ impl Obarray {
 
     /// Intern a symbol from a Lisp string OBJECT, which becomes the symbol's
     /// name when this call creates it -- GNU `intern`. Use this rather than
-    /// [`Self::intern_lisp_string`] whenever the name came from Lisp, so
+    /// [`Self::intern_member_lisp_string`] whenever the name came from Lisp,
+    /// so
     /// `symbol-name` gives that object back with its text properties.
-    pub fn intern_lisp_value(&mut self, name_value: crate::tagged::value::TaggedValue) -> SymId {
+    pub fn intern_member_lisp_value(
+        &mut self,
+        name_value: crate::tagged::value::TaggedValue,
+    ) -> SymId {
         let id = crate::intern::intern_lisp_value(name_value);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
@@ -2279,7 +2298,7 @@ impl Obarray {
     /// `indent::dynamic_buffer_or_global_symbol_value` is the older, identical
     /// reader; it lives in a file ledger 195 owns, so collapsing the two is
     /// owed rather than done here (ledger 196).
-    pub fn canonical_value_in_buffer<B: BufferLocalView>(
+    pub(crate) fn canonical_value_in_buffer<B: BufferLocalView>(
         &self,
         access: CanonicalAccess,
         buf: Option<&B>,
@@ -2297,7 +2316,7 @@ impl Obarray {
     /// [`Self::symbol_value_copied`] on the overwhelmingly common global path, which
     /// matters where a caller reads a dozen names at once -- the `print-*`
     /// family, for one.
-    pub fn canonical_value_in_buffer_id<B: BufferLocalView>(
+    pub(crate) fn canonical_value_in_buffer_id<B: BufferLocalView>(
         &self,
         _access: CanonicalAccess,
         buf: Option<&B>,
@@ -4367,7 +4386,7 @@ impl Obarray {
     }
 
     /// Check if a symbol is bound (has a value cell).
-    pub fn canonical_boundp(&self, access: CanonicalAccess, name: &str) -> bool {
+    pub(crate) fn canonical_boundp(&self, access: CanonicalAccess, name: &str) -> bool {
         self.canonical_boundp_id(access, intern(name))
     }
 
@@ -4501,7 +4520,7 @@ impl Obarray {
     }
 
     /// Get the symbol's full plist as a flat list.
-    pub fn symbol_plist(&self, name: &str) -> Value {
+    pub(crate) fn symbol_plist(&self, name: &str) -> Value {
         self.symbol_plist_id(intern(name))
     }
 
@@ -4705,7 +4724,7 @@ impl Obarray {
 
     /// Check whether a symbol is a buffer-local variable by identity.
     /// Phase F: uses the redirect tag rather than the legacy value enum.
-    pub fn is_buffer_local_id(&self, id: SymId) -> bool {
+    pub(crate) fn is_buffer_local_id(&self, id: SymId) -> bool {
         self.slot(id)
             .is_some_and(|s| s.redirect() == SymbolRedirect::Localized)
     }
@@ -4926,7 +4945,7 @@ impl Obarray {
         self.global_member_count
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.global_member_count == 0
     }
 
@@ -5349,6 +5368,16 @@ mod copied_value_tests;
 #[cfg(test)]
 #[path = "tests/plist_epoch_test.rs"]
 mod plist_epoch_tests;
+
+#[cfg(test)]
+#[path = "tests/member_funnel_test.rs"]
+mod member_funnel_tests;
+
+#[cfg(any(test, feature = "test-support"))]
+mod membership_audit;
+
+#[cfg(any(test, feature = "test-support"))]
+pub use membership_audit::VisibilityViolation;
 
 /// The pre-`CanonicalAccess` spellings, for tests, which set up and inspect
 /// canonical storage. Production code names its reason

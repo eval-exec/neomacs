@@ -137,10 +137,10 @@ fn deficiency_rx_with_eval_and_variable() {
     crate::common::assert_oracle_parity_expect(
         "(progn\n\
          (let ((prefix \"my-\"))\n\
-         (let ((re (rx-to-string '(eval prefix) (+ alpha)))))\n\
+         (let ((re (rx-to-string '(eval prefix) (+ alpha))))\n\
          (list re\n\
          (string-match re \"my-function\")\n\
-         (string-match re \"other-function\"))))",
+         (string-match re \"other-function\")))))",
         expect,
     );
 }

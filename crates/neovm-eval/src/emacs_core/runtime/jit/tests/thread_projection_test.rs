@@ -37,7 +37,7 @@ fn fixture() -> Context {
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::jit::cache::clear();
-    ev.obarray.intern("tpj-obj");
+    ev.obarray.intern_member("tpj-obj");
     ev.obarray
         .install_objfwd(intern("tpj-obj"), alloc_objfwd(Value::fixnum(4343)));
     ev.obarray.define_int_variable("tpj-int", 4444);
@@ -62,7 +62,7 @@ fn function(name: &str) -> ByteCodeFunction {
     });
     f.lexical = true;
     f.ops = OPS.to_vec();
-    f.constants = vec![Value::symbol(name)].into();
+    f.constants = vec![Value::from_sym_id(intern(name))].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     f
 }
@@ -86,7 +86,7 @@ fn interpret(ev: &mut Context, name: &str) -> String {
 /// NAME's reader compiled against EV with every inline variable path on.
 fn compile_inline(ev: &Context, name: &str) -> CompiledLeaf {
     force_inline_vars_for_test(Some(InlineVarsKnob::ALL));
-    let constants = [Value::symbol(name)];
+    let constants = [Value::from_sym_id(intern(name))];
     let leaf = with_compile_env_for_test(ev, || lower_leaf(&OPS, &constants, 0));
     force_inline_vars_for_test(None);
     leaf.expect("reader lowers")
@@ -176,7 +176,11 @@ const WRITE_OPS: [Op; 9] = [
 ];
 
 fn write_constants(name: &str) -> [Value; 3] {
-    [Value::symbol(name), Value::fixnum(50), Value::fixnum(51)]
+    [
+        Value::from_sym_id(intern(name)),
+        Value::fixnum(50),
+        Value::fixnum(51),
+    ]
 }
 
 fn write_function(name: &str) -> ByteCodeFunction {
@@ -251,7 +255,7 @@ fn setq_compiled_across_projection_stores_canonically() {
     const OPS: [Op; 4] = [Op::Constant(1), Op::VarSet(0), Op::VarRef(0), Op::Return];
     let compile = |ev: &Context, name: &str| {
         force_inline_vars_for_test(Some(InlineVarsKnob::ALL));
-        let constants = [Value::symbol(name), Value::fixnum(7)];
+        let constants = [Value::from_sym_id(intern(name)), Value::fixnum(7)];
         let leaf = with_compile_env_for_test(ev, || lower_leaf(&OPS, &constants, 0));
         force_inline_vars_for_test(None);
         leaf.expect("setter lowers")

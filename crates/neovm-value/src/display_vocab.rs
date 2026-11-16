@@ -384,17 +384,17 @@ pub enum FontWeight {
 impl FontWeight {
     pub const THIN: Self = Self::Thin;
     pub const ULTRA_LIGHT: Self = Self::UltraLight;
-    pub const EXTRA_LIGHT: Self = Self::ExtraLight;
-    pub const LIGHT: Self = Self::Light;
-    pub const SEMI_LIGHT: Self = Self::SemiLight;
+    pub(crate) const EXTRA_LIGHT: Self = Self::ExtraLight;
+    pub(crate) const LIGHT: Self = Self::Light;
+    pub(crate) const SEMI_LIGHT: Self = Self::SemiLight;
     pub const NORMAL: Self = Self::Normal;
     pub const MEDIUM: Self = Self::Medium;
     pub const SEMI_BOLD: Self = Self::SemiBold;
     pub const BOLD: Self = Self::Bold;
     pub const EXTRA_BOLD: Self = Self::ExtraBold;
-    pub const ULTRA_BOLD: Self = Self::UltraBold;
+    pub(crate) const ULTRA_BOLD: Self = Self::UltraBold;
     pub const BLACK: Self = Self::Black;
-    pub const ULTRA_HEAVY: Self = Self::UltraHeavy;
+    pub(crate) const ULTRA_HEAVY: Self = Self::UltraHeavy;
 
     pub fn from_symbol(name: &str) -> Option<Self> {
         name.parse().ok()
@@ -416,7 +416,7 @@ impl FontWeight {
         }
     }
 
-    pub fn from_gnu_style_code(code: i64) -> Option<Self> {
+    pub(crate) fn from_gnu_style_code(code: i64) -> Option<Self> {
         let code = u16::try_from(code).ok()?;
         let numeric = code >> 8;
         let row = (code >> 4) & 0x0f;
@@ -1383,7 +1383,7 @@ impl ImageFilenameType {
         self.into()
     }
 
-    pub fn available_type(self) -> Option<ImageType> {
+    pub(crate) fn available_type(self) -> Option<ImageType> {
         ImageType::from_symbol_name(self.name())
     }
 }
@@ -1462,7 +1462,7 @@ pub const FONT_WIDTH_STYLE_TABLE: &[(i64, &[&str])] = &[
     (200, &["ultra-expanded", "ultraexpanded", "wide"]),
 ];
 
-pub fn font_style_table(entries: &[(i64, &[&str])]) -> Value {
+pub fn font_style_table(entries: &[(i64, &'static [&'static str])]) -> Value {
     Value::vector(
         entries
             .iter()

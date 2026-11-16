@@ -53,7 +53,7 @@ fn backtrace_max_depth() {
     let mut bt = Backtrace::with_max_depth(3);
     for i in 0..10 {
         bt.push(BacktraceFrame {
-            function: Value::symbol(format!("fn{}", i)),
+            function: Value::from_sym_id(intern((format!("fn{}", i)).as_ref())),
             args: vec![],
             file: None,
             line: None,

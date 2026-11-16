@@ -241,7 +241,11 @@ pub(crate) fn gnutls_peer_status_to_value(status: &TlsPeerStatus) -> Value {
     if !status.warnings.is_empty() {
         entries.push(Value::keyword(":warnings"));
         entries.push(Value::list(
-            status.warnings.iter().map(Value::keyword).collect(),
+            status
+                .warnings
+                .iter()
+                .map(|name| Value::keyword(*name))
+                .collect(),
         ));
     }
 

@@ -63,7 +63,9 @@ pub(super) struct DesktopExtent {
 pub(super) struct DesktopUnavailable;
 
 impl DesktopExtent {
-    pub fn from_monitors(monitors: &[NeomacsMonitorInfo]) -> Result<Self, DesktopUnavailable> {
+    pub(crate) fn from_monitors(
+        monitors: &[NeomacsMonitorInfo],
+    ) -> Result<Self, DesktopUnavailable> {
         let convention = DisplayPixelConvention::current();
         let mut bounds: Option<(f64, f64, f64, f64)> = None;
         for monitor in monitors {

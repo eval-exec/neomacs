@@ -71,8 +71,8 @@ mod moved_eval_prelude {
     pub use neovm_value::error::*;
     pub use neovm_value::gc_trace::GcTrace;
     pub use neovm_value::intern::{
-        SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,
-        is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
+        SymId, WellKnown, format_symbol_name_for_diagnostic, intern, is_canonical_id,
+        is_keyword_id, make_uninterned_symbol, resolve_sym, symbol_name_id,
     };
     pub use neovm_value::kmacro::KmacroManager;
     pub use neovm_value::quit::QuitRequest;
@@ -785,7 +785,7 @@ fn gnu_timer_after(delay: Duration, callback: &str) -> Value {
         Value::fixnum(secs & 0xFFFF),
         Value::fixnum(when.subsec_micros() as i64),
         Value::NIL,
-        Value::symbol(callback),
+        Value::from_sym_id(intern(callback)),
         Value::NIL,
         Value::NIL,
         Value::fixnum(0),
@@ -807,7 +807,7 @@ fn gnu_timer_before(delay: Duration, callback: &str) -> Value {
         Value::fixnum(secs & 0xFFFF),
         Value::fixnum(when.subsec_micros() as i64),
         Value::NIL,
-        Value::symbol(callback),
+        Value::from_sym_id(intern(callback)),
         Value::NIL,
         Value::NIL,
         Value::fixnum(0),
@@ -824,7 +824,7 @@ fn gnu_idle_timer_after(delay: Duration, callback: &str) -> Value {
         Value::fixnum(secs & 0xFFFF),
         Value::fixnum(delay.subsec_micros() as i64),
         Value::NIL,
-        Value::symbol(callback),
+        Value::from_sym_id(intern(callback)),
         Value::NIL,
         Value::symbol("idle"),
         Value::fixnum(0),
@@ -9910,7 +9910,7 @@ fn canonical_subr_survives_rebinding_and_gc() {
 fn dispatch_subr_id_uses_name_identity_not_symbol_slot_identity() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    let namesake = neovm_value::intern::intern_uninterned("car");
+    let namesake = neovm_value::intern::make_uninterned_symbol("car");
     let args = vec![Value::list(vec![Value::fixnum(1), Value::fixnum(2)])];
     let result = ev
         .dispatch_subr_id(namesake, args)
@@ -17007,8 +17007,8 @@ fn jit_switch_through_funcall_seam() {
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
         for (name, target) in [("jit-sw-a", 5), ("jit-sw-b", 7)] {
-            let key = Value::symbol(name).to_hash_key(&ht.test);
-            ht.insert(key, Value::symbol(name), Value::fixnum(target));
+            let key = Value::from_sym_id(intern(name)).to_hash_key(&ht.test);
+            ht.insert(key, Value::from_sym_id(intern(name)), Value::fixnum(target));
         }
     });
     // (lambda (x) (pcase x ('jit-sw-a 1) ('jit-sw-b 2) (_ 0)))
@@ -17486,7 +17486,7 @@ fn jit_subr_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
     ops.push(Op::Call(nargs as u16));
     ops.push(Op::Return);
     f.ops = ops;
-    f.constants = vec![Value::symbol(name)].into();
+    f.constants = vec![Value::from_sym_id(intern(name))].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     if hot {
         jit_mark_hot_for_test(&f);
@@ -18114,7 +18114,7 @@ fn jit_subr_spec_position_queries_match_interpreter() {
                         } else {
                             "fixnump"
                         };
-                        assert_eq!(sig.data, vec![Value::symbol(predicate), arg]);
+                        assert_eq!(sig.data, vec![Value::from_sym_id(intern(predicate)), arg]);
                     }
                 }
                 results.push(format_eval_result(
@@ -18395,7 +18395,7 @@ fn jit_subr_spec_many_get_text_property_engages_and_matches() {
         (2, "absent", "inside->nil"),
         (9, "face", "outside->nil"),
     ] {
-        let args = || vec![Value::make_int(pos), Value::symbol(prop)];
+        let args = || vec![Value::make_int(pos), Value::from_sym_id(intern(prop))];
         let native = ev
             .funcall_general_untraced(hot, args())
             .unwrap_or_else(|e| panic!("native {label}: {e:?}"));
@@ -19005,7 +19005,6 @@ fn jit_cbsym_spec_inplace_rewrite_to_nonbuiltin_bounces_like_interp() {
         SubrEntryChange, lookup_global_subr_entry, register_global_subr_entry,
         with_subr_entry_change,
     };
-    use neovm_value::intern::intern;
     use neovm_value::tagged::header::SubrDispatchKind;
     let mut ev = crate::test_utils::new_context();
     let widen = intern("widen"); // Tier-B, 0-arg, not used between rewrite/restore
@@ -20342,7 +20341,7 @@ fn jit_bench_fib_value(sym_name: &str, tier: BenchTier) -> Value {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
-    let fib_sym = Value::symbol(sym_name);
+    let fib_sym = Value::from_sym_id(intern(sym_name));
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: vec![unsafe { neovm_value::intern::SymId::from_raw(1) }],
@@ -20768,7 +20767,6 @@ fn jit_bench_call_bound_loop() {
 fn jit_bench_builtin_bound_caller(tier: BenchTier) -> Value {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
-    use neovm_value::intern::intern;
     use neovm_value::value::LambdaParams;
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -22696,7 +22694,7 @@ fn jit_bench_cons() {
 fn direct_context_apply_accepts_uninterned_symbol_function_designators() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    let fun = intern_uninterned("vm-apply-uninterned");
+    let fun = make_uninterned_symbol("vm-apply-uninterned");
     let callable = ev
         .eval_str("(lambda (x) (+ x 1))")
         .expect("lambda should evaluate");
@@ -24636,12 +24634,13 @@ fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands
     for &(key, command) in commands {
         crate::emacs_core::keymap::list_keymap_define_seq(
             global_map,
-            &[Value::symbol(key)],
-            Value::symbol(command),
+            &[Value::from_sym_id(intern(key))],
+            Value::from_sym_id(intern(command)),
             neovm_value::tagged::SymbolMode::Bare,
         )
         .expect("define signaling command");
-        ev.command_loop_mut().unread_event(Value::symbol(key));
+        ev.command_loop_mut()
+            .unread_event(Value::from_sym_id(intern(key)));
     }
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
@@ -26181,7 +26180,8 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     // precondition holds on any build.
     let mut topup = 0u64;
     while ev.obarray_mut().current_slot_len() < 2 * 4096 {
-        ev.obarray_mut().intern(&format!("t23-topup-{topup}"));
+        ev.obarray_mut()
+            .intern_member(&format!("t23-topup-{topup}"));
         topup += 1;
     }
     assert!(ev.obarray().current_slot_len() >= 2 * 4096);
@@ -26229,7 +26229,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
         //     of the snapshotted obarray.
         if fresh < MAX_FRESH {
             for _ in 0..16 {
-                ev.obarray_mut().intern(&format!("t23-fill-{fresh}"));
+                ev.obarray_mut().intern_member(&format!("t23-fill-{fresh}"));
                 fresh += 1;
             }
         }
@@ -27691,7 +27691,7 @@ fn jit_cached_leaf_fixture(ev: &mut Context, name: &str) -> Value {
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     jit_mark_hot_for_test(&f);
     let fv = Value::make_bytecode(f);
-    crate::emacs_core::builtins::builtin_fset(ev, vec![Value::symbol(name), fv])
+    crate::emacs_core::builtins::builtin_fset(ev, vec![Value::from_sym_id(intern(name)), fv])
         .expect("fset fixture");
     assert_eq!(
         ev.funcall_general_untraced(fv, vec![]).unwrap(),
@@ -27777,7 +27777,7 @@ fn jit_closure_prototype(
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use neovm_value::value::LambdaParams;
     let mut consts: Vec<Value> = (0..placeholders)
-        .map(|i| Value::symbol(format!("V{i}")))
+        .map(|i| Value::from_sym_id(intern((format!("V{i}")).as_ref())))
         .collect();
     consts.extend(tail);
     let mut f = ByteCodeFunction::new(LambdaParams {
@@ -27833,8 +27833,11 @@ fn jit_make_closure_instances_share_one_leaf_and_read_their_own_captures() {
         ("jit-share-a", a),
         ("jit-share-b", b),
     ] {
-        crate::emacs_core::builtins::builtin_fset(&mut ev, vec![Value::symbol(name), v])
-            .expect("fset");
+        crate::emacs_core::builtins::builtin_fset(
+            &mut ev,
+            vec![Value::from_sym_id(intern(name)), v],
+        )
+        .expect("fset");
     }
     let a_bc = a.get_bytecode_data().expect("bytecode");
     assert_eq!(
@@ -29453,7 +29456,6 @@ fn current_buffer_scope_finish_watcher_panic_restores_popped_binding_and_roots()
     #[doc(hidden)]
     pub use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
     use neovm_value::error::EvalResult;
-    use neovm_value::intern::intern;
     fn panic_during_unlet(_: &mut Context, args: Vec<Value>) -> EvalResult {
         if args.get(2) == Some(&Value::symbol("unlet")) {
             panic!("exercise Rust panic in explicit scope finish");
@@ -29512,7 +29514,6 @@ fn unbind_watcher_panic_restores_quit_and_vm_roots() {
     #[doc(hidden)]
     pub use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
     use neovm_value::error::EvalResult;
-    use neovm_value::intern::intern;
     fn watcher(_: &mut Context, args: Vec<Value>) -> EvalResult {
         if args.get(2) == Some(&Value::symbol("unlet")) {
             panic!("contained watcher panic while unwind roots are owned");

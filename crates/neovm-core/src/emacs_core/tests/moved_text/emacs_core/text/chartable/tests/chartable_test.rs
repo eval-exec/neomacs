@@ -21,7 +21,7 @@ use neovm_value::boolvec::{bool_vector_from_bits, bool_vector_ref_value};
 
 use neovm_value::error::{FlowKind, FlowResultExt as _};
 
-use neovm_value::intern::{intern, intern_uninterned};
+use neovm_value::intern::{intern, make_uninterned_symbol};
 
 use neovm_value::symbol::CanonicalAccess;
 
@@ -103,7 +103,7 @@ fn builtin_make_char_table_checks_symbol_and_extra_slot_property_like_gnu() {
         "symbolp",
     );
 
-    let purpose = Value::symbol(intern_uninterned("neo-extra"));
+    let purpose = Value::symbol(make_uninterned_symbol("neo-extra"));
     eval.obarray_mut()
         .put_property_id(
             purpose.as_bare_symbol_id().unwrap(),

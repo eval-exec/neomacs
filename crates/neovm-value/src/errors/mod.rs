@@ -35,8 +35,21 @@ use std::collections::{HashMap, HashSet};
 /// Set `error-conditions` and `error-message` properties on `name` in the
 /// obarray.  `conditions` is the full list of condition symbols (including
 /// `name` itself, its parents, and their transitive ancestors).
-fn put_error_properties(obarray: &mut Obarray, name: &str, message: &str, conditions: Vec<&str>) {
-    let cond_list = Value::list(conditions.iter().map(|s| Value::symbol(*s)).collect());
+fn put_error_properties<I, S>(obarray: &mut Obarray, name: &str, message: &str, conditions: I)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    // GNU `define-error` interns every condition name it publishes; the
+    // port builds the transitive list by name, so publish each canonical id
+    // as a member before storing the list.
+    let mut values = Vec::new();
+    for condition in conditions {
+        let id = crate::intern::intern(condition.as_ref());
+        obarray.ensure_interned_global_id(id);
+        values.push(Value::from_sym_id(id));
+    }
+    let cond_list = Value::list(values);
     obarray
         .put_property(name, "error-conditions", cond_list)
         .expect("error-conditions plist should always be valid during init");
@@ -96,7 +109,7 @@ fn iter_symbol_list(value: &Value, symbol_mode: SymbolMode) -> Vec<String> {
 ///
 /// This is the hierarchical replacement for the flat `signal_matches` in
 /// `error.rs`.
-pub fn signal_matches_hierarchical(
+pub(crate) fn signal_matches_hierarchical(
     obarray: &Obarray,
     signal_sym: &str,
     condition_sym: &str,
@@ -123,7 +136,7 @@ pub fn signal_matches_hierarchical(
 
 /// Like `signal_matches_hierarchical` but matches a runtime `Value`
 /// produced by compiled bytecode condition handlers.
-pub fn signal_matches_condition_value(
+pub(crate) fn signal_matches_condition_value(
     obarray: &Obarray,
     signal_sym: &str,
     pattern: &Value,
@@ -681,8 +694,7 @@ pub fn register_dbus_error(obarray: &mut Obarray) {
 
 fn register_simple(obarray: &mut Obarray, name: &str, message: &str, parents: &[&str]) {
     let conditions = build_conditions_from_obarray(obarray, name, parents);
-    let cond_refs: Vec<&str> = conditions.iter().map(|s| s.as_str()).collect();
-    put_error_properties(obarray, name, message, cond_refs);
+    put_error_properties(obarray, name, message, &conditions);
 }
 
 // ---------------------------------------------------------------------------
@@ -717,7 +729,7 @@ pub fn build_signal_flow_id(symbol: SymId, data: Value) -> Flow {
 /// This can be used independently of the obarray (e.g. for testing or
 /// embedding).  For the full Emacs-compatible approach, prefer the
 /// obarray-based functions above.
-pub struct ErrorRegistry {
+pub(crate) struct ErrorRegistry {
     /// Map from error symbol name to its parent error symbol names.
     parents: HashMap<SymId, Vec<SymId>>,
 }
@@ -734,7 +746,7 @@ impl ErrorRegistry {
     }
 
     /// Register a new error type using symbol identity.
-    pub fn define_error_sym(&mut self, name: SymId, _message: &str, parents: &[SymId]) {
+    pub(crate) fn define_error_sym(&mut self, name: SymId, _message: &str, parents: &[SymId]) {
         let parent_list = if parents.is_empty() {
             vec![intern("error")]
         } else {
@@ -744,7 +756,7 @@ impl ErrorRegistry {
     }
 
     /// Register a new error type.
-    pub fn define_error(&mut self, name: &str, _message: &str, parents: &[&str]) {
+    pub(crate) fn define_error(&mut self, name: &str, _message: &str, parents: &[&str]) {
         let name = intern(name);
         let parents: Vec<SymId> = parents.iter().map(|s| intern(s)).collect();
         self.define_error_sym(name, _message, &parents);
@@ -752,7 +764,7 @@ impl ErrorRegistry {
 
     /// Check whether `signal` inherits from `condition` (directly or
     /// transitively).
-    pub fn signal_matches_condition_sym(&self, signal_sym: SymId, condition: SymId) -> bool {
+    pub(crate) fn signal_matches_condition_sym(&self, signal_sym: SymId, condition: SymId) -> bool {
         if condition == intern("t") {
             return true;
         }
@@ -777,12 +789,12 @@ impl ErrorRegistry {
         false
     }
 
-    pub fn signal_matches_condition(&self, signal_sym: &str, condition: &str) -> bool {
+    pub(crate) fn signal_matches_condition(&self, signal_sym: &str, condition: &str) -> bool {
         self.signal_matches_condition_sym(intern(signal_sym), intern(condition))
     }
 
     /// Collect the full condition list for a signal (self + all ancestors).
-    pub fn conditions_for_sym(&self, signal_sym: SymId) -> Vec<SymId> {
+    pub(crate) fn conditions_for_sym(&self, signal_sym: SymId) -> Vec<SymId> {
         let mut result = vec![signal_sym];
         let mut visited = HashSet::new();
         visited.insert(signal_sym);
@@ -800,7 +812,7 @@ impl ErrorRegistry {
         result
     }
 
-    pub fn conditions_for(&self, signal_sym: &str) -> Vec<String> {
+    pub(crate) fn conditions_for(&self, signal_sym: &str) -> Vec<String> {
         self.conditions_for_sym(intern(signal_sym))
             .into_iter()
             .map(|sym| resolve_sym(sym).to_owned())

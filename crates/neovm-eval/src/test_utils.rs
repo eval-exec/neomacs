@@ -941,17 +941,21 @@ mod unit_runtime {
     ) -> Result<(), neovm_value::error::Flow> {
         // F-4: this unit body is the exact wait only while the runtime has no
         // other wake source: no live process can queue a wait notification,
-        // and no OS-signal self-pipe is installed. Assert both premises.
+        // and no wait-notifier poller is registered. Assert both premises.
         let live = ctx.processes().live_process_ids();
         assert!(
             live.is_empty(),
             "ABSENT layer: unit wait reached with live processes ({live:?}); \
              the Green/select sleep would ignore process output"
         );
-        assert!(
-            crate::emacs_core::eval::input_hooks::signal_wake_pipe_read_fd().is_none(),
-            "ABSENT layer: unit wait reached with an OS-signal self-pipe installed"
-        );
+        // PEER 5796: the OS-signal self-pipe half was vacuous (that slot is
+        // the constant-None absent-layer value). A notifier-source assert
+        // cannot be written from the poller field either: the unit runtime
+        // does own a poller, but its handle is reachable only through the
+        // `process.wait_notifier` hook, which is still a refusal stand-in
+        // here, so nothing can publish a wake. The empty process table above
+        // already covers the only other source (process output). The
+        // process-table assert is therefore the real premise.
         match ctx.green_select_switch(duration)? {
             crate::emacs_core::eval::SelectTurn::Switched => Ok(()),
             crate::emacs_core::eval::SelectTurn::Block(wait_time) => {

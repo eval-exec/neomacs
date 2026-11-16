@@ -15,6 +15,7 @@ use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::NumericFeedback as NF;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
+use neovm_value::intern::intern;
 use neovm_value::value::{LambdaParams, ValueKind};
 
 /// `(lambda (p0 .. pN-1) OPS)` with `Float` recorded at `float_pcs`.
@@ -775,7 +776,7 @@ fn a_variable_read_keeps_flonums_unboxed_and_its_handler_boxes_them() {
                 Op::Add,
                 Op::Return,
             ],
-            vec![Value::symbol(var)],
+            vec![Value::from_sym_id(intern(var))],
             &[2, 4],
         );
         let mut consed = Vec::new();

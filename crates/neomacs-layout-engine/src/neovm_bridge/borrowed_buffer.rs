@@ -121,6 +121,23 @@ impl LayoutBufferView for BorrowedLayoutBuffer<'_> {
             .indexed_newline_count(range, neovm_core::buffer::LineIndexBuild::IfLarge)
     }
 
+    fn layout_nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize) {
+        self.buffer.nth_newline_emacs_byte(from, limit, n)
+    }
+
+    fn layout_prev_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        floor: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.buffer.prev_newline_emacs_byte(from, floor)
+    }
+
     fn layout_text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {
         self.buffer
             .text_props_get_property_at_emacs_byte_pos(pos, name)

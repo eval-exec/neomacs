@@ -106,35 +106,39 @@ impl TaggedHeap {
         std::mem::take(&mut self.reclaimed_buffer_ids)
     }
 
-    pub fn window_value(&self, id: u64) -> Option<TaggedValue> {
+    pub(crate) fn window_value(&self, id: u64) -> Option<TaggedValue> {
         self.window_registry.get(&id).copied()
     }
 
-    pub fn register_window_value(&mut self, id: u64, value: TaggedValue) {
+    pub(crate) fn register_window_value(&mut self, id: u64, value: TaggedValue) {
         self.window_registry.insert(id, value);
     }
 
-    pub fn frame_value(&self, id: u64) -> Option<TaggedValue> {
+    pub(crate) fn frame_value(&self, id: u64) -> Option<TaggedValue> {
         self.frame_registry.get(&id).copied()
     }
 
-    pub fn register_frame_value(&mut self, id: u64, value: TaggedValue) {
+    pub(crate) fn register_frame_value(&mut self, id: u64, value: TaggedValue) {
         self.frame_registry.insert(id, value);
     }
 
-    pub fn timer_value(&self, id: u64) -> Option<TaggedValue> {
+    pub(crate) fn timer_value(&self, id: u64) -> Option<TaggedValue> {
         self.timer_registry.get(&id).copied()
     }
 
-    pub fn register_timer_value(&mut self, id: u64, value: TaggedValue) {
+    pub(crate) fn register_timer_value(&mut self, id: u64, value: TaggedValue) {
         self.timer_registry.insert(id, value);
     }
 
-    pub fn process_value(&self, id: crate::heap_types::ProcessId) -> Option<TaggedValue> {
+    pub(crate) fn process_value(&self, id: crate::heap_types::ProcessId) -> Option<TaggedValue> {
         self.process_registry.get(&id).copied()
     }
 
-    pub fn register_process_value(&mut self, id: crate::heap_types::ProcessId, value: TaggedValue) {
+    pub(crate) fn register_process_value(
+        &mut self,
+        id: crate::heap_types::ProcessId,
+        value: TaggedValue,
+    ) {
         self.process_registry.insert(id, value);
     }
 
@@ -280,7 +284,7 @@ impl TaggedHeap {
         ImageStamp::Stamped
     }
 
-    pub fn dirty_owner_count(&self) -> usize {
+    pub(crate) fn dirty_owner_count(&self) -> usize {
         self.dirty_owners.len()
     }
 
@@ -288,7 +292,7 @@ impl TaggedHeap {
         self.dirty_owner_bits.contains(&owner.bits())
     }
 
-    pub fn take_dirty_owners(&mut self) -> Vec<TaggedValue> {
+    pub(crate) fn take_dirty_owners(&mut self) -> Vec<TaggedValue> {
         self.dirty_owner_bits.clear();
         std::mem::take(&mut self.dirty_owners)
     }
@@ -298,7 +302,7 @@ impl TaggedHeap {
         self.dirty_owner_bits.clear();
     }
 
-    pub fn dirty_write_count(&self) -> usize {
+    pub(crate) fn dirty_write_count(&self) -> usize {
         self.dirty_writes.len()
     }
 
@@ -306,7 +310,7 @@ impl TaggedHeap {
         &self.dirty_writes
     }
 
-    pub fn take_dirty_writes(&mut self) -> Vec<HeapWriteRecord> {
+    pub(crate) fn take_dirty_writes(&mut self) -> Vec<HeapWriteRecord> {
         std::mem::take(&mut self.dirty_writes)
     }
 

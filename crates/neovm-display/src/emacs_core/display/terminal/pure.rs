@@ -210,7 +210,7 @@ impl DeleteTerminalMode {
 /// comparison against this type: `t->type == output_initial`
 /// (src/terminal.c:499).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerminalOutputMethod {
+pub(crate) enum TerminalOutputMethod {
     /// GNU `output_initial`: the bootstrap terminal used during daemon mode,
     /// batch mode and the early stages of startup, and which holds the initial
     /// frame.

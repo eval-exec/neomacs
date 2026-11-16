@@ -133,7 +133,7 @@ pub use crate::tagged::value::ValueKind;
 /// pairs variables positionally with new arg values. A `HashMap` loses
 /// insertion order and causes wrong variable-to-value bindings.
 #[derive(Debug, Clone)]
-pub struct OrderedSymMap {
+pub(crate) struct OrderedSymMap {
     entries: Vec<(SymId, Value)>,
 }
 
@@ -222,7 +222,7 @@ pub enum RuntimeBindingValue {
 }
 
 impl RuntimeBindingValue {
-    pub fn bound(value: Value) -> Self {
+    pub(crate) fn bound(value: Value) -> Self {
         Self::Bound(value)
     }
 
@@ -233,7 +233,7 @@ impl RuntimeBindingValue {
         }
     }
 
-    pub fn as_ref(&self) -> Option<&Value> {
+    pub(crate) fn as_ref(&self) -> Option<&Value> {
         match self {
             Self::Bound(value) => Some(value),
             Self::Void => None,
@@ -275,7 +275,7 @@ impl OrderedRuntimeBindingMap {
         self.get_binding(key).and_then(RuntimeBindingValue::as_ref)
     }
 
-    pub fn get_binding(&self, key: &SymId) -> Option<&RuntimeBindingValue> {
+    pub(crate) fn get_binding(&self, key: &SymId) -> Option<&RuntimeBindingValue> {
         self.entries
             .iter()
             .rev()
@@ -287,7 +287,7 @@ impl OrderedRuntimeBindingMap {
         self.insert_binding(key, RuntimeBindingValue::Bound(value));
     }
 
-    pub fn insert_binding(&mut self, key: SymId, value: RuntimeBindingValue) {
+    pub(crate) fn insert_binding(&mut self, key: SymId, value: RuntimeBindingValue) {
         if let Some(entry) = self.entries.iter_mut().rev().find(|(k, _)| *k == key) {
             entry.1 = value;
         } else {
@@ -295,7 +295,7 @@ impl OrderedRuntimeBindingMap {
         }
     }
 
-    pub fn set_void(&mut self, key: SymId) {
+    pub(crate) fn set_void(&mut self, key: SymId) {
         self.insert_binding(key, RuntimeBindingValue::Void);
     }
 
@@ -430,7 +430,7 @@ fn string_text_props(value: Value) -> Option<&'static TextPropertyTable> {
 pub fn reset_string_text_properties() {}
 
 /// String text property GC roots are traced from `StringObj` during heap mark.
-pub fn collect_string_text_prop_gc_roots(_roots: &mut Vec<Value>) {}
+pub(crate) fn collect_string_text_prop_gc_roots(_roots: &mut Vec<Value>) {}
 
 pub fn set_string_text_properties_table_for_value(value: Value, table: TextPropertyTable) {
     if table.is_empty() {
@@ -663,13 +663,13 @@ pub struct StringTextPropertyRun {
 }
 
 /// Snapshot of a cons cell's car and cdr values (legacy compatibility).
-pub struct ConsSnapshot {
+pub(crate) struct ConsSnapshot {
     pub car: Value,
     pub cdr: Value,
 }
 
 /// Allocate a fresh float identity (stub — float identity is pointer-based).
-pub fn next_float_id() -> u32 {
+pub(crate) fn next_float_id() -> u32 {
     0
 }
 
@@ -805,7 +805,7 @@ impl LambdaData {
     ///
     /// Layout: [arglist, body, env, depth, docstring, interactive]
     /// All slots are GC-managed Values.
-    pub fn to_closure_slots(&self) -> Vec<Value> {
+    pub(crate) fn to_closure_slots(&self) -> Vec<Value> {
         // Slot 0: arglist as Lisp list
         let arglist = lambda_params_to_value(&self.params);
 
@@ -1404,7 +1404,7 @@ impl HashTableStorage {
     }
 
     /// `get_mut` counterpart of [`Self::get_by_value`].
-    pub fn get_mut_by_value(
+    pub(crate) fn get_mut_by_value(
         &mut self,
         value: Value,
         test: HashTableTest,
@@ -1521,7 +1521,7 @@ impl HashTableStorage {
         None
     }
 
-    pub fn insert_replacing_key(
+    pub(crate) fn insert_replacing_key(
         &mut self,
         hash_key: HashKey,
         key: Value,
@@ -1624,7 +1624,7 @@ impl HashTableStorage {
         self.user_hashes.keys().cloned().collect()
     }
 
-    pub fn reserve(&mut self, additional: usize) {
+    pub(crate) fn reserve(&mut self, additional: usize) {
         self.index.reserve(additional);
         self.slots.reserve(additional);
     }
@@ -1937,7 +1937,7 @@ impl HashTableWeakness {
         Self::try_from(code).ok()
     }
 
-    pub fn option_from_gnu_code(code: u8) -> Option<Option<Self>> {
+    pub(crate) fn option_from_gnu_code(code: u8) -> Option<Option<Self>> {
         if code == 0 {
             Some(None)
         } else {
@@ -2617,13 +2617,13 @@ impl LispHashTable {
 
     /// Build `index`/`slots` from parked dump entries. Idempotent.
     #[cold]
-    pub fn hydrate_pending(&mut self) {
+    pub(crate) fn hydrate_pending(&mut self) {
         if let Some(entries) = self.data.take_pending() {
             self.rebuild_from_ordered_entries(entries);
         }
     }
 
-    pub fn rebuild_from_parts(
+    pub(crate) fn rebuild_from_parts(
         &mut self,
         values: FxHashMap<HashKey, Value>,
         key_snapshots: FxHashMap<HashKey, Value>,
@@ -2748,7 +2748,7 @@ impl IntoSymbol for SymId {
     }
 }
 
-impl IntoSymbol for &str {
+impl IntoSymbol for &'static str {
     fn into_symbol(self) -> Value {
         if self == "nil" {
             Value::NIL
@@ -2783,30 +2783,6 @@ impl IntoSymbol for &crate::intern::WellKnown {
     }
 }
 
-impl IntoSymbol for String {
-    fn into_symbol(self) -> Value {
-        self.as_str().into_symbol()
-    }
-}
-
-impl IntoSymbol for &String {
-    fn into_symbol(self) -> Value {
-        self.as_str().into_symbol()
-    }
-}
-
-impl IntoSymbol for &&str {
-    fn into_symbol(self) -> Value {
-        (*self).into_symbol()
-    }
-}
-
-impl IntoSymbol for &&String {
-    fn into_symbol(self) -> Value {
-        self.as_str().into_symbol()
-    }
-}
-
 fn canonical_keyword_name(name: &str) -> String {
     if name.starts_with(':') {
         name.to_owned()
@@ -2820,18 +2796,23 @@ fn canonical_keyword_name(name: &str) -> String {
 // ---------------------------------------------------------------------------
 
 impl TaggedValue {
+    /// Record the symbol-use accounting the string symbol constructor
+    /// performs. Subsystems that compare a spelling path against a fixed-id
+    /// path (face-name producers) call this explicitly so the counters stay
+    /// equal; it creates no symbol and publishes no membership.
+    #[doc(hidden)]
+    #[inline]
+    pub fn account_symbol_name_use() {
+        add_wrapping(MemoryUseCountSlot::Symbols, 1);
+    }
+
     /// Create a symbol from a string (with nil/t/keyword canonicalization) or SymId.
     pub fn symbol(s: impl IntoSymbol) -> Self {
         s.into_symbol()
     }
 
-    /// Create a symbol by interning a name string, with nil/t/keyword canonicalization.
-    pub fn make_symbol(s: impl AsRef<str>) -> Self {
-        s.as_ref().into_symbol()
-    }
-
     /// Create a keyword by interning a canonical `:name` symbol.
-    pub fn keyword(s: impl AsRef<str>) -> Self {
+    pub fn keyword(s: &'static str) -> Self {
         add_wrapping(MemoryUseCountSlot::Symbols, 1);
         TaggedValue::from_kw_id(intern(&canonical_keyword_name(s.as_ref())))
     }
@@ -2839,12 +2820,12 @@ impl TaggedValue {
     /// Wrap an existing interned keyword symbol id.
     ///
     /// Callers must only pass SymIds whose canonical names already start with `:`.
-    pub fn keyword_id(id: SymId) -> Self {
+    pub(crate) fn keyword_id(id: SymId) -> Self {
         TaggedValue::from_kw_id(id)
     }
 
     /// Create a keyword by interning a name string.
-    pub fn make_keyword(s: impl AsRef<str>) -> Self {
+    pub(crate) fn make_keyword(s: &'static str) -> Self {
         Self::keyword(s)
     }
 
@@ -3138,7 +3119,7 @@ impl TaggedValue {
     }
 
     /// Allocate a macro from already-validated GNU closure slots.
-    pub fn make_macro_with_slots(slots: Vec<Value>) -> Self {
+    pub(crate) fn make_macro_with_slots(slots: Vec<Value>) -> Self {
         with_tagged_heap(|h| h.alloc_macro(slots))
     }
 
@@ -3298,7 +3279,7 @@ impl TaggedValue {
     }
 
     /// Allocate a GNU-shaped xwidget view object.
-    pub fn make_xwidget_view(model: Value, window: Value) -> Self {
+    pub(crate) fn make_xwidget_view(model: Value, window: Value) -> Self {
         with_tagged_heap(|h| h.alloc_xwidget_view(model, window))
     }
 
@@ -3424,7 +3405,7 @@ impl TaggedValue {
 
     /// Check if this is a timer.
     #[inline]
-    pub fn is_timer(self) -> bool {
+    pub(crate) fn is_timer(self) -> bool {
         self.veclike_type() == Some(VecLikeType::Timer)
     }
 
@@ -3487,7 +3468,7 @@ impl TaggedValue {
     }
 
     /// Access the heap string via a closure.
-    pub fn with_str<R>(self, f: impl FnOnce(&str) -> R) -> Option<R> {
+    pub(crate) fn with_str<R>(self, f: impl FnOnce(&str) -> R) -> Option<R> {
         self.as_utf8_str().map(f)
     }
 
@@ -3681,7 +3662,7 @@ impl TaggedValue {
     }
 
     /// Update a single closure slot through the centralized write path.
-    pub fn set_closure_slot(self, index: usize, value: Value) -> bool {
+    pub(crate) fn set_closure_slot(self, index: usize, value: Value) -> bool {
         mutate::set_closure_slot(self, index, value)
     }
 
@@ -3789,7 +3770,7 @@ impl TaggedValue {
 
     /// Get the pointer address as a unique identity for a string value.
     /// Used for text property operations.
-    pub fn str_ptr_key(self) -> Option<usize> {
+    pub(crate) fn str_ptr_key(self) -> Option<usize> {
         self.as_string_ptr().map(|p| p as usize)
     }
 
@@ -4099,7 +4080,7 @@ impl TaggedValue {
     }
 
     /// Replace the contents of either a vector or record.
-    pub fn replace_vectorlike_sequence_data(self, values: Vec<Value>) -> bool {
+    pub(crate) fn replace_vectorlike_sequence_data(self, values: Vec<Value>) -> bool {
         match self.veclike_type() {
             Some(VecLikeType::Vector) => self.replace_vector_data(values),
             Some(VecLikeType::Record) => self.replace_record_data(values),
@@ -4245,7 +4226,7 @@ impl TaggedValue {
     }
 
     /// EQ hash key with optional symbol-with-pos transparency.
-    pub fn to_eq_key_swp(&self, symbols_with_pos_enabled: bool) -> HashKey {
+    pub(crate) fn to_eq_key_swp(&self, symbols_with_pos_enabled: bool) -> HashKey {
         if symbols_with_pos_enabled && self.is_symbol_with_pos() {
             let sym = self.as_symbol_with_pos_sym().unwrap();
             return sym.to_eq_key();
@@ -4254,7 +4235,7 @@ impl TaggedValue {
     }
 
     /// EQL hash key with optional symbol-with-pos transparency.
-    pub fn to_eql_key_swp(&self, symbols_with_pos_enabled: bool) -> HashKey {
+    pub(crate) fn to_eql_key_swp(&self, symbols_with_pos_enabled: bool) -> HashKey {
         if symbols_with_pos_enabled && self.is_symbol_with_pos() {
             let sym = self.as_symbol_with_pos_sym().unwrap();
             return sym.to_eql_key();
@@ -4555,7 +4536,7 @@ pub fn equal_value(left: &Value, right: &Value, depth: usize) -> bool {
 /// `equal-including-properties` — structural comparison that also compares
 /// string text-property intervals.  This mirrors GNU Emacs `internal_equal`
 /// carrying its comparison mode recursively into compound objects.
-pub fn equal_value_including_properties(left: &Value, right: &Value, depth: usize) -> bool {
+pub(crate) fn equal_value_including_properties(left: &Value, right: &Value, depth: usize) -> bool {
     let mut seen = None;
     equal_value_inner(
         left,
@@ -5889,7 +5870,7 @@ pub(crate) fn lexenv_binding_symbol_value(sym_id: SymId) -> Value {
 }
 
 /// Look up symbol value in a cons-alist lexenv.
-pub fn lexenv_lookup(lexenv: Value, sym_id: SymId) -> Option<Value> {
+pub(crate) fn lexenv_lookup(lexenv: Value, sym_id: SymId) -> Option<Value> {
     let cell = lexenv_assq(lexenv, sym_id)?;
     Some(unsafe { cons_cdr_unchecked(cons_ptr_unchecked(cell)) })
 }
@@ -5935,7 +5916,7 @@ pub fn lexenv_set(cell: Value, value: Value) {
 }
 
 /// Prepend a `(sym . val)` binding onto a lexenv alist. Returns the new head.
-pub fn lexenv_prepend(lexenv: Value, sym_id: SymId, val: Value) -> Value {
+pub(crate) fn lexenv_prepend(lexenv: Value, sym_id: SymId, val: Value) -> Value {
     let binding = Value::make_cons(lexenv_binding_symbol_value(sym_id), val);
     Value::make_cons(binding, lexenv)
 }

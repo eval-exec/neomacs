@@ -139,7 +139,7 @@ impl TaggedHeap {
     /// `float_arena.owns`) and are NOT `link_object`ed — the intrusive lists
     /// sweep with `free_gc_object`/`Box::from_raw`, which would corrupt the
     /// heap on a page pointer. The page sweep is the only float reclaimer.
-    pub fn alloc_float(&mut self, value: f64) -> TaggedValue {
+    pub(crate) fn alloc_float(&mut self, value: f64) -> TaggedValue {
         self.alloc_float_inline(value)
     }
 
@@ -248,7 +248,7 @@ impl TaggedHeap {
     }
 
     /// Allocate a GNU-shaped sub-char-table.
-    pub fn alloc_sub_char_table(
+    pub(crate) fn alloc_sub_char_table(
         &mut self,
         depth: i32,
         min_char: i32,
@@ -286,7 +286,7 @@ impl TaggedHeap {
     }
 
     /// Allocate a GNU-shaped obarray object.
-    pub fn alloc_obarray(&mut self, buckets: Vec<TaggedValue>) -> TaggedValue {
+    pub(crate) fn alloc_obarray(&mut self, buckets: Vec<TaggedValue>) -> TaggedValue {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, buckets.len() as u64);
         let obj = Box::new(ObarrayObj {
             header: VecLikeHeader::new(VecLikeType::Obarray),
@@ -342,7 +342,7 @@ impl TaggedHeap {
 
     /// Allocate a lambda from a LambdaData (bridge for migration).
     /// Converts LambdaData fields to the Value vector layout.
-    pub fn alloc_lambda_from_data(&mut self, data: crate::value::LambdaData) -> TaggedValue {
+    pub(crate) fn alloc_lambda_from_data(&mut self, data: crate::value::LambdaData) -> TaggedValue {
         let slots = data.to_closure_slots();
         self.alloc_lambda(slots)
     }
@@ -374,7 +374,7 @@ impl TaggedHeap {
     }
 
     /// Allocate a macro from a LambdaData (bridge for migration).
-    pub fn alloc_macro_from_data(&mut self, data: crate::value::LambdaData) -> TaggedValue {
+    pub(crate) fn alloc_macro_from_data(&mut self, data: crate::value::LambdaData) -> TaggedValue {
         let slots = data.to_closure_slots();
         self.alloc_macro(slots)
     }
@@ -419,7 +419,7 @@ impl TaggedHeap {
     }
 
     /// Allocate a timer reference.
-    pub fn alloc_timer(&mut self, id: u64) -> TaggedValue {
+    pub(crate) fn alloc_timer(&mut self, id: u64) -> TaggedValue {
         let obj = Box::new(TimerObj {
             header: VecLikeHeader::new(VecLikeType::Timer),
             id,
@@ -432,7 +432,7 @@ impl TaggedHeap {
     }
 
     /// Allocate a process reference.
-    pub fn alloc_process(&mut self, id: crate::heap_types::ProcessId) -> TaggedValue {
+    pub(crate) fn alloc_process(&mut self, id: crate::heap_types::ProcessId) -> TaggedValue {
         let obj = Box::new(ProcessObj {
             header: VecLikeHeader::new(VecLikeType::Process),
             id,
@@ -445,7 +445,7 @@ impl TaggedHeap {
     }
 
     /// Allocate a display terminal object.
-    pub fn alloc_terminal(&mut self, id: u64) -> TaggedValue {
+    pub(crate) fn alloc_terminal(&mut self, id: u64) -> TaggedValue {
         let obj = Box::new(TerminalObj {
             header: VecLikeHeader::new(VecLikeType::Terminal),
             id,
@@ -496,7 +496,7 @@ impl TaggedHeap {
     /// `memory-use-counts` vector-cells grows by `1 + ⌈nbits/64⌉`, as GNU's
     /// `make_clear_bool_vector` counts it (the `size` word plus the data
     /// words; the header is not a cell).
-    pub fn alloc_bool_vector(&mut self, nbits: usize, words: Vec<u64>) -> TaggedValue {
+    pub(crate) fn alloc_bool_vector(&mut self, nbits: usize, words: Vec<u64>) -> TaggedValue {
         let nwords = words.len();
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, 1 + nwords as u64);
         let obj = Box::new(BoolVectorObj::new(nbits, words));
@@ -513,7 +513,7 @@ impl TaggedHeap {
     /// xwidgets' `internal_xwidget_list`): the handle dies when Lisp drops
     /// it, and `free_gc_object` then queues `surface_id` on
     /// `pending_surface_destroys` for the evaluator's post-collection drain.
-    pub fn alloc_surface_handle(&mut self, surface_id: u32) -> TaggedValue {
+    pub(crate) fn alloc_surface_handle(&mut self, surface_id: u32) -> TaggedValue {
         let obj = Box::new(SurfaceObj {
             header: VecLikeHeader::new(VecLikeType::SurfaceHandle),
             surface_id,
@@ -576,7 +576,10 @@ impl TaggedHeap {
     }
 
     /// Allocate a GC-managed video-session handle.
-    pub fn alloc_video_handle(&mut self, video_id: neovm_display_identity::VideoId) -> TaggedValue {
+    pub(crate) fn alloc_video_handle(
+        &mut self,
+        video_id: neovm_display_identity::VideoId,
+    ) -> TaggedValue {
         let obj = Box::new(VideoObj {
             header: VecLikeHeader::new(VecLikeType::VideoHandle),
             video_id,
@@ -805,7 +808,7 @@ impl TaggedHeap {
     /// Allocate a native opened-font pseudovector (`PVEC_FONT`).  Fonts retain
     /// typed metrics and an exact backend identity, so they are residual
     /// boxed objects rather than pretending to be record slots.
-    pub fn alloc_font(&mut self, data: FontObjectData) -> TaggedValue {
+    pub(crate) fn alloc_font(&mut self, data: FontObjectData) -> TaggedValue {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, data.fields.len() as u64);
         let obj = Box::new(FontObj {
             header: VecLikeHeader::new(VecLikeType::Font),

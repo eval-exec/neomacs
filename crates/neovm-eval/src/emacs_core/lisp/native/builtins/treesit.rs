@@ -235,7 +235,11 @@ fn parse_symbol_arg(name: &str, value: &Value, mode: SymbolMode) -> Result<SymId
     value.as_symbol_id(mode).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("symbolp"), *value, Value::symbol(name)],
+            vec![
+                Value::symbol("symbolp"),
+                *value,
+                Value::from_sym_id(intern(name)),
+            ],
         )
     })
 }
@@ -246,7 +250,11 @@ fn expect_symbol_or_nil(name: &str, value: Value, mode: SymbolMode) -> Result<Va
     } else {
         Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("symbolp"), value, Value::symbol(name)],
+            vec![
+                Value::symbol("symbolp"),
+                value,
+                Value::from_sym_id(intern(name)),
+            ],
         ))
     }
 }
@@ -257,7 +265,7 @@ fn parser_type_error(name: &str, value: Value) -> Flow {
         vec![
             Value::symbol("treesit-parser-p"),
             value,
-            Value::symbol(name),
+            Value::from_sym_id(intern(name)),
         ],
     )
 }
@@ -272,7 +280,11 @@ fn node_type_error(_name: &str, value: Value) -> Flow {
 fn query_type_error(name: &str, value: Value) -> Flow {
     signal(
         LispCondition::WrongTypeArgument,
-        vec![Value::symbol("treesit-query-p"), value, Value::symbol(name)],
+        vec![
+            Value::symbol("treesit-query-p"),
+            value,
+            Value::from_sym_id(intern(name)),
+        ],
     )
 }
 
@@ -282,7 +294,7 @@ fn compiled_query_type_error(name: &str, value: Value) -> Flow {
         vec![
             Value::symbol("treesit-compiled-query-p"),
             value,
-            Value::symbol(name),
+            Value::from_sym_id(intern(name)),
         ],
     )
 }
@@ -1079,7 +1091,11 @@ fn expand_pattern_value(pattern: Value, mode: SymbolMode) -> Result<String, Flow
     Ok(crate::emacs_core::print::print_value(&pattern))
 }
 
-fn expand_query_value(caller: &str, query: Value, mode: SymbolMode) -> Result<String, Flow> {
+fn expand_query_value(
+    caller: &'static str,
+    query: Value,
+    mode: SymbolMode,
+) -> Result<String, Flow> {
     if let Some(source) = query.as_str_owned() {
         return Ok(source);
     }
@@ -2617,7 +2633,7 @@ fn query_predicate_capture(
                 LispCondition::TreesitQueryError,
                 vec![
                     Value::string("Cannot find captured node"),
-                    Value::symbol(name),
+                    Value::from_sym_id(intern(name)),
                     Value::string(
                         "A predicate can only refer to captured nodes in the same pattern",
                     ),
@@ -2817,7 +2833,7 @@ fn query_predicate_pred(
             "Predicate `pred' requires a function name followed by node captures",
         ));
     };
-    let function = Value::symbol(function_name);
+    let function = Value::from_sym_id(intern((function_name).as_ref()));
     let mut nodes = Vec::with_capacity(args.len() - 1);
     for arg in &args[1..] {
         let runtime::QueryPredicateArg::Capture(capture_index) = arg else {
@@ -3032,7 +3048,9 @@ pub fn builtin_treesit_query_capture(
                                         capture.value
                                     } else {
                                         Value::cons(
-                                            Value::symbol(&capture_names[capture.index as usize]),
+                                            Value::from_sym_id(intern(
+                                                (&capture_names[capture.index as usize]).as_ref(),
+                                            )),
                                             capture.value,
                                         )
                                     }
@@ -3052,7 +3070,9 @@ pub fn builtin_treesit_query_capture(
                             capture.value
                         } else {
                             Value::cons(
-                                Value::symbol(&capture_names[capture.index as usize]),
+                                Value::from_sym_id(intern(
+                                    (&capture_names[capture.index as usize]).as_ref(),
+                                )),
                                 capture.value,
                             )
                         }

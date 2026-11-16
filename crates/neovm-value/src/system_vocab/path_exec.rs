@@ -132,7 +132,7 @@ impl PathExec {
         self.source
     }
 
-    pub fn into_dir(self) -> PathBuf {
+    pub(crate) fn into_dir(self) -> PathBuf {
         self.dir
     }
 }

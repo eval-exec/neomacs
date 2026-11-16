@@ -3,6 +3,7 @@
 use enum_map::EnumMap;
 pub use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, LFaceAttr};
 use neovm_value::gc_trace::GcTrace;
+use neovm_value::intern::intern;
 use neovm_value::intern::{SymId, WellKnown, resolve_sym};
 use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;
@@ -700,7 +701,10 @@ pub fn merge_face_height(
 
 #[doc(hidden)]
 pub fn face_symbol_value(name: &str) -> Value {
-    Value::symbol(name)
+    // The spelling path accounts the same symbol use as the fixed WellKnown
+    // path (`resolve_fixed_symbol`), which the face producer contract pins.
+    Value::account_symbol_name_use();
+    Value::from_sym_id(intern(name))
 }
 
 #[doc(hidden)]

@@ -11,7 +11,7 @@ use neovm_value::error::{EvalResult, Flow, signal};
 #[doc(hidden)]
 pub use neovm_value::error::{expect_args, expect_min_args};
 #[cfg(test)]
-use neovm_value::intern::intern_uninterned;
+use neovm_value::intern::make_uninterned_symbol;
 use neovm_value::intern::{intern, resolve_sym};
 use neovm_value::value::*;
 #[cfg(test)]
@@ -828,7 +828,7 @@ pub(crate) fn builtin_cl_gensym(args: Vec<Value>) -> EvalResult {
             CL_GENSYM_COUNTER.fetch_add(1, Ordering::Relaxed),
         ),
     };
-    Ok(Value::from_sym_id(intern_uninterned(&format!(
+    Ok(Value::from_sym_id(make_uninterned_symbol(&format!(
         "{prefix}{n}"
     ))))
 }

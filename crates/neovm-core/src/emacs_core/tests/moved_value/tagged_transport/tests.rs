@@ -4,7 +4,7 @@
 use std::sync::{Arc, Barrier, mpsc};
 
 use neovm_value::heap_types::LispString;
-use neovm_value::intern::{intern, intern_uninterned, is_canonical_id, unintern_canonical_id};
+use neovm_value::intern::{intern, is_canonical_id, make_uninterned_symbol, unintern_canonical_id};
 use neovm_value::tagged::gc::TaggedHeap;
 use neovm_value::tagged::transport::cell_census;
 use neovm_value::tagged::transport::{
@@ -28,7 +28,7 @@ fn table_anchor(heap: &TaggedHeap) -> SharedRoot {
     unsafe {
         SharedRoot::new(
             heap,
-            TaggedValue::from_sym_id(intern_uninterned("p73-table-anchor")),
+            TaggedValue::from_sym_id(make_uninterned_symbol("p73-table-anchor")),
         )
     }
 }
@@ -79,7 +79,7 @@ fn immediate_values_reject_heap_objects_and_uninterned_symbols() {
         ImmediateValue::try_from(text),
         Err(NotImmediate::HeapObject)
     );
-    let uninterned = TaggedValue::from_sym_id(intern_uninterned("p73-uninterned"));
+    let uninterned = TaggedValue::from_sym_id(make_uninterned_symbol("p73-uninterned"));
     assert_eq!(
         ImmediateValue::try_from(uninterned),
         Err(NotImmediate::SymbolNeedsRoot)
@@ -210,7 +210,7 @@ fn untraced_values_take_no_root_cell() {
     let uninterned = unsafe {
         SharedRoot::new(
             &heap,
-            TaggedValue::from_sym_id(intern_uninterned("p73-rooted-symbol")),
+            TaggedValue::from_sym_id(make_uninterned_symbol("p73-rooted-symbol")),
         )
     };
     assert_eq!(cell_census(heap.heap_identity()), (2, 0));

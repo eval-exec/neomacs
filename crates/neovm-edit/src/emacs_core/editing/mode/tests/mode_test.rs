@@ -165,5 +165,5 @@ fn mode_line_format_default_has_elements() {
 }
 
 fn mode_symbol(name: &str) -> Value {
-    Value::symbol(name)
+    Value::from_sym_id(intern(name))
 }

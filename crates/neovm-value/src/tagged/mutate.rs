@@ -530,7 +530,7 @@ pub fn replace_closure_slots(value: TaggedValue, slots: Vec<TaggedValue>) -> boo
 }
 
 #[inline]
-pub fn set_closure_slot(value: TaggedValue, index: usize, item: TaggedValue) -> bool {
+pub(crate) fn set_closure_slot(value: TaggedValue, index: usize, item: TaggedValue) -> bool {
     LispCollectionRevision::changed(value);
     match value.veclike_type() {
         // Atomic stores, as for vector slots: a concurrent reader of the slot

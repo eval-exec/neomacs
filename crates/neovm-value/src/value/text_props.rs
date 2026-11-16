@@ -149,7 +149,7 @@ impl PropertyInterval {
         }
     }
 
-    pub fn with_properties(range: CharRange, properties: HashMap<Value, Value>) -> Self {
+    pub(crate) fn with_properties(range: CharRange, properties: HashMap<Value, Value>) -> Self {
         let key_order: Vec<Value> = properties.keys().copied().collect();
         Self {
             start: range.start().get(),
@@ -4311,7 +4311,11 @@ impl TextPropertyTable {
         self.intervals.prune_trailing_empty_intervals();
     }
 
-    pub fn set_properties_in_char_range(&mut self, range: CharRange, plist: Vec<(Value, Value)>) {
+    pub(crate) fn set_properties_in_char_range(
+        &mut self,
+        range: CharRange,
+        plist: Vec<(Value, Value)>,
+    ) {
         self.set_properties_raw(range, plist);
     }
 
@@ -5021,7 +5025,7 @@ impl TextPropertyTable {
     ///
     /// Missing intervals are default intervals.  Property names compare by
     /// `eq`, while property values compare by ordinary `equal`.
-    pub fn equal_including_property_values(
+    pub(crate) fn equal_including_property_values(
         left: Option<&TextPropertyTable>,
         right: Option<&TextPropertyTable>,
         len: usize,
@@ -5092,7 +5096,10 @@ impl TextPropertyTable {
         Self::with_runs_and_names(runs, self.property_names.clone())
     }
 
-    pub fn slice_copy_text_properties_char_range(&self, range: CharRange) -> TextPropertyTable {
+    pub(crate) fn slice_copy_text_properties_char_range(
+        &self,
+        range: CharRange,
+    ) -> TextPropertyTable {
         self.slice_copy_text_properties_raw(range)
     }
 

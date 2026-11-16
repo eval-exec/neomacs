@@ -31,6 +31,23 @@ pub fn is_active_gnu_defsym_spelling(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `name` is a literal `intern_c_string`/`intern` spelling that this
+/// build's GNU sources intern at startup.
+///
+/// GNU's `syms_of_*` code interns these directly (`Fprovide`, cursor and DND
+/// tables, feature names, ...), so no `DEFSYM` row covers them and the
+/// `defsym_name[]` boot table cannot see them. The generator scans the
+/// literals inside each compiled file's `syms_of_*` bodies
+/// (`crates/neovm-value/src/intern/gnu_c_interns.snapshot.tsv`).
+#[doc(hidden)]
+pub fn is_active_gnu_c_intern_spelling(name: &str) -> bool {
+    let table = gnu_defsyms_generated::GNU_C_INTERNS_BY_SPELLING;
+    table
+        .binary_search_by(|(spelling, _)| (*spelling).cmp(name))
+        .map(|index| table[index].1.is_active())
+        .unwrap_or(false)
+}
+
 /// Whether `name` is a GNU `DEFSYM` spelling that this build's profile does
 /// not compile in.
 ///
@@ -552,7 +569,7 @@ impl Hash for SymbolNameKey {
 static_assertions::assert_impl_all!(SymbolNameCharacterCount: Send, Sync);
 
 /// Append-only string interner used only for symbol names.
-pub struct StringInterner {
+pub(crate) struct StringInterner {
     strings: NameAtomStorage,
     map: HashMap<SymbolNameKey, NameId, FxBuildHasher>,
 }
@@ -663,7 +680,7 @@ impl StringInterner {
     /// `LispString::clone` (an allocation + byte copy per name, ~17k names at
     /// startup) is replaced by a header-word [`LispString::borrowed_alias`].
     /// Owned or interval-carrying names fall back to the general path.
-    pub fn intern_dump_lisp_string(&mut self, name: &LispString) -> NameId {
+    pub(crate) fn intern_dump_lisp_string(&mut self, name: &LispString) -> NameId {
         debug_assert!(
             matches!(
                 Self::normalize_symbol_name_lisp_string(name),
@@ -710,7 +727,7 @@ impl StringInterner {
     }
 
     /// Look up a symbol-name atom without interning it.
-    pub fn lookup_lisp_string(&self, s: &LispString) -> Option<NameId> {
+    pub(crate) fn lookup_lisp_string(&self, s: &LispString) -> Option<NameId> {
         self.lookup_name_parts(s.as_bytes(), SymbolNameCharacterCount::from(s))
     }
 
@@ -729,7 +746,7 @@ impl StringInterner {
 
     /// Resolve a name id back to its exact Lisp-string storage.
     #[inline]
-    pub fn resolve_lisp_string(&self, id: NameId) -> &'static LispString {
+    pub(crate) fn resolve_lisp_string(&self, id: NameId) -> &'static LispString {
         self.strings.get(id)
     }
 }
@@ -1111,12 +1128,12 @@ impl SymbolRegistry {
         self.alloc_symbol(name, true, NewSymbolName::AtomOnly)
     }
 
-    fn intern_uninterned(&mut self, s: &str) -> SymId {
+    fn make_uninterned_symbol(&mut self, s: &str) -> SymId {
         let name = self.names.intern(s);
         self.alloc_symbol(name, false, NewSymbolName::AtomOnly)
     }
 
-    fn intern_uninterned_lisp_string(&mut self, s: &LispString) -> SymId {
+    fn make_uninterned_symbol_lisp_string(&mut self, s: &LispString) -> SymId {
         let name = self.names.intern_lisp_string(s);
         self.alloc_symbol(name, false, NewSymbolName::AtomOnly)
     }
@@ -1747,16 +1764,16 @@ pub(crate) fn lookup_interned_name_query(query: SymbolNameQuery<'_>) -> Option<S
 /// Create an uninterned symbol using the global runtime symbol registry.
 /// Always creates a new unique SymId, never reuses an existing one.
 #[inline]
-pub fn intern_uninterned(s: &str) -> SymId {
+pub fn make_uninterned_symbol(s: &str) -> SymId {
     let mut registry = global_symbol_registry().write();
-    registry.intern_uninterned(s)
+    registry.make_uninterned_symbol(s)
 }
 
 /// Create an uninterned symbol using an exact Lisp-string name.
 #[inline]
-pub fn intern_uninterned_lisp_string(s: &LispString) -> SymId {
+pub fn make_uninterned_symbol_lisp_string(s: &LispString) -> SymId {
     let mut registry = global_symbol_registry().write();
-    registry.intern_uninterned_lisp_string(s)
+    registry.make_uninterned_symbol_lisp_string(s)
 }
 
 /// Intern NAME_VALUE in the global obarray, adopting it as the new symbol's
@@ -1863,7 +1880,7 @@ pub fn is_keyword_id(id: SymId) -> bool {
 }
 
 #[inline]
-pub fn resolve_sym_metadata(id: SymId) -> (&'static str, bool) {
+pub(crate) fn resolve_sym_metadata(id: SymId) -> (&'static str, bool) {
     ensure_thread_local_cache_epoch_current();
     if let Some(is_canonical) = thread_local_is_canonical(id)
         && is_canonical
@@ -2162,7 +2179,7 @@ pub fn map_lisp_visible_symbol_names<T>(
 }
 
 #[inline]
-pub fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
+pub(crate) fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
     let registry = global_symbol_registry().read();
     registry.resolve_name_value(id)
 }
@@ -2542,7 +2559,7 @@ fn thread_local_record_keyword(id: SymId, is_keyword: bool) {
 /// panicking. This is useful at serialization boundaries where we want a
 /// structured error instead of aborting the process on malformed runtime data.
 #[inline]
-pub fn try_resolve_sym(id: SymId) -> Option<&'static str> {
+pub(crate) fn try_resolve_sym(id: SymId) -> Option<&'static str> {
     let registry = global_symbol_registry().read();
     registry
         .slot(id)
@@ -2550,7 +2567,7 @@ pub fn try_resolve_sym(id: SymId) -> Option<&'static str> {
 }
 
 #[inline]
-pub fn try_resolve_sym_lisp_string(id: SymId) -> Option<&'static LispString> {
+pub(crate) fn try_resolve_sym_lisp_string(id: SymId) -> Option<&'static LispString> {
     let registry = global_symbol_registry().read();
     registry
         .slot(id)

@@ -1,6 +1,7 @@
 //! Live deletion undo state, with expectations captured from GNU Emacs 31.1.
 //! GNU undo.c:163-190 records point, marker adjustments, then deleted text;
 //! insdel.c:2023-2037 relocates markers even when undo is disabled.
+use neovm_value::intern::intern;
 
 use super::*;
 
@@ -140,7 +141,10 @@ fn normalized_undo(mut undo: Value, markers: &[Value]) -> Value {
                     .iter()
                     .position(|m| m.bits() == entry.cons_car().bits())
                     .unwrap();
-                Value::cons(Value::symbol(&format!("m{index}")), entry.cons_cdr())
+                Value::cons(
+                    Value::from_sym_id(intern((&format!("m{index}")).as_ref())),
+                    entry.cons_cdr(),
+                )
             } else {
                 entry
             },

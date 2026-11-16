@@ -433,7 +433,7 @@ impl Context {
             context.bc_buf.truncate(temps_base);
             return Err(signal(
                 LispCondition::SettingConstant,
-                vec![Value::symbol(name)],
+                vec![Value::from_sym_id(intern((name).as_ref()))],
             ));
         }
 
@@ -585,7 +585,7 @@ impl Context {
                 if let Some(name) = let_constant_error_name(&context.obarray, id, value) {
                     return Err(signal(
                         LispCondition::SettingConstant,
-                        vec![Value::symbol(&name)],
+                        vec![Value::from_sym_id(intern((&name).as_ref()))],
                     ));
                 }
                 if use_lexical

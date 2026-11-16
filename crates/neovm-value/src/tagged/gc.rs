@@ -147,7 +147,7 @@ impl MemoryUseCountSlot {
 }
 
 impl HeapWriteRecord {
-    pub const fn bulk(owner: TaggedValue, kind: HeapWriteKind) -> Self {
+    pub(crate) const fn bulk(owner: TaggedValue, kind: HeapWriteKind) -> Self {
         Self {
             owner,
             kind,
@@ -1440,7 +1440,7 @@ impl TaggedHeap {
     }
 
     /// Lifetime count of cap-forced concurrent-mark terminations.
-    pub fn must_finish_count(&self) -> u64 {
+    pub(crate) fn must_finish_count(&self) -> u64 {
         self.must_finish_count
     }
 
@@ -1530,7 +1530,7 @@ impl TaggedHeap {
         }
     }
 
-    pub fn clear_gc_threshold_override(&mut self) {
+    pub(crate) fn clear_gc_threshold_override(&mut self) {
         self.gc_threshold_overridden = false;
     }
 

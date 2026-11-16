@@ -17,8 +17,6 @@ use neovm_value::value::Value;
 
 use neovm_value::error::{FlowKind, FlowResultExt as _};
 
-use neovm_value::intern::intern;
-
 use neovm_value::value::ValueKind;
 
 #[test]

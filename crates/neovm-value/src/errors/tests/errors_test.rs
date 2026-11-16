@@ -275,7 +275,7 @@ fn condition_handlers_use_canonical_t_identity_without_reading_symbol_names() {
     let signal = intern("error");
     let raw_condition =
         crate::intern::intern_lisp_string(&crate::heap_types::LispString::from_unibyte(vec![0xff]));
-    let uninterned_t = crate::intern::intern_uninterned("t");
+    let uninterned_t = crate::intern::make_uninterned_symbol("t");
 
     assert!(!signal_matches_condition_value_sym(
         &ob,

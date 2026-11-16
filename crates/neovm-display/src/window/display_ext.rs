@@ -22,6 +22,7 @@ use neovm_eval::emacs_core::eval::data::window_state::{
 use neovm_eval::emacs_core::eval::data::window_state::{
     horizontal_scroll_bar_area_height, horizontal_scroll_bar_lines, vertical_scroll_bar_area_width,
 };
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use neovm_value::value::eq_value;
 use std::sync::Arc;
@@ -58,7 +59,7 @@ impl DisplayWindowExt for Window {
 }
 
 /// Window-tree behaviour that binds the sibling layout algorithm.
-pub trait DisplayWindowTreeExt {
+pub(crate) trait DisplayWindowTreeExt {
     fn sibling_bounds_of(&self, parent: WindowId, bounds: Rect) -> Vec<Rect>;
     fn redistribute_bounds(&mut self, parent: WindowId, bounds: Rect);
 }
@@ -502,7 +503,9 @@ impl DisplayFrameExt for Frame {
     }
 
     fn parameter(&self, key: &str) -> Option<Value> {
-        self.parameters.get(&Value::symbol(key)).copied()
+        self.parameters
+            .get(&Value::from_sym_id(intern(key)))
+            .copied()
     }
 
     /// [`Self::parameter`] for a fixed GNU spelling.
@@ -510,7 +513,7 @@ impl DisplayFrameExt for Frame {
     /// Same parameter-map key and the same constructor accounting; the spelling
     /// is a compile-time DEFSYM id instead of a per-read intern.
     fn parameter_symbol(&self, key: &neovm_value::intern::WellKnown) -> Option<Value> {
-        self.parameters.get(&Value::symbol(key)).copied()
+        self.parameters.get(&Value::symbol(*key)).copied()
     }
 
     fn set_display_identity(&mut self, identity: FrameDisplayIdentity) {
