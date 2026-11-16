@@ -155,10 +155,6 @@ pub enum GeometryQueryError {
     },
     MissingWindow(WindowId),
     MissingMaterializedGeometry(WindowId),
-    MissingRegion {
-        window: WindowId,
-        region: WindowRegion,
-    },
     PositionNotVisible {
         window: WindowId,
         position: LispCharPos1,
@@ -173,12 +169,13 @@ pub enum GeometryQueryError {
 }
 
 /// Semantic edge used to attach a popup or child frame to active geometry.
+///
+/// The cursor anchors this crate resolves attach at the bottom edge; the
+/// region-edge anchor that needed the other three edges had no caller and was
+/// removed with `WindowRegion`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AnchorEdge {
-    Top,
+pub enum AnchorEdge {
     Bottom,
-    Left,
-    Right,
 }
 
 /// A durable description of what should be anchored, independent of pixels.
@@ -191,19 +188,12 @@ pub enum VisualAnchor {
         window: WindowId,
         position: LispCharPos1,
     },
-    WindowRegionEdge {
-        window: WindowId,
-        region: WindowRegion,
-        edge: AnchorEdge,
-    },
 }
 
 impl VisualAnchor {
     const fn window(self) -> WindowId {
         match self {
-            Self::CursorBottom { window }
-            | Self::BufferPositionBottom { window, .. }
-            | Self::WindowRegionEdge { window, .. } => window,
+            Self::CursorBottom { window } | Self::BufferPositionBottom { window, .. } => window,
         }
     }
 }
@@ -280,18 +270,6 @@ impl GeometryQuery for VisualAnchorQuery {
                     AnchorEdge::Bottom,
                 )
             }
-            VisualAnchor::WindowRegionEdge {
-                window,
-                region,
-                edge,
-            } => (
-                geometry.resolve(WindowRegionBoundsQuery::new(
-                    self.presentation,
-                    window,
-                    region,
-                ))?,
-                edge,
-            ),
         };
         Ok(VisualAnchorGeometry {
             presentation: self.presentation,
@@ -334,20 +312,15 @@ impl VisualAnchorGeometry {
         self.edge
     }
 
-    /// Edge attachment point. Horizontal edges attach at their left endpoint;
-    /// vertical edges attach at their top endpoint.
+    /// Edge attachment point: the bottom-left corner of the anchored bounds.
     pub const fn x(self) -> LogicalPx {
-        match self.edge {
-            AnchorEdge::Left | AnchorEdge::Top | AnchorEdge::Bottom => self.bounds.origin.x,
-            AnchorEdge::Right => LogicalPx(self.bounds.origin.x.0 + self.bounds.width.0),
-        }
+        let AnchorEdge::Bottom = self.edge;
+        self.bounds.origin.x
     }
 
     pub const fn y(self) -> LogicalPx {
-        match self.edge {
-            AnchorEdge::Top | AnchorEdge::Left | AnchorEdge::Right => self.bounds.origin.y,
-            AnchorEdge::Bottom => LogicalPx(self.bounds.origin.y.0 + self.bounds.height.0),
-        }
+        let AnchorEdge::Bottom = self.edge;
+        LogicalPx(self.bounds.origin.y.0 + self.bounds.height.0)
     }
 }
 
@@ -442,85 +415,6 @@ impl GeometryQuery for KnownWindowGeometryQuery {
             outer: window.outer,
             cell_origin: window.cell_origin,
         })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WindowRegion {
-    Outer,
-    TextBody,
-    LeftMargin,
-    RightMargin,
-    LeftFringe,
-    RightFringe,
-    LeftScrollBar,
-    RightScrollBar,
-    HorizontalScrollBar,
-    TabLine,
-    HeaderLine,
-    ModeLine,
-    RightDivider,
-    BottomDivider,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WindowRegionBoundsQuery {
-    presentation: PresentationId,
-    window: WindowId,
-    region: WindowRegion,
-}
-
-impl WindowRegionBoundsQuery {
-    pub const fn new(presentation: PresentationId, window: WindowId, region: WindowRegion) -> Self {
-        Self {
-            presentation,
-            window,
-            region,
-        }
-    }
-}
-
-impl query_seal::Sealed for WindowRegionBoundsQuery {}
-
-impl GeometryQuery for WindowRegionBoundsQuery {
-    type Output<'a> = PixelRect<FrameLogicalSpace>;
-
-    fn presentation(&self) -> PresentationId {
-        self.presentation
-    }
-
-    fn resolve_presented<'a>(
-        self,
-        geometry: &'a PresentationGeometry,
-    ) -> Result<Self::Output<'a>, GeometryQueryError> {
-        let window = geometry
-            .window(self.window)
-            .ok_or(GeometryQueryError::MissingWindow(self.window))?;
-        let regions = window
-            .regions
-            .as_ref()
-            .ok_or(GeometryQueryError::MissingMaterializedGeometry(self.window))?;
-        let rect = match self.region {
-            WindowRegion::Outer => Some(regions.outer),
-            WindowRegion::TextBody => Some(regions.text_body),
-            WindowRegion::LeftMargin => regions.left_margin,
-            WindowRegion::RightMargin => regions.right_margin,
-            WindowRegion::LeftFringe => regions.left_fringe,
-            WindowRegion::RightFringe => regions.right_fringe,
-            WindowRegion::LeftScrollBar => regions.left_scroll_bar,
-            WindowRegion::RightScrollBar => regions.right_scroll_bar,
-            WindowRegion::HorizontalScrollBar => regions.horizontal_scroll_bar,
-            WindowRegion::TabLine => regions.tab_line,
-            WindowRegion::HeaderLine => regions.header_line,
-            WindowRegion::ModeLine => regions.mode_line,
-            WindowRegion::RightDivider => regions.right_divider,
-            WindowRegion::BottomDivider => regions.bottom_divider,
-        }
-        .ok_or(GeometryQueryError::MissingRegion {
-            window: self.window,
-            region: self.region,
-        })?;
-        Ok(rect)
     }
 }
 
@@ -691,15 +585,10 @@ impl FramePoint {
 /// A window-owned point in a statically named window coordinate space.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct WindowPoint<Space> {
-    window: WindowId,
     point: PixelPoint<Space>,
 }
 
 impl<Space> WindowPoint<Space> {
-    pub const fn window(self) -> WindowId {
-        self.window
-    }
-
     pub const fn x(self) -> LogicalPx {
         self.point.x()
     }
@@ -806,7 +695,6 @@ impl<'a> SnapshotWindowGeometry<'a> {
 
     pub(crate) fn text_body_origin_in_window(&self) -> WindowPoint<WindowLocalSpace> {
         WindowPoint {
-            window: self.window,
             point: PixelPoint {
                 x: LogicalPx(
                     self.regions.text_body.origin.x.get() - self.regions.outer.origin.x.get(),
@@ -830,7 +718,7 @@ impl<'a> SnapshotWindowGeometry<'a> {
         })
     }
 
-    pub fn point_for_buffer_pos(
+    pub(crate) fn point_for_buffer_pos(
         &self,
         buffer_pos: LispCharPos1,
     ) -> Result<Option<SnapshotPointGeometry>, GeometryError> {
@@ -893,7 +781,6 @@ impl<'a> SnapshotWindowGeometry<'a> {
         point: &PresentationPosition,
     ) -> Result<SnapshotPointGeometry, GeometryError> {
         let body_point = WindowPoint {
-            window: self.window,
             point: PixelPoint::new(
                 LogicalPx::from_i64(point.x).get(),
                 LogicalPx::from_i64(point.body_y).get(),
