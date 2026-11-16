@@ -59,7 +59,12 @@ impl VariableWatcherList {
 
     /// Remove a watcher callback for a variable.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn remove_watcher(&mut self, var_id: SymId, callback: &Value, symbol_mode: SymbolMode) {
+    pub(crate) fn remove_watcher(
+        &mut self,
+        var_id: SymId,
+        callback: &Value,
+        symbol_mode: SymbolMode,
+    ) {
         if let Some(list) = self.watchers.get_mut(&var_id) {
             list.retain(|w| {
                 !equal_value_swp(

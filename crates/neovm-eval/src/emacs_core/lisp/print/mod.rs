@@ -22,6 +22,7 @@ pub(crate) use princ_text::PrincStringOutput;
 pub(crate) use princ_text::princ_string_bytes;
 
 mod error_format;
+pub(crate) use error_format::print_value_bytes_escaped_with_eval;
 #[doc(hidden)]
 pub use error_format::{
     PrintShorthandSymbol, builtin_error_message_string, format_flow_with_eval,
@@ -31,8 +32,10 @@ pub use error_format::{
     print_value_bytes_in_state_with_options, print_value_in_state,
     print_value_in_state_with_options, reset_error_format_for_carrier,
 };
-pub use error_format::{format_eval_result, format_eval_result_bytes_with_eval, format_eval_result_with_eval, map_flow, print_value_bytes_with_eval, print_value_with_eval};
-pub(crate) use error_format::{print_value_bytes_escaped_with_eval};
+pub use error_format::{
+    format_eval_result, format_eval_result_bytes_with_eval, format_eval_result_with_eval, map_flow,
+    print_value_bytes_with_eval, print_value_with_eval,
+};
 
 pub(crate) mod string_format;
 

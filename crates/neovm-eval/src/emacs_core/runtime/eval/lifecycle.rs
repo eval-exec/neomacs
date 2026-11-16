@@ -768,7 +768,9 @@ impl XfacesHooks {
 
 impl CommandSeamHooks {
     #[doc(hidden)]
-    pub(crate) fn window_configuration_capture(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+    pub(crate) fn window_configuration_capture(
+        &self,
+    ) -> fn(&mut Context, Vec<Value>) -> EvalResult {
         self.window_configuration_capture
     }
 

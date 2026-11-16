@@ -48,9 +48,11 @@ pub type WindowDomainFrameOf = fn(WindowDomain, &FrameManager, WindowId) -> Opti
 pub(crate) type WindowRegionsAt =
     fn(&PresentationGeometry, PresentationId, WindowId) -> Option<WindowRegions>;
 /// Resolve measured display-row motion.
-pub(crate) type MotionResolve = fn(&mut Context, MotionRequest) -> Result<Option<MeasuredMotion>, Flow>;
+pub(crate) type MotionResolve =
+    fn(&mut Context, MotionRequest) -> Result<Option<MeasuredMotion>, Flow>;
 /// GNU `init_iterator`'s line-wrap decision for one window/buffer pair.
-pub(crate) type WindowLineWrapQuery = fn(&mut Context, Option<Value>, BufferId, MotionEngine) -> LineWrap;
+pub(crate) type WindowLineWrapQuery =
+    fn(&mut Context, Option<Value>, BufferId, MotionEngine) -> LineWrap;
 /// `(window-body-width WINDOW nil)` for the EditHost geometry surface.
 pub(crate) type WindowBodyWidthQuery = fn(&mut Context, &[Value]) -> EvalResult;
 /// `(window-hscroll WINDOW)` for the EditHost geometry surface.

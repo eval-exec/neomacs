@@ -589,7 +589,10 @@ impl ThreadManager {
             .is_some()
     }
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn thread_current_buffer(&self, native: u64) -> Option<neovm_edit::buffer::BufferId> {
+    pub(crate) fn thread_current_buffer(
+        &self,
+        native: u64,
+    ) -> Option<neovm_edit::buffer::BufferId> {
         self.get_thread(native)
             .and_then(|t| t.native().current_buffer())
     }
@@ -697,7 +700,10 @@ impl ThreadManager {
         })
     }
 
-    pub(crate) fn buffer_current_in_other_thread(&self, buffer: neovm_edit::buffer::BufferId) -> bool {
+    pub(crate) fn buffer_current_in_other_thread(
+        &self,
+        buffer: neovm_edit::buffer::BufferId,
+    ) -> bool {
         self.threads.iter().any(|(id, value)| {
             self.thread_payload(*value).is_some_and(|thread| {
                 id.native_key() != self.current_thread.native_key()

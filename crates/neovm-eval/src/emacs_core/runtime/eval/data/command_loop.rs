@@ -675,7 +675,11 @@ impl KBoard {
         self.start_kbd_macro_with_initial(None, false);
     }
 
-    pub(crate) fn start_kbd_macro_with_initial(&mut self, initial_events: Option<&[Value]>, append: bool) {
+    pub(crate) fn start_kbd_macro_with_initial(
+        &mut self,
+        initial_events: Option<&[Value]>,
+        append: bool,
+    ) {
         self.defining_kbd_macro = true;
         self.appending_kbd_macro = append;
         self.kbd_macro_events.clear();
@@ -1248,7 +1252,11 @@ impl KeyboardRuntime {
         self.kboard.start_kbd_macro();
     }
 
-    pub(crate) fn start_kbd_macro_with_initial(&mut self, initial_events: Option<&[Value]>, append: bool) {
+    pub(crate) fn start_kbd_macro_with_initial(
+        &mut self,
+        initial_events: Option<&[Value]>,
+        append: bool,
+    ) {
         self.kboard
             .start_kbd_macro_with_initial(initial_events, append);
     }
@@ -1468,7 +1476,11 @@ impl CommandLoop {
         self.keyboard.start_kbd_macro();
     }
 
-    pub(crate) fn start_kbd_macro_with_initial(&mut self, initial_events: Option<&[Value]>, append: bool) {
+    pub(crate) fn start_kbd_macro_with_initial(
+        &mut self,
+        initial_events: Option<&[Value]>,
+        append: bool,
+    ) {
         self.keyboard
             .start_kbd_macro_with_initial(initial_events, append);
     }

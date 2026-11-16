@@ -19,7 +19,8 @@ pub(crate) type SubrFnManySlice = fn(
     &mut crate::emacs_core::eval::Context,
     &[neovm_value::tagged::value::TaggedValue],
 ) -> neovm_value::error::EvalResult;
-pub(crate) type SubrFn0 = fn(&mut crate::emacs_core::eval::Context) -> neovm_value::error::EvalResult;
+pub(crate) type SubrFn0 =
+    fn(&mut crate::emacs_core::eval::Context) -> neovm_value::error::EvalResult;
 pub(crate) type SubrFn1 = fn(
     &mut crate::emacs_core::eval::Context,
     neovm_value::tagged::value::TaggedValue,

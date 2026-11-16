@@ -241,7 +241,12 @@ impl MinibufferManager {
 
     /// Append one history entry from a Lisp string.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn add_to_history_lisp(&mut self, name: SymId, value: LispString, max_length: usize) {
+    pub(crate) fn add_to_history_lisp(
+        &mut self,
+        name: SymId,
+        value: LispString,
+        max_length: usize,
+    ) {
         self.history.add(name, value, max_length);
     }
 

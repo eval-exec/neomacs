@@ -2766,7 +2766,11 @@ impl ProcessWriteQueueEntry {
     }
 }
 
-pub(crate) fn write_queue_push_entry(queue: Value, entry: ProcessWriteQueueEntry, front: bool) -> Value {
+pub(crate) fn write_queue_push_entry(
+    queue: Value,
+    entry: ProcessWriteQueueEntry,
+    front: bool,
+) -> Value {
     let entry = Value::cons(
         entry.object,
         Value::cons(

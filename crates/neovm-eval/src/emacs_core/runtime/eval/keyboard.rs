@@ -31,7 +31,7 @@ mod unread;
 
 pub use keysym::{native_key_android, native_key_macos, native_key_windows};
 
-pub(crate) use keysym::{native_key_ohos};
+pub(crate) use keysym::native_key_ohos;
 pub(crate) use neovm_value::system_vocab::input::{
     ExecutingKbdMacroRuntimeSnapshot, KeySequenceBufferSelection, ReadKeySequenceOptions,
     TtyInputDecoding,
@@ -63,9 +63,6 @@ pub(crate) trait FatalSignalShutdown {
 // One statement per visibility class: the layering guard counts each `use`
 // statement as an upward keyboard->eval site, and that ratchet may only
 // decrease, so all narrowed leaves share the single pub(crate) statement.
-pub use crate::emacs_core::eval::data::command_loop::{
-    CommandLoop, KBoard, PrefixArg, PresentedMouseArea, PresentedMouseTarget,
-};
 pub(crate) use crate::emacs_core::eval::data::command_loop::{
     AUTO_SAVE_TIMEOUT, COMMAND_EXECUTE, ECHO_KEYSTROKES, ECHO_KEYSTROKES_HELP, EXECUTING_KBD_MACRO,
     HELP_CHAR, HELP_EVENT_LIST, INPUT_METHOD_FUNCTION, INTERNAL_TIMER_START_IDLE,
@@ -76,6 +73,9 @@ pub(crate) use crate::emacs_core::eval::data::command_loop::{
     SPECIAL_EVENT_MAP, THIS_COMMAND_KEYS_SHIFT_TRANSLATED, TRANSLATE_UPPER_CASE_KEY_BINDINGS,
     UNDEFINED_SYMBOL, UNREAD_INPUT_METHOD_EVENTS, UNREAD_POST_INPUT_METHOD_EVENTS,
     help_event_echo_suffix, num_nonmacro_input_events_symbol,
+};
+pub use crate::emacs_core::eval::data::command_loop::{
+    CommandLoop, KBoard, PrefixArg, PresentedMouseArea, PresentedMouseTarget,
 };
 
 #[derive(Clone, Debug, PartialEq)]

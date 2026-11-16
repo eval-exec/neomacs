@@ -1236,7 +1236,12 @@ impl CompiledLeaf {
     /// the leaf loads the `make-closure`-patched slots through it. Null is
     /// accepted only for an unpatched leaf (the JIT ignores the param then).
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn call_consts(&self, vmctx: *mut u8, consts: *const Value, args: &[Value]) -> NativeRun {
+    pub(crate) fn call_consts(
+        &self,
+        vmctx: *mut u8,
+        consts: *const Value,
+        args: &[Value],
+    ) -> NativeRun {
         debug_assert!(self.accepts(args.len()), "compiled call arity mismatch");
         // Copy the argument bits into a contiguous i64 buffer for the native
         // ABI (no heap alloc for the common <= 8 args). A `Value` is an opaque

@@ -288,7 +288,11 @@ impl DebugState {
         self.add_conditional_breakpoint_symbol(intern(function), condition)
     }
 
-    pub(crate) fn add_conditional_breakpoint_symbol(&mut self, function: SymId, condition: &str) -> usize {
+    pub(crate) fn add_conditional_breakpoint_symbol(
+        &mut self,
+        function: SymId,
+        condition: &str,
+    ) -> usize {
         let id = self.next_bp_id;
         self.next_bp_id += 1;
         self.breakpoints.push(Breakpoint {

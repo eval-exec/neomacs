@@ -269,7 +269,9 @@ fn params_on_stack(f: &ByteCodeFunction) -> bool {
 /// Dynamic-binding bytecode (params bound via `varbind`, not on the stack)
 /// still bails.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) fn compile_bytecode_function(f: &ByteCodeFunction) -> Result<CompiledLeaf, CompileError> {
+pub(crate) fn compile_bytecode_function(
+    f: &ByteCodeFunction,
+) -> Result<CompiledLeaf, CompileError> {
     compile_bytecode_function_with(f, None)
 }
 

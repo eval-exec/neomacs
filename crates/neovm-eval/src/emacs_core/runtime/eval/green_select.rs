@@ -116,7 +116,11 @@ impl GreenSelectHandle {
     /// Arm before the caller's next authoritative-state check. One native
     /// lease prevents main's future native pump and idle scheduler competing.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn wait_registered(&self, registration: &WaitRegistration, deadline: Instant) -> bool {
+    pub(crate) fn wait_registered(
+        &self,
+        registration: &WaitRegistration,
+        deadline: Instant,
+    ) -> bool {
         if super::ASYNC_ATTENTION.is_raised(super::AsyncSource::OsSignal)
             || self.notification_pending.swap(false, Ordering::AcqRel)
         {

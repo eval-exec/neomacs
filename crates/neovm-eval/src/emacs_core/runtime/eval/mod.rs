@@ -86,12 +86,12 @@ pub use world::Baton;
 // TEST-SUPPORT-VIS row: the sole-owner compile contract names the driver from
 // the real crate so that its crate-private constructor, not a fixture-local
 // copy of the source, is the rejected item.
+pub(crate) use world::OutstandingWorldViews;
 pub(crate) use world::WorldSlot;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use world::sole_owner::SoleOwnerDriver;
 pub use world::{ContextShutdownError, ObarrayWriteAccess, WorldEra};
-pub(crate) use world::OutstandingWorldViews;
 pub(crate) use world::{OwnedRootRegistryView, WorldView};
 
 pub(crate) mod subr_abi;
@@ -6855,7 +6855,11 @@ pub(crate) fn check_forwarded_unbind(
 impl Context {
     /// Call a registered subr value directly. Returns None if VALUE is not a
     /// fully registered subr.
-    pub(crate) fn dispatch_subr_value(&mut self, function: Value, args: Vec<Value>) -> Option<EvalResult> {
+    pub(crate) fn dispatch_subr_value(
+        &mut self,
+        function: Value,
+        args: Vec<Value>,
+    ) -> Option<EvalResult> {
         let sym_id = function.as_subr_id()?;
         let wrong_arity_callee = Value::from_sym_id(sym_id);
         self.dispatch_subr_value_internal(function, &args, wrong_arity_callee)
@@ -6865,7 +6869,11 @@ impl Context {
     /// Returns None if the symbol's canonical name has no registered subr.
     /// Supports uninterned symbols: falls back to canonical SymId via NameId lookup.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn dispatch_subr_id(&mut self, sym_id: SymId, args: Vec<Value>) -> Option<EvalResult> {
+    pub(crate) fn dispatch_subr_id(
+        &mut self,
+        sym_id: SymId,
+        args: Vec<Value>,
+    ) -> Option<EvalResult> {
         // Try the sym_id directly first
         let resolved = if lookup_global_subr_entry(sym_id).is_some() {
             sym_id
@@ -7590,9 +7598,9 @@ pub mod redisplay_hooks;
 pub use neovm_edit::emacs_core::redisplay_policy::RedisplayHookPolicyGuard;
 #[doc(hidden)]
 pub use neovm_edit::emacs_core::redisplay_policy::gnu_redisplay_hooks_enabled;
-pub use redisplay_hooks::{RedisplayMiniGeometryRequest, RedisplayMiniPreparationFailure};
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use redisplay_hooks::RedisplayMiniGeometrySource;
+pub use redisplay_hooks::{RedisplayMiniGeometryRequest, RedisplayMiniPreparationFailure};
 
 mod vm_shared;
 

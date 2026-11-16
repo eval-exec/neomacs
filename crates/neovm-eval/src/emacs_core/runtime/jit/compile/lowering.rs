@@ -1914,7 +1914,10 @@ const fn const_assert_vector_record_share_layout() {
 /// Lower a no-argument straight-line leaf body. Thin wrapper over [`lower_leaf`]
 /// kept for the existing call sites/tests.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) fn lower_nullary_leaf(ops: &[Op], constants: &[Value]) -> Result<CompiledLeaf, CompileError> {
+pub(crate) fn lower_nullary_leaf(
+    ops: &[Op],
+    constants: &[Value],
+) -> Result<CompiledLeaf, CompileError> {
     lower_leaf(ops, constants, 0)
 }
 

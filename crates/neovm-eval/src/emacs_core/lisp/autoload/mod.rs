@@ -280,7 +280,10 @@ impl AutoloadManager {
         self.get_obsolete_function_symbol(intern(name))
     }
 
-    pub(crate) fn get_obsolete_function_symbol(&self, name: SymId) -> Option<(LispString, LispString)> {
+    pub(crate) fn get_obsolete_function_symbol(
+        &self,
+        name: SymId,
+    ) -> Option<(LispString, LispString)> {
         self.obsolete_functions
             .get(&name)
             .map(|(new_name, when)| (new_name.clone(), when.clone()))
@@ -322,7 +325,10 @@ impl AutoloadManager {
         self.get_obsolete_variable_symbol(intern(name))
     }
 
-    pub(crate) fn get_obsolete_variable_symbol(&self, name: SymId) -> Option<(LispString, LispString)> {
+    pub(crate) fn get_obsolete_variable_symbol(
+        &self,
+        name: SymId,
+    ) -> Option<(LispString, LispString)> {
         self.obsolete_variables
             .get(&name)
             .map(|(new_name, when)| (new_name.clone(), when.clone()))
