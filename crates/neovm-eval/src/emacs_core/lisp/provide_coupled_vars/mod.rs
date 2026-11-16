@@ -308,10 +308,11 @@ const XSETTINGS_ORACLE_PIN: &str = "ledger 199: font-use-system-font is (car byt
 /// across `src/*.c` and `src/*.m`, each site's enclosing `#if`/`#ifdef` stack
 /// matched against the `Fprovide` calls in the same block, and the file-level
 /// guard taken from `src/emacs.c`'s own `syms_of_*` dispatch.  234 names
-/// survive that filter; this build binds 74 of them, each with a policy.  A
+/// survive that filter; this build binds 74 of them, each with a policy (71
+/// without the `xwidgets` feature, whose three rows are then `Absent`).  A
 /// build that links libdbus (`neomacs_have_dbus`) has `dbusbind`, so its nine
 /// `dbusbind.c` names are real variables there and their rows compile out:
-/// 225 rows, the same 74 bound.
+/// 225 rows, the same bound count.
 /// Kept one row per line, like `defvar_object::gnu_table` and
 /// `var_docs::gnu_table`: the rows are generated, and a row that reads as one
 /// line diffs as one line when the derivation is re-run.
