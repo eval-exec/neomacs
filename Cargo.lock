@@ -4644,6 +4644,7 @@ name = "neovm-worker"
 version = "0.0.20"
 dependencies = [
  "neovm-core",
+ "neovm-eval",
  "neovm-host-abi",
  "static_assertions",
  "thiserror 2.0.20",
