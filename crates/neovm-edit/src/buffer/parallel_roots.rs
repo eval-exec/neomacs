@@ -77,6 +77,10 @@ impl BufferStorage {
         for slot in &self.buffer_defaults {
             visit(*slot);
         }
+        // Seeds for new buffers, e.g. GNU's `staticpro (&QSFundamental)`.
+        for slot in &self.slot_seeds {
+            visit(*slot);
+        }
         for (buffer_id, restrictions) in &self.labeled_restrictions {
             let buffer = self.buffers.get(buffer_id);
             for restriction in restrictions {
