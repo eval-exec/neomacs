@@ -3008,7 +3008,7 @@ impl<'a> Vm<'a> {
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub(crate) fn finish_live_bytecode_depth_overflow(
+    fn finish_live_bytecode_depth_overflow(
         &mut self,
         cursor: RunLoopCursor,
         overflow: BytecodeDepthOverflow,
@@ -3054,13 +3054,13 @@ impl<'a> Vm<'a> {
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub(crate) fn check_live_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
+    fn check_live_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
         self.check_bytecode_call_depth()
     }
 
     #[inline(always)]
     #[doc(hidden)]
-    pub(crate) fn check_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
+    fn check_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
         if self.ctx.max_depth < 100 {
             self.ctx.max_depth = 100;
         }
@@ -3098,7 +3098,7 @@ impl<'a> Vm<'a> {
     /// unwinding the caller's bindings.
     #[inline(always)]
     #[doc(hidden)]
-    pub(crate) fn unbind_frame_target(
+    fn unbind_frame_target(
         &mut self,
         target: Result<Option<frame_bindings::FrameUnbindTarget>, frame_bindings::FrameUnbindError>,
     ) -> EvalResult {
@@ -4172,7 +4172,7 @@ impl<'a> Vm<'a> {
     /// subtracting the frame's immutable cost and restores it with one
     /// store.
     #[doc(hidden)]
-    pub(crate) fn install_iterative_interpreter_frame(
+    fn install_iterative_interpreter_frame(
         &mut self,
         cursor: &mut StackCursor,
         callee: PreparedInterpreterCallee,
@@ -4348,7 +4348,7 @@ impl<'a> Vm<'a> {
     /// unwind is represented as data rather than host-stack control flow.
     #[inline(never)]
     #[doc(hidden)]
-    pub(crate) fn complete_interpreter_frame_chain(
+    fn complete_interpreter_frame_chain(
         &mut self,
         callers: &mut InterpreterCallerStack,
         aux_stack: &mut InterpreterFrameAuxStack,
@@ -4450,7 +4450,7 @@ impl<'a> Vm<'a> {
     /// require the caller to publish before leaving the driver's register
     /// state. Nothing here allocates or reaches a GC safe point.
     #[doc(hidden)]
-    pub(crate) fn complete_interpreter_frame_value(
+    fn complete_interpreter_frame_value(
         &mut self,
         cursor: &mut StackCursor,
         callers: &mut InterpreterCallerStack,
@@ -4554,7 +4554,7 @@ impl<'a> Vm<'a> {
     // install_iterative_interpreter_frame (measured +60 Ir/call outlined).
     #[inline(always)]
     #[doc(hidden)]
-    pub(crate) fn dispatch_interpreter_stack_call(
+    fn dispatch_interpreter_stack_call(
         &mut self,
         func_val: Value,
         args_start: usize,
@@ -4690,7 +4690,7 @@ impl<'a> Vm<'a> {
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub(crate) fn osr_transfer(
+    fn osr_transfer(
         &mut self,
         func: &ByteCodeFunction,
         frame_base: usize,
@@ -4911,7 +4911,7 @@ impl<'a> Vm<'a> {
 
     #[inline(never)]
     #[doc(hidden)]
-    pub(crate) fn run_loop(
+    fn run_loop(
         &mut self,
         entry_func: &ByteCodeFunction,
         frame_base: usize,
@@ -4995,7 +4995,7 @@ impl<'a> Vm<'a> {
     /// `setup_frame`/`Breturn` jumps; the inner loop remains opcode dispatch.
     #[inline(always)]
     #[doc(hidden)]
-    pub(crate) fn run_interpreter_driver<const VERIFIED: bool>(
+    fn run_interpreter_driver<const VERIFIED: bool>(
         &mut self,
         callers: &mut InterpreterCallerStack,
         aux_stack: &mut InterpreterFrameAuxStack,
@@ -9733,7 +9733,7 @@ impl<'a> Vm<'a> {
     /// original synchronous VM; no detached World projection is retained.
     #[inline(always)]
     #[doc(hidden)]
-    pub(crate) fn resolve_interpreter_stack_call_target(
+    fn resolve_interpreter_stack_call_target(
         &mut self,
         func_val: Value,
         nargs: usize,
@@ -9800,7 +9800,7 @@ impl<'a> Vm<'a> {
     /// cycles, not just instructions, for anything that changes its size.
     #[inline(never)]
     #[doc(hidden)]
-    pub(crate) fn resolve_stack_call_target(&mut self, func_val: Value) -> ResolvedStackCallTarget {
+    fn resolve_stack_call_target(&mut self, func_val: Value) -> ResolvedStackCallTarget {
         match func_val.kind() {
             ValueKind::Veclike(VecLikeType::ByteCode) => ResolvedStackCallTarget::ByteCode {
                 callee: ResolvedByteCodeCallee::from_direct_value(func_val),
@@ -9980,7 +9980,7 @@ impl<'a> Vm<'a> {
     #[inline(never)]
     #[allow(clippy::too_many_arguments)] // one per loop local the cold path touches
     #[doc(hidden)]
-    pub(crate) fn resume_flow_out_of_line(
+    fn resume_flow_out_of_line(
         &mut self,
         pc_local: &mut usize,
         osr_tried: bool,
@@ -10058,7 +10058,7 @@ impl<'a> Vm<'a> {
     }
 
     #[doc(hidden)]
-    pub(crate) fn resume_nonlocal(
+    fn resume_nonlocal(
         &mut self,
         _func: &ByteCodeFunction,
         pc: &mut usize,

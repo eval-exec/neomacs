@@ -957,11 +957,7 @@ impl LoadSuffixRequirement {
     }
 
     #[doc(hidden)]
-    pub(crate) fn candidates(
-        self,
-        vars: VariableView<'_>,
-        file: &LispString,
-    ) -> Result<LoadCandidates, Flow> {
+    fn candidates(self, vars: VariableView<'_>, file: &LispString) -> Result<LoadCandidates, Flow> {
         if self == Self::ExactNameOnly {
             // GNU Fload does not even inspect the suffix variables when
             // NOSUFFIX is non-nil.  Besides avoiding needless work, keeping

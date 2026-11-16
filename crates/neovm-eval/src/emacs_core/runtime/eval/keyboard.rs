@@ -2167,7 +2167,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub(crate) fn lookup_key_sequence_suffix_translation(
+    fn lookup_key_sequence_suffix_translation(
         &mut self,
         map: Value,
         events: &[Value],
@@ -2259,7 +2259,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub(crate) fn apply_translation_map_to_events(
+    fn apply_translation_map_to_events(
         &mut self,
         map: Value,
         mut translated: Vec<Value>,
@@ -2567,7 +2567,7 @@ impl crate::emacs_core::eval::Context {
     ///
     /// Keyboard audit Finding 10.
     #[doc(hidden)]
-    pub(crate) fn maybe_apply_input_method_function(
+    fn maybe_apply_input_method_function(
         &mut self,
         event: Value,
     ) -> Result<InputMethodEvent, neovm_value::error::Flow> {
@@ -2693,7 +2693,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub(crate) fn apply_shift_translation_to_current_key_sequence(
+    fn apply_shift_translation_to_current_key_sequence(
         &mut self,
     ) -> Option<KeySequenceShiftTranslation> {
         let translated = self
@@ -2720,7 +2720,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub(crate) fn finalize_shift_translated_key_sequence(
+    fn finalize_shift_translated_key_sequence(
         &mut self,
         sequence_is_undefined: bool,
         options: ReadKeySequenceOptions,
@@ -4110,7 +4110,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub(crate) fn pop_queued_read_char_event(
+    fn pop_queued_read_char_event(
         &mut self,
         idle_policy: IdleTransitionPolicy,
     ) -> Result<QueuedReadCharEvent, neovm_value::error::Flow> {
@@ -4899,7 +4899,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub(crate) fn read_char_event_with_timeout(
+    fn read_char_event_with_timeout(
         &mut self,
         timeout: Option<std::time::Duration>,
         tty_input_decoding: TtyInputDecoding,
@@ -4908,14 +4908,14 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub(crate) fn read_char_event_with_timeout_for_key_sequence(
+    fn read_char_event_with_timeout_for_key_sequence(
         &mut self,
     ) -> Result<Option<ReadCharEvent>, neovm_value::error::Flow> {
         self.read_char_event_with_timeout_policy(None, true, TtyInputDecoding::KeyboardCodingSystem)
     }
 
     #[doc(hidden)]
-    pub(crate) fn read_char_event_with_timeout_policy(
+    fn read_char_event_with_timeout_policy(
         &mut self,
         timeout: Option<std::time::Duration>,
         command_input: bool,
@@ -5907,7 +5907,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub(crate) fn simplify_mouse_event_once(
+    fn simplify_mouse_event_once(
         event: Value,
         mode: SymbolMode,
     ) -> Option<(MouseEventFallbackStep, Option<Value>)> {
@@ -5958,7 +5958,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub(crate) fn resolve_undefined_mouse_sequence_fallback(
+    fn resolve_undefined_mouse_sequence_fallback(
         &mut self,
         events: &[Value],
         lookup_position: Option<&Value>,
@@ -6031,7 +6031,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub(crate) fn mouse_posn_descriptor_value(desc: MousePosnDescriptor) -> Value {
+    fn mouse_posn_descriptor_value(desc: MousePosnDescriptor) -> Value {
         let area_or_pos = match desc.area {
             Some(area) => Value::symbol(area),
             None => desc.metrics.point.map(Value::fixnum).unwrap_or(Value::NIL),

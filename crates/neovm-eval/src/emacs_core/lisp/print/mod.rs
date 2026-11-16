@@ -2902,7 +2902,7 @@ static_assertions::assert_not_impl_any!(PrintShorthandGuard<'static, 'static>: S
 
 impl<'scope, 'context> PrintShorthandGuard<'scope, 'context> {
     #[doc(hidden)]
-    pub(crate) fn enter(
+    fn enter(
         state: &'scope mut PrintState<'context>,
         options: PrintOptions,
         shorthand: SymbolShorthand,

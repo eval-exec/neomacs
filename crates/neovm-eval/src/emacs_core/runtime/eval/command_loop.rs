@@ -1806,7 +1806,7 @@ impl Context {
     /// matching heap, Obarray and TLS writers without Lisp or allocation
     /// safepoints through capture and launch. Rejection precedes blackening.
     #[doc(hidden)]
-    pub(crate) unsafe fn start_concurrent_mark(
+    unsafe fn start_concurrent_mark(
         &mut self,
         heap_ptr: *mut neovm_value::tagged::gc::TaggedHeap,
         kind: ConcurrentCycleKind,
