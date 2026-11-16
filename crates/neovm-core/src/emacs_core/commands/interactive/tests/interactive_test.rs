@@ -1,9 +1,9 @@
-use neovm_value::intern::intern;
 use super::*;
 use crate::emacs_core::error::{FlowKind, FlowRef};
 use crate::emacs_core::eval::SubrValueExt;
 use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::symbol::CanonicalAccess;
+use neovm_value::intern::intern;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
@@ -967,8 +967,8 @@ fn commandp_true_for_registered_rust_editing_commands() {
                 .is_some_and(|function| function.is_subr()),
             "{name} must be a registered Rust subr"
         );
-        let result =
-            builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))]).expect("commandp call");
+        let result = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
+            .expect("commandp call");
         assert!(result.is_truthy(), "expected commandp true for {name}");
     }
 }
@@ -1366,8 +1366,8 @@ fn commandp_true_for_additional_registered_rust_commands() {
                 .is_some_and(|function| function.is_subr()),
             "{name} must be a registered Rust subr"
         );
-        let result =
-            builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))]).expect("commandp call");
+        let result = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
+            .expect("commandp call");
         assert!(result.is_truthy(), "expected commandp true for {name}");
     }
     // Same gate as `subrs.rs` (`#[cfg(not(any(windows, target_os = "macos")))]`).
@@ -1381,8 +1381,8 @@ fn commandp_true_for_additional_registered_rust_commands() {
                 .is_some_and(|function| function.is_subr()),
             "{name} must be a registered Rust subr"
         );
-        let result =
-            builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))]).expect("commandp call");
+        let result = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
+            .expect("commandp call");
         assert!(result.is_truthy(), "expected commandp true for {name}");
     }
     #[cfg(any(windows, target_os = "macos"))]
@@ -1445,8 +1445,8 @@ fn commandp_true_for_loaded_lisp_commands_after_bootstrap() {
             !function.is_subr(),
             "expected {name} startup function cell to remain a GNU Lisp command"
         );
-        let result =
-            builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))]).expect("commandp call");
+        let result = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(intern(name))])
+            .expect("commandp call");
         assert!(result.is_truthy(), "expected commandp true for {name}");
     }
 }
@@ -6190,7 +6190,10 @@ fn where_is_preferred_modifier_accepts_gnu_solitary_names() {
         ("A", KEY_CHAR_ALT),
         ("alt", KEY_CHAR_ALT),
     ] {
-        obarray.set_symbol_value("where-is-preferred-modifier", Value::from_sym_id(intern(name)));
+        obarray.set_symbol_value(
+            "where-is-preferred-modifier",
+            Value::from_sym_id(intern(name)),
+        );
         assert_eq!(
             WhereIsPreferredModifier::snapshot(
                 VariableView::canonical(CanonicalAccess::TEST, &obarray),

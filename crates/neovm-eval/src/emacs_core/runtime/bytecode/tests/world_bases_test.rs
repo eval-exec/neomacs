@@ -185,7 +185,10 @@ fn world_bases_varset_keeps_plain_alias_forwarded_local_and_watcher_channels() {
         "world-bases-store-local",
         "world-bases-store-watched",
     ];
-    let mut constants: Vec<Value> = names.iter().map(|name| Value::from_sym_id(intern((name).as_ref()))).collect();
+    let mut constants: Vec<Value> = names
+        .iter()
+        .map(|name| Value::from_sym_id(intern((name).as_ref())))
+        .collect();
     constants.push(Value::fixnum(12345678));
     let mut ops = Vec::new();
     for index in 0..names.len() {

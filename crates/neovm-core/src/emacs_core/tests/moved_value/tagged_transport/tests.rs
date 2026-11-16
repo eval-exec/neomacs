@@ -4,7 +4,7 @@
 use std::sync::{Arc, Barrier, mpsc};
 
 use neovm_value::heap_types::LispString;
-use neovm_value::intern::{intern, make_uninterned_symbol, is_canonical_id, unintern_canonical_id};
+use neovm_value::intern::{intern, is_canonical_id, make_uninterned_symbol, unintern_canonical_id};
 use neovm_value::tagged::gc::TaggedHeap;
 use neovm_value::tagged::transport::cell_census;
 use neovm_value::tagged::transport::{

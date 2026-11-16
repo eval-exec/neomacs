@@ -1,9 +1,9 @@
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::RuntimeStateTieringExt;
+use neovm_value::intern::intern;
 use neovm_value::value::{LambdaParams, Value};
 
 fn nullary_fn(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {

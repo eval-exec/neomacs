@@ -1,5 +1,5 @@
-use neovm_value::intern::intern;
 use neovm_display::window::DisplayFrameManagerExt;
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()

@@ -11,11 +11,11 @@ use crate::emacs_core::effect_profile::{
     EffectScope, effect_name_from_lisp, effect_operations_from_lisp, effect_set_operation_from_lisp,
 };
 use neomacs_display_protocol::{EffectOperation, EffectValue, VisualConfig};
-use neovm_value::intern::intern;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::error::{
     EvalResult, Flow, expect_args, expect_args_range, expect_min_args, signal,
 };
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
 fn effect_error(function: &str, message: impl std::fmt::Display) -> Flow {

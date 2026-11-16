@@ -2286,7 +2286,12 @@ pub fn builtin_coding_system_aliases(
     {
         names.push(format!("{canonical}{suffix}"));
     }
-    Ok(Value::list(names.into_iter().map(|name| coding_name_value(&name)).collect()))
+    Ok(Value::list(
+        names
+            .into_iter()
+            .map(|name| coding_name_value(&name))
+            .collect(),
+    ))
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]

@@ -1,7 +1,7 @@
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {

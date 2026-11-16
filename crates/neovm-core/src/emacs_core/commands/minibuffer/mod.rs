@@ -499,9 +499,9 @@ fn intern_symbol_reader_result(result: Value) -> Value {
     if let Some(name) = result.as_lisp_string() {
         // read-symbol results are interned symbol names (ASCII / decoded text);
         // decode lossily and reuse Value::symbol's nil/t/keyword canonicalization.
-        return Value::from_sym_id(intern((crate::emacs_core::emacs_char::to_utf8_lossy(
-            name.as_bytes(),
-        )).as_ref()));
+        return Value::from_sym_id(intern(
+            (crate::emacs_core::emacs_char::to_utf8_lossy(name.as_bytes())).as_ref(),
+        ));
     }
     result
 }

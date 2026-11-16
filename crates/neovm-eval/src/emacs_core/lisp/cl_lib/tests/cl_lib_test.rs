@@ -1,6 +1,6 @@
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
+use neovm_value::intern::intern;
 use neovm_value::value::ValueKind;
 
 // --- Seq.el pure operations ---

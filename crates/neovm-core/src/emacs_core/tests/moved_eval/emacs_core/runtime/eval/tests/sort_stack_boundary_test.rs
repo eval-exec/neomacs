@@ -2,13 +2,13 @@
 //! GNU sort.c:198-214 compares key scalars through ordinary funcall;
 //! eval.c:3194-3216 retains that frame and depth until the body returns.
 #![deny(clippy::wildcard_enum_match_arm)]
-use neovm_value::intern::intern;
 use crate::emacs_core::builtins::higher_order_test_support::{
     CapturedSortPredicate, builtin_sort_slice, resolve_sort_predicate_for_test,
 };
 use crate::emacs_core::eval::{
     Context, EVAL_STACK_RED_ZONE, STACK_GROWTH_PROBE_INTERVAL, STACK_GROWTH_PROBE_START_DEPTH,
 };
+use neovm_value::intern::intern;
 use neovm_value::tagged::collection_reads::capture;
 use neovm_value::tagged::mutate::LispCollectionRevision;
 use neovm_value::value::Value;

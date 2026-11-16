@@ -831,7 +831,9 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute_from_resource(
             ":bold" | ":italic" => {
                 face_boolean_x_resource_value(&resource_value, true)?.expect("signal=true")
             }
-            ":weight" | ":slant" | ":width" => Value::from_sym_id(intern((&resource_value).as_ref())),
+            ":weight" | ":slant" | ":width" => {
+                Value::from_sym_id(intern((&resource_value).as_ref()))
+            }
             ":inverse-video" | ":extend" => {
                 face_boolean_x_resource_value(&resource_value, true)?.expect("signal=true")
             }

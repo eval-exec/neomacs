@@ -1,6 +1,6 @@
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::opcode::Op;
+use neovm_value::intern::intern;
 
 /// A simple arithmetic body builds the expected MIR shape.
 #[test]

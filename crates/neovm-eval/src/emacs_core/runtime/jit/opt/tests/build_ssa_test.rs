@@ -2,12 +2,12 @@
 //! differential tests in the independent IR evaluator and native lowering.
 
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::chunk::{ByteCodeFunction, GnuByteOffsetMapEntry};
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::analyze_cfg;
+use neovm_value::intern::intern;
 use neovm_value::value::{HashTableTest, LambdaParams, Value as LispValue};
 
 fn make(ops: &[Op], constants: &[LispValue], params: ParamShape) -> Func {

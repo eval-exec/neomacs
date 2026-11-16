@@ -6,11 +6,11 @@
 //! - `libxml-available-p` — feature availability probe
 
 use neovm_edit::buffer::{BufferId, BufferManager, EmacsByteRange};
-use neovm_value::intern::intern;
 use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_edit::emacs_core::position::LispRegionArgs;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, expect_args, expect_max_args, signal};
+use neovm_value::intern::intern;
 use neovm_value::value::ValueKind;
 use neovm_value::value::*;
 use std::borrow::Cow;
@@ -358,7 +358,10 @@ fn parse_xml_attributes(
             .normalized_value(quick_xml::XmlVersion::Implicit1_0)
             .map(|value| value.into_owned())
             .unwrap_or_else(|_| String::from_utf8_lossy(&attr.value).into_owned());
-        result.push(Value::cons(Value::from_sym_id(intern(&key)), Value::string(&val)));
+        result.push(Value::cons(
+            Value::from_sym_id(intern(&key)),
+            Value::string(&val),
+        ));
     }
     result
 }

@@ -6,10 +6,10 @@
 //! facade (the private predicate/proof types stay in eval), the resolver is
 //! driven through the product's `resolve_sort_predicate_for_test` route, and
 //! `Context::new(unit_runtime())` became core's `new_context()` facade.
-use neovm_value::intern::intern;
 use neovm_eval::emacs_core::builtins::higher_order_test_support::{
     CapturedSortPredicate, resolve_sort_predicate_for_test,
 };
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
 #[test]

@@ -21,7 +21,11 @@ fn pow2(n: u32) -> Value {
 }
 
 fn make_table(test: &str) -> Value {
-    builtin_make_hash_table(vec![Value::keyword("test"), Value::from_sym_id(intern(test))]).unwrap()
+    builtin_make_hash_table(vec![
+        Value::keyword("test"),
+        Value::from_sym_id(intern(test)),
+    ])
+    .unwrap()
 }
 
 #[test]

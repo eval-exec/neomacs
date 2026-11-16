@@ -1,5 +1,5 @@
-use neovm_value::intern::intern;
 use super::*;
+use neovm_value::intern::intern;
 use std::fmt;
 
 use encoding_rs::{BIG5, GBK};
@@ -2209,7 +2209,10 @@ fn register_test_jis() -> neovm_value::intern::SymId {
 }
 
 fn charset_prop(charset: &str) -> Value {
-    Value::list(vec![Value::symbol("charset"), Value::from_sym_id(intern(charset))])
+    Value::list(vec![
+        Value::symbol("charset"),
+        Value::from_sym_id(intern(charset)),
+    ])
 }
 
 fn fmt(eval: &mut crate::emacs_core::Context, src: &str) -> String {

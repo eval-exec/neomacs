@@ -1,6 +1,6 @@
-use neovm_value::intern::intern;
 use super::*;
 use neovm_value::heap_types::byte_positions::EmacsByteRange;
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
 #[test]
@@ -126,7 +126,9 @@ fn colliding_properties() -> (Value, Value) {
     // Each single-name signature selects one of 256 bits. Comparing the
     // public filters finds a pair even if symbol allocation order changes.
     for index in 0..=256 {
-        let property = Value::from_sym_id(intern((format!("overlay-filter-collision-{index}")).as_ref()));
+        let property = Value::from_sym_id(intern(
+            (format!("overlay-filter-collision-{index}")).as_ref(),
+        ));
         let filter = OverlayPropertyFilter::for_properties([property]);
         if let Some((_, previous)) = signatures
             .iter()

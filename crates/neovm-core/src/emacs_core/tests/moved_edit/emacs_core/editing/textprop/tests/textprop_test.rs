@@ -1,5 +1,5 @@
-use neovm_value::intern::intern;
 use super::*;
+use neovm_value::intern::intern;
 
 use neovm_display::window::DisplayFrameManagerExt;
 use neovm_edit::emacs_core::display_metrics::WindowId;
@@ -1818,7 +1818,12 @@ fn next_single_property_change_coalesces_and_reports_trailing_nil() {
     let put = |eval: &mut _, s, e, k, v| {
         builtin_put_text_property(
             eval,
-            vec![Value::fixnum(s), Value::fixnum(e), Value::from_sym_id(intern(k)), v],
+            vec![
+                Value::fixnum(s),
+                Value::fixnum(e),
+                Value::from_sym_id(intern(k)),
+                v,
+            ],
         )
         .unwrap();
     };
@@ -1866,7 +1871,12 @@ fn previous_single_property_change_coalesces_backward_and_reports_point_min() {
     let put = |eval: &mut _, s, e, k, v| {
         builtin_put_text_property(
             eval,
-            vec![Value::fixnum(s), Value::fixnum(e), Value::from_sym_id(intern(k)), v],
+            vec![
+                Value::fixnum(s),
+                Value::fixnum(e),
+                Value::from_sym_id(intern(k)),
+                v,
+            ],
         )
         .unwrap();
     };

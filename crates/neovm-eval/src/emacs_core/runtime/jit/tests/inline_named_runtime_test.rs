@@ -244,7 +244,11 @@ fn inline_named_runtime_cell_redefinition_resumes_original_call_with_new_functio
     );
     assert_eq!(
         resume.stack,
-        vec![Value::make_int(3), Value::from_sym_id(intern(name)), Value::make_int(3)]
+        vec![
+            Value::make_int(3),
+            Value::from_sym_id(intern(name)),
+            Value::make_int(3)
+        ]
     );
     assert_eq!(
         compile::resumed_chain::resume_deopt(&mut ctx, &f, Value::NIL, &leaf, *resume).unwrap(),
@@ -371,7 +375,10 @@ fn inline_named_runtime_assigned_argument_is_resumed_without_losing_original_cal
     let NativeRun::DeoptAt(resume) = run else {
         panic!("inner Car guard: {run:?}")
     };
-    assert_eq!(resume.stack, vec![original, Value::from_sym_id(intern(name)), original]);
+    assert_eq!(
+        resume.stack,
+        vec![original, Value::from_sym_id(intern(name)), original]
+    );
     let frames = &resume.inlined.as_ref().expect("named chain").frames;
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0].function, target);

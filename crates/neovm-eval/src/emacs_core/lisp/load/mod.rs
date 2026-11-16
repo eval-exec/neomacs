@@ -5250,7 +5250,11 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
         }
         let _ = super::builtins::builtin_put(
             eval,
-            vec![Value::from_sym_id(intern((name).as_ref())), Value::from_sym_id(intern((prop).as_ref())), Value::NIL],
+            vec![
+                Value::from_sym_id(intern((name).as_ref())),
+                Value::from_sym_id(intern((prop).as_ref())),
+                Value::NIL,
+            ],
         );
     }
 
@@ -5477,7 +5481,11 @@ pub fn normalize_final_dump_runtime_surface(
         }
         let _ = super::builtins::builtin_put(
             eval,
-            vec![Value::from_sym_id(intern((name).as_ref())), Value::from_sym_id(intern((prop).as_ref())), Value::NIL],
+            vec![
+                Value::from_sym_id(intern((name).as_ref())),
+                Value::from_sym_id(intern((prop).as_ref())),
+                Value::NIL,
+            ],
         );
     }
 

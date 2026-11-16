@@ -1,9 +1,9 @@
 //! Face vocabulary owned by the evaluator layer (stage-4 W1 E2).
 
 use enum_map::EnumMap;
-use neovm_value::intern::intern;
 pub use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, LFaceAttr};
 use neovm_value::gc_trace::GcTrace;
+use neovm_value::intern::intern;
 use neovm_value::intern::{SymId, WellKnown, resolve_sym};
 use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;

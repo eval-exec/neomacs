@@ -316,8 +316,9 @@ fn heap_drop_requests_real_marker_stop_and_retains_reachable_storage() {
 fn obarray_snapshot_leases_survive_owner_drop() {
     let mut heap = TaggedHeap::new();
     let mut obarray = crate::symbol::Obarray::new();
-    let child =
-        TaggedValue::from_sym_id(crate::intern::make_uninterned_symbol("snapshot-retained-child"));
+    let child = TaggedValue::from_sym_id(crate::intern::make_uninterned_symbol(
+        "snapshot-retained-child",
+    ));
     obarray.set_symbol_value("snapshot-retained-owner", child);
     // SAFETY: this test is the sole writer; capture and read have no callbacks
     // and no other mutator can modify this owner after it is dropped.

@@ -10,7 +10,6 @@ use super::display::{
     right_scroll_bar_area_width, vertical_scroll_bar_cols,
 };
 use super::parameters::alist_from_parameters;
-use neovm_value::intern::intern;
 use super::tty_posn_current::{
     TtyCurrentMatrixAuthority, TtyMatrixAllocation, TtyPosnCurrentOwner,
 };
@@ -23,6 +22,7 @@ use neovm_eval::emacs_core::eval::data::window_state::{
 use neovm_eval::emacs_core::eval::data::window_state::{
     horizontal_scroll_bar_area_height, horizontal_scroll_bar_lines, vertical_scroll_bar_area_width,
 };
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use neovm_value::value::eq_value;
 use std::sync::Arc;
@@ -503,7 +503,9 @@ impl DisplayFrameExt for Frame {
     }
 
     fn parameter(&self, key: &str) -> Option<Value> {
-        self.parameters.get(&Value::from_sym_id(intern(key))).copied()
+        self.parameters
+            .get(&Value::from_sym_id(intern(key)))
+            .copied()
     }
 
     /// [`Self::parameter`] for a fixed GNU spelling.

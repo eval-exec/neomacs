@@ -6,12 +6,12 @@
 //! when nothing was emitted.
 
 use super::leaf_abi::{LEAF_STATS, bare_trampoline, leaf_trampoline_calls, opcode_leaf};
-use neovm_value::intern::intern;
 use super::*;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::subr::leaf::{Containment, LEAVES, LeafEntry, LeafExit, LeafId, LeafShape};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {

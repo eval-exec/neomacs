@@ -1,9 +1,9 @@
-use neovm_value::intern::intern;
 use crate::emacs_core::builtins::*;
 use neovm_edit::buffer::{CharRange, EmacsByteRange, LispCharPos1};
 use neovm_eval::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use neovm_eval::emacs_core::eval::SubrValueExt;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
+use neovm_value::intern::intern;
 fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
 }
@@ -6310,7 +6310,10 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
     let first = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
         &mut ctx,
         "make-hash-table",
-        vec![Value::keyword(":test"), Value::from_sym_id(intern(alias_name))],
+        vec![
+            Value::keyword(":test"),
+            Value::from_sym_id(intern(alias_name)),
+        ],
     )
     .expect("make-hash-table should resolve")
     .expect("make-hash-table should evaluate");
@@ -6340,7 +6343,10 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
     let second = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
         &mut ctx,
         "make-hash-table",
-        vec![Value::keyword(":test"), Value::from_sym_id(intern(alias_name))],
+        vec![
+            Value::keyword(":test"),
+            Value::from_sym_id(intern(alias_name)),
+        ],
     )
     .expect("make-hash-table should resolve after alias redefinition")
     .expect("make-hash-table should evaluate after alias redefinition");
@@ -14599,7 +14605,10 @@ fn message_box_wrappers_render_opaque_handles_in_eval_dispatch() {
         match err.into_kind() {
             FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
-                assert_eq!(sig.data, vec![Value::from_sym_id(intern(symbol)), Value::fixnum(0)]);
+                assert_eq!(
+                    sig.data,
+                    vec![Value::from_sym_id(intern(symbol)), Value::fixnum(0)]
+                );
             }
             other => panic!("expected signal, got: {other:?}"),
         }

@@ -71,8 +71,8 @@ mod moved_eval_prelude {
     pub use neovm_value::error::*;
     pub use neovm_value::gc_trace::GcTrace;
     pub use neovm_value::intern::{
-        SymId, WellKnown, format_symbol_name_for_diagnostic, intern, make_uninterned_symbol,
-        is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
+        SymId, WellKnown, format_symbol_name_for_diagnostic, intern, is_canonical_id,
+        is_keyword_id, make_uninterned_symbol, resolve_sym, symbol_name_id,
     };
     pub use neovm_value::kmacro::KmacroManager;
     pub use neovm_value::quit::QuitRequest;
@@ -24639,7 +24639,8 @@ fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands
             neovm_value::tagged::SymbolMode::Bare,
         )
         .expect("define signaling command");
-        ev.command_loop_mut().unread_event(Value::from_sym_id(intern(key)));
+        ev.command_loop_mut()
+            .unread_event(Value::from_sym_id(intern(key)));
     }
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
@@ -26179,7 +26180,8 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     // precondition holds on any build.
     let mut topup = 0u64;
     while ev.obarray_mut().current_slot_len() < 2 * 4096 {
-        ev.obarray_mut().intern_member(&format!("t23-topup-{topup}"));
+        ev.obarray_mut()
+            .intern_member(&format!("t23-topup-{topup}"));
         topup += 1;
     }
     assert!(ev.obarray().current_slot_len() >= 2 * 4096);
@@ -27831,8 +27833,11 @@ fn jit_make_closure_instances_share_one_leaf_and_read_their_own_captures() {
         ("jit-share-a", a),
         ("jit-share-b", b),
     ] {
-        crate::emacs_core::builtins::builtin_fset(&mut ev, vec![Value::from_sym_id(intern(name)), v])
-            .expect("fset");
+        crate::emacs_core::builtins::builtin_fset(
+            &mut ev,
+            vec![Value::from_sym_id(intern(name)), v],
+        )
+        .expect("fset");
     }
     let a_bc = a.get_bytecode_data().expect("bytecode");
     assert_eq!(

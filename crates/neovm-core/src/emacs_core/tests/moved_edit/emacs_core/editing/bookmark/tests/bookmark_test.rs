@@ -1,5 +1,5 @@
-use neovm_value::intern::intern;
 use super::*;
+use neovm_value::intern::intern;
 use neovm_value::value::positions::{CharPos0, CharRange};
 use std::path::PathBuf;
 

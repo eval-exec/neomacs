@@ -1,7 +1,7 @@
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::Context;
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn raw_loop(ops: Vec<Op>) -> ByteCodeFunction {

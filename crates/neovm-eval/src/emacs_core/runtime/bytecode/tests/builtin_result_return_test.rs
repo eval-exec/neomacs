@@ -9,13 +9,13 @@
 //! and the inline ones, `Bchar_after`); and the specpdl is balanced after.
 
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::print::print_value;
 use neovm_value::error::{FlowRef, FlowResultExt};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 /// Arm a `signal-hook-function` that records whether a backtrace frame for

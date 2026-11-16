@@ -13,8 +13,8 @@
 //! and creates no buffer-specific or Lisp-state cache.
 
 use neomacs_display_protocol::face::TtySpaceIdentity;
-use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::eval::VariableView;
+use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::xfaces::realization::XfacesRealizationContextExt;
 use neovm_core::face::realization::BasicFace;
 use neovm_core::window::DisplayFrameExt;

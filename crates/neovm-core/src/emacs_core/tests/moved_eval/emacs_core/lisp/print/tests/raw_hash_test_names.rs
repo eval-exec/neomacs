@@ -4,7 +4,9 @@ use crate::emacs_core::print::{
     print_value_stateful_bytes_with_buffers,
 };
 use neovm_value::heap_types::LispString;
-use neovm_value::intern::{intern_lisp_string, make_uninterned_symbol, make_uninterned_symbol_lisp_string};
+use neovm_value::intern::{
+    intern_lisp_string, make_uninterned_symbol, make_uninterned_symbol_lisp_string,
+};
 use neovm_value::value::{HashTableTest, Value};
 
 fn character_codes(bytes: Vec<u8>) -> Value {

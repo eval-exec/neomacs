@@ -6585,7 +6585,10 @@ pub fn builtin_insert_file_contents(
 
     // GNU `insert-file-contents' sets `last-coding-system-used' before
     // `after-insert-file-set-coding' derives `buffer-file-coding-system'.
-    eval.set_variable("last-coding-system-used", Value::from_sym_id(intern((&contents.coding).as_ref())));
+    eval.set_variable(
+        "last-coding-system-used",
+        Value::from_sym_id(intern((&contents.coding).as_ref())),
+    );
 
     let inserted_char_count = run_after_insert_file_pipeline(
         eval,

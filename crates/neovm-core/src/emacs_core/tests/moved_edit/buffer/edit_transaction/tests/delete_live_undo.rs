@@ -141,7 +141,10 @@ fn normalized_undo(mut undo: Value, markers: &[Value]) -> Value {
                     .iter()
                     .position(|m| m.bits() == entry.cons_car().bits())
                     .unwrap();
-                Value::cons(Value::from_sym_id(intern((&format!("m{index}")).as_ref())), entry.cons_cdr())
+                Value::cons(
+                    Value::from_sym_id(intern((&format!("m{index}")).as_ref())),
+                    entry.cons_cdr(),
+                )
             } else {
                 entry
             },

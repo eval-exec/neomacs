@@ -4,12 +4,12 @@
 //! read must be the one taken for a plain bound symbol.
 
 use super::shims::VARREF_SHIM_CALLS;
-use neovm_value::intern::intern;
 use super::*;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn body(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
@@ -164,7 +164,8 @@ fn reads_survive_obarray_growth_and_absent_symbols() {
     let f = reader(Value::symbol("vri-grow"));
     let leaf = compile_bytecode_function(&f).expect("compiles");
     for i in 0..12_000 {
-        eval.obarray.intern_member(&format!("vri-growth-filler-{i}"));
+        eval.obarray
+            .intern_member(&format!("vri-growth-filler-{i}"));
     }
     eval_ok(&mut eval, "(setq vri-grow 'after)");
     VARREF_SHIM_CALLS.with(|c| c.set(0));

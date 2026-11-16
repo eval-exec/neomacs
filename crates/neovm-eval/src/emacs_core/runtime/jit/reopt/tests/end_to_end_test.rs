@@ -9,7 +9,6 @@
 //! argument is made right before its call and each result is printed at once.
 
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::vm::Vm as TestVm;
@@ -19,6 +18,7 @@ use crate::emacs_core::jit::compile::{force_deopt_for_test, force_profit_gate_fo
 use crate::emacs_core::jit::stats;
 use crate::emacs_core::print::print_value;
 use neovm_value::intern::SymId;
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 /// Finish only an actual queued compile AFTER its original Lisp call.

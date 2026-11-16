@@ -1793,7 +1793,11 @@ fn font_parse_fcname_keyval(elems: &mut Vec<Value>, key: &str, val: &str) {
         "foundry" | "family" | "adstyle" | "lang" | "script" => {
             font_parse_set(elems, key, Value::from_sym_id(intern(val)));
         }
-        "registry" => font_parse_set(elems, "registry", Value::from_sym_id(intern((val.to_ascii_lowercase()).as_ref()))),
+        "registry" => font_parse_set(
+            elems,
+            "registry",
+            Value::from_sym_id(intern((val.to_ascii_lowercase()).as_ref())),
+        ),
         "dpi" => {
             if let Ok(n) = val.parse::<i64>() {
                 font_parse_set(elems, "dpi", Value::fixnum(n));
@@ -1861,7 +1865,11 @@ fn font_parse_fcname(elems: &mut Vec<Value>, name: &str) -> bool {
     // Family.
     if family_end > 0 {
         let family = unescape_fcname(&name[..family_end]);
-        font_parse_set(elems, "family", Value::from_sym_id(intern((&family).as_ref())));
+        font_parse_set(
+            elems,
+            "family",
+            Value::from_sym_id(intern((&family).as_ref())),
+        );
     }
 
     // Point size (stored as a float, matching GNU `make_float`).
@@ -2128,7 +2136,11 @@ fn font_parse_xlfd_fields(
     let encoding = intern_field(XLFD_ENCODING);
     if !(registry == "*" && encoding == "*") {
         let combined = format!("{registry}-{encoding}");
-        font_parse_set(elems, "registry", Value::from_sym_id(intern((combined).as_ref())));
+        font_parse_set(
+            elems,
+            "registry",
+            Value::from_sym_id(intern((combined).as_ref())),
+        );
     } else if !abbreviated {
         // The abbreviated path retains an earlier registry when both fields
         // are unspecified; the complete path writes nil unconditionally.

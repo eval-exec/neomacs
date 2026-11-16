@@ -21,13 +21,13 @@
 //! Only built with the `jit` feature (links Cranelift).
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::hooks_proof::EvalHooksInstalled;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::{Linkage, Module, default_libcall_names};
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use neovm_value::intern::intern;
 
 use super::backend::BackendError;
 use super::compile::{CompileError, DeoptCells};

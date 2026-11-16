@@ -16,7 +16,12 @@ use neovm_value::value::*;
 // ---------------------------------------------------------------------------
 
 #[doc(hidden)]
-pub fn expect_min_max_args(name: &'static str, args: &[Value], min: usize, max: usize) -> Result<(), Flow> {
+pub fn expect_min_max_args(
+    name: &'static str,
+    args: &[Value],
+    min: usize,
+    max: usize,
+) -> Result<(), Flow> {
     if args.len() < min || args.len() > max {
         Err(signal(
             LispCondition::WrongNumberOfArguments,

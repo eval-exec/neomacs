@@ -1,11 +1,11 @@
 //! A refinement inside one unbind suffix must not tear its window snapshot.
 
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::eval::subr_abi::SubrFn;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::eval::{SubrEntry, register_global_subr_entry};
 use neovm_value::error::EvalResult;
+use neovm_value::intern::intern;
 use neovm_value::tagged::collection_reads::{
     CompiledJournalMode, capture, force_compiled_journal_for_test, is_observed,
 };

@@ -5,10 +5,10 @@
 //! assertion alone passes just as well when it did not).
 
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use neovm_value::error::{FlowKind, FlowResultExt};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 /// `(lambda (a1..an) (CALLEE a1..an))` through `Op::Call` (GNU `Bcall`).

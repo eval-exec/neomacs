@@ -461,7 +461,7 @@ fn major_before_first_minor_preserves_permanent_edge() {
 
 #[test]
 fn minor_uninterned_symbol_weak_key_survives_without_old_owner_retrace() {
-    use crate::intern::{make_uninterned_symbol, is_canonical_id};
+    use crate::intern::{is_canonical_id, make_uninterned_symbol};
     use crate::value::{HashTableTest, LispHashTable};
 
     let mut heap = heap_with_generations(true);
@@ -520,7 +520,7 @@ fn minor_uninterned_symbol_weak_key_survives_without_old_owner_retrace() {
 
 #[test]
 fn minor_then_major_old_owner_keeps_new_uninterned_weak_symbol_key() {
-    use crate::intern::{make_uninterned_symbol, is_canonical_id};
+    use crate::intern::{is_canonical_id, make_uninterned_symbol};
     use crate::value::{HashTableTest, LispHashTable};
 
     for cons_owner in [false, true] {

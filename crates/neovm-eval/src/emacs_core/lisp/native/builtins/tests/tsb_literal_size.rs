@@ -2,12 +2,12 @@
 //! Oracle fixtures are refreshed standalone with UPDATE_EXPECT=1 through the
 //! campaign sandbox, then read here without launching nested GNU scopes.
 use super::symbols::builtin_make_byte_code;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
+use neovm_value::intern::intern;
 use std::marker::PhantomData;
 use std::rc::Rc;
 

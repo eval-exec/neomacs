@@ -6,7 +6,6 @@
 //! an assertion panic. No process-global knob is changed.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::eval::{Context, ThreadingMode};
@@ -21,6 +20,7 @@ use crate::emacs_core::print::print_value;
 pub use crate::emacs_core::subr::{FixedMin1, SubrSpec};
 use neovm_value::error::{EvalResult, Flow};
 use neovm_value::error::{LispCondition, signal};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 use neovm_value::value::Value;
 use std::marker::PhantomData;
@@ -441,7 +441,10 @@ fn yield_then(name: &'static str) -> ByteCodeFunction {
             Op::Call(0),
             Op::Return,
         ],
-        vec![Value::symbol("thread-yield"), Value::from_sym_id(intern(name))],
+        vec![
+            Value::symbol("thread-yield"),
+            Value::from_sym_id(intern(name)),
+        ],
         FixtureArity::Nullary,
     )
 }

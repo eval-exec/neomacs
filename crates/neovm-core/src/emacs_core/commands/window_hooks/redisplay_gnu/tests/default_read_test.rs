@@ -1,5 +1,5 @@
-use neovm_value::intern::intern;
 use super::*;
+use neovm_value::intern::intern;
 
 #[test]
 fn void_default_signals_after_callback_and_records_on_unwind() {

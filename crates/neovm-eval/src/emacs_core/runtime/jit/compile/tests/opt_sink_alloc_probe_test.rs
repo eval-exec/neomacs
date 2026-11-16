@@ -3,9 +3,9 @@
 //! owned by this invocation's mutator. No new runtime cache/state is introduced.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+use neovm_value::intern::intern;
 
 use super::*;
 use crate::emacs_core::eval::{

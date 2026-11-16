@@ -1,9 +1,9 @@
 //! Resolver engagement and guard tests. GNU-refreshed Lisp behavior lives in
 //! neovm-oracle-tests/src/assoc/tests/callback_seams.rs under both knob states.
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use neovm_value::intern::intern;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::assoc_predicate::PureAssocPredicate;
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
 #[test]

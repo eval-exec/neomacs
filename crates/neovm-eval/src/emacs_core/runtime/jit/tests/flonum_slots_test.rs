@@ -9,13 +9,13 @@
 //! must stay `eq`, and two results must be distinct objects.
 
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::NumericFeedback as NF;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
+use neovm_value::intern::intern;
 use neovm_value::value::{LambdaParams, ValueKind};
 
 /// `(lambda (p0 .. pN-1) OPS)` with `Float` recorded at `float_pcs`.

@@ -4,7 +4,7 @@ use super::*;
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
-use crate::emacs_core::intern::{make_uninterned_symbol, is_canonical_id};
+use crate::emacs_core::intern::{is_canonical_id, make_uninterned_symbol};
 use crate::emacs_core::value::{HashTableTest, LispHashTable};
 
 struct ScratchRoots(usize);

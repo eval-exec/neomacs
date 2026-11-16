@@ -8,7 +8,6 @@
 //! peer 14:4xZ hold); the event-injection and thread-local-registry fixtures
 //! go through the eval authority fences.  Test names and assertions are
 //! unchanged.
-use neovm_value::intern::intern;
 use crate::test_utils::init_test_tracing;
 use crate::test_utils::runtime_startup_context;
 use crate::test_utils::workspace_root;
@@ -21,6 +20,7 @@ use neovm_eval::test_support::authority::{
     drain_batch_for_test, file_notify_register_for_test, file_notify_unregister_for_test,
     reset_file_notify_thread_locals_for_test,
 };
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
 fn workspace_temp_dir() -> tempfile::TempDir {

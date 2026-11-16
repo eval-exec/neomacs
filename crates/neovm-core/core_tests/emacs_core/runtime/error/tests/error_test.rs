@@ -1,9 +1,9 @@
-use neovm_value::intern::intern;
 use super::{EvalError, Flow, signal};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{FlowRef, FlowResultExt};
 use crate::emacs_core::print::{PrintShorthandSymbol, format_flow_with_eval, quote_payload};
 use crate::emacs_core::{Context, Value, print_value_bytes_with_eval, print_value_with_eval};
+use neovm_value::intern::intern;
 
 #[test]
 fn list_prints_buffers_with_names_in_eval_context() -> Result<(), EvalError> {

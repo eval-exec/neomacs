@@ -1244,7 +1244,12 @@ pub fn expect_max_args(name: &'static str, args: &[Value], max: usize) -> Result
 /// Signal wrong-number-of-arguments unless `min <= args.len() <= max`.
 #[inline]
 #[doc(hidden)]
-pub fn expect_args_range(name: &'static str, args: &[Value], min: usize, max: usize) -> Result<(), Flow> {
+pub fn expect_args_range(
+    name: &'static str,
+    args: &[Value],
+    min: usize,
+    max: usize,
+) -> Result<(), Flow> {
     if args.len() < min || args.len() > max {
         Err(wrong_number_of_arguments(name, args.len()))
     } else {

@@ -6,10 +6,10 @@
 pub use neovm_eval::emacs_core::eval::data::process_state::*;
 
 use super::*;
-use neovm_value::intern::intern;
 use neovm_eval::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
 };
+use neovm_value::intern::intern;
 use neovm_value::tagged::value::SymbolMode;
 
 use super::NetworkSocketIo;

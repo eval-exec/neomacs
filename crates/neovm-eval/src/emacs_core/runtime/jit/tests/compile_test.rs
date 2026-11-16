@@ -4965,8 +4965,8 @@ fn switch_follows_mutation_after_compile() {
     let mut ev =
         crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
-    let [a, b, c, d, e] =
-        ["a", "b", "c", "d", "e"].map(|n| Value::from_sym_id(intern((format!("jit-sw-mut-{n}")).as_ref())));
+    let [a, b, c, d, e] = ["a", "b", "c", "d", "e"]
+        .map(|n| Value::from_sym_id(intern((format!("jit-sw-mut-{n}")).as_ref())));
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
         for (key, offset) in [(a, 8), (b, 12)] {

@@ -2532,7 +2532,10 @@ pub(crate) fn lookup_frame_lisp_face_vector(
     face_name: &str,
 ) -> Option<Value> {
     let table = eval.frame_manager().get(frame_id)?.face_hash_table();
-    crate::emacs_core::xfaces::lookup_frame_face_hash_entry(table, Value::from_sym_id(intern(face_name)))
+    crate::emacs_core::xfaces::lookup_frame_face_hash_entry(
+        table,
+        Value::from_sym_id(intern(face_name)),
+    )
 }
 
 /// Symbol-keyed frame face lookup for callers that already hold the interned
@@ -4399,10 +4402,13 @@ fn resolved_lface_in_frame(
     frame_id: FrameId,
     face_name: &str,
 ) -> Option<(Value, Value)> {
-    let resolved =
-        resolve_face_designator(eval, Value::from_sym_id(intern(face_name)), FaceAliasCyclePolicy::Signal)
-            .ok()?
-            .name()?;
+    let resolved = resolve_face_designator(
+        eval,
+        Value::from_sym_id(intern(face_name)),
+        FaceAliasCyclePolicy::Signal,
+    )
+    .ok()?
+    .name()?;
     let name = resolved.symbol();
     // Both tables store the lface vector as the hash value. A non-vector value
     // cannot be compared slot-wise and is not proven equal.

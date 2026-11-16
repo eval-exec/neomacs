@@ -1,5 +1,5 @@
-use neovm_value::intern::intern;
 use super::*;
+use neovm_value::intern::intern;
 
 use LispSyntaxObjectReuse::{CanonicalBare, Fresh};
 use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;

@@ -4,7 +4,7 @@ use crate::emacs_core::builtins::symbols::builtin_unintern;
 use crate::emacs_core::builtins::{
     builtin_gethash, builtin_hash_table_count, builtin_puthash, builtin_remhash,
 };
-use crate::emacs_core::intern::{intern, make_uninterned_symbol, lookup_interned};
+use crate::emacs_core::intern::{intern, lookup_interned, make_uninterned_symbol};
 use crate::heap_types::LispString;
 
 #[test]
@@ -333,16 +333,18 @@ fn unintern_symbol_argument_removes_only_the_exact_symbol() {
     let uninterned = make_uninterned_symbol(name);
     eval.obarray_mut().ensure_interned_global_id(canonical);
 
-    let removed_shadow = builtin_unintern(&mut eval, vec![Value::from_sym_id(uninterned), Value::NIL])
-        .expect("unintern should accept uninterned symbol argument");
+    let removed_shadow =
+        builtin_unintern(&mut eval, vec![Value::from_sym_id(uninterned), Value::NIL])
+            .expect("unintern should accept uninterned symbol argument");
     assert!(removed_shadow.is_nil());
     assert!(
         eval.obarray().intern_soft(name).is_some(),
         "uninterned shadow must not remove canonical namesake"
     );
 
-    let removed_canonical = builtin_unintern(&mut eval, vec![Value::from_sym_id(canonical), Value::NIL])
-        .expect("unintern should remove exact canonical symbol");
+    let removed_canonical =
+        builtin_unintern(&mut eval, vec![Value::from_sym_id(canonical), Value::NIL])
+            .expect("unintern should remove exact canonical symbol");
     assert_eq!(removed_canonical, Value::T);
     assert!(eval.obarray().intern_soft(name).is_none());
 }
@@ -413,9 +415,11 @@ fn sxhash_float_signed_zero_and_nan_semantics_match_oracle() {
     assert_eq!(nan_eql, nan_equal);
 
     for test_name in ["eql", "equal"] {
-        let table =
-            builtin_make_hash_table(vec![Value::keyword(":test"), Value::from_sym_id(intern(test_name))])
-                .expect("hash table");
+        let table = builtin_make_hash_table(vec![
+            Value::keyword(":test"),
+            Value::from_sym_id(intern(test_name)),
+        ])
+        .expect("hash table");
         let _ = builtin_puthash(vec![Value::make_float(0.0), Value::symbol("zero"), table])
             .expect("puthash zero");
         assert_eq!(

@@ -363,7 +363,7 @@ fn major_retraces_old_children_when_mark_parity_repeats() {
 }
 
 fn major_retraces_old_uninterned_symbol_owner_without_recent_r() {
-    use crate::intern::{make_uninterned_symbol, is_canonical_id};
+    use crate::intern::{is_canonical_id, make_uninterned_symbol};
 
     for positioned in [false, true] {
         let mut heap = heap(true);
@@ -765,7 +765,7 @@ impl Drop for SymbolInsertionWorkerGuard {
 }
 
 fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: bool, jit: bool) {
-    use crate::intern::{make_uninterned_symbol, is_canonical_id};
+    use crate::intern::{is_canonical_id, make_uninterned_symbol};
 
     let mut heap = heap(true);
     heap.install();
@@ -801,7 +801,8 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
     insert(table, dead, TaggedValue::fixnum(181));
     roots.clear(dead_root);
     if !fresh {
-        let existing = TaggedValue::from_sym_id(make_uninterned_symbol("u34b-existing-weak-symbol"));
+        let existing =
+            TaggedValue::from_sym_id(make_uninterned_symbol("u34b-existing-weak-symbol"));
         let existing_root = roots.keep(existing);
         insert(table, existing, TaggedValue::fixnum(179));
         roots.clear(existing_root);

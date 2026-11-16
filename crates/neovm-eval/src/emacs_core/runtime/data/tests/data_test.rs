@@ -1,6 +1,6 @@
 use super::*;
-use neovm_value::intern::intern;
 use crate::emacs_core::builtins::symbols::{builtin_set, builtin_symbol_value};
+use neovm_value::intern::intern;
 use neovm_value::intern::make_uninterned_symbol;
 
 fn test_obarray() -> neovm_value::symbol::Obarray {

@@ -1,7 +1,7 @@
 use super::*;
 use neovm_value::heap_types::{GnuDeclaredCharacterCount, LispString};
 use neovm_value::intern::{
-    intern, intern_calls, intern_lisp_string, make_uninterned_symbol, is_canonical_id,
+    intern, intern_calls, intern_lisp_string, is_canonical_id, make_uninterned_symbol,
     reset_intern_calls, unintern_canonical_id,
 };
 use neovm_value::value::ProducerSymbolName;

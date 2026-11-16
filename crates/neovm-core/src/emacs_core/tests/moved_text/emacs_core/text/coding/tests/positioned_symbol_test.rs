@@ -1,5 +1,5 @@
-use neovm_value::intern::intern;
 use super::*;
+use neovm_value::intern::intern;
 
 use neovm_edit::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
@@ -148,7 +148,11 @@ fn positioned_coding_property_keys_and_hook_values_honor_mode() {
         wrong_symbol_operand(
             builtin_coding_system_put(
                 ctx.coding_systems_mut(),
-                vec![Value::symbol("utf-8-unix"), Value::from_sym_id(intern(name)), hook],
+                vec![
+                    Value::symbol("utf-8-unix"),
+                    Value::from_sym_id(intern(name)),
+                    hook,
+                ],
                 SymbolMode::Bare,
             ),
             hook,
@@ -399,7 +403,8 @@ fn coding_system_subsidiaries_are_obarray_members() {
 
 fn positioned(ctx: &mut Context, name: &str) -> Value {
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
-    unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(Value::from_sym_id(intern(name)), Value::fixnum(11))
+    unsafe { ctx.tagged_heap_mut() }
+        .alloc_symbol_with_pos(Value::from_sym_id(intern(name)), Value::fixnum(11))
 }
 
 fn wrong_symbol_operand(result: EvalResult, operand: Value) {

@@ -68,12 +68,18 @@ fn print_symbol_escapes_numeric_looking_names_like_gnu() {
 #[test]
 fn print_uninterned_symbols_follow_gnu_default_print_gensym_nil() {
     let _harness = crate::test_utils::unit_harness();
-    assert_eq!(print_value(&Value::symbol(make_uninterned_symbol("foo"))), "foo");
+    assert_eq!(
+        print_value(&Value::symbol(make_uninterned_symbol("foo"))),
+        "foo"
+    );
     assert_eq!(
         print_value(&Value::symbol(make_uninterned_symbol(":foo"))),
         ":foo"
     );
-    assert_eq!(print_value(&Value::symbol(make_uninterned_symbol(""))), "##");
+    assert_eq!(
+        print_value(&Value::symbol(make_uninterned_symbol(""))),
+        "##"
+    );
 }
 
 #[test]

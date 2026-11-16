@@ -3,7 +3,6 @@
 //! Exclusively borrowed Context owns records; no shared Lisp cache is added.
 
 use super::*;
-use neovm_value::intern::intern;
 use crate::buffer::BufferId;
 use crate::emacs_core::eval::redisplay_hooks::{
     BufferContext, HookWindowDimensions, default_hook_value, safe_named_hook,
@@ -14,6 +13,7 @@ use crate::window::DisplayFrameExt;
 use neovm_edit::emacs_core::display_metrics::WindowId;
 use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_value::display_vocab::FrameId;
+use neovm_value::intern::intern;
 
 // Fixed GNU hook spellings run on every redisplay; see `hooks.rs`.
 static WINDOW_STATE_CHANGE_HOOK: WellKnown = WellKnown::WindowStateChangeHook;
@@ -163,10 +163,7 @@ fn local(
         .buffers
         .get(buffer)
         .and_then(|buffer| buffer.buffer_local_value(name))
-        .ok_or_else(|| signal(
-            "void-variable",
-            vec![Value::from_sym_id(intern(name))],
-        ))?;
+        .ok_or_else(|| signal("void-variable", vec![Value::from_sym_id(intern(name))]))?;
     walk(eval, record, functions, Value::make_window(window.0))
 }
 

@@ -2153,7 +2153,10 @@ impl Obarray {
     /// [`Self::intern_member_lisp_string`] whenever the name came from Lisp,
     /// so
     /// `symbol-name` gives that object back with its text properties.
-    pub fn intern_member_lisp_value(&mut self, name_value: crate::tagged::value::TaggedValue) -> SymId {
+    pub fn intern_member_lisp_value(
+        &mut self,
+        name_value: crate::tagged::value::TaggedValue,
+    ) -> SymId {
         let id = crate::intern::intern_lisp_value(name_value);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);

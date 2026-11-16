@@ -20,7 +20,6 @@ use crate::emacs_core::image_catalog::{
     ImageSpecIdentity, image_scale_environment, numeric_image_scale,
 };
 use crate::window::DisplayFrameExt;
-use neovm_value::intern::intern;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::FRAME_ID_BASE;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
@@ -30,6 +29,7 @@ pub use neovm_value::display_vocab::ImageType;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
+use neovm_value::intern::intern;
 use neovm_value::value::*;
 use strum::{EnumString, IntoStaticStr};
 

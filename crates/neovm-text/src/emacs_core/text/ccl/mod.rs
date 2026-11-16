@@ -27,10 +27,10 @@ mod extension;
 pub mod extension;
 
 use self::command::CclCommand;
-use neovm_value::intern::intern;
 use self::expr::{eval_expr_self, eval_set_expr};
 use self::extension::{ExtensionStep, MapMultipleState, execute_extension};
 use super::text_host::RawTextVariableView;
+use neovm_value::intern::intern;
 use neovm_value::tagged::value::SymbolMode;
 
 use neovm_value::error::LispCondition;

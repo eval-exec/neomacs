@@ -1,4 +1,3 @@
-use neovm_value::intern::intern;
 use crate::emacs_core::process::NetworkAddressFamily;
 use crate::emacs_core::process::ProcessOutputServiceOutcome;
 use crate::emacs_core::process::ProcessOutputServiceRequest;
@@ -24,6 +23,7 @@ use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::error::signal;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt};
 use neovm_value::heap_types::LispString;
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use reap::ChildStatusChange;
 use std::cell::RefCell;
@@ -1514,8 +1514,14 @@ fn connection_process_mutators_keep_childp_plist_in_sync() {
         builtin_set_process_sentinel_impl(&mut pm, vec![Value::make_process(id), Value::NIL])
             .expect("set-process-sentinel");
 
-    assert_eq!(filter, Value::from_sym_id(intern(DEFAULT_PROCESS_FILTER_SYMBOL)));
-    assert_eq!(sentinel, Value::from_sym_id(intern(DEFAULT_PROCESS_SENTINEL_SYMBOL)));
+    assert_eq!(
+        filter,
+        Value::from_sym_id(intern(DEFAULT_PROCESS_FILTER_SYMBOL))
+    );
+    assert_eq!(
+        sentinel,
+        Value::from_sym_id(intern(DEFAULT_PROCESS_SENTINEL_SYMBOL))
+    );
 
     let contact = builtin_process_contact_impl(&pm, vec![Value::make_process(id), Value::T])
         .expect("process-contact t");

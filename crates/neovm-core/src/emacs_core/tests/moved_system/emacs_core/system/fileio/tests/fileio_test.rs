@@ -1,10 +1,10 @@
-use neovm_value::intern::intern;
 use crate::test_utils::runtime_startup_eval_all;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::print::format_eval_result;
 use neovm_system::emacs_core::fileio::*;
 use neovm_value::error::EvalResult;
 use neovm_value::error::{FlowKind, FlowResultExt};
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use neovm_value::value::list_to_vec;
 use std::fs;

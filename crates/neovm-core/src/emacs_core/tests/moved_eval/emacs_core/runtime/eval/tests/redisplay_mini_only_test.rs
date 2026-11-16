@@ -1,9 +1,9 @@
-use neovm_value::intern::intern;
 use crate::emacs_core::Context;
 use crate::emacs_core::eval::redisplay_hooks::*;
 use crate::emacs_core::eval::*;
 use crate::window::DisplayFrameManagerExt;
 use neovm_value::display_vocab::FrameId;
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
 fn mini_only_context() -> (Context, FrameId) {

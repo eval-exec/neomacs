@@ -1,4 +1,3 @@
-use neovm_value::intern::intern;
 use crate::emacs_core::Context;
 use crate::emacs_core::builtins::builtin_documentation_stringp;
 use crate::test_utils::{
@@ -8,6 +7,7 @@ use neovm_eval::emacs_core::doc::*;
 use neovm_eval::emacs_core::eval::SubrValueExt;
 use neovm_value::error::EvalError;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaData;
 use neovm_value::value::LambdaParams;
 use neovm_value::value::Value;
@@ -598,7 +598,8 @@ fn documentation_core_subr_stubs_use_oracle_first_line_shapes() {
         evaluator
             .obarray_view_mut()
             .set_symbol_function(name, Value::subr(intern(name)));
-        let result = builtin_documentation(&mut evaluator, vec![Value::from_sym_id(intern(name))]).unwrap();
+        let result =
+            builtin_documentation(&mut evaluator, vec![Value::from_sym_id(intern(name))]).unwrap();
         let text = result
             .as_utf8_str()
             .expect("core subr documentation should return a string");

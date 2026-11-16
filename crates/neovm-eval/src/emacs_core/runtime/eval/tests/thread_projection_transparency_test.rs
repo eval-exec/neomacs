@@ -209,7 +209,12 @@ fn bytecode_script(name: &str) -> ByteCodeFunction {
         Op::List(2),
         Op::Return,
     ];
-    f.constants = vec![Value::from_sym_id(intern(name)), Value::fixnum(50), Value::fixnum(51)].into();
+    f.constants = vec![
+        Value::from_sym_id(intern(name)),
+        Value::fixnum(50),
+        Value::fixnum(51),
+    ]
+    .into();
     f.max_stack = StackDepth::for_test(4);
     f
 }

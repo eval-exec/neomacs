@@ -7,8 +7,8 @@
 //! time and keep the raw resolver private afterward.
 
 use crate::neovm_bridge::{BufferFaceRemapping, FaceResolver, LayoutBufferView, ResolvedFace};
-use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::Value;
+use neovm_core::emacs_core::intern::intern;
 
 /// Face capability for frame-owned chrome.
 pub(crate) struct FrameFaces<'a, FS: crate::neovm_bridge::FaceServices = FaceResolver> {

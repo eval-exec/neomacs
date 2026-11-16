@@ -54,8 +54,8 @@ use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, FrameFullscre
 use neovm_value::error::*;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::{
-    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, make_uninterned_symbol,
-    is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
+    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, is_canonical_id, is_keyword_id,
+    make_uninterned_symbol, resolve_sym, symbol_name_id,
 };
 use neovm_value::kmacro::KmacroManager;
 use neovm_value::symbol::{CanonicalAccess, ConstantWrite, Obarray};

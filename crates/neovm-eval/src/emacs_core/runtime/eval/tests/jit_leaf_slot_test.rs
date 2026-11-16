@@ -6,7 +6,6 @@
 //! `cache::leaf_slot_epoch()` guard) and for any call that is not exact-arity.
 
 use crate::emacs_core::bytecode::ByteCodeFunction;
-use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
@@ -15,6 +14,7 @@ use crate::emacs_core::jit::RuntimeStateArmedLeafExt;
 use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::cache;
 use neovm_value::intern::SymId;
+use neovm_value::intern::intern;
 use neovm_value::value::{LambdaParams, Value, ValueKind};
 
 fn bc(

@@ -8,7 +8,6 @@
 //! this module names them downward through `crate::emacs_core::reader`.
 
 use crate::buffer::LispCharPos1;
-use neovm_value::intern::intern;
 use crate::emacs_core::minibuffer::MinibufferManagerExt;
 use crate::emacs_core::reader::{
     ActiveMinibufferWindowState, CallingFrame, MinibufferBufferUnwind, MinibufferExitDisposition,
@@ -16,6 +15,7 @@ use crate::emacs_core::reader::{
 };
 use crate::window::DisplayFrameManagerExt;
 use neovm_value::error::{EvalResult, Flow, FlowKind, FlowResultExt};
+use neovm_value::intern::intern;
 use neovm_value::value::*;
 
 #[must_use = "a restored minibuffer window must invalidate its display chrome"]

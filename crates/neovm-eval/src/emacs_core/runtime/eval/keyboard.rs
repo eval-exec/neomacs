@@ -4802,7 +4802,10 @@ impl crate::emacs_core::eval::Context {
                 } else {
                     format!("mouse-{button}")
                 };
-                let event = Value::list(vec![Value::from_sym_id(intern((&symbol).as_ref())), Value::list(position_parts)]);
+                let event = Value::list(vec![
+                    Value::from_sym_id(intern((&symbol).as_ref())),
+                    Value::list(position_parts),
+                ]);
                 self.command_loop.store_kbd_macro_event(event);
                 Ok(Some(event))
             }

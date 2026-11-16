@@ -1,5 +1,5 @@
-use neovm_value::intern::intern;
 use super::*;
+use neovm_value::intern::intern;
 
 /// GNU stores a Lisp string object directly in every symbol and
 /// `Fsymbol_name` returns that same object on every call.  Symbols synthesized

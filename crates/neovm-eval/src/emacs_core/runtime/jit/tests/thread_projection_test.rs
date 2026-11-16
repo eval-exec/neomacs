@@ -176,7 +176,11 @@ const WRITE_OPS: [Op; 9] = [
 ];
 
 fn write_constants(name: &str) -> [Value; 3] {
-    [Value::from_sym_id(intern(name)), Value::fixnum(50), Value::fixnum(51)]
+    [
+        Value::from_sym_id(intern(name)),
+        Value::fixnum(50),
+        Value::fixnum(51),
+    ]
 }
 
 fn write_function(name: &str) -> ByteCodeFunction {
