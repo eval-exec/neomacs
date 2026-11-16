@@ -4666,7 +4666,7 @@ impl crate::emacs_core::eval::Context {
                 // LINE-COUNT field, keeping custom wheel bindings in control.
                 let count = delta_x.abs().max(delta_y.abs()).round().max(1.0) as i64;
                 let event = Value::list(vec![
-                    Value::symbol(&sym),
+                    Value::from_sym_id(intern((&sym).as_ref())),
                     position,
                     Value::fixnum(1),
                     Value::fixnum(count),
@@ -4710,7 +4710,7 @@ impl crate::emacs_core::eval::Context {
                 // scrolling, point preservation, hooks and redisplay; layout
                 // must not consume a second, hidden input queue.
                 let event = Value::list(vec![
-                    Value::symbol(&symbol),
+                    Value::from_sym_id(intern((&symbol).as_ref())),
                     position,
                     Value::fixnum(1),
                     Value::fixnum(1),
@@ -4802,7 +4802,7 @@ impl crate::emacs_core::eval::Context {
                 } else {
                     format!("mouse-{button}")
                 };
-                let event = Value::list(vec![Value::symbol(&symbol), Value::list(position_parts)]);
+                let event = Value::list(vec![Value::from_sym_id(intern((&symbol).as_ref())), Value::list(position_parts)]);
                 self.command_loop.store_kbd_macro_event(event);
                 Ok(Some(event))
             }
@@ -5716,7 +5716,7 @@ impl crate::emacs_core::eval::Context {
         // reads it (`src/keyboard.c:11403-11406`).
         Self::mark_event_head_kind(eval, &format!("mouse-{button_num}"), "mouse-click");
         Self::mark_event_head_kind(eval, &sym, "mouse-click");
-        let head = Value::symbol(&sym);
+        let head = Value::from_sym_id(intern((&sym).as_ref()));
 
         match payload {
             MouseEventPayload::Position(position) => Value::list(vec![head, position]),
@@ -5729,7 +5729,7 @@ impl crate::emacs_core::eval::Context {
 
     /// GNU `Fput (symbol, Qevent_kind, kind)` for a mouse event head.
     #[doc(hidden)]
-    pub fn mark_event_head_kind(eval: &mut Self, head: &str, kind: &str) {
+    pub fn mark_event_head_kind(eval: &mut Self, head: &str, kind: &'static str) {
         let key = intern("event-kind");
         let _ = eval
             .obarray_mut()
@@ -5872,12 +5872,12 @@ impl crate::emacs_core::eval::Context {
         mode: SymbolMode,
     ) -> Option<Value> {
         match mode.unwrap(event).kind() {
-            ValueKind::Symbol(_) => Some(Value::symbol(symbol_name)),
+            ValueKind::Symbol(_) => Some(Value::from_sym_id(intern(symbol_name))),
             ValueKind::Cons => {
                 let mut slots = neovm_value::value::list_to_vec(&event)?;
                 let head = slots.first_mut()?;
                 head.as_symbol_name(mode)?;
-                *head = Value::symbol(symbol_name);
+                *head = Value::from_sym_id(intern(symbol_name));
                 Some(Value::list(slots))
             }
             _ => None,

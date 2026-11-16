@@ -16,6 +16,7 @@
 //! for 1,000 steps.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::decode::{decode_gnu_bytecode, parse_arglist_descriptor};
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
@@ -139,13 +140,13 @@ fn floats_consed(ev: &Context) -> u64 {
 /// Run 1,000 nbody steps with a JIT and an interpreter copy of the bodies
 /// under `mode`; return the float allocations of one compiled call and
 /// the census of the compile.
-fn run_nbody(mode: FlonumMode, probe_name: &str) -> (u64, lowering::FlonumCensus) {
+fn run_nbody(mode: FlonumMode, probe_name: &'static str) -> (u64, lowering::FlonumCensus) {
     force_flonum_mode_for_test(Some(mode));
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let jit_fn = Value::make_bytecode(applyforces());
     let interp_fn = applyforces();
     // Bind the JIT copy to a symbol: that roots it for the whole test.
-    let neovm_value::value::ValueKind::Symbol(id) = Value::symbol(probe_name).kind() else {
+    let neovm_value::value::ValueKind::Symbol(id) = Value::from_sym_id(intern(probe_name)).kind() else {
         panic!("symbol")
     };
     ev.obarray.set_symbol_function_id(id, jit_fn);

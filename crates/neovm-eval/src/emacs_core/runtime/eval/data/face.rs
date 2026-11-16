@@ -1,6 +1,7 @@
 //! Face vocabulary owned by the evaluator layer (stage-4 W1 E2).
 
 use enum_map::EnumMap;
+use neovm_value::intern::intern;
 pub use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, LFaceAttr};
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::{SymId, WellKnown, resolve_sym};
@@ -700,7 +701,7 @@ pub fn merge_face_height(
 
 #[doc(hidden)]
 pub fn face_symbol_value(name: &str) -> Value {
-    Value::symbol(name)
+    Value::from_sym_id(intern(name))
 }
 
 #[doc(hidden)]

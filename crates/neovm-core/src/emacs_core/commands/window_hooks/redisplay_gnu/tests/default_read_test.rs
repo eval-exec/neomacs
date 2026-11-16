@@ -1,3 +1,4 @@
+use neovm_value::intern::intern;
 use super::*;
 
 #[test]
@@ -89,7 +90,7 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
         signal.symbol,
         crate::emacs_core::intern::intern("void-variable")
     );
-    assert_eq!(signal.data, vec![Value::symbol(void_hook)]);
+    assert_eq!(signal.data, vec![Value::from_sym_id(intern(void_hook))]);
     assert_eq!(
         eval.obarray().symbol_value_copied("d5-default-hook-calls"),
         Some(Value::fixnum(1))

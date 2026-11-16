@@ -2,6 +2,7 @@
 //! and phase timers through the real cache seams.
 
 use super::*;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
@@ -388,7 +389,7 @@ pub(crate) fn captured_code(compile: impl FnOnce()) -> Vec<String> {
 /// leaf, a baseline leaf with calls, a loop, a condition-case and float
 /// arithmetic.
 pub(crate) fn corpus() -> Vec<(Vec<Op>, Vec<Value>, usize)> {
-    let sym = |name: &str| Value::symbol(name);
+    let sym = |name: &str| Value::from_sym_id(intern(name));
     vec![
         // (lambda (x) (+ x 1)): MIR.
         (

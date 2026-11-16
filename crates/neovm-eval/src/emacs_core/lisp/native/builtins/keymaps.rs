@@ -456,7 +456,7 @@ fn lookup_key_with_menu_compat_runtime(
         .map(|event| {
             event
                 .as_symbol_name(symbol_mode)
-                .map(|name| Value::symbol(name.to_lowercase()))
+                .map(|name| Value::from_sym_id(intern((name.to_lowercase()).as_ref())))
                 .unwrap_or(*event)
         })
         .collect();
@@ -471,7 +471,7 @@ fn lookup_key_with_menu_compat_runtime(
             event
                 .as_symbol_name(symbol_mode)
                 .filter(|name| name.contains(' '))
-                .map(|name| Value::symbol(name.replace(' ', "-")))
+                .map(|name| Value::from_sym_id(intern((name.replace(' ', "-")).as_ref())))
                 .unwrap_or(*event)
         })
         .collect();

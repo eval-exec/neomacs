@@ -1478,7 +1478,7 @@ fn collect_overlay_change_hooks<H: crate::emacs_core::edit_host::EditHost>(
         // symbol's `insert-in-front-hooks' / `insert-behind-hooks' /
         // `modification-hooks' property.  Use the same category-resolving
         // lookup here instead of a plain plist read.
-        let mut overlay_hook = |prop: &str| -> Option<Value> {
+        let mut overlay_hook = |prop: &'static str| -> Option<Value> {
             let (edit, vars) = host.edit_and_vars();
             let value = crate::emacs_core::textprop::lookup_overlay_property(
                 vars,

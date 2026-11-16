@@ -4343,7 +4343,7 @@ pub(crate) fn finish_require_in_state(
     loaded_path: Option<&Path>,
 ) -> EvalResult {
     if features.contains(&sym_id) {
-        Ok(Value::symbol(name))
+        Ok(Value::from_sym_id(intern(name)))
     } else {
         let message = if let Some(path) = loaded_path {
             format!(

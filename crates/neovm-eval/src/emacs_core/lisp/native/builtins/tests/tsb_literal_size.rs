@@ -2,6 +2,7 @@
 //! Oracle fixtures are refreshed standalone with UPDATE_EXPECT=1 through the
 //! campaign sandbox, then read here without launching nested GNU scopes.
 use super::symbols::builtin_make_byte_code;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::{
@@ -72,7 +73,7 @@ fn summary(value: Value) -> String {
     let table = value.as_hash_table().unwrap();
     assert!(matches!(table.test, HashTableTest::Eq));
     let get = |name| {
-        let key = Value::symbol(name).to_hash_key(&table.test);
+        let key = Value::from_sym_id(intern(name)).to_hash_key(&table.test);
         table.data.get(&key).copied().unwrap_or(Value::NIL)
     };
     crate::emacs_core::print::print_value(&Value::list(vec![

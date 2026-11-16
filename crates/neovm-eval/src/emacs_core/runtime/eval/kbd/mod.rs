@@ -141,7 +141,7 @@ pub fn parse_kbd_string(desc: &str) -> Result<Value, String> {
         .map(|event| match event {
             EncodedEvent::Char(c) => Value::fixnum(c as i64),
             EncodedEvent::Int(n) => Value::fixnum(n),
-            EncodedEvent::Symbol(name) => Value::symbol(name),
+            EncodedEvent::Symbol(name) => Value::from_sym_id(intern((name).as_ref())),
         })
         .collect();
     Ok(Value::vector(values))

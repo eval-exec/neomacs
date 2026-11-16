@@ -11,6 +11,7 @@ use crate::emacs_core::effect_profile::{
     EffectScope, effect_name_from_lisp, effect_operations_from_lisp, effect_set_operation_from_lisp,
 };
 use neomacs_display_protocol::{EffectOperation, EffectValue, VisualConfig};
+use neovm_value::intern::intern;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::error::{
     EvalResult, Flow, expect_args, expect_args_range, expect_min_args, signal,
@@ -67,7 +68,7 @@ fn get(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         .map_err(|error| effect_error("neomacs-effect-get", error))?;
     let mut result = Vec::with_capacity(properties.len() * 2);
     for (name, value) in properties {
-        result.push(Value::keyword(format!(":{name}")));
+        result.push(Value::from_kw_id(intern(&format!(":{name}"))));
         result.push(value_to_lisp(value));
     }
     Ok(Value::list(result))
@@ -114,7 +115,7 @@ fn schema(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         .map(|property| {
             let refined = property.refined();
             let mut entry = vec![
-                Value::keyword(format!(":{}", property.property.replace('_', "-"))),
+                Value::from_kw_id(intern(&format!(":{}", property.property.replace('_', "-")))),
                 Value::symbol(match refined.kind {
                     PropertyKind::Boolean => "boolean",
                     PropertyKind::Integer => "integer",
@@ -138,7 +139,7 @@ fn schema(eval: &mut Context, args: Vec<Value>) -> EvalResult {
 
 fn entries_push_allowed(entry: &mut Vec<Value>, allowed: &[&str]) {
     for name in allowed {
-        entry.push(Value::symbol(name));
+        entry.push(Value::from_sym_id(intern((name).as_ref())));
     }
 }
 
@@ -185,7 +186,12 @@ fn names(eval: &mut Context, args: Vec<Value>) -> EvalResult {
             }
         },
     };
-    Ok(Value::list(names.into_iter().map(Value::symbol).collect()))
+    Ok(Value::list(
+        names
+            .into_iter()
+            .map(|name| Value::from_sym_id(intern(&name)))
+            .collect(),
+    ))
 }
 
 fn value_to_lisp(value: EffectValue) -> Value {
@@ -194,7 +200,7 @@ fn value_to_lisp(value: EffectValue) -> Value {
         EffectValue::Bool(true) => Value::T,
         EffectValue::Integer(value) => Value::fixnum(value),
         EffectValue::Number(value) => Value::make_float(value),
-        EffectValue::Symbol(value) => Value::symbol(value),
+        EffectValue::Symbol(value) => Value::from_sym_id(intern((value).as_ref())),
         EffectValue::String(value) => Value::string(value),
         EffectValue::List(values) => Value::list(values.into_iter().map(value_to_lisp).collect()),
     }

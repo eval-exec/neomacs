@@ -9,6 +9,7 @@
 //! and the inline ones, `Bchar_after`); and the specpdl is balanced after.
 
 use super::*;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
@@ -74,7 +75,7 @@ fn params(n: usize) -> LambdaParams {
 }
 
 /// `(lambda (a1..an) (CALLEE a1..an))` through `Op::Call` (GNU `Bcall`).
-fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
+fn bcall_fn(callee: &'static str, nargs: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(params(nargs));
     f.lexical = true;
     let mut ops = vec![Op::Constant(0)];
@@ -84,7 +85,7 @@ fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
     ops.push(Op::Call(nargs as u16));
     ops.push(Op::Return);
     f.ops = ops;
-    f.constants = vec![Value::symbol(callee)].into();
+    f.constants = vec![Value::from_sym_id(intern(callee))].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }

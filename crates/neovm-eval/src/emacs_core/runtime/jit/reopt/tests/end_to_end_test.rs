@@ -9,6 +9,7 @@
 //! argument is made right before its call and each result is printed at once.
 
 use super::*;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::vm::Vm as TestVm;
@@ -114,7 +115,7 @@ fn caller_of(sym: Value) -> ByteCodeFunction {
 }
 
 fn install(ev: &mut Context, name: &str, f: ByteCodeFunction) -> Value {
-    let sym = Value::symbol(name);
+    let sym = Value::from_sym_id(intern(name));
     ev.obarray
         .set_symbol_function_id(sym.as_bare_symbol_id().unwrap(), Value::make_bytecode(f));
     sym

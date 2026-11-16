@@ -10,6 +10,7 @@ use super::display::{
     right_scroll_bar_area_width, vertical_scroll_bar_cols,
 };
 use super::parameters::alist_from_parameters;
+use neovm_value::intern::intern;
 use super::tty_posn_current::{
     TtyCurrentMatrixAuthority, TtyMatrixAllocation, TtyPosnCurrentOwner,
 };
@@ -502,7 +503,7 @@ impl DisplayFrameExt for Frame {
     }
 
     fn parameter(&self, key: &str) -> Option<Value> {
-        self.parameters.get(&Value::symbol(key)).copied()
+        self.parameters.get(&Value::from_sym_id(intern(key))).copied()
     }
 
     /// [`Self::parameter`] for a fixed GNU spelling.
@@ -510,7 +511,7 @@ impl DisplayFrameExt for Frame {
     /// Same parameter-map key and the same constructor accounting; the spelling
     /// is a compile-time DEFSYM id instead of a per-read intern.
     fn parameter_symbol(&self, key: &neovm_value::intern::WellKnown) -> Option<Value> {
-        self.parameters.get(&Value::symbol(key)).copied()
+        self.parameters.get(&Value::symbol(*key)).copied()
     }
 
     fn set_display_identity(&mut self, identity: FrameDisplayIdentity) {

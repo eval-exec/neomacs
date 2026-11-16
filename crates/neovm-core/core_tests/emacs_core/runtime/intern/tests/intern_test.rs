@@ -1,3 +1,4 @@
+use neovm_value::intern::intern;
 use super::*;
 
 /// GNU stores a Lisp string object directly in every symbol and

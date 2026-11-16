@@ -1,3 +1,4 @@
+use neovm_value::intern::intern;
 use crate::emacs_core::builtins::*;
 use neovm_edit::buffer::{CharRange, EmacsByteRange, LispCharPos1};
 use neovm_eval::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
@@ -57,7 +58,6 @@ use neovm_edit::emacs_core::editfns::{
     builtin_delete_and_extract_region, builtin_delete_region, builtin_erase_buffer,
 };
 use neovm_text::emacs_core::regex::compute_buffer_replacement_with_syntax;
-use neovm_value::intern::intern;
 use neovm_value::intern::make_uninterned_symbol;
 use neovm_value::strings_core::lisp_string_char_codes;
 use neovm_value::value::{
@@ -6275,7 +6275,7 @@ fn define_hash_table_test_alias_is_thread_local() {
         // can construct the alias values.
         let _ctx = crate::test_utils::new_context();
         let _ = builtin_define_hash_table_test(vec![
-            Value::symbol(alias_name),
+            Value::from_sym_id(intern(alias_name)),
             Value::symbol("eq"),
             Value::symbol("sxhash-eq"),
         ])
@@ -6300,7 +6300,7 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
         &mut ctx,
         "define-hash-table-test",
         vec![
-            Value::symbol(alias_name),
+            Value::from_sym_id(intern(alias_name)),
             Value::symbol("eq"),
             Value::symbol("sxhash-eq"),
         ],
@@ -6310,13 +6310,13 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
     let first = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
         &mut ctx,
         "make-hash-table",
-        vec![Value::keyword(":test"), Value::symbol(alias_name)],
+        vec![Value::keyword(":test"), Value::from_sym_id(intern(alias_name))],
     )
     .expect("make-hash-table should resolve")
     .expect("make-hash-table should evaluate");
     let first_name = neovm_value::hashtab::builtin_hash_table_test(vec![first])
         .expect("hash-table-test should evaluate for initial alias mapping");
-    assert_eq!(first_name, Value::symbol(alias_name));
+    assert_eq!(first_name, Value::from_sym_id(intern(alias_name)));
 
     if !first.is_hash_table() {
         panic!("expected hash table");
@@ -6330,7 +6330,7 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
         &mut ctx,
         "define-hash-table-test",
         vec![
-            Value::symbol(alias_name),
+            Value::from_sym_id(intern(alias_name)),
             Value::symbol("equal"),
             Value::symbol("sxhash-equal"),
         ],
@@ -6340,13 +6340,13 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
     let second = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
         &mut ctx,
         "make-hash-table",
-        vec![Value::keyword(":test"), Value::symbol(alias_name)],
+        vec![Value::keyword(":test"), Value::from_sym_id(intern(alias_name))],
     )
     .expect("make-hash-table should resolve after alias redefinition")
     .expect("make-hash-table should evaluate after alias redefinition");
     let second_name = neovm_value::hashtab::builtin_hash_table_test(vec![second])
         .expect("hash-table-test should evaluate after alias redefinition");
-    assert_eq!(second_name, Value::symbol(alias_name));
+    assert_eq!(second_name, Value::from_sym_id(intern(alias_name)));
 
     if !second.is_hash_table() {
         panic!("expected hash table");
@@ -10874,7 +10874,7 @@ fn replace_match_string_preserves_source_and_replacement_text_properties_like_gn
             start,
             end,
             Value::symbol("face"),
-            Value::symbol(face),
+            Value::from_sym_id(intern(face)),
         );
         neovm_value::value::set_string_text_properties_table_for_value(value, table);
     }
@@ -10889,7 +10889,7 @@ fn replace_match_string_preserves_source_and_replacement_text_properties_like_gn
         assert_eq!(interval.end, end);
         assert_eq!(
             interval.properties.get(&Value::symbol("face")),
-            Some(&Value::symbol(face))
+            Some(&Value::from_sym_id(intern(face)))
         );
     }
 
@@ -14545,7 +14545,7 @@ fn error_message_string_preserves_percent_s_handle_semantics() {
             other => panic!("expected signal flow, got: {other:?}"),
         };
         let mut err_data = Vec::with_capacity(data.len() + 1);
-        err_data.push(Value::symbol(symbol));
+        err_data.push(Value::from_sym_id(symbol));
         err_data.extend(data);
         let rendered = dispatch_builtin(eval, "error-message-string", vec![Value::list(err_data)])
             .expect("error-message-string should resolve")
@@ -14599,7 +14599,7 @@ fn message_box_wrappers_render_opaque_handles_in_eval_dispatch() {
         match err.into_kind() {
             FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
-                assert_eq!(sig.data, vec![Value::symbol(symbol), Value::fixnum(0)]);
+                assert_eq!(sig.data, vec![Value::from_sym_id(intern(symbol)), Value::fixnum(0)]);
             }
             other => panic!("expected signal, got: {other:?}"),
         }
@@ -16710,7 +16710,7 @@ fn functionp_eval_matches_symbol_and_lambda_form_semantics() {
         .expect("functionp should accept throw symbol");
     assert!(throw_symbol.is_truthy());
     for name in ["funcall", "defalias", "provide", "require"] {
-        let result = builtin_functionp(&mut eval, vec![Value::symbol(name)])
+        let result = builtin_functionp(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("functionp should accept {name} symbol"));
         assert!(result.is_truthy(), "expected {name} to satisfy functionp");
     }
@@ -16858,21 +16858,21 @@ fn fmakunbound_masks_builtin_special_and_evaluator_callables() {
         .expect("functionp should accept symbol");
     assert!(throw_functionp.is_nil());
     for name in ["funcall", "defalias", "provide", "require"] {
-        builtin_fmakunbound(&mut eval, vec![Value::symbol(name)])
+        builtin_fmakunbound(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("fmakunbound should accept {name}"));
-        let bound = builtin_fboundp(&mut eval, vec![Value::symbol(name)])
+        let bound = builtin_fboundp(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("fboundp should accept {name}"));
         assert!(
             bound.is_nil(),
             "expected {name} to be unbound after fmakunbound"
         );
-        let fn_cell = builtin_symbol_function(&mut eval, vec![Value::symbol(name)])
+        let fn_cell = builtin_symbol_function(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("symbol-function should accept {name}"));
         assert!(
             fn_cell.is_nil(),
             "expected symbol-function {name} to be nil"
         );
-        let functionp = builtin_functionp(&mut eval, vec![Value::symbol(name)])
+        let functionp = builtin_functionp(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("functionp should accept {name}"));
         assert!(
             functionp.is_nil(),
@@ -17357,7 +17357,7 @@ fn indirect_function_resolves_deep_alias_chain_without_depth_cutoff() {
         let target = if idx == depth - 1 {
             Value::symbol("car")
         } else {
-            Value::symbol(format!("vm-test-deep-alias-{}", idx + 1))
+            Value::from_sym_id(intern((format!("vm-test-deep-alias-{}", idx + 1)).as_ref()))
         };
         eval.obarray_mut().set_symbol_function(&name, target);
     }

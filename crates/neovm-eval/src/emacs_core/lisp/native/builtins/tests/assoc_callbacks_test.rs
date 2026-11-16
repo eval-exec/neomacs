@@ -1,6 +1,7 @@
 //! Resolver engagement and guard tests. GNU-refreshed Lisp behavior lives in
 //! neovm-oracle-tests/src/assoc/tests/callback_seams.rs under both knob states.
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use neovm_value::intern::intern;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::assoc_predicate::PureAssocPredicate;
 use neovm_value::value::Value;
@@ -25,7 +26,7 @@ fn assoc_callbacks_identify_pure_implementations_and_aliases() {
             .expect("install outer alias");
         let callable = eval.obarray().symbol_function(name).expect("builtin cell");
         for designator in [
-            Value::symbol(name),
+            Value::from_sym_id(intern(name)),
             Value::symbol("assoc-callback-outer"),
             callable,
         ] {

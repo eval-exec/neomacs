@@ -1,3 +1,4 @@
+use neovm_value::intern::intern;
 use super::*;
 
 use neovm_edit::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
@@ -15,7 +16,6 @@ use strum::{EnumString, IntoStaticStr};
 use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::coding::*;
 use neovm_value::error::EvalResult;
-use neovm_value::intern::intern;
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::value::Value;
 use neovm_value::value::list_to_vec;
@@ -148,7 +148,7 @@ fn positioned_coding_property_keys_and_hook_values_honor_mode() {
         wrong_symbol_operand(
             builtin_coding_system_put(
                 ctx.coding_systems_mut(),
-                vec![Value::symbol("utf-8-unix"), Value::symbol(name), hook],
+                vec![Value::symbol("utf-8-unix"), Value::from_sym_id(intern(name)), hook],
                 SymbolMode::Bare,
             ),
             hook,
@@ -391,7 +391,7 @@ fn coding_system_subsidiaries_are_obarray_members() {
             "{name} must be an obarray member (GNU interns every coding-system-list entry)"
         );
         assert!(
-            variable_names.contains(&Value::symbol(name)),
+            variable_names.contains(&Value::from_sym_id(intern(name))),
             "{name} missing from the coding-system-list variable"
         );
     }
@@ -399,7 +399,7 @@ fn coding_system_subsidiaries_are_obarray_members() {
 
 fn positioned(ctx: &mut Context, name: &str) -> Value {
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
-    unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(Value::symbol(name), Value::fixnum(11))
+    unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(Value::from_sym_id(intern(name)), Value::fixnum(11))
 }
 
 fn wrong_symbol_operand(result: EvalResult, operand: Value) {

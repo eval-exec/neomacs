@@ -4184,7 +4184,7 @@ fn value_runtime_literal(value: Value) -> Option<Value> {
         return Some(value);
     }
     // (quote X) -> X
-    value_quoted_symbol_name(value).map(|name| Value::symbol(&name))
+    value_quoted_symbol_name(value).map(|name| Value::from_sym_id(intern((&name).as_ref())))
 }
 
 #[derive(Default)]
@@ -4549,7 +4549,7 @@ pub(crate) fn collect_loaddefs_autoload_args(
         &mut state.symbol_names,
         &mut std::collections::BTreeSet::new(),
     );
-    let mut args = vec![Value::symbol(&name), file_value];
+    let mut args = vec![Value::from_sym_id(intern((&name).as_ref())), file_value];
     for item in items.iter().skip(3).take(3) {
         let Some(value) = value_runtime_literal(*item) else {
             return;
@@ -5250,7 +5250,7 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
         }
         let _ = super::builtins::builtin_put(
             eval,
-            vec![Value::symbol(name), Value::symbol(prop), Value::NIL],
+            vec![Value::from_sym_id(intern((name).as_ref())), Value::from_sym_id(intern((prop).as_ref())), Value::NIL],
         );
     }
 
@@ -5260,7 +5260,7 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("autoload-macro"),
                 Value::NIL,
             ],
@@ -5275,7 +5275,7 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("autoload-macro"),
                 Value::NIL,
             ],
@@ -5292,7 +5292,7 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("variable-documentation"),
                 Value::NIL,
             ],
@@ -5336,7 +5336,7 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
             let _ = super::builtins::builtin_put(
                 eval,
                 vec![
-                    Value::symbol(name),
+                    Value::from_sym_id(intern((name).as_ref())),
                     Value::symbol("autoload-macro"),
                     Value::NIL,
                 ],
@@ -5477,7 +5477,7 @@ pub fn normalize_final_dump_runtime_surface(
         }
         let _ = super::builtins::builtin_put(
             eval,
-            vec![Value::symbol(name), Value::symbol(prop), Value::NIL],
+            vec![Value::from_sym_id(intern((name).as_ref())), Value::from_sym_id(intern((prop).as_ref())), Value::NIL],
         );
     }
 
@@ -5487,7 +5487,7 @@ pub fn normalize_final_dump_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("autoload-macro"),
                 Value::NIL,
             ],
@@ -5502,7 +5502,7 @@ pub fn normalize_final_dump_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("autoload-macro"),
                 Value::NIL,
             ],
@@ -5519,7 +5519,7 @@ pub fn normalize_final_dump_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("variable-documentation"),
                 Value::NIL,
             ],
@@ -5540,7 +5540,7 @@ pub fn normalize_final_dump_runtime_surface(
             let _ = super::builtins::builtin_put(
                 eval,
                 vec![
-                    Value::symbol(name),
+                    Value::from_sym_id(intern((name).as_ref())),
                     Value::symbol("autoload-macro"),
                     Value::NIL,
                 ],
@@ -6439,7 +6439,7 @@ pub fn bootstrap_evaluator_for_loadup(
         }
         let bootstrap_features = normalized_bootstrap_features(extra_features);
         for feature in &bootstrap_features {
-            let _ = eval.provide_value(Value::symbol(feature), None);
+            let _ = eval.provide_value(Value::from_sym_id(intern((feature).as_ref())), None);
         }
         maybe_trace_bootstrap_step(format!(
             "create_bootstrap_evaluator_with_features: provided-features={bootstrap_features:?}"
@@ -6801,7 +6801,7 @@ pub fn load_runtime_image_for_executable(
     if !extra_features.is_empty() {
         let bootstrap_features = normalized_bootstrap_features(extra_features);
         for feature in &bootstrap_features {
-            let _ = eval.provide_value(Value::symbol(feature), None);
+            let _ = eval.provide_value(Value::from_sym_id(intern((feature).as_ref())), None);
         }
     }
 

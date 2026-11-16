@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::intern::intern;
 use crate::emacs_core::builtins::symbols::{builtin_set, builtin_symbol_value};
 use neovm_value::intern::make_uninterned_symbol;
 
@@ -80,7 +81,7 @@ fn uninterned_value_cells_ignore_buffer_local_namesakes() {
         .expect("current buffer")
         .set_buffer_local("depth-alist", Value::fixnum(7));
 
-    builtin_set(&mut ctx, vec![Value::symbol(uninterned), Value::NIL])
+    builtin_set(&mut ctx, vec![Value::from_sym_id(uninterned), Value::NIL])
         .expect("set should bind uninterned symbol");
 
     assert_eq!(
@@ -97,10 +98,10 @@ fn uninterned_value_cells_ignore_buffer_local_namesakes() {
         Some(Value::fixnum(7))
     );
 
-    let value = default_value(&mut ctx, vec![Value::symbol(uninterned)])
+    let value = default_value(&mut ctx, vec![Value::from_sym_id(uninterned)])
         .expect("default-value should read uninterned symbol");
     assert_eq!(value, Value::NIL);
-    let symbol_value = builtin_symbol_value(&mut ctx, vec![Value::symbol(uninterned)])
+    let symbol_value = builtin_symbol_value(&mut ctx, vec![Value::from_sym_id(uninterned)])
         .expect("symbol-value should read uninterned symbol");
     assert_eq!(symbol_value, Value::NIL);
 }

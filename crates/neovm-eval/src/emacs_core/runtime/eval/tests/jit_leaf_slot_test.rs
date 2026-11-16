@@ -6,6 +6,7 @@
 //! `cache::leaf_slot_epoch()` guard) and for any call that is not exact-arity.
 
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
@@ -59,8 +60,8 @@ fn bc_with(
 
 /// Bind `name`'s function cell to `bytecode` (roots it in the obarray) and
 /// return the callable symbol and the bytecode object.
-fn bind_fn(ev: &mut Context, name: &str, bytecode: ByteCodeFunction) -> (Value, Value) {
-    let sym = Value::symbol(name);
+fn bind_fn(ev: &mut Context, name: &'static str, bytecode: ByteCodeFunction) -> (Value, Value) {
+    let sym = Value::from_sym_id(intern(name));
     let ValueKind::Symbol(id) = sym.kind() else {
         panic!("symbol")
     };

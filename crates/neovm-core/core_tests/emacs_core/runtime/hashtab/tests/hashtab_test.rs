@@ -333,7 +333,7 @@ fn unintern_symbol_argument_removes_only_the_exact_symbol() {
     let uninterned = make_uninterned_symbol(name);
     eval.obarray_mut().ensure_interned_global_id(canonical);
 
-    let removed_shadow = builtin_unintern(&mut eval, vec![Value::symbol(uninterned), Value::NIL])
+    let removed_shadow = builtin_unintern(&mut eval, vec![Value::from_sym_id(uninterned), Value::NIL])
         .expect("unintern should accept uninterned symbol argument");
     assert!(removed_shadow.is_nil());
     assert!(
@@ -341,7 +341,7 @@ fn unintern_symbol_argument_removes_only_the_exact_symbol() {
         "uninterned shadow must not remove canonical namesake"
     );
 
-    let removed_canonical = builtin_unintern(&mut eval, vec![Value::symbol(canonical), Value::NIL])
+    let removed_canonical = builtin_unintern(&mut eval, vec![Value::from_sym_id(canonical), Value::NIL])
         .expect("unintern should remove exact canonical symbol");
     assert_eq!(removed_canonical, Value::T);
     assert!(eval.obarray().intern_soft(name).is_none());
@@ -414,7 +414,7 @@ fn sxhash_float_signed_zero_and_nan_semantics_match_oracle() {
 
     for test_name in ["eql", "equal"] {
         let table =
-            builtin_make_hash_table(vec![Value::keyword(":test"), Value::symbol(test_name)])
+            builtin_make_hash_table(vec![Value::keyword(":test"), Value::from_sym_id(intern(test_name))])
                 .expect("hash table");
         let _ = builtin_puthash(vec![Value::make_float(0.0), Value::symbol("zero"), table])
             .expect("puthash zero");
@@ -453,7 +453,7 @@ fn hash_table_nan_payloads_remain_distinct_for_eql_and_equal() {
     for test_name in ["eql", "equal"] {
         let table = builtin_make_hash_table(vec![
             Value::keyword(":test"),
-            Value::symbol(test_name),
+            Value::from_sym_id(intern(test_name)),
             Value::keyword(":size"),
             Value::fixnum(5),
         ])
@@ -725,7 +725,7 @@ fn internal_hash_table_buckets_match_oracle_eq_eql_fixnum_hashes() {
     for test_name in ["eq", "eql"] {
         let table = builtin_make_hash_table(vec![
             Value::keyword(":test"),
-            Value::symbol(test_name),
+            Value::from_sym_id(intern(test_name)),
             Value::keyword(":size"),
             Value::fixnum(3),
         ])
@@ -896,7 +896,7 @@ fn internal_hash_table_buckets_match_oracle_small_float_hashes() {
     for test_name in ["eql", "equal"] {
         let table = builtin_make_hash_table(vec![
             Value::keyword(":test"),
-            Value::symbol(test_name),
+            Value::from_sym_id(intern(test_name)),
             Value::keyword(":size"),
             Value::fixnum(3),
         ])
@@ -939,7 +939,7 @@ fn internal_hash_table_buckets_match_oracle_float_special_hashes() {
     for test_name in ["eql", "equal"] {
         let table = builtin_make_hash_table(vec![
             Value::keyword(":test"),
-            Value::symbol(test_name),
+            Value::from_sym_id(intern(test_name)),
             Value::keyword(":size"),
             Value::fixnum(5),
         ])

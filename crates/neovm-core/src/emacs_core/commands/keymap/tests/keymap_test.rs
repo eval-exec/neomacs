@@ -98,7 +98,7 @@ fn chrome_string_without_maps_preserves_tab_line_but_clears_mode_line_maps() {
     let position_for = |area: &str| {
         Value::list(vec![
             Value::make_window(window_id.0),
-            Value::symbol(area),
+            Value::from_sym_id(intern(area)),
             Value::cons(Value::fixnum(1), Value::fixnum(1)),
             Value::fixnum(0),
             Value::cons(displayed, Value::fixnum(0)),

@@ -7164,7 +7164,7 @@ fn load_face(decoder: &mut LoadDecoder, df: &DumpFace) -> Face {
             } else {
                 df.inherit
                     .iter()
-                    .map(|name| Value::symbol(name.as_str()))
+                    .map(|name| Value::from_sym_id(neovm_value::intern::intern(name.as_str())))
                     .collect()
             };
             match syms.len() {

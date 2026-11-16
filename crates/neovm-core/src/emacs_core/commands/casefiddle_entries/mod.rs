@@ -15,13 +15,14 @@ use crate::emacs_core::casefiddle::{
     upcase_initials_with_word_pred, upcase_word_predicate,
 };
 use crate::emacs_core::casetab_entries::case_table_override_for_current_buffer;
+use neovm_value::intern::intern;
 use neovm_value::error::{EvalResult, Flow, LispCondition, expect_args, signal};
 use neovm_value::value::*;
 
 fn casify_region_in_state(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
-    name: &str,
+    name: &'static str,
     action: CaseAction,
 ) -> EvalResult {
     expect_min_max_args(name, &args, 2, 3)?;
@@ -181,7 +182,7 @@ fn casify_replace_current_buffer_region(
 fn casify_word_in_state(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
-    name: &str,
+    name: &'static str,
     action: CaseAction,
 ) -> EvalResult {
     expect_args(name, &args, 1)?;

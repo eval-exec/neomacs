@@ -9,6 +9,7 @@
 //! must stay `eq`, and two results must be distinct objects.
 
 use super::*;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
@@ -775,7 +776,7 @@ fn a_variable_read_keeps_flonums_unboxed_and_its_handler_boxes_them() {
                 Op::Add,
                 Op::Return,
             ],
-            vec![Value::symbol(var)],
+            vec![Value::from_sym_id(intern(var))],
             &[2, 4],
         );
         let mut consed = Vec::new();

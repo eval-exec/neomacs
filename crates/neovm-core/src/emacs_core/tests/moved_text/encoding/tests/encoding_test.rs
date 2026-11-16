@@ -1,3 +1,4 @@
+use neovm_value::intern::intern;
 use super::*;
 use std::fmt;
 
@@ -958,7 +959,6 @@ fn ccl_coding_system_executes_registered_identity_program() {
 #[test]
 fn decode_sjis_attaches_charset_property() {
     crate::test_utils::init_test_tracing();
-    use neovm_value::intern::intern;
     // Shift-JIS charset list is (ascii katakana-jisx0201 <kanji>); register a
     // deterministic dim-1 katakana charset and a dim-2 kanji charset.
     let mut kana_args = vec![Value::NIL; 17];
@@ -2209,7 +2209,7 @@ fn register_test_jis() -> neovm_value::intern::SymId {
 }
 
 fn charset_prop(charset: &str) -> Value {
-    Value::list(vec![Value::symbol("charset"), Value::symbol(charset)])
+    Value::list(vec![Value::symbol("charset"), Value::from_sym_id(intern(charset))])
 }
 
 fn fmt(eval: &mut crate::emacs_core::Context, src: &str) -> String {

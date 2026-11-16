@@ -202,7 +202,7 @@ impl Default for CaseTableManager {
 
 /// Signal `wrong-type-argument` with a predicate name.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn wrong_type(pred: &str, got: &Value) -> Flow {
+fn wrong_type(pred: &'static str, got: &Value) -> Flow {
     signal(
         LispCondition::WrongTypeArgument,
         vec![Value::symbol(pred), *got],

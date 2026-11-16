@@ -75,7 +75,7 @@ struct Prog {
 impl Prog {
     #[doc(hidden)]
     pub fn constants(var: &str) -> Vec<Value> {
-        vec![Value::symbol(var), Value::symbol("vft-body")]
+        vec![Value::from_sym_id(intern(var)), Value::symbol("vft-body")]
     }
 
     /// `(lambda () VAR)`

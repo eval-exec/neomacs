@@ -1494,7 +1494,7 @@ fn read_coding_system_via_completing_read(
     if name.schars() == 0 {
         return Ok(Value::NIL);
     }
-    Ok(Value::symbol(crate::emacs_core::emacs_char::to_utf8_lossy(
+    Ok(Value::from_sym_id(intern((crate::emacs_core::emacs_char::to_utf8_lossy(
         name.as_bytes(),
-    )))
+    )).as_ref())))
 }

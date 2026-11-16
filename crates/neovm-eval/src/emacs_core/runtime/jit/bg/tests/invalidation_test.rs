@@ -6,6 +6,7 @@
 //! interpreter's.
 
 use super::*;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
@@ -32,7 +33,7 @@ fn done() {
 }
 
 fn sym(name: &str) -> (Value, SymId) {
-    let s = Value::symbol(name);
+    let s = Value::from_sym_id(intern(name));
     let ValueKind::Symbol(id) = s.kind() else {
         panic!("symbol")
     };

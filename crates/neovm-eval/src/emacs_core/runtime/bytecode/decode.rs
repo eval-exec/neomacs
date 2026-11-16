@@ -1230,7 +1230,7 @@ fn fetch2(bytecodes: &[u8], pos: &mut usize, byte_offset: usize) -> Result<u16, 
 /// Add a symbol to the constants vector if not already present, return its index.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn add_or_find_symbol(constants: &mut Vec<Value>, name: &str) -> u16 {
-    let sym = Value::symbol(name);
+    let sym = Value::from_sym_id(intern(name));
     for (i, c) in constants.iter().enumerate() {
         if let (Some(a), Some(b)) = (c.as_bare_symbol_id(), sym.as_bare_symbol_id())
             && a == b

@@ -5,6 +5,7 @@
 //! actual cached cell of a real localized symbol; no BLV field is fabricated.
 
 use super::*;
+use neovm_value::intern::intern;
 use crate::emacs_core::eval::subr_abi::SubrFn;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::eval::{SubrEntry, register_global_subr_entry};
@@ -113,7 +114,7 @@ fn check_setter(local: bool) {
     let leaf = compile_blv(
         &context,
         &[Op::StackRef(0), Op::VarSet(0), Op::StackRef(0), Op::Return],
-        &[Value::symbol(name)],
+        &[Value::from_sym_id(intern(name))],
         1,
     );
     assert_eq!(
@@ -209,7 +210,7 @@ fn check_binding(local: bool) {
             Op::Return,
         ],
         &[
-            Value::symbol(name),
+            Value::from_sym_id(intern(name)),
             Value::make_int(83),
             Value::from_sym_id(observer),
         ],
@@ -257,7 +258,7 @@ fn check_binding(local: bool) {
     let setter = compile_blv(
         &context,
         &[Op::StackRef(0), Op::VarSet(0), Op::StackRef(0), Op::Return],
-        &[Value::symbol(name)],
+        &[Value::from_sym_id(intern(name))],
         1,
     );
     assert_eq!(

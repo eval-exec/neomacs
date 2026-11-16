@@ -2748,7 +2748,7 @@ impl IntoSymbol for SymId {
     }
 }
 
-impl IntoSymbol for &str {
+impl IntoSymbol for &'static str {
     fn into_symbol(self) -> Value {
         if self == "nil" {
             Value::NIL
@@ -2783,30 +2783,6 @@ impl IntoSymbol for &crate::intern::WellKnown {
     }
 }
 
-impl IntoSymbol for String {
-    fn into_symbol(self) -> Value {
-        self.as_str().into_symbol()
-    }
-}
-
-impl IntoSymbol for &String {
-    fn into_symbol(self) -> Value {
-        self.as_str().into_symbol()
-    }
-}
-
-impl IntoSymbol for &&str {
-    fn into_symbol(self) -> Value {
-        (*self).into_symbol()
-    }
-}
-
-impl IntoSymbol for &&String {
-    fn into_symbol(self) -> Value {
-        self.as_str().into_symbol()
-    }
-}
-
 fn canonical_keyword_name(name: &str) -> String {
     if name.starts_with(':') {
         name.to_owned()
@@ -2826,7 +2802,7 @@ impl TaggedValue {
     }
 
     /// Create a keyword by interning a canonical `:name` symbol.
-    pub fn keyword(s: impl AsRef<str>) -> Self {
+    pub fn keyword(s: &'static str) -> Self {
         add_wrapping(MemoryUseCountSlot::Symbols, 1);
         TaggedValue::from_kw_id(intern(&canonical_keyword_name(s.as_ref())))
     }
@@ -2839,7 +2815,7 @@ impl TaggedValue {
     }
 
     /// Create a keyword by interning a name string.
-    pub fn make_keyword(s: impl AsRef<str>) -> Self {
+    pub fn make_keyword(s: &'static str) -> Self {
         Self::keyword(s)
     }
 

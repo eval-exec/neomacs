@@ -2,6 +2,7 @@
 //! differential tests in the independent IR evaluator and native lowering.
 
 use super::*;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::chunk::{ByteCodeFunction, GnuByteOffsetMapEntry};
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
@@ -569,7 +570,7 @@ fn jump_table() -> LispValue {
     let table = LispValue::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
         for (sym, offset) in [("opt-ssa-switch-a", 8), ("opt-ssa-switch-b", 12)] {
-            let value = LispValue::symbol(sym);
+            let value = LispValue::from_sym_id(intern(sym));
             let key = value.to_hash_key(&ht.test);
             ht.insert(key, value, LispValue::fixnum(offset));
         }

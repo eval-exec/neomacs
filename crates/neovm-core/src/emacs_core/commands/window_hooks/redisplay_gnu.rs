@@ -3,6 +3,7 @@
 //! Exclusively borrowed Context owns records; no shared Lisp cache is added.
 
 use super::*;
+use neovm_value::intern::intern;
 use crate::buffer::BufferId;
 use crate::emacs_core::eval::redisplay_hooks::{
     BufferContext, HookWindowDimensions, default_hook_value, safe_named_hook,
@@ -162,7 +163,10 @@ fn local(
         .buffers
         .get(buffer)
         .and_then(|buffer| buffer.buffer_local_value(name))
-        .ok_or_else(|| signal("void-variable", vec![Value::symbol(name)]))?;
+        .ok_or_else(|| signal(
+            "void-variable",
+            vec![Value::from_sym_id(intern(name))],
+        ))?;
     walk(eval, record, functions, Value::make_window(window.0))
 }
 

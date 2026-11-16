@@ -35,7 +35,7 @@ fn prepared(
     name: &str,
     nargs: usize,
 ) -> (Value, Value, u64, CheckedNativeCallback) {
-    let designator = Value::symbol(name);
+    let designator = Value::from_sym_id(neovm_value::intern::intern(name));
     let epoch = ctx.obarray().function_epoch();
     let subr = ctx
         .obarray()

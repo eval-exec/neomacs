@@ -132,7 +132,7 @@ pub fn string_char_range(start: usize, end: usize) -> CharRange {
 }
 
 #[doc(hidden)]
-pub fn substring_impl(name: &str, args: &[Value], preserve_props: bool) -> EvalResult {
+pub fn substring_impl(name: &'static str, args: &[Value], preserve_props: bool) -> EvalResult {
     expect_min_args(name, args, 1)?;
     expect_max_args(name, args, 3)?;
     match args[0].kind() {

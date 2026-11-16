@@ -6,6 +6,7 @@
 pub use neovm_eval::emacs_core::eval::data::process_state::*;
 
 use super::*;
+use neovm_value::intern::intern;
 use neovm_eval::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
 };
@@ -2716,7 +2717,7 @@ pub(super) fn serial_expect_fixnum(value: Value) -> Result<i64, Flow> {
 }
 
 pub(super) fn serial_value_eq_symbol(value: Value, symbol: &str) -> bool {
-    neovm_value::value::eq_value(&value, &Value::symbol(symbol))
+    neovm_value::value::eq_value(&value, &Value::from_sym_id(intern(symbol)))
 }
 
 /// GNU `serial_open`, src/sysdep.c:2980-2990 (termios) / src/w32.c:11098
@@ -8250,7 +8251,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         )
         .expect("inherited coding is registered");
         if let Some(proc) = self.processes_mut().get_mut(id) {
-            proc.coding_encode = Value::symbol(&inherited);
+            proc.coding_encode = Value::from_sym_id(intern((&inherited).as_ref()));
             proc.encoding_state = state;
         }
     }

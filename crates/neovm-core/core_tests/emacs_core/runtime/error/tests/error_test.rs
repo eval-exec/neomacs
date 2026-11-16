@@ -1,3 +1,4 @@
+use neovm_value::intern::intern;
 use super::{EvalError, Flow, signal};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{FlowRef, FlowResultExt};
@@ -172,7 +173,7 @@ fn print_shorthand_symbol_domain_matches_gnu_printer_symbols() {
         (PrintShorthandSymbol::Comma, ","),
         (PrintShorthandSymbol::CommaAt, ",@"),
     ] {
-        let value = Value::symbol(name);
+        let value = Value::from_sym_id(intern(name));
         assert_eq!(symbol.name(), name);
         assert_eq!(PrintShorthandSymbol::from_lisp_value(&value), Some(symbol));
     }

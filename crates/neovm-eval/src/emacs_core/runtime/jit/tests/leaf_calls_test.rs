@@ -6,6 +6,7 @@
 //! when nothing was emitted.
 
 use super::leaf_abi::{LEAF_STATS, bare_trampoline, leaf_trampoline_calls, opcode_leaf};
+use neovm_value::intern::intern;
 use super::*;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
@@ -530,7 +531,7 @@ fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
     }
     ops.push(Op::Call(nargs as u16));
     ops.push(Op::Return);
-    let mut f = lexical_fn(nargs as u32, ops, vec![Value::symbol(callee)]);
+    let mut f = lexical_fn(nargs as u32, ops, vec![Value::from_sym_id(intern(callee))]);
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }

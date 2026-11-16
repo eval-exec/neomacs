@@ -1,3 +1,4 @@
+use neovm_value::intern::intern;
 use neovm_display::window::DisplayFrameManagerExt;
 use neovm_value::value::Value;
 fn test_ob() -> neovm_value::symbol::Obarray {
@@ -100,7 +101,7 @@ fn gnu_timer_before(delay: Duration, callback: &str) -> Value {
         Value::fixnum(secs & 0xFFFF),
         Value::fixnum(when.subsec_micros() as i64),
         Value::NIL,
-        Value::symbol(callback),
+        Value::from_sym_id(intern(callback)),
         Value::NIL,
         Value::NIL,
         Value::fixnum(0),

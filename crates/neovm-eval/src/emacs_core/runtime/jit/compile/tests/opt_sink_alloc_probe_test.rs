@@ -3,6 +3,7 @@
 //! owned by this invocation's mutator. No new runtime cache/state is introduced.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
@@ -130,7 +131,7 @@ fn constant_value(spec: oracle::ConstantSpec, objects: &[Value]) -> Value {
     match spec {
         oracle::ConstantSpec::Object(id) => objects[id],
         oracle::ConstantSpec::Integer(n) => Value::make_int(n),
-        oracle::ConstantSpec::Symbol(name) => Value::symbol(name),
+        oracle::ConstantSpec::Symbol(name) => Value::from_sym_id(intern(name)),
     }
 }
 

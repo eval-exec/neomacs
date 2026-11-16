@@ -465,7 +465,7 @@ fn define_charset_internal_validates_name_arg() {
         match err.into_kind() {
             FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
-                assert_eq!(sig.data, vec![Value::symbol(predicate), operand]);
+                assert_eq!(sig.data, vec![Value::from_sym_id(intern(predicate)), operand]);
             }
             other => panic!("expected wrong-type-argument signal, got {other:?}"),
         }

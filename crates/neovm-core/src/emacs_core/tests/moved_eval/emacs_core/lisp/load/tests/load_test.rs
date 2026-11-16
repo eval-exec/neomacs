@@ -1733,7 +1733,7 @@ fn finalize_cached_bootstrap_eval_strips_transient_compile_features() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     for feature in TRANSIENT_RUNTIME_FEATURES {
-        eval.provide_value(Value::symbol(feature), None)
+        eval.provide_value(Value::from_sym_id(intern((feature).as_ref())), None)
             .expect("provide transient feature");
     }
 

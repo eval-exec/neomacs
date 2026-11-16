@@ -62,7 +62,7 @@ fn caller(name: &str, arity: usize) -> ByteCodeFunction {
     let mut ops = vec![Op::Constant(0)];
     ops.extend((0..arity).map(|_| Op::StackRef(arity as u16)));
     ops.extend([Op::Call(arity as u16), Op::Return]);
-    function(arity, ops, vec![Value::symbol(name)])
+    function(arity, ops, vec![Value::from_sym_id(intern(name))])
 }
 
 fn native(ctx: &mut Context, f: &ByteCodeFunction, name: &str) -> CompiledLeaf {
@@ -244,7 +244,7 @@ fn inline_named_runtime_cell_redefinition_resumes_original_call_with_new_functio
     );
     assert_eq!(
         resume.stack,
-        vec![Value::make_int(3), Value::symbol(name), Value::make_int(3)]
+        vec![Value::make_int(3), Value::from_sym_id(intern(name)), Value::make_int(3)]
     );
     assert_eq!(
         compile::resumed_chain::resume_deopt(&mut ctx, &f, Value::NIL, &leaf, *resume).unwrap(),
@@ -371,7 +371,7 @@ fn inline_named_runtime_assigned_argument_is_resumed_without_losing_original_cal
     let NativeRun::DeoptAt(resume) = run else {
         panic!("inner Car guard: {run:?}")
     };
-    assert_eq!(resume.stack, vec![original, Value::symbol(name), original]);
+    assert_eq!(resume.stack, vec![original, Value::from_sym_id(intern(name)), original]);
     let frames = &resume.inlined.as_ref().expect("named chain").frames;
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0].function, target);
@@ -397,7 +397,7 @@ fn inline_named_runtime_assigned_argument_is_resumed_without_losing_original_cal
         .unwrap();
     assert_eq!(
         observed.cons_car(),
-        Value::symbol(name),
+        Value::from_sym_id(intern(name)),
         "materialized Bcall records its symbol"
     );
     assert_eq!(

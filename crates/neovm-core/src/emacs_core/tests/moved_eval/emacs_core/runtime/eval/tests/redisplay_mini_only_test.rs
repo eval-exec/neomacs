@@ -1,3 +1,4 @@
+use neovm_value::intern::intern;
 use crate::emacs_core::Context;
 use crate::emacs_core::eval::redisplay_hooks::*;
 use crate::emacs_core::eval::*;
@@ -111,7 +112,7 @@ fn selected_mini_only_fallback_observes_dynamic_policy_and_precedes_hooks() {
     let event_index = |name| {
         events
             .iter()
-            .position(|event| *event == Value::symbol(name))
+            .position(|event| *event == Value::from_sym_id(intern(name)))
             .expect("event occurred")
     };
     assert!(event_index("pre") < event_index("resize"));

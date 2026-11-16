@@ -5,6 +5,7 @@
 //! - `CompletionTable` — what can be completed against (list, function, file names, etc.)
 //! - `CompletionStyle` — matching strategy (prefix, substring, flex, basic)
 //! - Builtin functions for Elisp: `read-from-minibuffer`, `completing-read`, `y-or-n-p`, etc.
+use neovm_value::intern::intern;
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
@@ -498,9 +499,9 @@ fn intern_symbol_reader_result(result: Value) -> Value {
     if let Some(name) = result.as_lisp_string() {
         // read-symbol results are interned symbol names (ASCII / decoded text);
         // decode lossily and reuse Value::symbol's nil/t/keyword canonicalization.
-        return Value::symbol(crate::emacs_core::emacs_char::to_utf8_lossy(
+        return Value::from_sym_id(intern((crate::emacs_core::emacs_char::to_utf8_lossy(
             name.as_bytes(),
-        ));
+        )).as_ref()));
     }
     result
 }

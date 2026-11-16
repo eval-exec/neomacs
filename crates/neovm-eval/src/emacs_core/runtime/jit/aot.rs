@@ -21,6 +21,7 @@
 //! Only built with the `jit` feature (links Cranelift).
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::hooks_proof::EvalHooksInstalled;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
@@ -2468,7 +2469,7 @@ pub fn testkit_call_bearing_selftest(
         f
     };
     let sym = |name: &str| -> (Value, SymId) {
-        let s = Value::symbol(name);
+        let s = Value::from_sym_id(intern(name));
         let ValueKind::Symbol(id) = s.kind() else {
             unreachable!("symbol");
         };

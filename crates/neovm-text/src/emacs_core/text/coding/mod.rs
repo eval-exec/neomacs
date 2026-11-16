@@ -1979,6 +1979,16 @@ fn record_coding_system_name<S: TextVariableStore>(vars: &mut S, name: SymId) {
     cons_coding_system_alist(vars, name);
 }
 
+/// Resolve a runtime coding-system spelling to its canonical symbol value.
+///
+/// Coding-system names reach Lisp only through `record_coding_system_name`,
+/// which publishes membership (GNU interns the `make_subsidiaries` names,
+/// src/coding.c:10968-10984). The query paths below re-resolve those same
+/// canonical ids; they never introduce a fresh Lisp-visible name.
+fn coding_name_value(name: &str) -> Value {
+    Value::from_sym_id(intern(name))
+}
+
 /// Mirror GNU `define-coding-system-internal`'s updates to
 /// `Vcoding_system_list` and `Vcoding_system_alist` in `src/coding.c`.
 /// When EOL is unspecified, GNU records the three subsidiary systems first
@@ -2276,7 +2286,7 @@ pub fn builtin_coding_system_aliases(
     {
         names.push(format!("{canonical}{suffix}"));
     }
-    Ok(Value::list(names.into_iter().map(Value::symbol).collect()))
+    Ok(Value::list(names.into_iter().map(|name| coding_name_value(&name)).collect()))
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2305,10 +2315,10 @@ pub(crate) fn builtin_coding_system_get(
             return Ok(value);
         }
         return match prop_name {
-            ":name" | "name" => Ok(Value::symbol(display_base_name(strip_eol_suffix(
+            ":name" | "name" => Ok(coding_name_value(&display_base_name(strip_eol_suffix(
                 &resolved_name,
             )))),
-            ":coding-type" | "coding-type" => Ok(Value::symbol(
+            ":coding-type" | "coding-type" => Ok(coding_name_value(
                 coding_type_for_base(strip_eol_suffix(&resolved_name))
                     .unwrap_or(resolve_sym(info.coding_type)),
             )),
@@ -2791,7 +2801,7 @@ fn builtin_coding_system_plist_uncached(
         coding_category_for_base(base)
     };
     plist_push_key(&mut plist, intern(":category"), Value::symbol(category));
-    plist_push_key(&mut plist, intern(":name"), Value::symbol(display_name));
+    plist_push_key(&mut plist, intern(":name"), coding_name_value(display_name));
     // `:docstring` keeps GNU's position right after `:name`; fall back to the
     // stored property when there is no built-in docstring for this base.
     if let Some(doc) = coding_docstring_for_base(base)
@@ -2803,7 +2813,7 @@ fn builtin_coding_system_plist_uncached(
     plist_push_key(
         &mut plist,
         intern(":coding-type"),
-        Value::symbol(coding_type),
+        coding_name_value(coding_type),
     );
     plist_push_key(&mut plist, intern(":mnemonic"), Value::fixnum(mnemonic));
     if let Some(charset_list) = coding_charset_list_for_base(base).or_else(|| {
@@ -2984,7 +2994,7 @@ fn builtin_coding_system_base_uncached(
     let name = coding_symbol_name(&args[0], mode)?;
     let resolved_name = resolve_runtime_name(mgr, &name)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![args[0]]))?;
-    Ok(Value::symbol(display_base_name(strip_eol_suffix(
+    Ok(coding_name_value(&display_base_name(strip_eol_suffix(
         &resolved_name,
     ))))
 }
@@ -3045,9 +3055,9 @@ fn builtin_coding_system_eol_type_uncached(
     // Return [base-unix base-dos base-mac] using Emacs display base names.
     let base = eol_vector_base(strip_eol_suffix(&resolved_name));
     let vec = vec![
-        Value::symbol(format!("{base}-unix")),
-        Value::symbol(format!("{base}-dos")),
-        Value::symbol(format!("{base}-mac")),
+        coding_name_value(&format!("{base}-unix")),
+        coding_name_value(&format!("{base}-dos")),
+        coding_name_value(&format!("{base}-mac")),
     ];
     Ok(Value::vector(vec))
 }
@@ -3419,13 +3429,13 @@ pub(crate) fn builtin_coding_system_change_text_conversion(
 
     if let Some(eol) = first_eol {
         if let Some(derived) = derive_coding_for_eol(resolved_text_base, eol) {
-            return Ok(Value::symbol(derived));
+            return Ok(coding_name_value(&derived));
         }
         return Ok(Value::NIL);
     }
 
     if EolType::from_suffix(&text_name).is_some() {
-        return Ok(Value::symbol(display_base_name(strip_eol_suffix(
+        return Ok(coding_name_value(&display_base_name(strip_eol_suffix(
             &text_name,
         ))));
     }
@@ -3433,7 +3443,7 @@ pub(crate) fn builtin_coding_system_change_text_conversion(
     match text_name.as_str() {
         "binary" => Ok(Value::symbol("no-conversion")),
         "emacs-internal" => Ok(Value::symbol("utf-8-emacs")),
-        _ => Ok(Value::symbol(text_name)),
+        _ => Ok(coding_name_value(&text_name)),
     }
 }
 
@@ -4068,7 +4078,7 @@ pub fn builtin_define_coding_system_alias(
     let canonical = mgr.resolve(&target).ok_or_else(|| {
         signal(
             LispCondition::CodingSystemError,
-            vec![Value::symbol(&target)],
+            vec![coding_name_value(&target)],
         )
     })?;
     mgr.add_alias(&alias, resolve_sym(canonical));
@@ -5420,7 +5430,7 @@ fn apply_detected_eol(
             return sym;
         }
         match mgr.canonical_name_for_detected_eol(name, eol_suffix) {
-            Some(resolved) => Value::symbol(resolved),
+            Some(resolved) => coding_name_value(&resolved),
             None => sym,
         }
     };
@@ -6196,7 +6206,7 @@ pub fn builtin_coding_system_priority_list(
         // of the highest-priority category when HIGHESTP is non-nil
         // (`return CODING_ATTR_BASE_NAME (attrs)`), not a one-element list.
         if let Some(first) = mgr.priority.first() {
-            Ok(Value::symbol(coding_system_base_name(
+            Ok(coding_name_value(&coding_system_base_name(
                 mgr,
                 resolve_sym(*first),
             )))
@@ -6207,7 +6217,7 @@ pub fn builtin_coding_system_priority_list(
         let items: Vec<Value> = mgr
             .priority
             .iter()
-            .map(|id| Value::symbol(coding_system_base_name(mgr, resolve_sym(*id))))
+            .map(|id| coding_name_value(&coding_system_base_name(mgr, resolve_sym(*id))))
             .collect();
         Ok(Value::list(items))
     }
@@ -6542,7 +6552,7 @@ fn safe_coding_systems_for_text(
             continue;
         };
         if chars.iter().all(|&ch| repertoire.encodes(ch)) {
-            safe_codings.push(Value::symbol(coding));
+            safe_codings.push(coding_name_value(&coding));
         }
     }
     safe_codings.push(Value::symbol("raw-text"));

@@ -1,4 +1,5 @@
 use crate::emacs_core::timefns::decode_epoch_secs;
+use neovm_value::intern::intern;
 use crate::test_utils::runtime_startup_eval_all;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_system::emacs_core::timefns::*;
@@ -34,7 +35,7 @@ fn condition_case_print(result: Result<Value, Flow>) -> String {
     match result.kinded() {
         Ok(value) => neovm_eval::emacs_core::print::print_value(&value),
         Err(FlowKind::Signal(sig)) => {
-            let symbol = Value::symbol(sig.symbol_name());
+            let symbol = Value::from_sym_id(intern(sig.symbol_name()));
             let err_obj = if let Some(raw) = sig.raw_data {
                 Value::cons(symbol, raw)
             } else {

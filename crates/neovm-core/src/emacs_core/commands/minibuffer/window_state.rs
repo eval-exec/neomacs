@@ -8,6 +8,7 @@
 //! this module names them downward through `crate::emacs_core::reader`.
 
 use crate::buffer::LispCharPos1;
+use neovm_value::intern::intern;
 use crate::emacs_core::minibuffer::MinibufferManagerExt;
 use crate::emacs_core::reader::{
     ActiveMinibufferWindowState, CallingFrame, MinibufferBufferUnwind, MinibufferExitDisposition,
@@ -518,7 +519,7 @@ pub(crate) fn run_minibuffer_mode_if_bound(
     mode: &str,
 ) -> EvalResult {
     if eval.obarray().symbol_function(mode).is_some() {
-        eval.apply0(Value::symbol(mode))
+        eval.apply0(Value::from_sym_id(intern(mode)))
     } else {
         Ok(Value::NIL)
     }

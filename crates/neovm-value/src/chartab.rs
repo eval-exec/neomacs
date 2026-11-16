@@ -290,7 +290,7 @@ fn uniprop_table_uncompress(table: Value, idx: usize) -> Option<Value> {
 
 /// Signal `wrong-type-argument` with a predicate name.
 #[doc(hidden)]
-pub fn wrong_type(pred: &str, got: &Value) -> Flow {
+pub fn wrong_type(pred: &'static str, got: &Value) -> Flow {
     signal(
         LispCondition::WrongTypeArgument,
         vec![Value::symbol(pred), *got],

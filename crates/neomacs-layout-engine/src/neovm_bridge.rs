@@ -13,6 +13,7 @@
 //! and creates no buffer-specific or Lisp-state cache.
 
 use neomacs_display_protocol::face::TtySpaceIdentity;
+use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::eval::VariableView;
 use neovm_core::emacs_core::xfaces::realization::XfacesRealizationContextExt;
 use neovm_core::face::realization::BasicFace;
@@ -3602,7 +3603,7 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
         let value = self
             .buffer
             .layout_overlays()
-            .overlay_get_named(overlay_id, Value::symbol(property))?;
+            .overlay_get_named(overlay_id, Value::from_sym_id(intern(property)))?;
         let string = value.as_lisp_string()?;
         if string.as_bytes().is_empty() {
             return None;
@@ -6509,7 +6510,7 @@ impl FaceResolver {
 
         let base = (*self.default_face).clone();
         let mut resolved = self
-            .resolve_remapped_face_value_over(remapping, &base, &Value::symbol(name))
+            .resolve_remapped_face_value_over(remapping, &base, &Value::from_sym_id(intern(name)))
             .unwrap_or(base);
         resolved.face_id = BasicFaceId::SENTINEL;
         resolved.canonical_tty_role = None;

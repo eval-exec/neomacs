@@ -1,6 +1,7 @@
 //! GNU print.c:1593-1610, 2388-2389: immutable runtime output retains
 //! the same charset pruning as Lisp printers, including error DATA printing.
 use super::super::*;
+use neovm_value::intern::intern;
 
 #[test]
 fn immutable_error_string_path_preserves_gnu_charset_policy() {
@@ -46,7 +47,7 @@ fn immutable_error_string_path_preserves_gnu_charset_policy() {
         context
             .obarray
             .set_symbol_value("print-charset-text-property", policy);
-        let mut props = vec![Value::symbol("charset"), Value::symbol(charset)];
+        let mut props = vec![Value::symbol("charset"), Value::from_sym_id(intern(charset))];
         if other_property {
             props.extend([Value::symbol("foo"), Value::symbol("bar")]);
         }

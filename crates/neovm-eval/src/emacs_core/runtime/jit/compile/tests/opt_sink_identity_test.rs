@@ -4,6 +4,7 @@
 //! belong to this invocation's mutator; no new runtime state is introduced.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use neovm_value::intern::intern;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
@@ -92,7 +93,7 @@ fn load(ctx: &mut Context, roots: &Roots) {
             match expected {
                 oracle::Constant::Integer(n) => assert_eq!(actual, Value::make_int(n)),
                 oracle::Constant::Float(bits) => assert_eq!(number(actual), Number::Float(bits)),
-                oracle::Constant::Symbol(name) => assert_eq!(actual, Value::symbol(name)),
+                oracle::Constant::Symbol(name) => assert_eq!(actual, Value::from_sym_id(intern(name))),
             }
         }
         assert!(!source.executable_ops().is_empty());

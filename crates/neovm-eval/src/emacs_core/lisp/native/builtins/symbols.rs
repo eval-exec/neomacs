@@ -4980,7 +4980,7 @@ pub fn init_event_symbol_properties(obarray: &mut Obarray) {
     }
 }
 
-fn init_standard_event_symbol(obarray: &mut Obarray, name: &str, kind: Option<&str>) {
+fn init_standard_event_symbol(obarray: &mut Obarray, name: &str, kind: Option<&'static str>) {
     let sym = intern(name);
     let _ = cache_event_symbol_properties_in_obarray(obarray, sym);
     if let Some(kind) = kind {

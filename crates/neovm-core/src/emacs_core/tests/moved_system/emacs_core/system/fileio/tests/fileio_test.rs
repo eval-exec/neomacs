@@ -1,10 +1,10 @@
+use neovm_value::intern::intern;
 use crate::test_utils::runtime_startup_eval_all;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::print::format_eval_result;
 use neovm_system::emacs_core::fileio::*;
 use neovm_value::error::EvalResult;
 use neovm_value::error::{FlowKind, FlowResultExt};
-use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use neovm_value::value::list_to_vec;
 use std::fs;
@@ -9170,7 +9170,7 @@ fn assert_recursive_auto_save_handler_native_policy(action: &str, outcome: &str)
     )
     .unwrap();
     eval.obarray_mut()
-        .set_symbol_value("asr-action", Value::symbol(action));
+        .set_symbol_value("asr-action", Value::from_sym_id(intern(action)));
     builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
         .expect("outer handler resumes after inner native scope");
     eprintln!(
@@ -9181,7 +9181,7 @@ fn assert_recursive_auto_save_handler_native_policy(action: &str, outcome: &str)
     assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(2));
     assert_eq!(
         eval.eval_str("asr-inner-outcome").unwrap(),
-        Value::symbol(outcome)
+        Value::from_sym_id(intern(outcome))
     );
     assert_eq!(fs::read(&target).unwrap(), b"seed\n");
     assert_eq!(
@@ -9235,7 +9235,7 @@ fn assert_auto_save_file_format_policy(
     eprintln!("AUTO_SAVE_FORMAT bytes={expected:?} args={actual_args:?}");
     let expected_args = expected_format.map_or(Value::NIL, |format| {
         Value::list(vec![
-            Value::symbol(format),
+            Value::from_sym_id(intern(format)),
             Value::NIL,
             Value::NIL,
             Value::make_buffer(original),
@@ -9338,7 +9338,7 @@ fn assert_auto_save_write_coding_policy(equal_names: bool, invalid_coding: bool)
     assert_eq!(fs::read(&target).unwrap(), expected_bytes);
     assert_eq!(
         eval.eval_str("last-coding-system-used").unwrap(),
-        Value::symbol(expected_coding)
+        Value::from_sym_id(intern(expected_coding))
     );
 }
 

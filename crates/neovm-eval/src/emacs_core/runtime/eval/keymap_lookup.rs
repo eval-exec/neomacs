@@ -1618,7 +1618,7 @@ pub fn key_event_to_emacs_event(event: &KeyEvent) -> Value {
             if *super_ {
                 prefix.push_str("s-");
             }
-            Value::symbol(format!("{}{}", prefix, resolve_sym(*name)))
+            Value::from_sym_id(intern((format!("{}{}", prefix, resolve_sym(*name))).as_ref()))
         }
     }
 }

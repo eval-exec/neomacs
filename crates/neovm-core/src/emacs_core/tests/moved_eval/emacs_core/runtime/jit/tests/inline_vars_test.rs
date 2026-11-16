@@ -6,6 +6,7 @@
 //!
 //! The Stage A transcripts (`eval/tests/var_fast.rs`) run every scenario on
 //! each knob value too (`INLINE_ENGINES`).
+use neovm_value::intern::intern;
 
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::Context;
@@ -21,7 +22,6 @@ use neovm_eval::test_support::authority::{
     osr_transfer_count_for_test, prepare_osr_for_test, reset_inline_var_sites_for_test,
     seal_hand_assembled_ops_for_test, var_shim_calls_for_test, with_compile_env_for_test,
 };
-use neovm_value::intern::intern;
 use neovm_value::value::{LambdaParams, Value};
 
 const OFF: TestInlineVars = TestInlineVars::OFF;
@@ -95,7 +95,7 @@ impl Prog {
 }
 
 fn constants(var: &str) -> Vec<Value> {
-    vec![Value::symbol(var), Value::symbol("ivt-body")]
+    vec![Value::from_sym_id(intern(var)), Value::symbol("ivt-body")]
 }
 
 fn flow_text(flow: neovm_value::error::Flow) -> String {
@@ -876,8 +876,8 @@ fn two_path_bind(a: &str, b: &str) -> (Vec<Op>, Vec<Value>) {
         Op::Return,
     ];
     let constants = vec![
-        Value::symbol(a),
-        Value::symbol(b),
+        Value::from_sym_id(intern(a)),
+        Value::from_sym_id(intern(b)),
         Value::make_int(5),
         Value::symbol("ivt-body"),
     ];

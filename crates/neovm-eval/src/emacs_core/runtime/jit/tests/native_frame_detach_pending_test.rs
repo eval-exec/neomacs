@@ -154,7 +154,7 @@ fn held_pending_callee_keeps_cleanup_backtrace_args_after_recovery() {
             let mut ops = vec![Op::Constant(0)];
             ops.extend((0..nargs).map(|_| Op::StackRef(nargs as u16)));
             ops.extend([Op::Call(nargs as u16), Op::Return]);
-            let caller = function(nargs, ops, vec![Value::symbol(&name)]);
+            let caller = function(nargs, ops, vec![Value::from_sym_id(intern((&name).as_ref()))]);
             let leaf = compile_bytecode_function_with(&caller, Some(&ev.obarray))
                 .expect("caller compiles synchronously");
             let arguments = ev.eval_str(argument_form).expect("fresh arguments");
