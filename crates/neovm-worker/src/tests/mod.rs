@@ -2,3 +2,4 @@
 
 mod isolate_test;
 mod lib_test;
+mod transfer_test;

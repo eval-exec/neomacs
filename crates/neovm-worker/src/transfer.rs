@@ -6,12 +6,12 @@
 //! [`neovm_host_abi::LispValue`] bytes the worker queue already carries, and
 //! rebuilt as fresh objects in the receiving Context's own heap.
 //!
-//! What crosses: nil, t, integers (fixnums and bignums), floats, strings
-//! (bytes and the multibyte flag; text properties are dropped), symbols (by
+//! What crosses: nil, t, integers (fixnums and bignums), floats, plain strings
+//! (bytes and the multibyte flag; propertized strings are refused), symbols (by
 //! name, re-interned on the other side), conses (proper and dotted lists),
 //! vectors, records, bool-vectors, hash tables with a standard test,
 //! interpreted closures (all six slots, so a captured lexical environment is
-//! copied with them), byte-code objects (through their printed `#[...]`
+//! copied with them), byte-code objects (through their escaped `#[...]`
 //! literal) and subr objects (by name). Everything that names host state --
 //! buffers, markers, overlays, windows, frames, processes, terminals,
 //! threads, module functions, user pointers and the rest -- is refused with
@@ -20,8 +20,10 @@
 
 use neovm_core::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use neovm_core::emacs_core::eval::Context;
-use neovm_core::emacs_core::print::print_value_with_eval;
-use neovm_core::emacs_core::value::{HashTableTest, HashTableWeakness, VecLikeType};
+use neovm_core::emacs_core::print::print_value_bytes_escaped_with_eval;
+use neovm_core::emacs_core::value::{
+    HashTableTest, HashTableWeakness, VecLikeType, get_string_text_properties_for_value,
+};
 use neovm_core::emacs_core::value_reader::read_all;
 use neovm_core::heap_types::LispString;
 use neovm_core::{Value, ValueKind};
@@ -226,6 +228,9 @@ impl Walker<'_> {
                 value.as_float().unwrap_or(f64::NAN).to_bits(),
             )),
             ValueKind::String => {
+                if get_string_text_properties_for_value(value).is_some() {
+                    return Err(TransferError::Unsupported("propertized-string"));
+                }
                 let string = value
                     .as_lisp_string()
                     .ok_or(TransferError::Unsupported("string"))?;
@@ -341,8 +346,11 @@ impl Walker<'_> {
                                 break;
                             }
                         }
-                        checked
-                            .map(|()| Transfer::ByteCode(print_value_with_eval(self.ctx, &value)))
+                        checked.and_then(|()| {
+                            String::from_utf8(print_value_bytes_escaped_with_eval(self.ctx, &value))
+                                .map(Transfer::ByteCode)
+                                .map_err(|_| TransferError::Unsupported("byte-code-function"))
+                        })
                     }
                     None => Err(TransferError::Unsupported("byte-code-function")),
                 };
@@ -436,7 +444,16 @@ pub fn to_value(ctx: &mut Context, transfer: &Transfer) -> Result<Value, Transfe
             Ok(Value::heap_string(string))
         }
         Transfer::Symbol(name) => Ok(Value::symbol(name.as_str())),
-        Transfer::Subr(name) => Ok(Value::symbol(name.as_str())),
+        Transfer::Subr(name) => ctx
+            .obarray()
+            .symbol_function(name)
+            .filter(|function| {
+                matches!(
+                    function.kind(),
+                    ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr)
+                )
+            })
+            .ok_or(TransferError::Unsupported("primitive-function")),
         Transfer::List { items, tail } => {
             let mut result = match tail {
                 Some(tail) => to_value(ctx, tail)?,
