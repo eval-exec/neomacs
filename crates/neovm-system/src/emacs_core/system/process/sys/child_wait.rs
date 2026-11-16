@@ -31,7 +31,7 @@ pub enum ChildWait {
 
 /// Probe `pid`'s status without blocking, reaping it if it changed state.
 /// `pid` is a live child pid (always positive), so it is taken as `u32`.
-pub fn poll_child_status(pid: u32) -> ChildWait {
+pub(crate) fn poll_child_status(pid: u32) -> ChildWait {
     let mut raw_status: libc::c_int = 0;
     // SAFETY: `waitpid` writes only through the provided `&mut raw_status`.
     let result = unsafe {

@@ -1672,7 +1672,7 @@ pub enum OverlaySerialSource {
 /// is atomic so the World is ready for several mutators; ordering between
 /// distinct serials only needs the atomic read-modify-write, hence `Relaxed`.
 #[derive(Debug, Default)]
-pub struct OverlaySerialCounter(std::sync::atomic::AtomicU64);
+pub(crate) struct OverlaySerialCounter(std::sync::atomic::AtomicU64);
 
 impl OverlaySerialCounter {
     pub const fn new() -> Self {
@@ -1682,7 +1682,7 @@ impl OverlaySerialCounter {
     /// Issue the next creation serial. The counter stores the last issued
     /// value; a `fetch_add` therefore yields the successor.
     #[inline]
-    pub fn mint(&self) -> OverlaySerial {
+    pub(crate) fn mint(&self) -> OverlaySerial {
         let next = self
             .0
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -1810,7 +1810,7 @@ impl MarkerBuffer {
     }
 
     #[inline]
-    pub const fn is_attached(self) -> bool {
+    pub(crate) const fn is_attached(self) -> bool {
         self.0.is_some()
     }
 
@@ -1842,10 +1842,10 @@ const MARKER_LINK_LAST_POSITION_VALID: usize = 0b010;
 const MARKER_LINK_CHAINED: usize = 0b100;
 
 impl MarkerLink {
-    pub const NONE: Self = Self(0);
+    pub(crate) const NONE: Self = Self(0);
 
     #[inline]
-    pub fn from_ptr(next: *mut crate::tagged::header::MarkerObj) -> Self {
+    pub(crate) fn from_ptr(next: *mut crate::tagged::header::MarkerObj) -> Self {
         debug_assert_eq!(
             next as usize & MARKER_LINK_FLAG_BITS,
             0,
@@ -1855,7 +1855,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn next_ptr(self) -> *mut crate::tagged::header::MarkerObj {
+    pub(crate) const fn next_ptr(self) -> *mut crate::tagged::header::MarkerObj {
         (self.0 & !MARKER_LINK_FLAG_BITS) as *mut _
     }
 
@@ -1882,7 +1882,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub fn with_next(self, next: *mut crate::tagged::header::MarkerObj) -> Self {
+    pub(crate) fn with_next(self, next: *mut crate::tagged::header::MarkerObj) -> Self {
         debug_assert_eq!(
             next as usize & MARKER_LINK_FLAG_BITS,
             0,
@@ -1892,7 +1892,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn with_insertion_type(self, value: bool) -> Self {
+    pub(crate) const fn with_insertion_type(self, value: bool) -> Self {
         if value {
             Self(self.0 | MARKER_LINK_INSERTION_TYPE)
         } else {
@@ -1901,7 +1901,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn with_last_position_valid(self, value: bool) -> Self {
+    pub(crate) const fn with_last_position_valid(self, value: bool) -> Self {
         if value {
             Self(self.0 | MARKER_LINK_LAST_POSITION_VALID)
         } else {
@@ -1910,7 +1910,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn with_chained(self, value: bool) -> Self {
+    pub(crate) const fn with_chained(self, value: bool) -> Self {
         if value {
             Self(self.0 | MARKER_LINK_CHAINED)
         } else {

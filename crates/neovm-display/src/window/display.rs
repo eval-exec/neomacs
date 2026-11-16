@@ -70,7 +70,7 @@ pub(crate) struct WindowScrollUpdate {
     pub buffer: BufferId,
     pub start: LispCharPos1,
     pub point: LispCharPos1,
-    pub hidden_top_pixels: i32,
+    pub(crate) hidden_top_pixels: i32,
 }
 
 impl WindowScrollUpdate {
@@ -150,17 +150,17 @@ impl WindowScrollUpdate {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct WindowBufferDisplayDefaults {
+pub(crate) struct WindowBufferDisplayDefaults {
     pub margins: Option<WindowMargins>,
     pub fringes: Option<WindowFringeDefaults>,
     pub scroll_bars: Option<WindowScrollBarDefaults>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WindowFringeDefaults {
+pub(crate) struct WindowFringeDefaults {
     pub left_width: Option<i32>,
     pub right_width: Option<i32>,
-    pub outside_margins: bool,
+    pub(crate) outside_margins: bool,
 }
 
 impl WindowFringeDefaults {
@@ -174,11 +174,11 @@ impl WindowFringeDefaults {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WindowScrollBarDefaults {
-    pub vertical_width: Option<i32>,
+pub(crate) struct WindowScrollBarDefaults {
+    pub(crate) vertical_width: Option<i32>,
     pub vertical_type: Value,
-    pub horizontal_height: Option<i32>,
-    pub horizontal_type: Value,
+    pub(crate) horizontal_height: Option<i32>,
+    pub(crate) horizontal_type: Value,
 }
 
 impl WindowScrollBarDefaults {

@@ -86,6 +86,45 @@ fn every_active_c_intern_spelling_is_a_boot_member() {
     }
 }
 
+/// Every literal DEFUN subr name of a compiled GNU object this platform
+/// builds must name a symbol, with no function and no value of its own.
+///
+/// GNU's `defsubr` interns each DEFUN name; this port declines a few subrs
+/// (the X toolkit dialogs among them), and those names stay members without
+/// a function cell.
+#[test]
+fn every_active_c_defun_spelling_is_a_boot_member() {
+    let eval = crate::test_utils::new_context();
+    let mut checked = 0usize;
+    let mut missing: Vec<&str> = Vec::new();
+    for (name, gate) in gnu_defsyms_generated::GNU_C_DEFUNS {
+        if !gate.is_active() {
+            continue;
+        }
+        checked += 1;
+        if eval.obarray().intern_soft(name).is_none() {
+            missing.push(name);
+        }
+    }
+    assert!(
+        checked > 1000,
+        "the generated DEFUN table should hold over a thousand active names, got {checked}"
+    );
+    assert!(
+        missing.is_empty(),
+        "{} of {checked} active GNU DEFUN names are not in the obarray \
+         (run `cargo xtask gnu-defsyms` if the table is stale): {:?}",
+        missing.len(),
+        &missing[..missing.len().min(20)]
+    );
+    // A declined X-toolkit subr: the name is a member, the function is not.
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        assert!(eval.obarray().intern_soft("x-gtk-debug").is_some());
+        assert!(eval.obarray().symbol_function("x-gtk-debug").is_none());
+    }
+}
+
 /// A DEFSYM gives the symbol no function and no value, matching GNU.
 #[test]
 fn defsym_only_spellings_are_unbound_and_have_no_function() {

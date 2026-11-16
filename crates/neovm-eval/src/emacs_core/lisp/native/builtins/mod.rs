@@ -883,7 +883,7 @@ pub fn define_coding_system_internal(
 #[doc(hidden)]
 pub fn define_coding_system_alias(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     let mode = eval.symbol_mode();
-    let result = neovm_text::emacs_core::coding::builtin_define_coding_system_alias(
+    let names = neovm_text::emacs_core::coding::define_coding_system_alias_with_subsidiaries(
         &mut eval.coding_systems,
         args.clone(),
         mode,
@@ -896,12 +896,12 @@ pub fn define_coding_system_alias(eval: &mut super::eval::Context, args: Vec<Val
     unsafe {
         eval.obarray.with_legacy_value_write(|obarray| {
             let mut vars = super::eval::VariableStore::new(obarray, Some(owner));
-            neovm_text::emacs_core::coding::record_lisp_define_coding_system_alias(
-                &mut vars, &args, mode,
+            neovm_text::emacs_core::coding::record_lisp_define_coding_system_alias_with_subsidiaries(
+                &mut vars, &names,
             );
         });
     }
-    Ok(result)
+    Ok(Value::NIL)
 }
 #[doc(hidden)]
 pub fn set_coding_system_priority(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {

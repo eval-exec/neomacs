@@ -91,35 +91,39 @@ impl TaggedHeap {
         self.buffer_registry[idx] = Some(value);
     }
 
-    pub fn window_value(&self, id: u64) -> Option<TaggedValue> {
+    pub(crate) fn window_value(&self, id: u64) -> Option<TaggedValue> {
         self.window_registry.get(&id).copied()
     }
 
-    pub fn register_window_value(&mut self, id: u64, value: TaggedValue) {
+    pub(crate) fn register_window_value(&mut self, id: u64, value: TaggedValue) {
         self.window_registry.insert(id, value);
     }
 
-    pub fn frame_value(&self, id: u64) -> Option<TaggedValue> {
+    pub(crate) fn frame_value(&self, id: u64) -> Option<TaggedValue> {
         self.frame_registry.get(&id).copied()
     }
 
-    pub fn register_frame_value(&mut self, id: u64, value: TaggedValue) {
+    pub(crate) fn register_frame_value(&mut self, id: u64, value: TaggedValue) {
         self.frame_registry.insert(id, value);
     }
 
-    pub fn timer_value(&self, id: u64) -> Option<TaggedValue> {
+    pub(crate) fn timer_value(&self, id: u64) -> Option<TaggedValue> {
         self.timer_registry.get(&id).copied()
     }
 
-    pub fn register_timer_value(&mut self, id: u64, value: TaggedValue) {
+    pub(crate) fn register_timer_value(&mut self, id: u64, value: TaggedValue) {
         self.timer_registry.insert(id, value);
     }
 
-    pub fn process_value(&self, id: crate::heap_types::ProcessId) -> Option<TaggedValue> {
+    pub(crate) fn process_value(&self, id: crate::heap_types::ProcessId) -> Option<TaggedValue> {
         self.process_registry.get(&id).copied()
     }
 
-    pub fn register_process_value(&mut self, id: crate::heap_types::ProcessId, value: TaggedValue) {
+    pub(crate) fn register_process_value(
+        &mut self,
+        id: crate::heap_types::ProcessId,
+        value: TaggedValue,
+    ) {
         self.process_registry.insert(id, value);
     }
 
@@ -265,7 +269,9 @@ impl TaggedHeap {
         ImageStamp::Stamped
     }
 
-    pub fn dirty_owner_count(&self) -> usize {
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn dirty_owner_count(&self) -> usize {
         self.dirty_owners.len()
     }
 
@@ -273,26 +279,19 @@ impl TaggedHeap {
         self.dirty_owner_bits.contains(&owner.bits())
     }
 
-    pub fn take_dirty_owners(&mut self) -> Vec<TaggedValue> {
-        self.dirty_owner_bits.clear();
-        std::mem::take(&mut self.dirty_owners)
-    }
-
     pub fn clear_dirty_owners(&mut self) {
         self.dirty_owners.clear();
         self.dirty_owner_bits.clear();
     }
 
-    pub fn dirty_write_count(&self) -> usize {
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn dirty_write_count(&self) -> usize {
         self.dirty_writes.len()
     }
 
     pub fn dirty_writes(&self) -> &[HeapWriteRecord] {
         &self.dirty_writes
-    }
-
-    pub fn take_dirty_writes(&mut self) -> Vec<HeapWriteRecord> {
-        std::mem::take(&mut self.dirty_writes)
     }
 
     pub fn clear_dirty_writes(&mut self) {

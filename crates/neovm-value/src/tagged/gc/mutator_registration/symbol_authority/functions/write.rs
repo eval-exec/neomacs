@@ -104,7 +104,7 @@ impl<K: EraKeeper> EraCore<'_, K> {
 
     /// Reserve this existing symbol's stamp and one original-target journal
     /// slot before ANY owner registers. No running write grows Rust metadata.
-    pub fn prepare_function_symbol(&self, key: &SymbolHandle) -> Result<(), FunctionError> {
+    pub(crate) fn prepare_function_symbol(&self, key: &SymbolHandle) -> Result<(), FunctionError> {
         self.prepare_function_subset(key, ReturnSubset::Scalar)
     }
 

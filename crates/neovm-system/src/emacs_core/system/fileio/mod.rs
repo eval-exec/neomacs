@@ -352,12 +352,12 @@ pub fn file_readable_p(filename: &str) -> bool {
 }
 
 /// Return true if FILENAME is writable.
-pub fn file_writable_p(filename: &str) -> bool {
+pub(crate) fn file_writable_p(filename: &str) -> bool {
     file_writable_path(Path::new(filename))
 }
 
 /// Return true if FILENAME is an accessible directory.
-pub fn file_accessible_directory_p(filename: &str) -> bool {
+pub(crate) fn file_accessible_directory_p(filename: &str) -> bool {
     let path = Path::new(filename);
     if !path.is_dir() {
         return false;
@@ -379,7 +379,7 @@ pub fn file_accessible_directory_p(filename: &str) -> bool {
 }
 
 /// Return true if FILENAME is executable by the current process.
-pub fn file_executable_p(filename: &str) -> bool {
+pub(crate) fn file_executable_p(filename: &str) -> bool {
     #[cfg(unix)]
     {
         let Ok(c_path) = CString::new(filename) else {
@@ -397,7 +397,7 @@ pub fn file_executable_p(filename: &str) -> bool {
 /// Return true if FILENAME is currently locked by Emacs lockfiles.
 ///
 /// NeoVM currently does not implement lockfile probing, so this returns nil.
-pub fn file_locked_p(_filename: &neovm_value::heap_types::LispString) -> bool {
+pub(crate) fn file_locked_p(_filename: &neovm_value::heap_types::LispString) -> bool {
     false
 }
 
@@ -479,7 +479,7 @@ pub fn file_symlink_p(filename: &str) -> bool {
 /// The returned target is whatever the OS `readlink` syscall produces;
 /// it may be relative.  We do NOT canonicalize it (GNU's
 /// `emacs_readlinkat` likewise does not).
-pub fn file_symlink_target(filename: &str) -> Option<String> {
+pub(crate) fn file_symlink_target(filename: &str) -> Option<String> {
     let meta = fs::symlink_metadata(filename).ok()?;
     if !meta.file_type().is_symlink() {
         return None;
@@ -489,7 +489,7 @@ pub fn file_symlink_target(filename: &str) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-pub fn file_symlink_target_lisp(
+pub(crate) fn file_symlink_target_lisp(
     filename: &neovm_value::heap_types::LispString,
 ) -> Option<neovm_value::heap_types::LispString> {
     let path = lisp_file_name_to_path_buf(filename);
@@ -503,12 +503,12 @@ pub fn file_symlink_target_lisp(
 }
 
 /// Return true if FILENAME is on a case-insensitive filesystem.
-pub fn file_name_case_insensitive_p(filename: &str) -> bool {
+pub(crate) fn file_name_case_insensitive_p(filename: &str) -> bool {
     file_name_case_insensitive_path(Path::new(filename))
 }
 
 /// Return true if FILE1 has a newer modification time than FILE2.
-pub fn file_newer_than_file_p(file1: &str, file2: &str) -> bool {
+pub(crate) fn file_newer_than_file_p(file1: &str, file2: &str) -> bool {
     let meta1 = match fs::metadata(file1) {
         Ok(meta) => meta,
         Err(_) => return false,
@@ -1110,7 +1110,7 @@ pub fn copy_file(from: &str, to: &str) -> std::io::Result<()> {
 }
 
 /// Create an additional name (hard link) from OLDNAME to NEWNAME.
-pub fn add_name_to_file(oldname: &str, newname: &str) -> std::io::Result<()> {
+pub(crate) fn add_name_to_file(oldname: &str, newname: &str) -> std::io::Result<()> {
     fs::hard_link(oldname, newname)
 }
 

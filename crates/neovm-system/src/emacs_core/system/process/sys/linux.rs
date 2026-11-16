@@ -219,7 +219,7 @@ fn linux_interface_metadata(ifname: &str) -> LinuxInterfaceMetadata {
     LinuxInterfaceMetadata { hwaddr, flags }
 }
 
-pub fn interface_snapshot() -> Option<Vec<HostInterfaceEntry>> {
+pub(crate) fn interface_snapshot() -> Option<Vec<HostInterfaceEntry>> {
     let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
     if unsafe { libc::getifaddrs(&mut ifaddrs) } == -1 {
         return None;

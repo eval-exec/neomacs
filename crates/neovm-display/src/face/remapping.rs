@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 /// - `(FACE . (:attr val ...))`   -> `[RemapAttrs(face)]`
 /// - `(FACE . (a b (:k v) ...))`  -> mixed list of face names & attr plists
 #[derive(Clone, Debug)]
-pub enum FaceRemapEntry {
+pub(crate) enum FaceRemapEntry {
     /// Remap to another named face.
     RemapFace(Value),
     /// Inline attribute plist parsed into a `Face`.
@@ -25,7 +25,7 @@ pub enum FaceRemapEntry {
 /// When resolving face `X`, if `X` is in this map the entries replace the
 /// original face definition.
 #[derive(Clone, Debug, Default)]
-pub struct FaceRemapping {
+pub(crate) struct FaceRemapping {
     map: HashMap<Value, Vec<FaceRemapEntry>>,
 }
 

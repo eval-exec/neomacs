@@ -2032,6 +2032,21 @@ pub fn record_lisp_define_coding_system_alias<S: TextVariableStore>(
     record_coding_system_name(vars, alias_id);
 }
 
+/// Record every name GNU's `define-coding-system-alias` publishes: the
+/// alias's EOL subsidiaries first, then the alias (the order the registry
+/// function returns). `record_coding_system_name` conses each onto
+/// `coding-system-list`/`coding-system-alist` and publishes obarray
+/// membership.
+#[doc(hidden)]
+pub fn record_lisp_define_coding_system_alias_with_subsidiaries<S: TextVariableStore>(
+    vars: &mut S,
+    names: &[SymId],
+) {
+    for name in names {
+        record_coding_system_name(vars, *name);
+    }
+}
+
 impl neovm_value::gc_trace::GcTrace for CodingSystemManager {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
         CodingSystemManager::trace_roots(self, roots);
@@ -4068,6 +4083,24 @@ pub fn builtin_define_coding_system_alias(
     args: Vec<Value>,
     mode: SymbolMode,
 ) -> EvalResult {
+    define_coding_system_alias_with_subsidiaries(mgr, args, mode)?;
+    Ok(Value::NIL)
+}
+
+/// GNU `Fdefine_coding_system_alias` including its subsidiary propagation.
+///
+/// When CODING-SYSTEM's spec carries the subsidiary VECTOR (an undecided
+/// base, the `make_subsidiaries` output stored at define time), GNU creates
+/// `<alias>-unix`/`-dos`/`-mac` and recursively aliases each to the base's
+/// corresponding subsidiary (`src/coding.c:11581-11610`). Returns the names
+/// GNU publishes, in its creation order: the three subsidiaries, then the
+/// alias itself.
+#[doc(hidden)]
+pub fn define_coding_system_alias_with_subsidiaries(
+    mgr: &mut CodingSystemManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> Result<Vec<SymId>, Flow> {
     expect_args("define-coding-system-alias", &args, 2)?;
 
     let alias = coding_symbol_name(&args[0], mode)?;
@@ -4086,8 +4119,30 @@ pub fn builtin_define_coding_system_alias(
             vec![coding_name_value(&target)],
         )
     })?;
-    mgr.add_alias(&alias, resolve_sym(canonical));
-    Ok(Value::NIL)
+    let canonical_name = resolve_sym(canonical);
+    // GNU appends ALIAS to the shared spec's alias list before creating the
+    // alias's subsidiaries.
+    mgr.add_alias(&alias, canonical_name);
+
+    let mut names = Vec::with_capacity(4);
+    let has_subsidiaries = mgr
+        .get(canonical_name)
+        .is_some_and(|info| matches!(info.eol_type, EolType::Undecided));
+    if has_subsidiaries {
+        for suffix in ["-unix", "-dos", "-mac"] {
+            let subsidiary_alias = format!("{alias}{suffix}");
+            let subsidiary_target = format!("{canonical_name}{suffix}");
+            // The base's variants are registered at define time. A base whose
+            // own name already carries an EOL suffix deliberately has none,
+            // so it has no subsidiary to alias.
+            if mgr.resolve(&subsidiary_target).is_some() {
+                mgr.add_alias(&subsidiary_alias, &subsidiary_target);
+                names.push(intern(&subsidiary_alias));
+            }
+        }
+    }
+    names.push(intern(&alias));
+    Ok(names)
 }
 
 /// `(set-coding-system-priority &rest CODING-SYSTEMS)` -- assign higher

@@ -48,6 +48,23 @@ pub fn is_active_gnu_c_intern_spelling(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `name` is a literal `DEFUN ("...", ...)` subr name of a compiled
+/// GNU object, which `defsubr` interns at startup.
+///
+/// GNU's image carries the names of every subr its objects declare. This port
+/// declines a few of them (the X toolkit dialogs, D-Bus, other window-system
+/// surfaces); their names stay members without a function. The generator
+/// scans the literal DEFUN names of each compiled object behind that
+/// profile's in-file `#if` guards (`gnu_c_defuns.snapshot.tsv`).
+#[doc(hidden)]
+pub fn is_active_gnu_c_defun_spelling(name: &str) -> bool {
+    let table = gnu_defsyms_generated::GNU_C_DEFUNS_BY_SPELLING;
+    table
+        .binary_search_by(|(spelling, _)| (*spelling).cmp(name))
+        .map(|index| table[index].1.is_active())
+        .unwrap_or(false)
+}
+
 /// Whether `name` is a GNU `DEFSYM` spelling that this build's profile does
 /// not compile in.
 ///
@@ -569,7 +586,7 @@ impl Hash for SymbolNameKey {
 static_assertions::assert_impl_all!(SymbolNameCharacterCount: Send, Sync);
 
 /// Append-only string interner used only for symbol names.
-pub struct StringInterner {
+pub(crate) struct StringInterner {
     strings: NameAtomStorage,
     map: HashMap<SymbolNameKey, NameId, FxBuildHasher>,
 }
@@ -680,7 +697,7 @@ impl StringInterner {
     /// `LispString::clone` (an allocation + byte copy per name, ~17k names at
     /// startup) is replaced by a header-word [`LispString::borrowed_alias`].
     /// Owned or interval-carrying names fall back to the general path.
-    pub fn intern_dump_lisp_string(&mut self, name: &LispString) -> NameId {
+    pub(crate) fn intern_dump_lisp_string(&mut self, name: &LispString) -> NameId {
         debug_assert!(
             matches!(
                 Self::normalize_symbol_name_lisp_string(name),
@@ -727,7 +744,7 @@ impl StringInterner {
     }
 
     /// Look up a symbol-name atom without interning it.
-    pub fn lookup_lisp_string(&self, s: &LispString) -> Option<NameId> {
+    pub(crate) fn lookup_lisp_string(&self, s: &LispString) -> Option<NameId> {
         self.lookup_name_parts(s.as_bytes(), SymbolNameCharacterCount::from(s))
     }
 
@@ -746,7 +763,7 @@ impl StringInterner {
 
     /// Resolve a name id back to its exact Lisp-string storage.
     #[inline]
-    pub fn resolve_lisp_string(&self, id: NameId) -> &'static LispString {
+    pub(crate) fn resolve_lisp_string(&self, id: NameId) -> &'static LispString {
         self.strings.get(id)
     }
 }
@@ -1880,29 +1897,6 @@ pub fn is_keyword_id(id: SymId) -> bool {
 }
 
 #[inline]
-pub fn resolve_sym_metadata(id: SymId) -> (&'static str, bool) {
-    ensure_thread_local_cache_epoch_current();
-    if let Some(is_canonical) = thread_local_is_canonical(id)
-        && is_canonical
-        && let Some(name) = thread_local_resolve(id)
-    {
-        return (name, true);
-    }
-    let registry = global_symbol_registry().read();
-    let name_value = registry.resolve_lisp_string(id);
-    let name = name_value
-        .as_utf8_str()
-        .unwrap_or_else(|| panic!("symbol name {:?} is not valid UTF-8", id));
-    let is_canonical = registry.is_canonical_id(id);
-    drop(registry);
-    thread_local_record_canonical(id, is_canonical);
-    if is_canonical {
-        thread_local_record_name(id, name_value);
-    }
-    (name, is_canonical)
-}
-
-#[inline]
 #[doc(hidden)]
 pub fn symbol_name_id(id: SymId) -> NameId {
     if let Some(name_id) = thread_local_name_id(id) {
@@ -2178,8 +2172,10 @@ pub fn map_lisp_visible_symbol_names<T>(
     mapped
 }
 
+#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+#[cfg(any(test, feature = "test-support"))]
 #[inline]
-pub fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
+pub(crate) fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
     let registry = global_symbol_registry().read();
     registry.resolve_name_value(id)
 }
@@ -2551,27 +2547,6 @@ fn thread_local_record_keyword(id: SymId, is_keyword: bool) {
         }
         cache[idx].keyword = Some(is_keyword);
     });
-}
-
-/// Resolve a SymId to its string using the global runtime symbol registry.
-///
-/// Returns `None` if the id is outside the current symbol range instead of
-/// panicking. This is useful at serialization boundaries where we want a
-/// structured error instead of aborting the process on malformed runtime data.
-#[inline]
-pub fn try_resolve_sym(id: SymId) -> Option<&'static str> {
-    let registry = global_symbol_registry().read();
-    registry
-        .slot(id)
-        .map(|slot| registry.names.resolve(slot.name))
-}
-
-#[inline]
-pub fn try_resolve_sym_lisp_string(id: SymId) -> Option<&'static LispString> {
-    let registry = global_symbol_registry().read();
-    registry
-        .slot(id)
-        .map(|slot| registry.names.resolve_lisp_string(slot.name))
 }
 
 #[cfg(test)]

@@ -1056,11 +1056,6 @@ impl TaggedValue {
 impl TaggedValue {
     // -- Compat constructors that allocate on the thread-local heap --
 
-    /// Create a symbol by interning a name string.
-    pub fn symbol_by_name(s: impl AsRef<str>) -> Self {
-        Self::from_sym_id(crate::intern::intern(s.as_ref()))
-    }
-
     /// Create a keyword by interning a name string.
     pub fn keyword_by_name(s: impl AsRef<str>) -> Self {
         Self::from_kw_id(crate::intern::intern(s.as_ref()))
@@ -1112,7 +1107,7 @@ impl TaggedValue {
 
     /// True if this value is a sub-char-table (GNU PVEC_SUB_CHAR_TABLE shape).
     #[inline]
-    pub fn is_sub_char_table(self) -> bool {
+    pub(crate) fn is_sub_char_table(self) -> bool {
         self.veclike_type() == Some(VecLikeType::SubCharTable)
     }
 

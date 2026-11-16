@@ -1,10 +1,5 @@
-error[E0624]: method `get_mut` is private
+error[E0599]: no method named `get_mut` found for struct `ObarrayWriteAccess<'_>` in the current scope
  --> tests/thread_safety_ui/obarray_writer_raw_symbol_by_name.rs:5:26
   |
 5 |     let _symbol = writer.get_mut("debug-on-next-call");
-  |                          ^^^^^^^ private method
-  |
- ::: $WORKSPACE/crates/neovm-value/src/symbol/mod.rs
-  |
-  |     pub(crate) fn get_mut(&mut self, name: &str) -> Option<&mut LispSymbol> {
-  |     ----------------------------------------------------------------------- private method defined here
+  |                          ^^^^^^^ method not found in `ObarrayWriteAccess<'_>`

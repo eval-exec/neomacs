@@ -7,11 +7,11 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 #[test]
 fn div_cx208_mega_1_full_subsystem_chaos_coding_eieio_clloop_advice() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (:errored args-out-of-range)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
-    (progn)
+    (progn
       (require 'eieio)
       (defclass neo-cx208-obj ()
         ((value :initarg :value :initform 0)))
@@ -68,7 +68,7 @@ fn div_cx208_mega_1_full_subsystem_chaos_coding_eieio_clloop_advice() {
                       (widen)
                       (advice-remove 'neo-cx208-target 'mega-advice)
                       (kill-buffer buf)
-                      (list state (buffer-live-p buf))))))))))
+                      (list state (buffer-live-p buf)))))))))))
   (error (list :errored (car e))))
 "##,
         expect,

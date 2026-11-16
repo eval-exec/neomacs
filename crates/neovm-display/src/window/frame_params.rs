@@ -10,7 +10,7 @@ use neovm_value::intern::{SymId, resolve_sym};
 use neovm_value::value::Value;
 use strum::{EnumString, IntoStaticStr};
 
-pub const GNU_FRAME_PARAM_COUNT: usize = 54;
+pub(crate) const GNU_FRAME_PARAM_COUNT: usize = 54;
 
 pub use neovm_value::display_vocab::FrameParam;
 
@@ -18,7 +18,7 @@ pub use neovm_value::display_vocab::FrameFullscreen;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
-pub enum FrameToolBarPosition {
+pub(crate) enum FrameToolBarPosition {
     Left,
     Right,
     Top,
@@ -37,7 +37,7 @@ impl FrameToolBarPosition {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
-pub enum FrameZGroup {
+pub(crate) enum FrameZGroup {
     Above,
     AboveSuspended,
     Below,
@@ -80,7 +80,7 @@ impl CursorTypeSymbol {
     }
 }
 
-pub const GNU_FRAME_PARAMS: [FrameParam; GNU_FRAME_PARAM_COUNT] = [
+pub(crate) const GNU_FRAME_PARAMS: [FrameParam; GNU_FRAME_PARAM_COUNT] = [
     FrameParam::AutoRaise,
     FrameParam::AutoLower,
     FrameParam::BackgroundColor,

@@ -313,7 +313,7 @@ pub(crate) fn replace_alternative_font_registry_alist(names: Vec<(LispString, Ve
     }
 }
 
-pub fn alternative_font_families(family: &str) -> Vec<String> {
+pub(crate) fn alternative_font_families(family: &str) -> Vec<String> {
     let lookup = FontFamilyLookup::new(family);
     if lookup.as_str().is_empty() {
         return Vec::new();
@@ -325,7 +325,7 @@ pub fn alternative_font_families(family: &str) -> Vec<String> {
 
 /// Capture a bounded family search order without cloning an unbounded alist.
 /// The byte budget conservatively allows UTF-8 expansion of Emacs bytes.
-pub fn bounded_alternative_font_families(
+pub(crate) fn bounded_alternative_font_families(
     family: &str,
     max_entries: usize,
     max_bytes: usize,

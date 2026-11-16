@@ -83,28 +83,28 @@ impl HscrollStep {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AutoHscrollInput {
     /// Display column of point on its line (`current-column` at point).
-    pub point_col: i64,
+    pub(crate) point_col: i64,
     /// Window text-area width in columns.
-    pub text_cols: i64,
+    pub(crate) text_cols: i64,
     /// `hscroll-margin` clamped to a sane range, in columns.
-    pub h_margin: i64,
+    pub(crate) h_margin: i64,
     /// The window's current `hscroll` (columns).
-    pub cur_hscroll: i64,
+    pub(crate) cur_hscroll: i64,
     /// Lower bound on auto hscroll (`w->min_hscroll`); usually 0.
     pub min_hscroll: i64,
     /// Whether point's line is *truncated* (does not wrap) in this window —
     /// i.e. the effective wrap mode is Truncate.  GNU only auto-hscrolls
     /// truncated lines; a wrapped line is fully visible by construction.
-    pub line_truncated: bool,
+    pub(crate) line_truncated: bool,
     /// GNU's `hscl` (`hscrolling_current_line_p`, src/xdisp.c:3074): auto
     /// hscroll is not suspended *and* `auto-hscroll-mode` is `current-line`.
     /// Only that mode arms trigger (C) below.
-    pub hscrolling_current_line: bool,
+    pub(crate) hscrolling_current_line: bool,
     /// Whether point sits at the end of its display line (GNU
     /// `ITERATOR_AT_END_OF_LINE_P`).  This is the `C-e` case: GNU then targets
     /// the right end of the window (`text_cols - 4`) instead of the center, so
     /// the maximum amount of preceding text stays visible.
-    pub point_at_eol: bool,
+    pub(crate) point_at_eol: bool,
     /// Decoded `hscroll-step`.
     pub step: HscrollStep,
 }

@@ -11,7 +11,7 @@
 //! module with internal cfg, the way `std::sys` organizes per facility.
 
 #[cfg(unix)]
-pub fn signal_name_number(name: &str) -> Option<i32> {
+pub(crate) fn signal_name_number(name: &str) -> Option<i32> {
     let name = name
         .strip_prefix("SIG")
         .or_else(|| name.strip_prefix("sig"))
@@ -86,7 +86,7 @@ fn realtime_signal_name_number(name: &str) -> Option<i32> {
 }
 
 #[cfg(not(unix))]
-pub fn signal_name_number(name: &str) -> Option<i32> {
+pub(crate) fn signal_name_number(name: &str) -> Option<i32> {
     match name
         .strip_prefix("SIG")
         .or_else(|| name.strip_prefix("sig"))
@@ -102,7 +102,7 @@ pub fn signal_name_number(name: &str) -> Option<i32> {
 /// A signal number's `strsignal` description with the first character
 /// down-cased, matching GNU's `status_message` ("Terminated" -> "terminated").
 /// Falls back to "unknown" when `strsignal` yields NULL or off Unix.
-pub fn signal_description(signum: i32) -> String {
+pub(crate) fn signal_description(signum: i32) -> String {
     #[cfg(unix)]
     {
         // SAFETY: `strsignal` returns NULL or a valid static C string.
@@ -132,7 +132,7 @@ pub fn signal_description(signum: i32) -> String {
 /// An errno's `strerror` text, exactly as GNU's `emacs_strerror`
 /// (src/sysdep.c) hands it to `emacs_perror`: `strerror` verbatim, with a
 /// fixed fallback when the number has no description.
-pub fn errno_description(errno: i32) -> String {
+pub(crate) fn errno_description(errno: i32) -> String {
     #[cfg(unix)]
     {
         // SAFETY: `strerror` returns NULL or a valid C string; the same
@@ -158,7 +158,7 @@ pub fn errno_description(errno: i32) -> String {
 /// table. Both the PTY layer and this lookup call `strsignal`, so the
 /// descriptions match exactly.
 #[cfg(unix)]
-pub fn signal_number_from_description(name: &str) -> Option<i32> {
+pub(crate) fn signal_number_from_description(name: &str) -> Option<i32> {
     // portable_pty falls back to "Signal N" when strsignal yields NULL.
     if let Some(rest) = name.strip_prefix("Signal ")
         && let Ok(n) = rest.trim().parse::<i32>()
@@ -185,13 +185,13 @@ pub fn signal_number_from_description(name: &str) -> Option<i32> {
 /// `kill(pid, signal_num)`; where `kill` is unavailable it degrades to a
 /// liveness probe (0 if the process exists, -1 otherwise).
 #[cfg(unix)]
-pub fn send_signal(pid: i64, signal_num: i32) -> i32 {
+pub(crate) fn send_signal(pid: i64, signal_num: i32) -> i32 {
     // SAFETY: `kill` takes no pointer arguments.
     unsafe { libc::kill(pid as libc::pid_t, signal_num) }
 }
 
 #[cfg(not(unix))]
-pub fn send_signal(pid: i64, signal_num: i32) -> i32 {
+pub(crate) fn send_signal(pid: i64, signal_num: i32) -> i32 {
     let _ = signal_num;
     if super::process_is_alive(pid) { 0 } else { -1 }
 }
@@ -200,12 +200,12 @@ pub fn send_signal(pid: i64, signal_num: i32) -> i32 {
 /// whole group for interrupt/quit/stop when CURRENT-GROUP is set. On Unix this
 /// is `kill(-pid, signal_num)`; elsewhere it falls back to `send_signal`.
 #[cfg(unix)]
-pub fn send_signal_to_group(pid: i64, signal_num: i32) -> i32 {
+pub(crate) fn send_signal_to_group(pid: i64, signal_num: i32) -> i32 {
     // SAFETY: `kill` takes no pointer arguments.
     unsafe { libc::kill(-(pid as libc::pid_t), signal_num) }
 }
 
 #[cfg(not(unix))]
-pub fn send_signal_to_group(pid: i64, signal_num: i32) -> i32 {
+pub(crate) fn send_signal_to_group(pid: i64, signal_num: i32) -> i32 {
     send_signal(pid, signal_num)
 }

@@ -81,7 +81,7 @@ fn heuristic_network_interface_flags(addr: &network_interface::Addr) -> Value {
     Value::list(flags)
 }
 
-pub fn interface_snapshot() -> Option<Vec<HostInterfaceEntry>> {
+pub(crate) fn interface_snapshot() -> Option<Vec<HostInterfaceEntry>> {
     use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 
     let interfaces = NetworkInterface::show().ok()?;
