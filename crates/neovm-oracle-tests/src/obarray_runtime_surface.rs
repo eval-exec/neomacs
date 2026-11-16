@@ -57,44 +57,63 @@ fn oracle_prop_fontsize_follows_the_compiled_object_list() {
     assert_oracle_parity_expect(r#"(list (and (intern-soft "fontsize") t))"#, expect);
 }
 
-/// The xwidget spellings a build without `--with-xwidgets` must not intern.
+/// Whether the neomacs binary under test advertises the xwidget layer.
 ///
-/// The Linux/Windows production builds do not enable the port's `xwidgets`
-/// feature (our HAVE_XWIDGETS), matching the reference GNU. The macOS product
-/// enables the `webview` backend, which implies `xwidgets`, so the row is
-/// ignored there; the R8 agreement guard covers that build instead.
+/// The decision is the build's own `xwidgets` feature (the port's key for
+/// GNU's HAVE_XWIDGETS); the macOS product enables it through `webview`.
+/// Rows branch on this rather than on the host OS, so a
+/// `--features xwidgets` Linux build is exercised the same way as the
+/// macOS product.
+pub(crate) fn neovm_advertises_xwidget_internal() -> bool {
+    crate::common::run_neovm_eval("(and (featurep 'xwidget-internal) t)")
+        .expect("neomacs featurep probe should run")
+        .trim()
+        == "OK t"
+}
+
+/// The xwidget spelling/definition surface follows the RUNNING build's
+/// feature, not the host OS.
+///
+/// - Feature absent (the reference profiles this row usually measures): every
+///   xwidget spelling is absent from both editors, matching the reference GNU
+///   built without `--with-xwidgets`.
+/// - Feature present (macOS product through `webview`): the layer's three
+///   surfaces must agree inside this build (`featurep` / `fboundp
+///   make-xwidget` / `boundp xwidget-list`). GNU's reference oracle has no
+///   xwidgets, so this half is an internal-agreement claim, not parity.
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "macOS product enables webview => xwidgets (R8 guard)"
-)]
-fn oracle_prop_xwidget_spellings_are_absent_without_the_feature() {
+fn oracle_prop_xwidget_surface_follows_the_running_feature() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let form = r#"(list (and (intern-soft "xwidgetp") t)
+    if neovm_advertises_xwidget_internal() {
+        let form = r#"(list (and (featurep 'xwidget-internal) t)
+                         (and (fboundp 'make-xwidget) t)
+                         (and (boundp 'xwidget-list) t))"#;
+        let neovm = crate::common::run_neovm_eval(form).expect("neomacs eval should run");
+        assert_eq!(
+            neovm, "OK (t t t)",
+            "a build that advertises xwidget-internal must also declare              make-xwidget and bind xwidget-list (PEER 5796 R8)"
+        );
+        return;
+    }
+
+    let spellings = r#"(list (and (intern-soft "xwidgetp") t)
        (and (intern-soft "xwidget-live-p") t)
        (and (intern-soft "xwidget-view-p") t)
        (and (intern-soft "xwidget-list") t))"#;
-    let expect = expect_test::expect![[r#""OK (nil nil nil nil)""#]];
-    assert_oracle_parity_expect(form, expect);
-}
-
-/// The same compiled-out names are not functions or variables either.
-#[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "macOS product enables webview => xwidgets (R8 guard)"
-)]
-fn oracle_prop_compiled_out_definitions_are_absent() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let form = r#"(list (fboundp 'xwidgetp)
+    assert_oracle_parity_expect(
+        spellings,
+        expect_test::expect![[r#""OK (nil nil nil nil)""#]],
+    );
+    let definitions = r#"(list (fboundp 'xwidgetp)
        (fboundp 'xwidget-live-p)
        (fboundp 'xwidget-view-p)
        (boundp 'xwidget-list)
        (boundp 'xwidget-webkit-disable-javascript))"#;
-    let expect = expect_test::expect![[r#""OK (nil nil nil nil nil)""#]];
-    assert_oracle_parity_expect(form, expect);
+    assert_oracle_parity_expect(
+        definitions,
+        expect_test::expect![[r#""OK (nil nil nil nil nil)""#]],
+    );
 }
 
 /// Literal C startup interns (`intern_c_string`) land in the profile that
