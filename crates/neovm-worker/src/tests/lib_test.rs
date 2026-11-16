@@ -634,13 +634,14 @@ fn cancel_running_task_calls_interrupt_once_and_clears_hook() {
     assert!(rt.cancel(task));
     assert!(rt.cancel(task));
     release.send(()).expect("release cancelled task");
-    rt.close();
-    for worker in workers {
-        worker.join().expect("worker should finish");
-    }
-    assert_eq!(interrupts.load(Ordering::Relaxed), 1);
-    assert!(
-        rt.tasks
+    assert_eq!(
+        TaskScheduler::task_await(&rt, task, Some(Duration::from_secs(1))),
+        Err(TaskError::Cancelled)
+    );
+    let mut hook_cleared = false;
+    for _ in 0..1000 {
+        if rt
+            .tasks
             .read()
             .expect("task map")
             .get(&task.0)
@@ -649,11 +650,29 @@ fn cancel_running_task_calls_interrupt_once_and_clears_hook() {
             .lock()
             .expect("interrupt hook")
             .is_none()
+        {
+            hook_cleared = true;
+            break;
+        }
+        thread::yield_now();
+    }
+    assert!(
+        hook_cleared,
+        "owner clears the interrupt hook before accepting its next task"
     );
+    let next = rt
+        .spawn(LispValue { bytes: vec![2] }, TaskOptions::default())
+        .expect("next task enqueued after hook cleared");
     assert_eq!(
-        TaskScheduler::task_await(&rt, task, Some(Duration::from_secs(1))),
-        Err(TaskError::Cancelled)
+        TaskScheduler::task_await(&rt, next, Some(Duration::from_secs(1)))
+            .expect("next task completes"),
+        LispValue { bytes: vec![2] }
     );
+    rt.close();
+    for worker in workers {
+        worker.join().expect("worker should finish");
+    }
+    assert_eq!(interrupts.load(Ordering::Relaxed), 1);
 }
 
 #[test]
