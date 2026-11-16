@@ -36,25 +36,43 @@ changed.
 
 - **(a) Unreachable in eval's unit runtime.** No product caller, or every
   caller sits in a path the unit runtime never executes (bootstrap/pdump
-  restore, redisplay, command loop, display service, GUI input). The
-  fix-forward replaces the bare panic with a dynamic premise assertion; the
-  slot keeps refusing if the premise is ever violated.
+  restore, redisplay, command loop, display service, GUI input). Per PEER
+  5795, the bare panic IS the premise assertion here and the slot STAYS a
+  panic: a fold would invent an answer and go silent the day a test reaches
+  the path. Three follow-ups apply:
+  - (a1) delete the hook field, the production accessor and the stand-in for
+    slots whose production accessor has no caller at all;
+  - (a2) delete stand-ins that no unit table installs (the completion trio,
+    the five case-table seams, and the slots that already have exact unit
+    impls);
+  - (a3) every remaining panic message names the path that reaches it.
 - **(b) Reachable, core/system-owned.** A Lisp builtin or service path can
   reach the slot, but the implementation belongs below eval (fileio, process,
-  timer/wait, kmacro, command loop, display, minibuf). The witness test belongs
-  in the lower layer (many already exist under
-  `crates/neovm-core/src/emacs_core/tests/moved_eval/`); eval must not carry a
-  test that drives the lower layer through its stand-in.
+  timer/wait, kmacro, command loop, display, minibuf). The slot stays a panic
+  in eval and the witness test belongs in the lower layer (many already exist
+  under `crates/neovm-core/src/emacs_core/tests/moved_eval/`). Before any eval
+  test that hits a (b) slot is deleted, its core twin must show an executing
+  nextest PASS.
 - **(c) Reachable with an exact unit state.** The slot is reached on ordinary
   eval paths (Context construction, green carrier park/resume, pdump reset) and
   the unit runtime's state is provably empty/exact (no display registry, no
-  active module env, empty process table). The fix-forward names the state and
-  asserts its premise, returning the exact value instead of panicking.
+  active module env, empty process table). The slot must ASSERT its premise
+  where the state is observable (the 6138 shape), not merely document it.
+- **(p) Poison marker.** The slot returns an uninterned marker as a startup
+  value (`fontset-alias-alist`, the upper bootstrap Lisp_Object variables).
+  This is not an "exact" value: a consumer that reads it must fail loudly
+  rather than treat the marker as data. Acceptable only while the printed name
+  plainly contains `ABSENT-LAYER` and no eval test asserts on the value; both
+  are verified below.
 
-Counts after the deletion: (a) 50, (b) 42, (c) 31 (123 rows). The eight deleted stand-ins were classed (a)
-in the original survey; they were the three completion seams and the five
-case-table seams, and `neovm-display`'s unit runtime now installs the real
-eval functions in their place.
+Counts after the PEER 5795 reclassification: (a) 50, (b) 42, (c) 29, (p) 2
+(123 rows). The eight deleted stand-ins were classed (a) in the original
+survey; they were the three completion seams and the five case-table seams,
+and `neovm-display`'s unit runtime now installs the real eval functions in
+their place. `display::terminal.frame_terminal` moved (c) -> (b) per F-1;
+`core::wait.wait_for_duration_until_timer_deadline` moved (b) -> (c)
+subject to the F-4 premise asserts; the two poison markers moved (c) -> (p)
+per F-3.
 
 ## system:: (37)
 
@@ -102,7 +120,7 @@ eval functions in their place.
 
 | marker | kind | production accessor | reaching path in eval's unit runtime | class |
 |---|---|---|---|---|
-| display::fontset.alias_alist_startup_value | value | lifecycle.rs:1361 | Context construction seeds fontset-alias-alist (construct.rs:527) with the uninterned marker; no fontset registry | c |
+| display::fontset.alias_alist_startup_value | value (poison) | lifecycle.rs:1361 | Context construction seeds fontset-alias-alist (construct.rs:527) with the uninterned marker; printed name is `ABSENT-LAYER display::fontset.alias_alist_startup_value`, no eval test asserts on the value (PEER 5795 F-3) | p |
 | display::boot.clear_created_lisp_face | panic | lifecycle.rs:1009 | bootstrap/pdump surface normalization only (lisp/load/mod.rs:5255,5482) | a |
 | display::boot.remove_face_new_frame_defaults_entry | panic | lifecycle.rs:1014 | same bootstrap-only pass (lisp/load/mod.rs:5259,5486) | a |
 | display::boot.restore_created_faces_from_table | panic | lifecycle.rs:1019 | clear_runtime_loader_state dump restore (lisp/load/mod.rs:5718) | a |
@@ -115,8 +133,8 @@ eval functions in their place.
 | display::boot.clear_font_cache_state | unlinked | lifecycle.rs:1337 | every Context::new via register_core_load_hooks (pdump/runtime.rs:86); no display font cache | c |
 | display::terminal.handle_value | panic | lifecycle.rs:1143 | GUI MonitorsChanged input events (keyboard.rs:3109,4435); unit tests inject no GUI events | a |
 | display::terminal.delete_noelisp | ASSERT-EMPTY override | lifecycle.rs:1175 | NOT-INSTALLED as a panic: `unit_terminal_delete_noelisp` (test_utils.rs:438) asserts the empty terminal record | c |
-| display::terminal.frame_terminal | panic | lifecycle.rs:1342 | `variable-binding-locus` on a Kboard-forwarded variable (symbols.rs:3869) delegates to `frame-terminal`; no terminal handle -> nil | c |
-| display::terminal.print_handle | unlinked (None) | lifecycle.rs:1347 | `prin1` and error formatting query it (lisp/print/mod.rs:3444, error_format.rs:93); empty terminal registry | c |
+| display::terminal.frame_terminal | panic | lifecycle.rs:1342 | `variable-binding-locus` on a Kboard-forwarded variable (symbols.rs:3869) delegates to `frame-terminal`; GNU's `Fframe_terminal` (data.c:2523-2524) returns the terminal, so this is NOT exact -- witnesses belong in core (PEER 5795 F-1) | b |
+| display::terminal.print_handle | unlinked (None) | lifecycle.rs:1347 | `prin1` and error formatting query it (lisp/print/mod.rs:3444, error_format.rs:93); must ASSERT the empty terminal registry (a record can exist; PEER 5795 F-2) | c |
 | display::terminal.configure_window_system_runtime | panic | lifecycle.rs:1352 | GUI keyboard-forwarding config only (keyboard_forwarding.rs:34) | a |
 | display::terminal.park_carrier_tls | unlinked | lifecycle.rs:1391 | green carrier park reset_step (carrier_tls.rs:158,486); no display terminal TLS | c |
 | display::terminal.reset_thread_locals | unlinked | lifecycle.rs:1404 | pdump restore_active_runtime (pdump/runtime.rs:146, pdump/mod.rs:764); no display terminal TLS | c |
@@ -196,10 +214,10 @@ eval functions in their place.
 | core::wait.service_timers_without_redisplay | panic | hooks_proof.rs:331 | read_char timer service (keyboard.rs:4971) and the core-used test fence (test_support.rs:1099); system-owned | b |
 | core::wait.wait_for_command_input_with_idle_policy | panic | hooks_proof.rs:335 | timed read-event blocking wait (keyboard.rs:5007); system-owned | b |
 | core::wait.wait_for_resize_ack_until | panic | hooks_proof.rs:343 | wait_for_pending_resize_events (keyboard.rs:2867) from display and core eval_test.rs:3469 | b |
-| core::wait.wait_for_duration_until_timer_deadline | panic (not installed) | hooks_proof.rs:350 | NOT-INSTALLED: unit table installs a working Green/select `unit_wait_for_duration_until_timer_deadline` (test_utils.rs:973); `sleep-for`/`sit-for` reach the core wait | b |
+| core::wait.wait_for_duration_until_timer_deadline | panic (not installed) | hooks_proof.rs:350 | NOT-INSTALLED: unit table installs a working Green/select `unit_wait_for_duration_until_timer_deadline` (test_utils.rs:973); that unit impl must ASSERT the empty live process table and the absence of wait-notifier sources (PEER 5795 F-4), then this row is (c) | c |
 | core::timer.next_ordinary_gnu_timer_timeout_before | panic | hooks_proof.rs:363 | unbounded read-event/read-key-sequence timer query (keyboard.rs:4955); system-owned | b |
 | core::timer.next_idle_gnu_timer_timeout | panic | hooks_proof.rs:367 | idle-timer query (keyboard.rs:4956); system-owned | b |
-| upper-variable::{name} | value | lifecycle.rs:1060 | every eval unit Context construction binds upper bootstrap Lisp_Object vars to the uninterned marker (construct.rs:1473); exact assertable state | c |
+| upper-variable::{name} | value (poison) | lifecycle.rs:1060 | every eval unit Context construction binds upper bootstrap Lisp_Object vars to the uninterned marker (construct.rs:1473); printed name is `ABSENT-LAYER upper-variable::<name>`, no eval test asserts on the values (PEER 5795 F-3) | p |
 
 ## Notes for the follow-up commits
 
@@ -207,14 +225,24 @@ eval functions in their place.
   seams) have been deleted. `neovm-display`'s unit runtime installed those
   stand-ins, so it now installs the real eval functions instead; the eval
   unit table already did.
-- Five slots are already substituted by exact unit implementations
+- Six slots are already substituted by exact unit implementations in eval
   (`unit_process_shutdown_noop`, the exact OS-signal pending/drain,
   `unit_wait_for_duration_until_timer_deadline`, `unit_boot_seed_batch_startup_frame`,
-  `unit_terminal_delete_noelisp`, `unit_terminal_live_ids`); they are class (c)
-  and need no change.
-- The (a) group is the real fix-forward: replace bare panics with dynamic
-  premise assertions that keep refusing if the premise is violated, following
-  the `unit_process_shutdown_noop` precedent.
+  `unit_terminal_delete_noelisp`, `unit_terminal_live_ids`). Their stand-ins
+  are the (a2) deletions; the unit substitutions remain. The
+  wait-for-duration substitution still owes the F-4 premise asserts (empty
+  live process table, no wait-notifier source).
+- (a) stays panics (PEER 5795): (a1) delete the four no-caller hook
+  fields/accessors/stand-ins (`process.unlink`, `process.delete`,
+  `window_tree.char_property_window_lookup`, `window_tree.window_resize_apply`);
+  (a2) delete the not-installed stand-ins; (a3) make every remaining (a)
+  panic message name the reaching path. The table's "reaching path" column
+  already carries the text for (a3).
 - The (b) group should not gain eval tests; the witnesses live, or should
   live, under `crates/neovm-core/src/emacs_core/tests/moved_eval/` with the real
-  hooks installed.
+  hooks installed. Before an eval test that hits a (b) slot is deleted, its
+  core twin must show an executing nextest PASS.
+- `test_utils.rs`'s `unit_runtime_runtime_paths_reach_only_unlinked_slots`
+  doc comment still names `ABSENT-LAYER core::case_tables.sync`; that slot was
+  deleted in b978fd3132 and the comment needs the same cleanup when the next
+  test-support commit touches that area.
