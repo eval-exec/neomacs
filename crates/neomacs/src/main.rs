@@ -3976,8 +3976,6 @@ fn jemalloc_release_startup_slack() {}
 /// only register the primitives, the way a dynamic module would.
 #[cfg(feature = "worker-isolates")]
 fn install_worker_isolates(eval: &mut Context, startup: &StartupOptions) {
-    eval.set_variable("neomacs-worker-pool-size", Value::NIL);
-    eval.obarray_mut().make_special("neomacs-worker-pool-size");
     let config = neovm_worker::isolate::IsolatePoolConfig::new(
         neovm_worker::isolate::IsolateBoot::RuntimeImage {
             dump_file_override: startup.dump_file_override.clone(),

@@ -206,9 +206,18 @@ fn transfer_in(ctx: &Context, value: Value) -> Result<transfer::Transfer, neovm_
 /// (neomacs-worker-run FUNCTION &rest ARGS) -> task
 fn builtin_run(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     let pool = pool()?;
-    let requested_width = ctx.visible_variable_value_or_nil("neomacs-worker-pool-size");
-    if requested_width.as_fixnum() == Some(0) {
-        return Err(pool_error("Worker pool size must be greater than zero"));
+    // The width is decided once, at the first task: `neomacs-worker-pool-size`
+    // nil = the pool's default (NEOMACS_WORKER_THREADS, else available
+    // parallelism), 0 = disabled, N = N owners.
+    let configured_size = ctx
+        .visible_variable_value_or_nil("neomacs-worker-pool-size")
+        .as_fixnum()
+        .and_then(|size| usize::try_from(size).ok());
+    if pool.configured_threads(configured_size) == 0 {
+        pool.ensure_started_with(configured_size);
+        return Err(pool_error(
+            "Worker isolate pool is disabled (neomacs-worker-pool-size is 0)",
+        ));
     }
     let mut args = args.into_iter();
     let function = args.next().unwrap_or(Value::NIL);
@@ -218,14 +227,6 @@ fn builtin_run(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
             .map(|arg| transfer_in(ctx, arg))
             .collect::<Result<Vec<_>, _>>()?,
     };
-    let configured_size = ctx
-        .visible_variable_value_or_nil("neomacs-worker-pool-size")
-        .as_fixnum()
-        .and_then(|size| usize::try_from(size).ok());
-    if pool.configured_threads(configured_size) == 0 {
-        pool.ensure_started_with(configured_size);
-        return Err(pool_error("Worker isolate pool is disabled"));
-    }
     pool.ensure_started_with(configured_size);
     let handle = pool
         .runtime()
