@@ -14,8 +14,11 @@ must spell its identifier somewhere in the consuming crate's source -- in a
 identifier per row and asks, for every other workspace crate (plus every
 gitignored harness crate below tmp/ that has its own Cargo.toml, which
 `cargo check --workspace` never sees), whether that identifier occurs there at
-all, and whether every occurrence is inside a test path (`tests/` component,
-`tests.rs`, `*_test.rs`).
+all, and whether every occurrence is inside a test target: an out-of-src
+`tests/`, `benches/` or `examples/` root, a `build_support/` build-time module,
+a `tests/` component, `tests.rs`, `*_test.rs`, or a tmp/ harness crate. Inline
+`#[cfg(test)]` modules under `src/` still count as production: the lexical
+scan cannot see the cfg, so the compiler is the arbiter for those.
 
 Verdicts:
 
@@ -35,7 +38,7 @@ which only make the script conservative.
 
 Usage:
     python3 -I scripts/plain-pub-consumers.py --crate neovm-eval [--suffix EVAL]
-        [--out REPORT.tsv] [--verbose]
+        [--out REPORT.tsv] [--workspace ROOT] [--verbose]
 """
 from __future__ import annotations
 
@@ -76,23 +79,42 @@ def identifier_of(kind: str, item: str) -> str | None:
     return name if IDENT.match(name) else None
 
 
-def scan_roots(workspace: Path, owner: str) -> list[Path]:
-    """Every crate src root except the owner's, plus tmp/ harness crates."""
+def scan_roots(workspace: Path, owner: str) -> tuple[list[Path], list[Path]]:
+    """Source roots and out-of-src test-target roots (tests/benches/examples).
+
+    The out-of-src targets are separate crates: an identifier used only there
+    is a test-only consumer, never production. They were missing from the
+    wave-1 script, which under-reports consumers used by integration tests.
+    """
     roots = []
+    test_roots = []
     for cargo in sorted(workspace.joinpath(CRATES_DIR).glob("*/Cargo.toml")):
         crate_dir = cargo.parent
-        if crate_dir.name != owner and (crate_dir / "src").is_dir():
+        if crate_dir.name == owner:
+            continue
+        if (crate_dir / "src").is_dir():
             roots.append(crate_dir / "src")
+        for sub in ("tests", "benches", "examples", "build_support", "core_tests"):
+            target = crate_dir / sub
+            if target.is_dir():
+                test_roots.append(target)
     # Gitignored harness crates have their own manifests and are compiled by
     # the nextest lanes, not by `cargo check --workspace`.
+    # Gitignored harness crates have their own manifests and are compiled by
+    # the nextest lanes, not by `cargo check --workspace`. They are test
+    # tooling: their sources are test-only consumers, never production.
     for cargo in sorted(workspace.joinpath("tmp").glob("*/Cargo.toml")):
         crate_dir = cargo.parent
         if crate_dir.name.startswith("wt-"):
             continue
         src = crate_dir / "src"
         if src.is_dir():
-            roots.append(src)
-    return roots
+            test_roots.append(src)
+        for sub in ("tests", "benches", "examples", "core_tests"):
+            target = crate_dir / sub
+            if target.is_dir():
+                test_roots.append(target)
+    return roots, test_roots
 
 
 def identifiers_in(root: Path, patterns: Path, prod_only: bool) -> set[str]:
@@ -117,9 +139,10 @@ def main() -> int:
     )
     parser.add_argument("--out", help="report path (default: stdout)")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--workspace", help="workspace root (default: script parent.parent)")
     args = parser.parse_args()
 
-    workspace = Path(__file__).resolve().parent.parent
+    workspace = Path(args.workspace) if args.workspace else Path(__file__).resolve().parent.parent
     suffix = args.suffix or re.sub(r"^neovm[-_]", "", args.crate).upper().replace("-", "_")
     baseline = workspace / ARCHITECTURE_DIR / f"PLAIN-PUB-{suffix}.tsv"
     rows = []
@@ -137,13 +160,15 @@ def main() -> int:
             continue
         by_identifier.setdefault(name, []).append(index)
 
-    roots = scan_roots(workspace, args.crate)
+    roots, test_roots = scan_roots(workspace, args.crate)
     with tempfile.NamedTemporaryFile("w", suffix=".patterns", delete=False) as patterns:
         patterns.write("\n".join(sorted(by_identifier)) + "\n")
         patterns_path = Path(patterns.name)
     try:
-        all_sets = {root: identifiers_in(root, patterns_path, prod_only=False) for root in roots}
+        all_sets = {root: identifiers_in(root, patterns_path, prod_only=False) for root in roots + test_roots}
         prod_sets = {root: identifiers_in(root, patterns_path, prod_only=True) for root in roots}
+        for root in test_roots:
+            prod_sets[root] = set()
     finally:
         patterns_path.unlink(missing_ok=True)
 
@@ -161,7 +186,7 @@ def main() -> int:
             ]
             test_only = [
                 root.parent.name
-                for root in roots
+                for root in roots + test_roots
                 if name in all_sets[root] and name not in prod_sets[root]
             ]
             if not prod and not test_only:
@@ -176,7 +201,7 @@ def main() -> int:
         )
         test_names = ",".join(
             root.parent.name
-            for root in roots
+            for root in roots + test_roots
             if name and name in all_sets[root] and name not in prod_sets[root]
         )
         report_lines.append(
