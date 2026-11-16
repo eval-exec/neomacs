@@ -226,7 +226,7 @@ fn dbus_marshalling_unix_fd_preserves_wire_type_and_caller_ownership() {
         .expect("marshalling must not close the caller's descriptor");
 }
 
-fn assert_structural_type_error(dtype: ArgType, value: Value, predicate: &str) {
+fn assert_structural_type_error(dtype: ArgType, value: Value, predicate: &'static str) {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         marshal_argument(dtype, value)
     }));

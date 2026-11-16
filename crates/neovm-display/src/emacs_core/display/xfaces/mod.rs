@@ -5373,7 +5373,7 @@ pub fn builtin_internal_set_alternative_font_family_alist(
                     // makes "Sans Serif" an obarray member. Intern the real
                     // Emacs bytes (issue #131) and mark the membership the
                     // same Fintern does.
-                    let sym = eval.obarray_mut().intern_lisp_value(member);
+                    let sym = eval.obarray_mut().intern_member_lisp_value(member);
                     converted.push(Value::from_sym_id(sym));
                     names.push(sym);
                 }

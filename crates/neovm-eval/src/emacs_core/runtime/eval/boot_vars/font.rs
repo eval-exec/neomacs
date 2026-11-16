@@ -24,7 +24,7 @@ pub(crate) fn init_font_vars(obarray: &mut neovm_value::symbol::Obarray) {
         .chain(FONT_WIDTH_STYLE_TABLE)
     {
         for name in *names {
-            obarray.intern(name);
+            obarray.intern_member(name);
         }
     }
     for (name, value) in [
