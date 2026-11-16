@@ -552,7 +552,6 @@ impl PlanSlot {
         let mut nodes: Vec<KeyNode> = Vec::new();
         let mut strings: Vec<StringKey> = Vec::new();
         let mut shapes: Vec<HashKey> = Vec::new();
-        let mut holds_live_keys = false;
         // Compile the INDEX's key snapshots, not the key objects: the
         // snapshots are what the hashed lookup compares against.
         for index_entry in data.index.iter() {
@@ -578,10 +577,7 @@ impl PlanSlot {
             // planned from the object while the object still hashes there.
             let hash_key = entry.key.to_hash_key(&test);
             let as_stored = match &index_entry.key {
-                HashKey::LiveKey => {
-                    holds_live_keys = true;
-                    equal_value_hash(entry.key) == index_entry.hash
-                }
+                HashKey::LiveKey => equal_value_hash(entry.key) == index_entry.hash,
                 snapshot => hash_key == *snapshot,
             };
             if !as_stored {
@@ -627,13 +623,13 @@ impl PlanSlot {
         if keys.len() > scan_limit {
             return PlanSlot::Hashed { tags };
         }
-        // A key object mutated in place may now equal another key, which a
-        // scan and the hashed lookup could resolve to different entries.
-        if holds_live_keys
-            && shapes
-                .iter()
-                .enumerate()
-                .any(|(i, shape)| shapes[..i].contains(shape))
+        // Equal keys, from key objects mutated in place or from a dump of
+        // such keys reloaded, can resolve to different entries under a scan
+        // (index order) and the hashed lookup (probe order).
+        if shapes
+            .iter()
+            .enumerate()
+            .any(|(i, shape)| shapes[..i].contains(shape))
         {
             return PlanSlot::Generic;
         }

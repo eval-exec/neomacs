@@ -352,3 +352,33 @@ fn hash_rebuild_keeps_entries_whose_keys_became_equal() {
     );
     assert_eq!(reloaded.data.len(), 2);
 }
+
+/// A dump of two live keys mutated into `equal` shapes reloads as two
+/// entries under the same snapshot key. A scan would answer the first in
+/// index order, the hashed lookup (GNU `Bswitch` through `hash_lookup`) the
+/// first in probe order, so the plan declines and the lookup answers.
+#[test]
+fn hash_reloaded_equal_snapshot_keys_are_not_planned() {
+    for leaf in 0..64 {
+        let dumped: Vec<_> = (1..=2)
+            .map(|target| {
+                let key = list(&[Value::fixnum(leaf)]);
+                (
+                    key.to_hash_key(&HashTableTest::Equal),
+                    Value::fixnum(8 * target),
+                    Some(key),
+                )
+            })
+            .collect();
+        let mut table = LispHashTable::new(HashTableTest::Equal);
+        table.rebuild_from_ordered_entries(dumped);
+        let (plan, lookup) = dispatch(&table, list(&[Value::fixnum(leaf)]));
+        assert!(lookup.is_some());
+        assert_eq!(plan, lookup, "leaf {leaf}");
+        assert_eq!(
+            table.shape(),
+            Some(switch_plan::PlanShape::Generic),
+            "leaf {leaf}"
+        );
+    }
+}
