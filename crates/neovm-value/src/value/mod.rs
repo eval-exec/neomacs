@@ -20,7 +20,7 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::FxHasher;
 use strum::{EnumString, IntoStaticStr};
 
 use self::buffer_vocab::BufferId;
@@ -162,52 +162,6 @@ impl OrderedSymMap {
         }
     }
 
-    pub fn with_capacity(cap: usize) -> Self {
-        Self {
-            entries: Vec::with_capacity(cap),
-        }
-    }
-
-    pub fn get(&self, key: &SymId) -> Option<&Value> {
-        self.entries
-            .iter()
-            .rev()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v)
-    }
-
-    pub fn insert(&mut self, key: SymId, value: Value) {
-        if let Some(entry) = self.entries.iter_mut().rev().find(|(k, _)| *k == key) {
-            entry.1 = value;
-        } else {
-            self.entries.push((key, value));
-        }
-    }
-
-    pub fn contains_key(&self, key: &SymId) -> bool {
-        self.entries.iter().any(|(k, _)| k == key)
-    }
-
-    pub fn values(&self) -> impl Iterator<Item = &Value> {
-        self.entries.iter().map(|(_, v)| v)
-    }
-
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Value> {
-        self.entries.iter_mut().map(|(_, v)| v)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&SymId, &Value)> {
-        self.entries.iter().map(|(k, v)| (k, v))
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
     /// Reconstruct from a vec of entries (for pdump load).
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(crate) fn from_entries(entries: Vec<(SymId, Value)>) -> Self {
@@ -222,10 +176,6 @@ pub enum RuntimeBindingValue {
 }
 
 impl RuntimeBindingValue {
-    pub(crate) fn bound(value: Value) -> Self {
-        Self::Bound(value)
-    }
-
     pub fn as_value(self) -> Option<Value> {
         match self {
             Self::Bound(value) => Some(value),
@@ -293,10 +243,6 @@ impl OrderedRuntimeBindingMap {
         } else {
             self.entries.push((key, value));
         }
-    }
-
-    pub(crate) fn set_void(&mut self, key: SymId) {
-        self.insert_binding(key, RuntimeBindingValue::Void);
     }
 
     pub fn contains_key(&self, key: &SymId) -> bool {
@@ -428,9 +374,6 @@ fn string_text_props(value: Value) -> Option<&'static TextPropertyTable> {
 /// Heap resets automatically discard them with the owning string, so there is
 /// no side table to clear anymore.
 pub fn reset_string_text_properties() {}
-
-/// String text property GC roots are traced from `StringObj` during heap mark.
-pub(crate) fn collect_string_text_prop_gc_roots(_roots: &mut Vec<Value>) {}
 
 pub fn set_string_text_properties_table_for_value(value: Value, table: TextPropertyTable) {
     if table.is_empty() {
@@ -660,17 +603,6 @@ pub struct StringTextPropertyRun {
     pub start: usize,
     pub end: usize,
     pub plist: Value,
-}
-
-/// Snapshot of a cons cell's car and cdr values (legacy compatibility).
-pub(crate) struct ConsSnapshot {
-    pub car: Value,
-    pub cdr: Value,
-}
-
-/// Allocate a fresh float identity (stub — float identity is pointer-based).
-pub(crate) fn next_float_id() -> u32 {
-    0
 }
 
 // ---------------------------------------------------------------------------
@@ -1403,6 +1335,8 @@ impl HashTableStorage {
         self.index.insert_new(hash, hash_key, slot);
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+    #[cfg(any(test, feature = "test-support"))]
     /// `get_mut` counterpart of [`Self::get_by_value`].
     pub(crate) fn get_mut_by_value(
         &mut self,
@@ -1937,6 +1871,8 @@ impl HashTableWeakness {
         Self::try_from(code).ok()
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn option_from_gnu_code(code: u8) -> Option<Option<Self>> {
         if code == 0 {
             Some(None)
@@ -2623,30 +2559,6 @@ impl LispHashTable {
         }
     }
 
-    pub(crate) fn rebuild_from_parts(
-        &mut self,
-        values: FxHashMap<HashKey, Value>,
-        key_snapshots: FxHashMap<HashKey, Value>,
-        insertion_order: Vec<HashKey>,
-    ) {
-        self.data.clear();
-        self.data.reserve(values.len());
-        for hash_key in insertion_order {
-            let Some(value) = values.get(&hash_key).copied() else {
-                continue;
-            };
-            let key = key_snapshots.get(&hash_key).copied().unwrap_or(value);
-            self.insert(hash_key, key, value);
-        }
-        for (hash_key, value) in values {
-            if self.data.contains_key(&hash_key) {
-                continue;
-            }
-            let key = key_snapshots.get(&hash_key).copied().unwrap_or(value);
-            self.insert(hash_key, key, value);
-        }
-    }
-
     pub fn live_hash_keys_in_slot_order(&self) -> Vec<&HashKey> {
         self.data.live_hash_keys_in_slot_order()
     }
@@ -2822,11 +2734,6 @@ impl TaggedValue {
     /// Callers must only pass SymIds whose canonical names already start with `:`.
     pub(crate) fn keyword_id(id: SymId) -> Self {
         TaggedValue::from_kw_id(id)
-    }
-
-    /// Create a keyword by interning a name string.
-    pub(crate) fn make_keyword(s: &'static str) -> Self {
-        Self::keyword(s)
     }
 
     /// Convert bool to Value (T or NIL).
@@ -3118,11 +3025,6 @@ impl TaggedValue {
         with_tagged_heap(|h| h.alloc_macro_from_data(data))
     }
 
-    /// Allocate a macro from already-validated GNU closure slots.
-    pub(crate) fn make_macro_with_slots(slots: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_macro(slots))
-    }
-
     /// Allocate a hash table.
     pub fn hash_table(test: HashTableTest) -> Self {
         with_tagged_heap(|h| h.alloc_hash_table(LispHashTable::new(test)))
@@ -3276,11 +3178,6 @@ impl TaggedValue {
         with_tagged_heap(|h| {
             h.alloc_xwidget(type_, title, buffer, width, height, xwidget_id, webview_id)
         })
-    }
-
-    /// Allocate a GNU-shaped xwidget view object.
-    pub(crate) fn make_xwidget_view(model: Value, window: Value) -> Self {
-        with_tagged_heap(|h| h.alloc_xwidget_view(model, window))
     }
 
     /// Allocate a bool-vector of `nbits` bits from `words` (`⌈nbits/64⌉`
@@ -3465,11 +3362,6 @@ impl TaggedValue {
     pub fn as_runtime_string_owned(self) -> Option<String> {
         self.as_lisp_string()
             .map(|string| crate::emacs_char::to_utf8_lossy(string.as_bytes()))
-    }
-
-    /// Access the heap string via a closure.
-    pub(crate) fn with_str<R>(self, f: impl FnOnce(&str) -> R) -> Option<R> {
-        self.as_utf8_str().map(f)
     }
 
     /// Borrow the `LispString` for a string value, for no longer than the
@@ -3661,6 +3553,8 @@ impl TaggedValue {
         mutate::replace_closure_slots(self, slots)
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+    #[cfg(any(test, feature = "test-support"))]
     /// Update a single closure slot through the centralized write path.
     pub(crate) fn set_closure_slot(self, index: usize, value: Value) -> bool {
         mutate::set_closure_slot(self, index, value)
@@ -3766,12 +3660,6 @@ impl TaggedValue {
                 .cast::<usize>()
                 .read()
         })
-    }
-
-    /// Get the pointer address as a unique identity for a string value.
-    /// Used for text property operations.
-    pub(crate) fn str_ptr_key(self) -> Option<usize> {
-        self.as_string_ptr().map(|p| p as usize)
     }
 
     /// Get the buffer ID from a buffer value.
@@ -4079,6 +3967,8 @@ impl TaggedValue {
         mutate::set_record_slot(self, index, value)
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+    #[cfg(any(test, feature = "test-support"))]
     /// Replace the contents of either a vector or record.
     pub(crate) fn replace_vectorlike_sequence_data(self, values: Vec<Value>) -> bool {
         match self.veclike_type() {
@@ -4531,21 +4421,6 @@ fn bool_vectors_equal(left: Value, right: Value) -> bool {
 pub fn equal_value(left: &Value, right: &Value, depth: usize) -> bool {
     let mut seen = None;
     equal_value_inner(left, right, depth, &mut seen, false, EqualKind::Plain)
-}
-
-/// `equal-including-properties` — structural comparison that also compares
-/// string text-property intervals.  This mirrors GNU Emacs `internal_equal`
-/// carrying its comparison mode recursively into compound objects.
-pub(crate) fn equal_value_including_properties(left: &Value, right: &Value, depth: usize) -> bool {
-    let mut seen = None;
-    equal_value_inner(
-        left,
-        right,
-        depth,
-        &mut seen,
-        false,
-        EqualKind::IncludingProperties,
-    )
 }
 
 /// `equal` — structural comparison with optional symbol-with-pos transparency.
@@ -5869,12 +5744,6 @@ pub(crate) fn lexenv_binding_symbol_value(sym_id: SymId) -> Value {
     TaggedValue::from_sym_id(sym_id)
 }
 
-/// Look up symbol value in a cons-alist lexenv.
-pub(crate) fn lexenv_lookup(lexenv: Value, sym_id: SymId) -> Option<Value> {
-    let cell = lexenv_assq(lexenv, sym_id)?;
-    Some(unsafe { cons_cdr_unchecked(cons_ptr_unchecked(cell)) })
-}
-
 /// Return true if the lexical environment contains a bare-symbol declaration
 /// marking SYM_ID as locally special/dynamic.
 pub fn lexenv_declares_special(lexenv: Value, sym_id: SymId) -> bool {
@@ -5913,12 +5782,6 @@ unsafe fn cons_cdr_unchecked(ptr: *const ConsCell) -> Value {
 /// Mutate a binding in place: set cdr of the `(sym . val)` cons cell.
 pub fn lexenv_set(cell: Value, value: Value) {
     cell.set_cdr(value);
-}
-
-/// Prepend a `(sym . val)` binding onto a lexenv alist. Returns the new head.
-pub(crate) fn lexenv_prepend(lexenv: Value, sym_id: SymId, val: Value) -> Value {
-    let binding = Value::make_cons(lexenv_binding_symbol_value(sym_id), val);
-    Value::make_cons(binding, lexenv)
 }
 
 // ---------------------------------------------------------------------------

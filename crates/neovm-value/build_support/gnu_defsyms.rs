@@ -59,6 +59,7 @@ use std::path::{Path, PathBuf};
 
 pub const LEDGER: &str = "crates/neovm-value/src/intern/gnu_defsyms.snapshot.tsv";
 pub const C_INTERN_LEDGER: &str = "crates/neovm-value/src/intern/gnu_c_interns.snapshot.tsv";
+pub const C_DEFUN_LEDGER: &str = "crates/neovm-value/src/intern/gnu_c_defuns.snapshot.tsv";
 pub const GENERATED: &str = "crates/neovm-value/src/intern/gnu_defsyms.generated.rs";
 pub const PINNED_COMMIT: &str = "a360712c9d272d950d8d8255ef74570f7e90b7d9";
 
@@ -71,7 +72,7 @@ const LEDGER_HEADER: &str = "# name\tgate\tc-name\tsource\n\
      # Do not edit by hand.\n";
 
 /// Build profiles the gates are keyed by.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Profile {
     Linux,
     Macos,
@@ -758,6 +759,486 @@ pub fn extract_c_interns(src_dir: &Path) -> Result<Vec<CInternRow>, String> {
     Ok(rows)
 }
 
+/// Three-valued preprocessor truth for one profile's reference build.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tri {
+    True,
+    False,
+    Unknown,
+}
+
+/// Whether a build macro is defined in a reference profile.
+///
+/// Only the macros that decide in-file `#if` guards around DEFUNs are modeled;
+/// unlisted macros answer `Unknown` and their blocks are not claimed (the
+/// conservative direction: a name the model cannot prove active stays out of
+/// the boot table instead of over-interning).
+fn macro_state(profile: Profile, name: &str) -> Tri {
+    // Off in every reference profile.
+    const OFF_ALWAYS: &[&str] = &[
+        "ENABLE_CHECKING",
+        "HAVE_NATIVE_COMP",
+        "HAVE_XWIDGETS",
+        "HAVE_ANDROID",
+        "HAVE_HAIKU",
+        "HAVE_PGTK",
+        "HAVE_MSDOS",
+        "HAVE_CYGWIN",
+        "HAVE_NS",
+        "HAVE_X_WINDOWS",
+        "HAVE_X11",
+        "USE_GTK",
+        "HAVE_GTK3",
+        "HAVE_GTK",
+        "HAVE_XAW3D",
+        "HAVE_XDBE",
+        "HAVE_XIM",
+        "HAVE_XINPUT2",
+        "HAVE_XRANDR",
+        "HAVE_XINERAMA",
+        "HAVE_XFIXES",
+        "HAVE_XSYNC",
+        "HAVE_X_SM",
+        "HAVE_XMENU",
+        "HAVE_CAIRO",
+        "HAVE_DBUS",
+        "HAVE_GSETTINGS",
+        "HAVE_NTGUI",
+        "WINDOWSNT",
+        "HAVE_W32",
+        "HAVE_W32NOTIFY",
+        "HAVE_WINDOW_SYSTEM",
+    ];
+    const LINUX_ON: &[&str] = &[
+        "HAVE_X_WINDOWS",
+        "HAVE_X11",
+        "HAVE_GTK3",
+        "USE_GTK",
+        "HAVE_GTK",
+        "HAVE_XDBE",
+        "HAVE_XIM",
+        "HAVE_XINPUT2",
+        "HAVE_XRANDR",
+        "HAVE_XINERAMA",
+        "HAVE_XFIXES",
+        "HAVE_XSYNC",
+        "HAVE_DBUS",
+        "HAVE_GSETTINGS",
+        "HAVE_WINDOW_SYSTEM",
+        "HAVE_LIBXML2",
+        "USE_CAIRO",
+        "HAVE_CAIRO",
+        "GTK_CHECK_VERSION",
+        "CAIRO_HAS_XLIB_SURFACE",
+        "CAIRO_HAS_PDF_SURFACE",
+        "CAIRO_HAS_PS_SURFACE",
+        "CAIRO_HAS_SVG_SURFACE",
+        "HAVE_XFT",
+        "HAVE_XCOMPOSITE",
+        "HAVE_XRENDER",
+    ];
+    const MACOS_ON: &[&str] = &["HAVE_NS", "HAVE_WINDOW_SYSTEM", "HAVE_LIBXML2"];
+    const WINDOWS_ON: &[&str] = &[
+        "HAVE_NTGUI",
+        "WINDOWSNT",
+        "HAVE_W32",
+        "HAVE_W32NOTIFY",
+        "HAVE_WINDOW_SYSTEM",
+    ];
+    const COMMON_ON: &[&str] = &[
+        "HAVE_GNUTLS",
+        "HAVE_LCMS2",
+        "THREADS_ENABLED",
+        "HAVE_PDUMPER",
+        "HAVE_TREE_SITTER",
+        "HAVE_JSON",
+        "HAVE_MODULES",
+        "HAVE_FREETYPE",
+        "HAVE_FONTCONFIG",
+        "HAVE_HARFBUZZ",
+        "HAVE_ZLIB",
+        "HAVE_RSVG",
+        "HAVE_WEBP",
+        "HAVE_GLIB",
+    ];
+    if OFF_ALWAYS.contains(&name) {
+        let on = match name {
+            "HAVE_NS" => matches!(profile, Profile::Macos),
+            "HAVE_X_WINDOWS" | "HAVE_X11" | "USE_GTK" | "HAVE_GTK3" | "HAVE_GTK" | "HAVE_XDBE"
+            | "HAVE_XIM" | "HAVE_XINPUT2" | "HAVE_XRANDR" | "HAVE_XINERAMA" | "HAVE_XFIXES"
+            | "HAVE_XSYNC" | "HAVE_XMENU" | "HAVE_DBUS" | "HAVE_GSETTINGS" => {
+                matches!(profile, Profile::Linux)
+            }
+            "HAVE_NTGUI" | "WINDOWSNT" | "HAVE_W32" | "HAVE_W32NOTIFY" => {
+                matches!(profile, Profile::Windows)
+            }
+            "HAVE_WINDOW_SYSTEM" => true,
+            _ => false,
+        };
+        return if on { Tri::True } else { Tri::False };
+    }
+    let table = match profile {
+        Profile::Linux => LINUX_ON,
+        Profile::Macos => MACOS_ON,
+        Profile::Windows => WINDOWS_ON,
+    };
+    if table.contains(&name) || COMMON_ON.contains(&name) {
+        return Tri::True;
+    }
+    Tri::Unknown
+}
+
+/// Evaluate a `#if`/`#elif` condition under one profile's macro model.
+///
+/// The grammar covered is what GNU's sources use in guard position:
+/// `defined(X)`, `defined X`, bare identifiers, `!`, `&&`, `||` and
+/// parentheses. Anything else is `Unknown`, and an `Unknown` block is not
+/// claimed by the ledger.
+fn eval_cpp_condition(text: &str, profile: Profile) -> Tri {
+    struct Parser<'a> {
+        bytes: &'a [u8],
+        at: usize,
+        profile: Profile,
+    }
+    impl<'a> Parser<'a> {
+        fn skip_ws(&mut self) {
+            while self.at < self.bytes.len() && self.bytes[self.at].is_ascii_whitespace() {
+                self.at += 1;
+            }
+        }
+        fn eat(&mut self, token: &[u8]) -> bool {
+            self.skip_ws();
+            if self.bytes[self.at..].starts_with(token) {
+                self.at += token.len();
+                true
+            } else {
+                false
+            }
+        }
+        fn ident(&mut self) -> Option<&'a str> {
+            self.skip_ws();
+            let start = self.at;
+            while self.at < self.bytes.len() && c_ident_continue(self.bytes[self.at]) {
+                self.at += 1;
+            }
+            (self.at > start)
+                .then(|| std::str::from_utf8(&self.bytes[start..self.at]).ok())
+                .flatten()
+        }
+        fn or_expr(&mut self) -> Tri {
+            let mut left = self.and_expr();
+            loop {
+                if !self.eat(b"||") {
+                    return left;
+                }
+                let right = self.and_expr();
+                left = match (left, right) {
+                    (Tri::True, _) | (_, Tri::True) => Tri::True,
+                    (Tri::False, Tri::False) => Tri::False,
+                    _ => Tri::Unknown,
+                };
+            }
+        }
+        fn and_expr(&mut self) -> Tri {
+            let mut left = self.unary();
+            loop {
+                if !self.eat(b"&&") {
+                    return left;
+                }
+                let right = self.unary();
+                left = match (left, right) {
+                    (Tri::False, _) | (_, Tri::False) => Tri::False,
+                    (Tri::True, Tri::True) => Tri::True,
+                    _ => Tri::Unknown,
+                };
+            }
+        }
+        fn unary(&mut self) -> Tri {
+            self.skip_ws();
+            if self.eat(b"!") {
+                return match self.unary() {
+                    Tri::True => Tri::False,
+                    Tri::False => Tri::True,
+                    Tri::Unknown => Tri::Unknown,
+                };
+            }
+            if self.eat(b"defined") {
+                let parenthesized = self.eat(b"(");
+                let Some(name) = self.ident() else {
+                    return Tri::Unknown;
+                };
+                if parenthesized && !self.eat(b")") {
+                    return Tri::Unknown;
+                }
+                return macro_state(self.profile, name);
+            }
+            if self.eat(b"(") {
+                let inner = self.or_expr();
+                return if self.eat(b")") { inner } else { Tri::Unknown };
+            }
+            match self.ident() {
+                Some(name) => {
+                    // A numeric literal is not a guard macro we model.
+                    if name.bytes().all(|byte| byte.is_ascii_digit()) {
+                        Tri::Unknown
+                    } else {
+                        macro_state(self.profile, name)
+                    }
+                }
+                None => Tri::Unknown,
+            }
+        }
+    }
+    let mut parser = Parser {
+        bytes: text.as_bytes(),
+        at: 0,
+        profile,
+    };
+    parser.or_expr()
+}
+
+/// Blank the byte ranges of one source that this profile's guards disable.
+///
+/// Directive lines are blanked too, so a scan never mistakes the guard text
+/// itself for a declaration. An `Unknown` condition claims neither branch:
+/// the safe direction for a boot membership table.
+fn mask_cpp_inactive(bytes: &[u8], profile: Profile) -> Vec<u8> {
+    struct Frame {
+        parent_active: bool,
+        taken: bool,
+    }
+    let mut out = bytes.to_vec();
+    let mut stack: Vec<Frame> = Vec::new();
+    let mut active = true;
+    let mut line_start = 0usize;
+    while line_start < bytes.len() {
+        let mut line_end = line_start;
+        while line_end < bytes.len() && bytes[line_end] != b'\n' {
+            line_end += 1;
+        }
+        let line = &bytes[line_start..line_end];
+        let trimmed = {
+            let mut i = 0;
+            while i < line.len() && line[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            &line[i..]
+        };
+        if trimmed.first() == Some(&b'#') {
+            let directive = &trimmed[1..];
+            let directive = {
+                let mut i = 0;
+                while i < directive.len() && directive[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                &directive[i..]
+            };
+            let keyword_len = directive
+                .iter()
+                .take_while(|byte| byte.is_ascii_alphabetic())
+                .count();
+            let keyword = &directive[..keyword_len];
+            let rest = &directive[keyword_len..];
+            match keyword {
+                b"if" | b"ifdef" | b"ifndef" => {
+                    let cond = match keyword {
+                        b"if" => {
+                            let mut name = rest;
+                            while name.first().is_some_and(|byte| byte.is_ascii_whitespace()) {
+                                name = &name[1..];
+                            }
+                            let name = std::str::from_utf8(name).unwrap_or("");
+                            eval_cpp_condition(name, profile)
+                        }
+                        _ => {
+                            let mut name = rest;
+                            while name.first().is_some_and(|byte| byte.is_ascii_whitespace()) {
+                                name = &name[1..];
+                            }
+                            let end = name
+                                .iter()
+                                .take_while(|byte| c_ident_continue(**byte))
+                                .count();
+                            let name = std::str::from_utf8(&name[..end]).unwrap_or("");
+                            let state = macro_state(profile, name);
+                            if keyword == b"ifdef" {
+                                state
+                            } else {
+                                match state {
+                                    Tri::True => Tri::False,
+                                    Tri::False => Tri::True,
+                                    Tri::Unknown => Tri::Unknown,
+                                }
+                            }
+                        }
+                    };
+                    let branch_active = active && cond == Tri::True;
+                    stack.push(Frame {
+                        parent_active: active,
+                        // An Unknown guard claims neither branch.
+                        taken: cond != Tri::False,
+                    });
+                    active = branch_active;
+                }
+                b"elif" => {
+                    if let Some(frame) = stack.last() {
+                        let cond =
+                            eval_cpp_condition(std::str::from_utf8(rest).unwrap_or(""), profile);
+                        let branch_active =
+                            frame.parent_active && !frame.taken && cond == Tri::True;
+                        let parent_active = frame.parent_active;
+                        let taken = frame.taken || cond != Tri::False;
+                        *stack.last_mut().expect("frame") = Frame {
+                            parent_active,
+                            taken,
+                        };
+                        active = branch_active;
+                    }
+                }
+                b"else" => {
+                    if let Some(frame) = stack.last_mut() {
+                        active = frame.parent_active && !frame.taken;
+                        frame.taken = true;
+                    }
+                }
+                b"endif" => {
+                    if let Some(frame) = stack.pop() {
+                        active = frame.parent_active;
+                    }
+                }
+                _ => {}
+            }
+            for byte in &mut out[line_start..line_end] {
+                *byte = b' ';
+            }
+        } else if !active {
+            for byte in &mut out[line_start..line_end] {
+                *byte = b' ';
+            }
+        }
+        line_start = line_end + 1;
+    }
+    out
+}
+
+/// Collect the literal `DEFUN ("name", ...)` subr names of one C source.
+fn scan_c_defun_names(bytes: &[u8], out: &mut Vec<String>) {
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
+                {
+                    index += 1;
+                }
+                index = (index + 2).min(bytes.len());
+            }
+            byte if c_ident_start(byte) => {
+                let start = index;
+                while index < bytes.len() && c_ident_continue(bytes[index]) {
+                    index += 1;
+                }
+                let identifier = &bytes[start..index];
+                if identifier != b"DEFUN" && identifier != b"DEFUN_NORETURN" {
+                    continue;
+                }
+                let mut cursor = index;
+                while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+                    cursor += 1;
+                }
+                if bytes.get(cursor) != Some(&b'(') {
+                    continue;
+                }
+                cursor += 1;
+                while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+                    cursor += 1;
+                }
+                if bytes.get(cursor) != Some(&b'"') {
+                    continue;
+                }
+                if let Some((literal, end)) = parse_c_string(bytes, cursor)
+                    && literal.is_ascii()
+                    && !literal.is_empty()
+                {
+                    out.push(String::from_utf8(literal).expect("ASCII checked"));
+                    index = end;
+                }
+            }
+            _ => index += 1,
+        }
+    }
+}
+
+pub const C_DEFUN_LEDGER_HEADER: &str = "# name\tgate\tsource\n# Literal DEFUN(\"...\") subr names of compiled GNU objects (defsubr interns them), guard-masked.\n";
+
+/// Every literal DEFUN name of the reference profiles, profile masks applied.
+pub fn extract_c_defuns(src_dir: &Path) -> Result<Vec<CInternRow>, String> {
+    let scan_orders: Vec<(Profile, Vec<String>)> = Profile::ALL
+        .into_iter()
+        .map(|profile| Ok((profile, profile_scan_order(src_dir, profile)?)))
+        .collect::<Result<_, String>>()?;
+    let mut rows: BTreeMap<String, CInternRow> = BTreeMap::new();
+    let mut cache: BTreeMap<(String, Profile), Vec<String>> = BTreeMap::new();
+    for (profile, order) in &scan_orders {
+        for file in order {
+            let key = (file.clone(), *profile);
+            if !cache.contains_key(&key) {
+                let path = src_dir.join(file);
+                let bytes =
+                    fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
+                let masked = mask_cpp_inactive(&bytes, *profile);
+                let mut names = Vec::new();
+                scan_c_defun_names(&masked, &mut names);
+                cache.insert(key.clone(), names);
+            }
+            for name in cache.get(&key).into_iter().flatten() {
+                let entry = rows.entry(name.clone()).or_insert_with(|| CInternRow {
+                    name: name.clone(),
+                    gate: ProfileMask::NONE,
+                    source: file.clone(),
+                });
+                entry.gate = entry.gate.union(ProfileMask(profile.bit()));
+            }
+        }
+    }
+    let mut rows: Vec<CInternRow> = rows.into_values().collect();
+    rows.sort_by(|left, right| {
+        left.source
+            .cmp(&right.source)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(rows)
+}
+
+pub fn render_c_defun_ledger(rows: &[CInternRow]) -> String {
+    let mut out = String::from(C_DEFUN_LEDGER_HEADER);
+    for row in rows {
+        let gate = if row.gate.0 == 0 {
+            "none".to_string()
+        } else {
+            let mut parts = Vec::new();
+            for profile in Profile::ALL {
+                if row.gate.contains(profile) {
+                    parts.push(profile.name());
+                }
+            }
+            parts.join("+")
+        };
+        writeln!(out, "{}\t{}\t{}", row.name, gate, row.source).expect("write to String");
+    }
+    out
+}
+
+pub fn parse_c_defun_ledger(text: &str) -> Result<Vec<CInternRow>, String> {
+    parse_c_intern_ledger_with(text, C_DEFUN_LEDGER)
+}
+
 pub const C_INTERN_LEDGER_HEADER: &str = "# name\tgate\tsource\n# Literal intern_c_string(\"...\")/intern(\"...\") spellings GNU's C startup code interns.\n";
 
 pub fn render_c_intern_ledger(rows: &[CInternRow]) -> String {
@@ -780,6 +1261,10 @@ pub fn render_c_intern_ledger(rows: &[CInternRow]) -> String {
 }
 
 pub fn parse_c_intern_ledger(text: &str) -> Result<Vec<CInternRow>, String> {
+    parse_c_intern_ledger_with(text, C_INTERN_LEDGER)
+}
+
+fn parse_c_intern_ledger_with(text: &str, ledger: &str) -> Result<Vec<CInternRow>, String> {
     let mut rows = Vec::new();
     for (line_number, line) in text.lines().enumerate() {
         if line.trim().is_empty() || line.starts_with('#') {
@@ -789,14 +1274,14 @@ pub fn parse_c_intern_ledger(text: &str) -> Result<Vec<CInternRow>, String> {
         if fields.len() != 3 {
             return Err(format!(
                 "{}:{}: expected name<TAB>gate<TAB>source",
-                C_INTERN_LEDGER,
+                ledger,
                 line_number + 1
             ));
         }
         let gate = ProfileMask::parse(fields[1]).ok_or_else(|| {
             format!(
                 "{}:{}: unknown profile gate `{}`",
-                C_INTERN_LEDGER,
+                ledger,
                 line_number + 1,
                 fields[1]
             )
@@ -1125,7 +1610,11 @@ fn gate_expression(mask: ProfileMask) -> String {
     }
 }
 
-pub fn render_generated(rows: &[Row], c_interns: &[CInternRow]) -> Result<String, String> {
+pub fn render_generated(
+    rows: &[Row],
+    c_interns: &[CInternRow],
+    c_defuns: &[CInternRow],
+) -> Result<String, String> {
     let emitted: Vec<&Row> = rows.iter().filter(|row| row.gate.is_emitted()).collect();
     if emitted.is_empty() {
         return Err("no emitted rows in the ledger".to_string());
@@ -1268,16 +1757,63 @@ pub fn render_generated(rows: &[Row], c_interns: &[CInternRow]) -> Result<String
     }
     out.push_str("];\n");
 
+    let emitted_d: Vec<&CInternRow> = c_defuns.iter().filter(|row| !row.gate.is_empty()).collect();
+    writeln!(
+        out,
+        "\n/// Every literal DEFUN subr name of the compiled GNU objects, in\n\
+         /// source-file then spelling order. `defsubr` interns each one, so\n\
+         /// GNU's image carries names of subrs this port declines.\n\
+         /// {} rows.\n\
+         #[rustfmt::skip]\n\
+         pub(crate) static GNU_C_DEFUNS: &[(&str, DefsymGate)] = &[",
+        emitted_d.len()
+    )
+    .expect("write to String");
+    for row in &emitted_d {
+        writeln!(
+            out,
+            "    ({}, DefsymGate({})),",
+            rust_string_literal(&row.name),
+            gate_expression(row.gate)
+        )
+        .expect("write to String");
+    }
+    out.push_str("];\n");
+    let mut by_spelling_d: Vec<&CInternRow> = emitted_d.clone();
+    by_spelling_d.sort_by(|left, right| left.name.cmp(&right.name));
+    writeln!(
+        out,
+        "\n/// `GNU_C_DEFUNS` sorted by spelling for the normalizer's membership\n\
+         /// test. {} rows.\n\
+         #[rustfmt::skip]\n\
+         pub(crate) static GNU_C_DEFUNS_BY_SPELLING: &[(&str, DefsymGate)] = &[",
+        by_spelling_d.len()
+    )
+    .expect("write to String");
+    for row in &by_spelling_d {
+        writeln!(
+            out,
+            "    ({}, DefsymGate({})),",
+            rust_string_literal(&row.name),
+            gate_expression(row.gate)
+        )
+        .expect("write to String");
+    }
+    out.push_str("];\n");
+
     writeln!(
         out,
         "\nconst _: () = assert!(GNU_DEFSYMS.len() == {});\n\
          const _: () = assert!(GNU_DEFSYMS_BY_SPELLING.len() == GNU_DEFSYMS.len());\n\
          const _: () = assert!(GNU_UNINTERNED_SPELLINGS.len() == {});\n\
          const _: () = assert!(GNU_C_INTERNS.len() == {});\n\
-         const _: () = assert!(GNU_C_INTERNS_BY_SPELLING.len() == GNU_C_INTERNS.len());",
+         const _: () = assert!(GNU_C_INTERNS_BY_SPELLING.len() == GNU_C_INTERNS.len());\n\
+         const _: () = assert!(GNU_C_DEFUNS.len() == {});\n\
+         const _: () = assert!(GNU_C_DEFUNS_BY_SPELLING.len() == GNU_C_DEFUNS.len());",
         emitted.len(),
         uninterned.len(),
-        emitted_c.len()
+        emitted_c.len(),
+        emitted_d.len()
     )
     .expect("write to String");
     Ok(out)
@@ -1310,7 +1846,11 @@ pub fn rendered(repo_root: &Path) -> Result<String, String> {
     let c_text = fs::read_to_string(&c_intern_path)
         .map_err(|error| format!("read {}: {error}", c_intern_path.display()))?;
     let c_interns = parse_c_intern_ledger(&c_text)?;
-    render_generated(&rows, &c_interns)
+    let c_defun_path = repo_root.join(C_DEFUN_LEDGER);
+    let d_text = fs::read_to_string(&c_defun_path)
+        .map_err(|error| format!("read {}: {error}", c_defun_path.display()))?;
+    let c_defuns = parse_c_defun_ledger(&d_text)?;
+    render_generated(&rows, &c_interns, &c_defuns)
 }
 
 /// Write (or `--check`) the ledger and generated table.
@@ -1326,20 +1866,23 @@ pub fn generate(repo_root: &Path, check: bool, source: Option<&Path>) -> Result<
     }
 
     let c_intern_path = repo_root.join(C_INTERN_LEDGER);
+    let c_defun_path = repo_root.join(C_DEFUN_LEDGER);
 
     let extracted = match source {
         Some(source) => {
             let src_dir = source_src_dir(source)?;
             let rows = extract(&src_dir)?;
             let c_interns = extract_c_interns(&src_dir)?;
-            Some((src_dir, rows, c_interns))
+            let c_defuns = extract_c_defuns(&src_dir)?;
+            Some((src_dir, rows, c_interns, c_defuns))
         }
         None => None,
     };
 
-    if let Some((src_dir, rows, c_interns)) = &extracted {
+    if let Some((src_dir, rows, c_interns, c_defuns)) = &extracted {
         let extracted_ledger = render_ledger(rows);
         let extracted_c_ledger = render_c_intern_ledger(c_interns);
+        let extracted_d_ledger = render_c_defun_ledger(c_defuns);
         if check {
             let tracked = fs::read_to_string(&ledger_path)
                 .map_err(|error| format!("read {}: {error}", ledger_path.display()))?;
@@ -1357,16 +1900,26 @@ pub fn generate(repo_root: &Path, check: bool, source: Option<&Path>) -> Result<
                     src_dir.display()
                 ));
             }
+            let tracked_d = fs::read_to_string(&c_defun_path)
+                .map_err(|error| format!("read {}: {error}", c_defun_path.display()))?;
+            if tracked_d != extracted_d_ledger {
+                return Err(format!(
+                    "{C_DEFUN_LEDGER} is stale against {}; run `cargo xtask gnu-defsyms --source <checkout>`",
+                    src_dir.display()
+                ));
+            }
         } else {
             fs::write(&ledger_path, &extracted_ledger)
                 .map_err(|error| format!("write {}: {error}", ledger_path.display()))?;
             fs::write(&c_intern_path, &extracted_c_ledger)
                 .map_err(|error| format!("write {}: {error}", c_intern_path.display()))?;
+            fs::write(&c_defun_path, &extracted_d_ledger)
+                .map_err(|error| format!("write {}: {error}", c_defun_path.display()))?;
         }
     }
 
     let rows = match &extracted {
-        Some((_, rows, _)) => rows.clone(),
+        Some((_, rows, _, _)) => rows.clone(),
         None => {
             let text = fs::read_to_string(&ledger_path)
                 .map_err(|error| format!("read {}: {error}", ledger_path.display()))?;
@@ -1374,7 +1927,7 @@ pub fn generate(repo_root: &Path, check: bool, source: Option<&Path>) -> Result<
         }
     };
     let c_interns = match &extracted {
-        Some((_, _, c_interns)) => c_interns.clone(),
+        Some((_, _, c_interns, _)) => c_interns.clone(),
         None => {
             let text = fs::read_to_string(&c_intern_path)
                 .map_err(|error| format!("read {}: {error}", c_intern_path.display()))?;
@@ -1382,7 +1935,16 @@ pub fn generate(repo_root: &Path, check: bool, source: Option<&Path>) -> Result<
         }
     };
 
-    let generated = render_generated(&rows, &c_interns)?;
+    let c_defuns = match &extracted {
+        Some((_, _, _, c_defuns)) => c_defuns.clone(),
+        None => {
+            let text = fs::read_to_string(&c_defun_path)
+                .map_err(|error| format!("read {}: {error}", c_defun_path.display()))?;
+            parse_c_defun_ledger(&text)?
+        }
+    };
+
+    let generated = render_generated(&rows, &c_interns, &c_defuns)?;
     if check {
         let tracked = fs::read_to_string(&generated_path)
             .map_err(|error| format!("read {}: {error}", generated_path.display()))?;

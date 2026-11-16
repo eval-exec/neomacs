@@ -149,16 +149,6 @@ impl PropertyInterval {
         }
     }
 
-    pub(crate) fn with_properties(range: CharRange, properties: HashMap<Value, Value>) -> Self {
-        let key_order: Vec<Value> = properties.keys().copied().collect();
-        Self {
-            start: range.start().get(),
-            end: range.end().get(),
-            properties,
-            key_order,
-        }
-    }
-
     fn from_plist(range: CharRange, plist: &[(Value, Value)]) -> Self {
         let mut properties = HashMap::new();
         for (key, value) in plist.iter().rev() {
@@ -2328,6 +2318,10 @@ impl IntervalTree {
 
     /// `find_id` without consulting or updating the memo -- the ground truth used
     /// by the differential test to prove the cache never goes stale.
+    #[allow(
+        dead_code,
+        reason = "test-only reference descent used by the differential interval tables"
+    )]
     #[cfg(any(test, feature = "test-support"))]
     fn find_id_uncached(&self, pos: CharPos0) -> Option<(CharPos0, IntervalId)> {
         let mut id = self.root?;
@@ -4311,6 +4305,8 @@ impl TextPropertyTable {
         self.intervals.prune_trailing_empty_intervals();
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_properties_in_char_range(
         &mut self,
         range: CharRange,
@@ -4319,6 +4315,8 @@ impl TextPropertyTable {
         self.set_properties_raw(range, plist);
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+    #[cfg(any(test, feature = "test-support"))]
     fn set_properties_raw(&mut self, range: CharRange, plist: Vec<(Value, Value)>) {
         self.mutation_tick += 1;
         self.syntax_prop_tick += 1;
@@ -5282,6 +5280,7 @@ impl TextPropertyTable {
         self.intervals.graft_shifted_runs(&runs, offset, new_root);
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
     /// The pre-graft algorithm (split, re-find and re-home per run), kept as
     /// the reference oracle for `graft_shifted_runs`: the two must leave the
     /// same interval partition and plist values.
@@ -5322,6 +5321,7 @@ impl TextPropertyTable {
         }
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
     /// The raw plist object stored on the interval containing `pos` (identity
     /// matters for the `copy_properties` aliasing rules).
     #[cfg(any(test, feature = "test-support"))]
@@ -5337,6 +5337,7 @@ impl TextPropertyTable {
         self.intervals.assert_invariants_for_test();
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn tree_max_depth_for_test(&self) -> usize {
         self.intervals.max_depth_for_test()
@@ -5425,6 +5426,7 @@ impl TextPropertyTable {
         self.intervals.merge_equal_neighbors_in(range);
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
     /// The pre-local algorithm, kept as the reference oracle for
     /// [`Self::merge_adjacent_equal_properties_around`]: the two must leave
     /// the same interval partition and plist values.
@@ -5480,6 +5482,7 @@ impl TextPropertyTable {
         self.intervals_snapshot()
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn debug_interval_bounds(&self) -> Vec<(usize, usize, bool)> {
         self.intervals

@@ -284,6 +284,8 @@ impl TaggedHeap {
         ImageStamp::Stamped
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn dirty_owner_count(&self) -> usize {
         self.dirty_owners.len()
     }
@@ -292,26 +294,19 @@ impl TaggedHeap {
         self.dirty_owner_bits.contains(&owner.bits())
     }
 
-    pub(crate) fn take_dirty_owners(&mut self) -> Vec<TaggedValue> {
-        self.dirty_owner_bits.clear();
-        std::mem::take(&mut self.dirty_owners)
-    }
-
     pub fn clear_dirty_owners(&mut self) {
         self.dirty_owners.clear();
         self.dirty_owner_bits.clear();
     }
 
+    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn dirty_write_count(&self) -> usize {
         self.dirty_writes.len()
     }
 
     pub fn dirty_writes(&self) -> &[HeapWriteRecord] {
         &self.dirty_writes
-    }
-
-    pub(crate) fn take_dirty_writes(&mut self) -> Vec<HeapWriteRecord> {
-        std::mem::take(&mut self.dirty_writes)
     }
 
     pub fn clear_dirty_writes(&mut self) {
