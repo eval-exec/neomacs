@@ -41,7 +41,8 @@ pub(crate) type emacs_function = unsafe extern "C" fn(
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum emacs_funcall_exit {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum emacs_funcall_exit {
     Return = 0,
     Signal = 1,
     Throw = 2,
@@ -283,7 +284,8 @@ pub(crate) struct emacs_value_frame {
     pub next: *mut emacs_value_frame,
 }
 
-pub struct emacs_value_storage {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct emacs_value_storage {
     pub(crate) initial: emacs_value_frame,
     pub(crate) current: *mut emacs_value_frame,
 }
@@ -292,7 +294,8 @@ pub struct emacs_value_storage {
 // emacs_env_private
 // ============================================================================
 
-pub struct emacs_env_private {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct emacs_env_private {
     pub pending_non_local_exit: emacs_funcall_exit,
     pub non_local_exit_symbol: Value,
     pub non_local_exit_data: Value,

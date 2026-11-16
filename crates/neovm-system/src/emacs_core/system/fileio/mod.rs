@@ -46,10 +46,8 @@ pub use neovm_eval::emacs_core::eval::data::file_coding::{
     WriteCodingFallback, coding_system_value_to_name, decode_file_name_lisp,
     resolve_write_coding_system_symbol,
 };
+pub(crate) use neovm_eval::emacs_core::eval::data::file_name_expand::current_user_home_bytes;
 pub(crate) use neovm_eval::emacs_core::eval::data::file_name_expand::expand_file_name_lisp_with_home;
-pub(crate) use neovm_eval::emacs_core::eval::data::file_name_expand::{
-    current_user_home_bytes, expand_file_name_with_home,
-};
 #[doc(hidden)]
 pub use neovm_eval::emacs_core::eval::data::file_name_expand::{
     default_directory_lisp_in_state, expand_file_name_lisp, resolve_filename_lisp_for_eval,
@@ -76,7 +74,9 @@ pub(crate) mod directory_stream;
 /// string type this conversion binds; the system layer re-exports it.
 pub use neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf;
 
+#[cfg(any(test, feature = "test-support"))]
 use neovm_edit::emacs_core::edit_host::EditHost;
+#[cfg(any(test, feature = "test-support"))]
 use neovm_text::emacs_core::text_host::TextHost;
 pub use neovm_value::system_vocab::file_names::substitute_in_file_name;
 use neovm_value::system_vocab::file_names::{
@@ -212,6 +212,7 @@ fn file_truename_lisp(
 
 /// Return the directory part of FILENAME, or None if there is no directory part.
 /// Like Emacs `file-name-directory`: includes the trailing slash.
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_name_directory(filename: &str) -> Option<String> {
     // Emacs: if the filename ends with /, the whole thing is the directory part
     if filename
@@ -234,6 +235,7 @@ pub fn file_name_directory(filename: &str) -> Option<String> {
 
 /// Return the non-directory part of FILENAME.
 /// Like Emacs `file-name-nondirectory`.
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_name_nondirectory(filename: &str) -> String {
     // Emacs: if the filename ends with /, return ""
     if filename
@@ -256,6 +258,7 @@ pub fn file_name_nondirectory(filename: &str) -> String {
 /// When PERIOD is nil, returns extension without the leading dot, or nil if missing.
 /// Return FILENAME as a directory name (must end in `/`).
 /// Like Emacs `file-name-as-directory`.
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_name_as_directory(filename: &str) -> String {
     if filename.is_empty() {
         "./".to_string()
@@ -288,6 +291,7 @@ pub fn directory_file_name(filename: &str) -> String {
 /// Concatenate file name components with separator insertion between
 /// non-empty components, skipping empty components.
 /// Like Emacs `file-name-concat` after filtering nil/empty args.
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_name_concat(parts: &[&str]) -> String {
     let mut iter = parts.iter().copied().filter(|s| !s.is_empty());
     let Some(first) = iter.next() else {
@@ -305,6 +309,7 @@ pub fn file_name_concat(parts: &[&str]) -> String {
 }
 
 /// Return true if NAME is a directory name (ends with a directory separator).
+#[cfg(any(test, feature = "test-support"))]
 pub fn directory_name_p(name: &str) -> bool {
     name.as_bytes()
         .last()
@@ -347,6 +352,7 @@ pub fn file_exists_p(filename: &str) -> bool {
 }
 
 /// Return true if FILENAME is readable.
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_readable_p(filename: &str) -> bool {
     file_readable_path(Path::new(filename))
 }
@@ -404,11 +410,13 @@ fn file_system_info_path(path: &Path) -> std::io::Result<(i64, i64, i64)> {
 }
 
 /// Return true if FILENAME is a directory.
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_directory_p(filename: &str) -> bool {
     Path::new(filename).is_dir()
 }
 
 /// Return true if FILENAME is a regular file.
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_regular_p(filename: &str) -> bool {
     Path::new(filename).is_file()
 }
@@ -417,6 +425,7 @@ pub fn file_regular_p(filename: &str) -> bool {
 /// Return true if FILENAME is a symbolic link. Used by predicates that
 /// only need a yes/no answer (e.g. internal helpers); the public
 /// `file-symlink-p` builtin returns the link target instead.
+#[cfg(any(test, feature = "test-support"))]
 pub fn file_symlink_p(filename: &str) -> bool {
     match fs::symlink_metadata(filename) {
         Ok(meta) => meta.file_type().is_symlink(),
@@ -463,11 +472,13 @@ fn file_newer_than_file_path(file1: &Path, file2: &Path) -> bool {
 // ===========================================================================
 
 /// Read the contents of FILENAME as a UTF-8 string.
+#[cfg(any(test, feature = "test-support"))]
 pub fn read_file_contents(filename: &str) -> std::io::Result<String> {
     fs::read_to_string(filename)
 }
 
 /// Write CONTENT to FILENAME, optionally appending.
+#[cfg(any(test, feature = "test-support"))]
 pub fn write_string_to_file(content: &str, filename: &str, append: bool) -> std::io::Result<()> {
     let mode = if append {
         FileWriteMode::Append
@@ -863,6 +874,7 @@ fn directory_files_with_decoder(
 }
 
 /// Create directory DIR.  If PARENTS is true, create parent directories as needed.
+#[cfg(any(test, feature = "test-support"))]
 pub fn make_directory(dir: &str, parents: bool) -> std::io::Result<()> {
     if parents {
         fs::create_dir_all(dir)
@@ -876,6 +888,7 @@ pub fn make_directory(dir: &str, parents: bool) -> std::io::Result<()> {
 // ===========================================================================
 
 /// Delete FILENAME.
+#[cfg(any(test, feature = "test-support"))]
 pub fn delete_file(filename: &str) -> std::io::Result<()> {
     unlink_file_path(Path::new(filename))
 }
@@ -894,6 +907,7 @@ pub fn unlink_file_path(path: &Path) -> std::io::Result<()> {
 }
 
 /// Rename file FROM to TO.
+#[cfg(any(test, feature = "test-support"))]
 pub fn rename_file(from: &str, to: &str) -> std::io::Result<()> {
     rename_path_with_cross_device_fallback(Path::new(from), Path::new(to), true, |from, to| {
         fs::rename(from, to)
@@ -2937,7 +2951,7 @@ fn set_file_times_path(
     }
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn delete_file_compat(filename: &str) -> Result<(), Flow> {
     match delete_file(filename) {

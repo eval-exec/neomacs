@@ -56,8 +56,10 @@
 ///
 /// Measured name by name under GNU Emacs 31.0.90, `-Q --batch`, not derived
 /// from the `#ifdef`s: 7 of these 32 are bound, 25 are not.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum GnuBinding {
+pub(crate) enum GnuBinding {
     /// GNU declares it with a `DEFVAR_*` in a `syms_of_*` this build compiles,
     /// so Neomacs must too -- with GNU's value and GNU's `declared_special`
     /// bit, which in GNU are the same statement.  `site` is the Neomacs
@@ -81,8 +83,10 @@ pub enum GnuBinding {
 }
 
 /// One `cus-start.el` platform name.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Copy, Clone, Debug)]
-pub struct CusStartPlatformVariable {
+pub(crate) struct CusStartPlatformVariable {
     pub name: &'static str,
     /// Where GNU declares it and what it initializes it to, `file:line`.
     pub gnu: &'static str,
@@ -97,6 +101,7 @@ pub struct CusStartPlatformVariable {
     pub(crate) ns_binding: Option<GnuBinding>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 const fn declared(
     name: &'static str,
     gnu: &'static str,
@@ -110,6 +115,7 @@ const fn declared(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 const fn declared_in_lisp(
     name: &'static str,
     gnu: &'static str,
@@ -123,6 +129,7 @@ const fn declared_in_lisp(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 const fn unbound(name: &'static str, gnu: &'static str) -> CusStartPlatformVariable {
     CusStartPlatformVariable {
         name,
@@ -132,6 +139,7 @@ const fn unbound(name: &'static str, gnu: &'static str) -> CusStartPlatformVaria
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl CusStartPlatformVariable {
     /// Record the NS reference build's answer when it differs from the X11
     /// one.
@@ -157,9 +165,12 @@ impl CusStartPlatformVariable {
 /// dump time -- eleven `DEFVAR_LISP`s from `nsterm.m:11568-11736` seeded by
 /// the evaluator's NS surface module, and four `DEFVAR_BOOL`s from
 /// `nsterm.m:11657-11720` / `nsfns.m:4233` carried by `GNU_BOOL_VARIABLES`.
+#[cfg(any(test, feature = "test-support"))]
 const NS_C_SITE: &str = "eval // ns_surface.rs + defvar_bool table (NS surface)";
 
-pub static CUS_START_PLATFORM_VARIABLES: &[CusStartPlatformVariable] = &[
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) static CUS_START_PLATFORM_VARIABLES: &[CusStartPlatformVariable] = &[
     // ---- Bound under GNU/Linux + X + GTK (7) ----
     declared(
         "window-combination-limit",
