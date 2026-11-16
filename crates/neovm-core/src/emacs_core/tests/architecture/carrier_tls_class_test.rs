@@ -1517,7 +1517,7 @@ const ENCLOSING_TEST_GATES: &[EnclosingTestGate] = &[
     EnclosingTestGate {
         root_file: "neovm-eval/src/lib.rs",
         file: "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
-        line: 5789,
+        line: 5790,
         cfg: "#[cfg(any(test, feature = \"test-support\"))]",
         module: "emacs_core::jit::aot::test_support",
         resolved_files: &[
