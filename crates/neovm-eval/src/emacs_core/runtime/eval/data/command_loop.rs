@@ -809,8 +809,7 @@ impl neovm_value::gc_trace::GcTrace for KBoard {
 /// This owns transport-facing queues plus the active keyboard-local `KBoard`
 /// state, which is the nearest NeoVM equivalent to GNU `keyboard.c` +
 /// `kboard`.
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct KeyboardRuntime {
+pub struct KeyboardRuntime {
     /// Input event queue used by unit tests and non-blocking command-loop paths.
     pub event_queue: VecDeque<InputEvent>,
     /// Input already received from the host but not yet returned by `read_char`.

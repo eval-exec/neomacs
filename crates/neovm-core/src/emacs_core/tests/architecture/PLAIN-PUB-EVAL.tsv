@@ -601,6 +601,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl Re
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl ReadKeySequenceState::snapshot
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct CommandLoop
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct KBoard
+crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct KeyboardRuntime
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct MousePixelPositionState
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct PresentedMouseTarget
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	enum	enum DisplayEval
