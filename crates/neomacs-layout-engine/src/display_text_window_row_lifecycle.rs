@@ -19,7 +19,7 @@ use crate::display_row::special_glyphs::{
 use crate::display_row::walk_state::{
     DisplayRowSourceStart, next_window_start_for_partially_visible_point_row,
     next_window_start_for_point_line_continuation, next_window_start_from_visible_rows,
-    scrollable_row_count,
+    row_next_window_start_charpos, scrollable_row_count,
 };
 use crate::display_status_line::ChromeRowRenderServices;
 use crate::neovm_bridge::{ForwardScrollMeasurement, LayoutBufferView, RustBufferAccess};
@@ -1170,19 +1170,28 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                 // A start that does not recenter still has to make progress,
                 // as the measured display-row scroll does.
                 let progress = advance(dy);
+                let place_relative_to_point = ViewportDecision::PlaceRelativeToPoint {
+                    lines_above_point,
+                    fallback_window_start:
+                        crate::buffer_source::window_source::ResolvedWindowStart::from_layout_charpos(
+                            progress.unwrap_or(self.window_start),
+                        ),
+                };
                 if let Some(row) = point_row_in_rows {
                     // Point's row was measured, so the row `lines_above_point`
-                    // above it is already known: start there.
-                    let rows_to_scroll = row as i64 - lines_above_point;
-                    return Some(rows_to_scroll)
-                        .filter(|&rows| {
-                            rows > 0 && scrollable_row_count(self.rows, self.window_start) >= rows
-                        })
-                        .and_then(|rows| {
-                            next_window_start_from_visible_rows(self.rows, self.window_start, rows)
-                        })
-                        .or(progress)
-                        .map_or(ViewportDecision::Keep, commit);
+                    // above it is already known: start there. Index it by
+                    // DISPLAY row, as GNU measures height: a string-only row
+                    // fills a row even when it offers no buffer position.
+                    let top_row = row as i64 - lines_above_point;
+                    if top_row <= 0 {
+                        return progress.map_or(ViewportDecision::Keep, commit);
+                    }
+                    // The walk resumes where the row above the new top row
+                    // ends. A row that does not pass the start, such as a
+                    // before-string row at the start, cannot be committed.
+                    return row_next_window_start_charpos(&self.rows[top_row as usize - 1])
+                        .filter(|&start| start > self.window_start)
+                        .map_or(place_relative_to_point, commit);
                 }
                 // Point is below the measured rows. Counting BUFFER lines is
                 // exact when no line between the two wraps. On wrapped lines it
@@ -1195,16 +1204,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                     byte_at_charpos,
                 ))
                 .filter(|&start| start > self.window_start)
-                .map_or(
-                    ViewportDecision::PlaceRelativeToPoint {
-                        lines_above_point,
-                        fallback_window_start:
-                            crate::buffer_source::window_source::ResolvedWindowStart::from_layout_charpos(
-                                progress.unwrap_or(self.window_start),
-                            ),
-                    },
-                    commit,
-                )
+                .map_or(place_relative_to_point, commit)
             }
         }
     }

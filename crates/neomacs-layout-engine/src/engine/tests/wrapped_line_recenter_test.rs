@@ -244,3 +244,70 @@ fn forced_start_above_wrapped_lines_moves_point_into_the_window() {
         "point moves back to the window {first}..={end}: point {point}, was {below}"
     );
 }
+
+#[test]
+fn recentering_counts_leading_before_string_rows_as_display_rows() {
+    // Rows produced only by a before-string at the window start occupy
+    // screen space but offer no buffer position past the start. GNU
+    // `recenter:` moves back from point by display height
+    // (`move_it_vertically_backward`, src/xdisp.c:21219), so those rows
+    // count like any other row.
+    const STRING_ROWS: usize = 7;
+    let (mut eval, frame, _buffer, window) = incr_editing_frame(&"x\n".repeat(400), 640, 400);
+    eval.eval_str(&format!(
+        "(progn (setq scroll-margin 3)
+                (overlay-put (make-overlay 1 2) 'before-string {:?}))",
+        "s\n".repeat(STRING_ROWS)
+    ))
+    .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    let all_rows = |eval: &Context| {
+        eval.frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .rows
+            .clone()
+    };
+    let rows = all_rows(&eval);
+    let string_rows = rows
+        .iter()
+        .take_while(|row| {
+            row.end_source == neovm_core::window::DisplayRowEndSource::OverlayBeforeString
+        })
+        .count();
+    let window_rows = rows
+        .iter()
+        .filter(|row| row.start_buffer_pos.is_some())
+        .count();
+    assert!(
+        string_rows == STRING_ROWS && window_rows >= 2 * STRING_ROWS,
+        "fixture needs {STRING_ROWS} string rows above the first buffer line: \
+         {string_rows} string rows of {window_rows}"
+    );
+
+    // Point inside the bottom scroll margin, on a row that was laid out.
+    let point = rows[window_rows - 2].start_buffer_pos.unwrap().as_i64();
+    assert!(
+        point > 1,
+        "point must sit on a buffer row, not a string row"
+    );
+    eval.eval_str(&format!("(goto-char {point})")).unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+
+    let rows = all_rows(&eval);
+    let point_row = row_starting_at(&rows, point).unwrap_or_else(|| {
+        panic!(
+            "point {point} must be visible after redisplay; window-start {}",
+            window_start(&eval, frame, window)
+        )
+    });
+    assert!(
+        point_row.abs_diff(window_rows / 2) <= 1,
+        "recenter puts point half the window's DISPLAY rows down, string rows \
+         included: row {point_row} of {window_rows}, window-start {}",
+        window_start(&eval, frame, window)
+    );
+}
