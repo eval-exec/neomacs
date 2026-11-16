@@ -202,6 +202,10 @@ fn oracle_neither_editor_declares_the_names_ledger_190_deleted() {
 /// and live mode the GNU half is measured on the attested oracle, and the
 /// snapshot half measures the shipped neomacs binary.
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS product enables webview => xwidgets; R8 guard covers the three-way agreement"
+)]
 fn oracle_neither_editor_declares_xwidget_subrs_without_the_feature() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

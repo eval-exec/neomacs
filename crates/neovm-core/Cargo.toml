@@ -128,7 +128,7 @@ default = ["jit", "sqlite"]
 # Diagnostic inventory walks and JSONL records; absent from ordinary builds.
 gc-memory-telemetry = ["dep:serde_json", "neovm-value/gc-memory-telemetry", "neovm-eval/gc-memory-telemetry", "neovm-display/gc-memory-telemetry"]
 sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite", "neovm-system/sqlite", "neovm-display/sqlite"]
-xwidgets = ["neovm-eval/xwidgets", "neovm-display/xwidgets"]
+xwidgets = ["neovm-eval/xwidgets", "neovm-display/xwidgets", "neovm-value/xwidgets"]
 # Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
 # Production/Nix builds leave this off and use the system library.  The
 # transport (and its dbus dependency) lives in neovm-system since stage 6,
@@ -140,7 +140,10 @@ sound = ["neovm-display/sound"]
 # `xwidget-internal` is provided: the evaluator cannot see
 # `neomacs-webview`'s feature directly, and advertising the layer without the
 # backend leaves `xwidget-webkit-browse-url` failing at creation.
-webview = ["neovm-value/webview"]
+# The macOS inline-webview backend implies the GNU keyed xwidget surface
+# (`xwidgets`, our HAVE_XWIDGETS): a build that advertises xwidget-internal
+# must also declare make-xwidget and bind xwidget-list.
+webview = ["neovm-value/webview", "xwidgets"]
 # The Linux display runtime enables this when it links its native GSettings
 # adapter. Bare evaluator builds must not advertise a native subscription.
 # The system-vocabulary table moved to neovm-value, so the same capability has
