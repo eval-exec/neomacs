@@ -23,7 +23,12 @@ can continue, then collect the result with `neomacs-worker-wait`.
 
 The pool starts lazily when the first task is submitted. Errors raised by a
 worker are copied back and signaled by `wait` with the same condition name;
-error data is printed in the worker and read in the main isolate.
+error data is printed in the worker (with the context-free printer, so
+`print-*` settings in the worker do not apply) and read back in the main
+isolate. Data that does not read back (an object with no readable syntax,
+such as a buffer the worker put in its error) arrives as the printed text,
+one string, so the condition is always re-signaled and the data is at worst
+a string.
 
 ## Values at the boundary
 

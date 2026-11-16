@@ -489,10 +489,15 @@ pub fn to_value(ctx: &mut Context, transfer: &Transfer) -> Result<Value, Transfe
         Transfer::ByteCode(literal) => {
             let forms = read_all(literal, ctx.variables())
                 .map_err(|err| TransferError::ByteCodeLiteral(err.message))?;
-            forms
-                .into_iter()
-                .next()
-                .ok_or_else(|| TransferError::ByteCodeLiteral("empty literal".to_string()))
+            match forms.as_slice() {
+                [form] if form.is_bytecode() => Ok(*form),
+                [_] => Err(TransferError::ByteCodeLiteral(
+                    "literal did not read as a byte-code object".to_string(),
+                )),
+                _ => Err(TransferError::ByteCodeLiteral(
+                    "expected exactly one byte-code literal".to_string(),
+                )),
+            }
         }
     }
 }
@@ -820,7 +825,17 @@ impl<'a> Reader<'a> {
                     entries,
                 }
             }
-            TAG_BYTE_CODE => Transfer::ByteCode(self.string()?),
+            TAG_BYTE_CODE => {
+                // The tag's invariant is "a byte-code literal": the wire must
+                // carry `#[...]`, not an arbitrary readable form.
+                let literal = self.string()?;
+                if !literal.trim_start().starts_with("#[") {
+                    return Err(TransferError::ByteCodeLiteral(
+                        "not a #[...] byte-code literal".to_string(),
+                    ));
+                }
+                Transfer::ByteCode(literal)
+            }
             other => return Err(TransferError::Decode(format!("tag {other}"))),
         })
     }
