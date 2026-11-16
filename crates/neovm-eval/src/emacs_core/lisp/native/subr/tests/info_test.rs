@@ -105,8 +105,11 @@ fn assert_subr_arity(name: &str, min: i64, max: Option<i64>) {
 #[test]
 fn subr_arities_match_the_pinned_gnu_defun_contracts() {
     crate::test_utils::init_test_tracing();
+    // The xwidget batch exists only with the port's `xwidgets` feature, the
+    // match for GNU's HAVE_XWIDGETS.
+    #[cfg(feature = "xwidgets")]
+    assert_subr_arity("xwidget-view-lookup", 1, Some(2));
     for (name, min, max) in [
-        ("xwidget-view-lookup", 1, Some(2)),
         ("frame-root-frame", 0, Some(1)),
         ("all-completions", 2, Some(3)),
         ("make-thread", 1, Some(3)),

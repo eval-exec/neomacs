@@ -1,4 +1,10 @@
 //! Real pinned grammar libraries through GNU 31.1's public Lisp API.
+//!
+//! The grammar cache is a pin, not a clone: 'cargo xtask treesit-grammars'
+//! prefetches every revision below and verifies each generated parser.c
+//! against its SHA-256 before publishing it. These rows read that cache
+//! without the network -- a cold cache fails loudly naming the prefetch
+//! command instead of flaking on a TLS hiccup mid-clone.
 use neomacs_melpa_test_support::{
     EmacsRuntime, GNU31_TREE_SITTER_GRAMMARS, MelpaSandbox, TreeSitterGrammarCase, elisp_string,
     output_with_timeout, output_with_timeout_pinned,
@@ -39,7 +45,7 @@ fn grammar_case(language: &str) -> TreeSitterGrammarCase {
 fn check_language(case: TreeSitterGrammarCase) {
     let language = case.language;
     let gnu = EmacsRuntime::gnu_emacs();
-    let grammar = case.prepare(&gnu).unwrap();
+    let grammar = case.prepare().unwrap();
     let sandbox = MelpaSandbox::new(&format!("treesit-{language}")).unwrap();
     let destination = sandbox.home().join(".emacs.d/tree-sitter");
     copy_grammar(&grammar, &destination);
@@ -111,7 +117,7 @@ fn missing_grammar_parser_and_eager_query_signal_language_load_error() {
 #[test]
 fn explicit_grammar_path_precedes_user_directory() {
     let gnu = EmacsRuntime::gnu_emacs();
-    let grammar = grammar_case("go").prepare(&gnu).unwrap();
+    let grammar = grammar_case("go").prepare().unwrap();
     let sandbox = MelpaSandbox::new("treesit-precedence").unwrap();
     copy_grammar(&grammar, &sandbox.home().join(".emacs.d/tree-sitter"));
     let extra = sandbox.root().join("explicit");
@@ -130,8 +136,8 @@ fn explicit_grammar_path_precedes_user_directory() {
 #[test]
 fn grammar_with_missing_entry_point_reports_symbol_error_without_fallback() {
     let gnu = EmacsRuntime::gnu_emacs();
-    let go = grammar_case("go").prepare(&gnu).unwrap();
-    let json = grammar_case("json").prepare(&gnu).unwrap();
+    let go = grammar_case("go").prepare().unwrap();
+    let json = grammar_case("json").prepare().unwrap();
     let sandbox = MelpaSandbox::new("treesit-symbol-error").unwrap();
     copy_grammar(&go, &sandbox.home().join(".emacs.d/tree-sitter"));
     let extra = sandbox.root().join("explicit");
@@ -159,7 +165,7 @@ fn grammar_with_missing_entry_point_reports_symbol_error_without_fallback() {
 fn incompatible_grammar_reports_language_version_mismatch() {
     let gnu = EmacsRuntime::gnu_emacs();
     let case = grammar_case("json");
-    let source = case.prepare_generated_source(&gnu).unwrap();
+    let source = case.prepare_generated_source().unwrap();
     let sandbox = MelpaSandbox::new("treesit-abi-mismatch").unwrap();
     let parser = sandbox.root().join("parser.c");
     let generated = fs::read_to_string(source.join("parser.c")).unwrap();

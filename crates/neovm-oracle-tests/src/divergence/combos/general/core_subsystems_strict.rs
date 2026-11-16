@@ -3874,8 +3874,9 @@ fn div_core_divergence_surface_process_send_bare_eol_coding() {
              (set-process-coding-system proc 'binary output-coding)
              (process-send-string proc "a\nb")
              (process-send-eof proc)
-             (while (process-live-p proc)
-               (accept-process-output proc 0.05))
+             ;; A terminal status does not imply the final filter bytes
+             ;; arrived; the post-terminal observation drains them.
+             (neovm--oracle-settle-process proc 600)
              (append (or out "") nil))))))
   (list (funcall run 'dos)
         (funcall run 'mac)
@@ -3909,8 +3910,9 @@ fn div_core_divergence_surface_process_filter_bare_eol_decoding() {
                                   (setq out (concat out s))))))
              (set-process-query-on-exit-flag proc nil)
              (set-process-coding-system proc input-coding 'binary)
-             (while (process-live-p proc)
-               (accept-process-output proc 0.05))
+             ;; A terminal status does not imply the final filter bytes
+             ;; arrived; the post-terminal observation drains them.
+             (neovm--oracle-settle-process proc 600)
              (append (or out "") nil))))))
   (list (funcall run 'dos "a\r\nb")
         (funcall run 'mac "a\rb")

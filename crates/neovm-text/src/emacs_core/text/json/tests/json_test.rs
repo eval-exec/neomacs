@@ -162,6 +162,37 @@ fn serialize_float_matches_gnu_dtoastr() {
     }
 }
 
+/// GNU `json_out_nest` (src/json.c): `maxdepth` starts at 50 and every
+/// object or array entry decrements it, so 50 nested containers serialize and
+/// entering the 51st signals a plain `error` (not a json-error subtype).
+#[test]
+fn serialize_depth_boundary_matches_gnu_json_out_nest() {
+    crate::test_utils::init_test_tracing();
+    fn nested(containers: usize) -> Value {
+        let mut value = Value::fixnum(1);
+        for _ in 0..containers {
+            value = Value::vector(vec![value]);
+        }
+        value
+    }
+    for containers in [1, 48, 49, 50] {
+        assert!(
+            builtin_json_serialize(vec![nested(containers)]).is_ok(),
+            "{containers} nested containers are allowed"
+        );
+    }
+    match builtin_json_serialize(vec![nested(51)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "error");
+            assert_eq!(
+                sig.data,
+                vec![Value::string("Maximum JSON serialization depth exceeded")]
+            );
+        }
+        other => panic!("expected GNU's serialization depth error, got {other:?}"),
+    }
+}
+
 #[test]
 fn serialize_nan_errors() {
     crate::test_utils::init_test_tracing();

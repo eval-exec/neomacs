@@ -5346,7 +5346,10 @@ pub fn builtin_internal_set_font_selection_order(args: Vec<Value>) -> EvalResult
 /// `(internal-set-alternative-font-family-alist ALIST)` -- normalize string
 /// entries to symbols and return the normalized list.
 #[doc(hidden)]
-pub fn builtin_internal_set_alternative_font_family_alist(args: Vec<Value>) -> EvalResult {
+pub fn builtin_internal_set_alternative_font_family_alist(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("internal-set-alternative-font-family-alist", &args, 1)?;
     let entries = proper_list_to_vec_or_listp_error(&args[0])?;
     let mut normalized = Vec::with_capacity(entries.len());
@@ -5358,11 +5361,13 @@ pub fn builtin_internal_set_alternative_font_family_alist(args: Vec<Value>) -> E
         for member in members {
             match member.kind() {
                 ValueKind::String => {
-                    // Issue #131: intern the family name faithfully (real Emacs
-                    // bytes) rather than via the PUA-sentinel storage form.
-                    let sym = neovm_value::intern::intern_lisp_string(
-                        member.as_lisp_string().expect("checked string"),
-                    );
+                    // GNU's setter is `XSETCAR (tail2, Fintern (XCAR (tail2),
+                    // Qnil))' (`src/xfaces.c:5877`): it interns each family
+                    // STRING into `Vobarray', which is why loading faces.el
+                    // makes "Sans Serif" an obarray member. Intern the real
+                    // Emacs bytes (issue #131) and mark the membership the
+                    // same Fintern does.
+                    let sym = eval.obarray_mut().intern_lisp_value(member);
                     converted.push(Value::from_sym_id(sym));
                     names.push(sym);
                 }

@@ -7,7 +7,7 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group};
 use neovm_core::buffer::{
     Buffer, BufferId, BufferTextBackendKind, CharPos0, EmacsBytePos, EmacsByteRange,
     SavedPointBeforeCommand,
@@ -211,4 +211,14 @@ criterion_group!(
     bench_copy_ranges,
     bench_char_to_byte,
 );
-criterion_main!(benches);
+
+/// Mirrors `criterion_main!(benches)` with one addition: the TaggedHeap
+/// fallback must be armed first, because criterion executes the bench
+/// functions to register their benchmarks — including under `--list`, which
+/// `cargo nextest --all-targets` runs while collecting the test list — and
+/// this bench constructs its buffers at registration time.
+fn main() {
+    neovm_value::test_utils::init_test_tracing();
+    benches();
+    Criterion::default().configure_from_args().final_summary();
+}

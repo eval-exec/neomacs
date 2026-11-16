@@ -157,6 +157,9 @@ mod oracle_safe_hooks;
 #[path = "oracle_shift_selection.rs"]
 mod oracle_shift_selection;
 
+#[path = "oracle_symbol_members.rs"]
+mod oracle_symbol_members;
+
 #[path = "oracle_tab_line.rs"]
 mod oracle_tab_line;
 
