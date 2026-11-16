@@ -385,8 +385,20 @@ fn waits_accept_lists_share_timeout_and_keep_unwaited_tasks() {
 fn quit_during_wait_does_not_consume_the_task() {
     let mut ctx = main_isolate();
     let request = ctx.quit_requested.clone();
+    // The quit must land inside the wait, not while the task is still being
+    // copied in or the pool is still booting: the helper raises it only once
+    // an owner has dequeued the task (so the main isolate is already in its
+    // 200 ms wait, which it entered right after the run returned) and then
+    // a little later, inside that wait's slices.
+    let runtime = isolate::installed().expect("pool installed").runtime();
+    let dequeued_before = runtime.stats().dequeued;
     let helper = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut polls = 0;
+        while runtime.stats().dequeued == dequeued_before && polls < 20_000 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            polls += 1;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(60));
         request.request();
     });
     assert_eq!(
