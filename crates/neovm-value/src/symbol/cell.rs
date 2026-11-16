@@ -954,7 +954,7 @@ impl LispSymbol {
 /// }
 /// ```
 #[cfg(doctest)]
-pub struct ValueCellCompileContract;
+pub(crate) struct ValueCellCompileContract;
 
 // ===========================================================================
 // Writing a cell

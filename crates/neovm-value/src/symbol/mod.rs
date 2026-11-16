@@ -343,7 +343,7 @@ impl BufferlessValue {
 
     /// Only the arm that agrees with GNU unconditionally.
     #[must_use]
-    pub fn global_only(self) -> Option<Value> {
+    pub(crate) fn global_only(self) -> Option<Value> {
         match self {
             Self::Global(value) => Some(value),
             Self::DefaultOfLocalized(_) | Self::PerBufferSlot | Self::Void => None,
@@ -656,7 +656,7 @@ impl SetInternalBind {
 ///
 /// Phase 5 stub: always `false`. Phase 7 wires this against the
 /// specpdl `LET_LOCAL` records.
-pub fn let_shadows_buffer_binding_p(_sym_id: SymId) -> bool {
+pub(crate) fn let_shadows_buffer_binding_p(_sym_id: SymId) -> bool {
     false
 }
 
@@ -2298,7 +2298,7 @@ impl Obarray {
     /// `indent::dynamic_buffer_or_global_symbol_value` is the older, identical
     /// reader; it lives in a file ledger 195 owns, so collapsing the two is
     /// owed rather than done here (ledger 196).
-    pub fn canonical_value_in_buffer<B: BufferLocalView>(
+    pub(crate) fn canonical_value_in_buffer<B: BufferLocalView>(
         &self,
         access: CanonicalAccess,
         buf: Option<&B>,
@@ -2316,7 +2316,7 @@ impl Obarray {
     /// [`Self::symbol_value_copied`] on the overwhelmingly common global path, which
     /// matters where a caller reads a dozen names at once -- the `print-*`
     /// family, for one.
-    pub fn canonical_value_in_buffer_id<B: BufferLocalView>(
+    pub(crate) fn canonical_value_in_buffer_id<B: BufferLocalView>(
         &self,
         _access: CanonicalAccess,
         buf: Option<&B>,
@@ -4386,7 +4386,7 @@ impl Obarray {
     }
 
     /// Check if a symbol is bound (has a value cell).
-    pub fn canonical_boundp(&self, access: CanonicalAccess, name: &str) -> bool {
+    pub(crate) fn canonical_boundp(&self, access: CanonicalAccess, name: &str) -> bool {
         self.canonical_boundp_id(access, intern(name))
     }
 
@@ -4520,7 +4520,7 @@ impl Obarray {
     }
 
     /// Get the symbol's full plist as a flat list.
-    pub fn symbol_plist(&self, name: &str) -> Value {
+    pub(crate) fn symbol_plist(&self, name: &str) -> Value {
         self.symbol_plist_id(intern(name))
     }
 
@@ -4724,7 +4724,7 @@ impl Obarray {
 
     /// Check whether a symbol is a buffer-local variable by identity.
     /// Phase F: uses the redirect tag rather than the legacy value enum.
-    pub fn is_buffer_local_id(&self, id: SymId) -> bool {
+    pub(crate) fn is_buffer_local_id(&self, id: SymId) -> bool {
         self.slot(id)
             .is_some_and(|s| s.redirect() == SymbolRedirect::Localized)
     }
@@ -4945,7 +4945,7 @@ impl Obarray {
         self.global_member_count
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.global_member_count == 0
     }
 

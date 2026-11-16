@@ -229,7 +229,7 @@ impl FacadeMarkExclusion {
         self.epoch.heap_identity()
     }
 
-    pub fn validate(&self, heap: &TaggedHeap) -> Result<(), FacadeMarkExclusionError> {
+    pub(crate) fn validate(&self, heap: &TaggedHeap) -> Result<(), FacadeMarkExclusionError> {
         self.epoch.validate(heap)
     }
 

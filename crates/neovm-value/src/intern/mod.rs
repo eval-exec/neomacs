@@ -569,7 +569,7 @@ impl Hash for SymbolNameKey {
 static_assertions::assert_impl_all!(SymbolNameCharacterCount: Send, Sync);
 
 /// Append-only string interner used only for symbol names.
-pub struct StringInterner {
+pub(crate) struct StringInterner {
     strings: NameAtomStorage,
     map: HashMap<SymbolNameKey, NameId, FxBuildHasher>,
 }
@@ -680,7 +680,7 @@ impl StringInterner {
     /// `LispString::clone` (an allocation + byte copy per name, ~17k names at
     /// startup) is replaced by a header-word [`LispString::borrowed_alias`].
     /// Owned or interval-carrying names fall back to the general path.
-    pub fn intern_dump_lisp_string(&mut self, name: &LispString) -> NameId {
+    pub(crate) fn intern_dump_lisp_string(&mut self, name: &LispString) -> NameId {
         debug_assert!(
             matches!(
                 Self::normalize_symbol_name_lisp_string(name),
@@ -727,7 +727,7 @@ impl StringInterner {
     }
 
     /// Look up a symbol-name atom without interning it.
-    pub fn lookup_lisp_string(&self, s: &LispString) -> Option<NameId> {
+    pub(crate) fn lookup_lisp_string(&self, s: &LispString) -> Option<NameId> {
         self.lookup_name_parts(s.as_bytes(), SymbolNameCharacterCount::from(s))
     }
 
@@ -746,7 +746,7 @@ impl StringInterner {
 
     /// Resolve a name id back to its exact Lisp-string storage.
     #[inline]
-    pub fn resolve_lisp_string(&self, id: NameId) -> &'static LispString {
+    pub(crate) fn resolve_lisp_string(&self, id: NameId) -> &'static LispString {
         self.strings.get(id)
     }
 }
@@ -1880,7 +1880,7 @@ pub fn is_keyword_id(id: SymId) -> bool {
 }
 
 #[inline]
-pub fn resolve_sym_metadata(id: SymId) -> (&'static str, bool) {
+pub(crate) fn resolve_sym_metadata(id: SymId) -> (&'static str, bool) {
     ensure_thread_local_cache_epoch_current();
     if let Some(is_canonical) = thread_local_is_canonical(id)
         && is_canonical
@@ -2179,7 +2179,7 @@ pub fn map_lisp_visible_symbol_names<T>(
 }
 
 #[inline]
-pub fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
+pub(crate) fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
     let registry = global_symbol_registry().read();
     registry.resolve_name_value(id)
 }
@@ -2559,7 +2559,7 @@ fn thread_local_record_keyword(id: SymId, is_keyword: bool) {
 /// panicking. This is useful at serialization boundaries where we want a
 /// structured error instead of aborting the process on malformed runtime data.
 #[inline]
-pub fn try_resolve_sym(id: SymId) -> Option<&'static str> {
+pub(crate) fn try_resolve_sym(id: SymId) -> Option<&'static str> {
     let registry = global_symbol_registry().read();
     registry
         .slot(id)
@@ -2567,7 +2567,7 @@ pub fn try_resolve_sym(id: SymId) -> Option<&'static str> {
 }
 
 #[inline]
-pub fn try_resolve_sym_lisp_string(id: SymId) -> Option<&'static LispString> {
+pub(crate) fn try_resolve_sym_lisp_string(id: SymId) -> Option<&'static LispString> {
     let registry = global_symbol_registry().read();
     registry
         .slot(id)

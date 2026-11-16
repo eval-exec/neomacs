@@ -107,7 +107,7 @@ impl<'era> RunAccess<'_, 'era> {
 
     /// Test the direct function cell without resolving aliases or executing it.
     /// The canonical boolean reaches the resident home before reader release.
-    pub fn sym_fboundp_into(
+    pub(crate) fn sym_fboundp_into(
         &mut self,
         symbol: &SymbolHandle,
         dst: &mut OwnerRootSlot<'era>,

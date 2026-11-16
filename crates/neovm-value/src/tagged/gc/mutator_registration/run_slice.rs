@@ -106,7 +106,7 @@ impl<'brand> RunSlice<'brand, '_> {
     /// No `NEOVM_THREADS` entry calls the field operations yet. The restricted
     /// executor is `cfg(test)` only.
     #[allow(dead_code)]
-    pub fn store_immediate(
+    pub(crate) fn store_immediate(
         &mut self,
         result: &mut SliceRoot<'brand>,
         bits: usize,
@@ -125,7 +125,7 @@ impl<'brand> RunSlice<'brand, '_> {
     /// Read car into a branded slot. The caller has already rejected a
     /// non-cons; this still refuses one rather than manufacturing a pointer.
     #[allow(dead_code)]
-    pub fn load_car(
+    pub(crate) fn load_car(
         &mut self,
         cell: &SliceRoot<'brand>,
         result: &mut SliceRoot<'brand>,

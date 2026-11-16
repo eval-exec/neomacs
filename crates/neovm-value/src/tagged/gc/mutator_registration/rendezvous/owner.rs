@@ -24,12 +24,12 @@ impl<'era> Mutator<'era> {
             _ => Ok(None),
         }
     }
-    pub fn request_collection(&self) -> Result<Request, RendezvousError> {
+    pub(crate) fn request_collection(&self) -> Result<Request, RendezvousError> {
         self.check_thread()?;
         request(self.registry)
     }
     /// StartingStopped cannot obtain a run slice until its bootstrap is opened.
-    pub fn wait_started(&mut self) -> Result<(), RendezvousError> {
+    pub(crate) fn wait_started(&mut self) -> Result<(), RendezvousError> {
         self.check_thread()?;
         let _park = self.registry.park_ticket();
         let mut gate = self.registry.lock()?;
@@ -93,7 +93,7 @@ impl<'era> Mutator<'era> {
     pub fn enter_native(&mut self, roots: &[SharedRoot]) -> Result<(), RendezvousError> {
         self.publish_roots(None, true, roots)
     }
-    pub fn park_once(&mut self, roots: &[SharedRoot]) -> Result<u64, RendezvousError> {
+    pub(crate) fn park_once(&mut self, roots: &[SharedRoot]) -> Result<u64, RendezvousError> {
         let epoch = self.wait_request()?;
         self.acknowledge(epoch, roots)?;
         self.restore_wait(false)

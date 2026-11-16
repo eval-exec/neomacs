@@ -2064,7 +2064,7 @@ pub fn note_heap_write(owner: TaggedValue, kind: HeapWriteKind) {
 
 /// Central mutation hook for slot writes to the tagged heap.
 #[inline(always)]
-pub fn note_heap_slot_write(
+pub(crate) fn note_heap_slot_write(
     owner: TaggedValue,
     kind: HeapWriteKind,
     slot: usize,

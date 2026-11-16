@@ -100,8 +100,8 @@ pub struct CollectionReport {
     pub live_bytes: usize,
     /// Post-sweep global charged live balance, retained canonically in owner 0.
     pub allocated_count: usize,
-    pub memory_use_counts: [u64; MEMORY_USE_COUNT_LEN],
-    pub total_allocated_bytes: u64,
+    pub(crate) memory_use_counts: [u64; MEMORY_USE_COUNT_LEN],
+    pub(crate) total_allocated_bytes: u64,
 }
 
 fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {
