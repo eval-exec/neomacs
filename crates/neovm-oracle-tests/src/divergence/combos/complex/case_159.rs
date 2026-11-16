@@ -52,12 +52,12 @@ fn div_cx159_mega_eieio_clloop_eval_macro_undo_buflocal_process_timer() {
                                         (buffer-string)
                                         (marker-position m)
                                         (overlay-start ov) (overlay-end ov)
-                                        (text-properties-at 1)))))
+                                        (text-properties-at 1))))
                     (undo) (undo)
                     (widen)
                     (list snapshot (buffer-string) (marker-position m)
                           (overlay-start ov) (overlay-end ov)
-                          (text-properties-at 1)))))))))
+                          (text-properties-at 1))))))))))
   (error (list :errored (car e))))
 "##,
         expect,

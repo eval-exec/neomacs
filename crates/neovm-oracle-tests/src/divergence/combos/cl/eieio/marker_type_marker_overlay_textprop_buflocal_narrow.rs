@@ -266,9 +266,7 @@ fn combo_eieio_mtype_multiple_markers_edit_chain() {
 fn combo_eieio_mtype_overlay_modification_hooks() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" _ (overlay-put ov 'modification-hooks (list (lambda (ov after-p beg end &optional _len) (when after-p (setq hook-fire-count (1+ hook-fire-count)))))) (results nil))""#
-    ]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass mtype-hook-snap ()
@@ -297,7 +295,7 @@ fn combo_eieio_mtype_overlay_modification_hooks() {
                            (list (lambda (ov after-p beg end &optional _len)
                                    (when after-p
                                      (setq hook-fire-count
-                                           (1+ hook-fire-count))))))
+                                           (1+ hook-fire-count)))))))
              (results nil))
         (setq buffer-undo-list nil)
         (undo-boundary)
@@ -342,7 +340,7 @@ fn combo_eieio_mtype_overlay_modification_hooks() {
               (marker-position m-adv) (marker-position m-stay)
               (overlay-start ov) (overlay-end ov)
               hook-fire-count)))
-    (kill-buffer buf))))"#,
+    (kill-buffer buf)))"#,
         expect,
     );
 }
