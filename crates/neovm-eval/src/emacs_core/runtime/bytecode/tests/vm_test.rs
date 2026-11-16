@@ -5677,7 +5677,7 @@ fn vm_func_arity_and_obarray_queries_use_shared_obarray_state() {
                   (obarrayp (obarray-make 3))
                   (obarrayp [1 2 3])))"#,
             |eval| {
-                eval.obarray_mut().intern("vm-soft-target");
+                eval.obarray_mut().intern_member("vm-soft-target");
             },
         ),
         "OK ((1 . 1) vm-soft-target nil t nil)"

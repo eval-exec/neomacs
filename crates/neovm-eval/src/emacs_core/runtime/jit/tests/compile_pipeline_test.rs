@@ -7,6 +7,7 @@ use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::stats::{self, CompileOrigin, CompilePhase};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 pub(crate) fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
@@ -388,7 +389,7 @@ pub(crate) fn captured_code(compile: impl FnOnce()) -> Vec<String> {
 /// leaf, a baseline leaf with calls, a loop, a condition-case and float
 /// arithmetic.
 pub(crate) fn corpus() -> Vec<(Vec<Op>, Vec<Value>, usize)> {
-    let sym = |name: &str| Value::symbol(name);
+    let sym = |name: &str| Value::from_sym_id(intern(name));
     vec![
         // (lambda (x) (+ x 1)): MIR.
         (

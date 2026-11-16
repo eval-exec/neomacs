@@ -98,7 +98,7 @@ fn chrome_string_without_maps_preserves_tab_line_but_clears_mode_line_maps() {
     let position_for = |area: &str| {
         Value::list(vec![
             Value::make_window(window_id.0),
-            Value::symbol(area),
+            Value::from_sym_id(intern(area)),
             Value::cons(Value::fixnum(1), Value::fixnum(1)),
             Value::fixnum(0),
             Value::cons(displayed, Value::fixnum(0)),
@@ -598,7 +598,7 @@ fn list_keymap_marker_requires_the_canonical_symbol_object() {
     crate::test_utils::init_test_tracing();
     let canonical = Value::list(vec![Value::symbol("keymap")]);
     let same_name = Value::list(vec![Value::from_sym_id(
-        crate::emacs_core::intern::intern_uninterned("keymap"),
+        crate::emacs_core::intern::make_uninterned_symbol("keymap"),
     )]);
 
     assert!(is_list_keymap(&canonical, crate::tagged::SymbolMode::Bare));

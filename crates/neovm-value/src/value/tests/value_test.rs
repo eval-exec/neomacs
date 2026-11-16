@@ -1,6 +1,6 @@
 use super::*;
 use crate::heap_types::LispMarker;
-use crate::intern::{intern, intern_uninterned, resolve_sym};
+use crate::intern::{intern, make_uninterned_symbol, resolve_sym};
 use crate::tagged::header::CLOSURE_ARGLIST;
 use crate::value::buffer_vocab::BufferId;
 use malachite::integer::Integer;
@@ -359,7 +359,7 @@ fn keyword_identity_is_consistent_across_constructors() {
 fn uninterned_colon_name_is_not_treated_as_keyword() {
     crate::test_utils::init_test_tracing();
     with_test_heap(|| {
-        let uninterned = Value::symbol(intern_uninterned(":vm-shadow-keyword"));
+        let uninterned = Value::symbol(make_uninterned_symbol(":vm-shadow-keyword"));
         assert!(!uninterned.is_bare_keyword());
         assert!(uninterned.as_bare_keyword_id().is_none());
 

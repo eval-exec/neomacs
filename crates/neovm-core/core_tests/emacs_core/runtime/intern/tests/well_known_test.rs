@@ -115,6 +115,19 @@ fn unintern_keeps_the_well_known_identity_while_lisp_reinterns() {
 fn initial_obarray_contains_every_table_symbol_like_gnu_defsym() {
     let mut ctx = crate::test_utils::new_context();
     for variant in WellKnown::VARIANTS.iter().copied() {
+        // A fixed id is not membership. GNU only interns the spellings its
+        // compiled `defsym_name[]` carries: `fontsize` is DEFSYM'd in
+        // `nsfns.m`, which a Linux GTK build does not compile, and the
+        // attested oracle answers `(intern-soft "fontsize")` with nil. The
+        // id stays for the display code's internal identity; the spelling
+        // stays out of this build's obarray.
+        if neovm_value::intern::is_gnu_defsym_spelling_absent_for_this_profile(variant.name()) {
+            assert!(
+                !ctx.obarray().is_global_member(variant.id()),
+                "{variant:?} is not compiled into this profile's GNU build"
+            );
+            continue;
+        }
         assert!(
             ctx.obarray().is_global_member(variant.id()),
             "{variant:?} must be an initial-obarray member"

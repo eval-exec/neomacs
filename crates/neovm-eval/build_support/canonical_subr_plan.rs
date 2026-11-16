@@ -123,7 +123,7 @@ const BATCHES: &[BatchDef] = &[
         module: "crate::emacs_core::xwidget",
         key: "xwidget",
         file: "crates/neovm-display/src/emacs_core/display/xwidget/subrs.rs",
-        base_cfg: "always",
+        base_cfg: "xwidgets",
         unlisted_layer: None,
         event_id: None,
     },
@@ -392,6 +392,9 @@ fn cfg_from_directive(line: &str) -> Option<&'static str> {
     }
     if line.contains("feature = \"sqlite\"") || line.contains("\"sqlite\"") {
         return Some("sqlite");
+    }
+    if line.contains("feature = \"xwidgets\"") || line.contains("\"xwidgets\"") {
+        return Some("xwidgets");
     }
     if line.contains("neomacs_have_lcms2") {
         return Some("lcms2");

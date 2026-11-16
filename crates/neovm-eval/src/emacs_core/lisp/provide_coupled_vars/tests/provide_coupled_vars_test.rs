@@ -44,13 +44,19 @@ fn the_table_has_no_duplicate_rows() {
 /// The counts the module doc states, so the prose cannot drift from the
 /// table.
 #[test]
-fn seventy_four_of_the_rows_are_bound_by_a_named_policy() {
+fn the_policy_rows_are_bound_by_a_named_policy() {
     let bound = PROVIDE_COUPLED_VARIABLES
         .iter()
         .filter(|v| matches!(v.here, HereDecision::BoundByPolicy { .. }))
         .count();
-    assert_eq!(bound, 74);
-    assert_eq!(PROVIDE_COUPLED_VARIABLES.len() - bound, 151 + DBUS_ROWS);
+    // The three xwidget variables are bound by policy only when the port's
+    // `xwidgets` feature compiles the same surface GNU's HAVE_XWIDGETS does.
+    #[cfg(feature = "xwidgets")]
+    let (bound_rows, absent_rows) = (74, 151 + DBUS_ROWS);
+    #[cfg(not(feature = "xwidgets"))]
+    let (bound_rows, absent_rows) = (71, 154 + DBUS_ROWS);
+    assert_eq!(bound, bound_rows);
+    assert_eq!(PROVIDE_COUPLED_VARIABLES.len() - bound, absent_rows);
 }
 
 /// The two names ledger 199 removed, and the two it deliberately did not.

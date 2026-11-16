@@ -14,7 +14,7 @@ pub(super) struct TextMeasurement {
     pub cell: TextCellPixels,
     pub columns: CharColumnWidth,
     pub edge: Option<RowEdge>,
-    pub y_limit: Option<f32>,
+    pub(crate) y_limit: Option<f32>,
 }
 
 impl TextMeasurement {

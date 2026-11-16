@@ -39,7 +39,7 @@ pub use value_vec::OwnedValueVec;
 #[repr(C)]
 pub union ConsCdrOrNext {
     pub cdr: TaggedValue,
-    pub next_free: *mut ConsCell,
+    pub(crate) next_free: *mut ConsCell,
 }
 
 /// One cons cell word: an interior-mutable, atomically writable place.
@@ -150,7 +150,7 @@ impl ConsCdrWord {
     }
 
     #[inline(always)]
-    pub const fn from_next(next: *mut ConsCell) -> Self {
+    pub(crate) const fn from_next(next: *mut ConsCell) -> Self {
         Self(UnsafeCell::new(ConsCdrOrNext { next_free: next }))
     }
 
@@ -283,7 +283,7 @@ impl ConsCell {
     /// `self` must point to a live cons cell whose words are accessed only by
     /// the atomic load/store helpers while concurrent collection is possible.
     #[inline]
-    pub unsafe fn load_car(&self) -> TaggedValue {
+    pub(crate) unsafe fn load_car(&self) -> TaggedValue {
         self.car.load_atomic()
     }
 
@@ -344,7 +344,7 @@ impl ConsCell {
     /// The cell must no longer be reachable as a live cons, and `next` must be
     /// null or point to another valid free-list node.
     #[inline]
-    pub unsafe fn set_free_next(&mut self, next: *mut ConsCell) {
+    pub(crate) unsafe fn set_free_next(&mut self, next: *mut ConsCell) {
         // GNU `sweep_conses` (src/alloc.c:6856-6858) writes the free-list link
         // into the cdr union and then poisons the car with `dead_object ()`.
         // The poison is load-bearing, not decoration: the link is a raw
@@ -480,7 +480,7 @@ impl HeaderFlags {
 
     /// These flags with `boxed` set.
     #[inline]
-    pub fn with_boxed(self) -> Self {
+    pub(crate) fn with_boxed(self) -> Self {
         Self(self.0 | Self::BOXED)
     }
 
@@ -817,7 +817,7 @@ impl GcHeader {
 
     /// Whether the raw mark byte is set at either parity (not at rest).
     #[inline]
-    pub fn is_marked(&self) -> bool {
+    pub(crate) fn is_marked(&self) -> bool {
         self.raw_mark() != UNMARKED_AT_REST
     }
 
@@ -825,7 +825,7 @@ impl GcHeader {
     /// current parity to mark ("this cycle" black), which is also the
     /// correct born-at-parity value at the allocation link seams.
     #[inline]
-    pub fn set_marked(&self, parity: MarkParity) {
+    pub(crate) fn set_marked(&self, parity: MarkParity) {
         self.marked.store(parity.byte(), Ordering::Relaxed);
     }
 
@@ -844,7 +844,7 @@ impl GcHeader {
     /// two threads racing to claim the same object cannot both observe `true`;
     /// a lost race is benign (the object ends up `== parity` either way).
     #[inline]
-    pub fn mark_claim_at(&self, parity: MarkParity) -> bool {
+    pub(crate) fn mark_claim_at(&self, parity: MarkParity) -> bool {
         self.marked.swap(parity.byte(), Ordering::Relaxed) != parity.byte()
     }
 }
@@ -961,7 +961,7 @@ pub enum VecLikeType {
 }
 
 impl VecLikeType {
-    pub fn gnu_pvec_type(self) -> Option<GnuPvecType> {
+    pub(crate) fn gnu_pvec_type(self) -> Option<GnuPvecType> {
         Some(match self {
             Self::Vector => GnuPvecType::NormalVector,
             Self::Bignum => GnuPvecType::Bignum,
@@ -1001,7 +1001,7 @@ impl VecLikeType {
         })
     }
 
-    pub fn gnu_pvec_code(self) -> Option<u8> {
+    pub(crate) fn gnu_pvec_code(self) -> Option<u8> {
         self.gnu_pvec_type().map(GnuPvecType::gnu_code)
     }
 }
@@ -1011,7 +1011,7 @@ impl VecLikeType {
 /// a corresponding runtime object.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, IntoPrimitive, TryFromPrimitive)]
-pub enum GnuPvecType {
+pub(crate) enum GnuPvecType {
     NormalVector = 0,
     Free = 1,
     Bignum = 2,
@@ -1140,7 +1140,7 @@ impl LispByteVec {
         self.as_slice().len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.as_slice().is_empty()
     }
 
@@ -1148,7 +1148,7 @@ impl LispByteVec {
     /// accounting. Every holder of shared owned bytes reports their full
     /// length, as it did when each clone was a private copy, so sharing
     /// does not move GC pacing.
-    pub fn owned_bytes(&self) -> usize {
+    pub(crate) fn owned_bytes(&self) -> usize {
         match &self.storage {
             LispByteVecStorage::Owned(bytes) => bytes.len(),
             LispByteVecStorage::Mapped { .. } => 0,
@@ -1203,7 +1203,7 @@ impl std::fmt::Debug for LispByteVec {
 pub struct LispValueSlice([TaggedValue]);
 
 impl LispValueSlice {
-    pub fn from_slice(slice: &[TaggedValue]) -> &Self {
+    pub(crate) fn from_slice(slice: &[TaggedValue]) -> &Self {
         unsafe { &*(slice as *const [TaggedValue] as *const Self) }
     }
 
@@ -1211,7 +1211,7 @@ impl LispValueSlice {
         &self.0
     }
 
-    pub fn to_vec(&self) -> Vec<TaggedValue> {
+    pub(crate) fn to_vec(&self) -> Vec<TaggedValue> {
         self.0.to_vec()
     }
 
@@ -1433,7 +1433,7 @@ impl LispValueVec {
         }
     }
 
-    pub fn owned_capacity(&self) -> usize {
+    pub(crate) fn owned_capacity(&self) -> usize {
         match self.storage {
             LispValueVecStorage::Owned(ref items) => items.capacity(),
             LispValueVecStorage::Mapped { .. } => 0,
@@ -1468,7 +1468,7 @@ impl LispValueVec {
     /// Acquire owned cells; read immutable mapped words plainly. Both iterators
     /// retain their actual storage's provenance.
     #[inline]
-    pub fn iter_atomic(&self) -> impl Iterator<Item = TaggedValue> + '_ {
+    pub(crate) fn iter_atomic(&self) -> impl Iterator<Item = TaggedValue> + '_ {
         let (owned, mapped): (&[AtomicTaggedValue], &[TaggedValue]) = match &self.storage {
             LispValueVecStorage::Owned(items) => (items, &[]),
             LispValueVecStorage::Mapped { .. } => (&[], self.as_slice()),
@@ -1724,7 +1724,7 @@ impl VectorScanSnapshot {
 /// publish field data, and a claim's field reads are ordered by this
 /// contract's pointer chain, not by the bit.
 #[inline]
-pub fn load_value_atomic(slot: &AtomicTaggedValue) -> TaggedValue {
+pub(crate) fn load_value_atomic(slot: &AtomicTaggedValue) -> TaggedValue {
     slot.load_atomic()
 }
 
@@ -1740,7 +1740,7 @@ pub fn load_value_atomic(slot: &AtomicTaggedValue) -> TaggedValue {
 /// store_value_atomic(&mut plain, TaggedValue::T);
 /// ```
 #[inline]
-pub fn store_value_atomic(slot: &AtomicTaggedValue, value: TaggedValue) {
+pub(crate) fn store_value_atomic(slot: &AtomicTaggedValue, value: TaggedValue) {
     slot.store_atomic(value);
 }
 
@@ -1846,7 +1846,7 @@ pub struct SubCharTableObj {
 /// mutable terminal state in `TerminalManager`; the Lisp object carries only the
 /// stable terminal id and the GNU-compatible vec-like tag.
 #[repr(C)]
-pub struct TerminalObj {
+pub(crate) struct TerminalObj {
     pub header: VecLikeHeader,
     pub id: u64,
 }
@@ -1966,7 +1966,7 @@ impl ByteCodeSlotObjects {
 
     /// A constructor's value: `code` already known (a `make-closure`
     /// instance takes its prototype's string), constants still empty.
-    pub fn with_code(code: TaggedValue) -> Self {
+    pub(crate) fn with_code(code: TaggedValue) -> Self {
         Self {
             code: AtomicUsize::new(code.0),
             constants: AtomicUsize::new(0),
@@ -2003,7 +2003,7 @@ impl ByteCodeSlotObjects {
 
     /// Both words, for the GC's child walks.
     #[inline]
-    pub fn children(&self) -> [TaggedValue; 2] {
+    pub(crate) fn children(&self) -> [TaggedValue; 2] {
         [
             self.get(ByteCodeSlotObject::Code),
             self.get(ByteCodeSlotObject::Constants),
@@ -2080,14 +2080,14 @@ pub struct MarkerObj {
 
 /// Heap-allocated buffer reference (wraps a BufferId).
 #[repr(C)]
-pub struct BufferObj {
+pub(crate) struct BufferObj {
     pub header: VecLikeHeader,
     pub id: crate::value::buffer_vocab::BufferId,
 }
 
 /// Heap-allocated window reference (wraps a u64 id).
 #[repr(C)]
-pub struct WindowObj {
+pub(crate) struct WindowObj {
     pub header: VecLikeHeader,
     pub id: u64,
 }
@@ -2097,21 +2097,21 @@ pub struct WindowObj {
 /// Mirrors `WindowObj`/`FrameObj`/`TimerObj`: the heap object holds only a
 /// numeric manager key, no Lisp Values, so GC tracing is a no-op.
 #[repr(C)]
-pub struct ProcessObj {
+pub(crate) struct ProcessObj {
     pub header: VecLikeHeader,
     pub id: crate::heap_types::ProcessId,
 }
 
 /// Heap-allocated frame reference (wraps a u64 id).
 #[repr(C)]
-pub struct FrameObj {
+pub(crate) struct FrameObj {
     pub header: VecLikeHeader,
     pub id: u64,
 }
 
 /// Heap-allocated timer reference (wraps a u64 id).
 #[repr(C)]
-pub struct TimerObj {
+pub(crate) struct TimerObj {
     pub header: VecLikeHeader,
     pub id: u64,
 }
@@ -2125,9 +2125,9 @@ pub struct TimerObj {
 /// drains after the collection completes by queuing
 /// `DisplayHost::destroy_shader_surface` (best-effort). No Lisp children.
 #[repr(C)]
-pub struct SurfaceObj {
+pub(crate) struct SurfaceObj {
     pub header: VecLikeHeader,
-    pub surface_id: u32,
+    pub(crate) surface_id: u32,
 }
 
 /// Heap-allocated bool-vector: GNU `struct Lisp_Bool_Vector` (`lisp.h`).
@@ -2153,7 +2153,7 @@ pub struct BoolVectorObj {
 
 impl BoolVectorObj {
     /// Bits per storage word.
-    pub const WORD_BITS: usize = u64::BITS as usize;
+    pub(crate) const WORD_BITS: usize = u64::BITS as usize;
 
     /// The number of words `nbits` bits occupy.
     #[inline]
@@ -2199,13 +2199,13 @@ impl BoolVectorObj {
     /// The storage words, for in-place updates. Callers keep the trailing
     /// bits zero ([`Self::clear_trailing_bits`] restores it).
     #[inline]
-    pub fn words_mut(&mut self) -> &mut [u64] {
+    pub(crate) fn words_mut(&mut self) -> &mut [u64] {
         &mut self.words
     }
 
     /// Re-establish the trailing-bits-zero invariant.
     #[inline]
-    pub fn clear_trailing_bits(&mut self) {
+    pub(crate) fn clear_trailing_bits(&mut self) {
         let mask = Self::last_word_mask(self.nbits);
         if let Some(last) = self.words.last_mut() {
             *last &= mask;
@@ -2242,7 +2242,7 @@ impl BoolVectorObj {
 
     /// The number of bytes of bit data: `⌈nbits/8⌉`.
     #[inline]
-    pub fn byte_len(&self) -> usize {
+    pub(crate) fn byte_len(&self) -> usize {
         self.nbits.div_ceil(8)
     }
 }
@@ -2329,7 +2329,7 @@ pub struct XwidgetObj {
     pub type_: TaggedValue,
     pub buffer: TaggedValue,
     pub title: TaggedValue,
-    pub script_callbacks: TaggedValue,
+    pub(crate) script_callbacks: TaggedValue,
     pub height: i32,
     pub width: i32,
     pub xwidget_id: u32,
@@ -2356,8 +2356,8 @@ pub struct XwidgetViewObj {
     pub clip_bottom: i32,
     pub clip_top: i32,
     pub clip_left: i32,
-    pub redisplayed: bool,
-    pub hidden: bool,
+    pub(crate) redisplayed: bool,
+    pub(crate) hidden: bool,
 }
 
 #[repr(u8)]
@@ -2607,7 +2607,7 @@ pub struct SqliteObj {
 /// It must return normally. This applies to both user-pointer and function
 /// finalizers. See `docs/lispref/internals.texi`, "Module Function Finalizers",
 /// and the module API's prohibition on interaction during garbage collection.
-pub type EmacsFinalizer = Option<unsafe extern "C" fn(*mut std::ffi::c_void)>;
+pub(crate) type EmacsFinalizer = Option<unsafe extern "C" fn(*mut std::ffi::c_void)>;
 
 #[repr(C)]
 pub struct UserPtrObj {
@@ -2640,7 +2640,7 @@ pub struct ModuleFunctionObj {
     /// Optional finalizer invoked when the module-function is GC'd.
     pub finalizer: EmacsFinalizer,
     /// Docstring (Lisp string value).
-    pub documentation: TaggedValue,
+    pub(crate) documentation: TaggedValue,
     /// Interactive form (Lisp value).
     pub interactive_form: TaggedValue,
 }

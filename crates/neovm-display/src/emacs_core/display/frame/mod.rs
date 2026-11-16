@@ -1444,7 +1444,7 @@ fn terminal_frame_string_parameter(params: Value, name: &str) -> Result<Option<S
         return Ok(None);
     };
     for item in items {
-        if !item.is_cons() || item.cons_car() != Value::symbol(name) {
+        if !item.is_cons() || item.cons_car() != Value::from_sym_id(intern(name)) {
             continue;
         }
         let value = item.cons_cdr();

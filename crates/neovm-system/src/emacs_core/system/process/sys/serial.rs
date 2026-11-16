@@ -44,14 +44,14 @@ use crate::emacs_core::process::signal_file_errno;
 /// src/sysdep.c:3193-3195); this arrives already narrowed, so the device layer
 /// has no domain error left to raise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SerialByteSize {
+pub(crate) enum SerialByteSize {
     Seven,
     Eight,
 }
 
 /// GNU's `:parity` domain: nil, `even' or `odd' (src/sysdep.c:3211-3213).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SerialParity {
+pub(crate) enum SerialParity {
     None,
     Even,
     Odd,
@@ -59,7 +59,7 @@ pub enum SerialParity {
 
 /// GNU's `:stopbits` domain: 1 or 2 (src/sysdep.c:3247-3249).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SerialStopBits {
+pub(crate) enum SerialStopBits {
     One,
     Two,
 }
@@ -67,7 +67,7 @@ pub enum SerialStopBits {
 /// GNU's `:flowcontrol` domain: nil, `hw' (RTS/CTS) or `sw' (XON/XOFF)
 /// (src/sysdep.c:3266-3268).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SerialFlowControl {
+pub(crate) enum SerialFlowControl {
     None,
     Hardware,
     Software,
@@ -85,7 +85,7 @@ pub enum SerialFlowControl {
 /// attributes, which is why GNU can validate `:bytesize` after having already
 /// applied the speed and still leave the device untouched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SerialConfigureStep {
+pub(crate) enum SerialConfigureStep {
     /// GNU `tcgetattr` -> `report_file_error ("Failed tcgetattr", Qnil)`
     /// (src/sysdep.c:3164-3166).
     #[cfg(unix)]
@@ -210,7 +210,7 @@ impl SerialDeviceFailure {
 /// Windows has no counterpart: `dcb.BaudRate = XFIXNUM (tem)` stores the raw
 /// number (src/w32.c:11170-11176), so the w32 attributes never fail here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SerialSpeedError {
+pub(crate) struct SerialSpeedError {
     pub errno: i32,
 }
 
@@ -241,7 +241,7 @@ pub(crate) mod dcb_settings;
 /// caller's validation run between the read and the write, which is where
 /// GNU's runs.
 #[derive(Debug)]
-pub struct SerialAttributes(backend::Attributes);
+pub(crate) struct SerialAttributes(backend::Attributes);
 
 pub(crate) trait SerialPortIo {
     /// GNU `serial_open`, src/sysdep.c:2980-2990 (termios) / src/w32.c:11098
@@ -340,7 +340,7 @@ impl SerialPortIo for SerialPort {
 /// the device half keeps its failing call; neither can be mistaken for the
 /// other.
 #[derive(Debug)]
-pub enum SerialConfigureFailure<E> {
+pub(crate) enum SerialConfigureFailure<E> {
     Device(SerialDeviceFailure),
     Settings(E),
 }
@@ -355,25 +355,25 @@ impl SerialAttributes {
 
     /// GNU's `CSIZE`/`CS7`/`CS8` arm, src/sysdep.c:3197-3199 (w32:
     /// `dcb.ByteSize`, src/w32.c:11183-11192).
-    pub fn set_byte_size(&mut self, size: SerialByteSize) {
+    pub(crate) fn set_byte_size(&mut self, size: SerialByteSize) {
         self.0.set_byte_size(size);
     }
 
     /// GNU's `PARENB`/`PARODD`/`IGNPAR`/`INPCK` arm, src/sysdep.c:3214-3232
     /// (w32: `fParity`/`Parity`/`fErrorChar`, src/w32.c:11206-11238).
-    pub fn set_parity(&mut self, parity: SerialParity) {
+    pub(crate) fn set_parity(&mut self, parity: SerialParity) {
         self.0.set_parity(parity);
     }
 
     /// GNU's `CSTOPB` arm, src/sysdep.c:3251-3253 (w32: `StopBits`,
     /// src/w32.c:11240-11249).
-    pub fn set_stop_bits(&mut self, bits: SerialStopBits) {
+    pub(crate) fn set_stop_bits(&mut self, bits: SerialStopBits) {
         self.0.set_stop_bits(bits);
     }
 
     /// GNU's `CRTSCTS`/`IXON`/`IXOFF` arm, src/sysdep.c:3269-3299 (w32: the
     /// handshake block, src/w32.c:11251-11276).
-    pub fn set_flow_control(&mut self, flow: SerialFlowControl) {
+    pub(crate) fn set_flow_control(&mut self, flow: SerialFlowControl) {
         self.0.set_flow_control(flow);
     }
 }

@@ -65,9 +65,9 @@ fn divergence_funcall_with_lambda_closure() {
 fn divergence_recursive_lambda() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-variable fib)""#]];
+    let expect = expect_test::expect![[r#""OK (0 1 5 55)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(let ((fib\n       (lambda (n self)\n         (if (< n 2) n\n           (+ (funcall self (- n 1) self)\n              (funcall self (- n 2) self)))))))\n  (list (funcall fib 0 fib)\n        (funcall fib 1 fib)\n        (funcall fib 5 fib)\n        (funcall fib 10 fib))",
+        "(let ((fib\n       (lambda (n self)\n         (if (< n 2) n\n           (+ (funcall self (- n 1) self)\n              (funcall self (- n 2) self))))))\n  (list (funcall fib 0 fib)\n        (funcall fib 1 fib)\n        (funcall fib 5 fib)\n        (funcall fib 10 fib)))",
         expect,
     );
 }

@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::bytecode::opcode::Op;
+use neovm_value::intern::intern;
 
 /// A simple arithmetic body builds the expected MIR shape.
 #[test]
@@ -623,8 +624,8 @@ fn jump_table(entries: &[(&str, i64)]) -> Value {
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
         for &(sym, offset) in entries {
-            let key = Value::symbol(sym).to_hash_key(&ht.test);
-            ht.insert(key, Value::symbol(sym), Value::fixnum(offset));
+            let key = Value::from_sym_id(intern(sym)).to_hash_key(&ht.test);
+            ht.insert(key, Value::from_sym_id(intern(sym)), Value::fixnum(offset));
         }
     });
     table

@@ -162,7 +162,10 @@ pub struct ModeLineFormat {
 }
 
 fn mode_symbol(name: &str) -> Value {
-    Value::symbol(name)
+    // NAME is an existing mode symbol's spelling (the caller resolves it
+    // from a mode symbol id), so the canonical id already carries the
+    // symbol's membership; do not build a detached Value from a string.
+    Value::from_sym_id(intern(name))
 }
 
 fn mode_symbol_id(name: &str) -> SymId {

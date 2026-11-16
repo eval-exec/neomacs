@@ -306,11 +306,11 @@ pub fn time_error_overflow() -> Flow {
 #[derive(Clone, Debug)]
 #[doc(hidden)]
 pub struct ParsedTime {
-    pub time: TimeMicros,
+    pub(crate) time: TimeMicros,
     pub hz: i64,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub form: TimeInputForm,
-    pub exact_ticks_hz: Option<(Integer, Integer)>,
+    pub(crate) form: TimeInputForm,
+    pub(crate) exact_ticks_hz: Option<(Integer, Integer)>,
 }
 /// Parse a time value from a Lisp argument.
 ///

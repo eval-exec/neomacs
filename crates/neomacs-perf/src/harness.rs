@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use linux_perf_data::{PerfFileReader, PerfFileRecord, linux_perf_event_reader::RecordType};
 use neomacs_melpa_test_support::{
     CommandError, MelpaSandbox, PreparedPackageSet, group_output_with_timeout, output_with_timeout,
-    prepare_cached_tree_sitter_grammar,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

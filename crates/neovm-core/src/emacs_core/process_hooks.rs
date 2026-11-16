@@ -10,21 +10,6 @@ use crate::emacs_core::eval::process_hooks::ProcessHooks;
 use crate::emacs_core::process::{ProcessContextExt, SystemProcessExt};
 use crate::heap_types::ProcessId;
 
-fn unlink_owned_unix_listener_for_exit(ctx: &mut crate::emacs_core::eval::Context, id: ProcessId) {
-    #[cfg(unix)]
-    {
-        ctx.processes_mut().unlink_owned_unix_listener_for_exit(id);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (ctx, id);
-    }
-}
-
-fn delete_process(ctx: &mut crate::emacs_core::eval::Context, id: ProcessId) -> bool {
-    ctx.processes_mut().delete_process(id)
-}
-
 fn shutdown_processes_for_exit(
     ctx: &mut crate::emacs_core::eval::Context,
 ) -> Result<(), crate::emacs_core::error::Flow> {
@@ -57,8 +42,6 @@ fn terminate_and_defer_reaping(
 }
 
 static CANONICAL_PROCESS_HOOKS: ProcessHooks = ProcessHooks::new(
-    unlink_owned_unix_listener_for_exit,
-    delete_process,
     shutdown_processes_for_exit,
     open_channel_for_module,
     print_process_handle,

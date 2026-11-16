@@ -925,12 +925,12 @@ macro_rules! obarray_method_proxies {
 
 obarray_method_proxies! {
     data; public_access;
-    pub fn intern(name: &str) -> String;
-    pub fn intern_lisp_string(name: &LispString) -> SymId;
-    pub fn intern_lisp_value(name_value: neovm_value::tagged::value::TaggedValue) -> SymId;
+    pub fn intern_member(name: &str) -> SymId;
+    pub fn intern_member_lisp_string(name: &LispString) -> SymId;
+    pub fn intern_member_lisp_value(name_value: neovm_value::tagged::value::TaggedValue) -> SymId;
     pub fn ensure_interned_global_id(id: SymId);
     #[doc(hidden)]
-    pub fn materialize_read_symbols(value: Value);
+    pub fn intern_member_symbols_in(value: Value);
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_symbol_value(name: &str, value: Value);
     pub fn seed_value(name: &str, value: Value);

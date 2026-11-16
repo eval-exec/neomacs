@@ -47,7 +47,10 @@ impl TtyTerminalConfig {
         self
     }
 
-    pub fn with_attribute_capabilities(mut self, capabilities: TtyAttributeCapabilities) -> Self {
+    pub(crate) fn with_attribute_capabilities(
+        mut self,
+        capabilities: TtyAttributeCapabilities,
+    ) -> Self {
         self.attribute_capabilities = capabilities;
         self
     }

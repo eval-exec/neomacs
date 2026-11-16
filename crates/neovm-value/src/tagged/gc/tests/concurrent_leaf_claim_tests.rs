@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::heap_types::LispMarker;
-use crate::intern::intern_uninterned;
+use crate::intern::make_uninterned_symbol;
 use crate::tagged::header::ImageResident;
 use std::sync::Arc;
 
@@ -441,7 +441,7 @@ fn concurrent_leaf_claims_keep_mapped_and_residual_box_symbol_positions_deferred
 fn concurrent_leaf_symbol_positions_route_both_fields_and_skip_born_black_payloads() {
     for major in [false, true] {
         let mut heap = heap(true, true, major);
-        let symbol = TaggedValue::from_sym_id(intern_uninterned("u35-leaf-symbol"));
+        let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u35-leaf-symbol"));
         let child = heap.alloc_cons(TaggedValue::fixnum(31), TaggedValue::NIL);
         // The ordinary constructor accepts two Values. Use a heap value in
         // pos here to prove both trace slots follow the mutator tracer.
@@ -504,7 +504,7 @@ fn concurrent_leaf_claims_preserve_weak_symbol_liveness_and_reclaim_dead_objects
     for generational in [false, true] {
         for chunk_map in [false, true] {
             let mut heap = heap(true, chunk_map, generational);
-            let key = TaggedValue::from_sym_id(intern_uninterned("u35-leaf-weak-key"));
+            let key = TaggedValue::from_sym_id(make_uninterned_symbol("u35-leaf-weak-key"));
             let position = heap.alloc_symbol_with_pos(key, TaggedValue::fixnum(3));
             let marker = Leaf::Marker.allocate(&mut heap);
             let bignum = Leaf::Bignum.allocate(&mut heap);

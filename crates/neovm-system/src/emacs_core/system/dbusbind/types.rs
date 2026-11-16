@@ -177,7 +177,7 @@ enum PreparedBasic {
     UnixFd(std::fs::File),
 }
 
-fn container_type_error(predicate: &str, value: Value) -> Flow {
+fn container_type_error(predicate: &'static str, value: Value) -> Flow {
     signal(
         LispCondition::WrongTypeArgument,
         vec![Value::symbol(predicate), value],

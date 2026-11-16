@@ -153,7 +153,7 @@ impl Attributes {
         Ok(())
     }
 
-    pub fn set_byte_size(&mut self, size: SerialByteSize) {
+    pub(crate) fn set_byte_size(&mut self, size: SerialByteSize) {
         self.0.c_cflag &= !libc::CSIZE;
         self.0.c_cflag |= match size {
             SerialByteSize::Seven => libc::CS7,
@@ -161,7 +161,7 @@ impl Attributes {
         };
     }
 
-    pub fn set_parity(&mut self, parity: SerialParity) {
+    pub(crate) fn set_parity(&mut self, parity: SerialParity) {
         self.0.c_cflag &= !(libc::PARENB | libc::PARODD);
         self.0.c_iflag &= !(libc::IGNPAR | libc::INPCK);
         match parity {
@@ -177,14 +177,14 @@ impl Attributes {
         }
     }
 
-    pub fn set_stop_bits(&mut self, bits: SerialStopBits) {
+    pub(crate) fn set_stop_bits(&mut self, bits: SerialStopBits) {
         self.0.c_cflag &= !libc::CSTOPB;
         if bits == SerialStopBits::Two {
             self.0.c_cflag |= libc::CSTOPB;
         }
     }
 
-    pub fn set_flow_control(&mut self, flow: SerialFlowControl) {
+    pub(crate) fn set_flow_control(&mut self, flow: SerialFlowControl) {
         self.0.c_cflag &= !libc::CRTSCTS;
         self.0.c_iflag &= !(libc::IXON | libc::IXOFF);
         match flow {

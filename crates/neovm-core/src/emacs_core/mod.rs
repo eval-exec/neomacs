@@ -411,6 +411,10 @@ mod symbol_plist_regression_test;
 mod symbol_redirect_regression_test;
 
 #[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/symbol/tests/membership_census_test.rs"]
+mod symbol_membership_census_test;
+
+#[cfg(test)]
 #[path = "tests/moved_eval/mod.rs"]
 mod moved_eval_tests;
 
@@ -453,6 +457,10 @@ mod architecture_transmute_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/layering_guard_test.rs"]
 mod architecture_layering_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/merge_ratchet.rs"]
+mod architecture_merge_ratchet;
 
 #[cfg(test)]
 #[path = "tests/architecture/moving_set.rs"]
@@ -502,6 +510,9 @@ mod architecture_canonical_registration_trace_test;
 #[path = "tests/architecture/host_cfg_elisp_regression_test.rs"]
 mod architecture_host_cfg_elisp_regression_test;
 
+#[cfg(test)]
+#[path = "tests/architecture/oracle_form_empty_binding_guard_test.rs"]
+mod architecture_oracle_form_empty_binding_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;

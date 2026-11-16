@@ -3,6 +3,7 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::RuntimeStateTieringExt;
+use neovm_value::intern::intern;
 use neovm_value::value::{LambdaParams, Value};
 
 fn nullary_fn(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
@@ -906,7 +907,7 @@ fn lexical_fn(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunc
 /// Install a multi-block bytecode callee (the MIR inliner leaves a call to
 /// it in place): `(lambda (n) (if n (1- n) 0))`.
 fn install_step(ev: &mut crate::emacs_core::eval::Context, name: &str) -> Value {
-    let sym = Value::symbol(name);
+    let sym = Value::from_sym_id(intern(name));
     let step = lexical_fn(
         vec![
             Op::StackRef(0),

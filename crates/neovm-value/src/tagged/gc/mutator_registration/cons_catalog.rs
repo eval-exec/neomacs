@@ -28,7 +28,7 @@ impl<K: EraKeeper> EraCore<'_, K> {
     /// cold transaction commits.
     #[cold]
     #[inline(never)]
-    pub fn start_cons_storage(&self) -> Result<(), RegistrationError> {
+    pub(crate) fn start_cons_storage(&self) -> Result<(), RegistrationError> {
         self.transfer_cons_storage(None, true)
     }
 
@@ -36,14 +36,20 @@ impl<K: EraKeeper> EraCore<'_, K> {
     /// Restore the actual catalog before the keeper can borrow the heap for GC.
     #[cold]
     #[inline(never)]
-    pub fn return_cons_storage(&self, stopped: &AllStopped<'_>) -> Result<(), RegistrationError> {
+    pub(crate) fn return_cons_storage(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<(), RegistrationError> {
         self.transfer_cons_storage(Some(stopped), false)
     }
 
     /// Following collection, detach the updated real catalog before resume.
     #[cold]
     #[inline(never)]
-    pub fn resume_cons_storage(&self, stopped: &AllStopped<'_>) -> Result<(), RegistrationError> {
+    pub(crate) fn resume_cons_storage(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<(), RegistrationError> {
         self.transfer_cons_storage(Some(stopped), true)
     }
 

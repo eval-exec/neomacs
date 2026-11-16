@@ -119,7 +119,9 @@ fn registry_json_error_family() {
     crate::test_utils::init_test_tracing();
     let reg = ErrorRegistry::new();
     assert!(reg.signal_matches_condition("json-parse-error", "json-error"));
-    assert!(reg.signal_matches_condition("json-serialize-error", "json-error"));
+    // GNU 31.1 has no json-serialize-error symbol (src/json.c DEFSYMs only
+    // the parse-side errors); serialization failures signal plain `error`.
+    assert!(!reg.signal_matches_condition("json-serialize-error", "json-error"));
     assert!(reg.signal_matches_condition("json-parse-error", "error"));
 
     // Full GNU json.c hierarchy: every condition is a json-error and an error.
@@ -273,7 +275,7 @@ fn condition_handlers_use_canonical_t_identity_without_reading_symbol_names() {
     let signal = intern("error");
     let raw_condition =
         crate::intern::intern_lisp_string(&crate::heap_types::LispString::from_unibyte(vec![0xff]));
-    let uninterned_t = crate::intern::intern_uninterned("t");
+    let uninterned_t = crate::intern::make_uninterned_symbol("t");
 
     assert!(!signal_matches_condition_value_sym(
         &ob,
@@ -655,7 +657,6 @@ fn obarray_all_standard_errors_have_message() {
         "circular-list",
         "json-error",
         "json-parse-error",
-        "json-serialize-error",
         "treesit-error",
         "treesit-query-error",
         "treesit-parse-error",

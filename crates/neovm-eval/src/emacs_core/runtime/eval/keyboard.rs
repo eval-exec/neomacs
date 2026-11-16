@@ -1294,6 +1294,9 @@ pub enum InputEvent {
         token: neomacs_display_protocol::input_latency::InputToken,
         event: Box<InputEvent>,
     },
+    /// Input already routed once while a preceding `switch-frame` event was
+    /// unread. Replaying it must not enqueue the same frame switch again.
+    FrameSwitchDeferred(Box<InputEvent>),
     /// Uninterpreted bytes from a Unix TTY.
     ///
     /// The evaluator expands this transport batch into ordered
@@ -1528,6 +1531,7 @@ impl InputEvent {
             Self::TtyByte { byte, .. } => *byte == 0x07,
             Self::TtyCharacter { character, .. } => character.code() == 0x07,
             Self::KeyPress { key, .. } => key.is_default_quit_char(),
+            Self::FrameSwitchDeferred(event) => event.requests_default_quit(),
             Self::Tracked { .. }
             | Self::Observed { .. }
             | Self::MousePress { .. }
@@ -4212,6 +4216,16 @@ impl crate::emacs_core::eval::Context {
         tty_input_decoding: TtyInputDecoding,
         idle_policy: IdleTransitionPolicy,
     ) -> Result<Option<Value>, neovm_value::error::Flow> {
+        self.handle_read_char_input_event_routed(event, tty_input_decoding, idle_policy, false)
+    }
+
+    fn handle_read_char_input_event_routed(
+        &mut self,
+        event: InputEvent,
+        tty_input_decoding: TtyInputDecoding,
+        idle_policy: IdleTransitionPolicy,
+        frame_already_routed: bool,
+    ) -> Result<Option<Value>, neovm_value::error::Flow> {
         if super::frontend_events::interrupts(&event)
             && crate::emacs_core::eval::input_hooks::interrupt_for_input_event_if_requested(
                 self,
@@ -4224,34 +4238,66 @@ impl crate::emacs_core::eval::Context {
         match event {
             InputEvent::Tracked { receipt, event } => {
                 self.input_progress.consumed(receipt);
-                self.handle_read_char_input_event_with_idle_policy(
+                self.handle_read_char_input_event_routed(
                     *event,
                     tty_input_decoding,
                     idle_policy,
+                    frame_already_routed,
                 )
             }
             InputEvent::Observed { token, event } => {
                 neomacs_display_protocol::input_latency::consumed(token);
-                self.handle_read_char_input_event_with_idle_policy(
+                self.handle_read_char_input_event_routed(
                     *event,
                     tty_input_decoding,
                     idle_policy,
+                    frame_already_routed,
                 )
             }
+            InputEvent::FrameSwitchDeferred(event) => self.handle_read_char_input_event_routed(
+                *event,
+                tty_input_decoding,
+                idle_policy,
+                true,
+            ),
             InputEvent::RawTtyBytes { bytes, target } => {
                 self.route_tty_keyboard_input(target);
-                for byte in bytes.into_iter().rev() {
-                    self.command_loop
-                        .keyboard
-                        .pending_input_events
-                        .push_front(InputEvent::TtyByte { byte, target });
+                // GNU stores each TTY byte as its own keyboard event
+                // (tty_read_avail_input). A switch-frame raised here belongs
+                // to the first byte; later bytes recheck their source frame
+                // against the selection when they are read.
+                let first_byte_deferred = self.command_loop.keyboard.has_unread_selection_event();
+                for (index, byte) in bytes.into_iter().enumerate().rev() {
+                    let event = InputEvent::TtyByte { byte, target };
+                    self.command_loop.keyboard.pending_input_events.push_front(
+                        if index == 0 && first_byte_deferred {
+                            InputEvent::FrameSwitchDeferred(Box::new(event))
+                        } else {
+                            event
+                        },
+                    );
                 }
                 Ok(None)
             }
             InputEvent::TtyByte { byte, target } => {
-                self.route_tty_keyboard_input(target);
+                if frame_already_routed {
+                    self.select_tty_keyboard_input_kboard(target);
+                } else {
+                    self.route_tty_keyboard_input(target);
+                }
                 match tty_input_decoding {
                     TtyInputDecoding::RawBytes => {
+                        if self.command_loop.keyboard.has_unread_selection_event() {
+                            // switch-frame is read first; the byte stays
+                            // queued, untranslated and unrecorded.
+                            self.command_loop.keyboard.pending_input_events.push_front(
+                                InputEvent::FrameSwitchDeferred(Box::new(InputEvent::TtyByte {
+                                    byte,
+                                    target,
+                                })),
+                            );
+                            return Ok(None);
+                        }
                         self.clear_current_message_for_keyboard_input();
                         let raw_event = Value::fixnum(i64::from(byte));
                         if self.event_is_quit_char(&raw_event) {
@@ -4272,23 +4318,35 @@ impl crate::emacs_core::eval::Context {
                             &coding_system,
                             eol_conversion,
                         );
+                        let frame_switch_deferred = frame_already_routed
+                            || self.command_loop.keyboard.has_unread_selection_event();
                         for character in characters.into_iter().rev() {
-                            self.command_loop
-                                .keyboard
-                                .pending_input_events
-                                .push_front(InputEvent::TtyCharacter { character, target });
+                            let event = InputEvent::TtyCharacter { character, target };
+                            self.command_loop.keyboard.pending_input_events.push_front(
+                                if frame_switch_deferred {
+                                    InputEvent::FrameSwitchDeferred(Box::new(event))
+                                } else {
+                                    event
+                                },
+                            );
                         }
                         Ok(None)
                     }
                 }
             }
             InputEvent::TtyCharacter { character, target } => {
-                self.route_tty_keyboard_input(target);
+                if frame_already_routed {
+                    self.select_tty_keyboard_input_kboard(target);
+                } else {
+                    self.route_tty_keyboard_input(target);
+                }
                 if self.command_loop.keyboard.has_unread_selection_event() {
-                    self.command_loop
-                        .keyboard
-                        .pending_input_events
-                        .push_front(InputEvent::TtyCharacter { character, target });
+                    self.command_loop.keyboard.pending_input_events.push_front(
+                        InputEvent::FrameSwitchDeferred(Box::new(InputEvent::TtyCharacter {
+                            character,
+                            target,
+                        })),
+                    );
                     return Ok(None);
                 }
                 self.clear_current_message_for_keyboard_input();
@@ -4451,16 +4509,20 @@ impl crate::emacs_core::eval::Context {
                 key,
                 emacs_frame_id,
             } => {
-                self.route_keyboard_input_to_frame(emacs_frame_id);
+                if frame_already_routed {
+                    self.select_keyboard_input_kboard(emacs_frame_id);
+                } else {
+                    self.route_keyboard_input_to_frame(emacs_frame_id);
+                }
                 if self.command_loop.keyboard.has_unread_selection_event() {
                     // GNU kbd_buffer_get_event returns switch-frame first and
                     // leaves the original key in the queue. Do not translate,
                     // record or feed this key to an input method twice.
                     self.command_loop.keyboard.pending_input_events.push_front(
-                        InputEvent::KeyPress {
+                        InputEvent::FrameSwitchDeferred(Box::new(InputEvent::KeyPress {
                             key,
                             emacs_frame_id,
-                        },
+                        })),
                     );
                     return Ok(None);
                 }
@@ -4604,7 +4666,7 @@ impl crate::emacs_core::eval::Context {
                 // LINE-COUNT field, keeping custom wheel bindings in control.
                 let count = delta_x.abs().max(delta_y.abs()).round().max(1.0) as i64;
                 let event = Value::list(vec![
-                    Value::symbol(&sym),
+                    Value::from_sym_id(intern((&sym).as_ref())),
                     position,
                     Value::fixnum(1),
                     Value::fixnum(count),
@@ -4648,7 +4710,7 @@ impl crate::emacs_core::eval::Context {
                 // scrolling, point preservation, hooks and redisplay; layout
                 // must not consume a second, hidden input queue.
                 let event = Value::list(vec![
-                    Value::symbol(&symbol),
+                    Value::from_sym_id(intern((&symbol).as_ref())),
                     position,
                     Value::fixnum(1),
                     Value::fixnum(1),
@@ -4740,7 +4802,10 @@ impl crate::emacs_core::eval::Context {
                 } else {
                     format!("mouse-{button}")
                 };
-                let event = Value::list(vec![Value::symbol(&symbol), Value::list(position_parts)]);
+                let event = Value::list(vec![
+                    Value::from_sym_id(intern((&symbol).as_ref())),
+                    Value::list(position_parts),
+                ]);
                 self.command_loop.store_kbd_macro_event(event);
                 Ok(Some(event))
             }
@@ -5654,7 +5719,7 @@ impl crate::emacs_core::eval::Context {
         // reads it (`src/keyboard.c:11403-11406`).
         Self::mark_event_head_kind(eval, &format!("mouse-{button_num}"), "mouse-click");
         Self::mark_event_head_kind(eval, &sym, "mouse-click");
-        let head = Value::symbol(&sym);
+        let head = Value::from_sym_id(intern((&sym).as_ref()));
 
         match payload {
             MouseEventPayload::Position(position) => Value::list(vec![head, position]),
@@ -5667,7 +5732,7 @@ impl crate::emacs_core::eval::Context {
 
     /// GNU `Fput (symbol, Qevent_kind, kind)` for a mouse event head.
     #[doc(hidden)]
-    pub fn mark_event_head_kind(eval: &mut Self, head: &str, kind: &str) {
+    pub fn mark_event_head_kind(eval: &mut Self, head: &str, kind: &'static str) {
         let key = intern("event-kind");
         let _ = eval
             .obarray_mut()
@@ -5810,12 +5875,12 @@ impl crate::emacs_core::eval::Context {
         mode: SymbolMode,
     ) -> Option<Value> {
         match mode.unwrap(event).kind() {
-            ValueKind::Symbol(_) => Some(Value::symbol(symbol_name)),
+            ValueKind::Symbol(_) => Some(Value::from_sym_id(intern(symbol_name))),
             ValueKind::Cons => {
                 let mut slots = neovm_value::value::list_to_vec(&event)?;
                 let head = slots.first_mut()?;
                 head.as_symbol_name(mode)?;
-                *head = Value::symbol(symbol_name);
+                *head = Value::from_sym_id(intern(symbol_name));
                 Some(Value::list(slots))
             }
             _ => None,

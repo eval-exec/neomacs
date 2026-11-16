@@ -29,10 +29,6 @@ use std::time::Instant;
 pub use super::green_select::GreenSelectHandle;
 pub(crate) mod select;
 
-/// Close an owned Unix listener after kill-emacs hooks (Unix only; no-op elsewhere).
-pub type UnlinkOwnedUnixListener = fn(&mut Context, ProcessId);
-/// Terminate and reap one process without running its sentinel.
-pub type DeleteProcess = fn(&mut Context, ProcessId) -> bool;
 /// Open the file descriptor a dynamic module uses to talk to PROCESS.
 pub type OpenChannelForModule = fn(&mut Context, Value) -> Result<std::ffi::c_int, Flow>;
 /// The printed representation of a process object, if it is still known.
@@ -184,8 +180,6 @@ pub type TerminateAndDeferReaping = fn(&mut ChildOwnership, i32);
 /// The cold process-IO bodies eval calls.
 #[derive(Clone, Copy)]
 pub struct ProcessHooks {
-    unlink: UnlinkOwnedUnixListener,
-    delete: DeleteProcess,
     shutdown: fn(&mut Context) -> Result<(), Flow>,
     open_channel: OpenChannelForModule,
     print_handle: PrintProcessHandle,
@@ -197,8 +191,6 @@ impl ProcessHooks {
     /// Build the one canonical descriptor core publishes.
     #[allow(clippy::too_many_arguments)] // one cold descriptor, one install site
     pub const fn new(
-        unlink: UnlinkOwnedUnixListener,
-        delete: DeleteProcess,
         shutdown: fn(&mut Context) -> Result<(), Flow>,
         open_channel: OpenChannelForModule,
         print_handle: PrintProcessHandle,
@@ -206,8 +198,6 @@ impl ProcessHooks {
         terminate_and_defer_reaping: TerminateAndDeferReaping,
     ) -> Self {
         Self {
-            unlink,
-            delete,
             shutdown,
             open_channel,
             print_handle,
@@ -244,16 +234,6 @@ fn process_hooks() -> &'static ProcessHooks {
     PROCESS_HOOKS
         .get()
         .expect("process hooks install at Context construction")
-}
-
-/// Close an owned Unix listener for ID after kill-emacs hooks.
-pub fn unlink_owned_unix_listener_for_exit(ctx: &mut Context, id: ProcessId) {
-    (process_hooks().unlink)(ctx, id)
-}
-
-/// Terminate and reap ID without running its sentinel.
-pub fn delete_process(ctx: &mut Context, id: ProcessId) -> bool {
-    (process_hooks().delete)(ctx, id)
 }
 
 /// GNU kill_buffer_processes(nil), after global sentinel inhibition.

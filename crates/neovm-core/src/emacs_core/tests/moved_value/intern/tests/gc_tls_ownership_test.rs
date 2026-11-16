@@ -109,7 +109,7 @@ fn name_atom_refs_strip_heap_properties_before_crossing_threads() {
     let mut heap = TaggedHeap::new();
     neovm_value::tagged::gc::set_tagged_heap(&mut heap);
     let payload = heap.alloc_string(LispString::from_utf8("name-atom-property-payload"));
-    let property = TaggedValue::from_sym_id(intern_uninterned("name-atom-property"));
+    let property = TaggedValue::from_sym_id(make_uninterned_symbol("name-atom-property"));
     let mut name = LispString::from_utf8("λ-name");
     let len = CharLen::new(name.schars());
     let range = CharRange::new(CharPos0::new(0), CharPos0::new(name.schars()));

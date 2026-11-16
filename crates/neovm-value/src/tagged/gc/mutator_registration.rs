@@ -746,7 +746,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         })
     }
 
-    pub fn stopped_summaries(&self) -> Result<StoppedSummaries<'_>, RegistrationError> {
+    pub(crate) fn stopped_summaries(&self) -> Result<StoppedSummaries<'_>, RegistrationError> {
         StoppedSummaries::new(self.registry())
     }
 
