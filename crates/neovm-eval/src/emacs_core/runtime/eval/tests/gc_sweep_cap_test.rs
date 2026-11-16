@@ -110,12 +110,13 @@ fn sweep_from_zero_allocation() -> Context {
 fn an_incremental_sweep_is_paced_by_allocation_not_by_safe_points() {
     let mut ev = sweep_from_zero_allocation();
     // Safe points with no allocation between them: the sweep's first slice
-    // runs, and nothing more is owed until the mutator allocates.
+    // runs, and after it one slice per 1024 safe points until the mutator
+    // allocates.
     for _ in 0..10_000 {
         ev.gc_safe_point_exact();
     }
     assert!(
-        ev.tagged_heap.sweep_stats().slice_count <= 1,
+        ev.tagged_heap.sweep_stats().slice_count <= 1 + 10_000 / 1024,
         "{} slices ran across 10000 safe points with no allocation",
         ev.tagged_heap.sweep_stats().slice_count
     );
@@ -160,6 +161,25 @@ fn raising_the_threshold_mid_sweep_does_not_postpone_the_sweep() {
         !ev.tagged_heap.sweep_in_progress(),
         "{} bytes allocated after the threshold was raised, sweep unfinished after {} slices",
         ev.tagged_heap.bytes_since_gc(),
+        ev.tagged_heap.sweep_stats().slice_count
+    );
+}
+
+#[test]
+fn a_deferred_sweep_finishes_in_a_loop_that_does_not_allocate() {
+    let mut ev = sweep_from_zero_allocation();
+    // `(while (not flag))` with no allocation and no `garbage-collect`. The
+    // cycle's finalizers and `post-gc-hook` run only when its sweep
+    // completes, so a flag one of them sets is never seen unless the sweep
+    // advances without allocation.
+    let mut safe_points = 0u32;
+    while ev.tagged_heap.sweep_in_progress() && safe_points < 2_000_000 {
+        ev.gc_safe_point_exact();
+        safe_points += 1;
+    }
+    assert!(
+        !ev.tagged_heap.sweep_in_progress(),
+        "sweep unfinished after {safe_points} safe points with no allocation ({} slices)",
         ev.tagged_heap.sweep_stats().slice_count
     );
 }

@@ -180,6 +180,11 @@ mod gc_generational;
 /// reclaims proportionally more non-cons objects internally.
 const INCREMENTAL_SWEEP_BUDGET: usize = 8;
 
+/// Safe points a deferred sweep waits for allocation before it runs a slice
+/// anyway: the cycle's finalizers and `post-gc-hook` run only when the sweep
+/// completes, so a loop that does not allocate must still finish it.
+const SWEEP_SLICE_SAFE_POINT_BOUND: u64 = 1024;
+
 /// The collection policy is selected before the admitted start mutates the heap.
 #[derive(Clone, Copy, Debug)]
 enum ConcurrentCycleKind {
@@ -2315,9 +2320,14 @@ impl Context {
             // A deferred sweep is paced by allocation, not by safe points:
             // running a slice at every boundary turned the whole sweep into
             // one burst between two allocation checkpoints. An overdue sweep
-            // is always due here, and the body drains it at once.
+            // is always due here, and the body drains it at once. A mutator
+            // that stops allocating still gets one slice every
+            // `SWEEP_SLICE_SAFE_POINT_BOUND` safe points.
             MarkPhase::Sweeping => {
-                return self.tagged_heap.sweep_slice_due(INCREMENTAL_SWEEP_BUDGET);
+                let due = self.tagged_heap.sweep_slice_due(INCREMENTAL_SWEEP_BUDGET)
+                    || self.eval_counter >= SWEEP_SLICE_SAFE_POINT_BOUND;
+                self.eval_counter = if due { 0 } else { self.eval_counter + 1 };
+                return due;
             }
             MarkPhase::StoppedMarking => return true,
             MarkPhase::ConcurrentRunning => {
