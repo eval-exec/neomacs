@@ -46,6 +46,7 @@ crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocatio
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocation::with_build_details
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpMode::as_gnu_string
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl RuntimeImageRole::image_file_name
+crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl StaleBytecodePolicy::for_this_process
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn load_file
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn load_runtime_image
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn load_runtime_image_for_executable

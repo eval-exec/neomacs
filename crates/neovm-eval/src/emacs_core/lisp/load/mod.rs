@@ -2799,8 +2799,7 @@ impl StaleBytecodePolicy {
     /// The default is the strict one deliberately: a crate that forgets to
     /// declare anything is a harness, and a harness reading stale bytecode is
     /// the bug this whole family is about.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn for_this_process() -> Self {
+    pub fn for_this_process() -> Self {
         Self::for_announcement(SHIPPED_EDITOR_PROCESS.load(std::sync::atomic::Ordering::Relaxed))
     }
 
