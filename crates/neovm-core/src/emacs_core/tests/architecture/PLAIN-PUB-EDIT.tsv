@@ -6,8 +6,6 @@ crates/neovm-edit/src/buffer/buffer.rs	const	const BUFFER_SLOT_CATEGORY_TABLE
 crates/neovm-edit/src/buffer/buffer.rs	const	const BUFFER_SLOT_ENABLE_MULTIBYTE_CHARACTERS
 crates/neovm-edit/src/buffer/buffer.rs	const	const BUFFER_SLOT_FILE_NAME
 crates/neovm-edit/src/buffer/buffer.rs	const	const BUFFER_SLOT_INFO
-crates/neovm-edit/src/buffer/buffer.rs	const	const BUFFER_SLOT_MARK_ACTIVE
-crates/neovm-edit/src/buffer/buffer.rs	const	const BUFFER_SLOT_POINT_BEFORE_SCROLL
 crates/neovm-edit/src/buffer/buffer.rs	const	const BUFFER_SLOT_READ_ONLY
 crates/neovm-edit/src/buffer/buffer.rs	const	const BUFFER_SLOT_SYNTAX_TABLE
 crates/neovm-edit/src/buffer/buffer.rs	const	const DISPLAY_AFFECTING_BUFFER_SLOTS
@@ -54,10 +52,8 @@ crates/neovm-edit/src/buffer/buffer.rs	field	BufferStateMarkers field begv_marke
 crates/neovm-edit/src/buffer/buffer.rs	field	BufferStateMarkers field pt_marker
 crates/neovm-edit/src/buffer/buffer.rs	field	BufferStateMarkers field zv_marker
 crates/neovm-edit/src/buffer/buffer.rs	field	BufferStorage field buffer_defaults
-crates/neovm-edit/src/buffer/buffer.rs	field	LabeledRestriction field end_marker
 crates/neovm-edit/src/buffer/buffer.rs	field	LabeledRestriction field label
 crates/neovm-edit/src/buffer/buffer.rs	field	SavedRestrictionState field buffer_id
-crates/neovm-edit/src/buffer/buffer.rs	field	SavedRestrictionState field labeled_restrictions
 crates/neovm-edit/src/buffer/buffer.rs	field	SavedRestrictionState field restriction
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl AccessibleBufferRegionSnapshot::end_emacs_byte
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::accessible_char_len
@@ -67,10 +63,8 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::accessible_emacs_byte_
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::accessible_region_snapshot
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::auto_save_failure_time
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::auto_save_file_name_lisp_string
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::auto_save_file_name_runtime_string_owned
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::auto_save_file_name_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::automatic_composition_spans
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::automatic_composition_spans_visible
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::automatic_composition_spans_visible_with_symbols
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::automatic_composition_spans_with_symbols
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::autosave_modified_tick
@@ -104,7 +98,6 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::file_name_runtime_stri
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::file_name_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::full_emacs_byte_range
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::full_lisp_char_region
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::full_text_string
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::gap_position_lisp
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::gap_size_lisp
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::get_buffer_local
@@ -119,7 +112,6 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::gnu_beg_unchanged
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::goto_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::has_any_non_nil_property_in_char_range
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::has_buffer_local_by_sym_id
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::has_name
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::id
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::indexed_newline_count
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::interval_plist_at_char_pos
@@ -129,7 +121,6 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::is_modified
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::is_narrowed
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::is_text_empty
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::kill_all_local_variables
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::kill_buffer_local
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::kill_buffer_local_by_sym_id
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::last_name_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::last_selected_window
@@ -144,8 +135,6 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::local_var_alist_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::mark_char_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::mark_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::mark_marker
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::marker_chain_anchor_lookup
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::marker_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::modified_state_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::modified_tick
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::modtime_size
@@ -178,31 +167,19 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::previous_syntax_prop_s
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::previous_watched_property_state_change_before_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::props_modified_tick
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::read_only_value
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::recent_auto_save_p
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::record_text_property_modification
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::register_marker_at_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::remap_text_marker_anchors
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::replace_lisp_string_with_text_props
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::reset_unchanged_region
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::restore_accessible_region
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::restore_accessible_region_with_current_full_end
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::restore_modified_state
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::save_modified_tick
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_accessible_region_and_point_from_emacs_bytes
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_auto_save_failure_time
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_auto_save_file_name_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_buffer_local
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_buffer_local_by_sym_id
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_buffer_local_void_by_sym_id
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_file_name_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_last_selected_window
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_last_window_start
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_mark_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_modified
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_modtime_size
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_multibyte_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_name_value
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_point_anchor
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_read_only_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_slot_local_flag
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_undo_list
@@ -231,7 +208,6 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::text_props_previous_ch
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::text_props_previous_single_change_before_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::text_props_property_name_presence
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::text_props_put_property_in_emacs_byte_range
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::text_props_remove_property_in_emacs_byte_range
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::text_props_snapshot
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::text_single_byte_chars_end
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::text_snapshot
@@ -240,8 +216,6 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::total_char_len
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::total_emacs_byte_end_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::total_emacs_byte_len
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::try_for_each_emacs_byte_range_chunk
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::try_new_standalone_with_text_backend_kind
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::try_new_with_text_backend_kind
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::visited_file_modtime
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::visited_file_modtime_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::widen
@@ -258,22 +232,17 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::collect_marker_
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::configure_buffer_undo_list
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::create_buffer
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::create_buffer_with_hook_inhibition
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::create_indirect_buffer
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::create_marker_at_anchor
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::create_marker_at_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::current_buffer
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::current_buffer_id
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::current_buffer_mut
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::current_labeled_restriction_bounds
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::current_local_map
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::dead_buffer_last_name_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::default_text_backend_kind
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::delete_all_buffer_overlays
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::delete_buffer_overlay
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::find_buffer_by_name
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::full_buffer_emacs_byte_range
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::generate_new_buffer_name
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::generate_new_buffer_name_ignoring
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::get
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::get_any
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::get_mut
@@ -282,19 +251,11 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::internal_labele
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::internal_labeled_widen
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::kill_buffer
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::kill_buffer_collect
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::marker_char_pos
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::marker_emacs_byte_pos
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::marker_value
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::move_buffer_overlay_to_emacs_byte_range
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::move_marker_ref_to_anchor
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::narrow_buffer_to_emacs_byte_range
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::new
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::note_buffer_display
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::note_buffer_order_tail
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::put_buffer_overlay_property
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::put_buffer_text_property_in_emacs_byte_range
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::record_undo_point_before_command
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::register_marker_at_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::remove_buffer_local_property
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::remove_marker
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::rename_buffer
@@ -310,9 +271,7 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::save_current_re
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::set_buffer_auto_saved
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::set_buffer_default_slot
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::set_buffer_file_name
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::set_buffer_file_truename
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::set_buffer_last_window_start
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::set_buffer_local_map
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::set_buffer_local_property
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::set_buffer_local_property_by_sym_id
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::set_buffer_local_void_property_by_sym_id
@@ -324,7 +283,6 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::set_current
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::set_current_local_map
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::switch_current
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::switch_current_unrecorded
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferManager::widen_buffer
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::char_pos_to_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::copy_emacs_byte_range_to
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::emacs_byte_at_pos
@@ -367,7 +325,6 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn lookup_buffer_slot
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn lookup_buffer_slot_by_sym_id
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn variable_affects_chrome
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn variable_affects_chrome_by_sym_id
-crates/neovm-edit/src/buffer/buffer.rs	fn	fn variable_affects_display
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn variable_affects_display_by_sym_id
 crates/neovm-edit/src/buffer/buffer.rs	struct	struct AccessibleBufferRegionSnapshot
 crates/neovm-edit/src/buffer/buffer.rs	struct	struct Buffer
@@ -375,10 +332,8 @@ crates/neovm-edit/src/buffer/buffer.rs	struct	struct BufferManager
 crates/neovm-edit/src/buffer/buffer.rs	struct	struct BufferSlotInfo
 crates/neovm-edit/src/buffer/buffer.rs	struct	struct BufferStateMarkers
 crates/neovm-edit/src/buffer/buffer.rs	struct	struct BufferTextSnapshot
-crates/neovm-edit/src/buffer/buffer.rs	struct	struct LabeledRestriction
 crates/neovm-edit/src/buffer/buffer.rs	struct	struct MarkerRef
 crates/neovm-edit/src/buffer/buffer.rs	struct	struct OutermostRestrictionResetState
-crates/neovm-edit/src/buffer/buffer.rs	struct	struct SavedLabeledRestrictions
 crates/neovm-edit/src/buffer/buffer.rs	struct	struct SavedRestrictionState
 crates/neovm-edit/src/buffer/buffer.rs	use	use BUFFER_SLOT_COUNT
 crates/neovm-edit/src/buffer/buffer.rs	use	use BufferId
@@ -406,7 +361,6 @@ crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::interval_plis
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::interval_plist_run_at_char_pos
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::is_empty
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::is_multibyte
-crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::markers_head_slot_raw
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::metrics
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::modified_tick
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::new
@@ -415,7 +369,6 @@ crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::next_watched_
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::previous_syntax_prop_state_run_start_at_char_pos
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::previous_watched_property_state_change_before_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::props_modified_tick
-crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::record_text_property_modification
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::reset_unchanged_region
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::save_modified_tick
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::set_modification_state
@@ -437,10 +390,8 @@ crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::text_props_pr
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::text_props_previous_single_change_before_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::text_props_property_name_presence
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::text_props_put_property_in_emacs_byte_range
-crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::text_props_remove_property_in_emacs_byte_range
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::text_props_replace
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::text_props_snapshot
-crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::try_from_str_with_backend_kind
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl SyntaxSafeKey::new
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl SyntaxSafePositions::key
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl SyntaxSafePositions::points
@@ -503,7 +454,6 @@ crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl Buffer::insert
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl Buffer::insert_lisp_string
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl Buffer::replace_emacs_byte_range_lisp_string
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl Buffer::text_transposition_for_char_ranges
-crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl Buffer::transpose_regions
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::delete_buffer_emacs_byte_range
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::delete_buffer_measured_region
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::edit_range_for_buffer_emacs_byte_range
@@ -543,7 +493,6 @@ crates/neovm-edit/src/buffer/mod.rs	use	use EmacsByteLen
 crates/neovm-edit/src/buffer/mod.rs	use	use EmacsBytePos
 crates/neovm-edit/src/buffer/mod.rs	use	use EmacsByteRange
 crates/neovm-edit/src/buffer/mod.rs	use	use InsertionType
-crates/neovm-edit/src/buffer/mod.rs	use	use LabeledRestriction
 crates/neovm-edit/src/buffer/mod.rs	use	use LabeledRestrictionLabel
 crates/neovm-edit/src/buffer/mod.rs	use	use LineIndexBuild
 crates/neovm-edit/src/buffer/mod.rs	use	use LispBytePos1
@@ -553,7 +502,6 @@ crates/neovm-edit/src/buffer/mod.rs	use	use ObjectIntervalPlistRun
 crates/neovm-edit/src/buffer/mod.rs	use	use ObjectIntervalRun
 crates/neovm-edit/src/buffer/mod.rs	use	use Overlay
 crates/neovm-edit/src/buffer/mod.rs	use	use OverlayList
-crates/neovm-edit/src/buffer/mod.rs	use	use SavedLabeledRestrictions
 crates/neovm-edit/src/buffer/mod.rs	use	use SavedPointBeforeCommand
 crates/neovm-edit/src/buffer/mod.rs	use	use SavedRestrictionKind
 crates/neovm-edit/src/buffer/mod.rs	use	use SavedRestrictionState
@@ -561,20 +509,13 @@ crates/neovm-edit/src/buffer/mod.rs	use	use SharedUndoState
 crates/neovm-edit/src/buffer/mod.rs	use	use TextChange
 crates/neovm-edit/src/buffer/mod.rs	use	use TextEditRange
 crates/neovm-edit/src/buffer/mod.rs	use	use TextExtent
-crates/neovm-edit/src/buffer/mod.rs	use	use TextInsertion
 crates/neovm-edit/src/buffer/mod.rs	use	use TextMetrics
 crates/neovm-edit/src/buffer/mod.rs	use	use TextPositionAnchor
 crates/neovm-edit/src/buffer/mod.rs	use	use TextPropertyTable
-crates/neovm-edit/src/buffer/mod.rs	use	use TextReplacement
-crates/neovm-edit/src/buffer/mod.rs	use	use TextTransposition
-crates/neovm-edit/src/buffer/mod.rs	use	use TranspositionAnchorPolicy
 crates/neovm-edit/src/buffer/mod.rs	use	use UndoLimitBindings
-crates/neovm-edit/src/buffer/mod.rs	use	use UndoLimits
-crates/neovm-edit/src/buffer/mod.rs	use	use UndoRecording
 crates/neovm-edit/src/buffer/mod.rs	use	use VisitedFileModtime
 crates/neovm-edit/src/buffer/mod.rs	use	use truncate_undo_list
 crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_boundary
-crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_has_trailing_boundary
 crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_is_disabled
 crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_record_insert
 crates/neovm-edit/src/buffer/overlay.rs	enum	enum OverlayPropertyAtPoint
@@ -585,22 +526,15 @@ crates/neovm-edit/src/buffer/overlay.rs	field	OverlayPositionRemap field overlay
 crates/neovm-edit/src/buffer/overlay.rs	field	OverlayPositionRemap field range
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl NonNilPropertyValue::new
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl NonNilPropertyValue::value
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::adjust_for_delete_emacs_byte_range
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::adjust_for_insert_at_emacs_byte_pos
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::content_digest
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::delete_all_overlays
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::delete_overlay
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::detach_overlay
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::get
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::highest_priority_overlay_at_emacs_byte_pos
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::highest_priority_overlay_property_value_at_emacs_byte_pos
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::insert_overlay
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::is_empty
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::iter_overlays_at_emacs_byte_pos
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::iter_overlays_in_accessible_emacs_byte_range
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::len
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::may_contain_property
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::move_overlay_to_emacs_byte_range
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::new
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::next_boundary_after_emacs_byte_pos
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_applies_to_window
@@ -608,18 +542,12 @@ crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_creation
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_end_emacs_byte_pos
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_get_named
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_plist
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_put
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlay_start_emacs_byte_pos
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlays_at_emacs_byte_pos
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlays_in_accessible_emacs_byte_range
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlays_in_emacs_byte_range
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::overlays_in_gnu_lists_order
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::previous_boundary_before_emacs_byte_pos
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::resolve_overlay_property_at_emacs_byte_pos
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::set_front_advance
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::set_rear_advance
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::snapshot
-crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::snapshot_clone
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::sort_overlay_ids_by_priority_desc
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayList::sort_overlay_ids_by_priority_desc_with
 crates/neovm-edit/src/buffer/overlay.rs	fn	fn impl OverlayModificationHook::hook_list
@@ -747,7 +675,6 @@ crates/neovm-edit/src/buffer/text/edit.rs	fn	fn impl TextEditRange::is_empty
 crates/neovm-edit/src/buffer/text/edit.rs	fn	fn impl TextEditRange::new
 crates/neovm-edit/src/buffer/text/edit.rs	fn	fn impl TextEditRange::start_anchor
 crates/neovm-edit/src/buffer/text/edit.rs	fn	fn impl TextExtent::chars
-crates/neovm-edit/src/buffer/text/edit.rs	fn	fn impl TextExtent::emacs_bytes
 crates/neovm-edit/src/buffer/text/edit.rs	fn	fn impl TextExtent::from_emacs_bytes
 crates/neovm-edit/src/buffer/text/edit.rs	fn	fn impl TextExtent::is_empty
 crates/neovm-edit/src/buffer/text/edit.rs	fn	fn impl TextExtent::new
@@ -792,8 +719,6 @@ crates/neovm-edit/src/buffer/text/edit.rs	struct	struct TextInsertion
 crates/neovm-edit/src/buffer/text/edit.rs	struct	struct TextReplacement
 crates/neovm-edit/src/buffer/text/edit.rs	struct	struct TextTransposition
 crates/neovm-edit/src/buffer/text/kind.rs	enum	enum BufferTextBackendKind
-crates/neovm-edit/src/buffer/text/kind.rs	fn	fn impl BufferTextBackendKind::implemented_variants
-crates/neovm-edit/src/buffer/text/kind.rs	fn	fn impl BufferTextBackendKind::non_gap_implemented_variants
 crates/neovm-edit/src/buffer/text/kind.rs	fn	fn impl BufferTextBackendKind::symbol_name
 crates/neovm-edit/src/buffer/text/kind.rs	fn	fn impl BufferTextBackendKind::variants
 crates/neovm-edit/src/buffer/text/metrics.rs	const	const impl TextMetrics::ZERO
@@ -806,37 +731,24 @@ crates/neovm-edit/src/buffer/text/mod.rs	use	use BufferTextBackendKind
 crates/neovm-edit/src/buffer/text/mod.rs	use	use TextChange
 crates/neovm-edit/src/buffer/text/mod.rs	use	use TextEditRange
 crates/neovm-edit/src/buffer/text/mod.rs	use	use TextExtent
-crates/neovm-edit/src/buffer/text/mod.rs	use	use TextInsertion
 crates/neovm-edit/src/buffer/text/mod.rs	use	use TextMetrics
-crates/neovm-edit/src/buffer/text/mod.rs	use	use TextReplacement
-crates/neovm-edit/src/buffer/text/mod.rs	use	use TextTransposition
-crates/neovm-edit/src/buffer/text_index.rs	fn	fn text_line_index_mismatches
 crates/neovm-edit/src/buffer/text_props.rs	use	use neovm_value::value::text_props::*
-crates/neovm-edit/src/buffer/text_snapshot.rs	enum	enum TextSnapshotMode
 crates/neovm-edit/src/buffer/text_snapshot.rs	fn	fn buffer_text_cow_copies
 crates/neovm-edit/src/buffer/text_snapshot.rs	fn	fn set_text_snapshot_mode_override
 crates/neovm-edit/src/buffer/text_snapshot.rs	fn	fn take_buffer_text_cow_copies
-crates/neovm-edit/src/buffer/undo.rs	enum	enum UndoRecording
-crates/neovm-edit/src/buffer/undo.rs	fn	fn impl UndoLimits::outer_limit_function_for
 crates/neovm-edit/src/buffer/undo.rs	fn	fn impl UndoLimits::read
 crates/neovm-edit/src/buffer/undo.rs	fn	fn impl UndoRecording::of
 crates/neovm-edit/src/buffer/undo.rs	fn	fn truncate_undo_list
 crates/neovm-edit/src/buffer/undo.rs	fn	fn undo_list_boundary
-crates/neovm-edit/src/buffer/undo.rs	fn	fn undo_list_has_trailing_boundary
 crates/neovm-edit/src/buffer/undo.rs	fn	fn undo_list_is_disabled
 crates/neovm-edit/src/buffer/undo.rs	fn	fn undo_list_record_delete
 crates/neovm-edit/src/buffer/undo.rs	fn	fn undo_list_record_insert
-crates/neovm-edit/src/buffer/undo.rs	struct	struct UndoLimits
 crates/neovm-edit/src/buffer/undo.rs	trait	trait UndoLimitBindings
 crates/neovm-edit/src/buffer/visited_file_modtime.rs	enum	enum VisitedFileModtime
-crates/neovm-edit/src/buffer/visited_file_modtime.rs	fn	fn impl FirstChangeModtime::to_lisp_value
 crates/neovm-edit/src/buffer/visited_file_modtime.rs	fn	fn impl VisitedFileModtime::from_lisp_flag
 crates/neovm-edit/src/buffer/visited_file_modtime.rs	fn	fn impl VisitedFileModtime::from_open_error
-crates/neovm-edit/src/buffer/visited_file_modtime.rs	fn	fn impl VisitedFileModtime::to_lisp_value
 crates/neovm-edit/src/buffer/visited_file_modtime.rs	fn	fn impl VisitedFileModtimeSlot::new
 crates/neovm-edit/src/buffer/visited_file_modtime.rs	fn	fn impl VisitedFileModtimeSlot::own
-crates/neovm-edit/src/buffer/visited_file_modtime.rs	struct	struct BaseVisitedFileModtime
-crates/neovm-edit/src/buffer/visited_file_modtime.rs	struct	struct FirstChangeModtime
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	field	Bookmark field annotation
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	field	Bookmark field filename
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	field	Bookmark field front_context
@@ -844,16 +756,11 @@ crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	field	Bookmark field ha
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	field	Bookmark field name
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	field	Bookmark field position
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	field	Bookmark field rear_context
-crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	fn	fn impl BookmarkManager::all_names
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	fn	fn impl BookmarkManager::delete
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	fn	fn impl BookmarkManager::get
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	fn	fn impl BookmarkManager::is_modified
-crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	fn	fn impl BookmarkManager::load_from_string
-crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	fn	fn impl BookmarkManager::mark_saved
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	fn	fn impl BookmarkManager::new
-crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	fn	fn impl BookmarkManager::recent_names
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	fn	fn impl BookmarkManager::rename
-crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	fn	fn impl BookmarkManager::save_to_string
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	fn	fn impl BookmarkManager::set
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	struct	struct Bookmark
 crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs	struct	struct BookmarkManager
@@ -924,7 +831,6 @@ crates/neovm-edit/src/emacs_core/editing/marker/mod.rs	field	Marker field buffer
 crates/neovm-edit/src/emacs_core/editing/marker/mod.rs	field	Marker field insertion_type
 crates/neovm-edit/src/emacs_core/editing/marker/mod.rs	field	Marker field position
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	enum	enum CustomType
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	enum	enum FontLockLevel
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	enum	enum ModeLineElement
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	field	CustomGroup field doc
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	field	CustomGroup field members
@@ -958,27 +864,8 @@ crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	field	MinorMode field keyma
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	field	MinorMode field lighter
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	field	ModeLineFormat field elements
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeLineFormat::render
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::active_minor_modes
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::add_auto_mode
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::derived_mode_p
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::disable_minor_mode
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::enable_global_minor_mode
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::enable_minor_mode
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::font_lock_keywords
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::get_custom_group
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::get_custom_variable
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::get_major_mode
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::get_major_mode_def
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::is_minor_mode_active
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::mode_for_file
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::mode_line_string
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::new
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::register_custom_group
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::register_custom_variable
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::register_major_mode
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::register_minor_mode
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::set_major_mode
-crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	fn	fn impl ModeRegistry::toggle_minor_mode
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	struct	struct CustomGroup
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	struct	struct CustomVariable
 crates/neovm-edit/src/emacs_core/editing/mode/mod.rs	struct	struct FontLockDefaults

@@ -42,7 +42,8 @@ fn prepend_undo_entry(undo_list: &mut Value, entry: Value) {
 /// branch exhaustive at compile time, so a new state cannot be forgotten and
 /// "on with an empty history" cannot be confused with "off".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UndoRecording {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum UndoRecording {
     /// `buffer-undo-list` is `t`: changes are not recorded.
     Disabled,
     /// `buffer-undo-list` is a list of records, possibly empty (nil).
@@ -321,7 +322,8 @@ pub fn undo_list_boundary(undo_list: &mut Value) {
 // (lisp/simple.el:3645), and it is Lisp.  This module RECORDS.
 
 /// Check whether the most recent entry is a nil boundary.
-pub fn undo_list_has_trailing_boundary(undo_list: &Value) -> bool {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn undo_list_has_trailing_boundary(undo_list: &Value) -> bool {
     undo_list.is_cons() && undo_list.cons_car().is_nil()
 }
 
@@ -450,7 +452,8 @@ pub trait UndoLimitBindings {
 
 /// One buffer's truncation limits, read at the moment GNU reads them.
 #[derive(Clone, Copy, Debug)]
-pub struct UndoLimits {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct UndoLimits {
     /// `undo-limit`: truncate *after* the boundary that pushes the list past
     /// this size (`src/undo.c:380-390`).
     limit: i64,
@@ -485,7 +488,8 @@ impl UndoLimits {
     /// The function GNU offers the oversized record to, when there is both an
     /// exceeded `undo-outer-limit` and an `undo-outer-limit-function`
     /// (`src/undo.c:352-356`). `None` means GNU would not call anything.
-    pub fn outer_limit_function_for(self, first_group_bytes: i64) -> Option<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn outer_limit_function_for(self, first_group_bytes: i64) -> Option<Value> {
         if !self.outer.is_exceeded_by(first_group_bytes) || self.outer_function.is_nil() {
             return None;
         }

@@ -1531,22 +1531,8 @@ fn forward_comment_backward_single_line_comments() {
         ));
         // Set up ; as comment start, \n as comment end
         let mut tbl = super::SyntaxTable::isolate_for_buffer(buf);
-        tbl.modify_syntax_entry(
-            ';',
-            SyntaxEntry {
-                class: SyntaxClass::Comment,
-                matching_char: None,
-                flags: SyntaxFlags::empty(),
-            },
-        );
-        tbl.modify_syntax_entry(
-            '\n',
-            SyntaxEntry {
-                class: SyntaxClass::EndComment,
-                matching_char: None,
-                flags: SyntaxFlags::empty(),
-            },
-        );
+        tbl.modify_syntax_entry(';', SyntaxEntry::simple(SyntaxClass::Comment));
+        tbl.modify_syntax_entry('\n', SyntaxEntry::simple(SyntaxClass::EndComment));
         buf.insert("code\n;; c1\n;; c2\n;; c3\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(
             buf.point_max_emacs_byte_pos().get(),
@@ -1677,22 +1663,8 @@ fn forward_comment_backward_stops_at_non_comment() {
             buf.point_max_emacs_byte_pos().get(),
         ));
         let mut tbl = super::SyntaxTable::isolate_for_buffer(buf);
-        tbl.modify_syntax_entry(
-            ';',
-            SyntaxEntry {
-                class: SyntaxClass::Comment,
-                matching_char: None,
-                flags: SyntaxFlags::empty(),
-            },
-        );
-        tbl.modify_syntax_entry(
-            '\n',
-            SyntaxEntry {
-                class: SyntaxClass::EndComment,
-                matching_char: None,
-                flags: SyntaxFlags::empty(),
-            },
-        );
+        tbl.modify_syntax_entry(';', SyntaxEntry::simple(SyntaxClass::Comment));
+        tbl.modify_syntax_entry('\n', SyntaxEntry::simple(SyntaxClass::EndComment));
         buf.insert("code\n;; c1\n;; c2\n;; c3\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(
             buf.point_max_emacs_byte_pos().get(),

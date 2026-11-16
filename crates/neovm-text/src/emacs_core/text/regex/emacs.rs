@@ -243,7 +243,7 @@ pub struct CompiledPattern {
     buffer: Vec<u8>,
 
     /// Number of subexpressions (groups).
-    pub re_nsub: usize,
+    pub(crate) re_nsub: usize,
 
     /// Fast rejection map: fastmap[c] is true if the pattern can start
     /// with byte c.  Used by `re_search` to skip non-matching positions.
@@ -258,7 +258,7 @@ pub struct CompiledPattern {
     pub(crate) fastmap_translated: [bool; 256],
 
     /// Whether the fastmap is valid (needs recomputation after compile).
-    pub fastmap_accurate: bool,
+    pub(crate) fastmap_accurate: bool,
 
     /// The tiny ASCII candidate set used by memchr, derived on first use.
     /// Rebuilt with the fastmap, including syntax-table recomputation.
@@ -283,7 +283,7 @@ pub struct CompiledPattern {
     pub target_multibyte: bool,
 
     /// True if the pattern can match the empty string.
-    pub can_be_null: bool,
+    pub(crate) can_be_null: bool,
 
     /// True if matching this pattern consults the syntax table at MATCH
     /// time (`\b \B \< \> \_< \_> \w \W \sC \SC` and POSIX classes).
@@ -314,7 +314,7 @@ pub struct CompiledPattern {
     /// membership per call from the active table, so only the FASTMAP
     /// bakes table content (see `compile_fastmap`); the caching rule is
     /// the same.
-    pub used_syntax: bool,
+    pub(crate) used_syntax: bool,
 
     /// Character translation table for case-folding.
     ///
@@ -327,7 +327,7 @@ pub struct CompiledPattern {
     /// Multibyte (non-ASCII) character ranges for Charset/CharsetNot opcodes.
     /// Key = bytecode position of the Charset/CharsetNot opcode.
     /// Value = list of inclusive (start_char, end_char) character ranges.
-    pub multibyte_charsets: FxHashMap<usize, Vec<(char, char)>>,
+    pub(crate) multibyte_charsets: FxHashMap<usize, Vec<(char, char)>>,
 
     /// Per-charset POSIX character class flags.
     ///
@@ -421,7 +421,7 @@ pub struct CompiledPattern {
     pub(crate) buffer: Vec<u8>,
 
     /// Number of subexpressions (groups).
-    pub re_nsub: usize,
+    pub(crate) re_nsub: usize,
 
     /// Fast rejection map: fastmap[c] is true if the pattern can start
     /// with byte c.  Used by `re_search` to skip non-matching positions.
@@ -436,7 +436,7 @@ pub struct CompiledPattern {
     pub(crate) fastmap_translated: [bool; 256],
 
     /// Whether the fastmap is valid (needs recomputation after compile).
-    pub fastmap_accurate: bool,
+    pub(crate) fastmap_accurate: bool,
 
     /// The tiny ASCII candidate set used by memchr, derived on first use.
     /// Rebuilt with the fastmap, including syntax-table recomputation.
@@ -461,7 +461,7 @@ pub struct CompiledPattern {
     pub target_multibyte: bool,
 
     /// True if the pattern can match the empty string.
-    pub can_be_null: bool,
+    pub(crate) can_be_null: bool,
 
     /// True if matching this pattern consults the syntax table at MATCH
     /// time (`\b \B \< \> \_< \_> \w \W \sC \SC` and POSIX classes).
@@ -492,7 +492,7 @@ pub struct CompiledPattern {
     /// membership per call from the active table, so only the FASTMAP
     /// bakes table content (see `compile_fastmap`); the caching rule is
     /// the same.
-    pub used_syntax: bool,
+    pub(crate) used_syntax: bool,
 
     /// Character translation table for case-folding.
     ///
@@ -505,7 +505,7 @@ pub struct CompiledPattern {
     /// Multibyte (non-ASCII) character ranges for Charset/CharsetNot opcodes.
     /// Key = bytecode position of the Charset/CharsetNot opcode.
     /// Value = list of inclusive (start_char, end_char) character ranges.
-    pub multibyte_charsets: FxHashMap<usize, Vec<(char, char)>>,
+    pub(crate) multibyte_charsets: FxHashMap<usize, Vec<(char, char)>>,
 
     /// Per-charset POSIX character class flags.
     ///
@@ -10830,5 +10830,27 @@ impl FailStackProbe {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn max_push_pos(&self) -> usize {
         self.max_push_pos
+    }
+}
+
+/// Test-facing readers for the GNU `re_pattern_buffer` mirrors. The
+/// production arm keeps these fields crate-private; the moved core regex
+/// tests read them through these readers under `test-support`.
+#[cfg(any(test, feature = "test-support"))]
+impl CompiledPattern {
+    pub fn fastmap_accurate(&self) -> bool {
+        self.fastmap_accurate
+    }
+
+    pub fn can_be_null(&self) -> bool {
+        self.can_be_null
+    }
+
+    pub fn used_syntax(&self) -> bool {
+        self.used_syntax
+    }
+
+    pub fn multibyte_charsets(&self) -> &FxHashMap<usize, Vec<(char, char)>> {
+        &self.multibyte_charsets
     }
 }

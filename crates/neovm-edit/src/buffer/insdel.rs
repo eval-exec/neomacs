@@ -290,7 +290,8 @@ impl Buffer {
     /// GNU `Ftranspose_regions` core: swap two non-overlapping current-buffer
     /// regions without changing buffer size.  Text movement is byte-based,
     /// while property and marker movement follows GNU's character positions.
-    pub fn transpose_regions(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn transpose_regions(
         &mut self,
         transposition: TextTransposition,
         anchor_policy: TranspositionAnchorPolicy,

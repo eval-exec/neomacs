@@ -39,11 +39,13 @@ impl BufferTextBackendKind {
         Self::iter()
     }
 
-    pub fn implemented_variants() -> impl Iterator<Item = Self> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn implemented_variants() -> impl Iterator<Item = Self> {
         Self::variants().filter(|kind| kind.is_implemented())
     }
 
-    pub fn non_gap_implemented_variants() -> impl Iterator<Item = Self> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn non_gap_implemented_variants() -> impl Iterator<Item = Self> {
         Self::implemented_variants().filter(|kind| !kind.is_gap_buffer())
     }
 

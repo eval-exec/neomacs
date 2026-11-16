@@ -1103,7 +1103,8 @@ impl BufferText {
         ))
     }
 
-    pub fn try_from_str_with_backend_kind(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn try_from_str_with_backend_kind(
         text: &str,
         kind: BufferTextBackendKind,
     ) -> Result<Self, BufferTextBackendKind> {
@@ -1707,7 +1708,8 @@ impl BufferText {
     /// rejoins `props_modified_tick` to it, leaving `chars_modified_tick`
     /// untouched. The single choke point for the props tick; mirrors
     /// [`Self::record_char_modification`] for char edits.
-    pub fn record_text_property_modification(&self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn record_text_property_modification(&self) {
         let mut storage = self.storage.borrow_mut();
         storage.modified_tick += 1;
         storage.props_modified_tick = storage.modified_tick;
@@ -2435,7 +2437,8 @@ impl BufferText {
             .range_has_any_interval_in_char_range(range)
     }
 
-    pub fn text_props_remove_property_in_emacs_byte_range(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn text_props_remove_property_in_emacs_byte_range(
         &self,
         byte_range: EmacsByteRange,
         name: Value,
@@ -3296,7 +3299,10 @@ impl BufferText {
     /// Used by `TaggedHeap::unchain_dead_markers` to splice unmarked
     /// MarkerObj nodes out of the intrusive per-buffer chain before
     /// `sweep_objects` frees them.
-    pub unsafe fn markers_head_slot_raw(&self) -> *mut *mut neovm_value::tagged::header::MarkerObj {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) unsafe fn markers_head_slot_raw(
+        &self,
+    ) -> *mut *mut neovm_value::tagged::header::MarkerObj {
         let storage_ptr: *mut BufferTextStorage = self.storage.as_ptr();
         unsafe { &mut (*storage_ptr).markers_head as *mut _ }
     }

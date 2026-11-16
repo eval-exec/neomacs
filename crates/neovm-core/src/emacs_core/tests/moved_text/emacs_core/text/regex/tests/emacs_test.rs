@@ -836,7 +836,7 @@ fn test_fastmap_literal_accurate() {
     crate::test_utils::init_test_tracing();
     // Verify fastmap is populated and accurate for a simple literal
     let compiled = regex_compile("hello", false, false).unwrap();
-    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap_accurate());
     assert!(compiled.fastmap[b'h' as usize]);
     assert!(!compiled.fastmap[b'a' as usize]);
     assert!(!compiled.fastmap[b'z' as usize]);
@@ -847,7 +847,7 @@ fn test_fastmap_charset() {
     crate::test_utils::init_test_tracing();
     // Verify fastmap for character class patterns
     let compiled = regex_compile("[abc]", false, false).unwrap();
-    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap_accurate());
     assert!(compiled.fastmap[b'a' as usize]);
     assert!(compiled.fastmap[b'b' as usize]);
     assert!(compiled.fastmap[b'c' as usize]);
@@ -859,7 +859,7 @@ fn test_fastmap_case_fold() {
     crate::test_utils::init_test_tracing();
     // Case-folded pattern should match both cases
     let compiled = regex_compile("Hello", false, true).unwrap();
-    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap_accurate());
     assert!(compiled.fastmap[b'h' as usize]);
     assert!(compiled.fastmap[b'H' as usize]);
 }
@@ -869,7 +869,7 @@ fn test_fastmap_alternation() {
     crate::test_utils::init_test_tracing();
     // Alternation: both branches should appear in fastmap
     let compiled = regex_compile("\\(foo\\|bar\\)", false, false).unwrap();
-    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap_accurate());
     assert!(compiled.fastmap[b'f' as usize]);
     assert!(compiled.fastmap[b'b' as usize]);
     assert!(!compiled.fastmap[b'z' as usize]);
@@ -880,7 +880,7 @@ fn test_fastmap_dot() {
     crate::test_utils::init_test_tracing();
     // AnyChar: everything except newline
     let compiled = regex_compile(".", false, false).unwrap();
-    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap_accurate());
     assert!(compiled.fastmap[b'a' as usize]);
     assert!(compiled.fastmap[b'Z' as usize]);
     assert!(!compiled.fastmap[b'\n' as usize]);
@@ -891,7 +891,7 @@ fn test_fastmap_anchor_then_literal() {
     crate::test_utils::init_test_tracing();
     // ^hello — anchor is zero-width, fastmap should see 'h'
     let compiled = regex_compile("^hello", false, false).unwrap();
-    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap_accurate());
     assert!(compiled.fastmap[b'h' as usize]);
     assert!(!compiled.fastmap[b'x' as usize]);
 }
@@ -901,7 +901,7 @@ fn test_fastmap_charset_not() {
     crate::test_utils::init_test_tracing();
     // [^abc] should allow everything except a, b, c
     let compiled = regex_compile("[^abc]", false, false).unwrap();
-    assert!(compiled.fastmap_accurate);
+    assert!(compiled.fastmap_accurate());
     assert!(!compiled.fastmap[b'a' as usize]);
     assert!(!compiled.fastmap[b'b' as usize]);
     assert!(!compiled.fastmap[b'c' as usize]);

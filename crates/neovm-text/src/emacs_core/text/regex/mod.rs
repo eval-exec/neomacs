@@ -1423,7 +1423,8 @@ impl MatchGroup {
         CharRange::new(CharPos0::new(self.start), CharPos0::new(self.end))
     }
 
-    pub const fn emacs_byte_range(self) -> EmacsByteRange {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn emacs_byte_range(self) -> EmacsByteRange {
         EmacsByteRange::new(EmacsBytePos::new(self.start), EmacsBytePos::new(self.end))
     }
 
@@ -5039,7 +5040,8 @@ fn string_search_full_with_case_fold_source_compiled_syntax(
 }
 
 /// Match a regex against a string using Emacs default case-fold behavior.
-pub fn string_match_full(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn string_match_full(
     pattern: &str,
     string: &str,
     start: usize,
@@ -5147,7 +5149,8 @@ pub(crate) fn compute_buffer_replacement_with_syntax(
 /// Replace the last match in SOURCE (Emacs-bytes) and return the resulting
 /// Emacs-bytes. `source_multibyte` mirrors the source Lisp string's
 /// `STRING_MULTIBYTE` flag and governs how the result is reassembled.
-pub fn replace_match_string(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn replace_match_string(
     source: &[u8],
     source_multibyte: bool,
     newtext: &str,

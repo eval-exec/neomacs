@@ -852,7 +852,8 @@ impl CharsetRegistry {
         lookup_interned(name).is_some_and(|id| self.contains_symbol(id))
     }
 
-    pub fn contains_symbol(&self, name: SymId) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn contains_symbol(&self, name: SymId) -> bool {
         self.charsets.contains_key(&self.resolve_name(name))
     }
 
@@ -867,7 +868,8 @@ impl CharsetRegistry {
     }
 
     /// Return the priority-ordered list of charset names.
-    pub fn priority_list(&self) -> &[SymId] {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn priority_list(&self) -> &[SymId] {
         &self.priority
     }
 
@@ -931,7 +933,8 @@ impl CharsetRegistry {
 
     /// Move the requested charset names to the front of the priority list
     /// (deduplicated, preserving relative order for remaining entries).
-    pub fn set_priority(&mut self, requested: &[SymId]) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_priority(&mut self, requested: &[SymId]) {
         let mut identity_seen = HashSet::with_capacity(self.priority_identities.len());
         let mut identity_order = Vec::with_capacity(self.priority_identities.len());
         for &name in requested {
@@ -1028,7 +1031,8 @@ impl CharsetRegistry {
     /// later change to the target charset (plist, unification, …) is reflected
     /// through the alias — matching GNU `define-charset-alias`, where an alias
     /// is simply another name for the same charset.
-    pub fn define_alias(&mut self, alias: SymId, target: SymId) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn define_alias(&mut self, alias: SymId, target: SymId) {
         let canonical = self.resolve_name(target);
         if self.charsets.contains_key(&canonical) {
             self.aliases.insert(alias, canonical);
@@ -1245,7 +1249,8 @@ impl CharsetRegistry {
     /// Decode a code-point in the given charset to an Emacs internal
     /// character code.  Returns `None` when the code-point is outside
     /// the charset's valid range or the charset method cannot handle it.
-    pub fn decode_char(&self, name: SymId, code_point: i64) -> Option<i64> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn decode_char(&self, name: SymId, code_point: i64) -> Option<i64> {
         let info = self.charsets.get(&self.resolve_name(name))?;
         if info.ascii_compatible_p && (0..=0x7f).contains(&code_point) {
             return Some(code_point);

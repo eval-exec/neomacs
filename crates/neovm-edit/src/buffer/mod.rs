@@ -40,9 +40,13 @@ pub mod undo;
 pub mod visited_file_modtime;
 
 pub use buffer::{
-    Buffer, BufferId, BufferManager, BufferTextSnapshot, InsertionType, LabeledRestriction,
-    LineIndexBuild, MarkerRef, SavedLabeledRestrictions, SavedRestrictionState,
+    Buffer, BufferId, BufferManager, BufferTextSnapshot, InsertionType, LineIndexBuild, MarkerRef,
+    SavedRestrictionState,
 };
+#[cfg(not(feature = "test-support"))]
+pub(crate) use buffer::{LabeledRestriction, SavedLabeledRestrictions};
+#[cfg(feature = "test-support")]
+pub use buffer::{LabeledRestriction, SavedLabeledRestrictions};
 pub use buffer::{LabeledRestrictionLabel, SavedRestrictionKind};
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) use buffer_text::BufferText;
@@ -50,6 +54,9 @@ pub(crate) use buffer_text::BufferText;
 pub use buffer_text::BufferText;
 pub use buffer_text::{BufferSourceAuthority, BufferSourceReadLease};
 pub use edit_runtime::EditRuntime;
+#[cfg(not(feature = "test-support"))]
+pub(crate) use edit_transaction::TranspositionAnchorPolicy;
+#[cfg(feature = "test-support")]
 pub use edit_transaction::TranspositionAnchorPolicy;
 #[doc(hidden)]
 pub use edit_transaction::{PreparedBufferEdit, TextMeasurement};
@@ -64,14 +71,19 @@ pub use position::{
 };
 pub use shared::{SavedPointBeforeCommand, SharedUndoState};
 pub use text::TextMetrics;
-pub use text::{
-    BufferTextBackendKind, TextChange, TextEditRange, TextExtent, TextInsertion, TextReplacement,
-    TextTransposition,
-};
+pub use text::{BufferTextBackendKind, TextChange, TextEditRange, TextExtent};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use text::{TextInsertion, TextReplacement, TextTransposition};
+#[cfg(feature = "test-support")]
+pub use text::{TextInsertion, TextReplacement, TextTransposition};
 pub use text_props::{ObjectIntervalPlistRun, ObjectIntervalRun, TextPropertyTable};
 pub(crate) use undo::undo_first_group_bytes;
 pub use undo::{
-    UndoLimitBindings, UndoLimits, UndoRecording, truncate_undo_list, undo_list_boundary,
-    undo_list_has_trailing_boundary, undo_list_is_disabled, undo_list_record_insert,
+    UndoLimitBindings, truncate_undo_list, undo_list_boundary, undo_list_is_disabled,
+    undo_list_record_insert,
 };
+#[cfg(not(feature = "test-support"))]
+pub(crate) use undo::{UndoLimits, UndoRecording, undo_list_has_trailing_boundary};
+#[cfg(feature = "test-support")]
+pub use undo::{UndoLimits, UndoRecording, undo_list_has_trailing_boundary};
 pub use visited_file_modtime::VisitedFileModtime;

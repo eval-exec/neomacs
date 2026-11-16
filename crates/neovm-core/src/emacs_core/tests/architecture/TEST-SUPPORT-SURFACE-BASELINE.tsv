@@ -110,7 +110,6 @@ neovm-edit	crates/neovm-edit/src/buffer/text/edit.rs	buffer::text::edit::TextEdi
 neovm-edit	crates/neovm-edit/src/buffer/text/edit.rs	buffer::text::edit::TextEditRange::new	method	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/text/edit.rs	buffer::text::edit::TextExtent	struct	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/text/edit.rs	buffer::text::edit::TextExtent::chars	method	VIS	d01843729a
-neovm-edit	crates/neovm-edit/src/buffer/text/edit.rs	buffer::text::edit::TextExtent::emacs_bytes	method	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/text/edit.rs	buffer::text::edit::TextExtent::new	method	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/text/edit.rs	buffer::text::edit::TextInsertion	struct	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/text/edit.rs	buffer::text::edit::TextInsertion::byte_pos	method	VIS	d01843729a

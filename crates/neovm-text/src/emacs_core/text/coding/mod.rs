@@ -1035,7 +1035,8 @@ pub(crate) fn ccl_coding_spec(info: &CodingSystemInfo) -> Option<CclCodingSpec> 
 #[enumflags2::bitflags]
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IsoFlag {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum IsoFlag {
     LongForm = 0x0001,
     AsciiAtEol = 0x0002,
     AsciiAtCntl = 0x0004,
@@ -1054,7 +1055,8 @@ pub enum IsoFlag {
 /// The ISO-2022 designation state of a coding system: the charset initially
 /// loaded into each graphic register G0-G3 (`initial`), the charset->register
 /// map consulted while encoding (`request`), and the control `flags`.
-pub struct Iso2022Spec {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct Iso2022Spec {
     pub initial: [Option<SymId>; 4],
     pub request: Vec<(SymId, u8)>,
     /// `(reg94, reg96)` — the graphic register that 94- and 96-character sets

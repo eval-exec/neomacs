@@ -426,7 +426,8 @@ impl OverlayList {
     /// share the live Lisp objects. They do preserve each source object's
     /// precedence serial: changing that serial would change GNU's final
     /// `compare_overlays` tiebreak merely because redisplay took a snapshot.
-    pub fn snapshot_clone(&self) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn snapshot_clone(&self) -> Self {
         self.clone_with_identity(OverlayCloneIdentity::PreservePrecedence)
     }
 
@@ -1012,7 +1013,8 @@ impl OverlayList {
         self.index.interval_height()
     }
 
-    pub fn insert_overlay(&mut self, overlay: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn insert_overlay(&mut self, overlay: Value) {
         let data = overlay.as_overlay_data().unwrap();
         // Attach consumes the object's materialized coordinates. A live
         // overlay already owned by this index is rejected, while cross-buffer
@@ -1021,11 +1023,13 @@ impl OverlayList {
         self.index_mut().attach(overlay, range);
     }
 
-    pub fn detach_overlay(&mut self, overlay: Value) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn detach_overlay(&mut self, overlay: Value) -> bool {
         self.index_mut().detach(overlay).is_some()
     }
 
-    pub fn delete_overlay(&mut self, overlay: Value) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn delete_overlay(&mut self, overlay: Value) -> bool {
         if !self.detach_overlay(overlay) {
             return false;
         }
@@ -1057,7 +1061,13 @@ impl OverlayList {
         }
     }
 
-    pub fn overlay_put(&mut self, overlay: Value, prop: Value, value: Value) -> Result<bool, Flow> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn overlay_put(
+        &mut self,
+        overlay: Value,
+        prop: Value,
+        value: Value,
+    ) -> Result<bool, Flow> {
         neovm_value::symbol::SymbolPropertyRevision::observe_category_property(prop, value);
         let (changed, plist_replaced) = overlay
             .with_overlay_data_mut(|data| {
@@ -1124,7 +1134,12 @@ impl OverlayList {
         self.index.range(overlay).map(EmacsByteRange::end)
     }
 
-    pub fn move_overlay_to_emacs_byte_range(&mut self, overlay: Value, range: EmacsByteRange) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn move_overlay_to_emacs_byte_range(
+        &mut self,
+        overlay: Value,
+        range: EmacsByteRange,
+    ) {
         if self.index_mut().move_to(overlay, range).is_none() {
             return;
         }
@@ -1288,7 +1303,8 @@ impl OverlayList {
         Some(hasher.finish())
     }
 
-    pub fn overlays_in_accessible_emacs_byte_range(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn overlays_in_accessible_emacs_byte_range(
         &self,
         range: EmacsByteRange,
         accessible_end: EmacsBytePos,
@@ -1345,7 +1361,8 @@ impl OverlayList {
         best.map(|(winner, _)| winner)
     }
 
-    pub fn highest_priority_overlay_at_emacs_byte_pos(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn highest_priority_overlay_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         property: Value,
@@ -1698,7 +1715,8 @@ impl OverlayList {
         }
     }
 
-    pub fn adjust_for_insert_at_emacs_byte_pos(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn adjust_for_insert_at_emacs_byte_pos(
         &mut self,
         pos: EmacsBytePos,
         len: EmacsByteLen,
@@ -1726,7 +1744,8 @@ impl OverlayList {
         );
     }
 
-    pub fn adjust_for_delete_emacs_byte_range(&mut self, range: EmacsByteRange) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn adjust_for_delete_emacs_byte_range(&mut self, range: EmacsByteRange) {
         if range.is_empty() {
             return;
         }
@@ -1783,14 +1802,16 @@ impl OverlayList {
         );
     }
 
-    pub fn set_front_advance(&mut self, overlay: Value, advance: bool) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_front_advance(&mut self, overlay: Value, advance: bool) {
         self.invalidate_snapshot();
         let _ = overlay.with_overlay_data_mut(|data| {
             data.front_advance = advance;
         });
     }
 
-    pub fn set_rear_advance(&mut self, overlay: Value, advance: bool) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_rear_advance(&mut self, overlay: Value, advance: bool) {
         self.invalidate_snapshot();
         let _ = overlay.with_overlay_data_mut(|data| {
             data.rear_advance = advance;
@@ -1835,7 +1856,8 @@ impl OverlayList {
         self.index.next_boundary_after_no_alloc(pos, limit)
     }
 
-    pub fn previous_boundary_before_emacs_byte_pos(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn previous_boundary_before_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
     ) -> Option<EmacsBytePos> {

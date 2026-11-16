@@ -936,7 +936,8 @@ impl AutomaticCompositionRules {
 /// run past the end. A caller wanting every span that STARTS in `a..b` must
 /// pass a slice covering `a - MAX_AUTO_COMPOSITION_LOOKBACK .. b + (longest
 /// match)` and filter, which is what the equivalence pin checks.
-pub fn automatic_composition_spans_in(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn automatic_composition_spans_in(
     buffer: &neovm_edit::buffer::Buffer,
     composition_function_table: Value,
     text: &str,

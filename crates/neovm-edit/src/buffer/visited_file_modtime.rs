@@ -67,7 +67,8 @@ impl VisitedFileModtime {
     /// `record_first_change` conses into `(t . TIME)`.  Both go through here so
     /// `primitive-undo`'s `(time-equal-p time (visited-file-modtime))`
     /// (`lisp/simple.el:3672-3688`) can ever match.
-    pub fn to_lisp_value(self) -> Value {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn to_lisp_value(self) -> Value {
         match self {
             Self::Unknown => Value::fixnum(0),
             Self::Nonexistent => Value::fixnum(-1),
@@ -154,11 +155,13 @@ const UNKNOWN_MODTIME_NSECS: i32 = -2;
 /// answer: its field is private to this module and
 /// [`VisitedFileModtimeSlot::for_first_change`] is the only constructor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FirstChangeModtime(VisitedFileModtime);
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct FirstChangeModtime(VisitedFileModtime);
 
 impl FirstChangeModtime {
     /// The `(t . TIME)` datum.
-    pub fn to_lisp_value(self) -> Value {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn to_lisp_value(self) -> Value {
         self.0.to_lisp_value()
     }
 }
@@ -168,7 +171,8 @@ impl FirstChangeModtime {
 /// [`VisitedFileModtimeSlot::share_own`] mints one, and it shares the pointer
 /// rather than copying the timestamp, so an indirect buffer linked through it
 /// sees the base's later `save-buffer` and `set-visited-file-modtime`.
-pub struct BaseVisitedFileModtime(Rc<Cell<VisitedFileModtime>>);
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct BaseVisitedFileModtime(Rc<Cell<VisitedFileModtime>>);
 
 /// A buffer's visited-file modtime storage, plus the link an indirect buffer
 /// needs to its base's -- GNU's `b->base_buffer->modtime` dereference.

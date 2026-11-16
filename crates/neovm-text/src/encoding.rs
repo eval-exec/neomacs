@@ -321,7 +321,8 @@ pub fn is_whitespace(c: char) -> bool {
 }
 
 /// Whether a string is multibyte (contains non-ASCII).
-pub fn is_multibyte_string(s: &str) -> bool {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn is_multibyte_string(s: &str) -> bool {
     s.chars().any(|ch| {
         let cp = ch as u32;
         cp > 0x7f && !(UNIBYTE_BYTE_SENTINEL_MIN..=UNIBYTE_BYTE_SENTINEL_MAX).contains(&cp)

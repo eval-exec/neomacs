@@ -539,9 +539,10 @@ impl std::ops::BitOrAssign for SyntaxFlags {
 /// A single entry in a syntax table: the class, an optional matching
 /// character (for parens/string delimiters), and comment/prefix flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SyntaxEntry {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct SyntaxEntry {
     pub class: SyntaxClass,
-    pub matching_char: Option<char>,
+    pub(crate) matching_char: Option<char>,
     pub flags: SyntaxFlags,
 }
 
@@ -556,7 +557,8 @@ impl SyntaxEntry {
     }
 
     /// Create an entry with a matching character (for open/close parens).
-    pub fn with_match(class: SyntaxClass, matching: char) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn with_match(class: SyntaxClass, matching: char) -> Self {
         Self {
             class,
             matching_char: Some(matching),
@@ -571,7 +573,8 @@ impl SyntaxEntry {
 
 /// Parse an Emacs syntax descriptor string (e.g., `" "`, `"w"`, `"()"`,
 /// `". 12"`) into a `SyntaxEntry`.
-pub fn string_to_syntax(s: &str) -> Result<SyntaxEntry, String> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn string_to_syntax(s: &str) -> Result<SyntaxEntry, String> {
     let chars: Vec<char> = s.chars().collect();
     let descriptor = chars.first().copied().unwrap_or('\0');
     let class = SyntaxClass::from_char(descriptor)
@@ -658,7 +661,8 @@ fn materialize_syntax_entry(entry: &SyntaxEntry, object_reuse: LispSyntaxObjectR
 
 /// Convert a `SyntaxEntry` using GNU's ordinary `string-to-syntax` policy:
 /// reuse the canonical object for a bare, unflagged syntax code.
-pub fn syntax_entry_to_value(entry: &SyntaxEntry) -> Value {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn syntax_entry_to_value(entry: &SyntaxEntry) -> Value {
     materialize_syntax_entry(entry, LispSyntaxObjectReuse::CanonicalBare)
 }
 
@@ -779,7 +783,8 @@ impl SyntaxTable {
     /// Materializes the chartable on first call via
     /// `ensure_standard_syntax_table_object()` — the same one installed
     /// on new buffers by `current_buffer_syntax_table_object_in_buffers`.
-    pub fn new_standard() -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn new_standard() -> Self {
         match ensure_standard_syntax_table_object() {
             Ok(table) => Self { chartable: table },
             // If we can't build the chartable (no thread-local state),
@@ -814,7 +819,8 @@ impl SyntaxTable {
     /// subsequent `modify_syntax_entry` calls don't leak into the
     /// shared standard. Returns the new `SyntaxTable`. Mirrors the
     /// GNU idiom `(set-syntax-table (copy-syntax-table))`.
-    pub fn isolate_for_buffer(buf: &mut neovm_edit::buffer::buffer::Buffer) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn isolate_for_buffer(buf: &mut neovm_edit::buffer::buffer::Buffer) -> Self {
         use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
         let slot = buf.slots()[BUFFER_SLOT_SYNTAX_TABLE.index()];
         let source = if slot.is_nil() {
@@ -938,7 +944,8 @@ impl Default for SyntaxTable {
 ///
 /// A "word" is a maximal run of characters with syntax class `Word`.
 /// Between words, non-word characters are skipped.
-pub fn forward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn forward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
     forward_word_with_options(
         buf,
         table,

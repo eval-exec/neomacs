@@ -152,13 +152,13 @@ fn assert_cached_syntax_table_lives(owner: SyntaxCacheOwner) {
                 &pattern, false, false, true, None, &syntax,
             )
             .unwrap();
-            assert!(compiled.used_syntax);
+            assert!(compiled.used_syntax());
         }
         SyntaxCacheOwner::SearchPatterns => {
             let compiled =
                 compile_search_pattern_with_posix(&pattern, false, false, &syntax).unwrap();
             assert!(
-                matches!(compiled, CompiledSearchPattern::Emacs(ref pattern) if pattern.used_syntax)
+                matches!(compiled, CompiledSearchPattern::Emacs(ref pattern) if pattern.used_syntax())
             );
         }
     }

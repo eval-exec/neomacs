@@ -130,7 +130,8 @@ impl CaseTable {
 
 /// Manages case tables, providing standard ASCII case conversion by default.
 #[derive(Clone, Debug)]
-pub struct CaseTableManager {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct CaseTableManager {
     #[cfg(test)]
     /// The standard (immutable) case table.
     standard: CaseTable,
@@ -162,12 +163,14 @@ impl CaseTableManager {
     }
 
     /// Convert an entire string to uppercase.
-    pub fn upcase_string(&self, s: &str) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn upcase_string(&self, s: &str) -> String {
         s.chars().map(|c| self.upcase_char(c)).collect()
     }
 
     /// Convert an entire string to lowercase.
-    pub fn downcase_string(&self, s: &str) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn downcase_string(&self, s: &str) -> String {
         s.chars().map(|c| self.downcase_char(c)).collect()
     }
 
@@ -760,7 +763,8 @@ pub fn ensure_case_table_derived_slots_with_symbols(
 /// Return `true` if `v` is a case table (GNU `Fcase_table_p`): a char-table
 /// with the `case-table` purpose whose up/canon/eqv extras are nil or
 /// char-tables, with eqv present only alongside canon.
-pub fn is_case_table(v: &Value) -> bool {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn is_case_table(v: &Value) -> bool {
     is_case_table_with_symbols(v, SymbolMode::Bare)
 }
 

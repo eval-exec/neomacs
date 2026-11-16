@@ -122,7 +122,8 @@ impl TextExtent {
         self.chars
     }
 
-    pub const fn emacs_bytes(self) -> EmacsByteLen {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn emacs_bytes(self) -> EmacsByteLen {
         self.emacs_bytes
     }
 
