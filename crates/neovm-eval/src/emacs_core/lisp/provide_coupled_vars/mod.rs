@@ -107,7 +107,8 @@ use CoupledFeature::{
 /// `src/msdos.c` and `src/dosfns.c` provide nothing, and `lisp/cus-start.el:901`
 /// asks `(eq system-type 'ms-dos)` instead.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum CoupledFeature {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum CoupledFeature {
     /// `Fprovide (Qx)`, `src/xfns.c:10498`, inside the `HAVE_X_WINDOWS` arm of
     /// `src/emacs.c:2373-2385` that runs `syms_of_xterm`, `syms_of_xfns`,
     /// `syms_of_xmenu`, `syms_of_xsettings`, `syms_of_xsmfns` and
@@ -317,7 +318,8 @@ const XSETTINGS_ORACLE_PIN: &str = "ledger 199: font-use-system-font is (car byt
 /// `var_docs::gnu_table`: the rows are generated, and a row that reads as one
 /// line diffs as one line when the derivation is re-run.
 #[rustfmt::skip]
-pub static PROVIDE_COUPLED_VARIABLES: &[ProvideCoupledVariable] = &[
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) static PROVIDE_COUPLED_VARIABLES: &[ProvideCoupledVariable] = &[
     absent("android-build-fingerprint", &[Android], "androidterm.c:7026"),
     absent("android-build-manufacturer", &[Android], "androidterm.c:7032"),
     absent("android-display-planes", &[Android], "androidterm.c:7036"),

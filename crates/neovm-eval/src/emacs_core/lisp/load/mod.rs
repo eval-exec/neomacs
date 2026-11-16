@@ -932,7 +932,8 @@ fn expand_tilde_path_buf(path: &LispString) -> PathBuf {
 /// value rather than two booleans (`false, false` at a call site said nothing,
 /// and `require` silently got the wrong one).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LoadSuffixRequirement {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum LoadSuffixRequirement {
     /// GNU NOSUFFIX = t: exactly the name given, no suffix appended.
     ExactNameOnly,
     /// GNU MUST-SUFFIX = t: only suffixed candidates, so an extensionless file
@@ -947,7 +948,7 @@ pub enum LoadSuffixRequirement {
 
 impl LoadSuffixRequirement {
     /// GNU `Frequire`: MUST-SUFFIX is t exactly when no FILENAME was supplied.
-    pub fn for_require(filename_given: bool) -> Self {
+    pub(crate) fn for_require(filename_given: bool) -> Self {
         if filename_given {
             Self::BareNameAllowed
         } else {
@@ -997,7 +998,8 @@ pub fn find_file_in_load_path(name: &str, load_path: &[LispString]) -> Option<Pa
 }
 
 /// Search `load-path` for NAME under an explicit suffix policy.
-pub fn find_file_in_load_path_with_requirement(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn find_file_in_load_path_with_requirement(
     name: &str,
     load_path: &[LispString],
     requirement: LoadSuffixRequirement,
@@ -1020,7 +1022,8 @@ pub fn find_file_in_load_path_with_requirement(
 /// - `prefer_newer`: ignore suffix order and choose the newest suffixed file.
 /// - default: search each load-path directory in order, trying `.elc` before
 ///   `.el`, then bare names when suffixless loading is allowed.
-pub fn find_file_in_load_path_with_flags(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn find_file_in_load_path_with_flags(
     name: &str,
     load_path: &[LispString],
     no_suffix: bool,
@@ -2734,7 +2737,8 @@ pub(crate) fn stale_lisp_bytecode(root: &Path) -> Vec<StaleBytecode> {
 /// one exception (it gets GNU's `Fload` warning, which this port also has) and
 /// every harness must be the rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StaleBytecodePolicy {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum StaleBytecodePolicy {
     /// GNU `Fload`: name the file and load it anyway.
     Warn,
     /// Refuse to build an image at all, naming every stale file and its
@@ -2747,7 +2751,8 @@ pub enum StaleBytecodePolicy {
 ///
 /// Exists so that a deliberate stale-artifact reproduction -- the one that
 /// found this -- can still be run.
-pub const ALLOW_STALE_BYTECODE_ENV: &str = "NEOVM_ALLOW_STALE_BYTECODE";
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const ALLOW_STALE_BYTECODE_ENV: &str = "NEOVM_ALLOW_STALE_BYTECODE";
 
 /// Whether this process is a shipped editor.
 ///
@@ -2796,7 +2801,8 @@ impl StaleBytecodePolicy {
     /// The default is the strict one deliberately: a crate that forgets to
     /// declare anything is a harness, and a harness reading stale bytecode is
     /// the bug this whole family is about.
-    pub fn for_this_process() -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn for_this_process() -> Self {
         Self::for_announcement(SHIPPED_EDITOR_PROCESS.load(std::sync::atomic::Ordering::Relaxed))
     }
 
@@ -3376,7 +3382,8 @@ impl LoadupDumpInvocation {
         self.mode
     }
 
-    pub fn command_line_args(&self) -> &[String] {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn command_line_args(&self) -> &[String] {
         &self.command_line_args
     }
 }
@@ -3398,7 +3405,7 @@ pub enum RuntimeImageRole {
 }
 
 impl RuntimeImageRole {
-    pub const fn canonical_image_stem(self) -> &'static str {
+    pub(crate) const fn canonical_image_stem(self) -> &'static str {
         match self {
             Self::Bootstrap => "bootstrap-neomacs",
             Self::Final => "neomacs",
@@ -3412,7 +3419,8 @@ impl RuntimeImageRole {
         }
     }
 
-    pub fn fingerprinted_image_file_name(self) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn fingerprinted_image_file_name(self) -> String {
         format!(
             "{}-{}.pdump",
             self.canonical_image_stem(),
@@ -3876,7 +3884,7 @@ pub fn fingerprinted_runtime_image_path_for_executable(
         .join(role.fingerprinted_image_file_name())
 }
 
-pub fn default_runtime_image_path(role: RuntimeImageRole) -> PathBuf {
+pub(crate) fn default_runtime_image_path(role: RuntimeImageRole) -> PathBuf {
     let executable = std::env::current_exe()
         .ok()
         .and_then(|path| path.canonicalize().ok().or(Some(path)))

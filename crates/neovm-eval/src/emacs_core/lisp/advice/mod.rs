@@ -18,13 +18,14 @@ use neovm_value::value::{Value, equal_value_swp};
 
 /// A single variable watcher callback.
 #[derive(Clone, Debug)]
-pub struct VariableWatcher {
+pub(crate) struct VariableWatcher {
     /// The callback function to invoke on variable change.
     pub callback: Value,
 }
 
 /// Registry of variable watchers.
-pub struct VariableWatcherList {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct VariableWatcherList {
     /// Map from resolved variable symbol → list of watcher callbacks.
     /// FxHashMap (not the default SipHash): `has_watchers` is queried on every
     /// variable set/bind/unbind, and SymId keys hash far cheaper under FxHash.
@@ -39,7 +40,8 @@ impl VariableWatcherList {
     }
 
     /// Add a watcher callback for a variable.
-    pub fn add_watcher(&mut self, var_id: SymId, callback: Value, symbol_mode: SymbolMode) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn add_watcher(&mut self, var_id: SymId, callback: Value, symbol_mode: SymbolMode) {
         let entry = self.watchers.entry(var_id).or_default();
         // Don't add duplicate watchers.
         let already_exists = entry.iter().any(|w| {
@@ -56,7 +58,8 @@ impl VariableWatcherList {
     }
 
     /// Remove a watcher callback for a variable.
-    pub fn remove_watcher(&mut self, var_id: SymId, callback: &Value, symbol_mode: SymbolMode) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn remove_watcher(&mut self, var_id: SymId, callback: &Value, symbol_mode: SymbolMode) {
         if let Some(list) = self.watchers.get_mut(&var_id) {
             list.retain(|w| {
                 !equal_value_swp(
@@ -73,7 +76,7 @@ impl VariableWatcherList {
     }
 
     /// Remove all watcher callbacks for a variable.
-    pub fn clear_watchers(&mut self, var_id: SymId) {
+    pub(crate) fn clear_watchers(&mut self, var_id: SymId) {
         self.watchers.remove(&var_id);
     }
 
@@ -93,7 +96,8 @@ impl VariableWatcherList {
     }
 
     /// Return registered watcher callbacks for a variable in insertion order.
-    pub fn get_watchers(&self, var_id: SymId) -> Vec<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_watchers(&self, var_id: SymId) -> Vec<Value> {
         self.watchers
             .get(&var_id)
             .map(|list| list.iter().map(|watcher| watcher.callback).collect())
@@ -111,7 +115,8 @@ impl VariableWatcherList {
     /// - NEWVAL: the new value
     /// - OPERATION: one of "set", "let", "unlet", "makunbound", "defvaralias"
     /// - WHERE: location designator (`nil` for global, buffer for buffer-local)
-    pub fn notify_watchers(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn notify_watchers(
         &self,
         var_id: SymId,
         new_val: &Value,

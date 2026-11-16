@@ -1,63 +1,28 @@
 file	kind	item
 crates/neovm-eval/src/emacs_core/lisp/advice/mod.rs	field	VariableWatcher field callback
-crates/neovm-eval/src/emacs_core/lisp/advice/mod.rs	fn	fn impl VariableWatcherList::add_watcher
-crates/neovm-eval/src/emacs_core/lisp/advice/mod.rs	fn	fn impl VariableWatcherList::clear_watchers
-crates/neovm-eval/src/emacs_core/lisp/advice/mod.rs	fn	fn impl VariableWatcherList::get_watchers
 crates/neovm-eval/src/emacs_core/lisp/advice/mod.rs	fn	fn impl VariableWatcherList::has_watchers
 crates/neovm-eval/src/emacs_core/lisp/advice/mod.rs	fn	fn impl VariableWatcherList::new
-crates/neovm-eval/src/emacs_core/lisp/advice/mod.rs	fn	fn impl VariableWatcherList::notify_watchers
-crates/neovm-eval/src/emacs_core/lisp/advice/mod.rs	fn	fn impl VariableWatcherList::remove_watcher
-crates/neovm-eval/src/emacs_core/lisp/advice/mod.rs	struct	struct VariableWatcher
-crates/neovm-eval/src/emacs_core/lisp/advice/mod.rs	struct	struct VariableWatcherList
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	enum	enum AutoloadType
 crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	field	AutoloadEntry field autoload_type
 crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	field	AutoloadEntry field docstring
 crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	field	AutoloadEntry field file
 crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	field	AutoloadEntry field interactive
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::add_after_load
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::entries_snapshot
 crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::get_entry
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::get_entry_symbol
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::get_obsolete_function
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::get_obsolete_function_symbol
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::get_obsolete_variable
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::get_obsolete_variable_symbol
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::is_autoloaded
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::is_autoloaded_symbol
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::is_function_obsolete
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::is_function_obsolete_symbol
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::is_loaded
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::is_variable_obsolete
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::is_variable_obsolete_symbol
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::make_obsolete
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::make_obsolete_symbol
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::make_variable_obsolete
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::make_variable_obsolete_symbol
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::mark_loaded
 crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::new
 crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::register
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::register_symbol
 crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::remove
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::remove_symbol
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadManager::take_after_load_forms
 crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadType::from_value
 crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	fn	fn impl AutoloadType::to_value
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	struct	struct AutoloadEntry
-crates/neovm-eval/src/emacs_core/lisp/autoload/mod.rs	struct	struct AutoloadManager
 crates/neovm-eval/src/emacs_core/lisp/custom/mod.rs	field	KillLocalVariableOutcome field buffer_id
 crates/neovm-eval/src/emacs_core/lisp/custom/mod.rs	field	KillLocalVariableOutcome field removed
 crates/neovm-eval/src/emacs_core/lisp/custom/mod.rs	field	KillLocalVariableOutcome field resolved_id
 crates/neovm-eval/src/emacs_core/lisp/custom/mod.rs	field	KillLocalVariableOutcome field result
 crates/neovm-eval/src/emacs_core/lisp/custom/mod.rs	fn	fn impl CustomManager::new
 crates/neovm-eval/src/emacs_core/lisp/custom/mod.rs	struct	struct CustomManager
-crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	const	const ALLOW_STALE_BYTECODE_ENV
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	const	const TEMACS_ROLE_BINARY_NAME
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	enum	enum BuildDetails
-crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	enum	enum LoadSuffixRequirement
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	enum	enum LoadupDumpMode
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	enum	enum LoadupInvocation
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	enum	enum RuntimeImageRole
-crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	enum	enum StaleBytecodePolicy
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn activate_runtime_evaluator
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn announce_shipped_editor_process
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn apply_runtime_startup_state
@@ -66,26 +31,18 @@ crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn bootstrap_evaluator_cach
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn bootstrap_evaluator_cached_with_features
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn bootstrap_evaluator_for_loadup
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn bootstrap_evaluator_with_features
-crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn default_runtime_image_path
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn find_file_in_load_path
-crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn find_file_in_load_path_with_flags
-crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn find_file_in_load_path_with_requirement
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn fingerprinted_runtime_image_path_for_executable
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn get_load_path
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl BootstrapError::message
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl BuildDetails::apply
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl BuildDetails::from_omit_flag
-crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadSuffixRequirement::for_require
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocation::build_details
-crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocation::command_line_args
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocation::mode
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocation::new
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocation::with_build_details
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpMode::as_gnu_string
-crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl RuntimeImageRole::canonical_image_stem
-crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl RuntimeImageRole::fingerprinted_image_file_name
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl RuntimeImageRole::image_file_name
-crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl StaleBytecodePolicy::for_this_process
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn load_file
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn load_runtime_image
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn load_runtime_image_for_executable
@@ -105,7 +62,6 @@ crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	struct	struct LoadupDumpInvoca
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	use	use image_data_directory
 crates/neovm-eval/src/emacs_core/lisp/lread/mod.rs	field	ModuleSuffixes field primary
 crates/neovm-eval/src/emacs_core/lisp/lread/mod.rs	field	ModuleSuffixes field secondary
-crates/neovm-eval/src/emacs_core/lisp/native/builtins/cons_list.rs	fn	fn lambda_to_closure_vector
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	enum	enum FringeBitmapAlign
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	field	FringeBitmap field align
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	field	FringeBitmap field bits
@@ -117,11 +73,9 @@ crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	fn	fn imp
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	fn	fn impl FringeBitmapRegistry::define
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	fn	fn impl FringeBitmapRegistry::destroy
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	fn	fn impl FringeBitmapRegistry::get
-crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	fn	fn impl FringeBitmapRegistry::get_by_index
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	fn	fn impl FringeBitmapRegistry::index_of
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	fn	fn impl FringeBitmapRegistry::iter_indexed
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	fn	fn impl FringeBitmapRegistry::new
-crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	fn	fn impl FringeBitmapRegistry::pre_register_standard_bitmaps
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	fn	fn impl FringeBitmapRegistry::set_face
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	fn	fn impl FringeBitmapRegistry::symbol_for_index
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/fringe_bitmap.rs	struct	struct FringeBitmap
@@ -153,7 +107,6 @@ crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use file_notify
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use from_value::*
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use higher_order::*
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use lambda_params_to_value
-crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use lambda_to_closure_vector
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use neomacs_monitor_info_snapshot
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use neovm_edit::emacs_core::buffer::*
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use neovm_value::value::*
@@ -162,9 +115,6 @@ crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use set_neomacs
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use stubs::*
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use symbols::*
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use treesit::*
-crates/neovm-eval/src/emacs_core/lisp/native/builtins/strings.rs	field	FormatPropSpan field arg_char_len
-crates/neovm-eval/src/emacs_core/lisp/native/builtins/strings.rs	field	FormatPropSpan field result_char_end
-crates/neovm-eval/src/emacs_core/lisp/native/builtins/strings.rs	field	FormatPropSpan field result_char_start
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/strings.rs	field	FormatPropSpan field source
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/stubs.rs	field	NeomacsMonitorInfo field height
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/stubs.rs	field	NeomacsMonitorInfo field height_mm
@@ -182,22 +132,8 @@ crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_parallel.rs	field	Catal
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_parallel.rs	field	CatalogRow field kind
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_parallel.rs	field	CatalogRow field name
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_parallel.rs	field	CatalogRow field variant
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	const	const INLINED_NATIVE_OPS
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum ArithOperands
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum Authority
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum CatalogKind
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum Classification
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum DispatchShapeError
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum FastPathReentry
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum ParallelArm
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum ParallelClass
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum ParallelSchemaError
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum ParallelVariant
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum PlainVarAccess
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum ReturnDisposition
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum SchemaError
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum SealedAuthority
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	enum	enum WorldSplit
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	field	DispatchSlot field arm
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	field	DispatchSlot field reentry
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	field	ParallelDeclaration field class
@@ -208,102 +144,55 @@ crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	field	Paralle
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	field	SchemaEntry field classification
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	field	SchemaEntry field kind
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	field	SchemaEntry field name
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	fn	fn assert_parallel_valid
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	fn	fn assert_valid
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	fn	fn dispatch_arm
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	fn	fn impl SchemaEntry::classified
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	fn	fn impl SchemaEntry::primitive
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	fn	fn validate
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	fn	fn validate_parallel
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	struct	struct DispatchSlot
-crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	struct	struct ParallelDeclaration
 crates/neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs	struct	struct SchemaEntry
 crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::ALLOCATES
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::DECLARED_BITS
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::FORBIDDEN_IN_LEAF
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::MAY_DEOPT
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::MAY_GC
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::MAY_REENTER
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::MAY_SIGNAL
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::PURE
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::READ_BINDINGS
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::READ_BUFFER
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::READ_HEAP
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::READ_MATCH
 crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::UNKNOWN
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::WRITE_BINDINGS
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::WRITE_BUFFER
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::WRITE_HEAP
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	const	const impl Effects::WRITE_MATCH
 crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	fn	fn impl Effects::contains
 crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	fn	fn impl Effects::intersects
-crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	fn	fn impl Effects::is_read_only
 crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	fn	fn impl Effects::with
 crates/neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs	struct	struct Effects
 crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrBatch::new
 crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed0
 crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed1
 crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed2
-crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed3
-crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed4
-crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed5
-crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed6
 crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	struct	struct SubrBatch
 crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	struct	struct SubrSpec
 crates/neovm-eval/src/emacs_core/lisp/print/error_format.rs	fn	fn format_eval_result
 crates/neovm-eval/src/emacs_core/lisp/print/error_format.rs	fn	fn format_eval_result_bytes_with_eval
 crates/neovm-eval/src/emacs_core/lisp/print/error_format.rs	fn	fn format_eval_result_with_eval
 crates/neovm-eval/src/emacs_core/lisp/print/error_format.rs	fn	fn map_flow
-crates/neovm-eval/src/emacs_core/lisp/print/error_format.rs	fn	fn print_value_bytes_escaped_with_eval
 crates/neovm-eval/src/emacs_core/lisp/print/error_format.rs	fn	fn print_value_bytes_with_eval
 crates/neovm-eval/src/emacs_core/lisp/print/error_format.rs	fn	fn print_value_with_eval
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	enum	enum CharsetTextProperty
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field charset_text_property
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field float_output_format
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_circle
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_continuous_numbering
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_escape_control_characters
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_escape_multibyte
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_escape_newlines
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_escape_nonascii
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_gensym
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_integers_as_characters
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_length
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_level
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_noescape
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_number_table
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_quoted
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field print_symbols_bare
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintOptions field unreadable_function
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintState field circle
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintState field depth
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	field	PrintState field options
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	fn	fn impl PrintOptions::new
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	fn	fn impl PrintOptions::princ
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	fn	fn impl PrintOptions::with_print_gensym
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	fn	fn print_value
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	fn	fn print_value_bytes
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	fn	fn print_value_bytes_with_options
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	fn	fn print_value_with_buffers
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	fn	fn print_value_with_buffers_and_options
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	fn	fn print_value_with_options
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	struct	struct PrintCircleState
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	struct	struct PrintOptions
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use format_eval_result
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use format_eval_result_bytes_with_eval
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use format_eval_result_with_eval
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use map_flow
-crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use print_value_bytes_escaped_with_eval
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use print_value_bytes_with_eval
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use print_value_with_eval
-crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	enum	enum CoupledFeature
 crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	enum	enum HereDecision
 crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	field	ProvideCoupledVariable field features
 crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	field	ProvideCoupledVariable field gnu
 crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	field	ProvideCoupledVariable field here
 crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	field	ProvideCoupledVariable field name
 crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	fn	fn lookup
-crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	static	static PROVIDE_COUPLED_VARIABLES
 crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	struct	struct ProvideCoupledVariable
 crates/neovm-eval/src/emacs_core/lisp/reader/mod.rs	field	ActiveMinibufferWindowState field calling_frame
 crates/neovm-eval/src/emacs_core/lisp/reader/mod.rs	field	ActiveMinibufferWindowState field calling_selected_window

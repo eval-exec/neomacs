@@ -110,7 +110,7 @@ impl FringeBitmapRegistry {
     /// Returns the `(SymId, index)` pairs so the caller can set each symbol's
     /// `'fringe` plist property to its index (matching `define-fringe-bitmap` and
     /// `lisp/fringe.el`'s `(put SYM 'fringe N)` loop).
-    pub fn pre_register_standard_bitmaps(&mut self) -> Vec<(SymId, u32)> {
+    pub(crate) fn pre_register_standard_bitmaps(&mut self) -> Vec<(SymId, u32)> {
         use crate::emacs_core::builtins::fringe_standard_bitmaps::{
             MAX_STANDARD_FRINGE_BITMAPS, STANDARD_FRINGE_BITMAPS,
         };
@@ -184,7 +184,7 @@ impl FringeBitmapRegistry {
     }
 
     /// Look up a bitmap by its resolved integer index.
-    pub fn get_by_index(&self, index: u32) -> Option<&FringeBitmap> {
+    pub(crate) fn get_by_index(&self, index: u32) -> Option<&FringeBitmap> {
         let sym = self.by_index.get(&index)?;
         self.user_bitmaps.get(sym)
     }

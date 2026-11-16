@@ -54,25 +54,26 @@ crate::emacs_core::subr::world_registry!(LeafId);
 pub struct Effects(u32);
 
 impl Effects {
-    pub const PURE: Self = Self(0);
-    pub const READ_HEAP: Self = Self(1 << 0);
-    pub const WRITE_HEAP: Self = Self(1 << 1);
-    pub const READ_BUFFER: Self = Self(1 << 2);
-    pub const WRITE_BUFFER: Self = Self(1 << 3);
-    pub const READ_MATCH: Self = Self(1 << 4);
-    pub const WRITE_MATCH: Self = Self(1 << 5);
-    pub const READ_BINDINGS: Self = Self(1 << 6);
-    pub const WRITE_BINDINGS: Self = Self(1 << 7);
-    pub const ALLOCATES: Self = Self(1 << 8);
-    pub const MAY_GC: Self = Self(1 << 9);
-    pub const MAY_REENTER: Self = Self(1 << 10);
-    pub const MAY_SIGNAL: Self = Self(1 << 11);
-    pub const MAY_DEOPT: Self = Self(1 << 12);
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const PURE: Self = Self(0);
+    pub(crate) const READ_HEAP: Self = Self(1 << 0);
+    pub(crate) const WRITE_HEAP: Self = Self(1 << 1);
+    pub(crate) const READ_BUFFER: Self = Self(1 << 2);
+    pub(crate) const WRITE_BUFFER: Self = Self(1 << 3);
+    pub(crate) const READ_MATCH: Self = Self(1 << 4);
+    pub(crate) const WRITE_MATCH: Self = Self(1 << 5);
+    pub(crate) const READ_BINDINGS: Self = Self(1 << 6);
+    pub(crate) const WRITE_BINDINGS: Self = Self(1 << 7);
+    pub(crate) const ALLOCATES: Self = Self(1 << 8);
+    pub(crate) const MAY_GC: Self = Self(1 << 9);
+    pub(crate) const MAY_REENTER: Self = Self(1 << 10);
+    pub(crate) const MAY_SIGNAL: Self = Self(1 << 11);
+    pub(crate) const MAY_DEOPT: Self = Self(1 << 12);
     pub const UNKNOWN: Self = Self((1 << 13) - 1);
 
     /// How many bits are declared: every one below this is a named effect,
     /// and [`Self::UNKNOWN`] is all of them.
-    pub const DECLARED_BITS: u32 = 13;
+    pub(crate) const DECLARED_BITS: u32 = 13;
 
     pub const fn with(self, other: Self) -> Self {
         Self(self.0 | other.0)
@@ -89,7 +90,7 @@ impl Effects {
 
     /// A read-only fast path still observes mutable runtime state. This is an
     /// admission fact, never permission to hoist it or elide fallback roots.
-    pub const fn is_read_only(self) -> bool {
+    pub(crate) const fn is_read_only(self) -> bool {
         let reads =
             Self::READ_HEAP.0 | Self::READ_BUFFER.0 | Self::READ_MATCH.0 | Self::READ_BINDINGS.0;
         self.0 & !reads == 0
@@ -98,7 +99,7 @@ impl Effects {
     /// The effects no leaf may have: a leaf never collects, runs Lisp,
     /// deopts or writes variable bindings. The entry type already rules out
     /// the first two; [`LeafSpec::new`] asserts all four at compile time.
-    pub const FORBIDDEN_IN_LEAF: Self =
+    pub(crate) const FORBIDDEN_IN_LEAF: Self =
         Self(Self::MAY_GC.0 | Self::MAY_REENTER.0 | Self::MAY_DEOPT.0 | Self::WRITE_BINDINGS.0);
 }
 
