@@ -86,19 +86,19 @@ impl Attributes {
         match *self {}
     }
 
-    pub fn set_byte_size(&mut self, _size: SerialByteSize) {
+    pub(crate) fn set_byte_size(&mut self, _size: SerialByteSize) {
         match *self {}
     }
 
-    pub fn set_parity(&mut self, _parity: SerialParity) {
+    pub(crate) fn set_parity(&mut self, _parity: SerialParity) {
         match *self {}
     }
 
-    pub fn set_stop_bits(&mut self, _bits: SerialStopBits) {
+    pub(crate) fn set_stop_bits(&mut self, _bits: SerialStopBits) {
         match *self {}
     }
 
-    pub fn set_flow_control(&mut self, _flow: SerialFlowControl) {
+    pub(crate) fn set_flow_control(&mut self, _flow: SerialFlowControl) {
         match *self {}
     }
 }

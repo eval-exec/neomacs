@@ -1123,7 +1123,7 @@ impl ProcessDecodedRun {
 /// Deriving it at read time, as this type does, is that same function with no
 /// cache left to invalidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProcessOutputSink {
+pub(crate) enum ProcessOutputSink {
     /// The internal default filter is inserting into a live UNIBYTE buffer, so
     /// character-code conversion is dropped and only the EOL conversion of the
     /// resolved coding survives.
@@ -1164,7 +1164,7 @@ impl ProcessOutputSink {
 /// (`setup_process_coding_systems`, :8380-8400, which does not consult
 /// `fast-read-process-output' at all), this says whether the decode happens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProcessReadBranch {
+pub(crate) enum ProcessReadBranch {
     /// `read_and_insert_process_output` (src/process.c:6459-6460) reached with a
     /// LIVE buffer to insert into, which is where `fast-read-process-output'
     /// and the default filter send a read (:6557-6558).

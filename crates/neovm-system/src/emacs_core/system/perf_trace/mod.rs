@@ -137,7 +137,7 @@ pub(crate) fn record_op(op: HotpathOp, elapsed: Duration) {
     });
 }
 
-pub fn reset_hotpath_stats() {
+pub(crate) fn reset_hotpath_stats() {
     if !hotpath_timing_enabled() {
         return;
     }
@@ -146,7 +146,7 @@ pub fn reset_hotpath_stats() {
     });
 }
 
-pub fn log_hotpath_stats(label: &str) {
+pub(crate) fn log_hotpath_stats(label: &str) {
     if !hotpath_timing_enabled() {
         return;
     }

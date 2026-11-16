@@ -49,7 +49,7 @@ pub enum emacs_funcall_exit {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum emacs_process_input_result {
+pub(crate) enum emacs_process_input_result {
     Continue = 0,
     Quit = 1,
 }
@@ -61,10 +61,10 @@ pub struct emacs_time {
     pub tv_nsec: libc::c_long,
 }
 
-pub type emacs_limb_t = u64;
+pub(crate) type emacs_limb_t = u64;
 
 #[allow(non_upper_case_globals)]
-pub const emacs_variadic_function: isize = -2;
+pub(crate) const emacs_variadic_function: isize = -2;
 
 // ============================================================================
 // emacs_env — the vtable struct
@@ -274,7 +274,7 @@ pub struct emacs_runtime {
 const VALUE_FRAME_SIZE: usize = 512;
 
 #[repr(C)]
-pub struct emacs_value_frame {
+pub(crate) struct emacs_value_frame {
     pub objects: [emacs_value_tag; VALUE_FRAME_SIZE],
     pub offset: usize,
     pub next: *mut emacs_value_frame,
@@ -338,7 +338,7 @@ impl ModuleLibrary {
 /// the module's init function runs, so they are freed when loading returns,
 /// as on the failure paths. The environment holds evaluator-local values; it
 /// never belonged in this process-wide registry.
-pub struct LoadedModule {
+pub(crate) struct LoadedModule {
     #[allow(dead_code)]
     library: &'static ModuleLibrary,
 }

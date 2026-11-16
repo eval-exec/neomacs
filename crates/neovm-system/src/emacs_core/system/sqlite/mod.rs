@@ -890,7 +890,7 @@ pub mod enabled {
 
     /// (sqlite-more-p SET) → t or nil
     #[doc(hidden)]
-    pub fn more_p(args: Vec<Value>) -> EvalResult {
+    pub(crate) fn more_p(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-more-p", &args, 1)?;
         let id = expect_stmt(&args[0])?;
         let has_more = RESULT_SETS.with(|sets| {
@@ -928,7 +928,7 @@ pub mod enabled {
 
     /// (sqlite-execute-batch DB STATEMENTS) → t or nil
     #[doc(hidden)]
-    pub fn execute_batch(
+    pub(crate) fn execute_batch(
         _eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
     ) -> EvalResult {
@@ -941,7 +941,7 @@ pub mod enabled {
 
     /// (sqlite-transaction DB) → t or nil
     #[doc(hidden)]
-    pub fn transaction(args: Vec<Value>) -> EvalResult {
+    pub(crate) fn transaction(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-transaction", &args, 1)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
         Ok(Value::bool_val(sqlite_exec(&connection, b"begin")))
@@ -965,7 +965,7 @@ pub mod enabled {
 
     /// (sqlite-pragma DB PRAGMA) → t or nil
     #[doc(hidden)]
-    pub fn pragma(args: Vec<Value>) -> EvalResult {
+    pub(crate) fn pragma(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-pragma", &args, 2)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
         let pragma = sqlite_text_bytes(&args[1])?;
@@ -979,7 +979,7 @@ pub mod enabled {
     ///
     /// GNU semantics: load a SQLite extension, restricted to an allowlist.
     #[doc(hidden)]
-    pub fn load_extension(
+    pub(crate) fn load_extension(
         eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
     ) -> EvalResult {
@@ -1074,10 +1074,11 @@ pub mod enabled {
 
 #[cfg(feature = "sqlite")]
 pub use enabled::{
-    available_p, close, columns, commit, execute, execute_batch, finalize,
-    install_sqlite_finalizer_hook, is_sqlite_object, load_extension, more_p, next, open, pragma,
-    rollback, select, transaction, version,
+    available_p, close, columns, commit, execute, finalize, install_sqlite_finalizer_hook,
+    is_sqlite_object, next, open, rollback, select, version,
 };
+#[cfg(feature = "sqlite")]
+pub(crate) use enabled::{execute_batch, load_extension, more_p, pragma, transaction};
 #[cfg(feature = "sqlite")]
 pub use enabled::{swap_world_state, world_state_placeholder};
 
