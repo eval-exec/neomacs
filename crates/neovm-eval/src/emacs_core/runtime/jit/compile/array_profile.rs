@@ -55,7 +55,7 @@ pub(super) fn when_open(open: bool, record: impl FnOnce()) {
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_record_array_use(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_record_array_use(
     site: *const ArraySiteFeedback,
     array: i64,
     obs: *const LeafObs,

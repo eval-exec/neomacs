@@ -998,7 +998,6 @@ pub(crate) const XK_PAGE_UP: u32 = 0xFF55;
 pub(crate) const XK_PAGE_DOWN: u32 = 0xFF56;
 pub(crate) const XK_INSERT: u32 = 0xFF63;
 pub const XK_F1: u32 = 0xFFBE;
-pub const XK_F24: u32 = 0xFFD5;
 
 // Render thread modifier bitmask constants.
 //

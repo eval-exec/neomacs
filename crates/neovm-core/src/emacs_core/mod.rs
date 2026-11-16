@@ -233,7 +233,6 @@ pub mod data {
     // to the compatibility sequence.
     pub use neovm_eval::emacs_core::data::*;
 }
-pub use neovm_eval::emacs_core::debug;
 pub use neovm_eval::emacs_core::debug_on_call;
 pub use neovm_eval::emacs_core::defvar_bool;
 pub use neovm_eval::emacs_core::defvar_object;

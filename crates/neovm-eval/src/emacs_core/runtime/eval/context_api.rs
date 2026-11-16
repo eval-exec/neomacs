@@ -151,26 +151,6 @@ impl Context {
         &self.obarray
     }
 
-    /// GNU `intern`: NAME as a member of this Context's obarray, as a Value.
-    ///
-    /// This is the member-producing Value funnel. A fresh name must come
-    /// through here (or [`Self::make_uninterned_symbol_value`] where GNU uses
-    /// `make-symbol`); wrapping a bare name-registry SymId would create a
-    /// Lisp-visible symbol that `intern-soft` cannot find (PEER 5786).
-    #[inline]
-    pub fn intern_member_value(&mut self, name: &str) -> Value {
-        Value::from_sym_id(self.obarray.intern_member(name))
-    }
-
-    /// GNU `intern` from an exact Lisp-string name, as a Value.
-    #[inline]
-    pub fn intern_member_value_lisp_string(
-        &mut self,
-        name: &neovm_value::heap_types::LispString,
-    ) -> Value {
-        Value::from_sym_id(self.obarray.intern_member_lisp_string(name))
-    }
-
     /// Publish an existing canonical `SymId` as an obarray member and return
     /// it as a Value.
     ///
@@ -178,16 +158,9 @@ impl Context {
     /// category ids) and GNU interns the name at publication. A non-canonical
     /// `make-symbol` id is left uninterned, as in GNU.
     #[inline]
-    pub fn intern_member_id_value(&mut self, id: SymId) -> Value {
+    pub(crate) fn intern_member_id_value(&mut self, id: SymId) -> Value {
         self.obarray.ensure_interned_global_id(id);
         Value::from_sym_id(id)
-    }
-
-    /// GNU `make-symbol`: a fresh uninterned symbol, as a Value. Never an
-    /// obarray member; use only where GNU itself calls `make-symbol`.
-    #[inline]
-    pub fn make_uninterned_symbol_value(name: &str) -> Value {
-        Value::from_sym_id(neovm_value::intern::make_uninterned_symbol(name))
     }
 
     /// R-b (PC11-F f1): the Context's tagged-heap view. The field this reads
