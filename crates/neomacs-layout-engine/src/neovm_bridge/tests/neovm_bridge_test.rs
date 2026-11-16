@@ -2620,6 +2620,90 @@ fn text_prop_access_returns_raw_line_spacing_property() {
     assert_eq!(access.get_property(6, line_spacing), Some(Value::fixnum(4)));
 }
 
+fn line_prefix_lookup_text(
+    access: &RustTextPropAccess<'_, Buffer>,
+    charpos: i64,
+) -> Option<String> {
+    access
+        .get_property(charpos, Value::symbol("line-prefix"))
+        .map(|value| {
+            std::str::from_utf8(value.as_lisp_string().expect("string prefix").as_bytes())
+                .unwrap()
+                .to_owned()
+        })
+}
+
+#[test]
+fn text_prop_access_get_property_reads_overlay_line_prefix_like_gnu() {
+    // GNU `get_it_property' uses `Fget_char_property', which consults
+    // overlays as well as text properties (issue #780).
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    {
+        let buf = evaluator
+            .buffer_manager_mut()
+            .current_buffer_mut()
+            .expect("current buffer");
+        buf.insert("plain\nover\ntext\n");
+    }
+    let _ = eval_lisp(
+        &mut evaluator,
+        "(overlay-put (make-overlay 7 12) 'line-prefix \">>>>\")",
+    );
+    let _ = eval_lisp(
+        &mut evaluator,
+        "(put-text-property 12 17 'line-prefix \"####\")",
+    );
+
+    let buf = evaluator
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer");
+    let access = RustTextPropAccess::new(buf);
+
+    assert_eq!(line_prefix_lookup_text(&access, 0), None);
+    assert_eq!(line_prefix_lookup_text(&access, 6).as_deref(), Some(">>>>"));
+    // Text-property-only behaviour is unchanged.
+    assert_eq!(
+        line_prefix_lookup_text(&access, 11).as_deref(),
+        Some("####")
+    );
+}
+
+#[test]
+fn text_prop_access_get_property_overlay_wins_over_text_property_like_gnu() {
+    // GNU `get_char_property_and_overlay' returns a non-nil overlay value
+    // before falling back to `Fget_text_property'.
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    {
+        let buf = evaluator
+            .buffer_manager_mut()
+            .current_buffer_mut()
+            .expect("current buffer");
+        buf.insert("plain\nover\ntext\n");
+    }
+    let _ = eval_lisp(
+        &mut evaluator,
+        "(put-text-property 1 17 'line-prefix \"####\")",
+    );
+    let _ = eval_lisp(
+        &mut evaluator,
+        "(overlay-put (make-overlay 7 12) 'line-prefix \">>>>\")",
+    );
+
+    let buf = evaluator
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer");
+    let access = RustTextPropAccess::new(buf);
+
+    assert_eq!(line_prefix_lookup_text(&access, 0).as_deref(), Some("####"));
+    assert_eq!(line_prefix_lookup_text(&access, 6).as_deref(), Some(">>>>"));
+    assert_eq!(
+        line_prefix_lookup_text(&access, 11).as_deref(),
+        Some("####")
+    );
+}
+
 #[test]
 fn overlay_strings_at_collects_zero_length_boundary_strings_like_gnu() {
     let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
