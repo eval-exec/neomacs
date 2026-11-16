@@ -22,11 +22,10 @@ use crate::tagged::SymbolMode;
 pub use native_message::CErrorMessage;
 
 use crate::error::{Flow, signal_with_data, signal_with_data_id};
-use crate::intern::{SymId, T_SYM_ID, intern, resolve_sym};
+use crate::intern::{SymId, T_SYM_ID, intern};
 use crate::symbol::Obarray;
 use crate::value::ValueKind;
 use crate::value::*;
-use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Obarray-based error hierarchy helpers

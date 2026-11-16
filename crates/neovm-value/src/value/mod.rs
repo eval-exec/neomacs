@@ -20,7 +20,7 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::FxHasher;
 use strum::{EnumString, IntoStaticStr};
 
 use self::buffer_vocab::BufferId;
