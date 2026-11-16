@@ -131,3 +131,27 @@ fn compute_motion_reads_unibyte_text_byte_by_byte() {
     buf.insert_lisp_string(&LispString::from_unibyte(b"a\t\xE9b".to_vec()));
     assert_eq!(scan_all(&buf, limits(80)), at(4, 13, 0, 12, false));
 }
+
+#[test]
+fn compute_motion_continues_a_wide_multibyte_character_at_its_own_start() {
+    // A multibyte character wider than one column that overruns WIDTH moves
+    // whole to the next line: GNU sets `wide_column_end_hpos' and the
+    // continuation subtracts the column it started at, not WIDTH (indent.c
+    // `compute_motion').  The raw byte `\200' is four columns, 漢 two.
+    let mut buf = buffer_with("");
+    buf.insert_lisp_string(&LispString::from_emacs_bytes(b"abc\xC0\x80".to_vec()));
+    assert_eq!(scan_all(&buf, limits(4)), at(5, 4, 1, 3, true));
+
+    let buf = buffer_with("abc漢");
+    assert_eq!(scan_all(&buf, limits(4)), at(6, 2, 1, 3, true));
+}
+
+#[test]
+fn compute_motion_continues_a_unibyte_byte_at_width() {
+    // A unibyte byte >= 0x80 is not a multibyte character, so its
+    // continuation subtracts WIDTH (indent.c `compute_motion').
+    let mut buf = buffer_with("");
+    buf.set_multibyte_value(false);
+    buf.insert_lisp_string(&LispString::from_unibyte(b"abc\x80".to_vec()));
+    assert_eq!(scan_all(&buf, limits(4)), at(4, 3, 1, 3, true));
+}

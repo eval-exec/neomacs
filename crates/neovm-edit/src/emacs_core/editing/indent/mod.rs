@@ -3578,8 +3578,21 @@ enum MotionChar {
     /// A character with a Unicode scalar, or U+FFFD for an Emacs code above
     /// U+10FFFF that is not a raw byte.
     Char(char),
-    /// An eight-bit raw byte, or any byte >= 0x80 of a unibyte buffer.
+    /// An eight-bit raw byte of a multibyte buffer.
     RawByte,
+    /// A byte >= 0x80 of a unibyte buffer.
+    UnibyteByte,
+}
+
+/// What a line continuation does with the character that ran past WIDTH.
+#[derive(Clone, Copy, Debug)]
+enum Overrun {
+    /// The columns past WIDTH start the next line (GNU subtracts WIDTH).
+    Split,
+    /// A multibyte character wider than one column moves whole to the next
+    /// line: GNU sets `wide_column_end_hpos` and subtracts the column the
+    /// character started at (indent.c `compute_motion`).
+    Whole,
 }
 
 /// Columns of a raw byte, which GNU displays as `\NNN`: `CHARACTER_WIDTH`
@@ -3604,36 +3617,52 @@ impl MotionScan {
         }
         self.prev_hpos = self.hpos;
         self.pos = self.pos.add_len(EmacsByteLen::new(len));
-        match ch {
+        let overrun = match ch {
             MotionChar::Char('\n') => {
                 self.vpos += 1;
                 self.hpos = 0;
                 self.contin = false;
+                Overrun::Split
             }
             MotionChar::Char('\t') => {
                 self.hpos += limits.tab_width - (self.hpos % limits.tab_width);
+                Overrun::Split
             }
             MotionChar::Char(ch) => {
-                self.hpos += neovm_value::emacs_char::char_width(ch) as i64;
+                let width = neovm_value::emacs_char::char_width(ch) as i64;
+                self.hpos += width;
+                if !ch.is_ascii() && width > 1 {
+                    Overrun::Whole
+                } else {
+                    Overrun::Split
+                }
             }
             MotionChar::RawByte => {
                 self.hpos += RAW_BYTE_COLUMNS;
+                Overrun::Whole
             }
-        }
+            MotionChar::UnibyteByte => {
+                self.hpos += RAW_BYTE_COLUMNS;
+                Overrun::Split
+            }
+        };
         // Line continuation (wrapping).
         if self.hpos >= limits.width && !matches!(ch, MotionChar::Char('\n')) {
             self.vpos += 1;
             self.contin = true;
-            self.hpos -= limits.width;
+            self.hpos -= match overrun {
+                Overrun::Whole if self.hpos > limits.width => self.prev_hpos,
+                Overrun::Whole | Overrun::Split => limits.width,
+            };
         }
         Ok(())
     }
 }
 
 /// Scan SPAN of BUF from START, reading the text in place one physical chunk
-/// at a time.  An eight-bit raw byte, or any byte >= 0x80 of a unibyte
-/// buffer, is a [`MotionChar::RawByte`]; every character advances by its own
-/// byte length.
+/// at a time.  An eight-bit raw byte is a [`MotionChar::RawByte`] and a
+/// byte >= 0x80 of a unibyte buffer a [`MotionChar::UnibyteByte`]; every
+/// character advances by its own byte length.
 fn scan_compute_motion(
     buf: &Buffer,
     span: EmacsByteRange,
@@ -3647,7 +3676,7 @@ fn scan_compute_motion(
                 let ch = if b < 0x80 {
                     MotionChar::Char(b as char)
                 } else {
-                    MotionChar::RawByte
+                    MotionChar::UnibyteByte
                 };
                 scan.step(ch, 1, &limits)
             })
