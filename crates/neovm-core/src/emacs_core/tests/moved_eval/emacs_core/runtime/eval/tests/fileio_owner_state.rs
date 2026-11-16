@@ -1,5 +1,6 @@
 //! Native file-I/O state uses the existing cold owner allocation, not the
 //! World's shared state. These rows execute in core with the real hook set.
+use neovm_value::intern::intern;
 
 use crate::emacs_core::eval::{AutoSaveNativeWritePolicy, Context};
 use crate::emacs_core::load_boot::load_from_dump;
@@ -17,7 +18,7 @@ fn snapshot(context: &mut Context, arguments: Vec<Value>) -> EvalResult {
     };
     Ok(Value::list(vec![
         Value::fixnum(context.tagged_heap().tagged_heap_identity() as i64),
-        Value::symbol(kind),
+        Value::from_sym_id(intern(kind)),
         Value::fixnum(i64::from(mode)),
     ]))
 }
@@ -103,7 +104,7 @@ fn auto_save_native_policy_survives_same_world_green_owner_switch() {
             observed,
             vec![
                 Value::fixnum(heap as i64),
-                Value::symbol(kind),
+                Value::from_sym_id(intern(kind)),
                 Value::fixnum(mode)
             ]
         );

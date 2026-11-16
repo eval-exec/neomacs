@@ -7,7 +7,7 @@ use super::*;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::heap_types::{GnuDeclaredCharacterCount, LispString};
 use neovm_value::intern::{
-    intern_call_names, intern_uninterned, reset_intern_calls, restore_runtime_interner,
+    intern_call_names, make_uninterned_symbol, reset_intern_calls, restore_runtime_interner,
     unintern_canonical_id,
 };
 
@@ -71,10 +71,10 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
         }
         // Only the process registry grows here. The World remains at its old
         // extent until C5's real transaction must add chunk/side-table pairs.
-        let mut gap = intern_uninterned("p3sym-c5-held-pass-gap");
+        let mut gap = make_uninterned_symbol("p3sym-c5-held-pass-gap");
         let target = (u64::from(gap.to_raw()) / 4096 + 2) * 4096 + 17;
         while u64::from(gap.to_raw()) + 1 < target {
-            gap = intern_uninterned("p3sym-c5-held-pass-gap");
+            gap = make_uninterned_symbol("p3sym-c5-held-pass-gap");
         }
         let pass_epoch = pctx.dynamic_symbols.borrow().epoch;
         // No VariableView, RefCell borrow, string Value or Context view enters
@@ -487,7 +487,7 @@ fn mode_line_dynamic_symbols_keep_object_identity_for_noncanonical_and_encoded_n
             ),
         ),
     ] {
-        let input_id = ctx.obarray_mut().intern_lisp_string(&atom);
+        let input_id = ctx.obarray_mut().intern_member_lisp_string(&atom);
         let spelling_id = intern(name);
         assert_ne!(input_id, spelling_id);
         ctx.obarray_mut()
@@ -504,7 +504,7 @@ fn mode_line_dynamic_symbols_keep_object_identity_for_noncanonical_and_encoded_n
     }
     let name = "ttykey-k5-dynamic-noncanonical";
     ctx.set_variable(name, Value::string("canonical"));
-    let uninterned = intern_uninterned(name);
+    let uninterned = make_uninterned_symbol(name);
     ctx.obarray_mut()
         .set_symbol_value_id(uninterned, Value::string("uninterned"));
     assert_eq!(
@@ -551,7 +551,7 @@ fn mode_line_dynamic_symbols_physical_atom_and_conditional_admission_matches_gnu
         "*invalid*"
     );
     // GNU's conditional CAR uses SYMBOLP/XSYMBOL, unlike atom dispatch.
-    let actual = intern_uninterned(name);
+    let actual = make_uninterned_symbol(name);
     ctx.obarray_mut().set_symbol_value_id(actual, Value::NIL);
     ctx.obarray_mut()
         .set_symbol_value_id(intern(name), Value::T);
@@ -573,7 +573,7 @@ fn mode_line_dynamic_symbols_physical_atom_and_conditional_admission_matches_gnu
         "FALSE"
     );
     let atom = LispString::from_unibyte_slice(b"ttykey-k5-dynamic-invalid-\xff");
-    let invalid = ctx.obarray_mut().intern_lisp_string(&atom);
+    let invalid = ctx.obarray_mut().intern_member_lisp_string(&atom);
     ctx.obarray_mut()
         .set_symbol_value_id(invalid, Value::string("ACTUAL-INTERNED-BYTE"));
     assert!(Value::from_sym_id(invalid).as_bare_symbol_name().is_none());
@@ -635,7 +635,7 @@ fn mode_line_symbol_object_identity_and_conditional_match_gnu() {
     let mut ctx = context();
     let name = "mode-line-symbol-object-identity";
     let canonical = intern(name);
-    let actual = intern_uninterned(name);
+    let actual = make_uninterned_symbol(name);
     ctx.obarray_mut()
         .set_symbol_value_id(canonical, Value::string("CANONICAL"));
     ctx.obarray_mut()

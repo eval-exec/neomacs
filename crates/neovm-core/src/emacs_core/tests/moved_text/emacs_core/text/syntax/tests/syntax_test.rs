@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::intern::intern;
 
 use LispSyntaxObjectReuse::{CanonicalBare, Fresh};
 use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
@@ -3564,7 +3565,7 @@ fn a_resumed_parse_pairs_a_comment_opener_split_at_its_start_like_gnu() {
         let commentstop = match commentstop {
             None => Value::NIL,
             Some("t") => Value::T,
-            Some(sym) => Value::symbol(sym),
+            Some(sym) => Value::from_sym_id(intern(sym)),
         };
         let s2 = builtin_parse_partial_sexp(
             &mut eval,

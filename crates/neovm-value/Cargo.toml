@@ -57,7 +57,11 @@ sqlite = []
 # Markers matching core's forwarding: value's source branches on the dbus and
 # wkwebview host cfgs, so its build script must reach the same host view.
 dbus-vendored = []
-webview = []
+# GNU's HAVE_XWIDGETS: the single predicate for the xwidget Lisp surface
+# (subr catalog, boot variables) and for advertising `xwidget-internal`.
+# `webview` (the macOS WKWebView backend) implies it.
+xwidgets = []
+webview = ["xwidgets"]
 # The moved system-vocabulary table (system_vocab/c_features.rs) decides
 # whether this build advertises GNU's `dynamic-setting` and
 # `system-font-setting` features (src/xsettings.c:1409,1417).  The native

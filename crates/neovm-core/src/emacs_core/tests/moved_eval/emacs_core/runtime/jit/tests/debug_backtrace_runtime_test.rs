@@ -1,4 +1,5 @@
 //! Backtrace integration test requiring the real subr.el runtime macros.
+use neovm_value::intern::intern;
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
@@ -75,7 +76,7 @@ fn calling(name: &str, max_stack: usize) -> Value {
         true,
         max_stack,
         vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
-        vec![Value::symbol(name)],
+        vec![Value::from_sym_id(intern(name))],
     )
 }
 

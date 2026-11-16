@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::error::EvalResult;
-use crate::intern::intern_uninterned;
+use crate::intern::make_uninterned_symbol;
 use crate::tagged::gc::mapped_veclike_scan::{MappedVeclikeScanItem, MappedVeclikeScanSnapshot};
 use crate::tagged::header::LispValueVec;
 use std::sync::atomic::AtomicBool;
@@ -139,8 +139,8 @@ fn finish_fixture_epoch(heap: &mut TestHeap, table: TaggedValue, completed: Conc
 fn concurrent_mapped_chartable_scan_and_builtin_range_writes_are_atomic() {
     let mut heap = TestHeap::new();
     heap.install();
-    let purpose_id = intern_uninterned("ctrace-purpose");
-    let sentinel_id = intern_uninterned("ctrace-untouched-leaf");
+    let purpose_id = make_uninterned_symbol("ctrace-purpose");
+    let sentinel_id = make_uninterned_symbol("ctrace-untouched-leaf");
     let purpose = TaggedValue::from_sym_id(purpose_id);
     let sentinel = TaggedValue::from_sym_id(sentinel_id);
     let table = TaggedValue::make_char_table(purpose, TaggedValue::fixnum(-1), 0);

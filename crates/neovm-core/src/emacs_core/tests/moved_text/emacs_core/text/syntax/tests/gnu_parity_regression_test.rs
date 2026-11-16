@@ -11,6 +11,7 @@
 //! (`forward_word(&buf, &table, ...)`) whose signature *will* change in
 //! T2. These regression tests target stable public entry points
 //! (builtins + buffer-manager helpers) that survive the refactor.
+use neovm_value::intern::intern;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -1081,7 +1082,7 @@ fn ctx_with_buffer(text: &str) -> (Context, BufferId) {
 }
 
 fn call(ctx: &mut Context, name: &str, args: Vec<Value>) -> Value {
-    ctx.funcall_general(Value::symbol(name), args)
+    ctx.funcall_general(Value::from_sym_id(intern(name)), args)
         .expect("funcall")
 }
 

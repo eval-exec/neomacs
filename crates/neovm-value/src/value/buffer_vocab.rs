@@ -35,7 +35,7 @@ impl BufferSlot {
         self.0 as usize
     }
 
-    pub const fn as_u16(self) -> u16 {
+    pub(crate) const fn as_u16(self) -> u16 {
         self.0 as u16
     }
 
@@ -165,7 +165,7 @@ pub fn install_slot_meta_table(table: Box<[Option<BufferSlotMeta>]>) {
 
 /// Value-layer slot metadata by symbol id.
 #[inline]
-pub fn slot_meta(sym_id: SymId) -> Option<BufferSlotMeta> {
+pub(crate) fn slot_meta(sym_id: SymId) -> Option<BufferSlotMeta> {
     SLOT_META_TABLE
         .get()
         .and_then(|table| table.get(sym_id.0 as usize).copied().flatten())

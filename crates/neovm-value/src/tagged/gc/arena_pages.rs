@@ -1631,7 +1631,7 @@ impl DrainKinds {
 
     /// Sum of all buckets — equals the deferred-entry count it was built from.
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub fn total(&self) -> usize {
+    pub(crate) fn total(&self) -> usize {
         self.string
             + self.vector
             + self.record
@@ -1781,26 +1781,26 @@ pub struct HeapLayoutStats {
 #[doc(hidden)]
 pub struct SweepStats {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub sweep_us: u64,
+    pub(crate) sweep_us: u64,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub slice_count: usize,
+    pub(crate) slice_count: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub cons_blocks_swept: usize,
+    pub(crate) cons_blocks_swept: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub noncons_freed: usize,
+    pub(crate) noncons_freed: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub lifetime_sweep_us: u64,
+    pub(crate) lifetime_sweep_us: u64,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub lifetime_slices: usize,
+    pub(crate) lifetime_slices: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub lifetime_cons_blocks_swept: usize,
+    pub(crate) lifetime_cons_blocks_swept: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub lifetime_noncons_freed: usize,
+    pub(crate) lifetime_noncons_freed: usize,
     /// Values `join_concurrent_mark` folded into the termination gray queue:
     /// the GC thread's parked non-cons buffer and the residual SATB log.
     pub last_termination_deferred: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub max_termination_deferred: usize,
+    pub(crate) max_termination_deferred: usize,
     pub last_termination_satb: usize,
     /// Owner-resident words folded at the last successful concurrent termination,
     /// excluding already published handoff chunks. A subset of SATB above.

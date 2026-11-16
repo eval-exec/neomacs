@@ -758,7 +758,7 @@ fn dispatch_file_completion_handler(
     directory: &LispString,
     call_args: &[Value],
 ) -> Result<Option<Value>, Flow> {
-    let operation = Value::symbol(operation_name);
+    let operation = Value::from_sym_id(intern(operation_name));
 
     // GNU dired.c first consults the expanded DIRECTORY, then FILE.
     let handler = super::fileio::find_file_name_handler_lisp_for_eval(eval, directory, operation);

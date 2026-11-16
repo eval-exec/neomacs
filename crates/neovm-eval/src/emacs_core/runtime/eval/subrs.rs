@@ -4676,7 +4676,7 @@ impl Context {
             },
         );
 
-        self.obarray.intern(name);
+        self.obarray.intern_member(name);
         // `init_builtins` runs both on a fresh evaluator and again after
         // restoring a pdump image. On the pdump path, GNU-loaded Lisp
         // definitions may already shadow a primitive with the same name

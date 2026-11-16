@@ -180,7 +180,7 @@ fn visible_symbol_name_reads_reuse_a_large_working_set() {
     let symbols: Vec<_> = (0..1024)
         .map(|i| {
             let spelling = format!("visible-name-replacement-{i}");
-            let symbol = intern_uninterned(&spelling);
+            let symbol = make_uninterned_symbol(&spelling);
             if i % 2 == 0 {
                 materialize_symbol_name_value(symbol);
             }
@@ -276,7 +276,7 @@ fn visible_symbol_name_reads_survive_thread_cache_destruction() {
     let checked = Arc::new(AtomicBool::new(false));
     let on_thread = Arc::clone(&checked);
     std::thread::spawn(move || {
-        let symbol = intern_uninterned("visible-name-thread-exit-probe");
+        let symbol = make_uninterned_symbol("visible-name-thread-exit-probe");
         // TLS destructors run in reverse initialization order. Register the
         // diagnostic first so its read runs after the name cache is destroyed.
         READ_ON_DROP.with(|slot| {
@@ -525,7 +525,7 @@ fn canonical_id_distinguishes_interned_from_uninterned_duplicates() {
     crate::test_utils::init_test_tracing();
     let mut registry = SymbolRegistry::new();
     let canonical = registry.intern("dup");
-    let uninterned = registry.intern_uninterned("dup");
+    let uninterned = registry.make_uninterned_symbol("dup");
 
     assert!(registry.is_canonical_id(canonical));
     assert!(!registry.is_canonical_id(uninterned));
@@ -621,7 +621,7 @@ fn dump_symbol_table_separates_name_atoms_from_symbol_slots() {
     crate::test_utils::init_test_tracing();
     let mut registry = SymbolRegistry::new();
     let canonical = registry.intern("shared-name");
-    let uninterned = registry.intern_uninterned("shared-name");
+    let uninterned = registry.make_uninterned_symbol("shared-name");
 
     let dumped = registry.dump_symbol_table();
 
@@ -730,7 +730,7 @@ fn symbol_registry_exposes_name_ids_separately() {
     crate::test_utils::init_test_tracing();
     let mut registry = SymbolRegistry::new();
     let canonical = registry.intern("shared-name");
-    let uninterned = registry.intern_uninterned("shared-name");
+    let uninterned = registry.make_uninterned_symbol("shared-name");
 
     let canonical_name = registry.name_id(canonical);
     let uninterned_name = registry.name_id(uninterned);

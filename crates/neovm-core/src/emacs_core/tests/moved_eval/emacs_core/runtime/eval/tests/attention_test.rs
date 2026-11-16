@@ -9,13 +9,13 @@
 //! `throw-on-input` promotion), and the constructors. `attention_clear`
 //! re-derives the word at every read in debug builds, so every test in the
 //! crate also checks it at every poll; these pin the classes explicitly.
+use neovm_value::intern::intern;
 
 use crate::emacs_core::Context;
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::*;
-use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 use neovm_value::value::Value;
 
@@ -55,7 +55,7 @@ fn bytecode_varset(var: &str, value: Value) -> Value {
     });
     f.lexical = true;
     f.ops = vec![Op::Constant(0), Op::VarSet(1), Op::Constant(0), Op::Return];
-    f.constants = vec![value, Value::symbol(var)].into();
+    f.constants = vec![value, Value::from_sym_id(intern(var))].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test(&mut f);
     Value::make_bytecode(f)

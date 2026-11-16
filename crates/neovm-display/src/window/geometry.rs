@@ -174,7 +174,7 @@ pub enum GeometryQueryError {
 
 /// Semantic edge used to attach a popup or child frame to active geometry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AnchorEdge {
+pub(crate) enum AnchorEdge {
     Top,
     Bottom,
     Left,
@@ -446,7 +446,7 @@ impl GeometryQuery for KnownWindowGeometryQuery {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WindowRegion {
+pub(crate) enum WindowRegion {
     Outer,
     TextBody,
     LeftMargin,
@@ -464,7 +464,7 @@ pub enum WindowRegion {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WindowRegionBoundsQuery {
+pub(crate) struct WindowRegionBoundsQuery {
     presentation: PresentationId,
     window: WindowId,
     region: WindowRegion,
@@ -525,7 +525,7 @@ impl GeometryQuery for WindowRegionBoundsQuery {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BufferPositionQuery {
+pub(crate) struct BufferPositionQuery {
     presentation: PresentationId,
     window: WindowId,
     position: LispCharPos1,
@@ -579,14 +579,14 @@ enum CoordinateInput {
 /// Resolve one pixel coordinate against the exact immutable presentation that
 /// supplied the window regions and visible glyph positions.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WindowCoordinateQuery {
+pub(crate) struct WindowCoordinateQuery {
     presentation: PresentationId,
     window: WindowId,
     input: CoordinateInput,
 }
 
 impl WindowCoordinateQuery {
-    pub const fn in_text_body(
+    pub(crate) const fn in_text_body(
         presentation: PresentationId,
         window: WindowId,
         x: i64,
@@ -599,7 +599,7 @@ impl WindowCoordinateQuery {
         }
     }
 
-    pub const fn in_whole_window(
+    pub(crate) const fn in_whole_window(
         presentation: PresentationId,
         window: WindowId,
         x: i64,
@@ -690,7 +690,7 @@ impl FramePoint {
 
 /// A window-owned point in a statically named window coordinate space.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WindowPoint<Space> {
+pub(crate) struct WindowPoint<Space> {
     window: WindowId,
     point: PixelPoint<Space>,
 }
@@ -711,7 +711,7 @@ impl<Space> WindowPoint<Space> {
 
 /// Typed geometry for one visible source position in a window snapshot.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SnapshotPointGeometry {
+pub(crate) struct SnapshotPointGeometry {
     buffer_pos: LispCharPos1,
     body_point: WindowPoint<WindowBodySpace>,
     frame_point: FramePoint,
@@ -726,7 +726,7 @@ impl SnapshotPointGeometry {
         self.buffer_pos
     }
 
-    pub const fn in_text_body(self) -> WindowPoint<WindowBodySpace> {
+    pub(crate) const fn in_text_body(self) -> WindowPoint<WindowBodySpace> {
         self.body_point
     }
 
@@ -792,7 +792,7 @@ impl<'a> SnapshotWindowGeometry<'a> {
         self.window
     }
 
-    pub const fn outer_in_frame(&self) -> PixelRect<FrameLogicalSpace> {
+    pub(crate) const fn outer_in_frame(&self) -> PixelRect<FrameLogicalSpace> {
         self.outer
     }
 
@@ -804,7 +804,7 @@ impl<'a> SnapshotWindowGeometry<'a> {
         self.window_geometry.cell_origin
     }
 
-    pub fn text_body_origin_in_window(&self) -> WindowPoint<WindowLocalSpace> {
+    pub(crate) fn text_body_origin_in_window(&self) -> WindowPoint<WindowLocalSpace> {
         WindowPoint {
             window: self.window,
             point: PixelPoint {
@@ -819,7 +819,7 @@ impl<'a> SnapshotWindowGeometry<'a> {
         }
     }
 
-    pub fn text_body_origin_in_frame(&self) -> Result<FramePoint, GeometryError> {
+    pub(crate) fn text_body_origin_in_frame(&self) -> Result<FramePoint, GeometryError> {
         let local = self.text_body_origin_in_window();
         Ok(FramePoint {
             frame: self.frame,
@@ -863,7 +863,7 @@ impl<'a> SnapshotWindowGeometry<'a> {
 
     /// Resolve coordinates in GNU's current snapshot convention: X is
     /// text-body-local while Y is window-local.
-    pub fn point_at_window_coords(
+    pub(crate) fn point_at_window_coords(
         &self,
         body_x: i64,
         window_y: i64,

@@ -10,7 +10,7 @@ use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::glyph_matrix::GlyphProvenance;
 
 fn assert_overlay_wrap_progress(
-    property: &str,
+    property: &'static str,
     word_wrap: bool,
     string: &str,
     tail_len: usize,
@@ -27,12 +27,12 @@ fn assert_overlay_wrap_progress(
 }
 
 fn assert_overlay_wrap_progress_with_insertions(
-    property: &str,
+    property: &'static str,
     word_wrap: bool,
     string: &str,
     tail_len: usize,
     buffer_space: bool,
-    additional: &[(i64, i64, &str, &str)],
+    additional: &[(i64, i64, &'static str, &'static str)],
 ) -> String {
     let prefix = if buffer_space { "see " } else { "see" };
     let text = format!("{}{}\n", prefix, "x".repeat(tail_len));

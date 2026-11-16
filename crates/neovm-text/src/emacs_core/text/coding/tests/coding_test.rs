@@ -2867,3 +2867,113 @@ fn detect_list_mb(bytes: &[u8], src_chars: usize, multibytep: bool) -> Vec<Strin
         .map(|s| resolve_sym(s.as_bare_symbol_id().unwrap()).to_string())
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// find-coding-systems-region-internal on a buffer (src/coding.c,
+// Ffind_coding_systems_region_internal)
+// ---------------------------------------------------------------------------
+
+const REGION_CHARS: usize = 1 << 20;
+
+fn region_buffer(text: &str) -> neovm_edit::buffer::Buffer {
+    let mut buffer = neovm_edit::buffer::Buffer::new(
+        neovm_edit::buffer::BufferId(7),
+        Value::string("region"),
+        neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global(),
+    );
+    buffer.insert(text);
+    buffer
+}
+
+fn region_codings(buffer: &neovm_edit::buffer::Buffer, start: i64, end: i64) -> EvalResult {
+    let args = [Value::fixnum(start), Value::fixnum(end)];
+    safe_coding_systems_for_region(&mgr(), buffer, (start, end), &args, SymbolMode::Bare)
+}
+
+fn coding_names(value: Value) -> Vec<String> {
+    list_to_vec(&value)
+        .expect("a list of coding systems")
+        .into_iter()
+        .map(|coding| resolve_sym(coding.as_bare_symbol_id().expect("a coding symbol")).to_owned())
+        .collect()
+}
+
+/// GNU returns t once the region's byte length equals its character length
+/// (`if (e - s == end_byte - start_byte) return Qt;`), before it reads the
+/// text: a 1 MB ASCII region is answered without copying it.
+#[test]
+fn find_coding_systems_region_ascii_buffer_copies_nothing() {
+    crate::test_utils::init_test_tracing();
+    let buffer = region_buffer(&"a".repeat(REGION_CHARS));
+    let manager = mgr();
+    let end = REGION_CHARS as i64 + 1;
+    let args = [Value::fixnum(1), Value::fixnum(end)];
+    let (result, (calls, bytes)) = super::allocation_tests::measured(|| {
+        safe_coding_systems_for_region(&manager, &buffer, (1, end), &args, SymbolMode::Bare)
+    });
+    assert_eq!(result.unwrap(), Value::T);
+    assert_eq!(
+        (calls, bytes),
+        (0, 0),
+        "an ASCII region of {REGION_CHARS} chars must not be copied"
+    );
+}
+
+/// One non-ASCII character keeps the full scan: the result is the one the
+/// same text gives as a string.
+#[test]
+fn find_coding_systems_region_non_ascii_buffer_scans_region() {
+    crate::test_utils::init_test_tracing();
+    let mut text = "a".repeat(REGION_CHARS);
+    text.push('é');
+    let buffer = region_buffer(&text);
+    let end = REGION_CHARS as i64 + 2;
+    let expected = safe_coding_systems_for_text(
+        &mgr(),
+        &LispString::from_utf8(&text),
+        None,
+        SymbolMode::Bare,
+    )
+    .unwrap();
+    let got = region_codings(&buffer, 1, end).unwrap();
+    assert_ne!(got, Value::T);
+    assert_eq!(coding_names(got), coding_names(expected));
+    // The ASCII prefix alone is still t.
+    assert_eq!(region_codings(&buffer, 1, end - 1).unwrap(), Value::T);
+}
+
+/// A unibyte buffer answers t without reading its text
+/// (`enable-multibyte-characters` is nil).
+#[test]
+fn find_coding_systems_region_unibyte_buffer_answers_t() {
+    crate::test_utils::init_test_tracing();
+    let mut buffer = region_buffer(&"a".repeat(REGION_CHARS));
+    buffer.set_multibyte_value(false);
+    let manager = mgr();
+    let end = REGION_CHARS as i64 + 1;
+    let args = [Value::fixnum(1), Value::fixnum(end)];
+    let (result, (calls, bytes)) = super::allocation_tests::measured(|| {
+        safe_coding_systems_for_region(&manager, &buffer, (1, end), &args, SymbolMode::Bare)
+    });
+    assert_eq!(result.unwrap(), Value::T);
+    assert_eq!(
+        (calls, bytes),
+        (0, 0),
+        "a unibyte region must not be copied"
+    );
+}
+
+/// GNU's string branch: unibyte, or as many characters as bytes, is t.
+#[test]
+fn find_coding_systems_region_strings_follow_char_byte_rule() {
+    crate::test_utils::init_test_tracing();
+    let codings = |text: LispString| {
+        safe_coding_systems_for_text(&mgr(), &text, None, SymbolMode::Bare).unwrap()
+    };
+    assert_eq!(
+        codings(LispString::from_unibyte(vec![0xFF, b'a'])),
+        Value::T
+    );
+    assert_eq!(codings(LispString::from_utf8("abc")), Value::T);
+    assert_ne!(codings(LispString::from_utf8("aé")), Value::T);
+}

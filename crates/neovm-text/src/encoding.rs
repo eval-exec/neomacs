@@ -16,6 +16,15 @@ use crate::emacs_core::text_host::TextHost;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
 use neovm_value::intern::{SymId, intern, resolve_sym};
+/// Resolve a runtime coding-system spelling to its canonical symbol value.
+/// Coding-system names reach Lisp through the member publication in the
+/// coding manager (record_coding_system_name / lisp_visible_names); these
+/// argument and result conversions resolve those same ids and never create
+/// a fresh Lisp-visible name.
+fn coding_symbol_value(name: &str) -> Value {
+    Value::from_sym_id(intern(name))
+}
+
 use std::collections::HashMap;
 // encoding.rs: sentinel imports removed; using emacs_char + LispString directly
 use encoding_rs::{BIG5, GBK};
@@ -1513,7 +1522,7 @@ fn charset_property_runs(
     vec![StringTextPropertyRun {
         start,
         end: char_count,
-        plist: Value::list(vec![Value::symbol("charset"), Value::symbol(charset)]),
+        plist: Value::list(vec![Value::symbol("charset"), coding_symbol_value(charset)]),
     }]
 }
 
@@ -1886,7 +1895,7 @@ fn transformed_region_string_in_context<H: TextHost>(
         ctx,
         vec![
             Value::heap_string(source),
-            Value::symbol(coding),
+            coding_symbol_value(coding),
             Value::NIL,
             Value::NIL,
         ],
@@ -3971,7 +3980,7 @@ fn run_coding_with_conversion_hook<H: TextHost>(
             ))
         };
         let decoded = builtin_decode_coding_string_with_known(
-            vec![source_arg, Value::symbol(&body)],
+            vec![source_arg, coding_symbol_value(&body)],
             |_| true,
             ctx.eol_conversion(),
             neovm_value::tagged::SymbolMode::Bare,
@@ -4791,7 +4800,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
             // Downstream helpers re-read `args[1]` rather than `coding` (see the
             // `undecided` rewrite below), so the resolved system has to be put
             // back there too or the codec still selects on the alias name.
-            args[1] = Value::symbol(&coding);
+            args[1] = coding_symbol_value(&coding);
         }
     }
     let destination = coding_string_destination(args.get(3).copied(), coding_symbol_mode)?;
@@ -4861,14 +4870,14 @@ fn builtin_coding_string_in_context<H: TextHost>(
             Some(CodingReadSelection::IdentityOnly(candidate)) => {
                 coding = candidate.to_owned();
                 reported_coding = coding.clone();
-                args[1] = Value::symbol(&coding);
+                args[1] = coding_symbol_value(&coding);
                 effective_decoder = EffectiveDecoder::RetainedUndecided;
             }
             Some(CodingReadSelection::Rebase(selected)) => {
                 reported_coding = selected.to_owned();
                 coding = runtime_codec_name(ctx.coding_systems(), selected)
                     .unwrap_or_else(|| selected.to_owned());
-                args[1] = Value::symbol(&coding);
+                args[1] = coding_symbol_value(&coding);
                 effective_decoder = EffectiveDecoder::Configured;
             }
         }
@@ -4944,7 +4953,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
         // The hook already supplied text; select its codec without running
         // the same callback a second time.
         let base = apply_explicit_eol_suffix(&base_type, coding_name_eol(&coding));
-        args[1] = Value::symbol(&base);
+        args[1] = coding_symbol_value(&base);
         coding = base;
     }
     // A coding system whose conversion is implemented by an elisp
@@ -5027,7 +5036,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
         if entry.reports_coding_result() {
             ctx.set_variable_by_name(
                 "last-coding-system-used",
-                Value::symbol(canonical_context_coding_name(&reported_coding)),
+                coding_symbol_value(&canonical_context_coding_name(&reported_coding)),
             );
         }
         let Some(buffer_id) = destination else {
@@ -5069,7 +5078,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
             // The fall-through arm re-reads `args[1]`, so the name has to be
             // spent there too or `encode_lisp_string` would expand a second
             // time and emit CR CR LF.
-            args[1] = Value::symbol(&coding);
+            args[1] = coding_symbol_value(&coding);
             // NOCOPY promises the caller's own string object back.  A source
             // that needed EOL expansion is a fresh object already, so the
             // promise no longer applies and the identity fast path downstream
@@ -5095,13 +5104,13 @@ fn builtin_coding_string_in_context<H: TextHost>(
         let spent = coding_name_with_eol_spent(&coding);
         if spent != coding.as_str() {
             coding = spent.into_owned();
-            args[1] = Value::symbol(&coding);
+            args[1] = coding_symbol_value(&coding);
         }
         if effective_decoder == EffectiveDecoder::RetainedUndecided {
             // A nil priority target changed only coding->id. Its decoder is
             // still the original undecided coding's raw-text decoder.
             coding = "raw-text".to_owned();
-            args[1] = Value::symbol(&coding);
+            args[1] = coding_symbol_value(&coding);
         }
     }
     let source_string = || {
@@ -5331,7 +5340,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
     if entry.reports_coding_result() {
         ctx.set_variable_by_name(
             "last-coding-system-used",
-            Value::symbol(canonical_context_coding_name(&reported_coding)),
+            coding_symbol_value(&canonical_context_coding_name(&reported_coding)),
         );
     }
 
@@ -5657,7 +5666,7 @@ pub fn decode_file_bytes_in_context<H: TextHost>(
     ));
     let decoded = builtin_coding_string_in_context(
         ctx,
-        vec![source, Value::symbol(coding)],
+        vec![source, coding_symbol_value(coding)],
         CodingDirection::Decode,
         EncodingBoundary::CompleteText,
         // `insert-file-contents` reaches `decode_coding_gap` (src/coding.c:7905),
@@ -5727,7 +5736,7 @@ pub fn decode_process_run_in_context<H: TextHost>(
     let mut run = CodingRun::process_read(state, block);
     let decoded = builtin_coding_string_in_context(
         ctx,
-        vec![source, Value::symbol(coding)],
+        vec![source, coding_symbol_value(coding)],
         CodingDirection::Decode,
         EncodingBoundary::CompleteText,
         CodingEntry::ProcessRun,

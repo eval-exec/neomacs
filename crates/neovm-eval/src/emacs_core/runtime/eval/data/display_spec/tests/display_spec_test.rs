@@ -8,7 +8,7 @@ fn list(items: Vec<Value>) -> Value {
 }
 
 fn symbol(name: &str) -> Value {
-    Value::symbol(name)
+    Value::from_sym_id(neovm_value::intern::intern(name))
 }
 
 fn string(text: &str) -> Value {

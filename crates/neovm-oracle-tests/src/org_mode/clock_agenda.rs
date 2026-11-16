@@ -476,7 +476,7 @@ fn org_clock_shift_display_overlay_cleanup_combo() {
                                  (overlays-at (line-end-position)))))))
                       '("Alpha" "Beta"))
                      (buffer-substring-no-properties
-                      (point-min) (point-max))))))
+                      (point-min) (point-max)))))
         (goto-char (point-min))
         (search-forward "09:00")
         (org-clock-timestamps-up 15)
@@ -494,7 +494,7 @@ fn org_clock_shift_display_overlay_cleanup_combo() {
             (org-clock-remove-empty-clock-drawer)
             (list after-shift
                   after-display
-                  (funcall snapshot 'after-cleanup)))))))"##,
+                  (funcall snapshot 'after-cleanup))))))))"##,
         expect,
     );
 }

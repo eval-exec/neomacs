@@ -167,10 +167,10 @@ impl Context {
                 for (&id, spelling) in ids[1..].iter().zip(spellings) {
                     obarray.seed_value_id(id, TaggedValue::string(spelling));
                 }
-                let mut id = neovm_value::intern::intern_uninterned("p3sym-c5-native-gap");
+                let mut id = neovm_value::intern::make_uninterned_symbol("p3sym-c5-native-gap");
                 let target = (u64::from(id.to_raw()) / 4096 + 2) * 4096 + 17;
                 while u64::from(id.to_raw()) + 1 < target {
-                    id = neovm_value::intern::intern_uninterned("p3sym-c5-native-gap");
+                    id = neovm_value::intern::make_uninterned_symbol("p3sym-c5-native-gap");
                 }
             },
             body,

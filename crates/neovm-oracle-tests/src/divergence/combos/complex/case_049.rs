@@ -395,19 +395,17 @@ fn div_cx49_weak_hash_value_eviction_marker_as_value() {
 #[test]
 fn div_cx49_read_delimited_list_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" lst (read-delimited-list (string 41)) lst)""#
-    ]];
+    let expect = expect_test::expect![[r#""OK (errored . void-function)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
     (with-temp-buffer
       (insert "(a b c) (d e) (f)")
       (goto-char 1)
-      (let ((lst (read-delimited-list (string ?\)))
-            lst))
+      (let ((lst (read-delimited-list (string 41))))
+        lst))
   (error (cons 'errored (car e))))
-))"##,
+"##,
         expect,
     );
 }

@@ -23,6 +23,7 @@ use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::error::signal;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt};
 use neovm_value::heap_types::LispString;
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use reap::ChildStatusChange;
 use std::cell::RefCell;
@@ -389,7 +390,7 @@ fn gnu_timer_before(delay: Duration, callback: &str) -> Value {
         Value::fixnum(secs & 0xFFFF),
         Value::fixnum(when.subsec_micros() as i64),
         Value::NIL,
-        Value::symbol(callback),
+        Value::from_sym_id(intern(callback)),
         Value::NIL,
         Value::NIL,
         Value::fixnum(0),
@@ -411,7 +412,7 @@ fn gnu_timer_after(delay: Duration, callback: &str) -> Value {
         Value::fixnum(secs & 0xFFFF),
         Value::fixnum(when.subsec_micros() as i64),
         Value::NIL,
-        Value::symbol(callback),
+        Value::from_sym_id(intern(callback)),
         Value::NIL,
         Value::NIL,
         Value::fixnum(0),
@@ -1513,8 +1514,14 @@ fn connection_process_mutators_keep_childp_plist_in_sync() {
         builtin_set_process_sentinel_impl(&mut pm, vec![Value::make_process(id), Value::NIL])
             .expect("set-process-sentinel");
 
-    assert_eq!(filter, Value::symbol(DEFAULT_PROCESS_FILTER_SYMBOL));
-    assert_eq!(sentinel, Value::symbol(DEFAULT_PROCESS_SENTINEL_SYMBOL));
+    assert_eq!(
+        filter,
+        Value::from_sym_id(intern(DEFAULT_PROCESS_FILTER_SYMBOL))
+    );
+    assert_eq!(
+        sentinel,
+        Value::from_sym_id(intern(DEFAULT_PROCESS_SENTINEL_SYMBOL))
+    );
 
     let contact = builtin_process_contact_impl(&pm, vec![Value::make_process(id), Value::T])
         .expect("process-contact t");
@@ -1526,12 +1533,12 @@ fn connection_process_mutators_keep_childp_plist_in_sync() {
     assert_eq!(
         builtins::builtin_plist_get(vec![contact, Value::keyword(":filter")])
             .expect("plist-get :filter"),
-        Value::symbol(DEFAULT_PROCESS_FILTER_SYMBOL)
+        Value::from_sym_id(intern(DEFAULT_PROCESS_FILTER_SYMBOL))
     );
     assert_eq!(
         builtins::builtin_plist_get(vec![contact, Value::keyword(":sentinel")])
             .expect("plist-get :sentinel"),
-        Value::symbol(DEFAULT_PROCESS_SENTINEL_SYMBOL)
+        Value::from_sym_id(intern(DEFAULT_PROCESS_SENTINEL_SYMBOL))
     );
 }
 

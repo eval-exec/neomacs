@@ -28,7 +28,7 @@ pub fn set_fd_nonblocking(fd: RawFd) -> std::io::Result<()> {
 }
 
 /// Duplicate `fd` (`dup(2)`), returning the new descriptor or `None` on failure.
-pub fn dup_fd(fd: RawFd) -> Option<RawFd> {
+pub(crate) fn dup_fd(fd: RawFd) -> Option<RawFd> {
     // SAFETY: `dup` takes no pointer arguments.
     let new_fd = unsafe { libc::dup(fd) };
     (new_fd != -1).then_some(new_fd)

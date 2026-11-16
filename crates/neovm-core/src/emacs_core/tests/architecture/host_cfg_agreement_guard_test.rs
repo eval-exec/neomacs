@@ -6,8 +6,9 @@
 //! it. This guard has two halves:
 //!
 //! 1. Runtime agreement (`host_cfg_views_agree_across_crates`): for every
-//!    host cfg the sources use (`neomacs_have_dbus`, `neomacs_have_lcms2`,
-//!    `neomacs_have_wkwebview`), each using crate must observe the SAME value
+//!    host cfg the sources use (`neomacs_have_dbus`, `neomacs_have_lcms2`),
+//!    plus the `xwidgets` feature that decides `xwidget-internal`, each using
+//!    crate must observe the SAME value
 //!    in one build. The observers are independent public surfaces: core is
 //!    this test's own `cfg!`, eval is `HostCfgClass::is_active`, value is its
 //!    GNU c-features table (the names it would `Fprovide`). System's dbus
@@ -298,12 +299,16 @@ fn host_cfg_views_agree_across_crates() {
         "neomacs_have_lcms2: core says {core_lcms2}, value provides lcms2 = {value_lcms2}"
     );
 
-    // wkwebview: core and value branch on it (eval has no such branch).
-    let core_wkwebview = cfg!(neomacs_have_wkwebview);
-    let value_wkwebview = value_provides("xwidget-internal");
+    // xwidget-internal: the single predicate is the `xwidgets` feature (the
+    // port's key for GNU's HAVE_XWIDGETS), which the macOS `webview` backend
+    // implies. The build-script `neomacs_have_wkwebview` cfg is only the
+    // backend probe; it must not advertise the feature on its own.
+    let value_xwidget = value_provides("xwidget-internal");
     assert_eq!(
-        core_wkwebview, value_wkwebview,
-        "neomacs_have_wkwebview: core says {core_wkwebview}, value provides xwidget-internal = {value_wkwebview}"
+        value_xwidget,
+        cfg!(feature = "xwidgets"),
+        "value provides xwidget-internal = {value_xwidget}, core xwidgets feature = {}",
+        cfg!(feature = "xwidgets")
     );
 }
 
@@ -497,4 +502,39 @@ pub fn configure_all() {
         );
         host_cfg_probe_violation(root).expect("relative include with the probe");
     }
+}
+
+/// PEER 5796 R8: `xwidget-internal`, the xwidget subr catalog and the xwidget
+/// variables are decided by ONE predicate in every build.
+///
+/// GNU couples all three under `HAVE_XWIDGETS` (`configure.ac:4455-4507`:
+/// the whole of `src/xwidget.c` is one `#ifdef`, and `Fprovide
+/// ("xwidget-internal")` sits inside it). This port keys the same three
+/// surfaces on the `xwidgets` cargo feature, and the macOS `webview` backend
+/// implies it. A build where `(featurep 'xwidget-internal)` is true while
+/// `make-xwidget` is void would break `lisp/xwidget.el`'s browse path, which
+/// is the R8 regression the batch-8 audit found on the macOS product.
+#[test]
+fn xwidget_surface_predicates_agree_in_this_build() {
+    let mut eval = crate::test_utils::new_context();
+    let value = eval
+        .eval_str(
+            r#"(list (and (featurep 'xwidget-internal) t)
+                      (and (fboundp 'make-xwidget) t)
+                      (and (boundp 'xwidget-list) t))"#,
+        )
+        .expect("xwidget predicate form");
+    let answers: Vec<bool> = neovm_value::value::list_to_vec(&value)
+        .expect("a three-element list")
+        .into_iter()
+        .map(|value| value.is_truthy())
+        .collect();
+    assert_eq!(answers.len(), 3, "three surfaces");
+    let expected = cfg!(feature = "xwidgets");
+    assert_eq!(
+        answers,
+        vec![expected; 3],
+        "featurep xwidget-internal / fboundp make-xwidget / boundp xwidget-list \
+         must agree with the xwidgets feature in every build (PEER 5796 R8)"
+    );
 }

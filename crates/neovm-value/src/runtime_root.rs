@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub const RUNTIME_ROOT_ENV: &str = "NEOMACS_RUNTIME_ROOT";
+pub(crate) const RUNTIME_ROOT_ENV: &str = "NEOMACS_RUNTIME_ROOT";
 
 pub fn compile_time_project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_WORKSPACE_DIR"))

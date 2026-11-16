@@ -409,15 +409,15 @@ fn text_quoting_and_conversion_style_basics() {
     );
     for style in ["grave", "straight", "curve"] {
         eval.obarray_mut()
-            .set_symbol_value("text-quoting-style", Value::symbol(style));
+            .set_symbol_value("text-quoting-style", Value::from_sym_id(intern(style)));
         assert_eq!(
             builtin_text_quoting_style(&eval, vec![]).expect("text-quoting-style explicit style"),
-            Value::symbol(style)
+            Value::from_sym_id(intern(style))
         );
     }
     for style in ["nil", "foo", "Curve"] {
         eval.obarray_mut()
-            .set_symbol_value("text-quoting-style", Value::symbol(style));
+            .set_symbol_value("text-quoting-style", Value::from_sym_id(intern(style)));
         assert_eq!(
             builtin_text_quoting_style(&eval, vec![]).expect("text-quoting-style fallback"),
             Value::symbol("curve")

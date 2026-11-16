@@ -14,7 +14,7 @@ impl RunAccess<'_, '_> {
     /// No arbitrary table payload or raw value can enter this sealed path.
     #[cold]
     #[inline(never)]
-    pub fn make_hash_table_into(
+    pub(crate) fn make_hash_table_into(
         &mut self,
         test: HashTableTest,
         size: usize,
@@ -32,7 +32,7 @@ impl RunAccess<'_, '_> {
     /// destination may be cloned handles to the same home.
     #[cold]
     #[inline(never)]
-    pub fn copy_hash_table_into(
+    pub(crate) fn copy_hash_table_into(
         &mut self,
         source: &OwnerRootSlot<'_>,
         destination: &OwnerRootSlot<'_>,

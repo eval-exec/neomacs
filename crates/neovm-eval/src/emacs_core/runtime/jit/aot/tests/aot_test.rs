@@ -559,7 +559,7 @@ fn aot_gensym_symbol_const_is_rejected_stays_jit() {
         crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // An uninterned (gensym) symbol — name not registered as canonical.
-    let gensym = Value::symbol(neovm_value::intern::intern_uninterned("g$decoy"));
+    let gensym = Value::symbol(neovm_value::intern::make_uninterned_symbol("g$decoy"));
     assert!(
         !neovm_value::intern::is_canonical_id(gensym.as_bare_symbol_id().unwrap()),
         "precondition: the gensym is non-canonical"

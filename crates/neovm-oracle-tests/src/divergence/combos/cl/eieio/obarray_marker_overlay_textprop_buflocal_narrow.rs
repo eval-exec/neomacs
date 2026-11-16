@@ -183,7 +183,7 @@ fn combo_eieio_obarray_mapatoms_collect() {
                                             'not-map-sym))))
                                syms))
                   my-ob)
-                  (sort syms (lambda (a b) (string< (car a) (car b))))))))
+                  (sort syms (lambda (a b) (string< (car a) (car b)))))))
         (setq buffer-undo-list nil)
         (undo-boundary)
         (dolist (name (list "sym-a" "sym-b" "sym-c"))
@@ -209,7 +209,7 @@ fn combo_eieio_obarray_mapatoms_collect() {
         (list (buffer-string)
               (marker-position m)
               (overlay-start ov) (overlay-end ov)
-              my-map-log)))
+              my-map-log))))
     (kill-buffer buf))"#,
         expect,
     );
