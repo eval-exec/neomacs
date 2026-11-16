@@ -129,7 +129,7 @@ per F-3.
 | display::terminal.handle_value | panic | lifecycle.rs:1143 | GUI MonitorsChanged input events (keyboard.rs:3109,4435); unit tests inject no GUI events | a |
 | display::terminal.delete_noelisp | ASSERT-EMPTY override | lifecycle.rs:1175 | NOT-INSTALLED as a panic: `unit_terminal_delete_noelisp` (test_utils.rs:438) asserts the empty terminal record | c |
 | display::terminal.frame_terminal | panic | lifecycle.rs:1342 | `variable-binding-locus` on a Kboard-forwarded variable (symbols.rs:3869) delegates to `frame-terminal`; GNU's `Fframe_terminal` (data.c:2523-2524) returns the terminal, so this is NOT exact -- witnesses belong in core (PEER 5795 F-1) | b |
-| display::terminal.print_handle | unlinked (None) | lifecycle.rs:1347 | `prin1` and error formatting query it (lisp/print/mod.rs:3444, error_format.rs:93); must ASSERT the empty terminal registry (a record can exist; PEER 5795 F-2) | c |
+| display::terminal.print_handle | unlinked (None, premise-asserted) | lifecycle.rs:1347 | `prin1` and error formatting query it (lisp/print/mod.rs:3444, error_format.rs:93); asserts the empty terminal registry before answering None (a record can exist; PEER 5795 F-2, done) | c |
 | display::terminal.configure_window_system_runtime | panic | lifecycle.rs:1352 | GUI keyboard-forwarding config only (keyboard_forwarding.rs:34) | a |
 | display::terminal.park_carrier_tls | unlinked | lifecycle.rs:1391 | green carrier park reset_step (carrier_tls.rs:158,486); no display terminal TLS | c |
 | display::terminal.reset_thread_locals | unlinked | lifecycle.rs:1404 | pdump restore_active_runtime (pdump/runtime.rs:146, pdump/mod.rs:764); no display terminal TLS | c |
@@ -207,7 +207,7 @@ per F-3.
 | core::wait.service_timers_without_redisplay | panic | hooks_proof.rs:331 | read_char timer service (keyboard.rs:4971) and the core-used test fence (test_support.rs:1099); system-owned | b |
 | core::wait.wait_for_command_input_with_idle_policy | panic | hooks_proof.rs:335 | timed read-event blocking wait (keyboard.rs:5007); system-owned | b |
 | core::wait.wait_for_resize_ack_until | panic | hooks_proof.rs:343 | wait_for_pending_resize_events (keyboard.rs:2867) from display and core eval_test.rs:3469 | b |
-| core::wait.wait_for_duration_until_timer_deadline | panic (not installed) | hooks_proof.rs:350 | NOT-INSTALLED: unit table installs a working Green/select `unit_wait_for_duration_until_timer_deadline` (test_utils.rs:973); that unit impl must ASSERT the empty live process table and the absence of wait-notifier sources (PEER 5795 F-4), then this row is (c) | c |
+| core::wait.wait_for_duration_until_timer_deadline | panic (not installed) | hooks_proof.rs:350 | NOT-INSTALLED: unit table installs a working Green/select `unit_wait_for_duration_until_timer_deadline` (test_utils.rs:973), which now ASSERTS the empty live process table and the absent OS-signal self-pipe before sleeping (PEER 5795 F-4, done) | c |
 | core::timer.next_ordinary_gnu_timer_timeout_before | panic | hooks_proof.rs:363 | unbounded read-event/read-key-sequence timer query (keyboard.rs:4955); system-owned | b |
 | core::timer.next_idle_gnu_timer_timeout | panic | hooks_proof.rs:367 | idle-timer query (keyboard.rs:4956); system-owned | b |
 | upper-variable::{name} | value (poison) | lifecycle.rs:1060 | every eval unit Context construction binds upper bootstrap Lisp_Object vars to the uninterned marker (construct.rs:1473); printed name is `ABSENT-LAYER upper-variable::<name>`, no eval test asserts on the values (PEER 5795 F-3) | p |
@@ -223,8 +223,8 @@ per F-3.
   `unit_wait_for_duration_until_timer_deadline`, `unit_boot_seed_batch_startup_frame`,
   `unit_terminal_delete_noelisp`, `unit_terminal_live_ids`). Their stand-ins
   are the (a2) deletions; the unit substitutions remain. The
-  wait-for-duration substitution still owes the F-4 premise asserts (empty
-  live process table, no wait-notifier source).
+  wait-for-duration substitution now asserts its premises (F-4), and the
+  terminal print-handle asserts the empty registry before its None (F-2).
 - (a) stays panics (PEER 5795): (a1) deleted the four no-caller hook
   fields/accessors/stand-ins (`process.unlink`, `process.delete`,
   `window_tree.char_property_window_lookup`, `window_tree.window_resize_apply`)

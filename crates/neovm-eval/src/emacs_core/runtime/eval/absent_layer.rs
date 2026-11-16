@@ -413,6 +413,15 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn terminal_print_handle(_value: &Value) -> Option<String> {
+                // F-2: None is the exact answer only while the terminal
+                // registry is empty; a record can exist (ensure_terminal(7)),
+                // so assert the premise instead of documenting it.
+                let handle = terminal_current_registry_handle();
+                let empty = handle.borrow().terminals.is_empty();
+                absent_layer_assert_empty(
+                    "ABSENT-LAYER display::terminal.print_handle (non-empty terminal registry)",
+                    empty,
+                );
                 absent_layer_unlinked("ABSENT-LAYER display::terminal.print_handle");
                 None
             }

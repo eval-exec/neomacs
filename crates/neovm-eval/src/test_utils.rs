@@ -939,6 +939,19 @@ mod unit_runtime {
         duration: std::time::Duration,
         timer_deadline: crate::emacs_core::eval::GnuTimerTimestamp,
     ) -> Result<(), neovm_value::error::Flow> {
+        // F-4: this unit body is the exact wait only while the runtime has no
+        // other wake source: no live process can queue a wait notification,
+        // and no OS-signal self-pipe is installed. Assert both premises.
+        let live = ctx.processes().live_process_ids();
+        assert!(
+            live.is_empty(),
+            "ABSENT layer: unit wait reached with live processes ({live:?}); \
+             the Green/select sleep would ignore process output"
+        );
+        assert!(
+            crate::emacs_core::eval::input_hooks::signal_wake_pipe_read_fd().is_none(),
+            "ABSENT layer: unit wait reached with an OS-signal self-pipe installed"
+        );
         match ctx.green_select_switch(duration)? {
             crate::emacs_core::eval::SelectTurn::Switched => Ok(()),
             crate::emacs_core::eval::SelectTurn::Block(wait_time) => {

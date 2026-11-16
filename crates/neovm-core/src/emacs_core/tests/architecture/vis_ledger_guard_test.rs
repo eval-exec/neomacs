@@ -2461,6 +2461,24 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
                 continue;
             }
         }
+        // F-2: a premise-asserted construction no-op asserts the upper state is
+        // empty, records the Unlinked hit, and returns its honest absent value
+        // (the terminal print-handle's empty registry).
+        if asserts.len() == 1
+            && unlinked.len() == 1
+            && panics.is_empty()
+            && stmts.len() >= 3
+            && absent_layer_call(&stmts[stmts.len() - 2])
+                .is_some_and(|(call, _)| call == "absent_layer_unlinked")
+        {
+            if let Some(value) = unlinked_honest_value(&stmts[stmts.len() - 1]) {
+                let marker = unlinked[0].1.clone().ok_or_else(|| {
+                    format!("{name}: the unlinked marker is not a string literal")
+                })?;
+                summary.unlinked.push((name, marker, Some(value)));
+                continue;
+            }
+        }
         if asserts.len() == 1 && panics.is_empty() && unlinked.is_empty() {
             let marker = asserts[0].1.clone().ok_or_else(|| {
                 format!("{name}: the assert-empty marker is not a string literal")
