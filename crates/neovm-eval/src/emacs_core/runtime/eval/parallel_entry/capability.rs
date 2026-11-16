@@ -126,11 +126,11 @@ impl<'heap, 'owner, 'shape> OwnerState<'heap, 'owner, 'shape> {
 #[allow(dead_code)] // Provenance checks are exercised by compile-contract fixtures.
 impl<'heap, 'owner, 'shape> ParallelExecution<'_, 'heap, 'owner, 'shape> {
     /// Require matching generative heap provenance, without dereferencing it.
-    pub(crate) fn require_heap(&self, _: &HeapIdentity<'heap>) {}
+    pub fn require_heap(&self, _: &HeapIdentity<'heap>) {}
 
-    pub(crate) fn require_owner(&self, _: &OwnerIdentity<'owner>) {}
+    pub fn require_owner(&self, _: &OwnerIdentity<'owner>) {}
 
-    pub(crate) fn require_shape(&self, _: &BindingShape<'shape>) {}
+    pub fn require_shape(&self, _: &BindingShape<'shape>) {}
 }
 
 #[allow(dead_code)] // Guard construction and actual stopped authority belong to E2.

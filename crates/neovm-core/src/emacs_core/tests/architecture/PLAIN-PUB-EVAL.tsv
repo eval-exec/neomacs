@@ -2710,6 +2710,9 @@ crates/neovm-eval/src/emacs_core/runtime/eval/native_stack.rs	fn	fn raise_main_s
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl OwnerState::native
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl OwnerState::parallel
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl OwnerState::serial
+crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl ParallelExecution::require_heap
+crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl ParallelExecution::require_owner
+crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl ParallelExecution::require_shape
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct HeapIdentity
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct OwnerState
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	enum	enum PerfOp
