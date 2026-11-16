@@ -5924,53 +5924,32 @@ fn test_insert_file_contents_and_write_region_arity_bounds() {
 #[test]
 fn test_find_file_noselect_arity_bounds() {
     crate::test_utils::init_test_tracing();
-    use neovm_eval::emacs_core::eval::Context;
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 
-    let dir = std::env::temp_dir().join("neovm_eval_find_file_noselect_arity");
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("arity.txt");
+    fs::write(&path, "").expect("write arity fixture");
+    let path_str = path.to_string_lossy().to_string();
 
-    let file_path = dir.join("arity.txt");
-    let file_str = file_path.to_string_lossy().to_string();
-    write_string_to_file("", &file_str, false).unwrap();
+    // The real files.el defun is (filename &optional nowarn rawfile
+    // wildcards): 4 args fit, 5 exceed the arity.
+    let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    let rendered = format_eval_result(&eval.eval_str(&format!(
+        r#"(list (bufferp (find-file-noselect {:?} nil nil nil))
+               (condition-case e
+                   (progn (find-file-noselect {:?} nil nil nil nil) 'no-error)
+                 (wrong-number-of-arguments (car e))
+                 (error (car e))))"#,
+        path_str, path_str
+    )));
 
-    let mut eval_ok = crate::emacs_core::eval_hook_installers::new_context();
-    let ok = builtin_find_file_noselect(
-        &mut eval_ok,
-        vec![Value::string(&file_str), Value::NIL, Value::NIL, Value::NIL],
-    )
-    .expect("4-arg find-file-noselect should succeed");
-    assert!(ok.is_buffer());
-
-    let mut eval_bad = crate::emacs_core::eval_hook_installers::new_context();
-    let bad = builtin_find_file_noselect(
-        &mut eval_bad,
-        vec![
-            Value::string(&file_str),
-            Value::NIL,
-            Value::NIL,
-            Value::NIL,
-            Value::NIL,
-        ],
-    )
-    .expect_err("5-arg find-file-noselect should fail");
-    match bad.into_kind() {
-        FlowKind::Signal(sig) => {
-            assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
-            assert_eq!(
-                sig.data,
-                vec![Value::symbol("find-file-noselect"), Value::fixnum(5)]
-            );
-        }
-        other => panic!("unexpected flow: {other:?}"),
-    }
-
-    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(rendered, "OK (t wrong-number-of-arguments)");
 }
 
 #[test]
 fn test_eval_fileio_relative_paths_respect_default_directory() {
     crate::test_utils::init_test_tracing();
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
     use neovm_eval::emacs_core::eval::Context;
 
     let dir = std::env::temp_dir().join("neovm_eval_fileio_relative");
@@ -6008,20 +5987,15 @@ fn test_eval_fileio_relative_paths_respect_default_directory() {
     .unwrap();
     assert_eq!(read_file_contents(&out_str).unwrap(), "neo");
 
-    let mut eval_find = crate::emacs_core::eval_hook_installers::new_context();
-    eval_find.set_variable("default-directory", Value::string(&default_dir));
-    let found =
-        builtin_find_file_noselect(&mut eval_find, vec![Value::string("alpha.txt")]).unwrap();
-    if !found.is_buffer() {
-        panic!("expected Buffer");
-    };
-    let buf_id = found.as_buffer_id().unwrap();
-    let fbuf = eval_find.edit.buffers.get(buf_id).unwrap();
-    assert_eq!(fbuf.buffer_string(), "alpha\n");
-    assert_eq!(
-        fbuf.file_name_runtime_string_owned().as_deref(),
-        Some(alpha_str.as_str())
-    );
+    let mut eval_find = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    let rendered = format_eval_result(&eval_find.eval_str(&format!(
+        r#"(let ((default-directory {:?}))
+             (let ((buf (find-file-noselect "alpha.txt")))
+               (with-current-buffer buf
+                 (list (buffer-string) (buffer-file-name)))))"#,
+        default_dir
+    )));
+    assert_eq!(rendered, format!("OK (\"alpha\n\" {alpha_str:?})"));
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -6635,46 +6609,26 @@ fn builtin_write_region_does_not_create_backup_for_raw_unibyte_filename() {
 #[test]
 fn test_find_file_noselect() {
     crate::test_utils::init_test_tracing();
-    use neovm_eval::emacs_core::eval::Context;
-    use neovm_value::value::{ValueKind, VecLikeType};
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 
-    let dir = std::env::temp_dir().join("neovm_findfile_test");
-    let _ = fs::create_dir_all(&dir);
-    let path = dir.join("findme.txt");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("findme.txt");
+    fs::write(&path, "file content here").expect("write find fixture");
     let path_str = path.to_string_lossy().to_string();
 
-    write_string_to_file("file content here", &path_str, false).unwrap();
+    let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    let rendered = format_eval_result(&eval.eval_str(&format!(
+        r#"(let ((buf (find-file-noselect {:?})))
+             (with-current-buffer buf
+               (list (bufferp buf)
+                     (buffer-string)
+                     (stringp (buffer-file-name))
+                     (buffer-modified-p)
+                     (eq buf (find-file-noselect {:?})))))"#,
+        path_str, path_str
+    )));
 
-    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
-
-    // find-file-noselect
-    let result = builtin_find_file_noselect(&mut eval, vec![Value::string(&path_str)]);
-    assert!(result.is_ok());
-    let buf_val = result.unwrap();
-    match buf_val.kind() {
-        ValueKind::Veclike(VecLikeType::Buffer) => {
-            let buf = eval
-                .edit
-                .buffers
-                .get(buf_val.as_buffer_id().unwrap())
-                .unwrap();
-            assert_eq!(buf.buffer_string(), "file content here");
-            assert!(buf.file_name_value().is_string());
-            assert!(!buf.is_modified());
-            assert!(buf.get_undo_list().is_nil());
-        }
-        _other => panic!("Expected Buffer, got {:?}", buf_val),
-    }
-
-    // Calling again with the same file should return the same buffer
-    let result2 = builtin_find_file_noselect(&mut eval, vec![Value::string(&path_str)]);
-    assert!(result2.is_ok());
-    let buf_val2 = result2.unwrap();
-    assert!(buf_val.is_buffer() && buf_val2.is_buffer());
-    assert_eq!(buf_val, buf_val2);
-
-    // Clean up
-    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(rendered, r#"OK (t "file content here" t nil t)"#);
 }
 
 /// GNU's `find-file-noselect` (lisp/files.el) visits under
@@ -6685,64 +6639,45 @@ fn test_find_file_noselect() {
 /// buffer born of `find-file-noselect` stays at the tail of the buffer
 /// list, pre-existing buffers keep their relative order, and re-visiting
 /// the same file reorders nothing either.  Emacs 31.1 at
-/// a360712c9d272d950d8d8255ef74570f7e90b7d9.
+/// a360712c9d272d950d8d8255ef74570f7e90b7d9.  Asserted through the
+/// Elisp `buffer-list' observable on the real files.el defun.
 #[test]
 fn find_file_noselect_does_not_reorder_the_buffer_list() {
     crate::test_utils::init_test_tracing();
-    use neovm_edit::buffer::BufferId;
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 
-    let dir = std::env::temp_dir().join("neovm_findfile_order_test");
-    let _ = fs::create_dir_all(&dir);
-    let path = dir.join("ordered.txt");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("ordered.txt");
+    fs::write(&path, "ordered content").expect("write order fixture");
     let path_str = path.to_string_lossy().to_string();
-    write_string_to_file("ordered content", &path_str, false).unwrap();
 
-    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
-    let first = eval.edit.buffers.create_buffer("order-first");
-    let second = eval.edit.buffers.create_buffer("order-second");
+    let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    // member returns the suffix from the match, so an earlier position
+    // yields a longer suffix: order-first preceding order-second means
+    // its member suffix strictly outlengths order-second's.
+    let rendered = format_eval_result(&eval.eval_str(&format!(
+        r#"(get-buffer-create "order-first")
+            (get-buffer-create "order-second")
+            (let* ((buf (find-file-noselect {:?}))
+                   (during (mapcar #'buffer-name (buffer-list)))
+                   (again (find-file-noselect {:?}))
+                   (after (mapcar #'buffer-name (buffer-list))))
+              (list (eq buf again)
+                    (equal after during)
+                    (string= (car (last during)) (buffer-name buf))
+                    (> (length (member "order-first" during))
+                       (length (member "order-second" during)))))"#,
+        path_str, path_str
+    )));
 
-    let visited = builtin_find_file_noselect(&mut eval, vec![Value::string(&path_str)])
-        .unwrap()
-        .as_buffer_id()
-        .unwrap();
-
-    let position = |order: &[BufferId], id: BufferId| {
-        order
-            .iter()
-            .position(|b| *b == id)
-            .unwrap_or_else(|| panic!("buffer {id:?} missing from buffer list"))
-    };
-    let order = eval.edit.buffers.buffer_list();
-    assert!(
-        position(&order, first) < position(&order, second),
-        "creation order must survive the visit: {order:?}"
-    );
-    assert!(
-        position(&order, visited) > position(&order, second),
-        "the visited buffer must stay at the tail, not jump to the head: {order:?}"
-    );
-
-    // Re-visiting the same file must not reorder either (GNU returns the
-    // existing buffer without any alist mutation).
-    let revisited = builtin_find_file_noselect(&mut eval, vec![Value::string(&path_str)])
-        .unwrap()
-        .as_buffer_id()
-        .unwrap();
-    assert_eq!(revisited, visited);
-    let order_after_revisit = eval.edit.buffers.buffer_list();
-    assert_eq!(
-        order_after_revisit, order,
-        "re-visiting must not reorder the buffer list"
-    );
-
-    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(rendered, "OK (t t t t)");
 }
 
 #[cfg(unix)]
 #[test]
-fn builtin_find_file_noselect_handles_raw_unibyte_filename() {
+fn find_file_noselect_handles_raw_unibyte_filename() {
     crate::test_utils::init_test_tracing();
-    use neovm_eval::emacs_core::eval::Context;
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 
     let dir = raw_temp_path(b"neovm-find-file-\xFF");
     let _ = fs::remove_dir_all(&dir);
@@ -6757,17 +6692,31 @@ fn builtin_find_file_noselect_handles_raw_unibyte_filename() {
         return;
     };
 
-    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
-    let result = builtin_find_file_noselect(&mut eval, vec![raw_path_value(&path)])
-        .expect("find-file-noselect should accept raw-byte filename");
-    let buf_id = result.as_buffer_id().expect("buffer result");
-    let buf = eval.edit.buffers.get(buf_id).expect("buffer");
-    assert_eq!(buf.buffer_string(), "file content here");
-    assert_unibyte_string_bytes(buf.file_name_value(), path.as_os_str().as_bytes());
+    // The raw OsStr stays raw through the real files.el defun; prin1 of a
+    // unibyte string prints bytes >= 0x80 as octal escapes, so the rendered
+    // buffer-file-name is a byte-faithful comparison.
+    let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    eval.set_variable("neo-raw-path", raw_path_value(&path));
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let* ((buf (find-file-noselect neo-raw-path))
+             (again (find-file-noselect neo-raw-path)))
+           (with-current-buffer buf
+             (list (buffer-string) (buffer-file-name) (eq buf again))))"#,
+    ));
 
-    let result2 = builtin_find_file_noselect(&mut eval, vec![raw_path_value(&path)])
-        .expect("repeat raw find-file-noselect");
-    assert_eq!(result, result2);
+    let mut printed_path = String::new();
+    for &byte in path.as_os_str().as_bytes() {
+        match byte {
+            b'"' => printed_path.push_str("\\\""),
+            b'\\' => printed_path.push_str("\\\\"),
+            0x20..=0x7e => printed_path.push(byte as char),
+            other => printed_path.push_str(&format!("\\{other:03o}")),
+        }
+    }
+    let expected = format!(r#"OK ("file content here" "{printed_path}" t)"#);
+    if rendered != expected {
+        panic!("raw find-file-noselect: {rendered:?} != {expected:?}");
+    }
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -7796,29 +7745,23 @@ fn do_auto_save_logs_a_failed_auto_save_in_the_warnings_buffer() {
 #[test]
 fn test_find_file_noselect_nonexistent() {
     crate::test_utils::init_test_tracing();
-    use neovm_eval::emacs_core::eval::Context;
-    use neovm_value::value::{ValueKind, VecLikeType};
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 
-    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
-    let result = builtin_find_file_noselect(
-        &mut eval,
-        vec![Value::string("/tmp/neovm_nonexistent_file_xyz.txt")],
-    );
-    assert!(result.is_ok());
-    let nonexistent_buf = result.unwrap();
-    match nonexistent_buf.kind() {
-        ValueKind::Veclike(VecLikeType::Buffer) => {
-            let buf = eval
-                .edit
-                .buffers
-                .get(nonexistent_buf.as_buffer_id().unwrap())
-                .unwrap();
-            // Buffer should be empty for a nonexistent file
-            assert_eq!(buf.buffer_string(), "");
-            assert!(buf.file_name_value().is_string());
-        }
-        _other => panic!("Expected Buffer, got {:?}", nonexistent_buf),
-    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("neovm_nonexistent_file_xyz.txt");
+    let path_str = missing.to_string_lossy().to_string();
+
+    // Visiting a nonexistent file yields an empty buffer named after the
+    // file, with buffer-file-name set (the new-file flow).
+    let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    let rendered = format_eval_result(&eval.eval_str(&format!(
+        r#"(let ((buf (find-file-noselect {:?})))
+             (with-current-buffer buf
+               (list (bufferp buf) (buffer-string) (buffer-file-name))))"#,
+        path_str
+    )));
+
+    assert_eq!(rendered, format!(r#"OK (t "" {path_str:?})"#));
 }
 
 #[test]

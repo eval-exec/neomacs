@@ -590,7 +590,12 @@ impl Context {
         // are installed.
         let features_value = initial_features_value(obarray);
         obarray.seed_value("features", features_value);
-        super::boot_vars::xwidget::init_xwidget_variables(obarray);
+        // GNU defines the xwidget variables only when `--with-xwidgets`
+        // compiled `xwidget.c` (`configure.ac:4456-4497`); the reference
+        // profile does not, so `(boundp 'xwidget-list)` is nil there.
+        if cfg!(feature = "xwidgets") {
+            super::boot_vars::xwidget::init_xwidget_variables(obarray);
+        }
         obarray.set_canonical_value(
             CanonicalAccess::BOOTSTRAP,
             lexical_binding_symbol(),

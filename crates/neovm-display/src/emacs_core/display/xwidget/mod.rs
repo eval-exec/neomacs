@@ -5,10 +5,12 @@
 //! lists and builtins for that object model; native frontend/embedder state is
 //! intentionally kept out of the Lisp heap objects.
 
+#[cfg(feature = "xwidgets")]
 mod subrs;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(all(feature = "xwidgets", any(test, feature = "test-support")))]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) use subrs::SUBRS;
+#[cfg(feature = "xwidgets")]
 #[doc(hidden)]
 pub use subrs::register_subrs;
 

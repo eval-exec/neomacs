@@ -2755,6 +2755,16 @@ impl Buffer {
     }
 }
 
+/// Bytes handed to `LispString::from_emacs_bytes`, which counts their
+/// characters, while a multibyte buffer slice became a Lisp string: by
+/// `Buffer::buffer_substring_lisp_string_no_properties_range` and by the
+/// edit layer's `lisp_string_from_buffer_bytes`.  It observes those two
+/// routes only.  Process-wide, which is exact under nextest's one test per
+/// process.
+#[cfg(test)]
+pub(crate) static BUFFER_SLICE_RECOUNT_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 impl Buffer {
     // -- Construction --------------------------------------------------------
 
@@ -4380,6 +4390,8 @@ impl Buffer {
     ) -> neovm_value::heap_types::LispString {
         let bytes = self.buffer_substring_bytes_range(range);
         if self.get_multibyte() {
+            #[cfg(test)]
+            BUFFER_SLICE_RECOUNT_BYTES.fetch_add(bytes.len(), std::sync::atomic::Ordering::Relaxed);
             neovm_value::heap_types::LispString::from_emacs_bytes(bytes)
         } else {
             neovm_value::heap_types::LispString::from_unibyte(bytes)

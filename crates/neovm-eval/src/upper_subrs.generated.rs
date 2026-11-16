@@ -2788,102 +2788,127 @@ fn upper_subr_0684(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::neomacs-video-begin-measurement-epoch");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0685(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::make-xwidget");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0686(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidgetp");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0687(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-p");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0688(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-live-p");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0689(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-info");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0690(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-info");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0691(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-model");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0692(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-window");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0693(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-view-lookup");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0694(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::delete-xwidget-view");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0695(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-plist");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0696(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-xwidget-plist");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0697(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-buffer");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0698(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-xwidget-buffer");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0699(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-query-on-exit-flag");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0700(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::set-xwidget-query-on-exit-flag");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0701(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::get-buffer-xwidgets");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0702(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::kill-xwidget");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0703(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-resize");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0704(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-size-request");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0705(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-uri");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0706(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-title");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0707(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-goto-uri");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0708(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-execute-script");
 }
 
+#[cfg(feature = "xwidgets")]
 fn upper_subr_0709(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::xwidget-webkit-estimated-load-progress");
 }
@@ -3842,30 +3867,55 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("neomacs-video-destroy", 1, Some(1), upper_subr_0682),
     ("neomacs-video-diagnostics", 0, Some(1), upper_subr_0683),
     ("neomacs-video-begin-measurement-epoch", 0, Some(0), upper_subr_0684),
+    #[cfg(feature = "xwidgets")]
     ("make-xwidget", 4, Some(7), upper_subr_0685),
+    #[cfg(feature = "xwidgets")]
     ("xwidgetp", 1, Some(1), upper_subr_0686),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-view-p", 1, Some(1), upper_subr_0687),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-live-p", 1, Some(1), upper_subr_0688),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-info", 1, Some(1), upper_subr_0689),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-view-info", 1, Some(1), upper_subr_0690),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-view-model", 1, Some(1), upper_subr_0691),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-view-window", 1, Some(1), upper_subr_0692),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-view-lookup", 1, Some(2), upper_subr_0693),
+    #[cfg(feature = "xwidgets")]
     ("delete-xwidget-view", 1, Some(1), upper_subr_0694),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-plist", 1, Some(1), upper_subr_0695),
+    #[cfg(feature = "xwidgets")]
     ("set-xwidget-plist", 2, Some(2), upper_subr_0696),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-buffer", 1, Some(1), upper_subr_0697),
+    #[cfg(feature = "xwidgets")]
     ("set-xwidget-buffer", 2, Some(2), upper_subr_0698),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-query-on-exit-flag", 1, Some(1), upper_subr_0699),
+    #[cfg(feature = "xwidgets")]
     ("set-xwidget-query-on-exit-flag", 2, Some(2), upper_subr_0700),
+    #[cfg(feature = "xwidgets")]
     ("get-buffer-xwidgets", 1, Some(1), upper_subr_0701),
+    #[cfg(feature = "xwidgets")]
     ("kill-xwidget", 1, Some(1), upper_subr_0702),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-resize", 3, Some(3), upper_subr_0703),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-size-request", 1, Some(1), upper_subr_0704),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-webkit-uri", 1, Some(1), upper_subr_0705),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-webkit-title", 1, Some(1), upper_subr_0706),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-webkit-goto-uri", 2, Some(2), upper_subr_0707),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-webkit-execute-script", 2, Some(3), upper_subr_0708),
+    #[cfg(feature = "xwidgets")]
     ("xwidget-webkit-estimated-load-progress", 1, Some(1), upper_subr_0709),
     #[cfg(neomacs_have_dbus)]
     ("dbus--init-bus", 1, Some(2), upper_subr_0710),

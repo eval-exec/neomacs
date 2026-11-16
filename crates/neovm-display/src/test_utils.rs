@@ -1088,20 +1088,6 @@ mod unit_runtime {
         crate::emacs_core::terminal::pure::live_terminal_ids_in_keyboard_poll_order()
     }
 
-    fn char_property_window_lookup(
-        frames: Option<&neovm_eval::emacs_core::eval::data::window_state::FrameManager>,
-        window: neovm_edit::emacs_core::display_metrics::WindowId,
-    ) -> neovm_edit::emacs_core::textprop::WindowBufferLookup {
-        match frames {
-            Some(frames) => {
-                neovm_eval::emacs_core::eval::data::window_state::char_property_window_buffer(
-                    frames, window,
-                )
-            }
-            None => neovm_edit::emacs_core::textprop::WindowBufferLookup::NotAvailable,
-        }
-    }
-
     fn apply_mini_window_resize(
         frame: &mut neovm_eval::emacs_core::eval::data::window_state::Frame,
         resize: neovm_eval::emacs_core::eval::data::window_state::MiniWindowResize,
@@ -1238,17 +1224,18 @@ mod unit_runtime {
             s::command_unwind_minibuffer_session,
             s::command_unwind_minibuffer_buffer,
             s::command_get_char_property,
-            s::command_try_completion,
-            s::command_all_completions,
-            s::command_test_completion,
+            // The real completion seam, the same functions eval's unit table
+            // and production publish -- display's unit runtime must not go
+            // through a refusal stand-in for a path it can evaluate.
+            neovm_eval::emacs_core::eval::data::minibuffer_entry::builtin_try_completion,
+            neovm_eval::emacs_core::eval::data::minibuffer_entry::builtin_all_completions,
+            neovm_eval::emacs_core::eval::data::minibuffer_entry::builtin_test_completion,
             s::command_menu_bar_top_level_items,
             s::command_key_binding,
             s::command_where_is_internal,
         ),
         WindowTreeHooks::new(
-            char_property_window_lookup,
             crate::window::window_resize_check,
-            crate::window::window_resize_apply,
             apply_mini_window_resize,
             crate::window::resize_pixelwise_with_buffer_constraints,
             frame_parameter_entry,
@@ -1263,10 +1250,43 @@ mod unit_runtime {
         s::sqlite_reset,
     );
 
+    /// Exact empty process-table shutdown for the display unit runtime: the
+    /// same body eval's unit runtime installs. Creation is a system-layer
+    /// primitive, so a well-formed unit runtime has no live process; if one
+    /// exists the no-op would hide real teardown and refuses instead.
+    fn display_unit_process_shutdown_noop(
+        ctx: &mut Context,
+    ) -> Result<(), neovm_value::error::Flow> {
+        let live = ctx.processes().live_process_ids();
+        assert!(
+            live.is_empty(),
+            "ABSENT layer: display unit process table is not empty ({live:?}); run this test in core"
+        );
+        Ok(())
+    }
+
+    /// Production's `pending_signals` read: one load of the evaluator's
+    /// `ASYNC_ATTENTION` OsSignal bit. The display unit runtime installs no
+    /// OS-signal source, so the bit stays clear in product use; a test that
+    /// raises it controls the same word production reads.
+    fn display_unit_os_signal_pending() -> bool {
+        neovm_eval::emacs_core::eval::ASYNC_ATTENTION
+            .is_raised(neovm_eval::emacs_core::eval::AsyncSource::OsSignal)
+    }
+
+    /// The exact empty fold of production's `process_pending_signals` for a
+    /// runtime with no signal source: clear the pending flag first, then no
+    /// delivery can exist.
+    fn display_unit_drain_pending_os_signals(
+        _ctx: &mut Context,
+    ) -> Result<(), neovm_value::error::Flow> {
+        neovm_eval::emacs_core::eval::ASYNC_ATTENTION
+            .take(neovm_eval::emacs_core::eval::AsyncSource::OsSignal);
+        Ok(())
+    }
+
     static PROCESS: ProcessHooks = ProcessHooks::new(
-        s::process_unlink,
-        s::process_delete,
-        s::process_shutdown,
+        display_unit_process_shutdown_noop,
         s::process_open_channel,
         s::process_print_handle,
         s::process_wait_notifier,
@@ -1275,9 +1295,9 @@ mod unit_runtime {
 
     static INPUT: InputHooks = InputHooks::new(
         s::input_interrupt_for_input_event_if_requested,
-        s::input_os_signal_pending,
+        display_unit_os_signal_pending,
         s::input_take_termination_signal,
-        s::input_drain_pending_os_signals,
+        display_unit_drain_pending_os_signals,
         SignalWakeSource::SelfPipe {
             read_fd: s::input_signal_wake_pipe_read_fd,
             drain: s::input_drain_signal_wake_pipe,
@@ -1288,11 +1308,13 @@ mod unit_runtime {
         CallInteractivelyHooks::new(s::call_interactively_resolve);
 
     static CASE_TABLES: CaseTableHooks = CaseTableHooks::new(
-        s::case_tables_canon,
-        s::case_tables_upcase,
-        s::case_tables_sync,
-        s::case_tables_standard,
-        s::case_tables_override_for_current_buffer,
+        // The real adapter, exactly as eval's unit table installs it; the
+        // refusal stand-ins are gone (they were never a product behaviour).
+        neovm_eval::emacs_core::eval::case_table_adapter::current_case_canon_table,
+        neovm_eval::emacs_core::eval::case_table_adapter::current_case_upcase_table,
+        neovm_eval::emacs_core::eval::case_table_adapter::sync_current_buffer_case_table_state,
+        neovm_eval::emacs_core::eval::case_table_adapter::standard_case_table_for_admission,
+        neovm_eval::emacs_core::eval::case_table_adapter::case_table_override_for_current_buffer,
     );
 
     static BUFFER_KILL: BufferKillHooks = BufferKillHooks::new(s::buffer_kill_before);

@@ -1733,11 +1733,14 @@ fn judge_merge_result(
             return Ok(());
         }
     }
+    // Measure the rejected increase from the highest parent value BELOW the
+    // resolution: a parent above it (an octopus side with a judged increase)
+    // is where the merge failed to carry, not the baseline it raised from.
     let previous = values
         .iter()
         .flatten()
         .copied()
-        .filter(|parent| *parent != value)
+        .filter(|parent| *parent < value)
         .max()
         .or(values[0])
         .unwrap_or(value);
@@ -1789,8 +1792,15 @@ fn side_authorized_value(
             }
             continue;
         };
+        // A side commit that deletes the ceiling is never a silent skip: a
+        // merge may not carry a value across a deletion, and the deletion
+        // must be judged as such (the anchor rule only covers recreation
+        // relative to a parent that has no file).
         let Some(current) = ceiling_at(workspace, commit, ceiling_path)? else {
-            continue;
+            return Err(format!(
+                "B3_RATCHET side commit {commit} deletes {ceiling_path}; \
+                 a merge may not carry a value across a deletion"
+            ));
         };
         if current <= previous || current < value {
             continue;
@@ -2276,6 +2286,16 @@ impl RatchetRepo {
         );
     }
 
+    fn git_output(&self, args: &[&str]) -> String {
+        let output = self.run_git(args);
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
     fn write(&self, files: &[(&str, &str)]) {
         for (name, text) in files {
             std::fs::write(self.path().join(name), text).unwrap();
@@ -2286,6 +2306,26 @@ impl RatchetRepo {
         self.write(files);
         self.git(&["add", "-A"]);
         self.git(&["commit", "-q", "-m", subject]);
+    }
+
+    /// Create a commit with explicit parents and move `main` to it. An
+    /// octopus merge of conflicting ceiling edits cannot be produced by
+    /// `git merge`, which refuses the conflict before recording the merge.
+    fn commit_octopus(&self, subject: &str, parents: &[&str], files: &[(&str, &str)]) -> String {
+        self.write(files);
+        self.git(&["add", "-A"]);
+        let tree = self.git_output(&["write-tree"]);
+        let mut args = vec!["commit-tree".to_string(), tree];
+        for parent in parents {
+            args.push("-p".to_string());
+            args.push((*parent).to_string());
+        }
+        args.push("-m".to_string());
+        args.push(subject.to_string());
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let sha = self.git_output(&args);
+        self.git(&["update-ref", "refs/heads/main", sha.as_str()]);
+        sha
     }
 
     /// `main` holds the ceiling at 1 and `side` branches from it.
@@ -2414,6 +2454,135 @@ fn architecture_pc11_mutation_conflicting_decreases_resolve_to_increase() {
         error.contains("silent ceiling increase 3 -> 4 in the resolution of merge"),
         "{error}"
     );
+}
+
+#[test]
+fn architecture_pc11_merge_of_octopus_with_judged_side_increase_is_accepted() {
+    // Three parents: main decreased 5 -> 3, side-a carries a judged named
+    // bump 5 -> 6, side-b carries no ceiling decision. The resolution takes
+    // side-a's judged 6, so the octopus may carry it.
+    let repo = RatchetRepo::new();
+    repo.commit(
+        "init",
+        &[(RatchetRepo::CEILING, "5\n"), ("other.rs", "a\n")],
+    );
+    repo.git(&["checkout", "-q", "-b", "side-a"]);
+    repo.commit(
+        "PC11 PROMOTION-LEDGER ceiling bump: 5 -> 6 (side-a row)",
+        &[(RatchetRepo::CEILING, "6\n")],
+    );
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&["checkout", "-q", "-b", "side-b"]);
+    repo.commit("side-b work", &[("side-b.rs", "b\n")]);
+    repo.git(&["checkout", "-q", "main"]);
+    repo.commit(
+        "PC11 PROMOTION-LEDGER ceiling decrease: 5 -> 3",
+        &[(RatchetRepo::CEILING, "3\n")],
+    );
+    let main = repo.git_output(&["rev-parse", "main"]);
+    let side_a = repo.git_output(&["rev-parse", "side-a"]);
+    let side_b = repo.git_output(&["rev-parse", "side-b"]);
+    repo.commit_octopus(
+        "octopus merge of side-a and side-b",
+        &[main.as_str(), side_a.as_str(), side_b.as_str()],
+        &[(RatchetRepo::CEILING, "6\n")],
+    );
+    repo.ratchet(6).unwrap_or_else(|e| panic!("{e}"));
+}
+
+#[test]
+fn architecture_pc11_mutation_octopus_resolution_matching_unjudged_parent_is_rejected() {
+    // Same three parents, but the resolution takes side-b's inherited 5,
+    // which no judged side increase authorizes. The rejection is measured
+    // from the first parent's 3, not from side-a's higher judged 6.
+    let repo = RatchetRepo::new();
+    repo.commit(
+        "init",
+        &[(RatchetRepo::CEILING, "5\n"), ("other.rs", "a\n")],
+    );
+    repo.git(&["checkout", "-q", "-b", "side-a"]);
+    repo.commit(
+        "PC11 PROMOTION-LEDGER ceiling bump: 5 -> 6 (side-a row)",
+        &[(RatchetRepo::CEILING, "6\n")],
+    );
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&["checkout", "-q", "-b", "side-b"]);
+    repo.commit("side-b work", &[("side-b.rs", "b\n")]);
+    repo.git(&["checkout", "-q", "main"]);
+    repo.commit(
+        "PC11 PROMOTION-LEDGER ceiling decrease: 5 -> 3",
+        &[(RatchetRepo::CEILING, "3\n")],
+    );
+    let main = repo.git_output(&["rev-parse", "main"]);
+    let side_a = repo.git_output(&["rev-parse", "side-a"]);
+    let side_b = repo.git_output(&["rev-parse", "side-b"]);
+    repo.commit_octopus(
+        "octopus merge of side-a and side-b",
+        &[main.as_str(), side_a.as_str(), side_b.as_str()],
+        &[(RatchetRepo::CEILING, "5\n")],
+    );
+    let error = repo.ratchet(5).unwrap_err();
+    assert!(
+        error.contains("silent ceiling increase 3 -> 5 in the resolution of merge"),
+        "{error}"
+    );
+}
+
+#[test]
+fn architecture_pc11_side_ceiling_deletion_is_an_error_not_a_silent_skip() {
+    // A side commit that deletes the ceiling must never be skipped by the
+    // authorization walk, even when a later commit recreates it.
+    let repo = RatchetRepo::new();
+    repo.commit(
+        "init",
+        &[(RatchetRepo::CEILING, "5\n"), ("other.rs", "a\n")],
+    );
+    let main = repo.git_output(&["rev-parse", "main"]);
+    repo.git(&["checkout", "-q", "-b", "side"]);
+    repo.git(&["rm", "-q", RatchetRepo::CEILING]);
+    repo.git(&["commit", "-q", "-m", "delete the ceiling"]);
+    repo.commit(
+        "PC11 PROMOTION-LEDGER ceiling bump: 5 -> 6 (recreate)",
+        &[(RatchetRepo::CEILING, "6\n")],
+    );
+    let side = repo.git_output(&["rev-parse", "side"]);
+    let error = side_authorized_value(
+        repo.path(),
+        &main,
+        &side,
+        RatchetRepo::CEILING,
+        RowCount(6),
+        Some(RowCount(5)),
+    )
+    .unwrap_err();
+    assert!(error.contains("deletes"), "{error}");
+}
+
+#[test]
+fn architecture_pc11_mutation_side_deletion_and_recreation_is_rejected_by_the_merge_judge() {
+    let repo = RatchetRepo::new();
+    repo.commit(
+        "init",
+        &[(RatchetRepo::CEILING, "5\n"), ("other.rs", "a\n")],
+    );
+    repo.git(&["checkout", "-q", "-b", "side"]);
+    repo.git(&["rm", "-q", RatchetRepo::CEILING]);
+    repo.git(&["commit", "-q", "-m", "delete the ceiling"]);
+    repo.commit(
+        "PC11 PROMOTION-LEDGER ceiling bump: 5 -> 6 (recreate)",
+        &[(RatchetRepo::CEILING, "6\n")],
+    );
+    repo.git(&["checkout", "-q", "main"]);
+    repo.commit(
+        "PC11 PROMOTION-LEDGER ceiling decrease: 5 -> 3",
+        &[(RatchetRepo::CEILING, "3\n")],
+    );
+    repo.run_git(&["merge", "-q", "--no-ff", "--no-commit", "side"]);
+    repo.write(&[(RatchetRepo::CEILING, "6\n")]);
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "--no-edit"]);
+    let error = repo.ratchet(6).unwrap_err();
+    assert!(error.contains("deletes"), "{error}");
 }
 
 #[test]

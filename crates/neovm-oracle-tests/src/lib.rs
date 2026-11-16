@@ -302,6 +302,7 @@ mod nreverse_reverse_semantics;
 mod nthcdr;
 mod number;
 mod obarray;
+mod obarray_runtime_surface;
 mod object_intervals_semantics;
 mod oclosure;
 mod oclosure_advanced;

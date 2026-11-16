@@ -2529,13 +2529,15 @@ fn font_put_wrong_arity() {
 #[test]
 fn bounded_family_alternatives_preserve_order_and_refuse_excess_payload() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(vec![
-        Value::list(vec![Value::list(vec![
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(
+        &mut eval,
+        vec![Value::list(vec![Value::list(vec![
             Value::string("Fixture"),
             Value::string("Second"),
             Value::string("Third"),
-        ])]),
-    ])
+        ])])],
+    )
     .unwrap();
     assert_eq!(
         super::bounded_alternative_font_families("fixture", 8, 256),
