@@ -122,13 +122,17 @@ fn the_c_intern_ledger_is_ordered_and_profile_gated() {
         table::GNU_C_INTERNS.len(),
         "the generated C-intern table and the ledger disagree on the row count"
     );
-    // Both literal call spellings the generator reads must be represented.
+    // Literal call spellings the generator reads must be represented: a
+    // GTK/GUI Fprovide and a syms_of_* buffer/session name. (bidi.c's
+    // `bidi-class` is deliberately absent: its intern call sits in a runtime
+    // helper, not a syms_of_* body, so the startup ledger does not claim it.)
     assert!(
         rows.iter().any(|row| row.name == "accelerate-menu"),
         "xmenu.c's Fprovide literal is missing"
     );
     assert!(
-        rows.iter().any(|row| row.name == "bidi-class"),
-        "bidi.c's syms_of_bidi literals are missing"
+        rows.iter()
+            .any(|row| row.name == "enable-multibyte-characters"),
+        "buffer.c's syms_of_buffer literal is missing"
     );
 }
