@@ -53,7 +53,7 @@ fn fontset_name_runtime(name: &FontNameSpelling) -> String {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum FontsetLookupPurpose {
+pub(crate) enum FontsetLookupPurpose {
     /// Rendering tries the configured font and tests its native glyph coverage.
     Rendering,
     /// `fontset-font` reports patterns admitted by encoding/repertory metadata.
@@ -412,8 +412,10 @@ impl StoredFontSpecExt for StoredFontSpec {
 // upper-layer type that owns the state.
 
 /// Stage-4 W5/E13 upper extension trait over the eval-owned type.
-#[doc(hidden)]
-pub trait FontSpecEntryExt: Sized {
+///
+/// Crate-local: the only caller is this module's lookup pass, and its
+/// `purpose` parameter is a crate-private enum.
+pub(crate) trait FontSpecEntryExt: Sized {
     fn for_lookup(&self, code: u32, purpose: FontsetLookupPurpose) -> Option<Self>;
 }
 
