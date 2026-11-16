@@ -173,7 +173,15 @@ fn builtin_run(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
             .map(|arg| transfer_in(ctx, arg))
             .collect::<Result<Vec<_>, _>>()?,
     };
-    pool.ensure_started();
+    let configured_size = ctx
+        .visible_variable_value_or_nil("neomacs-worker-pool-size")
+        .as_fixnum()
+        .and_then(|size| usize::try_from(size).ok());
+    if pool.configured_threads(configured_size) == 0 {
+        pool.ensure_started_with(configured_size);
+        return Err(pool_error("Worker isolate pool is disabled"));
+    }
+    pool.ensure_started_with(configured_size);
     let handle = pool
         .runtime()
         .spawn_task(
