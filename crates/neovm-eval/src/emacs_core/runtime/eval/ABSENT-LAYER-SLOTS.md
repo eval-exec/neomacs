@@ -230,8 +230,9 @@ per F-3.
   `window_tree.char_property_window_lookup`, `window_tree.window_resize_apply`)
   together with their PLAIN-PUB and PROMOTION-LEDGER rows;
   (a2) delete the not-installed stand-ins; (a3) make every remaining (a)
-  panic message name the reaching path. The table's "reaching path" column
-  already carries the text for (a3).
+  panic message name the reaching path -- done: each marker now carries
+  " (no unit path: ...)" with the reaching function/path summarized from the
+  table's "reaching path" column.
 - The (b) group should not gain eval tests; the witnesses live, or should
   live, under `crates/neovm-core/src/emacs_core/tests/moved_eval/` with the real
   hooks installed. Before an eval test that hits a (b) slot is deleted, its

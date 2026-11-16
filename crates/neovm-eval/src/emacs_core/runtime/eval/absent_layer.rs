@@ -239,7 +239,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn dynamic_module_apply_module_function(ctx: &mut Context, function: Value, args: Vec<Value>) -> EvalResult {
-                absent_layer_panic("ABSENT-LAYER system::dynamic_module.apply_module_function");
+                absent_layer_panic("ABSENT-LAYER system::dynamic_module.apply_module_function (no unit path: a ValueKind::ModuleFunction cannot exist without the system loader (apply.rs:4070))");
             }
 
             /// ASSERT-EMPTY: only system's module-call guard writes ACTIVE_ENVS.
@@ -317,43 +317,43 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn boot_ensure_startup_compat_variables(ctx: &mut Context) {
-                absent_layer_panic("ABSENT-LAYER core::boot.ensure_startup_compat_variables");
+                absent_layer_panic("ABSENT-LAYER core::boot.ensure_startup_compat_variables (no unit path: eval load/pdump bootstrap wrapper only)");
             }
 
             pub(crate) fn boot_clear_created_lisp_face(name: &str) {
-                absent_layer_panic("ABSENT-LAYER display::boot.clear_created_lisp_face");
+                absent_layer_panic("ABSENT-LAYER display::boot.clear_created_lisp_face (no unit path: bootstrap/pdump surface normalization only)");
             }
 
             pub(crate) fn boot_remove_face_new_frame_defaults_entry(ctx: &Context, name: &str) {
-                absent_layer_panic("ABSENT-LAYER display::boot.remove_face_new_frame_defaults_entry");
+                absent_layer_panic("ABSENT-LAYER display::boot.remove_face_new_frame_defaults_entry (no unit path: bootstrap/pdump surface normalization only)");
             }
 
             pub(crate) fn boot_restore_created_faces_from_table(rows: &[String]) {
-                absent_layer_panic("ABSENT-LAYER display::boot.restore_created_faces_from_table");
+                absent_layer_panic("ABSENT-LAYER display::boot.restore_created_faces_from_table (no unit path: clear_runtime_loader_state dump restore only)");
             }
 
             pub(crate) fn boot_gui_window_system_symbol() -> &'static str {
-                absent_layer_panic("ABSENT-LAYER display::boot.gui_window_system_symbol");
+                absent_layer_panic("ABSENT-LAYER display::boot.gui_window_system_symbol (no unit path: bootstrap restore/GUI keyboard forwarding only)");
             }
 
             pub(crate) fn boot_apply_post_image_init(ctx: &mut Context) {
-                absent_layer_panic("ABSENT-LAYER system::boot.apply_post_image_init");
+                absent_layer_panic("ABSENT-LAYER system::boot.apply_post_image_init (no unit path: finalize_cached_bootstrap_eval only)");
             }
 
             pub(crate) fn boot_apply_lread_constants(ctx: &mut Context) {
-                absent_layer_panic("ABSENT-LAYER core::boot.apply_lread_constants");
+                absent_layer_panic("ABSENT-LAYER core::boot.apply_lread_constants (no unit path: clear_runtime_loader_state bootstrap/pdump only)");
             }
 
             pub(crate) fn boot_install_host_environment_snapshot(ctx: &mut Context) {
-                absent_layer_panic("ABSENT-LAYER system::boot.install_host_environment_snapshot");
+                absent_layer_panic("ABSENT-LAYER system::boot.install_host_environment_snapshot (no unit path: post-pdump/loadup bootstrap only)");
             }
 
             pub(crate) fn boot_shell_file_name_install(ctx: &mut Context) {
-                absent_layer_panic("ABSENT-LAYER core::boot.shell_file_name_install");
+                absent_layer_panic("ABSENT-LAYER core::boot.shell_file_name_install (no unit path: loadup PreloadOnly bootstrap only)");
             }
 
             pub(crate) fn boot_shell_file_name_install_dump_default(ctx: &mut Context) {
-                absent_layer_panic("ABSENT-LAYER core::boot.shell_file_name_install_dump_default");
+                absent_layer_panic("ABSENT-LAYER core::boot.shell_file_name_install_dump_default (no unit path: loadup Dump bootstrap only)");
             }
 
             pub(crate) fn boot_seed_batch_startup_frame(ctx: &mut Context) -> FrameId {
@@ -361,19 +361,19 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn boot_init_frame_lisp_faces(frame: &mut Frame) {
-                absent_layer_panic("ABSENT-LAYER display::boot.init_frame_lisp_faces");
+                absent_layer_panic("ABSENT-LAYER display::boot.init_frame_lisp_faces (no unit path: display Frame constructor only)");
             }
 
             pub(crate) fn boot_prepare_runtime_faces(ctx: &mut Context, frame: FrameId) -> bool {
-                absent_layer_panic("ABSENT-LAYER display::boot.prepare_runtime_faces");
+                absent_layer_panic("ABSENT-LAYER display::boot.prepare_runtime_faces (no unit path: sync_runtime_faces_for_frame from display/layout)");
             }
 
             pub(crate) fn boot_sync_runtime_face_table(ctx: &mut Context, frame: FrameId) {
-                absent_layer_panic("ABSENT-LAYER display::boot.sync_runtime_face_table");
+                absent_layer_panic("ABSENT-LAYER display::boot.sync_runtime_face_table (no unit path: sync_runtime_faces_for_frame from display/layout)");
             }
 
             pub(crate) fn boot_ensure_lisp_face_id_property(ctx: &mut Context, name: &str) -> Result<(), Flow> {
-                absent_layer_panic("ABSENT-LAYER display::boot.ensure_lisp_face_id_property");
+                absent_layer_panic("ABSENT-LAYER display::boot.ensure_lisp_face_id_property (no unit path: Context::set_face_attribute from GUI startup only)");
             }
 
             pub(crate) fn boot_clear_font_cache_state() {
@@ -401,7 +401,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn terminal_handle_value() -> Value {
-                absent_layer_panic("ABSENT-LAYER display::terminal.handle_value");
+                absent_layer_panic("ABSENT-LAYER display::terminal.handle_value (no unit path: GUI MonitorsChanged input events only)");
             }
 
             pub(crate) fn terminal_delete_noelisp(ctx: &mut Context, id: u64) -> EvalResult {
@@ -418,7 +418,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn terminal_configure_window_system_runtime(identity: neomacs_display_protocol::GraphicalDisplayIdentity) {
-                absent_layer_panic("ABSENT-LAYER display::terminal.configure_window_system_runtime");
+                absent_layer_panic("ABSENT-LAYER display::terminal.configure_window_system_runtime (no unit path: GUI keyboard-forwarding config only)");
             }
 
             /// The unlinked display layer has no installed terminal TLS handle to forget.
@@ -520,43 +520,43 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn command_run_redisplay_window_change_hooks(ctx: &mut Context) -> EvalResult {
-                absent_layer_panic("ABSENT-LAYER core::command.run_redisplay_window_change_hooks");
+                absent_layer_panic("ABSENT-LAYER core::command.run_redisplay_window_change_hooks (no unit path: command-loop redisplay and RedisplayHookOwnership::run)");
             }
 
             pub(crate) fn command_unwind_minibuffer_session(ctx: &mut Context, session: MinibufferSessionUnwind) -> EvalResult {
-                absent_layer_panic("ABSENT-LAYER core::command.unwind_minibuffer_session");
+                absent_layer_panic("ABSENT-LAYER core::command.unwind_minibuffer_session (no unit path: NativeUnwindAction::run from core read_minibuf)");
             }
 
             pub(crate) fn command_unwind_minibuffer_buffer(ctx: &mut Context, buffer: MinibufferBufferUnwind) -> EvalResult {
-                absent_layer_panic("ABSENT-LAYER core::command.unwind_minibuffer_buffer");
+                absent_layer_panic("ABSENT-LAYER core::command.unwind_minibuffer_buffer (no unit path: NativeUnwindAction::run from core read_minibuf)");
             }
 
             pub(crate) fn command_get_char_property(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
-                absent_layer_panic("ABSENT-LAYER core::command.get_char_property");
+                absent_layer_panic("ABSENT-LAYER core::command.get_char_property (no unit path: adjust_point_for_property from core command_loop_1)");
             }
 
             pub(crate) fn command_menu_bar_top_level_items(ctx: &Context) -> Vec<(Value, String)> {
-                absent_layer_panic("ABSENT-LAYER core::command.menu_bar_top_level_items");
+                absent_layer_panic("ABSENT-LAYER core::command.menu_bar_top_level_items (no unit path: display menu-bar navigation only)");
             }
 
             pub(crate) fn command_key_binding(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
-                absent_layer_panic("ABSENT-LAYER core::command.key_binding");
+                absent_layer_panic("ABSENT-LAYER core::command.key_binding (no unit path: display menu shortcut resolver only)");
             }
 
             pub(crate) fn command_where_is_internal(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
-                absent_layer_panic("ABSENT-LAYER core::command.where_is_internal");
+                absent_layer_panic("ABSENT-LAYER core::command.where_is_internal (no unit path: display menu shortcut resolver only)");
             }
 
             pub(crate) fn window_tree_window_resize_check(tree: &WindowTree, window: WindowId, direction: SplitDirection, size: WindowBodyCellSize) -> bool {
-                absent_layer_panic("ABSENT-LAYER display::window_tree.window_resize_check");
+                absent_layer_panic("ABSENT-LAYER display::window_tree.window_resize_check (no unit path: redisplay mini-window staging only)");
             }
 
             pub(crate) fn window_tree_apply_mini_window_resize(frame: &mut Frame, resize: MiniWindowResize) {
-                absent_layer_panic("ABSENT-LAYER display::window_tree.apply_mini_window_resize");
+                absent_layer_panic("ABSENT-LAYER display::window_tree.apply_mini_window_resize (no unit path: redisplay mini-window preparation only)");
             }
 
             pub(crate) fn window_tree_frame_resize_pixelwise(frame: &mut Frame, buffers: &BufferManager, width: u32, height: u32) {
-                absent_layer_panic("ABSENT-LAYER display::window_tree.frame_resize_pixelwise");
+                absent_layer_panic("ABSENT-LAYER display::window_tree.frame_resize_pixelwise (no unit path: native GUI resize/open-frame sync only)");
             }
 
             pub(crate) fn window_tree_frame_parameter_entry(ctx: &mut Context, frame: Value, parameter: Value) -> EvalResult {
@@ -597,7 +597,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn process_open_channel(ctx: &mut Context, process: Value) -> Result<std::ffi::c_int, Flow> {
-                absent_layer_panic("ABSENT-LAYER system::process.open_channel");
+                absent_layer_panic("ABSENT-LAYER system::process.open_channel (no unit path: system dynamic-module loader only)");
             }
 
             pub(crate) fn process_print_handle(value: &Value) -> Option<String> {
@@ -609,7 +609,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn process_terminate_and_defer_reaping(ownership: &mut ChildOwnership, signal: i32) {
-                absent_layer_panic("ABSENT-LAYER system::process.terminate_and_defer_reaping");
+                absent_layer_panic("ABSENT-LAYER system::process.terminate_and_defer_reaping (no unit path: ChildOwnership::Unreaped needs a system-spawned child)");
             }
 
             pub(crate) fn input_interrupt_for_input_event_if_requested(ctx: &mut Context, event: InputEvent) -> Result<bool, Flow> {
@@ -630,7 +630,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn input_drain_signal_wake_pipe(fd: i32) {
-                absent_layer_panic("ABSENT-LAYER system::input.drain_signal_wake_pipe");
+                absent_layer_panic("ABSENT-LAYER system::input.drain_signal_wake_pipe (no unit path: self-pipe read_fd is None, so the key cannot occur)");
             }
 
             pub(crate) fn call_interactively_resolve(ctx: &mut Context, plan: &mut CallInteractivelyPlan) -> Result<(Value, Vec<Value>), Flow> {
@@ -638,7 +638,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn buffer_kill_before(ctx: &mut Context, killed: neovm_edit::buffer::BufferId, killed_value: Value) -> Result<Option<neovm_edit::buffer::BufferId>, Flow> {
-                absent_layer_panic("ABSENT-LAYER core::buffer_kill.before");
+                absent_layer_panic("ABSENT-LAYER core::buffer_kill.before (no unit path: green_before_buffer_killed from core kill-buffer needs a parked green thread)");
             }
 
             pub(crate) fn kmacro_start(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
@@ -662,19 +662,19 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn display_query_redisplay_idle_skip() -> bool {
-                absent_layer_panic("ABSENT-LAYER display::display_query.redisplay_idle_skip");
+                absent_layer_panic("ABSENT-LAYER display::display_query.redisplay_idle_skip (no unit path: command-loop redisplay only)");
             }
 
             pub(crate) fn display_query_mode_line_flow() -> bool {
-                absent_layer_panic("ABSENT-LAYER display::display_query.mode_line_flow");
+                absent_layer_panic("ABSENT-LAYER display::display_query.mode_line_flow (no unit path: command-loop mode-line policy only)");
             }
 
             pub(crate) fn display_query_face_realization() -> bool {
-                absent_layer_panic("ABSENT-LAYER display::display_query.face_realization");
+                absent_layer_panic("ABSENT-LAYER display::display_query.face_realization (no unit path: redisplay/command-loop face policy only)");
             }
 
             pub(crate) fn display_query_frame_tty_target(frame: &Frame) -> bool {
-                absent_layer_panic("ABSENT-LAYER display::display_query.frame_tty_target");
+                absent_layer_panic("ABSENT-LAYER display::display_query.frame_tty_target (no unit path: RowsObservation TTY admission only)");
             }
 
             pub(crate) fn display_window_ensure_selected_frame_id(frames: &mut FrameManager, buffers: &mut BufferManager) -> FrameId {
@@ -686,7 +686,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn display_window_window_body_dimensions(frames: &FrameManager, buffers: &BufferManager, frame: FrameId, window: WindowId) -> Result<(i64, i64), Flow> {
-                absent_layer_panic("ABSENT-LAYER display::display_window.window_body_dimensions");
+                absent_layer_panic("ABSENT-LAYER display::display_window.window_body_dimensions (no unit path: redisplay glyph-matrix adjustment only)");
             }
 
             pub(crate) fn display_window_resize_mini_window(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
@@ -694,7 +694,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn display_window_update_auto_hscroll(ctx: &mut Context) {
-                absent_layer_panic("ABSENT-LAYER display::display_window.update_auto_hscroll");
+                absent_layer_panic("ABSENT-LAYER display::display_window.update_auto_hscroll (no unit path: redisplay/command-loop auto-hscroll only)");
             }
 
             /// ASSERT-EMPTY (peer 5719): no display dependency means no fontset
@@ -710,7 +710,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn display_window_window_regions_at(geometry: &PresentationGeometry, presentation: PresentationId, window: WindowId) -> Option<WindowRegions> {
-                absent_layer_panic("ABSENT-LAYER display::display_window.window_regions_at");
+                absent_layer_panic("ABSENT-LAYER display::display_window.window_regions_at (no unit path: GUI mouse-position descriptor only)");
             }
 
             pub(crate) fn display_window_motion_resolve(ctx: &mut Context, request: MotionRequest) -> Result<Option<MeasuredMotion>, Flow> {
@@ -738,7 +738,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn perf_record(op: PerfOp, elapsed: std::time::Duration) {
-                absent_layer_panic("ABSENT-LAYER system::perf.record");
+                absent_layer_panic("ABSENT-LAYER system::perf.record (no unit path: the unit SET has perf_enabled=false)");
             }
 
             /// HOTPATH_STATE belongs only to the unlinked system layer; no
@@ -787,19 +787,19 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn frontend_apply_xwidget_frontend_event(ctx: &mut Context, event: &FrontendWebViewEvent) -> Result<bool, Flow> {
-                absent_layer_panic("ABSENT-LAYER system::frontend.apply_xwidget_frontend_event");
+                absent_layer_panic("ABSENT-LAYER system::frontend.apply_xwidget_frontend_event (no unit path: InputEvent::WebView needs a display frontend)");
             }
 
             pub(crate) fn display_service_compositor_scrolling_enabled(ctx: &Context, window: WindowId) -> bool {
-                absent_layer_panic("ABSENT-LAYER display::display_service.compositor_scrolling_enabled");
+                absent_layer_panic("ABSENT-LAYER display::display_service.compositor_scrolling_enabled (no unit path: command-loop redisplay_signature only)");
             }
 
             pub(crate) fn display_service_permits_compositor_pixel_scroll(ctx: &Context, window: WindowId) -> bool {
-                absent_layer_panic("ABSENT-LAYER display::display_service.permits_compositor_pixel_scroll");
+                absent_layer_panic("ABSENT-LAYER display::display_service.permits_compositor_pixel_scroll (no unit path: command-loop redisplay_signature only)");
             }
 
             pub(crate) fn display_service_redisplay_buffer_layout_inputs(ctx: &Context, buffer: BufferId) -> Option<BufferLayoutInputState> {
-                absent_layer_panic("ABSENT-LAYER display::display_service.redisplay_buffer_layout_inputs");
+                absent_layer_panic("ABSENT-LAYER display::display_service.redisplay_buffer_layout_inputs (no unit path: redisplay/command-loop signature only)");
             }
 
             pub(crate) fn file_notify_expand_file_name(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
