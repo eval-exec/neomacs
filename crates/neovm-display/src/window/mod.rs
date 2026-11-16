@@ -266,7 +266,7 @@ impl<'a> WindowOutputUpdate<'a> {
         self.display.begin_window_output_update();
     }
 
-    pub fn output_cursor_to(&mut self, pos: WindowCursorPos) {
+    pub(crate) fn output_cursor_to(&mut self, pos: WindowCursorPos) {
         self.display.output_cursor_to(pos);
     }
 
@@ -285,11 +285,11 @@ impl<'a> WindowOutputUpdate<'a> {
         }
     }
 
-    pub fn install_logical_cursor(&mut self, cursor: Option<WindowCursorPos>) {
+    pub(crate) fn install_logical_cursor(&mut self, cursor: Option<WindowCursorPos>) {
         self.display.install_logical_cursor(cursor);
     }
 
-    pub fn apply_physical_cursor_snapshot(&mut self, cursor: Option<WindowCursorSnapshot>) {
+    pub(crate) fn apply_physical_cursor_snapshot(&mut self, cursor: Option<WindowCursorSnapshot>) {
         self.display.apply_physical_cursor_snapshot(cursor);
     }
 

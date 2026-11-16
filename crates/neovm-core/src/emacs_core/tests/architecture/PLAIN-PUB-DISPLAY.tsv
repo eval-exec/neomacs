@@ -402,12 +402,9 @@ crates/neovm-display/src/window/mod.rs	field	RenderFrameTree field root_id
 crates/neovm-display/src/window/mod.rs	fn	fn default_gui_tool_bar_line_height
 crates/neovm-display/src/window/mod.rs	fn	fn impl WindowEndAttempt::accept
 crates/neovm-display/src/window/mod.rs	fn	fn impl WindowLayoutAttemptFreshness::remains_valid_across
-crates/neovm-display/src/window/mod.rs	fn	fn impl WindowOutputUpdate::apply_physical_cursor_snapshot
 crates/neovm-display/src/window/mod.rs	fn	fn impl WindowOutputUpdate::begin_update
 crates/neovm-display/src/window/mod.rs	fn	fn impl WindowOutputUpdate::commit
 crates/neovm-display/src/window/mod.rs	fn	fn impl WindowOutputUpdate::finalize_live_update
-crates/neovm-display/src/window/mod.rs	fn	fn impl WindowOutputUpdate::install_logical_cursor
-crates/neovm-display/src/window/mod.rs	fn	fn impl WindowOutputUpdate::output_cursor_to
 crates/neovm-display/src/window/mod.rs	fn	fn impl WindowOutputUpdate::output_cursor_to_coords
 crates/neovm-display/src/window/mod.rs	fn	fn window_resize_apply
 crates/neovm-display/src/window/mod.rs	mod	mod display
