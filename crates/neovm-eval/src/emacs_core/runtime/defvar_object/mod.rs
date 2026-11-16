@@ -65,7 +65,7 @@ use neovm_value::value::Value;
 /// keyboard variant refuses `make-local-variable' -- so it is a variant here
 /// rather than a flag a row could omit.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum GnuObjectForward {
+pub(crate) enum GnuObjectForward {
     /// `DEFVAR_LISP` / `DEFVAR_LISP_NOPRO` -> GNU `Lisp_Fwd_Obj`.
     Global,
     /// `DEFVAR_KBOARD` -> GNU `Lisp_Fwd_Kboard_Obj`.
@@ -123,7 +123,7 @@ impl GnuObjectForward {
 /// and `src/eval.c:1071` is the body of `internal-make-var-non-special`
 /// itself, clearing the flag on whatever symbol it was handed at runtime.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum GnuSpecialness {
+pub(crate) enum GnuSpecialness {
     /// `DEFVAR_*` alone: the symbol stays special, so `let` under
     /// `lexical-binding` rebinds the global dynamically.
     Special,
@@ -150,7 +150,7 @@ pub struct GnuObjectVariable {
 /// lets [`adopt`] report counts a ledger entry can be checked against instead
 /// of a bare "done".
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Adoption {
+pub(crate) enum Adoption {
     /// The symbol became `SYMBOL_FORWARDED`; its value moved into the
     /// descriptor.
     Forwarded,
@@ -182,11 +182,11 @@ pub enum Adoption {
 
 /// Counts of every [`Adoption`] outcome over the whole table.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub struct AdoptionCounts {
+pub(crate) struct AdoptionCounts {
     pub forwarded: usize,
     pub absent: usize,
     pub unbound: usize,
-    pub already_forwarded: usize,
+    pub(crate) already_forwarded: usize,
     pub alias: usize,
     pub localized: usize,
 }
@@ -207,7 +207,7 @@ impl AdoptionCounts {
     /// Rows this pass left as plain obarray cells, i.e. the residual on which
     /// `makunbound` still answers differently from GNU for a variable this
     /// port actually has.
-    pub fn unforwarded_but_present(self) -> usize {
+    pub(crate) fn unforwarded_but_present(self) -> usize {
         self.alias + self.localized
     }
 }

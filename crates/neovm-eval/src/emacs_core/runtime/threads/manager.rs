@@ -162,7 +162,7 @@ impl ThreadManager {
         })
     }
 
-    pub fn start_thread(&mut self, native: u64) {
+    pub(crate) fn start_thread(&mut self, native: u64) {
         self.update_thread_native(native, |state| {
             *state.phase_mut() = ThreadPhase::Active(RunState::Running);
             *state.executing_mut() = false;
@@ -178,28 +178,29 @@ impl ThreadManager {
         self.update_thread_native(native, |state| *state.executing_mut() = executing);
     }
 
-    pub fn discard_unstarted_thread(&mut self, native: u64) {
+    pub(crate) fn discard_unstarted_thread(&mut self, native: u64) {
         if let Some(id) = self.ids.thread_from_native_key(native) {
             self.threads.remove(&id);
         }
     }
 
-    pub fn enter_thread(&mut self, native: u64) -> u64 {
+    pub(crate) fn enter_thread(&mut self, native: u64) -> u64 {
         std::mem::replace(&mut self.current_thread, CurrentThreadOrdinal(native)).native_key()
     }
 
-    pub fn restore_thread(&mut self, native: u64) {
+    pub(crate) fn restore_thread(&mut self, native: u64) {
         self.current_thread = CurrentThreadOrdinal(native);
     }
 
-    pub fn finish_thread(&mut self, native: u64, result: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn finish_thread(&mut self, native: u64, result: Value) {
         self.update_thread(native, |children| *children.result_mut() = result);
         self.update_thread_native(native, |state| {
             *state.phase_mut() = ThreadPhase::Completing(ThreadOutcome::Returned)
         });
     }
 
-    pub fn signal_thread(&mut self, native: u64, error: Value) {
+    pub(crate) fn signal_thread(&mut self, native: u64, error: Value) {
         if let Some(thread) = self.live_value(native) {
             self.signal_thread_for_value(thread, error);
         }
@@ -233,7 +234,7 @@ impl ThreadManager {
         }
     }
 
-    pub fn record_thread_internal_error(&mut self, native: u64, error: Value) {
+    pub(crate) fn record_thread_internal_error(&mut self, native: u64, error: Value) {
         self.update_thread(native, |children| {
             *children.last_error_mut() = Some(error);
             *children.error_symbol_mut() = Value::NIL;
@@ -244,7 +245,7 @@ impl ThreadManager {
         });
     }
 
-    pub fn pending_thread_signal(&self, native: u64) -> Option<Flow> {
+    pub(crate) fn pending_thread_signal(&self, native: u64) -> Option<Flow> {
         self.pending_thread_signal_for_value(self.live_value(native)?)
     }
 
@@ -267,16 +268,17 @@ impl ThreadManager {
             .and_then(signal_from_binding_value)
     }
 
-    pub fn take_pending_thread_signal(&mut self, native: u64) -> Option<Flow> {
+    pub(crate) fn take_pending_thread_signal(&mut self, native: u64) -> Option<Flow> {
         let (symbol, data) = self.take_thread_error(native)?;
         Some(signal_with_data_id(symbol.as_bare_symbol_id()?, data))
     }
 
-    pub fn record_last_error(&mut self, error: Value) {
+    pub(crate) fn record_last_error(&mut self, error: Value) {
         self.last_error = Some(error);
     }
 
-    pub fn thread_alive_p(&self, native: u64) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn thread_alive_p(&self, native: u64) -> bool {
         self.get_thread(native).is_some_and(thread_is_live)
     }
 
@@ -323,7 +325,8 @@ impl ThreadManager {
             .map(|thread| thread.children().function())
     }
 
-    pub fn thread_name(&self, native: u64) -> Option<ThreadName> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn thread_name(&self, native: u64) -> Option<ThreadName> {
         self.get_thread(native)
             .map(|thread| ThreadName(thread.children().name()))
     }
@@ -334,7 +337,7 @@ impl ThreadManager {
             .map(|thread| ThreadName(thread.children().name()))
     }
 
-    pub fn is_thread(&self, native: u64) -> bool {
+    pub(crate) fn is_thread(&self, native: u64) -> bool {
         self.live_value(native).is_some()
     }
     pub fn thread_handle(&self, native: u64) -> Option<Value> {
@@ -353,7 +356,7 @@ impl ThreadManager {
             .collect()
     }
 
-    pub fn thread_result(&self, native: u64) -> Value {
+    pub(crate) fn thread_result(&self, native: u64) -> Value {
         self.get_thread(native)
             .map_or(Value::NIL, |thread| thread.children().result())
     }
@@ -364,7 +367,7 @@ impl ThreadManager {
             .map_or(Value::NIL, |thread| thread.children().result())
     }
 
-    pub fn join_thread(&mut self, native: u64) -> Option<Value> {
+    pub(crate) fn join_thread(&mut self, native: u64) -> Option<Value> {
         self.join_thread_for_value(self.live_value(native)?)
     }
 
@@ -380,7 +383,7 @@ impl ThreadManager {
         error
     }
 
-    pub fn block_thread(&mut self, native: u64, blocker: Value, remaining: Value) {
+    pub(crate) fn block_thread(&mut self, native: u64, blocker: Value, remaining: Value) {
         self.update_thread(native, |children| {
             *children.event_object_mut() = blocker;
             *children.blocked_remaining_forms_mut() = remaining;
@@ -445,7 +448,7 @@ impl ThreadManager {
     /// `lisp_mutex_unlock_for_wait` (:276-288) use it, and a waiting
     /// thread's `event_object` keeps rooting the wait object until the
     /// waiter itself clears it (:346, :455, :465).
-    pub fn wake_threads_blocked_on(&mut self, blocker: Value) {
+    pub(crate) fn wake_threads_blocked_on(&mut self, blocker: Value) {
         let ids = self.all_native_registrations();
         for id in ids {
             if id != 0 && self.is_waiting_on(id, &blocker) {
@@ -507,7 +510,7 @@ impl ThreadManager {
         self.clear_main_wait_object()
     }
 
-    pub fn thread_ready_to_resume(&self, native: u64) -> bool {
+    pub(crate) fn thread_ready_to_resume(&self, native: u64) -> bool {
         self.get_thread(native).is_some_and(|thread| {
             thread.native().phase() == ThreadPhase::Active(RunState::Blocked)
                 && (thread.native().woken()
@@ -516,7 +519,7 @@ impl ThreadManager {
         })
     }
 
-    pub fn blocked_sleep_duration(&self, native: u64) -> Option<Duration> {
+    pub(crate) fn blocked_sleep_duration(&self, native: u64) -> Option<Duration> {
         let thread = self.get_thread(native)?;
         if thread.native().phase() != ThreadPhase::Active(RunState::Blocked) {
             return None;
@@ -529,7 +532,7 @@ impl ThreadManager {
         }
     }
 
-    pub fn wake_thread(&mut self, native: u64) {
+    pub(crate) fn wake_thread(&mut self, native: u64) {
         if self
             .get_thread(native)
             .is_some_and(|thread| thread.native().phase() == ThreadPhase::Active(RunState::Blocked))
@@ -538,7 +541,7 @@ impl ThreadManager {
         }
     }
 
-    pub fn take_blocked_remaining_forms(&mut self, native: u64) -> Option<Value> {
+    pub(crate) fn take_blocked_remaining_forms(&mut self, native: u64) -> Option<Value> {
         if !self.thread_ready_to_resume(native) {
             return None;
         }
@@ -551,7 +554,7 @@ impl ThreadManager {
         Some(remaining)
     }
 
-    pub fn blocked_remaining_forms_if_ready(&self, native: u64) -> Option<Value> {
+    pub(crate) fn blocked_remaining_forms_if_ready(&self, native: u64) -> Option<Value> {
         if !self.thread_ready_to_resume(native) {
             return None;
         }
@@ -567,7 +570,7 @@ impl ThreadManager {
         value
     }
 
-    pub fn thread_buffer_disposition(&self, native: u64) -> Option<Value> {
+    pub(crate) fn thread_buffer_disposition(&self, native: u64) -> Option<Value> {
         self.get_thread(native)
             .map(|t| t.children().buffer_disposition())
     }
@@ -576,7 +579,7 @@ impl ThreadManager {
         self.thread_payload(value)
             .map(|t| t.children().buffer_disposition())
     }
-    pub fn set_thread_buffer_disposition(&mut self, native: u64, value: Value) -> bool {
+    pub(crate) fn set_thread_buffer_disposition(&mut self, native: u64, value: Value) -> bool {
         self.update_thread(native, |t| *t.buffer_disposition_mut() = value)
             .is_some()
     }
@@ -585,7 +588,8 @@ impl ThreadManager {
         self.update_thread_value(thread, |t| *t.buffer_disposition_mut() = value)
             .is_some()
     }
-    pub fn thread_current_buffer(&self, native: u64) -> Option<neovm_edit::buffer::BufferId> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn thread_current_buffer(&self, native: u64) -> Option<neovm_edit::buffer::BufferId> {
         self.get_thread(native)
             .and_then(|t| t.native().current_buffer())
     }
@@ -598,7 +602,7 @@ impl ThreadManager {
         self.thread_payload(thread)
             .and_then(|t| t.native().current_buffer())
     }
-    pub fn set_thread_current_buffer(
+    pub(crate) fn set_thread_current_buffer(
         &mut self,
         native: u64,
         buffer: Option<neovm_edit::buffer::BufferId>,
@@ -612,7 +616,8 @@ impl ThreadManager {
         self.update_thread_native(native, |state| *state.current_buffer_mut() = buffer)
             .is_some()
     }
-    pub fn thread_blocker(&self, native: u64) -> Option<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn thread_blocker(&self, native: u64) -> Option<Value> {
         self.get_thread(native).map(|t| t.children().event_object())
     }
     #[doc(hidden)]
@@ -620,15 +625,16 @@ impl ThreadManager {
         self.thread_payload(value)
             .map(|t| t.children().event_object())
     }
-    pub fn set_thread_blocker(&mut self, native: u64, blocker: Value) -> bool {
+    pub(crate) fn set_thread_blocker(&mut self, native: u64, blocker: Value) -> bool {
         self.update_thread(native, |t| *t.event_object_mut() = blocker)
             .is_some()
     }
-    pub fn clear_thread_blocker(&mut self, native: u64) -> bool {
+    pub(crate) fn clear_thread_blocker(&mut self, native: u64) -> bool {
         self.set_thread_blocker(native, Value::NIL)
     }
 
-    pub fn mark_thread_exited(&mut self, native: u64) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn mark_thread_exited(&mut self, native: u64) {
         self.update_thread_native(native, |state| {
             let outcome = match state.phase() {
                 ThreadPhase::New | ThreadPhase::Active(_) => ThreadOutcome::Returned,
@@ -638,7 +644,7 @@ impl ThreadManager {
         });
     }
 
-    pub fn set_thread_error(&mut self, native: u64, symbol: Value, data: Value) {
+    pub(crate) fn set_thread_error(&mut self, native: u64, symbol: Value, data: Value) {
         if let Some(thread) = self.live_value(native) {
             self.set_thread_error_for_value(thread, symbol, data);
         }
@@ -654,7 +660,7 @@ impl ThreadManager {
         });
     }
 
-    pub fn take_thread_error(&mut self, native: u64) -> Option<(Value, Value)> {
+    pub(crate) fn take_thread_error(&mut self, native: u64) -> Option<(Value, Value)> {
         self.update_thread(native, |thread| {
             if thread.error_symbol().is_nil() {
                 return None;
@@ -666,7 +672,7 @@ impl ThreadManager {
         })?
     }
 
-    pub fn restore_thread_error(&mut self, native: u64, symbol: Value, data: Value) {
+    pub(crate) fn restore_thread_error(&mut self, native: u64, symbol: Value, data: Value) {
         self.update_thread(native, |thread| {
             if thread.error_symbol().is_nil() {
                 *thread.error_symbol_mut() = symbol;
@@ -680,7 +686,7 @@ impl ThreadManager {
         self.threads.keys().map(|id| id.native_key()).collect()
     }
 
-    pub fn buffer_held_by_other_thread(&self, buffer: neovm_edit::buffer::BufferId) -> bool {
+    pub(crate) fn buffer_held_by_other_thread(&self, buffer: neovm_edit::buffer::BufferId) -> bool {
         self.threads.iter().any(|(id, value)| {
             self.thread_payload(*value).is_some_and(|thread| {
                 id.native_key() != self.current_thread.native_key()
@@ -691,7 +697,7 @@ impl ThreadManager {
         })
     }
 
-    pub fn buffer_current_in_other_thread(&self, buffer: neovm_edit::buffer::BufferId) -> bool {
+    pub(crate) fn buffer_current_in_other_thread(&self, buffer: neovm_edit::buffer::BufferId) -> bool {
         self.threads.iter().any(|(id, value)| {
             self.thread_payload(*value).is_some_and(|thread| {
                 id.native_key() != self.current_thread.native_key()
@@ -701,7 +707,7 @@ impl ThreadManager {
         })
     }
 
-    pub fn move_threads_off_killed_buffer(
+    pub(crate) fn move_threads_off_killed_buffer(
         &mut self,
         buffer: neovm_edit::buffer::BufferId,
         other: neovm_edit::buffer::BufferId,

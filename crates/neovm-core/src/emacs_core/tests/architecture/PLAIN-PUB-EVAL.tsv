@@ -421,7 +421,6 @@ crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use Vm
 crates/neovm-eval/src/emacs_core/runtime/bytecode/opcode.rs	use	use Op
 crates/neovm-eval/src/emacs_core/runtime/bytecode/value_api.rs	trait	trait TaggedValueBytecodeExt
 crates/neovm-eval/src/emacs_core/runtime/bytecode/vm.rs	struct	struct Vm
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	enum	enum DebugAction
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	BacktraceFrame field args
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	BacktraceFrame field file
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	BacktraceFrame field function
@@ -430,12 +429,9 @@ crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	BacktraceFrame field
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	Breakpoint field condition
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	Breakpoint field enabled
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	Breakpoint field function
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	Breakpoint field hit_count
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	Breakpoint field id
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	DebugState field active
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	DebugState field breakpoints
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	DebugState field current_backtrace
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	DebugState field debug_on_entry
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	field	DebugState field stepping
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl Backtrace::clear
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl Backtrace::depth
@@ -444,62 +440,19 @@ crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl Backtrace::fram
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl Backtrace::new
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl Backtrace::pop
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl Backtrace::push
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl Backtrace::with_max_depth
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::add_breakpoint
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::add_breakpoint_symbol
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::add_conditional_breakpoint
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::add_conditional_breakpoint_symbol
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::add_debug_on_entry
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::add_debug_on_entry_symbol
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::list_breakpoints
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::new
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::record_breakpoint_hit
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::record_breakpoint_hit_symbol
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::remove_breakpoint
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::remove_debug_on_entry
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::remove_debug_on_entry_symbol
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::should_debug_on_entry
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::should_debug_on_entry_symbol
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DebugState::toggle_breakpoint
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::all_documented_functions
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::all_documented_variables
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::apropos
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::get_function_doc
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::get_function_doc_symbol
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::get_variable_doc
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::get_variable_doc_symbol
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::new
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::remove_function_doc
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::remove_variable_doc
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::set_function_doc
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::set_function_doc_symbol
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::set_variable_doc
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl DocStore::set_variable_doc_symbol
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl HelpFormatter::describe_function
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl HelpFormatter::describe_key
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl HelpFormatter::describe_variable
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	fn	fn impl HelpFormatter::format_apropos
 crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	struct	struct Backtrace
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	struct	struct BacktraceFrame
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	struct	struct Breakpoint
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	struct	struct DebugState
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	struct	struct DocStore
-crates/neovm-eval/src/emacs_core/runtime/debug/mod.rs	struct	struct HelpFormatter
 crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	field	GnuBoolVariable field byte_boolean_vars
 crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	field	GnuBoolVariable field initial
-crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	field	GnuBoolVariable field main_value
 crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	field	GnuBoolVariable field name
-crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	fn	fn apply_post_main_batch_defaults
 crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	fn	fn register_bootstrap_vars
 crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	static	static GNU_BOOL_VARIABLES
 crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	struct	struct GnuBoolVariable
 crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	use	use ByteBooleanVars
-crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	enum	enum Adoption
-crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	enum	enum GnuObjectForward
-crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	enum	enum GnuSpecialness
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	field	AdoptionCounts field absent
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	field	AdoptionCounts field alias
-crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	field	AdoptionCounts field already_forwarded
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	field	AdoptionCounts field forwarded
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	field	AdoptionCounts field localized
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	field	AdoptionCounts field unbound
@@ -507,8 +460,6 @@ crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	field	GnuObjectVar
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	field	GnuObjectVariable field name
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	field	GnuObjectVariable field special
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	fn	fn adopt
-crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	fn	fn impl AdoptionCounts::unforwarded_but_present
-crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	struct	struct AdoptionCounts
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	struct	struct GnuObjectVariable
 crates/neovm-eval/src/emacs_core/runtime/eval/auto_save_hooks.rs	fn	fn impl AutoSaveHooks::new
 crates/neovm-eval/src/emacs_core/runtime/eval/auto_save_hooks.rs	struct	struct AutoSaveHooks
@@ -3784,47 +3735,11 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpSymbol
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	struct	struct DumpVecLikeSpan
 crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::all_thread_ids
 crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::any_thread_created
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::block_thread
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::blocked_remaining_forms_if_ready
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::blocked_sleep_duration
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::buffer_current_in_other_thread
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::buffer_held_by_other_thread
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::clear_thread_blocker
 crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::current_thread_id
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::discard_unstarted_thread
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::enter_thread
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::finish_thread
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::is_thread
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::join_thread
 crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::last_error
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::mark_thread_exited
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::move_threads_off_killed_buffer
 crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::new
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::pending_thread_signal
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::record_last_error
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::record_thread_internal_error
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::restore_thread
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::restore_thread_error
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::set_thread_blocker
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::set_thread_buffer_disposition
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::set_thread_current_buffer
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::set_thread_error
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::signal_thread
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::start_thread
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::take_blocked_remaining_forms
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::take_pending_thread_signal
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::take_thread_error
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::thread_alive_p
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::thread_blocker
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::thread_buffer_disposition
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::thread_current_buffer
 crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::thread_handle
 crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::thread_id_from_handle
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::thread_name
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::thread_ready_to_resume
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::thread_result
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::wake_thread
-crates/neovm-eval/src/emacs_core/runtime/threads/manager.rs	fn	fn impl ThreadManager::wake_threads_blocked_on
 crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs	const	const impl ThreadName::UNNAMED
 crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs	field	InFlightThreadEvent field data
 crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs	field	InFlightThreadEvent field error_symbol
@@ -3833,31 +3748,18 @@ crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs	fn	fn impl InFlightThrea
 crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs	fn	fn impl ThreadName::from_lisp
 crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs	fn	fn impl ThreadName::is_unnamed
 crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs	fn	fn impl ThreadName::stored
-crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs	struct	struct InFlightThreadEvent
 crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs	struct	struct ThreadManager
 crates/neovm-eval/src/emacs_core/runtime/threads/mod.rs	struct	struct ThreadName
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	enum	enum ReadErrorKind
 crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	field	ReadError field kind
 crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	field	ReadError field message
 crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	field	ReadError field position
 crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	field	ReadError field signal_data
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	field	ReadError field signal_symbol
 crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn impl LispReadSource::is_multibyte
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn impl LispReadSource::logical_len
 crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn impl LispReadSource::new
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn impl LispReadSource::read_one
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn impl LispReadSource::read_one_range
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn impl LispReadSource::read_one_with_locate_syms
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn impl LispReadSource::read_one_with_locate_syms_with_symbols
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn impl LispReadSource::storage_slice_range
 crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn read_all
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn read_all_lisp_source
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn read_all_with_source_multibyte
 crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn read_one
 crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn read_one_with_locate_syms
 crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn read_one_with_locate_syms_with_symbols
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	fn	fn read_one_with_source_multibyte
-crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	struct	struct LispReadSource
 crates/neovm-eval/src/emacs_core/runtime/value_reader/mod.rs	struct	struct ReadError
 crates/neovm-eval/src/host_cfg.rs	const	const impl HostCfgClass::ALL
 crates/neovm-eval/src/host_cfg.rs	enum	enum HostCfgClass

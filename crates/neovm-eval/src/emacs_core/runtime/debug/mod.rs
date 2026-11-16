@@ -28,7 +28,7 @@ use neovm_value::value::{Value, ValueKind, VecLikeType};
 
 /// A single stack frame in a backtrace.
 #[derive(Clone, Debug)]
-pub struct BacktraceFrame {
+pub(crate) struct BacktraceFrame {
     /// Lisp function object for this frame, matching GNU backtrace entries.
     pub function: Value,
     /// Arguments passed to the function.
@@ -64,7 +64,7 @@ impl Backtrace {
     }
 
     /// Create a backtrace with a custom max depth.
-    pub fn with_max_depth(max_depth: usize) -> Self {
+    pub(crate) fn with_max_depth(max_depth: usize) -> Self {
         Self {
             frames: Vec::new(),
             max_depth,
@@ -149,7 +149,7 @@ impl Backtrace {
 
 /// What the debugger should do when triggered.
 #[derive(Clone, Debug)]
-pub enum DebugAction {
+pub(crate) enum DebugAction {
     /// Continue execution normally.
     Continue,
     /// Step into the next form.
@@ -170,7 +170,7 @@ pub enum DebugAction {
 
 /// A breakpoint set on a function.
 #[derive(Clone, Debug)]
-pub struct Breakpoint {
+pub(crate) struct Breakpoint {
     /// Unique identifier.
     pub id: usize,
     /// The function this breakpoint is set on.
@@ -180,7 +180,7 @@ pub struct Breakpoint {
     /// Optional condition expression (source string).
     pub condition: Option<LispString>,
     /// Number of times this breakpoint has been hit.
-    pub hit_count: usize,
+    pub(crate) hit_count: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -188,15 +188,15 @@ pub struct Breakpoint {
 // ---------------------------------------------------------------------------
 
 /// Central debug/introspection state for the evaluator.
-pub struct DebugState {
+pub(crate) struct DebugState {
     /// Whether the debugger is currently active (stopped at a breakpoint/error).
     pub active: bool,
     /// Set of function names that should trigger the debugger on entry.
-    pub debug_on_entry: HashSet<SymId>,
+    pub(crate) debug_on_entry: HashSet<SymId>,
     /// Whether we are in single-step mode.
     pub stepping: bool,
     /// The current backtrace (populated during evaluation).
-    pub current_backtrace: Backtrace,
+    pub(crate) current_backtrace: Backtrace,
     /// All breakpoints.
     pub breakpoints: Vec<Breakpoint>,
     /// Next breakpoint id.
@@ -232,11 +232,11 @@ impl DebugState {
     }
 
     /// Check whether the debugger should be entered when `function` is called.
-    pub fn should_debug_on_entry(&self, function: &str) -> bool {
+    pub(crate) fn should_debug_on_entry(&self, function: &str) -> bool {
         lookup_interned(function).is_some_and(|symbol| self.should_debug_on_entry_symbol(symbol))
     }
 
-    pub fn should_debug_on_entry_symbol(&self, function: SymId) -> bool {
+    pub(crate) fn should_debug_on_entry_symbol(&self, function: SymId) -> bool {
         if self.debug_on_entry.contains(&function) {
             return true;
         }
@@ -246,31 +246,31 @@ impl DebugState {
     }
 
     /// Mark a function for debug-on-entry.
-    pub fn add_debug_on_entry(&mut self, function: &str) {
+    pub(crate) fn add_debug_on_entry(&mut self, function: &str) {
         self.add_debug_on_entry_symbol(intern(function));
     }
 
-    pub fn add_debug_on_entry_symbol(&mut self, function: SymId) {
+    pub(crate) fn add_debug_on_entry_symbol(&mut self, function: SymId) {
         self.debug_on_entry.insert(function);
     }
 
     /// Remove a function from debug-on-entry.
-    pub fn remove_debug_on_entry(&mut self, function: &str) {
+    pub(crate) fn remove_debug_on_entry(&mut self, function: &str) {
         if let Some(symbol) = lookup_interned(function) {
             self.remove_debug_on_entry_symbol(symbol);
         }
     }
 
-    pub fn remove_debug_on_entry_symbol(&mut self, function: SymId) {
+    pub(crate) fn remove_debug_on_entry_symbol(&mut self, function: SymId) {
         self.debug_on_entry.remove(&function);
     }
 
     /// Add a breakpoint on a function.  Returns the breakpoint id.
-    pub fn add_breakpoint(&mut self, function: &str) -> usize {
+    pub(crate) fn add_breakpoint(&mut self, function: &str) -> usize {
         self.add_breakpoint_symbol(intern(function))
     }
 
-    pub fn add_breakpoint_symbol(&mut self, function: SymId) -> usize {
+    pub(crate) fn add_breakpoint_symbol(&mut self, function: SymId) -> usize {
         let id = self.next_bp_id;
         self.next_bp_id += 1;
         self.breakpoints.push(Breakpoint {
@@ -284,11 +284,11 @@ impl DebugState {
     }
 
     /// Add a breakpoint with a condition expression.  Returns the breakpoint id.
-    pub fn add_conditional_breakpoint(&mut self, function: &str, condition: &str) -> usize {
+    pub(crate) fn add_conditional_breakpoint(&mut self, function: &str, condition: &str) -> usize {
         self.add_conditional_breakpoint_symbol(intern(function), condition)
     }
 
-    pub fn add_conditional_breakpoint_symbol(&mut self, function: SymId, condition: &str) -> usize {
+    pub(crate) fn add_conditional_breakpoint_symbol(&mut self, function: SymId, condition: &str) -> usize {
         let id = self.next_bp_id;
         self.next_bp_id += 1;
         self.breakpoints.push(Breakpoint {
@@ -302,14 +302,14 @@ impl DebugState {
     }
 
     /// Remove a breakpoint by id.  Returns true if found and removed.
-    pub fn remove_breakpoint(&mut self, id: usize) -> bool {
+    pub(crate) fn remove_breakpoint(&mut self, id: usize) -> bool {
         let before = self.breakpoints.len();
         self.breakpoints.retain(|bp| bp.id != id);
         self.breakpoints.len() < before
     }
 
     /// Toggle a breakpoint's enabled state.  Returns true if the breakpoint was found.
-    pub fn toggle_breakpoint(&mut self, id: usize) -> bool {
+    pub(crate) fn toggle_breakpoint(&mut self, id: usize) -> bool {
         for bp in &mut self.breakpoints {
             if bp.id == id {
                 bp.enabled = !bp.enabled;
@@ -320,13 +320,13 @@ impl DebugState {
     }
 
     /// Record a breakpoint hit (increment hit_count).
-    pub fn record_breakpoint_hit(&mut self, function: &str) {
+    pub(crate) fn record_breakpoint_hit(&mut self, function: &str) {
         if let Some(symbol) = lookup_interned(function) {
             self.record_breakpoint_hit_symbol(symbol);
         }
     }
 
-    pub fn record_breakpoint_hit_symbol(&mut self, function: SymId) {
+    pub(crate) fn record_breakpoint_hit_symbol(&mut self, function: SymId) {
         for bp in &mut self.breakpoints {
             if bp.enabled && bp.function == function {
                 bp.hit_count += 1;
@@ -335,7 +335,7 @@ impl DebugState {
     }
 
     /// List all breakpoints.
-    pub fn list_breakpoints(&self) -> &[Breakpoint] {
+    pub(crate) fn list_breakpoints(&self) -> &[Breakpoint] {
         &self.breakpoints
     }
 }
@@ -345,7 +345,7 @@ impl DebugState {
 // ---------------------------------------------------------------------------
 
 /// Storage for documentation strings (function and variable docs).
-pub struct DocStore {
+pub(crate) struct DocStore {
     function_docs: HashMap<SymId, LispString>,
     variable_docs: HashMap<SymId, LispString>,
 }
@@ -366,42 +366,42 @@ impl DocStore {
     }
 
     /// Set the documentation string for a function.
-    pub fn set_function_doc(&mut self, name: &str, doc: &str) {
+    pub(crate) fn set_function_doc(&mut self, name: &str, doc: &str) {
         self.set_function_doc_symbol(intern(name), plain_str_to_lisp_string(doc, true));
     }
 
-    pub fn set_function_doc_symbol(&mut self, name: SymId, doc: LispString) {
+    pub(crate) fn set_function_doc_symbol(&mut self, name: SymId, doc: LispString) {
         self.function_docs.insert(name, doc);
     }
 
     /// Set the documentation string for a variable.
-    pub fn set_variable_doc(&mut self, name: &str, doc: &str) {
+    pub(crate) fn set_variable_doc(&mut self, name: &str, doc: &str) {
         self.set_variable_doc_symbol(intern(name), plain_str_to_lisp_string(doc, true));
     }
 
-    pub fn set_variable_doc_symbol(&mut self, name: SymId, doc: LispString) {
+    pub(crate) fn set_variable_doc_symbol(&mut self, name: SymId, doc: LispString) {
         self.variable_docs.insert(name, doc);
     }
 
     /// Get the documentation string for a function.
-    pub fn get_function_doc(&self, name: &str) -> Option<String> {
+    pub(crate) fn get_function_doc(&self, name: &str) -> Option<String> {
         let symbol = lookup_interned(name)?;
         self.get_function_doc_symbol(symbol)
     }
 
-    pub fn get_function_doc_symbol(&self, name: SymId) -> Option<String> {
+    pub(crate) fn get_function_doc_symbol(&self, name: SymId) -> Option<String> {
         self.function_docs
             .get(&name)
             .map(|s| neovm_value::emacs_char::to_utf8_lossy(s.as_bytes()))
     }
 
     /// Get the documentation string for a variable.
-    pub fn get_variable_doc(&self, name: &str) -> Option<String> {
+    pub(crate) fn get_variable_doc(&self, name: &str) -> Option<String> {
         let symbol = lookup_interned(name)?;
         self.get_variable_doc_symbol(symbol)
     }
 
-    pub fn get_variable_doc_symbol(&self, name: SymId) -> Option<String> {
+    pub(crate) fn get_variable_doc_symbol(&self, name: SymId) -> Option<String> {
         self.variable_docs
             .get(&name)
             .map(|s| neovm_value::emacs_char::to_utf8_lossy(s.as_bytes()))
@@ -437,7 +437,7 @@ impl DocStore {
     }
 
     /// Return all function names that have documentation, sorted.
-    pub fn all_documented_functions(&self) -> Vec<String> {
+    pub(crate) fn all_documented_functions(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .function_docs
             .keys()
@@ -448,7 +448,7 @@ impl DocStore {
     }
 
     /// Return all variable names that have documentation, sorted.
-    pub fn all_documented_variables(&self) -> Vec<String> {
+    pub(crate) fn all_documented_variables(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .variable_docs
             .keys()
@@ -459,12 +459,12 @@ impl DocStore {
     }
 
     /// Remove documentation for a function.
-    pub fn remove_function_doc(&mut self, name: &str) -> bool {
+    pub(crate) fn remove_function_doc(&mut self, name: &str) -> bool {
         lookup_interned(name).is_some_and(|symbol| self.function_docs.remove(&symbol).is_some())
     }
 
     /// Remove documentation for a variable.
-    pub fn remove_variable_doc(&mut self, name: &str) -> bool {
+    pub(crate) fn remove_variable_doc(&mut self, name: &str) -> bool {
         lookup_interned(name).is_some_and(|symbol| self.variable_docs.remove(&symbol).is_some())
     }
 }
@@ -474,11 +474,11 @@ impl DocStore {
 // ---------------------------------------------------------------------------
 
 /// Formats help buffer content (describe-function, describe-variable, etc.).
-pub struct HelpFormatter;
+pub(crate) struct HelpFormatter;
 
 impl HelpFormatter {
     /// Format a `describe-function` help string.
-    pub fn describe_function(name: &str, value: &Value, doc: Option<&str>) -> String {
+    pub(crate) fn describe_function(name: &str, value: &Value, doc: Option<&str>) -> String {
         let mut out = String::new();
 
         let kind = match value.kind() {
@@ -572,7 +572,7 @@ impl HelpFormatter {
     }
 
     /// Format a `describe-variable` help string.
-    pub fn describe_variable(name: &str, value: &Value, doc: Option<&str>) -> String {
+    pub(crate) fn describe_variable(name: &str, value: &Value, doc: Option<&str>) -> String {
         let mut out = String::new();
 
         let printed = print_value(value);
@@ -592,7 +592,7 @@ impl HelpFormatter {
     }
 
     /// Format a `describe-key` help string.
-    pub fn describe_key(key: &str, binding: &str, doc: Option<&str>) -> String {
+    pub(crate) fn describe_key(key: &str, binding: &str, doc: Option<&str>) -> String {
         let mut out = String::new();
 
         out.push_str(&format!("{} runs the command {}\n", key, binding));
@@ -609,7 +609,7 @@ impl HelpFormatter {
     }
 
     /// Format an apropos result listing.
-    pub fn format_apropos(entries: &[(String, bool, bool)]) -> String {
+    pub(crate) fn format_apropos(entries: &[(String, bool, bool)]) -> String {
         if entries.is_empty() {
             return "No matches.\n".to_string();
         }

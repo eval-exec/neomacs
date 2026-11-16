@@ -76,7 +76,8 @@ pub fn read_all(
 
 /// Read all top-level forms from `input`, preserving the source string's
 /// multibyte/unibyte distinction where it affects reader results.
-pub fn read_all_with_source_multibyte(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn read_all_with_source_multibyte(
     input: &str,
     source_multibyte: bool,
     vars: crate::emacs_core::eval::VariableView<'_>,
@@ -98,7 +99,8 @@ pub fn read_all_with_source_multibyte(
 /// `.el` load loop uses), so non-Unicode source character literals keep their
 /// real codes instead of round-tripping through the in-Unicode storage-string
 /// form (issue #131).
-pub fn read_all_lisp_source(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn read_all_lisp_source(
     input: &neovm_value::heap_types::LispString,
     vars: crate::emacs_core::eval::VariableView<'_>,
 ) -> Result<Vec<Value>, ReadError> {
@@ -119,7 +121,8 @@ pub fn read_all_lisp_source(
 /// Read a single form from `input` starting at byte offset `start`.
 /// Returns `None` if there is nothing to read (only whitespace/comments remain).
 /// On success returns `(value, end_position)`.
-pub fn read_one(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn read_one(
     input: &str,
     start: usize,
     vars: crate::emacs_core::eval::VariableView<'_>,
@@ -129,7 +132,8 @@ pub fn read_one(
 
 /// Read a single form from `input`, preserving whether the original source was
 /// multibyte or unibyte.
-pub fn read_one_with_source_multibyte(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn read_one_with_source_multibyte(
     input: &str,
     source_multibyte: bool,
     start: usize,
@@ -174,7 +178,7 @@ pub(crate) fn read_one_from_encoded_file_bytes<'a>(
 /// Read a single form from `input`, optionally wrapping interned symbols in
 /// `symbol-with-pos` objects that record GNU's character offset from the start
 /// of this read.  Used by `read-positioning-symbols`.
-pub fn read_one_with_locate_syms(
+pub(crate) fn read_one_with_locate_syms(
     input: &str,
     source_multibyte: bool,
     start: usize,
@@ -191,7 +195,7 @@ pub fn read_one_with_locate_syms(
     )
 }
 
-pub fn read_one_with_locate_syms_with_symbols(
+pub(crate) fn read_one_with_locate_syms_with_symbols(
     input: &str,
     source_multibyte: bool,
     start: usize,
@@ -267,7 +271,8 @@ pub enum BufferReadcharOffsetOrigin {
 ///
 /// This keeps the runtime-storage adapter inside the reader boundary so callers
 /// can work in logical Emacs-byte offsets instead of storage-string byte math.
-pub struct LispReadSource<'a> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct LispReadSource<'a> {
     input: &'a neovm_value::heap_types::LispString,
 }
 
@@ -280,11 +285,11 @@ impl<'a> LispReadSource<'a> {
         self.input.is_multibyte()
     }
 
-    pub fn logical_len(&self) -> usize {
+    pub(crate) fn logical_len(&self) -> usize {
         self.input.sbytes()
     }
 
-    pub fn storage_slice_range(&self, start: usize, end: usize) -> String {
+    pub(crate) fn storage_slice_range(&self, start: usize, end: usize) -> String {
         assert!(start <= end, "invalid LispReadSource range: {start}..{end}");
         assert!(
             end <= self.logical_len(),
@@ -301,7 +306,8 @@ impl<'a> LispReadSource<'a> {
         neovm_value::emacs_char::to_utf8_lossy(slice)
     }
 
-    pub fn read_one(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn read_one(
         &self,
         start: usize,
         vars: crate::emacs_core::eval::VariableView<'_>,
@@ -332,7 +338,7 @@ impl<'a> LispReadSource<'a> {
         Ok(Some((value, reader.pos)))
     }
 
-    pub fn read_one_range(
+    pub(crate) fn read_one_range(
         &self,
         start: usize,
         end: usize,
@@ -353,7 +359,7 @@ impl<'a> LispReadSource<'a> {
         Ok(Some((value, reader.pos)))
     }
 
-    pub fn read_one_with_locate_syms(
+    pub(crate) fn read_one_with_locate_syms(
         &self,
         start: usize,
         locate_syms: bool,
@@ -362,7 +368,7 @@ impl<'a> LispReadSource<'a> {
         self.read_one_with_locate_syms_with_symbols(start, locate_syms, vars, SymbolMode::Bare)
     }
 
-    pub fn read_one_with_locate_syms_with_symbols(
+    pub(crate) fn read_one_with_locate_syms_with_symbols(
         &self,
         start: usize,
         locate_syms: bool,
@@ -610,12 +616,12 @@ pub struct ReadError {
     pub message: String,
     pub position: usize,
     pub kind: ReadErrorKind,
-    pub signal_symbol: Option<neovm_value::intern::SymId>,
+    pub(crate) signal_symbol: Option<neovm_value::intern::SymId>,
     pub signal_data: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReadErrorKind {
+pub(crate) enum ReadErrorKind {
     InvalidReadSyntax,
     EndOfFile,
     Error,
