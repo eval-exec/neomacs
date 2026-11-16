@@ -445,8 +445,7 @@ impl KeyEvent {
         }
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn char_with_mods(c: char, mods: Modifiers) -> Self {
+    pub fn char_with_mods(c: char, mods: Modifiers) -> Self {
         Self {
             key: Key::Char(c),
             modifiers: mods,
@@ -1009,10 +1008,8 @@ pub(crate) const XK_F24: u32 = 0xFFD5;
 // were appended when the NS modifier policy (issue #442) taught the
 // transport to carry the full GNU modifier set, which distinguishes
 // `alt_modifier' from `meta_modifier'.
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) const RENDER_SHIFT_MASK: u32 = 1 << 0;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) const RENDER_CTRL_MASK: u32 = 1 << 1;
+pub const RENDER_SHIFT_MASK: u32 = 1 << 0;
+pub const RENDER_CTRL_MASK: u32 = 1 << 1;
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const RENDER_META_MASK: u32 = 1 << 2;
 pub(crate) const RENDER_SUPER_MASK: u32 = 1 << 3;
@@ -1285,8 +1282,7 @@ pub(crate) fn keysym_to_key_event(keysym: u32, modifiers: u32) -> Option<KeyEven
 /// thread is created, so baking the opening frame id into that thread is
 /// incorrect.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) enum TtyInputTarget {
+pub enum TtyInputTarget {
     SelectedFrame,
     Frame(neovm_value::display_vocab::FrameId),
     Terminal(u64),

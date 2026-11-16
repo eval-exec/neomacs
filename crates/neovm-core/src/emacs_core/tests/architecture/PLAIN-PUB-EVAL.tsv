@@ -18,11 +18,13 @@ crates/neovm-eval/src/emacs_core/lisp/custom/mod.rs	field	KillLocalVariableOutco
 crates/neovm-eval/src/emacs_core/lisp/custom/mod.rs	field	KillLocalVariableOutcome field result
 crates/neovm-eval/src/emacs_core/lisp/custom/mod.rs	fn	fn impl CustomManager::new
 crates/neovm-eval/src/emacs_core/lisp/custom/mod.rs	struct	struct CustomManager
+crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	const	const ALLOW_STALE_BYTECODE_ENV
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	const	const TEMACS_ROLE_BINARY_NAME
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	enum	enum BuildDetails
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	enum	enum LoadupDumpMode
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	enum	enum LoadupInvocation
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	enum	enum RuntimeImageRole
+crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	enum	enum StaleBytecodePolicy
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn activate_runtime_evaluator
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn announce_shipped_editor_process
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn apply_runtime_startup_state
@@ -38,6 +40,7 @@ crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl BootstrapError::mes
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl BuildDetails::apply
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl BuildDetails::from_omit_flag
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocation::build_details
+crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocation::command_line_args
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocation::mode
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocation::new
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn impl LoadupDumpInvocation::with_build_details
@@ -1735,6 +1738,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Fr
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::window_layout_inputs
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::window_list
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::window_part_geometry_from
+crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameDeletion::was_deleted
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameDisplayIdentity::native_display
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameDisplayIdentity::x_display
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::buffer_window_count
@@ -1852,6 +1856,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_point
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_suspend_auto_hscroll
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_top_line
+crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_window_end_from_positions
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_window_end_record
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::suspend_auto_hscroll
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::top_line
@@ -2186,6 +2191,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	struct	str
 crates/neovm-eval/src/emacs_core/runtime/eval/kbd/mod.rs	enum	enum KeyDesignatorError
 crates/neovm-eval/src/emacs_core/runtime/eval/kbd/mod.rs	fn	fn key_events_from_designator
 crates/neovm-eval/src/emacs_core/runtime/eval/kbd/mod.rs	fn	fn parse_kbd_string
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const RENDER_CTRL_MASK
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const RENDER_SHIFT_MASK
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_DOWN
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_ESCAPE
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_F1
@@ -2202,6 +2209,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum FrontendWebV
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum InputEvent
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum Key
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum NamedKey
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum TtyInputTarget
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	field	KeyEvent field key
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	field	KeyEvent field modifiers
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	field	KeySequence field events
@@ -2219,6 +2227,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl InputEvent:
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl InputEvent::raw_tty_bytes_for_terminal
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl InputEvent::requests_default_quit
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeyEvent::char
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeyEvent::char_with_mods
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeyEvent::named
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeySequence::from_description
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeySequence::is_empty
@@ -2708,6 +2717,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use TerminalGridSize
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use TerminalId
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use VariableStore
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use VariableView
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use WorldEra
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use XwidgetScriptRequestId
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use raise_main_stack_rlimit
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use register_carrier_tls_reset
@@ -2859,6 +2869,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn im
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn impl PendingImage::new
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn impl PendingImage::placement
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn impl ReadyImage::image_id
+crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn impl ResolvedImageMetadata::layout_is_image_pixels
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	struct	struct FailedImage
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	struct	struct ImageBaseUri
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	struct	struct ImageFileName
@@ -2980,6 +2991,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	fn	fn impl ObarrayWriteAc
 crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	fn	fn impl ObarrayWriteAccess::replace_symbol_plist_id
 crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	struct	struct ObarrayWriteAccess
 crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	use	use Baton
+crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	use	use WorldEra
+crates/neovm-eval/src/emacs_core/runtime/eval/world/era.rs	type	type WorldEra
 crates/neovm-eval/src/emacs_core/runtime/eval/world/green_owner.rs	struct	struct Baton
 crates/neovm-eval/src/emacs_core/runtime/eval/world/parallel_admission/factory.rs	trait	sealed::trait Sealed
 crates/neovm-eval/src/emacs_core/runtime/gc_stats/mod.rs	field	GcStatsSnapshot field collections
@@ -3666,9 +3679,22 @@ crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::from_label
 crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::label
 crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::vocabulary_round_trips
 crates/neovm-eval/src/host_cfg_active.rs	fn	fn impl HostCfgClass::is_active
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum CompletionMilestone
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ConditionRecord
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum HostClosure
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum HostResult
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum NativeTruth
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum OwnedNativeData
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ReadDeadline
+crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ThreadSignalRecord
 crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::affinity
 crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::font
+crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::font_reply_for
 crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message
+crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_error_for
+crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_reply_for
+crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_signal_for
+crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn with_fixture
 crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl RegisteredRootRef::record
 crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl RegisteredRootRef::request
 crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl RegisteredRootRef::session
@@ -3681,39 +3707,23 @@ crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl TerminalResponse::into
 crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl TerminalResponse::request
 crates/neovm-eval/src/host_effect/contracts.rs	fn	fn impl TerminalResponse::session
 crates/neovm-eval/src/host_effect/contracts.rs	struct	contract_fixture::struct Fixture
+crates/neovm-eval/src/host_effect/contracts.rs	struct	sealed::struct RequestIdentity
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct HostAffinity
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RegisteredRootRef
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RejectedReply
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct ReplyPort
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RootedCondition
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RootedThreadSignal
 crates/neovm-eval/src/host_effect/contracts.rs	struct	struct Submitted
+crates/neovm-eval/src/host_effect/contracts.rs	struct	struct TerminalResponse
 crates/neovm-eval/src/host_effect/contracts.rs	trait	sealed::trait Plan
 crates/neovm-eval/src/host_effect/contracts.rs	trait	sealed::trait Record
 crates/neovm-eval/src/host_effect/contracts.rs	trait	sealed::trait Reply
+crates/neovm-eval/src/host_effect/contracts.rs	trait	trait HostPlan
+crates/neovm-eval/src/host_effect/contracts.rs	trait	trait HostReply
+crates/neovm-eval/src/host_effect/contracts.rs	trait	trait RegisteredRecord
 crates/neovm-eval/src/host_effect/mod.rs	mod	mod contracts
 crates/neovm-eval/src/host_effect/owner_step.rs	trait	sealed::trait Kind
 crates/neovm-eval/src/lib.rs	mod	mod emacs_core
 crates/neovm-eval/src/lib.rs	mod	mod host_cfg
 crates/neovm-eval/src/lib.rs	mod	mod host_effect
-crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn with_fixture
-crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_signal_for
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RejectedReply
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct HostAffinity
-crates/neovm-eval/src/host_effect/contracts.rs	trait	trait HostPlan
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct TerminalResponse
-crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_error_for
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ThreadSignalRecord
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RootedCondition
-crates/neovm-eval/src/host_effect/contracts.rs	struct	sealed::struct RequestIdentity
-crates/neovm-eval/src/emacs_core/runtime/eval/world/era.rs	type	type WorldEra
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum NativeTruth
-crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::message_reply_for
-crates/neovm-eval/src/host_effect/contracts.rs	trait	trait HostReply
-crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	use	use WorldEra
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RegisteredRootRef
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct RootedThreadSignal
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum OwnedNativeData
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum HostResult
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ReadDeadline
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum CompletionMilestone
-crates/neovm-eval/src/host_effect/contracts.rs	fn	contract_fixture::fn impl Fixture::font_reply_for
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum HostClosure
-crates/neovm-eval/src/host_effect/contracts.rs	struct	struct ReplyPort
-crates/neovm-eval/src/host_effect/contracts.rs	trait	trait RegisteredRecord
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use WorldEra
-crates/neovm-eval/src/host_effect/contracts.rs	enum	enum ConditionRecord

@@ -1446,8 +1446,7 @@ impl Context {
         )
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn current_message_text(&self) -> Option<String> {
+    pub fn current_message_text(&self) -> Option<String> {
         self.current_message
             .as_ref()
             .map(|message| neovm_value::emacs_char::to_utf8_lossy(message.as_bytes()))

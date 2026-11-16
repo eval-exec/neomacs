@@ -236,8 +236,7 @@ pub struct ResolvedImageMetadata {
 impl ResolvedImageMetadata {
     /// Build metadata when layout already equals GNU image-pixel size.
     #[must_use]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) const fn layout_is_image_pixels(
+    pub const fn layout_is_image_pixels(
         width: u32,
         height: u32,
         background: u32,

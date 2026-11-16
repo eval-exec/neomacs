@@ -2602,8 +2602,7 @@ impl Window {
     }
 
     /// Publish the last redisplay's window-end state for this leaf window.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn set_window_end_from_positions(
+    pub fn set_window_end_from_positions(
         &mut self,
         buffer_z_char: LispCharPos1,
         buffer_z_byte: EmacsBytePos,
@@ -3295,8 +3294,7 @@ pub enum FrameDeletion {
 }
 
 impl FrameDeletion {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) const fn was_deleted(self) -> bool {
+    pub const fn was_deleted(self) -> bool {
         matches!(self, Self::Deleted { .. })
     }
 }

@@ -2737,8 +2737,7 @@ pub(crate) fn stale_lisp_bytecode(root: &Path) -> Vec<StaleBytecode> {
 /// one exception (it gets GNU's `Fload` warning, which this port also has) and
 /// every harness must be the rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) enum StaleBytecodePolicy {
+pub enum StaleBytecodePolicy {
     /// GNU `Fload`: name the file and load it anyway.
     Warn,
     /// Refuse to build an image at all, naming every stale file and its
@@ -2751,8 +2750,7 @@ pub(crate) enum StaleBytecodePolicy {
 ///
 /// Exists so that a deliberate stale-artifact reproduction -- the one that
 /// found this -- can still be run.
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) const ALLOW_STALE_BYTECODE_ENV: &str = "NEOVM_ALLOW_STALE_BYTECODE";
+pub const ALLOW_STALE_BYTECODE_ENV: &str = "NEOVM_ALLOW_STALE_BYTECODE";
 
 /// Whether this process is a shipped editor.
 ///
@@ -3382,8 +3380,7 @@ impl LoadupDumpInvocation {
         self.mode
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn command_line_args(&self) -> &[String] {
+    pub fn command_line_args(&self) -> &[String] {
         &self.command_line_args
     }
 }
