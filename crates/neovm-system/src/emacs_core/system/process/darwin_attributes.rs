@@ -8,7 +8,10 @@ pub(super) fn attributes(pid: i64) -> EvalResult {
         return Ok(Value::NIL);
     };
     let mut attrs = Vec::new();
-    let mut add = |key: &str, value| attrs.push(Value::cons(Value::symbol(key), value));
+    // Every key below is a literal; the attribute names are static symbols
+    // (`IntoSymbol` now accepts only `&'static str`, which rejects a `String`
+    // built at runtime by construction).
+    let mut add = |key: &'static str, value| attrs.push(Value::cons(Value::symbol(key), value));
     add("euid", Value::fixnum(i64::from(snapshot.euid)));
     if let Some(user) = sys::user_name(snapshot.euid) {
         add("user", Value::string(user));
