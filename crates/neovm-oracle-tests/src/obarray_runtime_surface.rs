@@ -70,3 +70,36 @@ fn oracle_prop_compiled_out_definitions_are_absent() {
     let expect = expect_test::expect![[r#""OK (nil nil nil nil nil)""#]];
     assert_oracle_parity_expect(form, expect);
 }
+
+/// Literal C startup interns (`intern_c_string`) land in the profile that
+/// compiles the file, exactly as GNU's object list decides.
+#[test]
+fn oracle_prop_c_intern_spellings_follow_the_profile() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // `accelerate-menu` is xmenu.c, `bidi-class` is bidi.c (both compiled in
+    // the Linux/GTK reference); `kqueue` is kqueue.c (macOS); `w32notify` is
+    // w32notify.c (Windows).
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let (form, expect) = (
+        r#"(list (and (intern-soft "accelerate-menu") t)
+           (and (intern-soft "bidi-class") t)
+           (and (intern-soft "kqueue") t))"#,
+        expect_test::expect![[r#""OK (t t nil)""#]],
+    );
+    #[cfg(all(not(windows), target_os = "macos"))]
+    let (form, expect) = (
+        r#"(list (and (intern-soft "accelerate-menu") t)
+           (and (intern-soft "kqueue") t)
+           (and (intern-soft "w32notify") t))"#,
+        expect_test::expect![[r#""OK (nil t nil)""#]],
+    );
+    #[cfg(windows)]
+    let (form, expect) = (
+        r#"(list (and (intern-soft "w32notify") t)
+           (and (intern-soft "accelerate-menu") t)
+           (and (intern-soft "kqueue") t))"#,
+        expect_test::expect![[r#""OK (t nil nil)""#]],
+    );
+    assert_oracle_parity_expect(form, expect);
+}

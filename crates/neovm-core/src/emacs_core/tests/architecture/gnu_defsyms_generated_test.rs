@@ -85,3 +85,50 @@ fn the_ledger_keeps_the_make_docfile_order_and_gate_split() {
         "ledger has no `uninterned` rows"
     );
 }
+
+#[test]
+fn the_c_intern_ledger_is_ordered_and_profile_gated() {
+    let root = super::architecture_production_source_roots::workspace_root();
+    let path = root.join(generator::C_INTERN_LEDGER);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let rows = generator::parse_c_intern_ledger(&text).expect("C-intern ledger parses");
+    assert!(
+        rows.len() > 50,
+        "the C-intern ledger should hold over fifty startup spellings, got {}",
+        rows.len()
+    );
+    let mut previous: Option<(&str, &str)> = None;
+    for row in &rows {
+        assert!(
+            !row.gate.is_empty(),
+            "{}: a C-intern row needs at least one compiling profile",
+            row.name
+        );
+        if let Some((previous_source, previous_name)) = previous {
+            assert!(
+                (previous_source, previous_name) <= (row.source.as_str(), row.name.as_str()),
+                "C-intern ledger is not in (source, spelling) order: \
+                 {previous_source}/{previous_name} then {}/{}",
+                row.source,
+                row.name
+            );
+        }
+        previous = Some((row.source.as_str(), row.name.as_str()));
+    }
+    let emitted = rows.iter().filter(|row| !row.gate.is_empty()).count();
+    assert_eq!(
+        emitted,
+        table::GNU_C_INTERNS.len(),
+        "the generated C-intern table and the ledger disagree on the row count"
+    );
+    // Both literal call spellings the generator reads must be represented.
+    assert!(
+        rows.iter().any(|row| row.name == "accelerate-menu"),
+        "xmenu.c's Fprovide literal is missing"
+    );
+    assert!(
+        rows.iter().any(|row| row.name == "bidi-class"),
+        "bidi.c's syms_of_bidi literals are missing"
+    );
+}

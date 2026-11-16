@@ -46,6 +46,46 @@ fn every_compiled_gnu_defsym_spelling_is_a_boot_symbol() {
     );
 }
 
+/// Every literal `intern_c_string`/`intern` startup spelling this platform's
+/// GNU sources compile must name a symbol, with no value and no function.
+///
+/// These are GNU's own `syms_of_*` interning calls (`Fprovide`, cursor and
+/// DND tables, feature names, ...); no `DEFSYM` row covers them, so the
+/// generated C-intern ledger is a second boot table.
+#[test]
+fn every_active_c_intern_spelling_is_a_boot_member() {
+    let eval = crate::test_utils::new_context();
+    let mut checked = 0usize;
+    let mut missing: Vec<&str> = Vec::new();
+    for (name, gate) in gnu_defsyms_generated::GNU_C_INTERNS {
+        if !gate.is_active() {
+            continue;
+        }
+        checked += 1;
+        if eval.obarray().intern_soft(name).is_none() {
+            missing.push(name);
+        }
+    }
+    assert!(
+        checked > 50,
+        "the generated C-intern table should hold over fifty active spellings, got {checked}"
+    );
+    assert!(
+        missing.is_empty(),
+        "{} of {checked} active C-intern spellings are not in the obarray \
+         (run `cargo xtask gnu-defsyms` if the table is stale): {:?}",
+        missing.len(),
+        &missing[..missing.len().min(20)]
+    );
+    // The other profiles' literals stay out, matching GNU's defsym_name[] /
+    // compiled object split (`kqueue.c` is macOS, `w32notify.c` Windows).
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        assert!(eval.obarray().intern_soft("kqueue").is_none());
+        assert!(eval.obarray().intern_soft("w32notify").is_none());
+    }
+}
+
 /// A DEFSYM gives the symbol no function and no value, matching GNU.
 #[test]
 fn defsym_only_spellings_are_unbound_and_have_no_function() {

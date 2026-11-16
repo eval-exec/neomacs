@@ -4872,6 +4872,7 @@ pub(crate) fn symbol_has_runtime_surface_or_reference(
 fn keeps_gnu_defsym_initial_member(name: &str, id: neovm_value::intern::SymId) -> bool {
     neovm_value::intern::WellKnown::is_table_id(id)
         || neovm_value::intern::is_active_gnu_defsym_spelling(name)
+        || neovm_value::intern::is_active_gnu_c_intern_spelling(name)
 }
 
 fn is_gnu_preloaded_syntax_symbol(name: &str) -> bool {

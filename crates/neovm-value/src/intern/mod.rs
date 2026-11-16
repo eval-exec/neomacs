@@ -31,6 +31,23 @@ pub fn is_active_gnu_defsym_spelling(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `name` is a literal `intern_c_string`/`intern` spelling that this
+/// build's GNU sources intern at startup.
+///
+/// GNU's `syms_of_*` code interns these directly (`Fprovide`, cursor and DND
+/// tables, feature names, ...), so no `DEFSYM` row covers them and the
+/// `defsym_name[]` boot table cannot see them. The generator scans the
+/// literals inside each compiled file's `syms_of_*` bodies
+/// (`crates/neovm-value/src/intern/gnu_c_interns.snapshot.tsv`).
+#[doc(hidden)]
+pub fn is_active_gnu_c_intern_spelling(name: &str) -> bool {
+    let table = gnu_defsyms_generated::GNU_C_INTERNS_BY_SPELLING;
+    table
+        .binary_search_by(|(spelling, _)| (*spelling).cmp(name))
+        .map(|index| table[index].1.is_active())
+        .unwrap_or(false)
+}
+
 /// Whether `name` is a GNU `DEFSYM` spelling that this build's profile does
 /// not compile in.
 ///
