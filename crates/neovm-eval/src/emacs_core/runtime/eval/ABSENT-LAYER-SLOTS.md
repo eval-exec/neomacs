@@ -207,7 +207,7 @@ per F-3.
 | core::wait.service_timers_without_redisplay | panic | hooks_proof.rs:331 | read_char timer service (keyboard.rs:4971) and the core-used test fence (test_support.rs:1099); system-owned | b |
 | core::wait.wait_for_command_input_with_idle_policy | panic | hooks_proof.rs:335 | timed read-event blocking wait (keyboard.rs:5007); system-owned | b |
 | core::wait.wait_for_resize_ack_until | panic | hooks_proof.rs:343 | wait_for_pending_resize_events (keyboard.rs:2867) from display and core eval_test.rs:3469 | b |
-| core::wait.wait_for_duration_until_timer_deadline | panic (not installed) | hooks_proof.rs:350 | NOT-INSTALLED: unit table installs a working Green/select `unit_wait_for_duration_until_timer_deadline` (test_utils.rs:973), which now ASSERTS the empty live process table and the absent OS-signal self-pipe before sleeping (PEER 5795 F-4, done) | c |
+| core::wait.wait_for_duration_until_timer_deadline | panic (not installed) | hooks_proof.rs:350 | NOT-INSTALLED: unit table installs a working Green/select `unit_wait_for_duration_until_timer_deadline` (test_utils.rs:973), which now ASSERTS the empty live process table before sleeping (PEER 5795 F-4); the self-pipe half was dropped as vacuous per PEER 5796 (that slot is constant None and the unit poller handle is unreachable) | c |
 | core::timer.next_ordinary_gnu_timer_timeout_before | panic | hooks_proof.rs:363 | unbounded read-event/read-key-sequence timer query (keyboard.rs:4955); system-owned | b |
 | core::timer.next_idle_gnu_timer_timeout | panic | hooks_proof.rs:367 | idle-timer query (keyboard.rs:4956); system-owned | b |
 | upper-variable::{name} | value (poison) | lifecycle.rs:1060 | every eval unit Context construction binds upper bootstrap Lisp_Object vars to the uninterned marker (construct.rs:1473); printed name is `ABSENT-LAYER upper-variable::<name>`, no eval test asserts on the values (PEER 5795 F-3) | p |
@@ -223,8 +223,10 @@ per F-3.
   `unit_wait_for_duration_until_timer_deadline`, `unit_boot_seed_batch_startup_frame`,
   `unit_terminal_delete_noelisp`, `unit_terminal_live_ids`). Their stand-ins
   are the (a2) deletions; the unit substitutions remain. The
-  wait-for-duration substitution now asserts its premises (F-4), and the
-  terminal print-handle asserts the empty registry before its None (F-2).
+  wait-for-duration substitution now asserts its only assertable premise
+  (empty live process table; PEER 5796 dropped the vacuous self-pipe half),
+  and the terminal print-handle asserts the empty registry before its None
+  (F-2).
 - (a) stays panics (PEER 5795): (a1) deleted the four no-caller hook
   fields/accessors/stand-ins (`process.unlink`, `process.delete`,
   `window_tree.char_property_window_lookup`, `window_tree.window_resize_apply`)
