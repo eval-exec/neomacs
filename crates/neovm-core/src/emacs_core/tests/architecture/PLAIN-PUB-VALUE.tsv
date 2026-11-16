@@ -580,6 +580,8 @@ crates/neovm-value/src/intern/mod.rs	fn	fn intern_uninterned_lisp_string
 crates/neovm-value/src/intern/mod.rs	fn	fn is_canonical_id
 crates/neovm-value/src/intern/mod.rs	fn	fn lookup_interned
 crates/neovm-value/src/intern/mod.rs	fn	fn lookup_interned_lisp_string
+crates/neovm-value/src/intern/mod.rs	fn	fn make_uninterned_symbol
+crates/neovm-value/src/intern/mod.rs	fn	fn make_uninterned_symbol_lisp_string
 crates/neovm-value/src/intern/mod.rs	fn	fn make_uninterned_symbol_with_name_value
 crates/neovm-value/src/intern/mod.rs	fn	fn resolve_sym
 crates/neovm-value/src/intern/mod.rs	fn	fn resolve_sym_lisp_string
@@ -810,6 +812,9 @@ crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::int_forwarder
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::intern
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::intern_lisp_string
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::intern_lisp_value
+crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::intern_member
+crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::intern_member_lisp_string
+crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::intern_member_lisp_value
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::intern_soft
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::intern_soft_lisp_string
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::interned_function_cells_with_names
@@ -917,16 +922,19 @@ crates/neovm-value/src/system_vocab/file_names.rs	fn	fn substitute_in_file_name
 crates/neovm-value/src/system_vocab/file_names.rs	fn	fn substitute_in_file_name_lisp
 crates/neovm-value/src/system_vocab/file_names.rs	fn	fn trim_embedded_absfilename_bytes
 crates/neovm-value/src/system_vocab/input.rs	enum	enum InputPendingFilter
+crates/neovm-value/src/system_vocab/input.rs	enum	enum KeySequenceBufferSelection
 crates/neovm-value/src/system_vocab/input.rs	enum	enum TtyInputDecoding
 crates/neovm-value/src/system_vocab/input.rs	enum	enum UnreadCommandEvent
 crates/neovm-value/src/system_vocab/input.rs	field	ExecutingKbdMacroRuntimeSnapshot field events
 crates/neovm-value/src/system_vocab/input.rs	field	ExecutingKbdMacroRuntimeSnapshot field index
+crates/neovm-value/src/system_vocab/input.rs	field	ReadKeySequenceOptions field buffer_selection
 crates/neovm-value/src/system_vocab/input.rs	field	ReadKeySequenceOptions field can_return_switch_frame
 crates/neovm-value/src/system_vocab/input.rs	field	ReadKeySequenceOptions field continue_echo
 crates/neovm-value/src/system_vocab/input.rs	field	ReadKeySequenceOptions field dont_downcase_last
 crates/neovm-value/src/system_vocab/input.rs	field	ReadKeySequenceOptions field prompt
 crates/neovm-value/src/system_vocab/input.rs	fn	fn impl InputPendingFilter::from_filter_events_variable
 crates/neovm-value/src/system_vocab/input.rs	fn	fn impl InputPendingFilter::ignores
+crates/neovm-value/src/system_vocab/input.rs	fn	fn impl ReadKeySequenceOptions::for_command_loop
 crates/neovm-value/src/system_vocab/input.rs	fn	fn impl ReadKeySequenceOptions::new
 crates/neovm-value/src/system_vocab/input.rs	fn	fn impl UnreadCommandEvent::decode
 crates/neovm-value/src/system_vocab/input.rs	fn	fn impl UnreadCommandEvent::event
@@ -1044,40 +1052,18 @@ crates/neovm-value/src/tagged/gc.rs	field	HeapWriteRecord field value
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl HeapWriteRecord::bulk
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl HeapWriteRecord::slot
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::allocated_count
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::buffer_value
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::bytes_since_gc
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::bytes_since_gc_exact
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::clear_dirty_owners
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::clear_dirty_writes
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::clear_gc_threshold_override
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::dirty_owner_count
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::dirty_write_count
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::dirty_writes
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::frame_value
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::gc_collections
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::gc_threshold
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::gc_threshold_is_overridden
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::heap_identity
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::is_dirty_owner
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::live_bytes
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::must_finish_count
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::new
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::process_value
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::register_buffer_value
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::register_frame_value
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::register_process_value
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::register_timer_value
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::register_window_value
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::reserve_mapped_object_capacity
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::set_gc_threshold
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::set_gc_threshold_from_runtime
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::set_marker_chain_head_slots
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::set_write_tracking_mode
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::should_collect
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::take_dirty_owners
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::take_dirty_writes
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::timer_value
-crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::window_value
 crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::write_tracking_mode
 crates/neovm-value/src/tagged/gc.rs	mod	mod memory_telemetry
 crates/neovm-value/src/tagged/gc.rs	struct	struct HeapWriteRecord
@@ -1143,6 +1129,7 @@ crates/neovm-value/src/tagged/gc.rs	use	use SymbolRef
 crates/neovm-value/src/tagged/gc.rs	use	use TableMut
 crates/neovm-value/src/tagged/gc.rs	use	use TableRef
 crates/neovm-value/src/tagged/gc.rs	use	use YoungWorkerLoan
+crates/neovm-value/src/tagged/gc.rs	use	use gc_thread::*
 crates/neovm-value/src/tagged/gc/allocation.rs	fn	fn impl TaggedHeap::alloc_bignum
 crates/neovm-value/src/tagged/gc/allocation.rs	fn	fn impl TaggedHeap::alloc_bool_vector
 crates/neovm-value/src/tagged/gc/allocation.rs	fn	fn impl TaggedHeap::alloc_buffer
@@ -1366,6 +1353,28 @@ crates/neovm-value/src/tagged/gc/incremental.rs	fn	fn impl TaggedHeap::sweep_in_
 crates/neovm-value/src/tagged/gc/mark_sweep.rs	fn	fn impl TaggedHeap::collect
 crates/neovm-value/src/tagged/gc/mark_sweep.rs	fn	fn impl TaggedHeap::collect_exact
 crates/neovm-value/src/tagged/gc/mark_sweep.rs	fn	fn impl TaggedHeap::take_doomed_finalizer_functions
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::buffer_value
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::bytes_since_gc
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::bytes_since_gc_exact
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::clear_dirty_owners
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::clear_dirty_writes
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::dirty_owner_count
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::dirty_write_count
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::dirty_writes
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::frame_value
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::is_dirty_owner
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::live_bytes
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::process_value
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::register_buffer_value
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::register_frame_value
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::register_process_value
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::register_timer_value
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::register_window_value
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::reserve_mapped_object_capacity
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::take_dirty_owners
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::take_dirty_writes
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::timer_value
+crates/neovm-value/src/tagged/gc/memory_registry.rs	fn	fn impl TaggedHeap::window_value
 crates/neovm-value/src/tagged/gc/memory_telemetry.rs	field	AllocatorSnapshot field active_bytes
 crates/neovm-value/src/tagged/gc/memory_telemetry.rs	field	AllocatorSnapshot field allocated_bytes
 crates/neovm-value/src/tagged/gc/memory_telemetry.rs	field	AllocatorSnapshot field available
@@ -2688,7 +2697,3 @@ crates/neovm-value/src/value/text_props.rs	struct	struct PropertyInterval
 crates/neovm-value/src/value/text_props.rs	struct	struct TextPropertiesRef
 crates/neovm-value/src/value/text_props.rs	struct	struct TextPropertyTable
 crates/neovm-value/src/value/text_props.rs	trait	trait CasingInsertionPolicy
-crates/neovm-value/src/tagged/gc.rs	use	use gc_thread::*
-crates/neovm-value/src/system_vocab/input.rs	enum	enum KeySequenceBufferSelection
-crates/neovm-value/src/system_vocab/input.rs	field	ReadKeySequenceOptions field buffer_selection
-crates/neovm-value/src/system_vocab/input.rs	fn	fn impl ReadKeySequenceOptions::for_command_loop
