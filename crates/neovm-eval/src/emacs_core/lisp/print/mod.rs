@@ -22,7 +22,6 @@ pub(crate) use princ_text::PrincStringOutput;
 pub(crate) use princ_text::princ_string_bytes;
 
 mod error_format;
-pub(crate) use error_format::print_value_bytes_escaped_with_eval;
 #[doc(hidden)]
 pub use error_format::{
     PrintShorthandSymbol, builtin_error_message_string, format_flow_with_eval,
@@ -78,13 +77,6 @@ struct StatefulPrintOutput {
 
 impl StatefulPrintOutput {
     #[doc(hidden)]
-    pub fn from_str(value: &str) -> Self {
-        Self {
-            bytes: value.as_bytes().to_vec(),
-        }
-    }
-
-    #[doc(hidden)]
     pub fn push(&mut self, character: char) {
         let mut encoded = [0; 4];
         self.bytes
@@ -102,11 +94,6 @@ impl StatefulPrintOutput {
     }
 
     #[doc(hidden)]
-    pub fn append(&mut self, other: Self) {
-        self.bytes.extend(other.bytes);
-    }
-
-    #[doc(hidden)]
     pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
@@ -114,11 +101,6 @@ impl StatefulPrintOutput {
     #[doc(hidden)]
     pub fn len(&self) -> usize {
         self.bytes.len()
-    }
-
-    #[doc(hidden)]
-    pub fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
     }
 
     #[doc(hidden)]
@@ -383,6 +365,7 @@ impl PrintOptions {
         }
     }
 
+    #[cfg(test)]
     pub(crate) const fn with_print_gensym(print_gensym: bool) -> Self {
         Self {
             print_gensym,
@@ -2599,7 +2582,7 @@ static_assertions::assert_not_impl_any!(PrintDepthGuard<'static, 'static>: Send,
 
 impl<'scope, 'context> PrintDepthGuard<'scope, 'context> {
     #[doc(hidden)]
-    pub fn enter(state: &'scope mut PrintState<'context>) -> Self {
+    pub(crate) fn enter(state: &'scope mut PrintState<'context>) -> Self {
         let saved_depth = state.depth;
         state.depth += 1;
         Self {
@@ -2610,7 +2593,7 @@ impl<'scope, 'context> PrintDepthGuard<'scope, 'context> {
     }
 
     #[doc(hidden)]
-    pub fn state(&mut self) -> &mut PrintState<'context> {
+    pub(crate) fn state(&mut self) -> &mut PrintState<'context> {
         self.state
     }
 }
@@ -2919,7 +2902,7 @@ static_assertions::assert_not_impl_any!(PrintShorthandGuard<'static, 'static>: S
 
 impl<'scope, 'context> PrintShorthandGuard<'scope, 'context> {
     #[doc(hidden)]
-    pub fn enter(
+    pub(crate) fn enter(
         state: &'scope mut PrintState<'context>,
         options: PrintOptions,
         shorthand: SymbolShorthand,
@@ -2940,7 +2923,7 @@ impl<'scope, 'context> PrintShorthandGuard<'scope, 'context> {
     }
 
     #[doc(hidden)]
-    pub fn state(&mut self) -> &mut PrintState<'context> {
+    pub(crate) fn state(&mut self) -> &mut PrintState<'context> {
         self.state
     }
 }

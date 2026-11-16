@@ -834,15 +834,6 @@ impl Face {
         })
     }
 
-    /// Shared-payload form of [`Self::foundry_runtime_string_owned`].
-    pub(crate) fn foundry_runtime_string_shared(&self) -> Option<std::sync::Arc<str>> {
-        self.foundry.and_then(|value| {
-            value
-                .as_lisp_string()
-                .map(|ls| neovm_value::emacs_char::to_utf8_lossy_arc(ls.as_bytes()))
-        })
-    }
-
     /// Compatibility constructor for existing call sites. The name is owned
     /// by `FaceTable`, not by `Face` itself.
     pub fn new(_name: &str) -> Self {

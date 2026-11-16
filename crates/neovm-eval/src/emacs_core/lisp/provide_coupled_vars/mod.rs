@@ -284,6 +284,7 @@ const NS_SURFACE: &str = "ledger 189/199 surface split: GNU's HAVE_NS objects de
 /// excusing a gap.  Issue 300 tracks the remaining divergences.  On Linux the
 /// WPE path still leaves ledger 190's missing subrs open, the feature is not
 /// provided, and the rows remain policy.
+#[cfg(feature = "xwidgets")]
 const XWIDGET_LAYER: &str = "ledger 190/192: xwidget.rs implements GNU's xwidget subrs over WPE/WebKit \
      (Linux, xwidget-internal NotBuilt) or a native WKWebView (macOS with the `webview' \
      feature, provided)";

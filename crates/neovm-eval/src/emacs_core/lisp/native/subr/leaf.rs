@@ -224,7 +224,7 @@ pub(crate) enum Containment {
 /// an AOT leaf table (design §2.9, phase 2) would be indexed by them.
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum LeafId {
+pub enum LeafId {
     Gethash,
     PlistGet,
     GetCharProperty,

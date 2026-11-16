@@ -267,10 +267,6 @@ impl DisplayPointRow {
         self.y
     }
     #[inline]
-    pub(crate) const fn buffer_base(&self) -> i64 {
-        self.buffer_base
-    }
-    #[inline]
     pub fn point_count(&self) -> usize {
         self.data.source_order.len()
     }

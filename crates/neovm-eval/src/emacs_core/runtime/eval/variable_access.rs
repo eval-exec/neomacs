@@ -687,6 +687,9 @@ impl Context {
 
     /// Make the variable void the way [`Self::store_variable`] writes it.
     #[inline(never)]
+    // LOST WIRING: owner-projection makunbound seam; the builtin voids
+    // through set_internal_after_watchers until the routed path is wired.
+    #[allow(dead_code)]
     pub(crate) fn makunbound_variable(&mut self, id: SymId) {
         if self.obarray.makunbound_canonical_routed(id) == CanonicalWrite::Projected {
             self.makunbound_owner_variable(id);

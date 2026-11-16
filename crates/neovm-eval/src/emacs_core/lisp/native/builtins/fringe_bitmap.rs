@@ -184,6 +184,7 @@ impl FringeBitmapRegistry {
     }
 
     /// Look up a bitmap by its resolved integer index.
+    #[cfg(test)]
     pub(crate) fn get_by_index(&self, index: u32) -> Option<&FringeBitmap> {
         let sym = self.by_index.get(&index)?;
         self.user_bitmaps.get(sym)

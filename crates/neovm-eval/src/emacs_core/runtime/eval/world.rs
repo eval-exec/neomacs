@@ -963,16 +963,20 @@ obarray_method_proxies! {
     // Audited closed operation, test-support surface: core tests unbind a
     // fixture variable through this adapter method instead of a mutable deref.
     #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)] // audited test-support unbind adapter; no core caller yet.
     pub(crate) fn makunbound(name: &str);
     #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)] // id form of the audited test-support unbind adapter.
     pub fn makunbound_id(id: SymId);
     pub fn makunbound_canonical_by_name(access: CanonicalAccess,
             name: &str,
         );
     pub fn makunbound_canonical(access: CanonicalAccess, id: SymId);
+    #[allow(dead_code)] // paired with the routed makunbound seam.
     pub(crate) fn set_canonical_value_routed(id: SymId,
             value: Value,
         ) -> neovm_value::symbol::CanonicalWrite;
+    #[allow(dead_code)] // paired with set_canonical_value_routed; routed makunbound seam.
     pub(crate) fn makunbound_canonical_routed(id: SymId) -> neovm_value::symbol::CanonicalWrite;
     pub fn put_property(name: &str, prop: &str, value: Value) -> Result<(), Flow>;
     pub fn put_property_id(symbol: SymId,
@@ -1167,7 +1171,7 @@ impl Context {
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0} World storage views remain after Context retirement")]
-pub(crate) struct OutstandingWorldViews(NonZeroUsize);
+pub struct OutstandingWorldViews(NonZeroUsize);
 static_assertions::assert_impl_all!(OutstandingWorldViews: Send,Sync);
 
 #[derive(Debug, thiserror::Error)]

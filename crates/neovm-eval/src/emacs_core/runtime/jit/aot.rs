@@ -4962,7 +4962,7 @@ fn unit_leaf_symbols(
 
 /// Stats from a prepopulate pass (logged so a degraded preload is visible).
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct PrepopulateStats {
+pub struct PrepopulateStats {
     /// Required-only fns probed for membership: hash-probed (content hash
     /// succeeded → dlsym gate) or, under the v2 manifest pre-filter (task #11),
     /// name-probed non-members skipped WITHOUT hashing. Same count as the
@@ -5523,6 +5523,7 @@ pub(crate) fn drain_aot_pgo_to_dir(
 /// three module seams: no `builder.symbol` (shims are `Linkage::Import`, host-
 /// exported), `Linkage::Export` (vs `Local`) for the entry, and `finish().emit()`
 /// (vs `finalize_definitions`/`get_finalized_function`).
+#[cfg(test)]
 pub(crate) fn build_object_for_leaf(
     m: &mir::MirFunction,
     entry_name: &str,

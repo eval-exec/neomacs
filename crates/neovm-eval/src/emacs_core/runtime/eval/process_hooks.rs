@@ -268,11 +268,6 @@ pub(crate) fn select_handle(ctx: &mut Context) -> Option<SelectHandleToken> {
     select::register_manager(ctx.processes())
 }
 
-/// Wake the idle scheduler's select source.
-pub(crate) fn select_notify(token: SelectHandleToken) {
-    select::select_notify(token)
-}
-
 /// Nudge one native destination of the select source.
 pub(crate) fn select_nudge(
     token: SelectHandleToken,

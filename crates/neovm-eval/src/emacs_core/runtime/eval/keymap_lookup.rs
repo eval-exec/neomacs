@@ -385,7 +385,7 @@ pub(crate) fn maybe_resolve_keyelt(
 /// `&mut Context` may evaluate a menu-item `:filter` exactly as GNU's
 /// `autoload` argument does.  Neither implementor needs a lifetime-carrying
 /// adapter struct, so no lifetime annotations appear in signatures.
-pub(crate) trait KeyeltResolution {
+pub trait KeyeltResolution {
     /// The obarray whose function cells a symbol keymap tail resolves through.
     fn lookup_obarray(&self) -> Option<&Obarray>;
     /// Keep a walk value alive across callbacks until the runtime caller's
@@ -956,18 +956,6 @@ pub(crate) fn list_keymap_access_impl(
 /// Returns the binding or `Value::NIL` if not found.
 pub fn list_keymap_lookup_one(keymap: &Value, event: &Value, symbol_mode: SymbolMode) -> Value {
     list_keymap_access(keymap, event, false, false, symbol_mode)
-}
-
-/// Look up a single event in a keymap, following the parent chain,
-/// accepting `(t . COMMAND)` default bindings.
-///
-/// This mirrors GNU Emacs `access_keymap` with `noinherit=false, t_ok=true`.
-pub(crate) fn list_keymap_lookup_one_t_ok(
-    keymap: &Value,
-    event: &Value,
-    symbol_mode: SymbolMode,
-) -> Value {
-    list_keymap_access(keymap, event, false, true, symbol_mode)
 }
 
 /// Look up a single event in a keymap without stripping menu-item wrappers.

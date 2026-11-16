@@ -15,9 +15,13 @@
 //! (The earlier note here about cross-checking against a `neovm-compiler` crate
 //! is obsolete: that crate was deleted from the workspace on 2026-07-03.)
 
+#[cfg(test)]
 use cranelift_codegen::ir::{AbiParam, Function, InstBuilder, Signature, UserFuncName, types};
+#[cfg(test)]
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+#[cfg(test)]
 use cranelift_jit::{JITBuilder, JITModule};
+#[cfg(test)]
 use cranelift_module::{Linkage, Module, default_libcall_names};
 
 /// Failures that can arise while building or finalizing native code.
@@ -25,7 +29,7 @@ use cranelift_module::{Linkage, Module, default_libcall_names};
 /// Matched exhaustively at call sites (no catch-all), in keeping with the JIT
 /// subsystem's compiler-enforced-completeness rule.
 #[derive(Debug)]
-pub(crate) enum BackendError {
+pub enum BackendError {
     /// Constructing the JIT builder/module failed (e.g. unsupported target).
     ModuleInit(String),
     /// Declaring or defining the function in the module failed.
@@ -53,6 +57,7 @@ impl std::error::Error for BackendError {}
 /// parameter, an entry block, `iconst` + `iadd`, `return`, `finalize_definitions`,
 /// and a real indirect call into freshly-committed executable memory. A success
 /// (`Ok(arg + addend)`) is the proof that Cranelift codegen is usable here.
+#[cfg(test)]
 pub(crate) fn smoke_compile_add(arg: i64, addend: i64) -> Result<i64, BackendError> {
     // 1. Build the JIT module — it owns the executable-memory allocator and the
     //    native ISA selected for the host.
@@ -98,6 +103,7 @@ pub(crate) fn smoke_compile_add(arg: i64, addend: i64) -> Result<i64, BackendErr
 ///   * `builder.symbol(...)`   — for AOT becomes a `Linkage::Import` + dlopen.
 ///   * `finalize_definitions`  — for AOT becomes `ObjectModule::finish()`.
 ///   * `get_finalized_function`— for AOT becomes a `dlsym` lookup.
+#[cfg(test)]
 fn build_smoke_fn<M: Module>(
     module: &mut M,
     addend: i64,

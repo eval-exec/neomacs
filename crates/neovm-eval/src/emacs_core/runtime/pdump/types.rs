@@ -15,22 +15,21 @@ use neovm_value::heap_types::LispString;
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct DumpHeapRef {
+pub struct DumpHeapRef {
     pub index: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct DumpSymId(pub u32);
+pub struct DumpSymId(pub u32);
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct DumpNameId(pub u32);
+pub struct DumpNameId(pub u32);
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DumpBufferId(pub u64);
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct DumpByteSpan {
+pub struct DumpByteSpan {
     pub offset: u64,
     pub len: u64,
 }
@@ -64,7 +63,7 @@ pub struct DumpVecLikeSpan {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DumpByteData {
+pub enum DumpByteData {
     Owned(Vec<u8>),
     Mapped(DumpByteSpan),
     StaticRoData { key: u64, len: u64 },
@@ -83,7 +82,7 @@ impl DumpByteData {
         Self::StaticRoData { key, len }
     }
 
-    pub(crate) fn as_owned_bytes(&self) -> Option<&[u8]> {
+    pub fn as_owned_bytes(&self) -> Option<&[u8]> {
         match self {
             Self::Owned(data) => Some(data),
             Self::Mapped(_) | Self::StaticRoData { .. } => None,
@@ -203,7 +202,7 @@ pub enum DumpHeapObject {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpLambdaParams {
+pub struct DumpLambdaParams {
     pub required: Vec<DumpSymId>,
     pub optional: Vec<DumpSymId>,
     pub rest: Option<DumpSymId>,
@@ -211,7 +210,7 @@ pub(crate) struct DumpLambdaParams {
 
 /// Stored bytecode parameter shape. Dynamic contents remain invocation-checked.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum DumpFunctionParams {
+pub enum DumpFunctionParams {
     Stack(i64),
     Dynamic,
     Named(DumpLambdaParams),
@@ -221,7 +220,7 @@ pub(crate) enum DumpFunctionParams {
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, num_enum::TryFromPrimitive, num_enum::IntoPrimitive,
 )]
-pub(crate) enum DumpFunctionParamsKind {
+pub enum DumpFunctionParamsKind {
     Stack = 0,
     Dynamic = 1,
     Named = 2,
@@ -288,14 +287,14 @@ pub struct DumpByteCodeFunction {
     /// created before the dump: Lisp may hold it, so it round-trips to keep
     /// `(eq v (aref f 1))`. `None` = never created (created on first read).
     #[serde(default)]
-    pub(crate) code_object: Option<DumpValue>,
+    pub code_object: Option<DumpValue>,
     /// The `aref` slot-2 constants vector object, likewise.
     #[serde(default)]
-    pub(crate) constants_object: Option<DumpValue>,
+    pub constants_object: Option<DumpValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum DumpByteCodeInstructions {
+pub enum DumpByteCodeInstructions {
     /// Native NeoVM instructions that have no GNU byte-string source.
     Decoded(Vec<crate::emacs_core::bytecode::opcode::Op>),
     /// Original GNU bytecode. Decoded instructions and byte-offset maps are
@@ -314,7 +313,7 @@ pub(crate) enum DumpByteCodeInstructions {
 
 #[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
-pub(crate) enum DumpHashTableTest {
+pub enum DumpHashTableTest {
     Eq = 0,
     Eql = 1,
     Equal = 2,
@@ -322,7 +321,7 @@ pub(crate) enum DumpHashTableTest {
 
 #[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
-pub(crate) enum DumpHashTableWeakness {
+pub enum DumpHashTableWeakness {
     Key = 0,
     Value = 1,
     KeyOrValue = 2,
@@ -330,7 +329,7 @@ pub(crate) enum DumpHashTableWeakness {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum DumpHashKey {
+pub enum DumpHashKey {
     Nil,
     True,
     Int(i64),
@@ -370,7 +369,7 @@ pub(crate) enum DumpHashKey {
 
 /// Serializable mirror of `ByteCodeKeyPart`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum DumpByteCodeKeyPart {
+pub enum DumpByteCodeKeyPart {
     ObservableSlotCount(usize),
     Value(DumpHashKey),
     Bytes(Vec<u8>),
@@ -381,7 +380,7 @@ pub(crate) enum DumpByteCodeKeyPart {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpLispHashTable {
+pub struct DumpLispHashTable {
     pub test: DumpHashTableTest,
     pub test_name: Option<DumpSymId>,
     pub size: i64,
@@ -394,7 +393,7 @@ pub(crate) struct DumpLispHashTable {
     /// insertion_order triple: the loader used to build two temporary maps
     /// and re-join them per table (4-5 hash operations per entry); ordered
     /// entries load with ONE insert per entry.
-    pub(crate) ordered_entries: Vec<(DumpHashKey, DumpValue, Option<DumpValue>)>,
+    pub ordered_entries: Vec<(DumpHashKey, DumpValue, Option<DumpValue>)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -409,7 +408,7 @@ pub(crate) struct DumpLispHashTable {
 /// enum from `LispSymbol`.  The variant tag directly mirrors the
 /// `SymbolRedirect` discriminant stored in `SymbolFlags`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum DumpSymbolVal {
+pub enum DumpSymbolVal {
     /// `SymbolRedirect::Plainval` — value is in `val.plain`.
     /// `DumpValue::Unbound` encodes the unbound sentinel.
     Plain(DumpValue),
@@ -468,7 +467,7 @@ pub(crate) enum DumpSymbolVal {
     Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive,
 )]
 #[repr(u8)]
-pub(crate) enum DumpLocalizedForwarder {
+pub enum DumpLocalizedForwarder {
     /// GNU `Lisp_Fwd_Bool` — `*XBOOLVAR (valcontents) = !NILP (newval)`.
     Bool = 1,
     /// GNU `Lisp_Fwd_Int` — `CHECK_INTEGER` then `integer_to_intmax`.
@@ -490,7 +489,7 @@ pub(crate) enum DumpLocalizedForwarder {
 /// the flag byte fields (`redirect`, `trapped_write`, `interned`,
 /// `declared_special`) mirror `SymbolFlags` exactly.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpSymbolData {
+pub struct DumpSymbolData {
     /// Redirect tag: 0=Plainval, 1=Varalias, 2=Localized, 3=Forwarded.
     /// Redundant with `val`'s variant tag but kept for clarity and to
     /// allow future validation on load.
@@ -510,7 +509,7 @@ pub(crate) struct DumpSymbolData {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpObarray {
+pub struct DumpObarray {
     /// Residual symbols that need per-symbol reconstruction (Localized and
     /// Forwarded redirects - runtime BLV/forwarder pointers cannot be baked).
     /// Plain and Varalias symbols ride `plain_rows` instead.
@@ -524,7 +523,7 @@ pub(crate) struct DumpObarray {
     /// through `write_dump_value_word`, so the relocation/fixup machinery
     /// patches them to live runtime Values before `load_obarray` reads the
     /// rows back - no per-symbol DumpValue decode at load.
-    pub(crate) plain_rows: Option<(u64, u64)>,
+    pub plain_rows: Option<(u64, u64)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -532,7 +531,7 @@ pub(crate) struct DumpObarray {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpSymbolEntry {
+pub struct DumpSymbolEntry {
     /// Dump-local name atom id for this symbol slot.
     pub name: DumpNameId,
     /// `true` when the corresponding symbol id is canonical/interned and
@@ -554,8 +553,7 @@ pub struct DumpSymbolTable {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct DumpTaggedHeap {
+pub struct DumpTaggedHeap {
     pub objects: Vec<DumpHeapObject>,
     #[serde(default)]
     pub mapped_cons: Vec<Option<DumpConsSpan>>,
@@ -574,13 +572,13 @@ pub(crate) struct DumpTaggedHeap {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum DumpRuntimeBindingValue {
+pub enum DumpRuntimeBindingValue {
     Bound(DumpValue),
     Void,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpOrderedSymMap {
+pub struct DumpOrderedSymMap {
     pub entries: Vec<(DumpSymId, DumpRuntimeBindingValue)>,
 }
 
@@ -612,7 +610,7 @@ pub struct DumpStringTextPropertyRun {
     IntoPrimitive,
     TryFromPrimitive,
 )]
-pub(crate) enum DumpBufferTextBackendKind {
+pub enum DumpBufferTextBackendKind {
     #[default]
     GapBuffer = 0,
     PieceTree = 1,
@@ -634,7 +632,7 @@ impl From<DumpBufferTextBackendKind> for BufferTextBackendKind {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpBufferText {
+pub struct DumpBufferText {
     pub backend_kind: DumpBufferTextBackendKind,
     pub text: Vec<u8>,
 }
@@ -644,19 +642,19 @@ pub(crate) struct DumpBufferText {
 // the insertion type as a plain `bool` matching `LispMarker`.
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpPropertyInterval {
+pub struct DumpPropertyInterval {
     pub start: usize,
     pub end: usize,
     pub properties: Vec<(DumpValue, DumpValue)>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpTextPropertyTable {
+pub struct DumpTextPropertyTable {
     pub intervals: Vec<DumpPropertyInterval>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpOverlay {
+pub struct DumpOverlay {
     pub serial: u64,
     pub plist: DumpValue,
     pub buffer: Option<DumpBufferId>,
@@ -673,7 +671,7 @@ pub(crate) struct DumpOverlay {
 /// layout. Used both for individual heap-object marker decode
 /// (`DumpHeapObject::Marker`) and for `DumpBuffer.markers` chain entries.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpMarker {
+pub struct DumpMarker {
     pub buffer: Option<DumpBufferId>,
     pub insertion_type: bool,
     pub marker_id: Option<u64>,
@@ -687,12 +685,12 @@ pub(crate) struct DumpMarker {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpOverlayList {
+pub struct DumpOverlayList {
     pub overlays: Vec<DumpOverlay>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum DumpUndoRecord {
+pub enum DumpUndoRecord {
     Insert {
         pos: usize,
         len: usize,
@@ -716,7 +714,7 @@ pub(crate) enum DumpUndoRecord {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpUndoList {
+pub struct DumpUndoList {
     pub records: Vec<DumpUndoRecord>,
     pub limit: usize,
     pub enabled: bool,
@@ -726,11 +724,11 @@ pub(crate) struct DumpUndoList {
 pub struct DumpBuffer {
     pub id: DumpBufferId,
     #[serde(default)]
-    pub(crate) name_lisp: Option<DumpLispString>,
+    pub name_lisp: Option<DumpLispString>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub(crate) last_name_lisp: Option<DumpLispString>,
+    pub last_name_lisp: Option<DumpLispString>,
     #[serde(default)]
     pub last_name: Option<String>,
     pub base_buffer: Option<DumpBufferId>,
@@ -759,9 +757,9 @@ pub struct DumpBuffer {
     #[serde(default)]
     pub auto_save_failure_time: i64,
     #[serde(default)]
-    pub(crate) modtime_sec: Option<i64>,
+    pub modtime_sec: Option<i64>,
     #[serde(default)]
-    pub(crate) modtime_nsec: Option<i32>,
+    pub modtime_nsec: Option<i32>,
     #[serde(default)]
     pub modtime_size: Option<i64>,
     /// GNU `last_window_start` serialized as a Lisp-visible one-based
@@ -772,11 +770,11 @@ pub struct DumpBuffer {
     pub read_only: bool,
     pub multibyte: bool,
     #[serde(default)]
-    pub(crate) file_name_lisp: Option<DumpLispString>,
+    pub file_name_lisp: Option<DumpLispString>,
     #[serde(default)]
     pub file_name: Option<String>,
     #[serde(default)]
-    pub(crate) auto_save_file_name_lisp: Option<DumpLispString>,
+    pub auto_save_file_name_lisp: Option<DumpLispString>,
     #[serde(default)]
     pub auto_save_file_name: Option<String>,
     /// v26: chain order, head→tail. Each entry is a full `DumpMarker`
@@ -785,23 +783,23 @@ pub struct DumpBuffer {
     /// same `marker_id` to preserve identity with Lisp references.
     pub markers: Vec<DumpMarker>,
     #[serde(default)]
-    pub(crate) state_pt_marker: Option<u64>,
+    pub state_pt_marker: Option<u64>,
     #[serde(default)]
-    pub(crate) state_begv_marker: Option<u64>,
+    pub state_begv_marker: Option<u64>,
     #[serde(default)]
-    pub(crate) state_zv_marker: Option<u64>,
+    pub state_zv_marker: Option<u64>,
     /// Dump-local id of this buffer's mark marker (`BVAR (buf, mark)`).
     /// Marker identity on load is the `MarkerObj` pointer; the id only ties
     /// this slot to the object allocated for the same chain entry.
     #[serde(default)]
     pub mark_marker: Option<u64>,
     #[serde(default)]
-    pub(crate) properties_syms: Vec<(DumpSymId, DumpRuntimeBindingValue)>,
+    pub properties_syms: Vec<(DumpSymId, DumpRuntimeBindingValue)>,
     pub properties: Vec<(String, DumpRuntimeBindingValue)>,
     #[serde(default)]
-    pub(crate) local_binding_syms: Vec<DumpSymId>,
+    pub local_binding_syms: Vec<DumpSymId>,
     #[serde(default)]
-    pub(crate) local_binding_names: Vec<String>,
+    pub local_binding_names: Vec<String>,
     #[serde(default)]
     pub local_map: DumpValue,
     pub text_props: DumpTextPropertyTable,
@@ -868,8 +866,7 @@ pub struct DumpBufferManager {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct DumpLispString {
+pub struct DumpLispString {
     pub data: Vec<u8>,
     pub size: usize,
     pub size_byte: i64,
@@ -878,16 +875,14 @@ pub(crate) struct DumpLispString {
 // Autoload
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) enum DumpAutoloadType {
+pub enum DumpAutoloadType {
     Function = 0,
     Macro = 1,
     Keymap = 2,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct DumpAutoloadEntry {
+pub struct DumpAutoloadEntry {
     pub file: DumpLispString,
     pub docstring: Option<DumpLispString>,
     pub interactive: bool,
@@ -895,8 +890,7 @@ pub(crate) struct DumpAutoloadEntry {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct DumpAutoloadManager {
+pub struct DumpAutoloadManager {
     #[serde(default)]
     pub entries_syms: Vec<(DumpSymId, DumpAutoloadEntry)>,
     pub entries: Vec<(String, DumpAutoloadEntry)>,
@@ -915,8 +909,7 @@ pub(crate) struct DumpAutoloadManager {
 
 // Custom
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct DumpCustomManager {
+pub struct DumpCustomManager {
     #[serde(default)]
     pub auto_buffer_local_syms: Vec<DumpSymId>,
     #[serde(default)]
@@ -925,7 +918,7 @@ pub(crate) struct DumpCustomManager {
 
 // Abbrev
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpAbbrev {
+pub struct DumpAbbrev {
     pub expansion: DumpLispString,
     pub hook: Option<DumpLispString>,
     pub count: usize,
@@ -933,7 +926,7 @@ pub(crate) struct DumpAbbrev {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpAbbrevTable {
+pub struct DumpAbbrevTable {
     pub name: DumpLispString,
     pub abbrevs: Vec<(DumpLispString, DumpAbbrev)>,
     pub parent: Option<DumpLispString>,
@@ -942,33 +935,33 @@ pub(crate) struct DumpAbbrevTable {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpAbbrevManager {
+pub struct DumpAbbrevManager {
     #[serde(default)]
-    pub(crate) tables_syms: Vec<(DumpSymId, DumpAbbrevTable)>,
+    pub tables_syms: Vec<(DumpSymId, DumpAbbrevTable)>,
     #[serde(default)]
     pub tables: Vec<(String, DumpAbbrevTable)>,
     #[serde(default)]
-    pub(crate) global_table_sym: Option<DumpSymId>,
-    pub(crate) global_table_name: DumpLispString,
-    pub(crate) abbrev_mode: bool,
+    pub global_table_sym: Option<DumpSymId>,
+    pub global_table_name: DumpLispString,
+    pub abbrev_mode: bool,
 }
 
 // Interactive
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpInteractiveSpec {
+pub struct DumpInteractiveSpec {
     pub spec: DumpValue,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpInteractiveRegistry {
+pub struct DumpInteractiveRegistry {
     pub specs: Vec<(DumpSymId, DumpInteractiveSpec)>,
 }
 
 // Mode
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpFontLockKeyword {
+pub struct DumpFontLockKeyword {
     #[serde(default)]
-    pub(crate) pattern_lisp: Option<DumpLispString>,
+    pub pattern_lisp: Option<DumpLispString>,
     #[serde(default)]
     pub pattern: Option<String>,
     #[serde(default)]
@@ -981,17 +974,17 @@ pub(crate) struct DumpFontLockKeyword {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpFontLockDefaults {
+pub struct DumpFontLockDefaults {
     pub keywords: Vec<DumpFontLockKeyword>,
     pub case_fold: bool,
     #[serde(default)]
-    pub(crate) syntax_table_lisp: Option<DumpLispString>,
+    pub syntax_table_lisp: Option<DumpLispString>,
     #[serde(default)]
     pub syntax_table: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpMajorMode {
+pub struct DumpMajorMode {
     pub pretty_name: DumpLispString,
     pub parent: Option<DumpValue>,
     pub mode_hook: DumpValue,
@@ -1003,7 +996,7 @@ pub(crate) struct DumpMajorMode {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpMinorMode {
+pub struct DumpMinorMode {
     pub lighter: Option<DumpLispString>,
     pub keymap_name: Option<DumpValue>,
     pub global: bool,
@@ -1012,7 +1005,7 @@ pub(crate) struct DumpMinorMode {
 
 // mode.rs has its own CustomVariable/CustomGroup — we mirror those separately
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpModeCustomVariable {
+pub struct DumpModeCustomVariable {
     pub default_value: DumpValue,
     pub doc: Option<DumpLispString>,
     pub custom_type: DumpModeCustomType,
@@ -1023,7 +1016,7 @@ pub(crate) struct DumpModeCustomVariable {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum DumpModeCustomType {
+pub enum DumpModeCustomType {
     Boolean,
     Integer,
     Float,
@@ -1045,21 +1038,21 @@ pub(crate) enum DumpModeCustomType {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpModeCustomGroup {
+pub struct DumpModeCustomGroup {
     pub doc: Option<DumpLispString>,
     pub parent: Option<DumpValue>,
     pub members: Vec<DumpValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpModeRegistry {
+pub struct DumpModeRegistry {
     pub major_modes: Vec<(DumpSymId, DumpMajorMode)>,
     pub minor_modes: Vec<(DumpSymId, DumpMinorMode)>,
     pub buffer_major_modes: Vec<(u64, DumpValue)>,
     pub buffer_minor_modes: Vec<(u64, Vec<DumpValue>)>,
     pub global_minor_modes: Vec<DumpValue>,
     #[serde(default)]
-    pub(crate) auto_mode_alist_lisp: Vec<(DumpLispString, DumpValue)>,
+    pub auto_mode_alist_lisp: Vec<(DumpLispString, DumpValue)>,
     #[serde(default)]
     pub auto_mode_alist: Vec<(String, DumpValue)>,
     pub custom_variables: Vec<(DumpSymId, DumpModeCustomVariable)>,
@@ -1070,7 +1063,7 @@ pub(crate) struct DumpModeRegistry {
 // Coding
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
-pub(crate) enum DumpEolType {
+pub enum DumpEolType {
     Unix = 0,
     Dos = 1,
     Mac = 2,
@@ -1078,55 +1071,55 @@ pub(crate) enum DumpEolType {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpCodingSystemInfo {
+pub struct DumpCodingSystemInfo {
     #[serde(default)]
     pub name_sym: Option<DumpSymId>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub(crate) coding_type_sym: Option<DumpSymId>,
+    pub coding_type_sym: Option<DumpSymId>,
     #[serde(default)]
     pub coding_type: Option<String>,
     pub mnemonic: char,
     pub eol_type: DumpEolType,
     pub ascii_compatible_p: bool,
     #[serde(default)]
-    pub(crate) charset_list_syms: Vec<DumpSymId>,
+    pub charset_list_syms: Vec<DumpSymId>,
     #[serde(default)]
     pub charset_list: Vec<String>,
     #[serde(default)]
-    pub(crate) post_read_conversion_sym: Option<DumpSymId>,
+    pub post_read_conversion_sym: Option<DumpSymId>,
     #[serde(default)]
     pub post_read_conversion: Option<String>,
     #[serde(default)]
-    pub(crate) pre_write_conversion_sym: Option<DumpSymId>,
+    pub pre_write_conversion_sym: Option<DumpSymId>,
     #[serde(default)]
     pub pre_write_conversion: Option<String>,
     pub default_char: Option<char>,
     pub for_unibyte: bool,
     #[serde(default)]
-    pub(crate) properties_syms: Vec<(DumpSymId, DumpValue)>,
+    pub properties_syms: Vec<(DumpSymId, DumpValue)>,
     #[serde(default)]
     pub properties: Vec<(String, DumpValue)>,
     pub int_properties: Vec<(i64, DumpValue)>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpCodingSystemManager {
+pub struct DumpCodingSystemManager {
     #[serde(default)]
-    pub(crate) systems_syms: Vec<(DumpSymId, DumpCodingSystemInfo)>,
+    pub systems_syms: Vec<(DumpSymId, DumpCodingSystemInfo)>,
     #[serde(default)]
     pub systems: Vec<(String, DumpCodingSystemInfo)>,
     #[serde(default)]
-    pub(crate) aliases_syms: Vec<(DumpSymId, DumpSymId)>,
+    pub aliases_syms: Vec<(DumpSymId, DumpSymId)>,
     #[serde(default)]
     pub aliases: Vec<(String, String)>,
     #[serde(default)]
-    pub(crate) alias_order_syms: Vec<(DumpSymId, Vec<DumpSymId>)>,
+    pub alias_order_syms: Vec<(DumpSymId, Vec<DumpSymId>)>,
     #[serde(default)]
     pub alias_order: Vec<(String, Vec<String>)>,
     #[serde(default)]
-    pub(crate) priority_syms: Vec<DumpSymId>,
+    pub priority_syms: Vec<DumpSymId>,
     #[serde(default)]
     pub priority: Vec<String>,
     #[serde(default)]
@@ -1141,9 +1134,9 @@ pub(crate) struct DumpCodingSystemManager {
 
 // Charset
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpCharsetSubsetSpec {
+pub struct DumpCharsetSubsetSpec {
     #[serde(default)]
-    pub(crate) parent_sym: Option<DumpSymId>,
+    pub parent_sym: Option<DumpSymId>,
     #[serde(default)]
     pub parent: Option<String>,
     pub parent_min_code: i64,
@@ -1152,7 +1145,7 @@ pub(crate) struct DumpCharsetSubsetSpec {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum DumpCharsetMethod {
+pub enum DumpCharsetMethod {
     Offset(i64),
     Map(String),
     Subset(DumpCharsetSubsetSpec),
@@ -1161,7 +1154,7 @@ pub(crate) enum DumpCharsetMethod {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpCharsetInfo {
+pub struct DumpCharsetInfo {
     pub id: i64,
     #[serde(default)]
     pub name_sym: Option<DumpSymId>,
@@ -1182,34 +1175,34 @@ pub(crate) struct DumpCharsetInfo {
     pub unify_map: DumpValue,
     pub method: DumpCharsetMethod,
     #[serde(default)]
-    pub(crate) plist_syms: Vec<(DumpSymId, DumpValue)>,
+    pub plist_syms: Vec<(DumpSymId, DumpValue)>,
     #[serde(default)]
     pub plist: Vec<(String, DumpValue)>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpCharsetRegistry {
+pub struct DumpCharsetRegistry {
     pub charsets: Vec<DumpCharsetInfo>,
     #[serde(default)]
-    pub(crate) priority_syms: Vec<DumpSymId>,
+    pub priority_syms: Vec<DumpSymId>,
     #[serde(default)]
     pub priority: Vec<String>,
     /// Exact GNU Mule-list chronology. Old charset sections lack this field;
     /// None reconstructs their Mule membership from global priority order.
     #[serde(default)]
-    pub(crate) emacs_mule_order_syms: Option<Vec<DumpSymId>>,
+    pub emacs_mule_order_syms: Option<Vec<DumpSymId>>,
     /// Stable physical-ID order and authoritative alias lookup metadata.
     /// Missing fields preserve materialized-alias sections from versions 1/2.
     #[serde(default)]
-    pub(crate) priority_identity_syms: Option<Vec<DumpSymId>>,
+    pub priority_identity_syms: Option<Vec<DumpSymId>>,
     #[serde(default)]
-    pub(crate) alias_syms: Option<Vec<(DumpSymId, DumpSymId)>>,
+    pub alias_syms: Option<Vec<(DumpSymId, DumpSymId)>>,
     pub next_id: i64,
 }
 
 #[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
-pub(crate) enum DumpFontWidth {
+pub enum DumpFontWidth {
     UltraCondensed = 0,
     ExtraCondensed = 1,
     Condensed = 2,
@@ -1222,8 +1215,7 @@ pub(crate) enum DumpFontWidth {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) enum DumpFontRepertory {
+pub enum DumpFontRepertory {
     Charset(String),
     CharTableRanges(Vec<(u32, u32)>),
     CharsetSym(DumpSymId),
@@ -1253,8 +1245,7 @@ pub struct DumpStoredFontSpec {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) enum DumpFontSpecEntry {
+pub enum DumpFontSpecEntry {
     Font(DumpStoredFontSpec),
     ExplicitNone,
 }
@@ -1267,15 +1258,13 @@ pub struct DumpFontsetRangeEntry {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct DumpFontsetData {
+pub struct DumpFontsetData {
     pub ranges: Vec<DumpFontsetRangeEntry>,
     pub fallback: Option<Vec<DumpFontSpecEntry>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct DumpFontsetRegistry {
+pub struct DumpFontsetRegistry {
     #[serde(default)]
     pub ordered_names_lisp: Vec<DumpLispString>,
     #[serde(default)]
@@ -1293,7 +1282,7 @@ pub(crate) struct DumpFontsetRegistry {
 
 // Face
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
-pub(crate) struct DumpColor {
+pub struct DumpColor {
     pub r: u8,
     pub g: u8,
     pub b: u8,
@@ -1302,7 +1291,7 @@ pub(crate) struct DumpColor {
 
 #[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
-pub(crate) enum DumpFontSlant {
+pub enum DumpFontSlant {
     Normal = 0,
     Italic = 1,
     Oblique = 2,
@@ -1312,7 +1301,7 @@ pub(crate) enum DumpFontSlant {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
-pub(crate) enum DumpUnderlineStyle {
+pub enum DumpUnderlineStyle {
     Line = 0,
     Wave = 1,
     Dot = 2,
@@ -1321,7 +1310,7 @@ pub(crate) enum DumpUnderlineStyle {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpUnderline {
+pub struct DumpUnderline {
     pub style: DumpUnderlineStyle,
     pub color: Option<DumpColor>,
     pub position: Option<i32>,
@@ -1329,7 +1318,7 @@ pub(crate) struct DumpUnderline {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
-pub(crate) enum DumpBoxStyle {
+pub enum DumpBoxStyle {
     Flat = 0,
     Raised = 1,
     Pressed = 2,
@@ -1337,14 +1326,14 @@ pub(crate) enum DumpBoxStyle {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpBoxBorder {
+pub struct DumpBoxBorder {
     pub color: Option<DumpColor>,
     pub width: i32,
     pub style: DumpBoxStyle,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum DumpFaceHeight {
+pub enum DumpFaceHeight {
     Absolute(i32),
     Relative(f64),
 }
@@ -1357,22 +1346,22 @@ pub struct DumpFace {
     pub family_value: Option<DumpValue>,
     pub family: Option<String>,
     #[serde(default)]
-    pub(crate) foundry_value: Option<DumpValue>,
+    pub foundry_value: Option<DumpValue>,
     pub foundry: Option<String>,
     pub height: Option<DumpFaceHeight>,
     pub weight: Option<u16>,
     pub slant: Option<DumpFontSlant>,
     #[serde(default)]
-    pub(crate) underline_disabled: bool,
+    pub underline_disabled: bool,
     pub underline: Option<DumpUnderline>,
     pub overline: Option<bool>,
     pub strike_through: Option<bool>,
     #[serde(default)]
-    pub(crate) box_disabled: bool,
+    pub box_disabled: bool,
     pub box_border: Option<DumpBoxBorder>,
     pub inverse_video: Option<bool>,
     #[serde(default)]
-    pub(crate) stipple_value: Option<DumpValue>,
+    pub stipple_value: Option<DumpValue>,
     pub stipple: Option<String>,
     pub extend: Option<bool>,
     #[serde(default)]
@@ -1395,26 +1384,26 @@ pub struct DumpFaceTable {
 
 // Rectangle
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpRectangleState {
+pub struct DumpRectangleState {
     pub killed: Vec<DumpLispString>,
 }
 
 // Kmacro
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpKmacroManager {
-    pub(crate) current_macro: Vec<DumpValue>,
-    pub(crate) last_macro: Option<Vec<DumpValue>>,
+pub struct DumpKmacroManager {
+    pub current_macro: Vec<DumpValue>,
+    pub last_macro: Option<Vec<DumpValue>>,
     pub macro_ring: Vec<Vec<DumpValue>>,
     pub counter: i64,
     #[serde(default)]
-    pub(crate) counter_format_lisp: Option<DumpLispString>,
+    pub counter_format_lisp: Option<DumpLispString>,
     #[serde(default)]
     pub counter_format: Option<String>,
 }
 
 // Register
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum DumpRegisterContent {
+pub enum DumpRegisterContent {
     Text {
         data: Vec<u8>,
         size: usize,
@@ -1429,13 +1418,13 @@ pub(crate) enum DumpRegisterContent {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpRegisterManager {
+pub struct DumpRegisterManager {
     pub registers: Vec<(char, DumpRegisterContent)>,
 }
 
 // Bookmark
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpBookmark {
+pub struct DumpBookmark {
     pub name: DumpLispString,
     pub filename: Option<DumpLispString>,
     pub position: usize,
@@ -1446,9 +1435,9 @@ pub(crate) struct DumpBookmark {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpBookmarkManager {
+pub struct DumpBookmarkManager {
     #[serde(default)]
-    pub(crate) bookmarks_lisp: Vec<(DumpLispString, DumpBookmark)>,
+    pub bookmarks_lisp: Vec<(DumpLispString, DumpBookmark)>,
     #[serde(default)]
     pub bookmarks: Vec<(String, DumpBookmark)>,
     pub recent: Vec<DumpLispString>,
@@ -1456,7 +1445,7 @@ pub(crate) struct DumpBookmarkManager {
 
 // Variable watchers
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct DumpVariableWatcherList {
+pub struct DumpVariableWatcherList {
     pub watchers: Vec<(DumpSymId, Vec<DumpValue>)>,
 }
 
@@ -1479,14 +1468,14 @@ pub struct DumpContextState {
     pub custom: DumpCustomManager,
     pub modes: DumpModeRegistry,
     pub coding_systems: DumpCodingSystemManager,
-    pub(crate) charset_registry: DumpCharsetRegistry,
-    pub(crate) fontset_registry: DumpFontsetRegistry,
+    pub charset_registry: DumpCharsetRegistry,
+    pub fontset_registry: DumpFontsetRegistry,
     pub face_table: DumpFaceTable,
     pub abbrevs: DumpAbbrevManager,
     pub interactive: DumpInteractiveRegistry,
     pub rectangle: DumpRectangleState,
-    pub(crate) standard_syntax_table: DumpValue,
-    pub(crate) syntax_code_objects: DumpValue,
+    pub standard_syntax_table: DumpValue,
+    pub syntax_code_objects: DumpValue,
     pub standard_category_table: DumpValue,
     pub current_local_map: DumpValue,
     pub current_global_map: DumpValue,

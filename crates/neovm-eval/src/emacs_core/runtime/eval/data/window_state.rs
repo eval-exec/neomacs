@@ -109,11 +109,6 @@ impl ChromeDirty {
         self.all_generation
     }
 
-    /// Whether WINDOW carries its own mark (GNU `w->update_mode_line`).
-    pub(crate) fn is_window_marked(&self, window: WindowId) -> bool {
-        self.windows.contains(&window)
-    }
-
     /// Whether WINDOW must re-generate its chrome this redisplay.
     pub fn is_dirty(&self, window: WindowId) -> bool {
         self.windows.contains(&window)
@@ -146,13 +141,6 @@ impl ChromeDirty {
     pub fn note_chrome_generated(&mut self, window: WindowId) {
         self.windows.remove(&window);
         self.acknowledged.insert(window, self.all_generation);
-    }
-
-    /// Drop a deleted window's acknowledgement so the table does not grow
-    /// without bound across a session's window churn.
-    pub(crate) fn forget_window(&mut self, window: WindowId) {
-        self.windows.remove(&window);
-        self.acknowledged.remove(&window);
     }
 }
 
@@ -926,12 +914,6 @@ impl WindowDisplayState {
         self.redisplay_output.as_ref()
     }
 
-    pub(crate) fn clear_cursor_state(&mut self) {
-        self.cursor = None;
-        self.clear_output_cursor_state();
-        self.clear_physical_cursor_state();
-    }
-
     /// Start a new output pass for this window.
     ///
     /// The last committed output cursor remains authoritative until redisplay
@@ -1016,21 +998,6 @@ impl WindowVisibleBufferSpan {
 
     pub const fn end(self) -> LispCharPos1 {
         self.end
-    }
-
-    /// Convert the inclusive redisplay span into GNU's Lisp-visible
-    /// `window-end` position.
-    ///
-    /// Published row ends normally identify the last displayed character, so
-    /// `window-end` is the following insertion position. Redisplay also
-    /// publishes Z itself for a visible EOB insertion slot; that boundary is
-    /// already a Lisp position and must not be advanced past `point-max`.
-    pub(crate) fn lisp_window_end(self, buffer_z: LispCharPos1) -> LispCharPos1 {
-        if self.end >= buffer_z {
-            buffer_z
-        } else {
-            LispCharPos1::new(self.end.as_i64().saturating_add(1))
-        }
     }
 }
 
@@ -1734,7 +1701,7 @@ pub enum PresentationPositions {
 
 /// Immutable numeric descriptors and maps with one thread-safe vector cache.
 /// Concurrent readers publish once; no Lisp state or snapshot object is retained.
-pub(crate) struct DeferredPositions {
+pub struct DeferredPositions {
     pub(crate) rows: DisplayPointRows,
     pub(crate) body_rows: HashMap<i64, PresentedBodyRowSnapshot>,
     pub(crate) row_heights: HashMap<i64, i64>,
@@ -1996,16 +1963,6 @@ impl Window {
         }
     }
 
-    /// Mutable counterpart of [`Window::children`], for the structural edits
-    /// -- push, remove, reorder -- that [`WindowTree`] performs on behalf of
-    /// split and delete.  `None` for a leaf, which has no child list to edit.
-    pub(crate) fn children_mut(&mut self) -> Option<&mut Vec<WindowId>> {
-        match self {
-            Window::Leaf { .. } => None,
-            Window::Internal { children, .. } => Some(children),
-        }
-    }
-
     /// Character-line top edge. GNU `w->top_line` (`WINDOW_TOP_EDGE_LINE`).
     pub fn top_line(&self) -> i64 {
         match self {
@@ -2225,14 +2182,6 @@ impl Window {
         match self {
             Window::Leaf { min_hscroll, .. } => *min_hscroll,
             Window::Internal { .. } => 0,
-        }
-    }
-
-    /// Set the lower bound for automatic horizontal scrolling
-    /// (`w->min_hscroll`). No-op for internal nodes.
-    pub(crate) fn set_min_hscroll(&mut self, value: usize) {
-        if let Window::Leaf { min_hscroll, .. } = self {
-            *min_hscroll = value;
         }
     }
 
@@ -2492,13 +2441,6 @@ impl Window {
         match self {
             Window::Leaf { change_stamp, .. } => *change_stamp,
             Window::Internal { .. } => None,
-        }
-    }
-
-    /// Stamp this window with the epoch that has just been recorded.
-    pub(crate) fn set_change_stamp(&mut self, stamp: ChangeStamp) {
-        if let Window::Leaf { change_stamp, .. } = self {
-            *change_stamp = Some(stamp);
         }
     }
 
@@ -3870,10 +3812,6 @@ impl WindowDisplaySnapshot {
             self.points = rows.iter_points().collect();
         }
         &mut self.points
-    }
-
-    pub(crate) fn clear_point_rows(&mut self) {
-        self.point_rows = None;
     }
 
     /// Replace the flat points and invalidate any previous shared representation.

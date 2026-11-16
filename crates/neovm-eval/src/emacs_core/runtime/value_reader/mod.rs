@@ -175,50 +175,6 @@ pub(crate) fn read_one_from_encoded_file_bytes<'a>(
     Ok(Some((value, reader.pos)))
 }
 
-/// Read a single form from `input`, optionally wrapping interned symbols in
-/// `symbol-with-pos` objects that record GNU's character offset from the start
-/// of this read.  Used by `read-positioning-symbols`.
-pub(crate) fn read_one_with_locate_syms(
-    input: &str,
-    source_multibyte: bool,
-    start: usize,
-    locate_syms: bool,
-    vars: crate::emacs_core::eval::VariableView<'_>,
-) -> Result<Option<(Value, usize)>, ReadError> {
-    read_one_with_locate_syms_with_symbols(
-        input,
-        source_multibyte,
-        start,
-        locate_syms,
-        vars,
-        SymbolMode::Bare,
-    )
-}
-
-pub(crate) fn read_one_with_locate_syms_with_symbols(
-    input: &str,
-    source_multibyte: bool,
-    start: usize,
-    locate_syms: bool,
-    vars: crate::emacs_core::eval::VariableView<'_>,
-    mode: SymbolMode,
-) -> Result<Option<(Value, usize)>, ReadError> {
-    let mut reader = Reader::new(
-        input,
-        ReaderSourceSemantics::for_lisp_object(source_multibyte),
-        vars,
-    );
-    reader.advance_raw_to(EmacsBytePos::new(start));
-    reader.readchar_offset_origin = ReadcharOffsetOrigin::RelativeToSourceByte(start);
-    reader.symbol_position_mode = SymbolPositionMode::from(locate_syms);
-    reader.symbol_mode = mode;
-    if !reader.skip_ws_and_comments() {
-        return Ok(None);
-    }
-    let value = reader.read_form()?;
-    Ok(Some((value, reader.pos)))
-}
-
 #[path = "callable.rs"]
 mod callable;
 
@@ -359,34 +315,9 @@ impl<'a> LispReadSource<'a> {
         Ok(Some((value, reader.pos)))
     }
 
-    pub(crate) fn read_one_with_locate_syms(
-        &self,
-        start: usize,
-        locate_syms: bool,
-        vars: crate::emacs_core::eval::VariableView<'_>,
-    ) -> Result<Option<(Value, usize)>, ReadError> {
-        self.read_one_with_locate_syms_with_symbols(start, locate_syms, vars, SymbolMode::Bare)
-    }
-
-    pub(crate) fn read_one_with_locate_syms_with_symbols(
-        &self,
-        start: usize,
-        locate_syms: bool,
-        vars: crate::emacs_core::eval::VariableView<'_>,
-        mode: SymbolMode,
-    ) -> Result<Option<(Value, usize)>, ReadError> {
-        self.read_one_range_with_locate_syms_with_symbols(
-            start,
-            self.logical_len(),
-            SymbolPositionMode::from(locate_syms),
-            vars,
-            None,
-            mode,
-        )
-    }
-
     #[doc(hidden)]
-    pub fn read_one_character_range_with_locate_syms(
+    #[cfg(test)]
+    pub(crate) fn read_one_character_range_with_locate_syms(
         &self,
         range: CharacterReadRange<'a>,
         symbol_position_mode: SymbolPositionMode,
@@ -404,7 +335,7 @@ impl<'a> LispReadSource<'a> {
 
     /// Lisp START/END are logical character coordinates, not byte bounds.
     #[doc(hidden)]
-    pub fn read_one_character_range_with_locate_syms_with_symbols(
+    pub(crate) fn read_one_character_range_with_locate_syms_with_symbols(
         &self,
         range: CharacterReadRange<'a>,
         symbol_position_mode: SymbolPositionMode,
@@ -524,7 +455,7 @@ impl ReadSymbolShorthands {
     }
 
     #[doc(hidden)]
-    pub fn rewrite(
+    pub(crate) fn rewrite(
         &self,
         name: &neovm_value::heap_types::LispString,
     ) -> Result<Option<neovm_value::heap_types::LispString>, ReadShorthandError> {
@@ -615,7 +546,7 @@ fn recount_specified_multibyte_name(
 pub struct ReadError {
     pub message: String,
     pub position: usize,
-    pub kind: ReadErrorKind,
+    pub(crate) kind: ReadErrorKind,
     pub(crate) signal_symbol: Option<neovm_value::intern::SymId>,
     pub signal_data: Vec<Value>,
 }

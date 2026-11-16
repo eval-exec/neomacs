@@ -208,7 +208,7 @@ impl LoadedUnit {
 
     /// The unit's leaf index, resolved by `init` on first use.
     #[doc(hidden)]
-    pub fn index_or_init(
+    pub(crate) fn index_or_init(
         &self,
         init: impl FnOnce(&libloading::Library) -> Option<AotUnitIndex>,
     ) -> Option<AotUnitIndex> {
@@ -958,7 +958,7 @@ impl CompiledLeaf {
 
     /// The tier that produced this leaf (see [`LeafTier`]).
     #[doc(hidden)]
-    pub fn tier(&self) -> LeafTier {
+    pub(crate) fn tier(&self) -> LeafTier {
         self.tier
     }
 
@@ -1004,7 +1004,7 @@ impl CompiledLeaf {
     /// exactly like a fresh JIT compile. A `None` obarray (test/testkit load) leaves
     /// every site DISARMED.
     #[doc(hidden)]
-    pub unsafe fn from_aot(
+    pub(crate) unsafe fn from_aot(
         entry: *const u8,
         backing: std::sync::Arc<LoadedUnit>,
         meta: AotLeafMeta,
@@ -1348,7 +1348,7 @@ impl CompiledLeaf {
     /// SAFETY: as [`Self::entry_call_raw_memory`].
     #[inline(always)]
     #[doc(hidden)]
-    pub unsafe fn entry_call_raw_register(
+    pub(crate) unsafe fn entry_call_raw_register(
         &self,
         vmctx: *mut u8,
         consts: *const Value,
@@ -1878,7 +1878,7 @@ impl CompiledLeaf {
     #[inline(never)]
     #[allow(clippy::too_many_arguments)] // mirrors invoke_native's locals
     #[doc(hidden)]
-    pub fn cold_frame_exit(
+    pub(crate) fn cold_frame_exit(
         &self,
         vmctx: *mut u8,
         status: i64,

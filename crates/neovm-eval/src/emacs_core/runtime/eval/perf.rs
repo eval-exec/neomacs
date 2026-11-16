@@ -108,11 +108,6 @@ pub(crate) fn install_perf_hooks(
     }
 }
 
-/// The installed descriptor, if core has run one of the two pinned seams.
-pub(crate) fn perf_hooks() -> Option<&'static PerfHooks> {
-    PERF_HOOKS.get()
-}
-
 /// Whether hot-path tracing is on. This is the disabled fast-path gate: one
 /// installed bool and one branch.
 #[inline]

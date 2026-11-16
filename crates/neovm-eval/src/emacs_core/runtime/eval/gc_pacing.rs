@@ -837,6 +837,7 @@ impl Context {
     }
 
     /// Set the maximum eval recursion depth.
+    #[cfg(test)]
     pub(crate) fn set_max_depth(&mut self, depth: usize) {
         self.max_depth = depth;
     }

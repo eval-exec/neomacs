@@ -135,13 +135,14 @@ pub(crate) enum GnuSpecialness {
 
 /// One GNU `DEFVAR_LISP' / `DEFVAR_KBOARD' declaration.
 #[derive(Copy, Clone, Debug)]
-pub struct GnuObjectVariable {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct GnuObjectVariable {
     /// The Lisp symbol name the macro's first argument spells.
     pub name: &'static str,
     /// The forward variant the macro installs.
-    pub kind: GnuObjectForward,
+    pub(crate) kind: GnuObjectForward,
     /// Whether GNU keeps the `declared_special` flag the macro sets.
-    pub special: GnuSpecialness,
+    pub(crate) special: GnuSpecialness,
 }
 
 /// What [`adopt_one`] did with a row.
@@ -207,6 +208,7 @@ impl AdoptionCounts {
     /// Rows this pass left as plain obarray cells, i.e. the residual on which
     /// `makunbound` still answers differently from GNU for a variable this
     /// port actually has.
+    #[cfg(test)]
     pub(crate) fn unforwarded_but_present(self) -> usize {
         self.alias + self.localized
     }
@@ -221,7 +223,7 @@ impl AdoptionCounts {
 /// value each symbol already holds moves into the descriptor, so no row can
 /// change a variable's value, and a name this build does not have is left
 /// alone rather than newly bound to nil.
-pub fn adopt(obarray: &mut Obarray) -> AdoptionCounts {
+pub(crate) fn adopt(obarray: &mut Obarray) -> AdoptionCounts {
     let mut counts = AdoptionCounts::default();
     for var in gnu_table::GNU_OBJECT_VARIABLES {
         let outcome = adopt_one(obarray, var);

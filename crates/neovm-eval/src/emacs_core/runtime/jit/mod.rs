@@ -568,6 +568,7 @@ impl FeedbackVecExt for FeedbackVec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum HofCallerBit {
+    #[allow(dead_code)] // discriminant 0 sentinel of the u8 bit codec.
     Unknown = 0,
     No = 1,
     Yes = 2,

@@ -146,11 +146,11 @@ impl VariableWatcherList {
 
     // pdump accessors
     #[doc(hidden)]
-    pub fn dump_watchers(&self) -> &FxHashMap<SymId, Vec<VariableWatcher>> {
+    pub(crate) fn dump_watchers(&self) -> &FxHashMap<SymId, Vec<VariableWatcher>> {
         &self.watchers
     }
     #[doc(hidden)]
-    pub fn from_dump(watchers: FxHashMap<SymId, Vec<VariableWatcher>>) -> Self {
+    pub(crate) fn from_dump(watchers: FxHashMap<SymId, Vec<VariableWatcher>>) -> Self {
         Self { watchers }
     }
 }

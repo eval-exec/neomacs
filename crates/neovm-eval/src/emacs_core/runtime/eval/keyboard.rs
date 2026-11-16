@@ -31,7 +31,6 @@ mod unread;
 
 pub use keysym::{native_key_android, native_key_macos, native_key_windows};
 
-pub(crate) use keysym::native_key_ohos;
 pub(crate) use neovm_value::system_vocab::input::{
     ExecutingKbdMacroRuntimeSnapshot, KeySequenceBufferSelection, ReadKeySequenceOptions,
     TtyInputDecoding,
@@ -68,11 +67,11 @@ pub(crate) use crate::emacs_core::eval::data::command_loop::{
     HELP_CHAR, HELP_EVENT_LIST, INPUT_METHOD_FUNCTION, INTERNAL_TIMER_START_IDLE,
     KEY_TRANSLATION_MAP, KEYBOARD_TRANSLATE_TABLE, KeyEchoDecoration, KeyEchoState,
     KeyboardRuntime, LAST_INPUT_EVENT, LAST_KBD_MACRO, LAST_NONMENU_EVENT, LastMouseClick,
-    MouseEventPayload, MousePixelPositionState, MousePressState, NonmacroInputEvent,
-    PREFIX_HELP_COMMAND, PresentedInteractions, PresentedMouseObservation, ReadKeySequenceState,
-    SPECIAL_EVENT_MAP, THIS_COMMAND_KEYS_SHIFT_TRANSLATED, TRANSLATE_UPPER_CASE_KEY_BINDINGS,
-    UNDEFINED_SYMBOL, UNREAD_INPUT_METHOD_EVENTS, UNREAD_POST_INPUT_METHOD_EVENTS,
-    help_event_echo_suffix, num_nonmacro_input_events_symbol,
+    MouseEventPayload, MousePressState, NonmacroInputEvent, PREFIX_HELP_COMMAND,
+    PresentedMouseObservation, ReadKeySequenceState, SPECIAL_EVENT_MAP,
+    THIS_COMMAND_KEYS_SHIFT_TRANSLATED, TRANSLATE_UPPER_CASE_KEY_BINDINGS, UNDEFINED_SYMBOL,
+    UNREAD_INPUT_METHOD_EVENTS, UNREAD_POST_INPUT_METHOD_EVENTS, help_event_echo_suffix,
+    num_nonmacro_input_events_symbol,
 };
 pub use crate::emacs_core::eval::data::command_loop::{
     CommandLoop, KBoard, PrefixArg, PresentedMouseArea, PresentedMouseTarget,
@@ -999,7 +998,7 @@ pub(crate) const XK_PAGE_UP: u32 = 0xFF55;
 pub(crate) const XK_PAGE_DOWN: u32 = 0xFF56;
 pub(crate) const XK_INSERT: u32 = 0xFF63;
 pub const XK_F1: u32 = 0xFFBE;
-pub(crate) const XK_F24: u32 = 0xFFD5;
+pub const XK_F24: u32 = 0xFFD5;
 
 // Render thread modifier bitmask constants.
 //
@@ -2168,7 +2167,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn lookup_key_sequence_suffix_translation(
+    pub(crate) fn lookup_key_sequence_suffix_translation(
         &mut self,
         map: Value,
         events: &[Value],
@@ -2260,7 +2259,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn apply_translation_map_to_events(
+    pub(crate) fn apply_translation_map_to_events(
         &mut self,
         map: Value,
         mut translated: Vec<Value>,
@@ -2370,7 +2369,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn key_echo_message(
+    pub(crate) fn key_echo_message(
         &mut self,
         translated_events: &[Value],
         decoration: KeyEchoDecoration,
@@ -2454,7 +2453,7 @@ impl crate::emacs_core::eval::Context {
     /// deliberately cancels any previous keyboard ownership, so ownership is
     /// installed only after the new message has been committed.
     #[doc(hidden)]
-    pub fn publish_key_echo_message(
+    pub(crate) fn publish_key_echo_message(
         &mut self,
         events: &[Value],
         prompt: Option<LispString>,
@@ -2568,7 +2567,7 @@ impl crate::emacs_core::eval::Context {
     ///
     /// Keyboard audit Finding 10.
     #[doc(hidden)]
-    pub fn maybe_apply_input_method_function(
+    pub(crate) fn maybe_apply_input_method_function(
         &mut self,
         event: Value,
     ) -> Result<InputMethodEvent, neovm_value::error::Flow> {
@@ -2694,7 +2693,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn apply_shift_translation_to_current_key_sequence(
+    pub(crate) fn apply_shift_translation_to_current_key_sequence(
         &mut self,
     ) -> Option<KeySequenceShiftTranslation> {
         let translated = self
@@ -2721,7 +2720,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn finalize_shift_translated_key_sequence(
+    pub(crate) fn finalize_shift_translated_key_sequence(
         &mut self,
         sequence_is_undefined: bool,
         options: ReadKeySequenceOptions,
@@ -4111,7 +4110,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn pop_queued_read_char_event(
+    pub(crate) fn pop_queued_read_char_event(
         &mut self,
         idle_policy: IdleTransitionPolicy,
     ) -> Result<QueuedReadCharEvent, neovm_value::error::Flow> {
@@ -4900,7 +4899,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn read_char_event_with_timeout(
+    pub(crate) fn read_char_event_with_timeout(
         &mut self,
         timeout: Option<std::time::Duration>,
         tty_input_decoding: TtyInputDecoding,
@@ -4909,14 +4908,14 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn read_char_event_with_timeout_for_key_sequence(
+    pub(crate) fn read_char_event_with_timeout_for_key_sequence(
         &mut self,
     ) -> Result<Option<ReadCharEvent>, neovm_value::error::Flow> {
         self.read_char_event_with_timeout_policy(None, true, TtyInputDecoding::KeyboardCodingSystem)
     }
 
     #[doc(hidden)]
-    pub fn read_char_event_with_timeout_policy(
+    pub(crate) fn read_char_event_with_timeout_policy(
         &mut self,
         timeout: Option<std::time::Duration>,
         command_input: bool,
@@ -5716,7 +5715,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn make_mouse_event(
+    pub(crate) fn make_mouse_event(
         eval: &mut Self,
         button: &MouseButton,
         modifiers: &Modifiers,
@@ -5908,7 +5907,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn simplify_mouse_event_once(
+    pub(crate) fn simplify_mouse_event_once(
         event: Value,
         mode: SymbolMode,
     ) -> Option<(MouseEventFallbackStep, Option<Value>)> {
@@ -5959,7 +5958,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn resolve_undefined_mouse_sequence_fallback(
+    pub(crate) fn resolve_undefined_mouse_sequence_fallback(
         &mut self,
         events: &[Value],
         lookup_position: Option<&Value>,
@@ -6032,7 +6031,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn mouse_posn_descriptor_value(desc: MousePosnDescriptor) -> Value {
+    pub(crate) fn mouse_posn_descriptor_value(desc: MousePosnDescriptor) -> Value {
         let area_or_pos = match desc.area {
             Some(area) => Value::symbol(area),
             None => desc.metrics.point.map(Value::fixnum).unwrap_or(Value::NIL),
@@ -6506,7 +6505,7 @@ impl crate::emacs_core::eval::Context {
     /// stale observation left by an earlier pointer event would open a drag on
     /// a press that landed in the text body.
     #[doc(hidden)]
-    pub fn grabbed_window_edge(
+    pub(crate) fn grabbed_window_edge(
         &self,
         button: MouseButton,
         x: f32,

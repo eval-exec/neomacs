@@ -86,7 +86,6 @@ pub use world::Baton;
 // TEST-SUPPORT-VIS row: the sole-owner compile contract names the driver from
 // the real crate so that its crate-private constructor, not a fixture-local
 // copy of the source, is the rejected item.
-pub(crate) use world::OutstandingWorldViews;
 pub(crate) use world::WorldSlot;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
@@ -876,6 +875,7 @@ pub(crate) const AUDITED_PURE_PRIMITIVES: &[&str] = &["setcar", "setcdr"];
 /// (buffer-change hooks, `word-boundary-function`, ...). Kept next to the
 /// pure list so both are one registration-time source of truth for the
 /// exhaustiveness test.
+#[cfg(test)]
 pub(crate) const AUDITED_REENTRANT_PRIMITIVES: &[&str] =
     &["insert", "delete-region", "indent-to", "forward-word"];
 
@@ -1464,7 +1464,7 @@ impl SpecBinding {
 
 /// A dynamic binding owned by one selected keyboard lifetime.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct KeyboardBinding {
+pub struct KeyboardBinding {
     sym_id: SymId,
     owner: neovm_value::forward::KeyboardBindingOwner,
     old_value: Value,
@@ -5682,7 +5682,7 @@ impl Context {
     /// variable's own value answers instead (`thread_projection`).
     #[inline]
     #[doc(hidden)]
-    pub fn forwarded_buffer_obj_value(
+    pub(crate) fn forwarded_buffer_obj_value(
         &self,
         sym_id: SymId,
         sym: &neovm_value::symbol::LispSymbol,
@@ -5785,7 +5785,10 @@ impl Context {
     /// uninterned symbol identity, like Emacs's EQ-based Fassq on
     /// Vinternal_interpreter_environment).
     #[doc(hidden)]
-    pub fn lookup_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
+    pub(crate) fn lookup_symbol_value_by_id(
+        &self,
+        sym_id: SymId,
+    ) -> Result<SymbolValueLookup, Flow> {
         // GNU eval.c checks the lexenv for the ORIGINAL symbol BEFORE
         // resolving variable aliases and does not rescan declared-special
         // flags on ordinary reads. Declared-special affects how bindings are
@@ -5815,7 +5818,7 @@ impl Context {
     }
 
     #[doc(hidden)]
-    pub fn find_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
+    pub(crate) fn find_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
         // Fast path — GNU `find_symbol_value`'s SYMBOL_PLAINVAL leaf: an
         // ordinary global with a bound plain cell answers from one slot
         // read. Aliases, localized/forwarded symbols, unbound cells (where

@@ -220,7 +220,7 @@ impl OwnerRecordId {
 /// record. No `Value`: the record's values live in the slab, which the
 /// collector traces.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct OwnerBindingRef {
+pub struct OwnerBindingRef {
     sym: SymId,
     record: OwnerRecordId,
 }
@@ -229,7 +229,7 @@ impl OwnerBindingRef {
     /// The specpdl's handle on RECORD, a binding of SYM.
     #[inline]
     #[doc(hidden)]
-    pub fn new(sym: SymId, record: OwnerRecordId) -> Self {
+    pub(crate) fn new(sym: SymId, record: OwnerRecordId) -> Self {
         Self { sym, record }
     }
 
@@ -2372,6 +2372,7 @@ impl Context {
     /// [`Context::makunbound_variable`] of a projected cell.
     #[cold]
     #[inline(never)]
+    #[allow(dead_code)] // callee of the retained routed makunbound seam.
     pub(crate) fn makunbound_owner_variable(&mut self, id: SymId) {
         debug_assert!(
             self.owner.slab().is_some(),

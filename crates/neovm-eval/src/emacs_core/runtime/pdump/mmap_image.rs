@@ -63,8 +63,7 @@ const RELOCATION_TAG_MASK: u64 = (1 << RELOCATION_TAG_BITS) - 1;
 #[derive(
     Clone, Copy, Debug, Eq, PartialEq, num_enum::IntoPrimitive, num_enum::TryFromPrimitive,
 )]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) enum DumpSectionKind {
+pub enum DumpSectionKind {
     Metadata = 1,
     HeapImage = 2,
     Roots = 3,
@@ -94,8 +93,8 @@ pub(crate) struct ImageSection<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ImageRelocation {
-    pub(crate) location_offset: u64,
-    pub(crate) addend: u8,
+    pub location_offset: u64,
+    pub addend: u8,
 }
 
 #[repr(C)]

@@ -612,7 +612,7 @@ pub(crate) enum LastBlock {
 #[derive(Clone, Debug, Default)]
 pub struct ProcessCodingState {
     pub carryover: Vec<u8>,
-    pub last_block: LastBlock,
+    pub(crate) last_block: LastBlock,
     pub decoder: neovm_text::encoding::CodingDecoderState,
 }
 
@@ -626,10 +626,10 @@ pub(crate) enum ProcessEncodingEligibility {
 /// A descriptor groups its coding identity, setup flags, and continuation.
 /// Fields stay private so changing identity cannot retain another codec's state.
 #[derive(Clone, Debug)]
-pub(crate) struct ProcessEncodingDescriptor {
+pub struct ProcessEncodingDescriptor {
     pub coding: neovm_text::encoding::RuntimeCodingSystem,
     pub(crate) raw_coding: neovm_text::encoding::RuntimeCodingSystem,
-    pub eligibility: ProcessEncodingEligibility,
+    pub(crate) eligibility: ProcessEncodingEligibility,
     pub encoder: neovm_text::encoding::CodingEncoderState,
 }
 

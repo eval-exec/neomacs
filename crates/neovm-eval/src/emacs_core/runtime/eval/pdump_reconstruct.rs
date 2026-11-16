@@ -14,7 +14,7 @@ impl Context {
     /// before calling this.
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
-    pub fn from_dump(
+    pub(crate) fn from_dump(
         tagged_heap: neovm_value::tagged::gc::AliasableBox<neovm_value::tagged::gc::TaggedHeap>,
         obarray: Obarray,
         lexenv: Value,

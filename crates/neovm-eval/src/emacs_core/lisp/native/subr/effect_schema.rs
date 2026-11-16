@@ -13,7 +13,7 @@ pub enum Authority {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CatalogKind {
+pub enum CatalogKind {
     Primitive,
     Opcode,
     Leaf,
@@ -55,7 +55,7 @@ impl<'name> SchemaEntry<'name> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SchemaError {
+pub enum SchemaError {
     UnclassifiedPrimitive,
     DuplicateRegistration,
 }

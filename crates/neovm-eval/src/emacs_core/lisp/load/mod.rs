@@ -957,7 +957,7 @@ impl LoadSuffixRequirement {
     }
 
     #[doc(hidden)]
-    pub fn candidates(
+    pub(crate) fn candidates(
         self,
         vars: VariableView<'_>,
         file: &LispString,

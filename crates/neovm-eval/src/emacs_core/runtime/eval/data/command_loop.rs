@@ -589,26 +589,6 @@ impl KBoard {
         self.unread_event(event.to_emacs_event_value());
     }
 
-    pub(crate) fn reset_key_sequence(&mut self) {
-        self.current_key_sequence.reset();
-    }
-
-    pub(crate) fn push_key_sequence_input_event(&mut self, event: Value) {
-        self.current_key_sequence.push_input_event(event);
-    }
-
-    pub(crate) fn rewrite_key_sequence_translation(&mut self, events: Vec<Value>) {
-        self.current_key_sequence.replace_translated_events(events);
-    }
-
-    pub(crate) fn rewrite_key_sequence_events(&mut self, events: Vec<Value>) {
-        self.current_key_sequence.replace_events(events);
-    }
-
-    pub(crate) fn key_sequence_snapshot(&self) -> (Vec<Value>, Vec<Value>) {
-        self.current_key_sequence.snapshot()
-    }
-
     pub fn set_command_key_sequences(&mut self, translated: Vec<Value>, raw: Vec<Value>) {
         self.command_keys = translated;
         self.raw_command_keys = raw;
@@ -664,10 +644,6 @@ impl KBoard {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn recent_input_events(&self) -> &[Value] {
         &self.recent_input_events
-    }
-
-    pub(crate) fn clear_recent_input_events(&mut self) {
-        self.recent_input_events.clear();
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -879,7 +855,7 @@ pub(crate) enum InputEventHistoryDisposition {
 /// recorded in the lossage ring and the counter silently did not move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "a recorded non-macro event must advance num-nonmacro-input-events"]
-pub(crate) enum NonmacroInputEvent {
+pub enum NonmacroInputEvent {
     /// `record_char` reached its `num_nonmacro_input_events++`.
     Counted,
     /// The event came from an executing keyboard macro, which GNU excludes
@@ -894,7 +870,7 @@ impl KeyboardRuntime {
     }
 
     #[doc(hidden)]
-    pub fn input_event_history_disposition(&self) -> InputEventHistoryDisposition {
+    pub(crate) fn input_event_history_disposition(&self) -> InputEventHistoryDisposition {
         if self.kboard.is_executing_kbd_macro() {
             InputEventHistoryDisposition::SuppressDuringMacroPlayback
         } else {
@@ -1320,6 +1296,7 @@ pub struct CommandLoop {
     /// Next bounded GUI service opportunity while command input stays queued.
     pub(crate) gui_display_deadline: Option<Instant>,
     /// Current prefix argument.
+    #[allow(dead_code)] // field carried by the pinned command-loop layout.
     pub(crate) prefix_arg: PrefixArg,
     /// Whether we are in a recursive edit.
     pub recursive_depth: usize,
@@ -1512,6 +1489,9 @@ impl CommandLoop {
         self.keyboard.begin_executing_kbd_macro(events);
     }
 
+    // LOST WIRING: CommandLoop-level kbd-macro query; the keyboard runtime
+    // exposes the same state and the command loop does not need this alias yet.
+    #[allow(dead_code)]
     pub(crate) fn is_executing_kbd_macro(&self) -> bool {
         self.keyboard.is_executing_kbd_macro()
     }

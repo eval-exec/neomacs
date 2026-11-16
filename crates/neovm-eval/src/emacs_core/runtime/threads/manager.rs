@@ -200,6 +200,7 @@ impl ThreadManager {
         });
     }
 
+    #[cfg(test)]
     pub(crate) fn signal_thread(&mut self, native: u64, error: Value) {
         if let Some(thread) = self.live_value(native) {
             self.signal_thread_for_value(thread, error);
@@ -337,6 +338,7 @@ impl ThreadManager {
             .map(|thread| ThreadName(thread.children().name()))
     }
 
+    #[cfg(test)]
     pub(crate) fn is_thread(&self, native: u64) -> bool {
         self.live_value(native).is_some()
     }
@@ -356,6 +358,7 @@ impl ThreadManager {
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn thread_result(&self, native: u64) -> Value {
         self.get_thread(native)
             .map_or(Value::NIL, |thread| thread.children().result())
@@ -367,6 +370,7 @@ impl ThreadManager {
             .map_or(Value::NIL, |thread| thread.children().result())
     }
 
+    #[cfg(test)]
     pub(crate) fn join_thread(&mut self, native: u64) -> Option<Value> {
         self.join_thread_for_value(self.live_value(native)?)
     }
@@ -570,6 +574,7 @@ impl ThreadManager {
         value
     }
 
+    #[cfg(test)]
     pub(crate) fn thread_buffer_disposition(&self, native: u64) -> Option<Value> {
         self.get_thread(native)
             .map(|t| t.children().buffer_disposition())
@@ -645,12 +650,6 @@ impl ThreadManager {
             };
             *state.phase_mut() = ThreadPhase::Terminal(outcome);
         });
-    }
-
-    pub(crate) fn set_thread_error(&mut self, native: u64, symbol: Value, data: Value) {
-        if let Some(thread) = self.live_value(native) {
-            self.set_thread_error_for_value(thread, symbol, data);
-        }
     }
 
     #[doc(hidden)]
@@ -750,14 +749,14 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn create_mutex(&mut self, name: Option<LispString>) -> Result<MutexHandle, Flow> {
+    pub(crate) fn create_mutex(&mut self, name: Option<LispString>) -> Result<MutexHandle, Flow> {
         let id = self.ids.issue_mutex().map_err(identity_exhausted)?;
         let value = with_tagged_heap(|heap| heap.alloc_mutex(MutexPayload::new(id, name)));
         Ok(MutexHandle { value, id })
     }
 
     #[doc(hidden)]
-    pub fn mutex_payload(&self, mutex: MutexHandle) -> Option<&MutexPayload> {
+    pub(crate) fn mutex_payload(&self, mutex: MutexHandle) -> Option<&MutexPayload> {
         let ptr = mutex.value.as_veclike_ptr()?.cast::<MutexObj>();
         // SAFETY: private handle constructors validate the rooted object's
         // exact tag and issued same-World identity. A borrowed view cannot cross
@@ -766,7 +765,7 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn update_mutex<R>(
+    pub(crate) fn update_mutex<R>(
         &mut self,
         mutex: MutexHandle,
         update: impl FnOnce(&mut MutexPayload) -> R,
@@ -780,7 +779,7 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn mutex_id_from_handle(&self, value: &Value) -> Option<MutexHandle> {
+    pub(crate) fn mutex_id_from_handle(&self, value: &Value) -> Option<MutexHandle> {
         if value.veclike_type()? != VecLikeType::Mutex {
             return None;
         }
@@ -792,24 +791,25 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn is_mutex(&self, mutex: MutexHandle) -> bool {
+    pub(crate) fn is_mutex(&self, mutex: MutexHandle) -> bool {
         self.mutex_id_from_handle(&mutex.value).is_some()
     }
     #[doc(hidden)]
-    pub fn mutex_handle(&self, mutex: MutexHandle) -> Value {
+    pub(crate) fn mutex_handle(&self, mutex: MutexHandle) -> Value {
         mutex.value
     }
     #[doc(hidden)]
-    pub fn mutex_name(&self, mutex: MutexHandle) -> Option<&LispString> {
+    pub(crate) fn mutex_name(&self, mutex: MutexHandle) -> Option<&LispString> {
         self.mutex_payload(mutex)?.name().as_ref()
     }
     #[doc(hidden)]
-    pub fn mutex_free(&self, mutex: MutexHandle) -> bool {
+    #[cfg(test)]
+    pub(crate) fn mutex_free(&self, mutex: MutexHandle) -> bool {
         self.mutex_payload(mutex)
             .is_some_and(|payload| payload.ownership() == MutexOwnership::Unlocked)
     }
     #[doc(hidden)]
-    pub fn mutex_owned_by_current_thread(&self, mutex: MutexHandle) -> bool {
+    pub(crate) fn mutex_owned_by_current_thread(&self, mutex: MutexHandle) -> bool {
         self.mutex_payload(mutex)
             .is_some_and(|payload| match payload.ownership() {
                 MutexOwnership::Unlocked => false,
@@ -820,7 +820,7 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn mutex_lock(&mut self, mutex: MutexHandle) -> MutexAcquisition {
+    pub(crate) fn mutex_lock(&mut self, mutex: MutexHandle) -> MutexAcquisition {
         let Some(current) = self
             .ids
             .thread_from_native_key(self.current_thread.native_key())
@@ -848,7 +848,7 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn mutex_unlock(&mut self, mutex: MutexHandle) -> MutexRelease {
+    pub(crate) fn mutex_unlock(&mut self, mutex: MutexHandle) -> MutexRelease {
         let current = self.current_thread.native_key();
         self.update_mutex(mutex, |state| match state.ownership() {
             MutexOwnership::Unlocked => MutexRelease::NotOwner,
@@ -870,7 +870,7 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn mutex_unlock_for_wait(&mut self, mutex: MutexHandle) -> Option<RecursionDepth> {
+    pub(crate) fn mutex_unlock_for_wait(&mut self, mutex: MutexHandle) -> Option<RecursionDepth> {
         let current = self.current_thread.native_key();
         self.update_mutex(mutex, |state| match state.ownership() {
             MutexOwnership::Unlocked => None,
@@ -883,7 +883,7 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn mutex_relock_after_wait(
+    pub(crate) fn mutex_relock_after_wait(
         &mut self,
         mutex: MutexHandle,
         depth: RecursionDepth,
@@ -905,7 +905,7 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn create_condition_variable(
+    pub(crate) fn create_condition_variable(
         &mut self,
         mutex: MutexHandle,
         name: Option<LispString>,
@@ -926,7 +926,7 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn condition_payload(&self, condition: CondVarHandle) -> Option<&CondVarPayload> {
+    pub(crate) fn condition_payload(&self, condition: CondVarHandle) -> Option<&CondVarPayload> {
         let ptr = condition.value.as_veclike_ptr()?.cast::<CondVarObj>();
         // SAFETY: private handle construction fixes the rooted live layout;
         // the serial borrow excludes payload mutation/collection during view.
@@ -934,7 +934,7 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn condition_variable_id_from_handle(&self, value: &Value) -> Option<CondVarHandle> {
+    pub(crate) fn condition_variable_id_from_handle(&self, value: &Value) -> Option<CondVarHandle> {
         if value.veclike_type()? != VecLikeType::CondVar {
             return None;
         }
@@ -955,20 +955,16 @@ impl ThreadManager {
     }
 
     #[doc(hidden)]
-    pub fn is_condition_variable(&self, condition: CondVarHandle) -> bool {
+    pub(crate) fn is_condition_variable(&self, condition: CondVarHandle) -> bool {
         self.condition_variable_id_from_handle(&condition.value)
             .is_some()
     }
     #[doc(hidden)]
-    pub fn condition_variable_handle(&self, condition: CondVarHandle) -> Value {
-        condition.value
-    }
-    #[doc(hidden)]
-    pub fn condition_variable_name(&self, condition: CondVarHandle) -> Option<&LispString> {
+    pub(crate) fn condition_variable_name(&self, condition: CondVarHandle) -> Option<&LispString> {
         self.condition_payload(condition)?.name().as_ref()
     }
     #[doc(hidden)]
-    pub fn condition_variable_mutex(&self, condition: CondVarHandle) -> MutexHandle {
+    pub(crate) fn condition_variable_mutex(&self, condition: CondVarHandle) -> MutexHandle {
         condition.mutex
     }
 }
@@ -1008,7 +1004,7 @@ fn thread_is_live(thread: &ThreadPayload) -> bool {
 impl ThreadManager {
     /// Refusal preserves both the target and the caller's temporary leases.
     #[doc(hidden)]
-    pub fn queue_thread_event(
+    pub(crate) fn queue_thread_event(
         &mut self,
         target: ThreadId,
         event: &InFlightThreadEvent,
@@ -1053,7 +1049,7 @@ impl ThreadManager {
     /// Build ALL receiving leases before removing any stored child. No Lisp
     /// allocation, yield or collection intervenes in this same-World transfer.
     #[doc(hidden)]
-    pub fn take_thread_events(
+    pub(crate) fn take_thread_events(
         &mut self,
         target: ThreadId,
     ) -> Result<Vec<InFlightThreadEvent>, MailboxError> {

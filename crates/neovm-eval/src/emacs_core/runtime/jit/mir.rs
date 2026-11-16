@@ -120,6 +120,7 @@ impl LispType {
     /// test. Only `Unknown`/`Any` (neither provably immediate nor provably
     /// heap) are worth an inlined runtime tag test — and both return `false`
     /// from BOTH methods, which is how the codegen distinguishes them.
+    #[cfg(test)]
     pub(crate) fn provably_heap(self) -> bool {
         matches!(
             self,
@@ -197,6 +198,7 @@ pub(crate) enum BinKind {
 #[derive(Clone, Debug)]
 pub(crate) enum MirOp {
     /// Function argument `i` (`0..arity`), seeding the entry block's stack.
+    #[allow(dead_code)] // `0` needs no read outside the stack model.
     Arg(usize),
     /// The original call boundary before an inlined body, including an
     /// identity callee with no instructions. Carries the call's framestate.
@@ -268,6 +270,7 @@ pub(crate) enum MirTerm {
         /// True for the `GotoIfNil*` family (branch when nil); false for
         /// `GotoIfNotNil*` (branch when non-nil).
         on_nil: bool,
+        #[allow(dead_code)] // carried for the GotoIf* stack-shape parity.
         else_pop: bool,
         taken: MirBlockId,
         taken_args: Vec<MirValue>,
@@ -292,13 +295,15 @@ pub(crate) struct MirBlockData {
 /// A function in MIR form: a CFG of [`MirBlockData`] over an SSA value space.
 /// `value_types[v.0]` is the [`LispType`] of value `v`.
 #[derive(Clone, Debug)]
-pub struct MirFunction {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct MirFunction {
     pub arity: usize,
-    pub blocks: Vec<MirBlockData>,
+    pub(crate) blocks: Vec<MirBlockData>,
     /// Type fact per SSA value (block params + instruction results), indexed by
     /// `MirValue`.
     pub(crate) value_types: Vec<LispType>,
     /// Map from a bytecode leader index to its [`MirBlockId`].
+    #[allow(dead_code)] // leader map kept for the debugger/BPE views.
     pub(crate) block_for: HashMap<usize, MirBlockId>,
     /// The body's constant pool: an [`MirOp::Opaque`] keeps its bytecode `op`
     /// verbatim, and a `VarRef(idx)`/`CallBuiltinSym(idx, ..)` indexes THIS
@@ -314,7 +319,7 @@ pub struct MirFunction {
 }
 
 impl MirFunction {
-    pub fn value_type(&self, v: MirValue) -> LispType {
+    pub(crate) fn value_type(&self, v: MirValue) -> LispType {
         self.value_types[v.0 as usize]
     }
 }

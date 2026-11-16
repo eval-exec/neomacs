@@ -16,7 +16,7 @@ use bytemuck::{Pod, Zeroable};
 use super::DumpError;
 use super::object_value_codec::{Cursor, write_bool, write_u8, write_u32, write_u64, write_value};
 #[doc(hidden)]
-pub(crate) use super::types::{
+pub use super::types::{
     DumpCharsetInfo, DumpCharsetMethod, DumpCharsetRegistry, DumpCharsetSubsetSpec, DumpSymId,
     DumpValue,
 };
