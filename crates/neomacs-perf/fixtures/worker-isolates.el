@@ -69,26 +69,37 @@
       (when sampling-enabled
         (neomacs-perf-worker--sampling-command "disable")))))
 
+(defun neomacs-perf-worker--run-batch (fn arg tasks)
+  "Run FN on ARG as TASKS worker tasks and return their values, in order."
+  (let ((handles nil))
+    (dotimes (_ tasks)
+      (push (neomacs-worker-run fn arg) handles))
+    (mapcar #'neomacs-worker-wait (nreverse handles))))
+
+(defun neomacs-perf-worker--check-batch (label values expected)
+  "Signal unless every value in VALUES is `equal' to EXPECTED.
+Called after the timer has stopped, so the comparison is outside the
+measured region, and before any number is recorded."
+  (dolist (value values)
+    (unless (equal value expected)
+      (error "%s: worker result differs from serial result" label))))
+
 (defun neomacs-perf-worker--sample (label fn arg tasks)
   (let* ((expected (funcall fn arg))
          (serial (neomacs-perf-worker--time
                   (lambda () (dotimes (_ tasks) (funcall fn arg)))))
+         (first-values nil)
          (parallel (neomacs-perf-worker--time
                     (lambda ()
-                      (let ((handles nil))
-                        (dotimes (_ tasks)
-                          (push (neomacs-worker-run fn arg) handles))
-                        (dolist (handle handles)
-                          (unless (equal (neomacs-worker-wait handle) expected)
-                            (error "worker result differs from serial result")))))))
+                      (setq first-values (neomacs-perf-worker--run-batch fn arg tasks)))))
+         (warm-values nil)
          (warm (neomacs-perf-worker--time
                 (lambda ()
-                  (let ((handles nil))
-                    (dotimes (_ tasks)
-                      (push (neomacs-worker-run fn arg) handles))
-                    (dolist (handle handles)
-                      (unless (equal (neomacs-worker-wait handle) expected)
-                        (error "warm worker result differs from serial result"))))))))
+                  (setq warm-values (neomacs-perf-worker--run-batch fn arg tasks))))))
+    ;; Validity before timing: both batches are compared with the serial
+    ;; value after their timers stopped and before a number is kept.
+    (neomacs-perf-worker--check-batch (format "%s first" label) first-values expected)
+    (neomacs-perf-worker--check-batch (format "%s warm" label) warm-values expected)
     `((tier . ,label)
       (tasks . ,tasks)
       (serial_seconds . ,serial)

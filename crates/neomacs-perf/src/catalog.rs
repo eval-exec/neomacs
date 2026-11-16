@@ -805,7 +805,7 @@ const SCENARIOS: &[ScenarioSpec] = &[
         description: "Cold worker isolate pool start and per-owner boot latency",
         default_frontend: Frontend::Batch,
         default_iterations: NonZeroU32::new(1).expect("non-zero scenario default"),
-        primary_metric: MetricName::ProcessWallTime,
+        primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
 ];
