@@ -101,6 +101,7 @@ neomacs-allocator = { path = "crates/neomacs-allocator" }
 neovm-core = { path = "crates/neovm-core", default-features = false }
 neovm-display-identity = { path = "crates/neovm-display-identity", default-features = false }
 neovm-host-abi = { path = "crates/neovm-host-abi", default-features = false }
+neovm-worker = { path = "crates/neovm-worker", default-features = false }
 neovm-oracle-tests = { path = "crates/neovm-oracle-tests", default-features = false }
 neovm-value = { path = "crates/neovm-value", default-features = false }
 neomacs-display-runtime = { path = "crates/neomacs-display-runtime", default-features = false }

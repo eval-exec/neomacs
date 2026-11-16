@@ -46,14 +46,14 @@ jemalloc-profiling = [
 # a measured win even on Doom startup (~5% fewer instructions; interpreter
 # dispatch cut ~60%), so it ships on by default. Build `--no-default-features`
 # (plus the features you want) to get the interpreter-only binary.
-jit = ["neovm-core/jit"]
+jit = ["neovm-core/jit", "neovm-worker/jit"]
 # Opt-in GC inventory plus statistics from an already-selected jemalloc.
 # Enabling this feature changes allocator bookkeeping; use ordinary builds
 # for performance gates and this build for same-binary memory attribution.
 gc-memory-telemetry = ["neovm-core/gc-memory-telemetry", "tikv-jemalloc-sys?/stats"]
 # GNU-compatible native SQLite support. Default-on for distributed Neomacs
 # builds, while remaining a compile-time capability for minimal builds.
-sqlite = ["neovm-core/sqlite"]
+sqlite = ["neovm-core/sqlite", "neovm-worker/sqlite"]
 xwidgets = ["neovm-core/xwidgets"]
 # Static-link libdbus (cross-compile / hosts without dbus-1.pc). Nix and
 # desktop Linux leave this off and pkg-config the system library.
@@ -104,6 +104,7 @@ neomacs-allocator = { workspace = true, optional = true }
 neomacs-layout-engine.workspace = true
 neomacs-diagnostics.workspace = true
 neovm-core.workspace = true
+neovm-worker.workspace = true
 serde.workspace = true
 strum.workspace = true
 serde_json = "1"

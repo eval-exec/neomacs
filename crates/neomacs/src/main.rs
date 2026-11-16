@@ -3970,6 +3970,22 @@ fn jemalloc_release_startup_slack() {
 )))]
 fn jemalloc_release_startup_slack() {}
 
+/// Expose the worker isolate pool to Lisp (`neomacs-worker-run` and
+/// friends). The pool is installed once per process and boots its owners
+/// from the same runtime image as this Context, on the first task; here we
+/// only register the primitives, the way a dynamic module would.
+fn install_worker_isolates(eval: &mut Context, startup: &StartupOptions) {
+    let config = neovm_worker::isolate::IsolatePoolConfig::new(
+        neovm_worker::isolate::IsolateBoot::RuntimeImage {
+            dump_file_override: startup.dump_file_override.clone(),
+        },
+    );
+    // A second Context in this process (a daemon's later frame, a test)
+    // reuses the first installation.
+    let _ = neovm_worker::isolate::install(config);
+    neovm_worker::lisp::register_subrs(eval);
+}
+
 fn create_startup_evaluator_for_mode(mode: RuntimeMode, startup: &StartupOptions) -> Context {
     let evaluator = match mode {
         RuntimeMode::Raw => raw_source_bootstrap_evaluator(),
@@ -6110,6 +6126,7 @@ fn bootstrap_gui_startup_terminal(eval: &mut Context) -> FrameId {
 }
 
 fn configure_gnu_startup_state(eval: &mut Context, frame_id: FrameId, startup: &StartupOptions) {
+    install_worker_isolates(eval, startup);
     // Doom and similar configs deliberately raise `gc-cons-threshold` during
     // startup. Keep the measured arena-fragmentation ceiling active through
     // GNU's complete `normal-top-level`; startup.el clears this private flag
