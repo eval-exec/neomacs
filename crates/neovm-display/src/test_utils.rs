@@ -1250,8 +1250,43 @@ mod unit_runtime {
         s::sqlite_reset,
     );
 
+    /// Exact empty process-table shutdown for the display unit runtime: the
+    /// same body eval's unit runtime installs. Creation is a system-layer
+    /// primitive, so a well-formed unit runtime has no live process; if one
+    /// exists the no-op would hide real teardown and refuses instead.
+    fn display_unit_process_shutdown_noop(
+        ctx: &mut Context,
+    ) -> Result<(), neovm_value::error::Flow> {
+        let live = ctx.processes().live_process_ids();
+        assert!(
+            live.is_empty(),
+            "ABSENT layer: display unit process table is not empty ({live:?}); run this test in core"
+        );
+        Ok(())
+    }
+
+    /// Production's `pending_signals` read: one load of the evaluator's
+    /// `ASYNC_ATTENTION` OsSignal bit. The display unit runtime installs no
+    /// OS-signal source, so the bit stays clear in product use; a test that
+    /// raises it controls the same word production reads.
+    fn display_unit_os_signal_pending() -> bool {
+        neovm_eval::emacs_core::eval::ASYNC_ATTENTION
+            .is_raised(neovm_eval::emacs_core::eval::AsyncSource::OsSignal)
+    }
+
+    /// The exact empty fold of production's `process_pending_signals` for a
+    /// runtime with no signal source: clear the pending flag first, then no
+    /// delivery can exist.
+    fn display_unit_drain_pending_os_signals(
+        _ctx: &mut Context,
+    ) -> Result<(), neovm_value::error::Flow> {
+        neovm_eval::emacs_core::eval::ASYNC_ATTENTION
+            .take(neovm_eval::emacs_core::eval::AsyncSource::OsSignal);
+        Ok(())
+    }
+
     static PROCESS: ProcessHooks = ProcessHooks::new(
-        s::process_shutdown,
+        display_unit_process_shutdown_noop,
         s::process_open_channel,
         s::process_print_handle,
         s::process_wait_notifier,
@@ -1260,9 +1295,9 @@ mod unit_runtime {
 
     static INPUT: InputHooks = InputHooks::new(
         s::input_interrupt_for_input_event_if_requested,
-        s::input_os_signal_pending,
+        display_unit_os_signal_pending,
         s::input_take_termination_signal,
-        s::input_drain_pending_os_signals,
+        display_unit_drain_pending_os_signals,
         SignalWakeSource::SelfPipe {
             read_fd: s::input_signal_wake_pipe_read_fd,
             drain: s::input_drain_signal_wake_pipe,

@@ -596,10 +596,6 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_unlinked("ABSENT-LAYER system::sqlite.reset");
             }
 
-            pub(crate) fn process_shutdown(ctx: &mut Context) -> Result<(), Flow> {
-                absent_layer_panic("ABSENT-LAYER system::process.shutdown");
-            }
-
             pub(crate) fn process_open_channel(ctx: &mut Context, process: Value) -> Result<std::ffi::c_int, Flow> {
                 absent_layer_panic("ABSENT-LAYER system::process.open_channel");
             }
@@ -620,17 +616,9 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER system::input.interrupt_for_input_event_if_requested");
             }
 
-            pub(crate) fn input_os_signal_pending() -> bool {
-                absent_layer_panic("ABSENT-LAYER system::input.os_signal_pending");
-            }
-
             /// ASSERT-EMPTY: only system's absent OS handler writes TERMINATION_SIGNAL.
             pub(crate) fn input_take_termination_signal() -> Option<i32> {
                 None
-            }
-
-            pub(crate) fn input_drain_pending_os_signals(ctx: &mut Context) -> Result<(), Flow> {
-                absent_layer_panic("ABSENT-LAYER system::input.drain_pending_os_signals");
             }
 
             /// UNLINKED: plain unit-runtime construction reaches this through

@@ -14,7 +14,7 @@ changed.
   `display::fontset.alias_alist_startup_value` is named by both the marker
   helper and the slot function). The eight stand-ins that no unit table
   installed were then deleted, and (a1) removed the four no-caller slots,
-  leaving 119 distinct markers (119 rows; the original 132 entries contained
+  leaving 116 distinct markers (116 rows; the original 132 entries contained
   one duplicate marker row for the fontset alias).
 - Install status: cross-checked against the hook tables in
   `crates/neovm-eval/src/test_utils.rs` (`LIFECYCLE`, `INPUT`, `PROCESS`,
@@ -66,7 +66,7 @@ changed.
   are verified below.
 
 Counts after the PEER 5795 reclassification and the (a1) deletions:
-(a) 46, (b) 42, (c) 29, (p) 2 (119 rows). The eight deleted stand-ins were classed (a) in the original
+(a) 43, (b) 42, (c) 29, (p) 2 (116 rows). The eight deleted stand-ins were classed (a) in the original
 survey; they were the three completion seams and the five case-table seams,
 and `neovm-display`'s unit runtime now installs the real eval functions in
 their place. `display::terminal.frame_terminal` moved (c) -> (b) per F-1;
@@ -97,14 +97,11 @@ per F-3.
 | system::fileio.unlink_file_path | panic | lifecycle.rs:1138 | kill-emacs auto-save-list unlink (command_loop.rs:394), raw system fileio | b |
 | system::timefns.reset | unlinked | lifecycle.rs:999 | pdump load hook on every Context::new heap reset (pdump/runtime.rs:91); exact state: no time-zone TLS | c |
 | system::sqlite.reset | unlinked | lifecycle.rs:1105 | reset_builtins_thread_locals (stubs.rs:222, pdump/runtime.rs:88); exact state: no SQLite TLS | c |
-| system::process.shutdown | panic | process_hooks.rs:261 | NOT-INSTALLED: unit table installs `unit_process_shutdown_noop`, which asserts the empty process table | a |
 | system::process.open_channel | panic | process_hooks.rs:266 | only the unlinked system dynamic-module loader (system/dynamic_module/mod.rs:1868) | a |
 | system::process.print_handle | panic | process_hooks.rs:271 | Lisp printer for a `Process` value (lisp/print/mod.rs:2354,3834); handle text is system-owned | b |
 | system::process.wait_notifier | panic | process_hooks.rs:277 | inotify/kqueue/w32notify add-watch and the async wait path (gc_pacing.rs:1081, file_notify platform lisp.rs); process-owned | b |
 | system::process.terminate_and_defer_reaping | panic | process_hooks.rs:282 | LiveProcessIo::drop only for `ChildOwnership::Unreaped` (process_state.rs:1583); only a system-spawned child creates that | a |
 | system::input.interrupt_for_input_event_if_requested | panic | input_hooks.rs:118 | `read-char`/wait special-input policy (keyboard.rs:3078,4216); policy body is core's CommandLoopHost | b |
-| system::input.os_signal_pending | panic | input_hooks.rs:126 | NOT-INSTALLED: unit table installs the exact `ASYNC_ATTENTION` OsSignal read | a |
-| system::input.drain_pending_os_signals | panic | input_hooks.rs:136 | NOT-INSTALLED: unit table installs the exact empty fold that takes the bit | a |
 | system::input.signal_wake_pipe_read_fd | unlinked (None) | input_hooks.rs:142 | every ProcessManager/ProcessWaitBackend construction (process_state.rs:1671); exact state: no POSIX self-pipe | c |
 | system::input.drain_signal_wake_pipe | panic | input_hooks.rs:150 | only for a registered self-pipe fd (process_state.rs:1761); read_fd is None, so the key cannot occur | a |
 | system::perf.record | panic | perf.rs:139 | perf_enabled=false in the unit SET (test_utils.rs:996) gates record_op/time_op; never dispatched | a |
