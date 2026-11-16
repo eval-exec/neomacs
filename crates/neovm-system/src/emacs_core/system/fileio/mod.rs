@@ -351,49 +351,6 @@ pub fn file_readable_p(filename: &str) -> bool {
     file_readable_path(Path::new(filename))
 }
 
-/// Return true if FILENAME is writable.
-pub(crate) fn file_writable_p(filename: &str) -> bool {
-    file_writable_path(Path::new(filename))
-}
-
-/// Return true if FILENAME is an accessible directory.
-pub(crate) fn file_accessible_directory_p(filename: &str) -> bool {
-    let path = Path::new(filename);
-    if !path.is_dir() {
-        return false;
-    }
-
-    #[cfg(unix)]
-    {
-        let Ok(c_path) = CString::new(filename) else {
-            return false;
-        };
-        let mode = libc::R_OK | libc::X_OK;
-        unsafe { libc::access(c_path.as_ptr(), mode) == 0 }
-    }
-
-    #[cfg(not(unix))]
-    {
-        return fs::read_dir(path).is_ok();
-    }
-}
-
-/// Return true if FILENAME is executable by the current process.
-pub(crate) fn file_executable_p(filename: &str) -> bool {
-    #[cfg(unix)]
-    {
-        let Ok(c_path) = CString::new(filename) else {
-            return false;
-        };
-        unsafe { libc::access(c_path.as_ptr(), libc::X_OK) == 0 }
-    }
-
-    #[cfg(not(unix))]
-    {
-        return Path::new(filename).exists();
-    }
-}
-
 /// Return true if FILENAME is currently locked by Emacs lockfiles.
 ///
 /// NeoVM currently does not implement lockfile probing, so this returns nil.
@@ -467,28 +424,6 @@ pub fn file_symlink_p(filename: &str) -> bool {
     }
 }
 
-/// Return the symbolic link target of FILENAME as a String, mirroring
-/// GNU Emacs `Ffile_symlink_p` (`fileio.c:3160`):
-///
-///   "Return non-nil if file FILENAME is the name of a symbolic link.
-///    The value is the link target, as a string.
-///    Return nil if FILENAME does not exist or is not a symbolic link,
-///    or there was trouble determining whether the file is a symbolic link.
-///    This function does not check whether the link target exists."
-///
-/// The returned target is whatever the OS `readlink` syscall produces;
-/// it may be relative.  We do NOT canonicalize it (GNU's
-/// `emacs_readlinkat` likewise does not).
-pub(crate) fn file_symlink_target(filename: &str) -> Option<String> {
-    let meta = fs::symlink_metadata(filename).ok()?;
-    if !meta.file_type().is_symlink() {
-        return None;
-    }
-    fs::read_link(filename)
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
-}
-
 pub(crate) fn file_symlink_target_lisp(
     filename: &neovm_value::heap_types::LispString,
 ) -> Option<neovm_value::heap_types::LispString> {
@@ -500,33 +435,6 @@ pub(crate) fn file_symlink_target_lisp(
     fs::read_link(&path)
         .ok()
         .map(|target| path_to_lisp_file_name(&target))
-}
-
-/// Return true if FILENAME is on a case-insensitive filesystem.
-pub(crate) fn file_name_case_insensitive_p(filename: &str) -> bool {
-    file_name_case_insensitive_path(Path::new(filename))
-}
-
-/// Return true if FILE1 has a newer modification time than FILE2.
-pub(crate) fn file_newer_than_file_p(file1: &str, file2: &str) -> bool {
-    let meta1 = match fs::metadata(file1) {
-        Ok(meta) => meta,
-        Err(_) => return false,
-    };
-    let meta2 = match fs::metadata(file2) {
-        Ok(meta) => meta,
-        Err(_) => return true,
-    };
-
-    let mtime1 = match meta1.modified() {
-        Ok(time) => time,
-        Err(_) => return false,
-    };
-    let mtime2 = match meta2.modified() {
-        Ok(time) => time,
-        Err(_) => return true,
-    };
-    mtime1 > mtime2
 }
 
 fn file_newer_than_file_path(file1: &Path, file2: &Path) -> bool {
@@ -1107,11 +1015,6 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
 /// Copy file FROM to TO.
 pub fn copy_file(from: &str, to: &str) -> std::io::Result<()> {
     fs::copy(from, to).map(|_| ())
-}
-
-/// Create an additional name (hard link) from OLDNAME to NEWNAME.
-pub(crate) fn add_name_to_file(oldname: &str, newname: &str) -> std::io::Result<()> {
-    fs::hard_link(oldname, newname)
 }
 
 // ===========================================================================

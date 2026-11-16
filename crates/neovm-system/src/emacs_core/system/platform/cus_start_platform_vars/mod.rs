@@ -284,6 +284,10 @@ pub static CUS_START_PLATFORM_VARIABLES: &[CusStartPlatformVariable] = &[
 /// the executable form of the rows' measurement -- 25 names GNU leaves unbound
 /// in a build like this one -- which is what the unit tests below assert
 /// against and what a future author gets instead of re-deriving it.
+///
+/// Test-only: entry 173 retired the production filter, so the executable
+/// measurement below is reached only by the table-drift unit test.
+#[cfg(test)]
 pub(crate) fn is_name_gnu_leaves_unbound_here(name: &str) -> bool {
     let ns_surface = cfg!(target_os = "macos");
     CUS_START_PLATFORM_VARIABLES.iter().any(|var| {

@@ -284,8 +284,8 @@ pub(crate) struct emacs_value_frame {
 }
 
 pub struct emacs_value_storage {
-    pub initial: emacs_value_frame,
-    pub current: *mut emacs_value_frame,
+    pub(crate) initial: emacs_value_frame,
+    pub(crate) current: *mut emacs_value_frame,
 }
 
 // ============================================================================

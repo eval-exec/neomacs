@@ -301,7 +301,6 @@ pub use neovm_system::emacs_core::filelock;
 pub use neovm_system::emacs_core::host_input;
 #[path = "load_boot.rs"]
 pub mod load_boot;
-pub use neovm_system::emacs_core::network;
 pub(crate) use neovm_system::emacs_core::os_signal;
 pub use neovm_system::emacs_core::path_exec;
 pub use neovm_system::emacs_core::perf_trace;
