@@ -213,7 +213,9 @@ fn builtin_run(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         .visible_variable_value_or_nil("neomacs-worker-pool-size")
         .as_fixnum()
         .and_then(|size| usize::try_from(size).ok());
-    if pool.configured_threads(configured_size) == 0 {
+    // 0 is the kill switch and is honoured at every call, even after the
+    // pool has started; a positive width is decided once, at the first task.
+    if configured_size == Some(0) || pool.configured_threads(configured_size) == 0 {
         pool.ensure_started_with(configured_size);
         return Err(pool_error(
             "Worker isolate pool is disabled (neomacs-worker-pool-size is 0)",
