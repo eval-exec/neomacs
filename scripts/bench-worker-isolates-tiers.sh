@@ -33,5 +33,5 @@ done
 
 if [[ -f "$asm_dump" ]]; then
   printf '\nJIT assembly evidence: %s\n' "$asm_dump" >&2
-  rg -n 's6-worker-bench-loop|s6-worker-jit-witness|s6-worker-bench' "$asm_dump" >&2 || true
+  grep -n -E 's6-worker-bench-loop|s6-worker-jit-witness|s6-worker-bench' "$asm_dump" >&2 || true
 fi
