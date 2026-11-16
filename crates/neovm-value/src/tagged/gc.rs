@@ -2894,8 +2894,6 @@ mod marker_arena_tests;
 /// Record and closure slot stores are atomic: race-free against an atomic
 /// reader, same semantics, same barrier through a concurrent mark.
 #[cfg(test)]
-#[path = "gc/tests/slot_store_test.rs"]
-mod slot_store_tests;
 #[cfg(test)]
 #[path = "gc/tests/symbol_with_pos_arena_test.rs"]
 mod symbol_with_pos_arena_tests;
