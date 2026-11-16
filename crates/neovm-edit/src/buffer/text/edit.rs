@@ -263,11 +263,11 @@ impl TextReplacement {
         self.old_range.char_len()
     }
 
-    pub const fn new_byte_len(self) -> EmacsByteLen {
+    pub(crate) const fn new_byte_len(self) -> EmacsByteLen {
         self.new_extent.emacs_bytes()
     }
 
-    pub const fn new_char_len(self) -> CharLen {
+    pub(crate) const fn new_char_len(self) -> CharLen {
         self.new_extent.chars()
     }
 
@@ -278,7 +278,7 @@ impl TextReplacement {
     }
 
     #[cfg(test)]
-    pub const fn changed_chars_usize(self) -> usize {
+    pub(crate) const fn changed_chars_usize(self) -> usize {
         self.changed_chars().get()
     }
 }
@@ -338,7 +338,8 @@ impl TextChange {
         self.new_extent
     }
 
-    pub const fn before_byte_range(self) -> EmacsByteRange {
+    #[cfg(test)]
+    pub(crate) const fn before_byte_range(self) -> EmacsByteRange {
         self.old_range.byte_range()
     }
 
@@ -350,7 +351,7 @@ impl TextChange {
         self.old_range.byte_end()
     }
 
-    pub const fn after_start_byte(self) -> EmacsBytePos {
+    pub(crate) const fn after_start_byte(self) -> EmacsBytePos {
         self.after_start_byte
     }
 
@@ -363,7 +364,7 @@ impl TextChange {
         EmacsByteRange::new(self.after_start_byte(), self.after_end_byte())
     }
 
-    pub const fn old_char_len(self) -> CharLen {
+    pub(crate) const fn old_char_len(self) -> CharLen {
         self.after_old_char_len
     }
 }
@@ -420,7 +421,7 @@ impl TextTransposition {
         CharRange::new(self.first.char_end(), self.second.char_start())
     }
 
-    pub const fn second_destination_char_start(self) -> CharPos0 {
+    pub(crate) const fn second_destination_char_start(self) -> CharPos0 {
         self.first.char_start()
     }
 
@@ -434,11 +435,11 @@ impl TextTransposition {
             .saturating_sub_len(self.first_char_len())
     }
 
-    pub const fn first_char_len(self) -> CharLen {
+    pub(crate) const fn first_char_len(self) -> CharLen {
         self.first.char_len()
     }
 
-    pub const fn second_char_len(self) -> CharLen {
+    pub(crate) const fn second_char_len(self) -> CharLen {
         self.second.char_len()
     }
 
@@ -491,7 +492,7 @@ impl TextEditRange {
         }
     }
 
-    pub const fn empty_at(byte_pos: EmacsBytePos, char_pos: CharPos0) -> Self {
+    pub(crate) const fn empty_at(byte_pos: EmacsBytePos, char_pos: CharPos0) -> Self {
         Self::new(EmacsByteRange::new(byte_pos, byte_pos), char_pos, char_pos)
     }
 

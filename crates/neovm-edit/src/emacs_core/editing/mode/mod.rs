@@ -212,8 +212,9 @@ pub enum ModeLineElement {
 }
 
 impl ModeLineFormat {
+    #[cfg(test)]
     /// Return the standard Emacs-like default mode-line format.
-    pub fn default_format() -> Self {
+    pub(crate) fn default_format() -> Self {
         ModeLineFormat {
             elements: vec![
                 ModeLineElement::Literal(" ".to_string()),
@@ -510,8 +511,9 @@ impl ModeRegistry {
         Ok(())
     }
 
+    #[cfg(test)]
     /// Disable a globally-active minor mode.
-    pub fn disable_global_minor_mode(&mut self, mode_name: &str) {
+    pub(crate) fn disable_global_minor_mode(&mut self, mode_name: &str) {
         let mode_symbol = mode_symbol(mode_name);
         self.global_minor_modes.retain(|m| *m != mode_symbol);
     }
@@ -618,9 +620,10 @@ impl ModeRegistry {
     // Clean up
     // -------------------------------------------------------------------
 
+    #[cfg(test)]
     /// Remove all mode state associated with a buffer (e.g. when the buffer
     /// is killed).
-    pub fn remove_buffer(&mut self, buffer_id: u64) {
+    pub(crate) fn remove_buffer(&mut self, buffer_id: u64) {
         self.buffer_major_modes.remove(&buffer_id);
         self.buffer_minor_modes.remove(&buffer_id);
     }

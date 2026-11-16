@@ -28,15 +28,10 @@ crates/neovm-text/src/emacs_core/text/casetab/mod.rs	field	CaseTable field equiv
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	field	CaseTable field upcase
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn collect_casetab_gc_roots
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTable::empty
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTable::standard_ascii
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::current_table
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::downcase_char
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::downcase_string
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::new
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::set_current
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::set_standard
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::standard_table
-crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::upcase_char
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn impl CaseTableManager::upcase_string
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn is_case_table
 crates/neovm-text/src/emacs_core/text/casetab/mod.rs	fn	fn is_case_table_with_symbols
@@ -81,10 +76,8 @@ crates/neovm-text/src/emacs_core/text/charset/mod.rs	field	CharsetSubsetSpecSnap
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::contains
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::contains_symbol
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::decode_char
-crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::decode_char_from_bytes
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::define_alias
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::encode_char
-crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::encode_char_bytes
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::id
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::new
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::plist
@@ -102,42 +95,28 @@ crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemManager fi
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemManager field systems
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	Iso2022Spec field flags
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	Iso2022Spec field initial
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	Iso2022Spec field reg_usage
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	Iso2022Spec field request
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn builtin_detect_coding_region_in_context
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn builtin_detect_coding_string_in_context
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::add_alias
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::aliases_for
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::get
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::get_mut
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::is_ascii_compatible
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::is_known
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::is_known_or_derived
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::list_all
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::new
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::resolve
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::trace_roots
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl EolType::from_specified_symbol_name
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl EolType::from_specified_symbol_value
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl EolType::from_suffix
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl EolType::name
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl EolType::specified_index
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl EolType::suffix
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl EolType::to_int
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl EolType::to_symbol
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl Iso2022Spec::encode_register
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl Iso2022Spec::register_of
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn process_locale_uses_utf8
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn register_bootstrap_vars
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	struct	struct CodingSystemManager
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	struct	struct Iso2022Spec
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	use	use CodingSystemInfo
-crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn ascii_has_no_composition_rules
-crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn ascii_has_no_composition_rules_with_symbols
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn automatic_composition_for_terminal
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn automatic_composition_spans
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn automatic_composition_spans_in
-crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn automatic_composition_spans_in_with_symbols
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn composition_display_text_for_property
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn impl AutomaticCompositionRules::new
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn impl AutomaticCompositionRules::new_with_symbols
@@ -159,11 +138,8 @@ crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	BufferSyntaxLookup fi
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	BufferSyntaxLookup field syntax_table
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	BufferSyntaxLookup field word_boundary
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	CompiledPattern field can_be_null
-crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	CompiledPattern field charset_class_bits
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	CompiledPattern field fastmap
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	CompiledPattern field fastmap_accurate
-crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	CompiledPattern field fastmap_translated
-crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	CompiledPattern field has_nongreedy_optional
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	CompiledPattern field multibyte
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	CompiledPattern field multibyte_charsets
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	CompiledPattern field pike_eligible
@@ -181,28 +157,20 @@ crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	MatchRegisters field 
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	field	RegexCompileError field message
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	fn	fn impl CompiledPattern::new
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	fn	fn impl MatchRegisters::new
-crates/neovm-text/src/emacs_core/text/regex/emacs.rs	fn	fn impl MatchRegisters::num_regs
 crates/neovm-text/src/emacs_core/text/regex/emacs.rs	struct	struct CaseTranslation
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	enum	enum SearchedString
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn char_pos_to_byte
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn char_pos_to_byte_lisp_string
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn impl MatchGroup::emacs_byte_range
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn impl MatchGroup::end
-crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn impl MatchGroup::from_char_range
-crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn impl MatchGroup::from_emacs_byte_range
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn impl MatchGroup::new
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn impl MatchGroup::saturating_sub
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn impl MatchGroup::shift
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn impl MatchGroup::start
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn impl MatchGroup::string_char_range
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn impl MatchGroup::translate_saturating
-crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn looking_at_string
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn replace_match_string
-crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn replace_match_string_with_syntax
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn string_match_full
-crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn string_match_full_with_case_fold
-crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn string_match_full_with_case_fold_and_posix
-crates/neovm-text/src/emacs_core/text/regex/mod.rs	fn	fn translate_emacs_regex
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	struct	struct MatchData
 crates/neovm-text/src/emacs_core/text/regex/mod.rs	struct	struct MatchGroup
 crates/neovm-text/src/emacs_core/text/substrate_hooks.rs	fn	fn note_char_table_layout_mutation
@@ -218,7 +186,6 @@ crates/neovm-text/src/emacs_core/text/syntax/mod.rs	const	const impl SyntaxFlags
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	field	SyntaxEntry field class
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	field	SyntaxEntry field flags
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	field	SyntaxEntry field matching_char
-crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn backward_word
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn collect_syntax_gc_roots
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn forward_word
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxEntry::simple
@@ -230,19 +197,13 @@ crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxFlags::is_e
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxFlags::new
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::char_syntax
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::char_syntax_code
-crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::copy_syntax_table
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::for_buffer
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::get_entry
-crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::get_entry_code
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::isolate_for_buffer
-crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::make_syntax_table
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::modify_syntax_entry
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::new_standard
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn init_syntax_vars
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn reset_syntax_thread_locals
-crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn scan_sexps
-crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn skip_syntax_backward
-crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn skip_syntax_forward
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn string_to_syntax
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn syntax_entry_to_value
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxEntry
@@ -265,12 +226,8 @@ crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field pre_write_convers
 crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field properties
 crates/neovm-text/src/encoding.rs	fn	fn byte_to_char_pos
 crates/neovm-text/src/encoding.rs	fn	fn char_to_byte_pos
-crates/neovm-text/src/encoding.rs	fn	fn glyphless_char_display
-crates/neovm-text/src/encoding.rs	fn	fn is_ascii_string
 crates/neovm-text/src/encoding.rs	fn	fn is_multibyte_string
-crates/neovm-text/src/encoding.rs	fn	fn is_printable
 crates/neovm-text/src/encoding.rs	fn	fn is_whitespace
-crates/neovm-text/src/encoding.rs	fn	fn is_word_char
 crates/neovm-text/src/encoding.rs	fn	fn string_width
 crates/neovm-text/src/encoding.rs	struct	struct CodingDecoderState
 crates/neovm-text/src/encoding.rs	struct	struct CodingSystemInfo

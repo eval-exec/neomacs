@@ -1080,7 +1080,7 @@ impl OverlayList {
         Ok(changed)
     }
 
-    pub fn overlay_get(&self, overlay: Value, prop: &Value) -> Option<Value> {
+    pub(crate) fn overlay_get(&self, overlay: Value, prop: &Value) -> Option<Value> {
         plist::plist_get(overlay.as_overlay_data().unwrap().plist, prop)
     }
 
@@ -1457,24 +1457,7 @@ impl OverlayList {
         }
     }
 
-    /// Single-winner overlay lookup with GNU `overlay-get` alias semantics.
-    /// The canonical property is first in `property_lookup_order`, followed by
-    /// its `char-property-alias-alist` fallbacks. Property lookup happens per
-    /// overlay before the highest-precedence carrier is selected.
-    pub fn highest_priority_overlay_effective_property_value_at_emacs_byte_pos(
-        &self,
-        pos: EmacsBytePos,
-        property_lookup_order: &[Value],
-        window_id: Option<u64>,
-    ) -> Option<Value> {
-        match self.resolve_overlay_property_at_emacs_byte_pos(pos, window_id, |overlay| {
-            overlay_property_in_lookup_order(overlay, property_lookup_order)
-        }) {
-            OverlayPropertyAtPoint::Present(resolution) => Some(resolution.value()),
-            OverlayPropertyAtPoint::Vacant(_) => None,
-        }
-    }
-
+    #[cfg(test)]
     /// The overlay half of GNU `face_at_buffer_position` (src/xfaces.c): every
     /// window-visible overlay's PROPERTY value at POS in ASCENDING precedence
     /// (`sort_overlays` order), for the one policy where overlay values MERGE
@@ -1485,7 +1468,7 @@ impl OverlayList {
     /// value, then a stable tiebreak. A bare `priority`-integer comparison is not
     /// equivalent -- it silently reads a cons `priority` as 0 and drops the
     /// containment rule.
-    pub fn overlay_property_values_ascending_at_emacs_byte_pos(
+    pub(crate) fn overlay_property_values_ascending_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         property: Value,
@@ -1498,6 +1481,7 @@ impl OverlayList {
         )
     }
 
+    #[cfg(test)]
     /// GNU `overlay-get` property lookup composed with the ascending overlay
     /// merge order used by `face_at_buffer_position`.
     ///
@@ -1507,7 +1491,7 @@ impl OverlayList {
     /// overlay carrying an alias must still merge after a lower-priority
     /// overlay carrying the canonical name.  Querying each name across all
     /// overlays separately would reverse that GNU ordering.
-    pub fn overlay_effective_property_values_ascending_at_emacs_byte_pos(
+    pub(crate) fn overlay_effective_property_values_ascending_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         property_lookup_order: &[Value],
@@ -1646,7 +1630,8 @@ impl OverlayList {
         Some(start)
     }
 
-    pub fn highest_priority_overlay_for_inserted_emacs_byte_pos(
+    #[cfg(test)]
+    pub(crate) fn highest_priority_overlay_for_inserted_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         property: &Value,
@@ -1660,7 +1645,7 @@ impl OverlayList {
 
     /// [`Self::highest_priority_overlay_for_inserted_emacs_byte_pos`] reading
     /// `priority' the way the caller says (see [`OverlayPriorityLookup`]).
-    pub fn highest_priority_overlay_for_inserted_emacs_byte_pos_with(
+    pub(crate) fn highest_priority_overlay_for_inserted_emacs_byte_pos_with(
         &self,
         pos: EmacsBytePos,
         property: &Value,
@@ -1729,7 +1714,11 @@ impl OverlayList {
         });
     }
 
-    pub fn adjust_for_inserted_text(&mut self, insertion: TextInsertion, before_markers: bool) {
+    pub(crate) fn adjust_for_inserted_text(
+        &mut self,
+        insertion: TextInsertion,
+        before_markers: bool,
+    ) {
         self.adjust_for_insert_at_emacs_byte_pos(
             insertion.byte_pos(),
             insertion.extent().emacs_bytes(),
@@ -1767,11 +1756,11 @@ impl OverlayList {
         }
     }
 
-    pub fn adjust_for_deleted_text(&mut self, range: TextEditRange) {
+    pub(crate) fn adjust_for_deleted_text(&mut self, range: TextEditRange) {
         self.adjust_for_delete_emacs_byte_range(range.byte_range());
     }
 
-    pub fn adjust_for_replace_at_emacs_byte_pos(
+    pub(crate) fn adjust_for_replace_at_emacs_byte_pos(
         &mut self,
         start: EmacsBytePos,
         old_len: EmacsByteLen,
@@ -1786,7 +1775,7 @@ impl OverlayList {
         self.adjust_for_delete_emacs_byte_range(EmacsByteRange::from_start_len(start, old_len));
     }
 
-    pub fn adjust_for_replaced_text(&mut self, replacement: TextReplacement) {
+    pub(crate) fn adjust_for_replaced_text(&mut self, replacement: TextReplacement) {
         self.adjust_for_replace_at_emacs_byte_pos(
             replacement.byte_start(),
             replacement.old_byte_len(),
@@ -1826,7 +1815,7 @@ impl OverlayList {
         self.next_boundary_after_until_emacs_byte_pos(pos, EmacsBytePos::new(usize::MAX))
     }
 
-    pub fn next_boundary_after_until_emacs_byte_pos(
+    pub(crate) fn next_boundary_after_until_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         limit: EmacsBytePos,
@@ -1853,7 +1842,7 @@ impl OverlayList {
         self.previous_boundary_before_since_emacs_byte_pos(pos, EmacsBytePos::ZERO)
     }
 
-    pub fn previous_boundary_before_since_emacs_byte_pos(
+    pub(crate) fn previous_boundary_before_since_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         limit: EmacsBytePos,
@@ -1971,6 +1960,7 @@ fn overlay_property_named(overlay: Value, prop_name: Value) -> Option<Value> {
     plist::plist_get(plist, &prop_name)
 }
 
+#[cfg(test)]
 fn overlay_property_in_lookup_order(
     overlay: Value,
     property_lookup_order: &[Value],
@@ -2034,6 +2024,7 @@ fn overlay_precedence(
     })
 }
 
+#[cfg(test)]
 /// Order `overlays` by ascending precedence, reading each overlay's key once.
 fn sort_overlays_by_precedence_ascending(overlays: &mut [Value]) {
     let mut keyed: Vec<(Value, Option<OverlayPrecedence>)> = overlays
@@ -2174,12 +2165,12 @@ fn winner_window_symbol_id() -> neovm_value::intern::SymId {
 /// fallback needs an obarray, which this layer has none of, so a caller that
 /// has one passes the lookup in; callers without one read the overlay's own
 /// plist, which is what this layer did for everyone before.
-pub type OverlayPriorityLookup<'a> = &'a dyn Fn(Value) -> Option<Value>;
+pub(crate) type OverlayPriorityLookup<'a> = &'a dyn Fn(Value) -> Option<Value>;
 
 /// How a caller reads any property of an overlay -- `Foverlay_get' when the
 /// caller has an obarray (so `category' is followed), the overlay's own plist
 /// otherwise.
-pub type OverlayPropertyLookup<'a> = &'a dyn Fn(Value, Value) -> Option<Value>;
+pub(crate) type OverlayPropertyLookup<'a> = &'a dyn Fn(Value, Value) -> Option<Value>;
 
 fn overlay_plist_property(overlay: Value, property: Value) -> Option<Value> {
     overlay_property_named(overlay, property)

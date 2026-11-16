@@ -41,7 +41,7 @@ static TEXT_SNAPSHOT_MODE: AtomicU8 = AtomicU8::new(MODE_UNREAD);
 static BUFFER_TEXT_COW_COPIES: AtomicUsize = AtomicUsize::new(0);
 
 /// The mode a value of `NEOMACS_TEXT_SNAPSHOT` selects.
-pub fn parse_text_snapshot_knob(value: Option<&str>) -> TextSnapshotMode {
+pub(crate) fn parse_text_snapshot_knob(value: Option<&str>) -> TextSnapshotMode {
     let Some(value) = value.map(str::trim) else {
         return TextSnapshotMode::Share;
     };
@@ -75,7 +75,7 @@ pub fn set_text_snapshot_mode_override(mode: Option<TextSnapshotMode>) {
 
 /// The active mode. One relaxed byte load once the knob is read.
 #[inline]
-pub fn text_snapshot_mode() -> TextSnapshotMode {
+pub(crate) fn text_snapshot_mode() -> TextSnapshotMode {
     if let Some(mode) = MODE_OVERRIDE.with(|cell| cell.get()) {
         return mode;
     }

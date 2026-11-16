@@ -51,11 +51,11 @@ impl BufferTextBackendKind {
         self.into()
     }
 
-    pub const fn is_gap_buffer(self) -> bool {
+    pub(crate) const fn is_gap_buffer(self) -> bool {
         matches!(self, Self::GapBuffer)
     }
 
-    pub fn is_implemented(self) -> bool {
+    pub(crate) fn is_implemented(self) -> bool {
         self.implemented().is_some()
     }
 

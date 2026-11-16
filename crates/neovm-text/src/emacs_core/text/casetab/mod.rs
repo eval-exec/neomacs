@@ -90,7 +90,7 @@ impl CaseTable {
     }
 
     /// Create the standard ASCII case table (a-z <-> A-Z).
-    pub fn standard_ascii() -> Self {
+    pub(crate) fn standard_ascii() -> Self {
         let mut upcase = HashMap::new();
         let mut downcase = HashMap::new();
         let mut canonicalize = HashMap::new();
@@ -131,6 +131,7 @@ impl CaseTable {
 /// Manages case tables, providing standard ASCII case conversion by default.
 #[derive(Clone, Debug)]
 pub struct CaseTableManager {
+    #[cfg(test)]
     /// The standard (immutable) case table.
     standard: CaseTable,
     /// The current buffer-local case table.
@@ -142,6 +143,7 @@ impl CaseTableManager {
     pub fn new() -> Self {
         let table = CaseTable::standard_ascii();
         Self {
+            #[cfg(test)]
             standard: table.clone(),
             current: table,
         }
@@ -149,13 +151,13 @@ impl CaseTableManager {
 
     /// Convert a character to uppercase using the current case table.
     /// Returns the character unchanged if no upcase mapping exists.
-    pub fn upcase_char(&self, c: char) -> char {
+    pub(crate) fn upcase_char(&self, c: char) -> char {
         *self.current.upcase.get(&c).unwrap_or(&c)
     }
 
     /// Convert a character to lowercase using the current case table.
     /// Returns the character unchanged if no downcase mapping exists.
-    pub fn downcase_char(&self, c: char) -> char {
+    pub(crate) fn downcase_char(&self, c: char) -> char {
         *self.current.downcase.get(&c).unwrap_or(&c)
     }
 
@@ -169,8 +171,9 @@ impl CaseTableManager {
         s.chars().map(|c| self.downcase_char(c)).collect()
     }
 
+    #[cfg(test)]
     /// Return a reference to the standard case table.
-    pub fn standard_table(&self) -> &CaseTable {
+    pub(crate) fn standard_table(&self) -> &CaseTable {
         &self.standard
     }
 
@@ -184,8 +187,9 @@ impl CaseTableManager {
         self.current = table;
     }
 
+    #[cfg(test)]
     /// Set the standard case table.
-    pub fn set_standard(&mut self, table: CaseTable) {
+    pub(crate) fn set_standard(&mut self, table: CaseTable) {
         self.standard = table;
     }
 }

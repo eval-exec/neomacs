@@ -791,11 +791,12 @@ impl SyntaxTable {
         }
     }
 
+    #[cfg(test)]
     /// Same as `new_standard` — GNU's `make-syntax-table` with nil parent
     /// creates a fresh, empty chartable whose parent is the standard
     /// table. The distinction is handled at the chartable level by
     /// `builtin_make_syntax_table`.
-    pub fn make_syntax_table() -> Self {
+    pub(crate) fn make_syntax_table() -> Self {
         Self::new_standard()
     }
 
@@ -830,10 +831,11 @@ impl SyntaxTable {
         Self { chartable: own }
     }
 
+    #[cfg(test)]
     /// Deep-copy the backing chartable, matching GNU `copy-syntax-table`
     /// (`syntax.c:265-282`). The copy is independent: mutations to
     /// either table do not affect the other.
-    pub fn copy_syntax_table(&self) -> Self {
+    pub(crate) fn copy_syntax_table(&self) -> Self {
         if self.chartable.is_nil() {
             return *self;
         }
@@ -864,7 +866,7 @@ impl SyntaxTable {
     /// (`0..=MAX_CHAR`), not by Unicode scalar values; keep this path
     /// available for callers such as `char-syntax`.
     #[inline(always)]
-    pub fn get_entry_code(&self, code: u32) -> Option<SyntaxEntry> {
+    pub(crate) fn get_entry_code(&self, code: u32) -> Option<SyntaxEntry> {
         syntax_entry_at_char_code(&self.chartable, code)
     }
 
@@ -1451,8 +1453,9 @@ pub fn forward_word_with_options(
     (buffer_char_to_emacs_byte_pos(buf, abs_char), true)
 }
 
+#[cfg(test)]
 /// Move backward over `count` words.  Returns the resulting Emacs byte position.
-pub fn backward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
+pub(crate) fn backward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
     backward_word_with_options(
         buf,
         table,
@@ -1795,10 +1798,11 @@ fn backward_word_with_options(
     (buffer_char_to_emacs_byte_pos(buf, abs_char), true)
 }
 
+#[cfg(test)]
 /// Skip forward over characters whose syntax class matches any character in
 /// `syntax_chars` (each character in the string names a syntax class,
 /// e.g., `"w_"` matches Word and Symbol).  Returns the resulting byte position.
-pub fn skip_syntax_forward(
+pub(crate) fn skip_syntax_forward(
     buf: &Buffer,
     table: &SyntaxTable,
     syntax_chars: &str,
@@ -1859,9 +1863,10 @@ fn skip_syntax_forward_with_options(
     buffer_char_to_emacs_byte_pos(buf, abs_char).get()
 }
 
+#[cfg(test)]
 /// Skip backward over characters whose syntax class matches any character in
 /// `syntax_chars`.  Returns the resulting byte position.
-pub fn skip_syntax_backward(
+pub(crate) fn skip_syntax_backward(
     buf: &Buffer,
     table: &SyntaxTable,
     syntax_chars: &str,
@@ -1976,12 +1981,13 @@ impl SkipSyntaxClasses {
     }
 }
 
+#[cfg(test)]
 /// Scan for balanced expressions (sexps).
 ///
 /// Starting from byte position `from`, scan `count` sexps forward (positive
 /// count) or backward (negative count).  Returns the byte position after the
 /// last sexp, or an error if unbalanced.
-pub fn scan_sexps(
+pub(crate) fn scan_sexps(
     buf: &Buffer,
     table: &SyntaxTable,
     from: usize,

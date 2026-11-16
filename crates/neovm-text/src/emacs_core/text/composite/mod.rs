@@ -857,19 +857,7 @@ pub fn automatic_composition_spans(
     automatic_composition_spans_in(buffer, composition_function_table, text, 0)
 }
 
-/// Whether no ASCII character has an automatic-composition rule in TABLE, so
-/// that text with no byte >= 0x80 composes nothing: the scan triggers only on
-/// a character whose entry is non-nil, and rules for non-ASCII triggers
-/// (keycaps U+20E3, variation selectors U+FE0F, marks) need that non-ASCII
-/// character inside the scanned text. Something that is not a char-table
-/// composes nothing either. This is the scan's own ASCII row
-/// (`select_automatic_composition_spans`), read the same way.
-pub fn ascii_has_no_composition_rules(table: Value) -> bool {
-    install_substrate_seams();
-    ascii_has_no_composition_rules_with_symbols(table, neovm_value::tagged::SymbolMode::Bare)
-}
-
-pub fn ascii_has_no_composition_rules_with_symbols(
+pub(crate) fn ascii_has_no_composition_rules_with_symbols(
     table: Value,
     mode: neovm_value::tagged::SymbolMode,
 ) -> bool {
@@ -963,7 +951,7 @@ pub fn automatic_composition_spans_in(
     )
 }
 
-pub fn automatic_composition_spans_in_with_symbols(
+pub(crate) fn automatic_composition_spans_in_with_symbols(
     buffer: &neovm_edit::buffer::Buffer,
     composition_function_table: Value,
     text: &str,

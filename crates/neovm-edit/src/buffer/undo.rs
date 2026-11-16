@@ -73,7 +73,7 @@ pub fn undo_list_is_disabled(undo_list: &Value) -> bool {
 /// answer is therefore a fact about the list as the command found it, which
 /// is why it is read once by [`crate::buffer::Buffer::undo_prepare_change`]
 /// rather than re-derived by each recorder.
-pub fn undo_list_at_boundary(undo_list: &Value) -> bool {
+pub(crate) fn undo_list_at_boundary(undo_list: &Value) -> bool {
     undo_list.is_nil() || (undo_list.is_cons() && undo_list.cons_car().is_nil())
 }
 
@@ -182,7 +182,11 @@ pub fn undo_list_record_delete(
 /// GNU `record_marker_adjustments` conses `(MARKER . ADJUSTMENT)` entries
 /// before `record_delete` conses `(TEXT . POS)`, so the final undo list has
 /// the deletion first followed by its marker adjustments.
-pub fn undo_list_record_marker_adjustment(undo_list: &mut Value, marker: Value, adjustment: i64) {
+pub(crate) fn undo_list_record_marker_adjustment(
+    undo_list: &mut Value,
+    marker: Value,
+    adjustment: i64,
+) {
     if undo_list_is_disabled(undo_list) || adjustment == 0 {
         return;
     }
@@ -198,7 +202,7 @@ pub fn undo_list_record_marker_adjustment(undo_list: &mut Value, marker: Value, 
 
 /// Record the cursor position (0-indexed `pt`) as a 1-indexed integer.
 /// Skips if the most recent entry is the same position.
-pub fn undo_list_record_point(undo_list: &mut Value, pt: CharPos0) {
+pub(crate) fn undo_list_record_point(undo_list: &mut Value, pt: CharPos0) {
     if undo_list_is_disabled(undo_list) {
         return;
     }
@@ -220,7 +224,7 @@ pub fn undo_list_record_point(undo_list: &mut Value, pt: CharPos0) {
 /// `prop` is the property name (symbol), `val` is the OLD value before
 /// the change (so that undoing restores it), `beg` and `end` are
 /// 0-indexed character positions; they are stored as 1-indexed integers.
-pub fn undo_list_record_property_change(
+pub(crate) fn undo_list_record_property_change(
     undo_list: &mut Value,
     prop: Value,
     val: Value,
@@ -275,7 +279,7 @@ pub fn undo_list_record_property_change(
 /// can mint.  Passing the current buffer's own
 /// `visited-file-modtime` is therefore not expressible here; it was the whole
 /// of ledger 105's residual.
-pub fn undo_list_record_first_change(
+pub(crate) fn undo_list_record_first_change(
     undo_list: &mut Value,
     first_change_modtime: super::visited_file_modtime::FirstChangeModtime,
 ) {
@@ -292,19 +296,6 @@ pub fn undo_list_record_first_change(
     push_scratch_gc_root(entry);
     *undo_list = Value::cons(entry, *undo_list);
     restore_scratch_gc_roots(saved);
-}
-
-/// Return true if LIST contains a GNU first-change sentinel `(t . MODTIME)`.
-pub fn undo_list_contains_first_change(undo_list: &Value) -> bool {
-    let mut cursor = *undo_list;
-    while cursor.is_cons() {
-        let entry = cursor.cons_car();
-        if entry.is_cons() && entry.cons_car().is_t() {
-            return true;
-        }
-        cursor = cursor.cons_cdr();
-    }
-    false
 }
 
 /// Insert an undo boundary (`nil`).  Skips if the list is empty/nil or
@@ -403,7 +394,7 @@ impl GnuIntVariable {
 /// for a `DEFVAR_LISP` variable that is documented to hold "a size, or nil for
 /// no limit".
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OuterUndoLimit {
+pub(crate) enum OuterUndoLimit {
     /// `undo-outer-limit` is not an integer (nil is the documented "no limit"
     /// value, and `--batch` installs it — `src/emacs.c:1700-1707`), or it is a
     /// positive bignum too large for `intmax_t`, for which `Fnatnump` is
@@ -505,7 +496,7 @@ impl UndoLimits {
 /// Bytes occupied by the leading boundary plus the most recent undo record —
 /// the size GNU has accumulated when it tests `undo-outer-limit`, and the
 /// number it passes to `undo-outer-limit-function` (`src/undo.c:312-361`).
-pub fn undo_first_group_bytes(undo_list: Value) -> i64 {
+pub(crate) fn undo_first_group_bytes(undo_list: Value) -> i64 {
     let mut size_so_far = 0;
     let mut next = undo_list;
 

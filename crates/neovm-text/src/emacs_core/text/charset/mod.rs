@@ -1347,7 +1347,7 @@ impl CharsetRegistry {
     /// Emacs character code and the number of bytes consumed, or `None` when
     /// there are too few bytes or the code point is not assigned in the
     /// charset (the caller then falls back to an eight-bit raw byte).
-    pub fn decode_char_from_bytes(&self, name: SymId, bytes: &[u8]) -> Option<(i64, usize)> {
+    pub(crate) fn decode_char_from_bytes(&self, name: SymId, bytes: &[u8]) -> Option<(i64, usize)> {
         let dimension = self
             .charsets
             .get(&self.resolve_name(name))
@@ -1366,7 +1366,7 @@ impl CharsetRegistry {
     /// byte sequence (one byte per charset dimension) — the bytes a simple
     /// charset-based coding system emits for that character. Returns `None`
     /// when `ch` is not representable in the charset.
-    pub fn encode_char_bytes(&self, name: SymId, ch: i64) -> Option<Vec<u8>> {
+    pub(crate) fn encode_char_bytes(&self, name: SymId, ch: i64) -> Option<Vec<u8>> {
         let code = self.encode_char(name, ch)?;
         let dimension = self
             .charsets

@@ -1427,11 +1427,11 @@ impl MatchGroup {
         EmacsByteRange::new(EmacsBytePos::new(self.start), EmacsBytePos::new(self.end))
     }
 
-    pub const fn from_char_range(range: CharRange) -> Self {
+    pub(crate) const fn from_char_range(range: CharRange) -> Self {
         Self::new(range.start().get(), range.end().get())
     }
 
-    pub const fn from_emacs_byte_range(range: EmacsByteRange) -> Self {
+    pub(crate) const fn from_emacs_byte_range(range: EmacsByteRange) -> Self {
         Self::new(range.start().get(), range.end().get())
     }
 
@@ -1928,6 +1928,7 @@ impl StringSearchSuccess {
 // Emacs → Rust regex translation
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 /// Translate basic Emacs regex syntax to Rust regex syntax.
 ///
 /// Key differences handled:
@@ -1944,7 +1945,7 @@ impl StringSearchSuccess {
 /// - Emacs `\s-` etc. (syntax classes)  →  simplified to `\s` (whitespace)
 /// - Emacs `\<` `\>` (word boundaries)  →  Rust `\b`
 /// - Emacs character classes inside `[...]` are kept as-is.
-pub fn translate_emacs_regex(pattern: &str) -> String {
+pub(crate) fn translate_emacs_regex(pattern: &str) -> String {
     fn next_char_at(s: &str, byte_idx: usize) -> Option<(char, usize)> {
         s.get(byte_idx..)
             .and_then(|tail| tail.chars().next().map(|ch| (ch, ch.len_utf8())))
@@ -2772,6 +2773,7 @@ pub fn buffer_regexp_syntax_dependency_and_span(
     Ok((dependency, span))
 }
 
+#[cfg(test)]
 fn string_char_match_data(searched_string: SearchedString, byte_md: EngineMatchData) -> MatchData {
     byte_md.publish_string(searched_string)
 }
@@ -4567,12 +4569,13 @@ pub fn looking_at_compiled_into(
     }
 }
 
+#[cfg(test)]
 /// Test whether STRING matches PATTERN starting at byte offset 0.
 ///
 /// Returns `true` if the regex matches at the beginning of STRING and updates
 /// match data using character positions, mirroring `looking-at` semantics on a
 /// string-backed source.
-pub fn looking_at_string(
+pub(crate) fn looking_at_string(
     pattern: &str,
     string: &str,
     case_fold: bool,
@@ -4615,6 +4618,7 @@ pub(crate) fn looking_at_lisp_pattern_length_with_syntax(
     .map(|(end, _regs)| neovm_value::emacs_char::byte_to_char_pos(text_bytes, end)))
 }
 
+#[cfg(test)]
 fn looking_at_string_with_syntax(
     pattern: &str,
     string: &str,
@@ -4665,7 +4669,7 @@ fn looking_at_string_with_syntax(
 /// to the whole string, not `start`), or `None` if no match.
 /// Updates match data with capture groups in CHARACTER positions;
 /// stores the searched string.
-pub fn string_match_full_with_case_fold(
+pub(crate) fn string_match_full_with_case_fold(
     pattern: &str,
     string: &str,
     start: usize,
@@ -4677,7 +4681,7 @@ pub fn string_match_full_with_case_fold(
 
 /// POSIX longest-match variant of [`string_match_full_with_case_fold`]
 /// used by `posix-string-match`. See GNU `src/search.c:Fposix_string_match`.
-pub fn string_match_full_with_case_fold_and_posix(
+pub(crate) fn string_match_full_with_case_fold_and_posix(
     pattern: &str,
     string: &str,
     start: usize,
@@ -5170,7 +5174,7 @@ pub fn replace_match_string(
 /// For pure string replacement (no buffer in scope), pass `None` for
 /// the table to get GNU's standard-table baseline behavior.
 #[allow(clippy::too_many_arguments)] // public replacement options mirror Lisp replace-match semantics
-pub fn replace_match_string_with_syntax(
+pub(crate) fn replace_match_string_with_syntax(
     source: &[u8],
     source_multibyte: bool,
     newtext: &str,

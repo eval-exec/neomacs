@@ -255,7 +255,7 @@ pub struct CompiledPattern {
     /// characters are stored translated, so the one leading code of the
     /// stored character is the only candidate, where `fastmap` -- indexed by
     /// a translated BYTE -- has to admit every non-ASCII leading byte.
-    pub fastmap_translated: [bool; 256],
+    pub(crate) fastmap_translated: [bool; 256],
 
     /// Whether the fastmap is valid (needs recomputation after compile).
     pub fastmap_accurate: bool,
@@ -338,14 +338,14 @@ pub struct CompiledPattern {
     /// and for syntax-table-sensitive classes such as `word` and `space`.
     /// Fx-hashed: probed per charset op while matching (57K probes per
     /// five org font-lock operations); SipHash on a `usize` key was 1.7M Ir/op.
-    pub charset_class_bits: FxHashMap<usize, u32>,
+    pub(crate) charset_class_bits: FxHashMap<usize, u32>,
 
     /// True if the pattern used a non-greedy optional `??`.  Set at the sole
     /// `??` emit site, which produces GNU's `on_failure_jump` + `jump` shape
     /// (regex-emacs.c:2009-2015; no keep-string jump).  It keeps the pattern
     /// off the Pike VM (see [`compute_pike_eligible`]), whose priority order
     /// for that skip-first split has not been validated.
-    pub has_nongreedy_optional: bool,
+    pub(crate) has_nongreedy_optional: bool,
 
     /// True if this pattern is eligible for the non-backtracking Pike VM
     /// fast path (see [`pike_match`]).  Computed once at compile time by
@@ -433,7 +433,7 @@ pub struct CompiledPattern {
     /// characters are stored translated, so the one leading code of the
     /// stored character is the only candidate, where `fastmap` -- indexed by
     /// a translated BYTE -- has to admit every non-ASCII leading byte.
-    pub fastmap_translated: [bool; 256],
+    pub(crate) fastmap_translated: [bool; 256],
 
     /// Whether the fastmap is valid (needs recomputation after compile).
     pub fastmap_accurate: bool,
@@ -516,14 +516,14 @@ pub struct CompiledPattern {
     /// and for syntax-table-sensitive classes such as `word` and `space`.
     /// Fx-hashed: probed per charset op while matching (57K probes per
     /// five org font-lock operations); SipHash on a `usize` key was 1.7M Ir/op.
-    pub charset_class_bits: FxHashMap<usize, u32>,
+    pub(crate) charset_class_bits: FxHashMap<usize, u32>,
 
     /// True if the pattern used a non-greedy optional `??`.  Set at the sole
     /// `??` emit site, which produces GNU's `on_failure_jump` + `jump` shape
     /// (regex-emacs.c:2009-2015; no keep-string jump).  It keeps the pattern
     /// off the Pike VM (see [`compute_pike_eligible`]), whose priority order
     /// for that skip-first split has not been validated.
-    pub has_nongreedy_optional: bool,
+    pub(crate) has_nongreedy_optional: bool,
 
     /// True if this pattern is eligible for the non-backtracking Pike VM
     /// fast path (see [`pike_match`]).  Computed once at compile time by
@@ -1212,7 +1212,7 @@ impl MatchRegisters {
         }
     }
 
-    pub fn num_regs(&self) -> usize {
+    pub(crate) fn num_regs(&self) -> usize {
         self.start.len()
     }
 }

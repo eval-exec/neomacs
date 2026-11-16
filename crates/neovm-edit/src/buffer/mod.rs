@@ -41,14 +41,14 @@ pub mod visited_file_modtime;
 
 pub use buffer::{
     Buffer, BufferId, BufferManager, BufferTextSnapshot, InsertionType, LabeledRestriction,
-    LabeledRestrictionLabel, LineIndexBuild, MarkerRef, SavedLabeledRestrictions,
-    SavedRestrictionKind, SavedRestrictionState,
+    LineIndexBuild, MarkerRef, SavedLabeledRestrictions, SavedRestrictionState,
 };
+pub use buffer::{LabeledRestrictionLabel, SavedRestrictionKind};
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) use buffer_text::BufferText;
 #[cfg(any(test, feature = "test-support"))]
 pub use buffer_text::BufferText;
-pub use buffer_text::{BufferContentRevision, BufferSourceAuthority, BufferSourceReadLease};
+pub use buffer_text::{BufferSourceAuthority, BufferSourceReadLease};
 pub use edit_runtime::EditRuntime;
 pub use edit_transaction::TranspositionAnchorPolicy;
 #[doc(hidden)]
@@ -60,19 +60,18 @@ pub(crate) use position::BufferLispPos;
 pub use position::BufferLispPos;
 pub use position::{
     AccessibleCharRange, AccessibleEmacsByteRange, CharLen, CharPos0, CharRange, DisplayColumn,
-    EmacsByteLen, EmacsBytePos, EmacsByteRange, FullBufferLispCharRange, LispBytePos1,
-    LispCharPos1, TextPositionAnchor,
+    EmacsByteLen, EmacsBytePos, EmacsByteRange, LispBytePos1, LispCharPos1, TextPositionAnchor,
 };
 pub use shared::{SavedPointBeforeCommand, SharedUndoState};
+pub use text::TextMetrics;
 pub use text::{
-    BufferTextBackendKind, TextChange, TextEditRange, TextExtent, TextInsertion, TextMetrics,
-    TextReplacement, TextTransposition,
+    BufferTextBackendKind, TextChange, TextEditRange, TextExtent, TextInsertion, TextReplacement,
+    TextTransposition,
 };
 pub use text_props::{ObjectIntervalPlistRun, ObjectIntervalRun, TextPropertyTable};
+pub(crate) use undo::undo_first_group_bytes;
 pub use undo::{
-    OuterUndoLimit, UndoLimitBindings, UndoLimits, UndoRecording, truncate_undo_list,
-    undo_first_group_bytes, undo_list_boundary, undo_list_has_trailing_boundary,
-    undo_list_is_disabled, undo_list_record_delete, undo_list_record_first_change,
-    undo_list_record_insert, undo_list_record_point, undo_list_record_property_change,
+    UndoLimitBindings, UndoLimits, UndoRecording, truncate_undo_list, undo_list_boundary,
+    undo_list_has_trailing_boundary, undo_list_is_disabled, undo_list_record_insert,
 };
-pub use visited_file_modtime::{FirstChangeModtime, VisitedFileModtime, VisitedFileModtimeSlot};
+pub use visited_file_modtime::VisitedFileModtime;

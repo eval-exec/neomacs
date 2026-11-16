@@ -105,15 +105,6 @@ impl VisitedFileModtime {
         }
     }
 
-    /// The `(seconds, nanoseconds)` pair, or `None` when this is one of GNU's
-    /// two non-times. For callers that must compare against a `stat` result.
-    pub fn seconds_and_nanos(self) -> Option<(i64, i32)> {
-        match self {
-            Self::Unknown | Self::Nonexistent => None,
-            Self::Known { sec, nsec } => Some((sec, nsec)),
-        }
-    }
-
     /// Rebuild from the pdump's two optional halves. A dump that carries only
     /// one half is as unknown as one that carries neither.  GNU's negative
     /// `tv_nsec` sentinels ride along in the nanoseconds half, exactly as they
@@ -187,7 +178,7 @@ pub struct BaseVisitedFileModtime(Rc<Cell<VisitedFileModtime>>);
 /// `set-visited-file-modtime`, and an indirect buffer's first change must
 /// record whatever it says *then*, not a copy taken when the indirect buffer
 /// was created.
-pub struct VisitedFileModtimeSlot {
+pub(crate) struct VisitedFileModtimeSlot {
     /// This buffer's own modtime -- what `visited-file-modtime` reports.
     own: Rc<Cell<VisitedFileModtime>>,
     /// The base buffer's cell, when this is an indirect buffer.
@@ -236,14 +227,14 @@ impl VisitedFileModtimeSlot {
     /// `current_buffer`'s slot even in an indirect buffer
     /// (`src/fileio.c:6177-6215`), which is why the own cell stays distinct
     /// from the base link.
-    pub fn set_own(&self, modtime: VisitedFileModtime) {
+    pub(crate) fn set_own(&self, modtime: VisitedFileModtime) {
         self.own.set(modtime);
     }
 
     /// GNU `record_first_change`'s base-buffer redirect (`src/undo.c:213-214`):
     /// the base buffer's modtime for an indirect buffer, this buffer's own
     /// otherwise.
-    pub fn for_first_change(&self) -> FirstChangeModtime {
+    pub(crate) fn for_first_change(&self) -> FirstChangeModtime {
         FirstChangeModtime(match &self.base {
             Some(base) => base.get(),
             None => self.own.get(),
