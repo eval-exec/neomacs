@@ -759,3 +759,39 @@ fn sweep_window_allocation_does_not_count_as_live() {
         "2,048 dead strings allocated during the sweep raised live bytes {quiet} -> {busy}"
     );
 }
+
+/// Live bytes after a minor that tenures 2,048 retained strings, when its
+/// sweep window allocates `conses` dead conses. The sweep never visits a
+/// cons allocated during it: unswept blocks are withheld from allocation, so
+/// a window cons lands in a swept block or a new one.
+fn live_bytes_after_minor_with_sweep_window_conses(conses: usize) -> usize {
+    let mut heap = heap_with_generations(true);
+    set_tagged_heap(&mut heap);
+    let roots = ScratchRoots::new();
+    let kept: Vec<TaggedValue> = (0..2_048)
+        .map(|i| heap.alloc_string(LispString::from_utf8(&format!("retained {i:08}"))))
+        .collect();
+    for &string in &kept {
+        roots.keep(string);
+    }
+    minor(&mut heap, &kept);
+    heap.begin_minor_collection().unwrap();
+    heap.complete_minor_collection();
+    assert!(heap.sweep_in_progress());
+    for _ in 0..conses {
+        let _ = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
+    }
+    heap.finish_incremental_sweep_now();
+    heap.live_bytes
+}
+
+#[test]
+fn sweep_window_allocation_the_sweep_never_counted_keeps_the_survivors() {
+    let quiet = live_bytes_after_minor_with_sweep_window_conses(0);
+    // About 512 KB of conses, well above the retained strings' bytes.
+    let busy = live_bytes_after_minor_with_sweep_window_conses(32_768);
+    assert!(
+        busy >= quiet,
+        "32,768 conses allocated during the sweep erased survivors: live bytes {quiet} -> {busy}"
+    );
+}

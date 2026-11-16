@@ -624,23 +624,31 @@ impl TaggedHeap {
         // eight cycles at a flat 75K live conses. A stop-the-world
         // collection allocates nothing while it runs, so its live count is
         // GNU's; this brings the incremental one to the same measure. The
-        // sweep window is taken out the same way: a slot allocated during it
-        // in a page the cursor had not reached is counted as a survivor when
-        // the page is visited, and a paced sweep spans up to half a
-        // threshold of allocation. `bytes_since_gc` (reset at termination)
-        // bounds that from above. Both undercount what the windows
-        // allocated that stays live, which only paces the next cycle sooner.
+        // sweep window is taken out the same way, from the one term that can
+        // hold it: a slot allocated during it in an arena page the cursor had
+        // not reached is counted in `sweep_noncons_live_bytes` when the page
+        // is visited, and a paced sweep spans up to half a threshold of
+        // allocation. Nothing else the sweep counts was allocated in its
+        // window: unswept cons blocks are withheld from allocation, boxed
+        // objects link onto the fresh young list the sweep never visits, and
+        // the old and mapped bytes hold no young object. `bytes_since_gc`
+        // (reset at termination) bounds the counted part from above, and
+        // taking it from that term alone keeps it off the survivors the
+        // window never touched. Both undercount what the windows allocated
+        // that stays live, which only paces the next cycle sooner.
         let cons_live_bytes = self
             .sweep_cons_live_cells
             .saturating_add(mapped_cons_live)
             .saturating_mul(size_of::<ConsCell>());
         let mapped_object_live_bytes = self.mapped_non_cons_live_bytes();
         self.live_bytes = cons_live_bytes
-            .saturating_add(self.sweep_noncons_live_bytes)
+            .saturating_add(
+                self.sweep_noncons_live_bytes
+                    .saturating_sub(self.bytes_since_gc()),
+            )
             .saturating_add(mapped_object_live_bytes)
             .saturating_add(self.old_noncons_bytes())
             .saturating_sub(self.sweep_mark_window_alloc_bytes)
-            .saturating_sub(self.bytes_since_gc())
             .max(mapped_object_live_bytes);
 
         self.gc_collections += 1;
