@@ -90,7 +90,9 @@ pub(crate) use world::WorldSlot;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use world::sole_owner::SoleOwnerDriver;
-pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
+pub use world::{ContextShutdownError};
+pub use world::ObarrayWriteAccess;
+pub(crate) use world::{OutstandingWorldViews, WorldEra};
 pub(crate) use world::{OwnedRootRegistryView, WorldView};
 
 pub(crate) mod subr_abi;
@@ -99,7 +101,8 @@ pub(crate) mod subr_abi;
 // spelling.
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub use subr_abi::SubrValueExt;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use subr_abi::SubrValueExt;
 #[cfg(not(any(test, feature = "test-support")))]
 use subr_abi::SubrValueExt;
 use subr_abi::{SubrFn, SubrObj};
@@ -3359,7 +3362,7 @@ pub struct Context {
     interpreted_closure_filter_fn: Option<Value>,
     pub(crate) in_flight_registry: neovm_value::error::InFlightRegistryHandle,
     #[doc(hidden)]
-    pub cached_standard_case_table: Option<Value>,
+    pub(crate) cached_standard_case_table: Option<Value>,
     /// Edit-owned runtime state: the buffer manager and the insdel
     /// change-combining state. Embedded by value so field access stays one
     /// offset; stage-3 inversion keeps the evaluator above the edit domain.
@@ -4978,7 +4981,8 @@ impl Context {
     }
 
     /// Whether lexical-binding is currently enabled.
-    pub fn lexical_binding(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn lexical_binding(&self) -> bool {
         lexenv_is_active(self.lexenv)
     }
 
@@ -5632,7 +5636,7 @@ impl Context {
     /// If `symbols-with-pos-enabled` and `val` is a symbol-with-pos,
     /// return the bare symbol. Otherwise return `val` unchanged.
     #[inline]
-    pub fn unwrap_symbol(&self, val: Value) -> Value {
+    pub(crate) fn unwrap_symbol(&self, val: Value) -> Value {
         self.symbol_mode().unwrap(val)
     }
 
@@ -6852,7 +6856,7 @@ pub(crate) fn check_forwarded_unbind(
 impl Context {
     /// Call a registered subr value directly. Returns None if VALUE is not a
     /// fully registered subr.
-    pub fn dispatch_subr_value(&mut self, function: Value, args: Vec<Value>) -> Option<EvalResult> {
+    pub(crate) fn dispatch_subr_value(&mut self, function: Value, args: Vec<Value>) -> Option<EvalResult> {
         let sym_id = function.as_subr_id()?;
         let wrong_arity_callee = Value::from_sym_id(sym_id);
         self.dispatch_subr_value_internal(function, &args, wrong_arity_callee)
@@ -6861,7 +6865,8 @@ impl Context {
     /// Resolve a symbol identity to its canonical subr object and call it.
     /// Returns None if the symbol's canonical name has no registered subr.
     /// Supports uninterned symbols: falls back to canonical SymId via NameId lookup.
-    pub fn dispatch_subr_id(&mut self, sym_id: SymId, args: Vec<Value>) -> Option<EvalResult> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dispatch_subr_id(&mut self, sym_id: SymId, args: Vec<Value>) -> Option<EvalResult> {
         // Try the sym_id directly first
         let resolved = if lookup_global_subr_entry(sym_id).is_some() {
             sym_id
@@ -6876,7 +6881,7 @@ impl Context {
         self.dispatch_subr_value(function, args)
     }
 
-    pub fn dispatch_subr(&mut self, name: &str, args: Vec<Value>) -> Option<EvalResult> {
+    pub(crate) fn dispatch_subr(&mut self, name: &str, args: Vec<Value>) -> Option<EvalResult> {
         self.dispatch_subr_id(intern(name), args)
     }
 
@@ -7586,9 +7591,9 @@ pub mod redisplay_hooks;
 pub use neovm_edit::emacs_core::redisplay_policy::RedisplayHookPolicyGuard;
 #[doc(hidden)]
 pub use neovm_edit::emacs_core::redisplay_policy::gnu_redisplay_hooks_enabled;
-pub use redisplay_hooks::{
-    RedisplayMiniGeometryRequest, RedisplayMiniGeometrySource, RedisplayMiniPreparationFailure,
-};
+pub use redisplay_hooks::{RedisplayMiniGeometryRequest, RedisplayMiniPreparationFailure};
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use redisplay_hooks::RedisplayMiniGeometrySource;
 
 mod vm_shared;
 

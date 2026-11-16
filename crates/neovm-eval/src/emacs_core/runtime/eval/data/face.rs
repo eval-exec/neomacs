@@ -148,7 +148,8 @@ impl RealizedColor {
     }
 
     /// Convert to "#RRGGBB" hex string.
-    pub fn to_hex(&self) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn to_hex(&self) -> String {
         format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
     }
 
@@ -571,7 +572,7 @@ impl FaceColorSpecifications {
     /// Content-equal specifications that were parsed into distinct allocations
     /// digest differently; the caller's `PartialEq` check remains the
     /// authority.
-    pub fn hash_shared_identity(&self, state: &mut impl std::hash::Hasher) {
+    pub(crate) fn hash_shared_identity(&self, state: &mut impl std::hash::Hasher) {
         fn hash_arc<T: ?Sized>(
             state: &mut impl std::hash::Hasher,
             spec: &Option<std::sync::Arc<T>>,
@@ -814,7 +815,8 @@ impl Face {
         })
     }
 
-    pub fn foundry_runtime_string_owned(&self) -> Option<String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn foundry_runtime_string_owned(&self) -> Option<String> {
         self.foundry.and_then(|value| {
             value
                 .as_lisp_string()
@@ -833,7 +835,7 @@ impl Face {
     }
 
     /// Shared-payload form of [`Self::foundry_runtime_string_owned`].
-    pub fn foundry_runtime_string_shared(&self) -> Option<std::sync::Arc<str>> {
+    pub(crate) fn foundry_runtime_string_shared(&self) -> Option<std::sync::Arc<str>> {
         self.foundry.and_then(|value| {
             value
                 .as_lisp_string()
@@ -1045,7 +1047,8 @@ impl Face {
     }
 
     /// Effective foreground, accounting for inverse video.
-    pub fn effective_foreground(&self) -> Option<Color> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn effective_foreground(&self) -> Option<Color> {
         if self.inverse_video == Some(true) {
             self.background
         } else {
@@ -1054,7 +1057,8 @@ impl Face {
     }
 
     /// Effective background, accounting for inverse video.
-    pub fn effective_background(&self) -> Option<Color> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn effective_background(&self) -> Option<Color> {
         if self.inverse_video == Some(true) {
             self.foreground
         } else {
@@ -1063,7 +1067,8 @@ impl Face {
     }
 
     /// Convert to a Lisp plist.
-    pub fn to_plist(&self) -> Value {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn to_plist(&self) -> Value {
         let mut items = Vec::new();
 
         if let Some(fg) = &self.foreground {
@@ -2252,7 +2257,8 @@ impl FaceTable {
     }
 
     /// List all defined face names.
-    pub fn face_list(&self) -> Vec<String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn face_list(&self) -> Vec<String> {
         self.faces
             .map
             .keys()

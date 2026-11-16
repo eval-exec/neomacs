@@ -37,11 +37,11 @@ pub enum PerfOp {
 }
 
 /// Record one measured operation in the core counters.
-pub type PerfRecord = fn(PerfOp, Duration);
+pub(crate) type PerfRecord = fn(PerfOp, Duration);
 /// Drop the core hotpath tracing state on a green carrier park.
-pub type PerfCarrierReset = fn();
+pub(crate) type PerfCarrierReset = fn();
 /// Debug-only TLS fingerprint for the core hotpath records.
-pub type PerfCarrierFingerprint = fn(&mut u64);
+pub(crate) type PerfCarrierFingerprint = fn(&mut u64);
 
 /// The cold descriptor core publishes at the construction seams.
 #[derive(Clone, Copy)]
@@ -109,7 +109,7 @@ pub(crate) fn install_perf_hooks(
 }
 
 /// The installed descriptor, if core has run one of the two pinned seams.
-pub fn perf_hooks() -> Option<&'static PerfHooks> {
+pub(crate) fn perf_hooks() -> Option<&'static PerfHooks> {
     PERF_HOOKS.get()
 }
 

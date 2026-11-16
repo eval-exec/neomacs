@@ -165,7 +165,8 @@ impl DisplayPointRow {
         Self::freeze_placement(row, y, base, points)
     }
 
-    pub fn from_placement(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn from_placement(
         row: i64,
         y: i64,
         buffer_base: i64,
@@ -266,7 +267,7 @@ impl DisplayPointRow {
         self.y
     }
     #[inline]
-    pub const fn buffer_base(&self) -> i64 {
+    pub(crate) const fn buffer_base(&self) -> i64 {
         self.buffer_base
     }
     #[inline]
@@ -317,7 +318,8 @@ impl DisplayPointRow {
         })
     }
     #[inline]
-    pub fn is_compact(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_compact(&self) -> bool {
         matches!(self.data.cells, Cells::Compact(_))
     }
 
@@ -456,7 +458,8 @@ impl DisplayPointRow {
     }
 
     #[inline]
-    pub fn shares_cells_with(&self, other: &Self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn shares_cells_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.data, &other.data)
     }
 }

@@ -512,15 +512,11 @@ crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	struct	struct Adop
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	struct	struct GnuObjectVariable
 crates/neovm-eval/src/emacs_core/runtime/eval/auto_save_hooks.rs	fn	fn impl AutoSaveHooks::new
 crates/neovm-eval/src/emacs_core/runtime/eval/auto_save_hooks.rs	struct	struct AutoSaveHooks
-crates/neovm-eval/src/emacs_core/runtime/eval/buffer_kill.rs	fn	fn buffer_kill_hooks
 crates/neovm-eval/src/emacs_core/runtime/eval/buffer_kill.rs	fn	fn impl BufferKillHooks::before
 crates/neovm-eval/src/emacs_core/runtime/eval/buffer_kill.rs	fn	fn impl BufferKillHooks::new
-crates/neovm-eval/src/emacs_core/runtime/eval/buffer_kill.rs	fn	fn other_buffer_for_killed
 crates/neovm-eval/src/emacs_core/runtime/eval/buffer_kill.rs	struct	struct BufferKillHooks
-crates/neovm-eval/src/emacs_core/runtime/eval/buffer_kill.rs	type	type BeforeBufferKilled
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	enum	enum CallInteractivelyArgsSpec
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	enum	enum InteractivePrefixFlag
-crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	fn	fn call_interactively_hooks
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	fn	fn eval_interactive_form_value
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	fn	fn impl CallInteractivelyCommandIdentity::capture
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	fn	fn impl CallInteractivelyCommandIdentity::push_gc_roots
@@ -547,7 +543,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	fn	fn impl P
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	fn	fn impl RestoredCallInteractivelyInvocation::into_funcall_args
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	fn	fn parse_interactive_code_entries
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	fn	fn plan_call_interactively_after_interactive_form_in_state
-crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	fn	fn resolve_call_interactively_target_and_args
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	fn	fn value_is_interactive_form
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	struct	struct CallInteractivelyCommandIdentity
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	struct	struct CallInteractivelyHooks
@@ -555,7 +550,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	struct	struc
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	struct	struct InteractiveInvocationContext
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	struct	struct ParsedInteractiveStringCode
 crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	struct	struct RestoredCallInteractivelyInvocation
-crates/neovm-eval/src/emacs_core/runtime/eval/call_interactively.rs	type	type CallInteractivelyResolver
 crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn builtin_current_case_table
 crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn builtin_set_case_table
 crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn builtin_set_standard_case_table
@@ -565,29 +559,22 @@ crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn curren
 crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn current_case_upcase_table
 crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn standard_case_table_for_admission
 crates/neovm-eval/src/emacs_core/runtime/eval/case_table_adapter.rs	fn	fn sync_current_buffer_case_table_state
-crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn case_table_hooks
 crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn case_table_override_for_current_buffer
 crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn current_case_canon_table
 crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn current_case_upcase_table
 crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn impl CaseTableHooks::canon
 crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn impl CaseTableHooks::new
-crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn impl CaseTableHooks::override_for_current_buffer
 crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn impl CaseTableHooks::standard
 crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn impl CaseTableHooks::sync
 crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn impl CaseTableHooks::upcase
-crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn standard_case_table
 crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	fn	fn sync_current_buffer_case_table_state
 crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	struct	struct CaseTableHooks
-crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	type	type CaseTableRead
-crates/neovm-eval/src/emacs_core/runtime/eval/case_tables.rs	type	type CaseTableSync
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::body_redisplay_revision
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::chrome_dirty
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::configure_daemon
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::context_instance_id
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::defer_mode_line_display_flow
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::force_body_redisplay
-crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::forget_chrome_window
-crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::gc_collect
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::gc_collect_exact
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::gc_safe_point
 crates/neovm-eval/src/emacs_core/runtime/eval/command_loop.rs	fn	fn impl Context::has_mode_line_display_flow
@@ -636,58 +623,34 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	field	AbbrevTable f
 crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	field	AbbrevTable field enable_quoting
 crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	field	AbbrevTable field name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	field	AbbrevTable field parent
-crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::all_table_names
-crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::clear_table
-crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::create_table
-crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::define_abbrev
-crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::define_abbrev_full
-crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::expand_abbrev
-crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::get_table
-crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::global_table_name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::is_enabled
-crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::list_abbrevs
 crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::new
-crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	fn	fn impl AbbrevManager::set_enabled
 crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	struct	struct Abbrev
 crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	struct	struct AbbrevManager
-crates/neovm-eval/src/emacs_core/runtime/eval/data/abbrev.rs	struct	struct AbbrevTable
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	enum	enum NonmacroInputEvent
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	enum	enum PrefixArg
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	enum	enum PresentedMouseArea
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	CommandLoop field inhibit_quit
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	CommandLoop field keyboard
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	CommandLoop field last_auto_save_input_events
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	CommandLoop field prefix_arg
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	CommandLoop field presented_interactions
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	CommandLoop field quit_flag
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	CommandLoop field recursive_depth
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	CommandLoop field running
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field appending_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field button_down
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field command_keys
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field current_key_sequence
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field defining_kbd_macro
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field executing_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field executing_kbd_macro_iterations
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field in_input_method_function
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field internal_last_event_frame
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field kbd_macro_end
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field kbd_macro_events
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field kbd_macro_index
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field last_help_echo_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field last_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field last_mouse_click
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field mouse_pixel_position
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field presented_mouse_observation
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field raw_command_keys
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field recent_input_events
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field unread_events
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KBoard field unread_selection_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KeyboardRuntime field event_queue
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KeyboardRuntime field kboard
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	KeyboardRuntime field pending_input_events
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	LastMouseClick field button
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	LastMouseClick field click_count
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	LastMouseClick field frame_id
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	LastMouseClick field timestamp
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	LastMouseClick field x
@@ -707,77 +670,45 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	Present
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	PresentedMouseObservation field y
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	PresentedMouseTarget field area
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	field	PresentedMouseTarget field posn_string
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::begin_executing_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::cancel_kbd_macro_events
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::check_quit
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::clear_read_command_keys
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::clear_recent_input_events
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::end_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::enqueue_event
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::finalize_kbd_macro_chars
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::finish_executing_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::is_executing_kbd_macro
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::last_kbd_macro
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::new
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::read_command_keys
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::read_key_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::read_raw_command_keys
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::recent_input_events
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::record_input_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::record_recent_command
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::reset_key_sequence
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::set_command_key_sequences
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::set_read_command_keys
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::set_translated_command_keys
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::signal_quit
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::start_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::start_kbd_macro_with_initial
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::store_kbd_macro_event
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::unread_event
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl CommandLoop::unread_key
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::append_read_command_key
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::begin_executing_kbd_macro
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::cancel_kbd_macro_events
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::clear_read_command_keys
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::clear_recent_input_events
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::close_dribble_file
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::dribble_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::end_kbd_macro
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::finalize_kbd_macro_chars
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::finish_executing_kbd_macro
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::input_decode_map
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::internal_last_event_frame
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::is_executing_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::key_sequence_snapshot
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::last_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::local_function_key_map
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::mouse_pixel_position
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::new
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::open_dribble_file
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::push_key_sequence_input_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::read_command_keys
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::read_raw_command_keys
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::recent_input_events
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::record_input_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::record_recent_command
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::reset_key_sequence
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::rewrite_key_sequence_events
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::rewrite_key_sequence_translation
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::set_command_key_sequences
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::set_input_decode_map
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::set_internal_last_event_frame
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::set_local_function_key_map
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::set_mouse_pixel_position
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::set_read_command_keys
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::set_terminal_translation_maps
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::set_translated_command_keys
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::set_unread_selection_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::start_kbd_macro
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::start_kbd_macro_with_initial
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::store_kbd_macro_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::unread_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KBoard::unread_key
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::active_terminal_id
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::begin_executing_kbd_macro
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::cancel_kbd_macro_events
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::clear_read_command_keys
@@ -787,8 +718,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl Ke
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::enqueue_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::finalize_kbd_macro_chars
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::finish_executing_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::has_pending_kboard_input
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::has_pending_low_level_input
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::input_decode_map
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::is_executing_kbd_macro
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::key_sequence_snapshot
@@ -796,8 +725,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl Ke
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::local_function_key_map
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::mouse_pixel_position
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::new
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::next_executing_kbd_macro_event
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::pop_unread_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::push_key_sequence_input_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::read_command_keys
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::read_key_event
@@ -808,7 +735,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl Ke
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::reset_key_sequence
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::rewrite_key_sequence_events
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::rewrite_key_sequence_translation
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::select_terminal
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::set_command_key_sequences
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::set_input_decode_map
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::set_local_function_key_map
@@ -819,39 +745,25 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl Ke
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::start_kbd_macro
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::start_kbd_macro_with_initial
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::store_kbd_macro_event
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::take_unread_selection_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::unread_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl KeyboardRuntime::unread_key
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl PrefixArg::numeric_value
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl PrefixArg::to_value
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl PresentedInteractions::begin
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl PresentedInteractions::register_mouse_target
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl PresentedInteractions::resolve
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl PresentedInteractions::retire
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl ReadKeySequenceState::new
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl ReadKeySequenceState::push_input_event
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl ReadKeySequenceState::raw_events
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl ReadKeySequenceState::replace_events
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl ReadKeySequenceState::replace_translated_events
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl ReadKeySequenceState::reset
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl ReadKeySequenceState::snapshot
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	fn	fn impl ReadKeySequenceState::translated_events
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct CommandLoop
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct KBoard
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct KeyboardRuntime
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct LastMouseClick
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct MousePixelPositionState
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct MousePressState
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct PresentedInteractions
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct PresentedMouseObservation
 crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct PresentedMouseTarget
-crates/neovm-eval/src/emacs_core/runtime/eval/data/command_loop.rs	struct	struct ReadKeySequenceState
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	enum	enum DisplayEval
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	enum	enum DisplayMarginLocation
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	enum	enum DisplayMediaSpecKind
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	enum	enum DisplaySpecKind
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	field	DisplayPropertySpecs field eval
-crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	field	DisplayPropertySpecs field eval_enabled
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn display_margin_spec
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn display_spec_kind
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn display_spec_margin_value
@@ -859,15 +771,12 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn dis
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn impl DisplayMarginSpec::content
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn impl DisplayMarginSpec::location
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn impl DisplayPropertySpecs::for_each
-crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn impl DisplayPropertySpecs::is_spec_list
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn impl DisplayPropertySpecs::of
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn impl DisplaySpecKind::replaces_text
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	struct	struct DisplayMarginSpec
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	struct	struct DisplayPropertySpecs
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	use	use DisplaySpaceKey
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	field	emacs_value_tag field v
-crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn collect_dynamic_module_registry_gc_roots
-crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn current_dynamic_module_registry_handle
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn dynamic_module_registry_heap_identity
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn impl GlobalRefEntry::heap_identity
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn impl GlobalRefEntry::new
@@ -880,15 +789,11 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn impl emacs_value_tag::metadata
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn impl emacs_value_tag::new
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn impl emacs_value_tag::set_metadata
-crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn install_dynamic_module_registry_handle
-crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn park_dynamic_module_registry
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn reset_dynamic_module_registry
-crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn retire_dynamic_module_registry
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn with_global_refs
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	struct	struct GlobalRefEntry
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	struct	struct GlobalRefMetadata
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	struct	struct emacs_value_tag
-crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	type	type DynamicModuleRegistryHandle
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	type	type emacs_value
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	enum	enum BasicFace
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	enum	enum BoxStyle
@@ -959,25 +864,18 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl BoxStyle::
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl BoxStyle::gnu_code
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl BoxStyle::symbol_name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::content_hash
-crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::effective_background
-crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::effective_foreground
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::family_runtime_string_owned
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::family_runtime_string_shared
-crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::foundry_runtime_string_owned
-crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::foundry_runtime_string_shared
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::from_plist
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::from_plist_realized
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::merge
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::new
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::set_attribute
-crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl Face::to_plist
-crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl FaceColorSpecifications::hash_shared_identity
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl FaceDecoration::enabled
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl FaceTable::default_face_colors
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl FaceTable::define
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl FaceTable::define_lisp_face
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl FaceTable::ensure_face
-crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl FaceTable::face_list
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl FaceTable::get
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl FaceTable::get_fixed
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl FaceTable::is_empty
@@ -1001,7 +899,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl RealizedCo
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl RealizedColor::parse
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl RealizedColor::rgb
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl RealizedColor::rgba
-crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl RealizedColor::to_hex
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl RealizedColor::to_pixel
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl RealizedColor::with_terminal
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	fn	fn impl SpecifiedColor::parse
@@ -1023,7 +920,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	use	use FontSlant
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	use	use FontWeight
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	use	use FontWidth
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	use	use LFaceAttr
-crates/neovm-eval/src/emacs_core/runtime/eval/data/face_registry.rs	const	const FIRST_DYNAMIC_FACE_ID
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face_registry.rs	field	FaceAttrState field created_face_ids
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face_registry.rs	field	FaceAttrState field created_lisp_faces
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face_registry.rs	field	FaceAttrState field defaults_overrides
@@ -1038,14 +934,11 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/face_registry.rs	type	type Fo
 crates/neovm-eval/src/emacs_core/runtime/eval/data/file_coding.rs	enum	enum WriteCodingFallback
 crates/neovm-eval/src/emacs_core/runtime/eval/data/file_coding.rs	fn	fn coding_system_value_to_name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/file_coding.rs	fn	fn decode_file_name_lisp
-crates/neovm-eval/src/emacs_core/runtime/eval/data/file_coding.rs	fn	fn resolve_write_coding_system
 crates/neovm-eval/src/emacs_core/runtime/eval/data/file_coding.rs	fn	fn resolve_write_coding_system_symbol
 crates/neovm-eval/src/emacs_core/runtime/eval/data/file_name_expand.rs	fn	fn current_user_home_bytes
 crates/neovm-eval/src/emacs_core/runtime/eval/data/file_name_expand.rs	fn	fn expand_file_name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/file_name_expand.rs	fn	fn expand_file_name_with_home
-crates/neovm-eval/src/emacs_core/runtime/eval/data/file_name_expand.rs	fn	fn expand_user_home_prefix_bytes
 crates/neovm-eval/src/emacs_core/runtime/eval/data/file_name_expand.rs	fn	fn file_name_absolute_p
-crates/neovm-eval/src/emacs_core/runtime/eval/data/file_name_expand.rs	fn	fn home_env_bytes
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	enum	enum FontRepertory
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	enum	enum FontSpecEntry
 crates/neovm-eval/src/emacs_core/runtime/eval/data/fontset_state.rs	field	FontDefinitionMetadata field encoding
@@ -1126,7 +1019,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/layout_input/pixel_input.rs	f
 crates/neovm-eval/src/emacs_core/runtime/eval/data/layout_input/pixel_input.rs	field	SpaceInput field operands
 crates/neovm-eval/src/emacs_core/runtime/eval/data/layout_input/string_property_input.rs	field	DisplayRun field end
 crates/neovm-eval/src/emacs_core/runtime/eval/data/layout_input/string_property_input.rs	field	DisplayRun field eval
-crates/neovm-eval/src/emacs_core/runtime/eval/data/layout_input/string_property_input.rs	field	DisplayRun field eval_enabled
 crates/neovm-eval/src/emacs_core/runtime/eval/data/layout_input/string_property_input.rs	field	DisplayRun field specs
 crates/neovm-eval/src/emacs_core/runtime/eval/data/layout_input/string_property_input.rs	field	DisplayRun field start
 crates/neovm-eval/src/emacs_core/runtime/eval/data/layout_input/string_property_input.rs	field	SpecInput field condition
@@ -1149,7 +1041,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	field	Minibuffe
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	field	MinibufferState field default_value
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	field	MinibufferState field depth
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	field	MinibufferState field history
-crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	field	MinibufferState field history_position
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	field	MinibufferState field initial_input
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	field	MinibufferState field prompt
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	field	MinibufferState field prompt_end
@@ -1157,7 +1048,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	field	Minibuffe
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	fn	fn impl MinibufferHistory::add
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	fn	fn impl MinibufferHistory::get
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	fn	fn impl MinibufferHistory::new
-crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	fn	fn impl MinibufferManager::add_to_history_lisp
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	fn	fn impl MinibufferManager::depth
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	fn	fn impl MinibufferManager::new
 crates/neovm-eval/src/emacs_core/runtime/eval/data/minibuffer.rs	fn	fn impl MinibufferSelectedWindowUpdate::apply
@@ -1204,7 +1094,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod redisplay
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod register
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod terminal_state
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod textprop_entries
-crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod window_edge_drag
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod window_layout_query
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod window_markers
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod window_state
@@ -1212,12 +1101,9 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod word_wrap
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod xdisp_column_spec
 crates/neovm-eval/src/emacs_core/runtime/eval/data/mod.rs	mod	mod xwidget
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn display_point_rows_mode
-crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::buffer_base
-crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::from_placement
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::from_points
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::from_points_reusing
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::has_uniform_y
-crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::is_compact
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::max_buffer_position
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::max_height
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::max_x
@@ -1230,7 +1116,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl Disp
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::points_x_order
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::replaced_placement
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::row
-crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::shares_cells_with
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::try_replaced_placement
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRow::y
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRows::from_points
@@ -1273,21 +1158,17 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	const	const 
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	const	const DEFAULT_READ_PROCESS_OUTPUT_MAX
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	const	const READ_OUTPUT_DELAY_INCREMENT_MS
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	const	const READ_OUTPUT_DELAY_MAX_MAX_MS
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	const	const READ_OUTPUT_DELAY_MAX_MS
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	const	const READ_PROCESS_OUTPUT_MAX_CEILING
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	const	const impl ExitQueryPolicy::GNU_MAKE_PROCESS
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum ChildHandle
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum ChildOutputReader
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum ChildOwnership
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum Device
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum ExitQueryPolicy
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum GnutlsInitStage
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum LastBlock
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum LastBlockArrival
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum NetworkSocket
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum NetworkSocketOption
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum PendingNetworkConnect
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum ProcessEncodingEligibility
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum ProcessEncodingState
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum ProcessFilterDispatch
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	enum	enum ProcessInputDisposition
@@ -1385,7 +1266,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	Proces
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessEncodingDescriptor field coding
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessEncodingDescriptor field eligibility
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessEncodingDescriptor field encoder
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessEncodingDescriptor field raw_coding
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessIdState field last_read_process
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessIdState field next_id
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessManager field default_read_config
@@ -1399,7 +1279,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	Proces
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessReadConfig field readmax
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessWaitBackend field notification_pending
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessWaitBackend field poller
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessWaitBackend field signal_fd
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessWaitEvents field notification_wakeup
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessWaitEvents field ready_processes
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	ProcessWaitEvents field writable_processes
@@ -1415,7 +1294,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	Status
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	StatusChangeTicks field notified
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	WaitNotifier field notification_pending
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	field	WaitNotifier field poller
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn default_process_tty_name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ChildOwnership::has_child
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl Device::cancel_serial_read_ahead
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl Device::new_serial
@@ -1425,8 +1303,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl D
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl Device::with_serial_read_event
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ExitQueryPolicy::from_lisp_query_flag
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ExitQueryPolicy::queries_on_exit
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl LiveProcessIo::terminate_and_defer_children
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl NetworkSocket::kind_name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl NetworkSocketOption::from_keyword
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl PendingDnsRequest::is_ready
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessCodingState::carryover_len
@@ -1437,9 +1313,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl P
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessCodingState::store_decoder
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessCodingState::take_carryover
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessEncodingState::coding
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessEncodingState::encoder_mut
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessEncodingState::initialized
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessEncodingState::requires_encoding
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessEncodingState::select_input
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessFilterDispatch::accepts_output
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessFilterDispatch::from_lisp
@@ -1449,7 +1323,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl P
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessKeyword::value
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessKind::name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::adaptive_read_timeout
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::allocate_process_name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::clear_adaptive_read_skip_if_needed
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::clear_status_notify_pending
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::create_process_record
@@ -1465,9 +1338,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl P
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::new
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::pop_process_write_queue
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::process_ids_for_buffer
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::process_name_is_in_use
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::process_status
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::process_status_any
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::push_process_write_queue_entry
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::queue_input
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessManager::record_status_change
@@ -1487,14 +1358,10 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl P
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitBackend::notify_handle
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitBackend::poller
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitBackend::wait_for_events
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitBackendInterest::wants_notifications
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitBackendInterest::wants_processes
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitDeadline::is_expired
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitDeadline::remaining
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitEvents::from_sources
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitEvents::from_sources_with_writable
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitEvents::has_notification_wakeup
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitEvents::has_ready_process
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitEvents::has_ready_processes
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitEvents::has_writable_processes
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl ProcessWaitEvents::is_empty
@@ -1517,36 +1384,22 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl W
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl WaitNotifier::notify
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn impl WaitNotifier::nudge_control
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn is_standalone_pipe_process
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn keyword_name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn make_network_process_subfeatures
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn make_process_command_lisp_value
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn os_str_to_lisp_string
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn pending_network_connect_has_ready_async_dns
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn print_process_handle
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_contact_server_p
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_effective_status
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_filter_accepts_output
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_has_observable_child_status
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_has_pending_tls_handshake_io
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_has_readable_process_io
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_has_ready_async_dns
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_name_lisp_value
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_name_runtime
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_name_value
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_public_status_symbol
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_status_has_readable_process_io
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_status_run_value
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_status_symbol_value
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_stopped_for_io
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn process_type_value
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn register_process_print_name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn signal_kill_number
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn swap_world_state
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn update_process_mark
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn world_state_placeholder
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn write_queue_pop
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn write_queue_push
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	fn	fn write_queue_push_entry
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	struct	struct ChildStatusSource
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	struct	struct Device
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	struct	struct LiveProcessIo
@@ -1555,7 +1408,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	struct	struc
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	struct	struct Process
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	struct	struct ProcessCodingState
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	struct	struct ProcessCodingSystems
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	struct	struct ProcessEncodingDescriptor
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	struct	struct ProcessIdState
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	struct	struct ProcessManager
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs	struct	struct ProcessReadConfig
@@ -1575,7 +1427,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/process_tls.rs	fn	fn impl Tls
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_tls.rs	fn	fn impl TlsStream::rustls
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_tls.rs	fn	fn impl TlsStream::tcp_stream
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_tls.rs	struct	struct RustlsTlsStream
-crates/neovm-eval/src/emacs_core/runtime/eval/data/process_tls.rs	type	type RustlsClientStream
 crates/neovm-eval/src/emacs_core/runtime/eval/data/redisplay.rs	enum	enum OutputKind
 crates/neovm-eval/src/emacs_core/runtime/eval/data/redisplay.rs	fn	fn impl ModeLineElementId::into_value
 crates/neovm-eval/src/emacs_core/runtime/eval/data/redisplay.rs	fn	fn impl ModeLineOutputOwner::advance
@@ -1613,8 +1464,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_edge_drag.rs	fn	fn imp
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_edge_drag.rs	fn	fn impl WindowEdgeDrag::origin
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_edge_drag.rs	fn	fn impl WindowEdgeDrag::released
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_edge_drag.rs	fn	fn impl WindowEdgeGrab::of
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_edge_drag.rs	struct	struct WindowEdgeDrag
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_edge_drag.rs	struct	struct WindowEdgeGrab
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_layout_query.rs	enum	enum WindowLayoutQueryFailure
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_layout_query.rs	enum	enum WindowLayoutQueryOutcome
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_layout_query.rs	enum	enum WindowLayoutQueryScope
@@ -1633,7 +1482,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_markers.rs	fn	fn set_w
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_markers.rs	fn	fn set_window_start_with_marker
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_markers.rs	fn	fn sync_all_frames_for_buffer
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_markers.rs	fn	fn sync_window_positions_from_markers
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_markers.rs	fn	fn unchain_window_markers
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	const	const GUI_SCROLL_BAR_DEFAULT_WIDTH_PX
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	const	const impl MatrixRow0::ZERO
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	enum	enum DisplayPointRowsMode
@@ -1909,19 +1757,15 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowH
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field bounds
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field buffer_id
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field char_table_mutation_epoch
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field display_table_identity
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field fringes_outside_margins
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field glyph_matrix_row_scale
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field horizontal_scroll_bar_height
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field hscroll
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field id
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field left_fringe_width
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field left_scroll_bar_width
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field margins
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field point
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field preserve_vscroll_p
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field right_fringe_width
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field right_scroll_bar_width
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field vscroll
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field window_parameters_generation
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowLayoutInputState field window_start
@@ -1989,12 +1833,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl At
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl CellOrigin::column
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl CellOrigin::line
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl CellOrigin::new
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl CharTableLayoutRevision::from_counter
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl ChromeDirty::all_generation
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl ChromeDirty::forget_window
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl ChromeDirty::is_any_dirty
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl ChromeDirty::is_dirty
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl ChromeDirty::is_window_marked
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl ChromeDirty::mark_all
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl ChromeDirty::mark_window
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl ChromeDirty::note_chrome_generated
@@ -2009,16 +1849,10 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Di
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::activate_display_presentation
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::active_presentation
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::active_presentation_geometry
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::active_window_presentation
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::child_frame_border_width_raw
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::chrome_top_height
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::columns
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::coordinate_hit
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::coordinate_hit_with
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::default_left_fringe_width
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::default_right_fringe_width
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::default_vertical_scroll_bar_side
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::default_vertical_scroll_bar_width
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::discard_display_presentation
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::display_identity
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::effective_window_system
@@ -2044,7 +1878,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Fr
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::redisplay_snapshot
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::remove_parameter
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::reposition_minibuffer_below_root
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::retire_display_presentation
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::root_window
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::select_window
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::selected_window
@@ -2057,7 +1890,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Fr
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::window_layout_inputs
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::window_list
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Frame::window_part_geometry_from
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameDeletion::was_deleted
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameDisplayIdentity::native_display
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameDisplayIdentity::x_display
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::buffer_window_count
@@ -2065,7 +1897,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Fr
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::deletion_record
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::find_window_frame_id
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::frame_ancestor_p
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::frame_ancestors_visible_p
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::frame_list
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::frame_parent_id
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::frame_z_order_cmp
@@ -2079,19 +1910,15 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Fr
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::lookup_window_mut
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::mark_window_topology_changed
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::new
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::record_selected_window_after_redisplay
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::replacement_frame_for_deletion
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::retire_source_preload_window_sequences
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::root_frame_id
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::select_frame
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::select_frame_with_focus_tracking
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::selected_frame
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::selected_frame_mut
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::selected_window
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::set_frame_init_hook
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::top_frame_on_terminal
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::window_buffer_id
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::window_sequence_number
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameManager::window_use_time
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameParamKey::from_symbol_id
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl FrameParamKey::from_symbol_value
@@ -2110,7 +1937,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Mi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl MiniWindowResize::is_growth
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl MiniWindowResize::previous_height_px
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl NavigationIntentToken::direction
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl PendingGuiResize::after_native_observation
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl PendingGuiResize::is_queued
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl PendingGuiResize::take_native_wait
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl PosnArea::symbol_name
@@ -2140,7 +1966,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::buffer_id
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::change_stamp
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::children
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::children_mut
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::combination_limit
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::display
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::display_mut
@@ -2165,18 +1990,15 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::parameters
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::parameters_generation
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::record_change_epoch
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::redisplay_output
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::redisplay_state
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::replace_buffer_id
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::reset_mode_line_base
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_bounds
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_buffer
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_change_stamp
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_combination_limit
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_fixed_height_lines
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_fixed_width_cols
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_left_col
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_min_hscroll
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_new_normal
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_new_pixel
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_new_total
@@ -2185,13 +2007,11 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_point
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_suspend_auto_hscroll
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_top_line
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_window_end_from_positions
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::set_window_end_record
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::suspend_auto_hscroll
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::top_line
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::total_columns
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::total_lines
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::window_end_bytepos
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::window_end_charpos
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::window_end_state
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Window::window_end_valid
@@ -2204,7 +2024,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::body_row_for_output_row
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::chrome_line_hit
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::chrome_row
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::clear_point_rows
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::fringe_bitmaps_for_buffer_pos
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::has_points
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::iter_points
@@ -2215,11 +2034,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::point_count
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::point_for_buffer_pos
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::position_hidden_by_hscroll
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::row_at_y
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::row_metrics
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::set_points
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::text_area_relative_row
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::text_area_relative_y
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::text_body_position
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::top_chrome_height
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshot::top_chrome_rows
@@ -2228,18 +2043,13 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshotFreshness::same_position_rows_ignoring_point
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshotFreshness::same_query_row_content
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplaySnapshotFreshness::same_scroll_content
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplayState::clear_cursor_state
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDisplayState::redisplay_output
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowDomain::predicate
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndRecord::byte_offset_from_z
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndRecord::bytepos_from_z
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndRecord::char_offset_from_z
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndRecord::charpos_from_z
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndRecord::from_anchors
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndRecord::from_positions
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndRecord::matrix_row
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndRecord::with_matrix_row
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndState::bytepos_from_z
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndState::charpos_from_z
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndState::invalidate
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowEndState::is_current
@@ -2247,8 +2057,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowOldPointMarker::raw
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowOldPointMarker::root
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPart::area_symbol
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPart::chrome_line
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPart::text_area_coordinate
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPartGeometry::classify
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPartGeometry::new
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPartGeometry::resolve
@@ -2261,7 +2069,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPositionMarkerState::trace_roots
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPresentationSnapshot::display_snapshot
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPresentationSnapshot::display_snapshot_mut
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPresentationSnapshot::geometry_only
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPresentationSnapshot::live
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPresentationSnapshot::live_window_snapshot
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowPresentationSnapshot::retain_as_geometry_only
@@ -2280,7 +2087,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowRegions::left_margin
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowRegions::left_margin_columns
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowRegions::left_scroll_bar
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowRegions::matches_transport
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowRegions::mode_line
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowRegions::outer
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowRegions::right_divider
@@ -2309,7 +2115,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowTree::leaf_ids_of
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowTree::new
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowTree::nodes
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowTree::nodes_mut
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowTree::parent_of
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowTree::remove
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowTree::replace_buffer_id
@@ -2321,7 +2126,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl Wi
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowTree::subtree_ids
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowTree::window_at
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowVisibleBufferSpan::end
-crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowVisibleBufferSpan::lisp_window_end
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowVisibleBufferSpan::new
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn impl WindowVisibleBufferSpan::start
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	fn	fn resolve_window_scroll_bar_geometry
@@ -2395,16 +2199,12 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/xdisp_column_spec.rs	fn	fn re
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	PendingScriptCallback field function
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	PendingScriptCallback field view
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	WebKitRuntimeState field generation
-crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	WebKitRuntimeState field load_progress
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	WebKitRuntimeState field title
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	WebKitRuntimeState field uri
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	XwidgetState field internal_xwidget_list
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	XwidgetState field internal_xwidget_view_list
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	XwidgetState field script_callbacks
-crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	XwidgetState field script_counter
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	XwidgetState field webkit_state
-crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	XwidgetState field webview_counter
-crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	field	XwidgetState field xwidget_counter
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	fn	fn impl XwidgetState::ensure_webkit_state
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	fn	fn impl XwidgetState::new
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	fn	fn impl XwidgetState::next_ids
@@ -2426,48 +2226,26 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	struct	struct WebK
 crates/neovm-eval/src/emacs_core/runtime/eval/data/xwidget.rs	struct	struct XwidgetState
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn display_query_hooks
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn ensure_selected_frame_id
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn face_realization_enabled
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn fontset_generation
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn frame_is_tty_target
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn impl DisplayQueryHooks::face_realization
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn impl DisplayQueryHooks::frame_tty_target
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn impl DisplayQueryHooks::mode_line_flow
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn impl DisplayQueryHooks::new
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn impl DisplayQueryHooks::redisplay_idle_skip
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn impl DisplayQueryHooks::window
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn impl DisplayWindowHooks::new
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn invisible_source_run_end
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn invisible_status
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn mode_line_flow_enabled
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn redisplay_idle_skip_enabled
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn remember_selected_window_point
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn resize_mini_window
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn resolve_motion
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn update_auto_hscroll
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn window_body_dimensions
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn window_body_width
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn window_domain_frame_of
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn window_hscroll
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn window_line_wrap
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	fn	fn window_regions_at
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	struct	struct DisplayQueryHooks
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	struct	struct DisplayWindowHooks
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type DisplayFlagQuery
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type EnsureSelectedFrameId
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type FontsetGeneration
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type FrameTTYTargetQuery
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type InvisibleSourceRunEndQuery
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type InvisibleStatusQuery
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type MotionResolve
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type RememberSelectedWindowPoint
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type ResizeMiniWindow
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type UpdateAutoHscroll
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type WindowBodyDimensions
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type WindowBodyWidthQuery
 crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type WindowDomainFrameOf
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type WindowHscrollQuery
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type WindowLineWrapQuery
-crates/neovm-eval/src/emacs_core/runtime/eval/display_query_hooks.rs	type	type WindowRegionsAt
 crates/neovm-eval/src/emacs_core/runtime/eval/font_shape.rs	enum	enum GstringShapeOutcome
 crates/neovm-eval/src/emacs_core/runtime/eval/font_shape.rs	type	type FontShapeFn
 crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::gc_threshold
@@ -2477,12 +2255,10 @@ crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::m
 crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::restore_current_buffer_if_live
 crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::set_display_host
 crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::set_gc_threshold
-crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::set_max_depth
 crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::set_tty_frame_host_factory
 crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::setup_thread_locals
 crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::share_value
 crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::share_values
-crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::share_values_array
 crates/neovm-eval/src/emacs_core/runtime/eval/gc_pacing.rs	fn	fn impl Context::wait_notifier
 crates/neovm-eval/src/emacs_core/runtime/eval/global_state.rs	fn	fn impl Context::display_var_change_count
 crates/neovm-eval/src/emacs_core/runtime/eval/global_state.rs	fn	fn impl Context::face_change_count
@@ -2509,7 +2285,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	field	WaitServiceHo
 crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	field	WaitServiceHooks field service_timers_without_redisplay
 crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	field	WaitServiceHooks field wait_for_command_input_with_idle_policy
 crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	field	WaitServiceHooks field wait_for_resize_ack_until
-crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	fn	fn impl Context::hooks_installed
 crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	fn	fn impl EvalHookSet::new
 crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	struct	struct DisplayServiceHooks
 crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	struct	struct EvalHookSet
@@ -2518,23 +2293,15 @@ crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	struct	struct FileN
 crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	struct	struct FrontendServiceHooks
 crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	struct	struct TimerServiceHooks
 crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	struct	struct WaitServiceHooks
-crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	type	type SqliteFinalizerInstaller
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	enum	enum CommandInputWaitOutcome
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	enum	enum SignalWakeSource
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	fn	fn drain_pending_os_signals
-crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	fn	fn drain_signal_wake_pipe
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	fn	fn impl InputHooks::new
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	fn	fn interrupt_for_input_event_if_requested
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	fn	fn os_signal_pending
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	fn	fn signal_wake_pipe_read_fd
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	fn	fn take_termination_signal
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	struct	struct InputHooks
-crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	type	type DrainPendingOsSignals
-crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	type	type DrainSignalWakePipe
-crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	type	type InterruptForInputEvent
-crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	type	type OsSignalPending
-crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	type	type SignalWakePipeReadFd
-crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	type	type TakeTerminationSignal
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	const	const FORWARD_CHAR_INTERACTIVE_SPEC
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	const	const WIDEN_INTERACTIVE_SPEC
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	enum	enum BuiltinInteractiveSpec
@@ -2547,22 +2314,14 @@ crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::cached_where_is_reverse_index
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::cached_where_is_sequences
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::clear_where_is_reverse_index
-crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::get_spec
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::install_where_is_reverse_index
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::is_called_interactively
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::is_interactive
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::new
-crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::pop_interactive_call
-crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::push_interactive_call
-crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::register_interactive
-crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveRegistry::unregister_interactive
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveSpec::from_value
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveSpec::new
-crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveSpec::no_args
-crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl InteractiveSpec::string_code_runtime_owned
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl WhereIsDefinitionKey::from_value
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl WhereIsKeymapState::new
-crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl WhereIsReverseIndex::collect_traced_roots
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl WhereIsReverseIndex::from_parts
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn impl WhereIsReverseIndex::remapping_for
 crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	fn	fn interactive_form_from_spec_value
@@ -2582,24 +2341,10 @@ crates/neovm-eval/src/emacs_core/runtime/eval/interactive_registry.rs	struct	str
 crates/neovm-eval/src/emacs_core/runtime/eval/kbd/mod.rs	enum	enum KeyDesignatorError
 crates/neovm-eval/src/emacs_core/runtime/eval/kbd/mod.rs	fn	fn key_events_from_designator
 crates/neovm-eval/src/emacs_core/runtime/eval/kbd/mod.rs	fn	fn parse_kbd_string
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const RENDER_ALT_MASK
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const RENDER_CTRL_MASK
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const RENDER_HYPER_MASK
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const RENDER_META_MASK
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const RENDER_SHIFT_MASK
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const RENDER_SUPER_MASK
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_BACKSPACE
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_DELETE
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_DOWN
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_END
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_ESCAPE
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_F1
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_F24
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_HOME
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_INSERT
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_LEFT
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_PAGE_DOWN
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_PAGE_UP
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_RETURN
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_RIGHT
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	const	const XK_TAB
@@ -2610,10 +2355,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum FrontendWebP
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum FrontendWebValue
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum FrontendWebViewEvent
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum InputEvent
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum InteractiveCode
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum Key
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum NamedKey
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	enum	enum TtyInputTarget
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	field	KeyEvent field key
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	field	KeyEvent field modifiers
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	field	KeySequence field events
@@ -2625,22 +2368,13 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	field	Modifiers field 
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	field	Modifiers field super_
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Context::begin_interaction_presentation
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Context::register_presented_mouse_target
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Context::resolve_presented_mouse_target
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Context::retire_interaction_presentation
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl FrontendLoadPhase::gnu_name
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl InputEvent::key_press
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl InputEvent::key_press_in_frame
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl InputEvent::raw_tty_bytes
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl InputEvent::raw_tty_bytes_for_terminal
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl InputEvent::requests_default_quit
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeyEvent::char
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeyEvent::char_with_mods
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeyEvent::from_description
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeyEvent::is_default_quit_char
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeyEvent::named
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeyEvent::named_with_mods
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeyEvent::to_description
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeyEvent::to_emacs_event_value
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeySequence::from_description
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeySequence::is_empty
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeySequence::len
@@ -2649,15 +2383,11 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeySequence
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeySequence::single
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl KeySequence::to_description
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Modifiers::ctrl
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Modifiers::ctrl_meta
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Modifiers::from_bits
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Modifiers::is_empty
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Modifiers::meta
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Modifiers::none
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Modifiers::prefix_string
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn impl Modifiers::to_bits
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn keysym_to_key_event
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn parse_interactive_spec
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn render_key_transport_to_input_event
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn render_modifiers_to_modifiers
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	struct	struct KeyEvent
@@ -2665,32 +2395,20 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	struct	struct KeySeque
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	struct	struct Modifiers
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use CommandLoop
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use KBoard
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use KeyboardRuntime
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use LastMouseClick
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use MouseButton
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use MousePixelPositionState
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use MousePressState
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use NonmacroInputEvent
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use PrefixArg
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use PresentedInteractions
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use PresentedMouseArea
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use PresentedMouseObservation
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use PresentedMouseTarget
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use ReadKeySequenceState
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use native_key_android
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use native_key_macos
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use native_key_ohos
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use native_key_windows
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard/keysym.rs	fn	fn native_key_android
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard/keysym.rs	fn	fn native_key_macos
-crates/neovm-eval/src/emacs_core/runtime/eval/keyboard/keysym.rs	fn	fn native_key_ohos
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard/keysym.rs	fn	fn native_key_windows
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard_forwarding.rs	fn	fn impl Context::initialize_graphical_terminal
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard_forwarding.rs	fn	fn impl Context::sync_keyboard_terminal_owner
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	const	const MAX_KEYMAP_SPINE_STEPS
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	const	const MAX_KEYMAP_WALK_DEPTH
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	enum	enum DefaultBindingMode
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	enum	enum GlobalMapSelection
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	enum	enum KeyEvent
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	enum	enum KeymapElement
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	enum	enum KeymapMarker
@@ -2701,8 +2419,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	enum	enum MenuBut
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	enum	enum MenuItemProperty
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	field	ActiveKeyBindingResolution field binding
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	field	ActiveKeyBindingResolution field lookup
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn access_keymap_in_member
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn accumulate_prefix_keymap
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn collect_map_entries_from_alist_in_state
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn collect_minor_mode_maps_in_state
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn command_remapping_command_name
@@ -2710,8 +2426,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn command_rem
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn command_remapping_lookup_in_keymaps
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn command_remapping_lookup_in_lisp_keymap
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn command_remapping_normalize_target
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn compose_prefix_keymaps
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn compose_prefix_with_parent_keymap
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn current_active_maps_for_position
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn current_active_maps_for_position_read_only
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn dynamic_buffer_or_global_symbol_value_by_sym_id_in_state
@@ -2722,9 +2436,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn get_keyelt
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn get_keyelt_runtime
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn get_keymap_in_obarray
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn get_keymap_in_runtime
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn get_keymap_tail_parent
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn impl DefaultBindingMode::accepts_default
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn impl KeymapLookupEvent::from_event
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn impl KeymapMarker::from_symbol_name
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn impl KeymapMarker::from_value
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn impl KeymapMarker::is_value
@@ -2748,10 +2459,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn key_event_t
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn keymap_binding_spine
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn keymap_mutation_epoch
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn keymap_symbol_id
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_access
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_access_impl
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_access_in_obarray
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_access_unresolved
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_access_with_event
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_accessible
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_copy
@@ -2766,7 +2473,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_lookup_one_in_obarray
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_lookup_one_noinherit
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_lookup_one_runtime
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_lookup_one_t_ok
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_lookup_one_t_ok_in_obarray
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_lookup_one_unresolved
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_lookup_seq
@@ -2775,7 +2481,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_set_parent
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn list_keymap_sibling_keymaps
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn local_map_property_at_buffer_point
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn lookup_in_keymap_level_impl
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn lookup_key_in_keymaps_in_obarray
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn lookup_key_in_keymaps_in_obarray_runtime
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn lookup_key_in_obarray
@@ -2785,12 +2490,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn make_list_k
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn make_sparse_list_keymap
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn maybe_keymap_in_obarray
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn maybe_keymap_in_runtime
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn maybe_resolve_keyelt
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn menu_item_filter
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn minor_mode_key_binding_in_context
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn normalized_binding_value
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn note_keymap_mutation
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn nth_list_element
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn resolve_active_key_binding
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn resolve_indirect_function_by_id_in_obarray
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn resolve_keymap
@@ -2800,51 +2501,34 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	fn	fn where_is_ke
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	struct	struct ActiveKeyBindingResolution
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	struct	struct KeymapLookupEvent
 crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	struct	struct KeymapMutationEpoch
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	struct	struct SelectedGlobalMap
-crates/neovm-eval/src/emacs_core/runtime/eval/keymap_lookup.rs	trait	trait KeyeltResolution
-crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn call_last_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn end_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn execute_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn impl KmacroHooks::call_last
 crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn impl KmacroHooks::end
 crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn impl KmacroHooks::execute
 crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn impl KmacroHooks::new
 crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn impl KmacroHooks::start
 crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn impl KmacroHooks::store_event
 crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn kmacro_hooks
-crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn start_kbd_macro
-crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	fn	fn store_kbd_macro_event
 crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	struct	struct KmacroHooks
-crates/neovm-eval/src/emacs_core/runtime/eval/kmacro_hooks.rs	type	type KmacroCommand
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn all_completions
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn apply_lread_constants
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn apply_mini_window_resize
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn apply_post_image_init
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn clear_created_lisp_face
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn clear_font_cache_state
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn collect_dynamic_module_active_gc_roots
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn configure_window_system_runtime
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn current_font_registry_handle
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn current_terminal_registry_handle
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn dbusbind_drain_events
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn dbusbind_has_active_watches
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn dbusbind_swap_world_state
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn dbusbind_world_state_placeholder
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn delete_terminal_noelisp_owned
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn dispatch_file_handler
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn dynamic_module_apply_module_function
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn dynamic_module_call_active
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn dynamic_module_carrier_tls_fingerprint
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn dynamic_module_panic_message
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn ensure_lisp_face_id_property
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn ensure_startup_compat_variables
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn expand_file_name_entry
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn fontset_alias_alist_startup_value
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn fontset_list_value
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn fontset_registry_snapshot
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn frame_init_hook
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn frame_parameter_entry
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn frame_terminal_value
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn get_char_property
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn gui_window_system_symbol
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn impl BootHooks::new
@@ -2865,7 +2549,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn impl LifecycleH
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn impl LifecycleHooks::terminal
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn impl LifecycleHooks::timefns
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn impl LifecycleHooks::timefns_reset
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn impl LifecycleHooks::window_tree
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn impl LifecycleHooks::xfaces
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn impl TerminalHooks::new
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn impl WindowTreeHooks::new
@@ -2884,40 +2567,26 @@ crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn prepare_runtime
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn print_terminal_handle
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn register_core_bootstrap_vars
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn remove_face_new_frame_defaults_entry
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn reset_dbusbind_thread_locals
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn reset_dynamic_module_carrier_tls
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn reset_fontset_registry
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn reset_sqlite_thread_locals
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn reset_terminal_handle
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn reset_terminal_thread_locals
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn reset_timefns_thread_locals
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn resize_frame_pixelwise_with_buffer_constraints
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn restore_created_faces_from_table
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn restore_fontset_registry
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn run_redisplay_window_change_hooks
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn seed_batch_startup_frame
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn shell_file_name_install
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn shell_file_name_install_dump_default
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn sqlite_swap_world_state
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn sqlite_world_state_placeholder
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn sync_runtime_face_table
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn terminal_carrier_tls_fingerprint
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn terminal_handle_value
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn terminal_park_carrier_tls
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn terminal_swap_world_state
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn terminal_world_state_placeholder
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn test_completion
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn timefns_swap_world_state
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn timefns_world_state_placeholder
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn try_completion
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn unlock_file
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn unwind_minibuffer_buffer
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn unwind_minibuffer_session
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn where_is_internal
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn window_configuration_capture
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn window_configuration_restore
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn window_resize_check
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn xfaces_carrier_tls_fingerprint
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	fn	fn xfaces_park_carrier_tls
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	struct	struct BootHooks
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	struct	struct CommandSeamHooks
@@ -2930,15 +2599,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	struct	struct Termina
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	struct	struct WindowTreeHooks
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	struct	struct WorldStateHooks
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	struct	struct XfacesHooks
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	type	type ApplyModuleFunction
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	type	type CollectModuleGcRoots
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	type	type ModuleCallActive
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	type	type WorldStatePlaceholder
-crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	type	type WorldStateSwap
 crates/neovm-eval/src/emacs_core/runtime/eval/lifecycle.rs	use	use resolve_filename_lisp_for_eval as resolve_filename
-crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Context::activate_minibuffer_window_for_buffer
 crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Context::active_minibuffer_window_id
-crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Context::minibuffer_is_active
 crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Context::minibuffer_selected_window_id
 crates/neovm-eval/src/emacs_core/runtime/eval/minibuffer_window.rs	fn	fn impl Context::minibuffer_window_is_active
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum FontListError
@@ -2952,7 +2614,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum WebKitResolveSour
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	BcFrame field base
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	BcFrame field fun
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field active_minibuffer_window
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field cached_standard_case_table
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field coding_systems
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field command_loop
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field current_message
@@ -3104,9 +2765,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	VideoResolveRequest f
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	WebKitResolveRequest field height
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	WebKitResolveRequest field source
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	WebKitResolveRequest field width
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::dispatch_subr
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::dispatch_subr_id
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::dispatch_subr_value
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::eval_form
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::eval_str
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::eval_str_each
@@ -3114,7 +2772,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::eval_va
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::face_table
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::face_table_mut
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::finish_concurrent_mark
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::lexical_binding
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::set_face_attribute
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::set_function
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::set_lexical_binding
@@ -3122,7 +2779,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::set_var
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::shutdown
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::symbol_mode
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::sync_runtime_faces_for_frame
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::unwrap_symbol
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl GuiFrameHostRequest::for_frame
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl ResolvedOpenedFont::char_width
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl ResolvedOpenedFont::font_size_px
@@ -3192,11 +2848,9 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use FrameFontRequest
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use FrameFontSize
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use GraphicalFaceAttribute
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use ObarrayWriteAccess
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use OutstandingWorldViews
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use QuitRequest
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RedisplayHookPolicyGuard
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RedisplayMiniGeometryRequest
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RedisplayMiniGeometrySource
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RedisplayMiniPreparationFailure
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RowsDependencyMetadata
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RowsObservationEpoch
@@ -3209,7 +2863,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use TerminalGridSize
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use TerminalId
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use VariableStore
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use VariableView
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use WorldEra
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use XwidgetScriptRequestId
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use raise_main_stack_rlimit
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use register_carrier_tls_reset
@@ -3217,19 +2870,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/native_stack.rs	fn	fn raise_main_s
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl OwnerState::native
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl OwnerState::parallel
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl OwnerState::serial
-crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl ParallelExecution::require_heap
-crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl ParallelExecution::require_owner
-crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl ParallelExecution::require_shape
-crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl WorldBatonGuard::with_witness
-crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct BatonWitness
-crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct BindingShape
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct HeapIdentity
-crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct NativeExecution
-crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct OwnerIdentity
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct OwnerState
-crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct ParallelExecution
-crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct SerialContext
-crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct WorldBatonGuard
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	enum	enum PerfOp
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	fn	fn carrier_tls_fingerprint
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	fn	fn enabled
@@ -3237,18 +2879,11 @@ crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	fn	fn impl PerfHooks::fing
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	fn	fn impl PerfHooks::new
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	fn	fn impl PerfHooks::record
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	fn	fn impl PerfHooks::reset
-crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	fn	fn perf_hooks
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	fn	fn record_op
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	fn	fn reset_carrier_tls
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	fn	fn time_op
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	struct	struct PerfHooks
-crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	type	type PerfCarrierFingerprint
-crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	type	type PerfCarrierReset
-crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	type	type PerfRecord
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	enum	enum MainWaitPreparation
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	enum	enum SelectArm
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl NativeWaitGuard::from_raw
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl NativeWaitGuard::wait_with
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl NativeWaitToken::from_raw
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl NativeWaitToken::raw
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl ProcessHooks::new
@@ -3259,27 +2894,11 @@ crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl Select
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl SelectHandleToken::from_raw
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn impl SelectHandleToken::raw
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn open_channel_for_module
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn prepare_main_wait
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn print_process_handle
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn select_control_source
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn select_handle
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn select_notify
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn select_nudge
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn select_wait_until
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn terminate_and_defer_reaping
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	fn	fn wait_notifier
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct NativeWaitGuard
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct NativeWaitToken
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct ProcessHooks
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct SelectArmGuard
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct SelectArmToken
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	struct	struct SelectHandleToken
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	type	type DeleteProcess
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	type	type OpenChannelForModule
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	type	type PrintProcessHandle
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	type	type TerminateAndDeferReaping
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	type	type UnlinkOwnedUnixListener
-crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	type	type WaitNotifierHook
 crates/neovm-eval/src/emacs_core/runtime/eval/process_hooks.rs	use	use GreenSelectHandle
 crates/neovm-eval/src/emacs_core/runtime/eval/profiler.rs	fn	fn impl Context::diagnostics_cpu_profile_abort
 crates/neovm-eval/src/emacs_core/runtime/eval/profiler.rs	fn	fn impl Context::diagnostics_cpu_profile_start
@@ -3313,7 +2932,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	fn	fn impl FrameFontRe
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	fn	fn impl FrameFontRequest::from_face
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	fn	fn impl FrameFontRequest::size
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	fn	fn impl FrameFontRequest::with_size
-crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	fn	fn impl FrameFontSize::from_face_height
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	fn	fn impl FrameFontSize::pixels
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	fn	fn impl FrameFontSize::points
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	fn	fn impl FrameFontSize::relative
@@ -3392,9 +3010,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn im
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn impl PendingImage::new
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn impl PendingImage::placement
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn impl ReadyImage::image_id
-crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn impl ResolvedImageMetadata::from_layout
-crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn impl ResolvedImageMetadata::layout_is_image_pixels
-crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	fn	fn impl ResolvedImageMetadata::with_embedded
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	struct	struct FailedImage
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	struct	struct ImageBaseUri
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	struct	struct ImageFileName
@@ -3438,7 +3053,6 @@ crates/neovm-eval/src/emacs_core/runtime/eval/protocol/tty_host.rs	struct	struct
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/tty_host.rs	struct	struct TtyFrameSize
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/tty_host.rs	trait	trait TerminalHost
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/tty_host.rs	trait	trait TtyFrameHostFactory
-crates/neovm-eval/src/emacs_core/runtime/eval/redisplay_hooks.rs	enum	enum RedisplayMiniGeometrySource
 crates/neovm-eval/src/emacs_core/runtime/eval/redisplay_hooks.rs	enum	enum RedisplayMiniPreparationFailure
 crates/neovm-eval/src/emacs_core/runtime/eval/redisplay_hooks.rs	field	BufferContext field eval
 crates/neovm-eval/src/emacs_core/runtime/eval/redisplay_hooks.rs	field	BufferContext field saved
@@ -3480,24 +3094,9 @@ crates/neovm-eval/src/emacs_core/runtime/eval/rows_observation.rs	fn	fn impl Row
 crates/neovm-eval/src/emacs_core/runtime/eval/rows_observation.rs	fn	fn impl RowsDependencyMetadata::into_original_epoch
 crates/neovm-eval/src/emacs_core/runtime/eval/rows_observation.rs	struct	struct RowsDependencyMetadata
 crates/neovm-eval/src/emacs_core/runtime/eval/rows_observation.rs	struct	struct RowsObservationEpoch
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	enum	enum SubrFn
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	trait	trait SubrValueExt
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFn0
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFn1
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFn2
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFn3
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFn4
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFn5
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFn6
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFn7
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFn8
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFnMany
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFnManyNoContext
-crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFnManySlice
 crates/neovm-eval/src/emacs_core/runtime/eval/tree_walk.rs	fn	fn impl Context::eval_sub
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::default_value_only
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::default_value_only_by_name
-crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::makunbound_variable
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::store_variable
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::store_variable_by_name
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::variable_value_in_buffer
@@ -3506,10 +3105,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Cont
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::variables
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl VariableStore::obarray
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl VariableStore::store
-crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl VariableStore::store_by_name
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl VariableStore::view
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl VariableView::boundp
-crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl VariableView::boundp_by_name
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl VariableView::canonical
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl VariableView::default_value
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl VariableView::obarray
@@ -3533,10 +3130,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	fn	fn impl ObarrayWriteAc
 crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	fn	fn impl ObarrayWriteAccess::make_symbol_localized
 crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	fn	fn impl ObarrayWriteAccess::replace_symbol_plist_id
 crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	struct	struct ObarrayWriteAccess
-crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	struct	struct OutstandingWorldViews
 crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	use	use Baton
-crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	use	use WorldEra
-crates/neovm-eval/src/emacs_core/runtime/eval/world/era.rs	type	type WorldEra
 crates/neovm-eval/src/emacs_core/runtime/eval/world/green_owner.rs	struct	struct Baton
 crates/neovm-eval/src/emacs_core/runtime/eval/world/parallel_admission/factory.rs	trait	sealed::trait Sealed
 crates/neovm-eval/src/emacs_core/runtime/gc_stats/mod.rs	field	GcStatsSnapshot field collections

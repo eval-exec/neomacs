@@ -115,7 +115,8 @@ impl GreenSelectHandle {
 
     /// Arm before the caller's next authoritative-state check. One native
     /// lease prevents main's future native pump and idle scheduler competing.
-    pub fn wait_registered(&self, registration: &WaitRegistration, deadline: Instant) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn wait_registered(&self, registration: &WaitRegistration, deadline: Instant) -> bool {
         if super::ASYNC_ATTENTION.is_raised(super::AsyncSource::OsSignal)
             || self.notification_pending.swap(false, Ordering::AcqRel)
         {
@@ -168,7 +169,8 @@ impl ProcessManager {
     }
 
     #[doc(hidden)]
-    pub fn green_select_handle(&self) -> Option<GreenSelectHandle> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn green_select_handle(&self) -> Option<GreenSelectHandle> {
         let latch = &self.wait_backend.notification_pending;
         let wake = latch
             .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))

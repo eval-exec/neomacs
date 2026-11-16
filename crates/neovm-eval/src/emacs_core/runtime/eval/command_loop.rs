@@ -700,7 +700,7 @@ impl Context {
     }
 
     /// Drop a deleted window's chrome acknowledgement.
-    pub fn forget_chrome_window(&mut self, window: WindowId) {
+    pub(crate) fn forget_chrome_window(&mut self, window: WindowId) {
         self.chrome_dirty.forget_window(window);
     }
 
@@ -1277,7 +1277,8 @@ impl Context {
 
     /// Perform a full mark-and-sweep garbage collection.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub fn gc_collect(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn gc_collect(&mut self) {
         self.gc_collect_exact();
     }
 

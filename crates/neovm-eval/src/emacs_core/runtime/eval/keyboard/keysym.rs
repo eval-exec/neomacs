@@ -117,7 +117,7 @@ pub fn native_key_android(keycode: u32) -> u32 {
 }
 
 /// Identity for an OpenHarmony key that winit could not name.
-pub fn native_key_ohos(keycode: u32) -> u32 {
+pub(crate) fn native_key_ohos(keycode: u32) -> u32 {
     NATIVE_OHOS_BASE | (keycode & NATIVE_BAND_MASK)
 }
 

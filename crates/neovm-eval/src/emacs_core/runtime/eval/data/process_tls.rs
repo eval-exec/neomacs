@@ -20,7 +20,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-pub type RustlsClientStream = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
+pub(crate) type RustlsClientStream = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
 
 pub struct RustlsTlsStream {
     pub inner: RustlsClientStream,

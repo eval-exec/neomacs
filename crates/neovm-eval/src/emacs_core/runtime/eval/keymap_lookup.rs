@@ -270,7 +270,7 @@ pub fn get_keyelt(binding: Value, symbol_mode: SymbolMode) -> Value {
     }
 }
 
-pub fn nth_list_element(mut list: Value, mut index: usize) -> Option<Value> {
+pub(crate) fn nth_list_element(mut list: Value, mut index: usize) -> Option<Value> {
     while list.is_cons() {
         let car = list.cons_car();
         if index == 0 {
@@ -282,7 +282,7 @@ pub fn nth_list_element(mut list: Value, mut index: usize) -> Option<Value> {
     None
 }
 
-pub fn menu_item_filter(tail: Value, symbol_mode: SymbolMode) -> Option<Value> {
+pub(crate) fn menu_item_filter(tail: Value, symbol_mode: SymbolMode) -> Option<Value> {
     let mut cursor = tail;
     while cursor.is_cons() {
         let key = cursor.cons_car();
@@ -358,7 +358,7 @@ pub fn keymap_binding_spine(keymap: &Value, symbol_mode: SymbolMode) -> Option<V
     Some(*keymap)
 }
 
-pub fn maybe_resolve_keyelt(
+pub(crate) fn maybe_resolve_keyelt(
     binding: Value,
     resolve_keyelt: bool,
     symbol_mode: SymbolMode,
@@ -385,7 +385,7 @@ pub fn maybe_resolve_keyelt(
 /// `&mut Context` may evaluate a menu-item `:filter` exactly as GNU's
 /// `autoload` argument does.  Neither implementor needs a lifetime-carrying
 /// adapter struct, so no lifetime annotations appear in signatures.
-pub trait KeyeltResolution {
+pub(crate) trait KeyeltResolution {
     /// The obarray whose function cells a symbol keymap tail resolves through.
     fn lookup_obarray(&self) -> Option<&Obarray>;
     /// Keep a walk value alive across callbacks until the runtime caller's
@@ -457,7 +457,7 @@ impl KeyeltResolution for &mut Context {
 pub struct KeymapLookupEvent(Value);
 
 impl KeymapLookupEvent {
-    pub fn from_event(event: Value, symbol_mode: SymbolMode) -> Self {
+    pub(crate) fn from_event(event: Value, symbol_mode: SymbolMode) -> Self {
         let head = if event.is_cons() {
             event.cons_car()
         } else {
@@ -487,7 +487,7 @@ impl KeymapLookupEvent {
 
 /// Scan one keymap level, retaining callback results and pending tails so
 /// filters may collect or detach bindings without invalidating the walk.
-pub fn lookup_in_keymap_level_impl(
+pub(crate) fn lookup_in_keymap_level_impl(
     keymap: &Value,
     event: KeymapLookupEvent,
     noinherit: bool,
@@ -696,7 +696,7 @@ pub fn lookup_in_keymap_level_impl(
 /// That distinction is why this cannot just call [`list_keymap_access_impl`],
 /// which returns nil for both: an explicit nil entry SHADOWS the members and
 /// parents that follow, while no entry at all lets them through.
-pub fn access_keymap_in_member(
+pub(crate) fn access_keymap_in_member(
     member: &Value,
     event: KeymapLookupEvent,
     noinherit: bool,
@@ -757,7 +757,7 @@ pub fn access_keymap_in_member(
 }
 
 /// Get the parent keymap from a keymap (the tail after all alist entries).
-pub fn get_keymap_tail_parent(keymap: &Value, symbol_mode: SymbolMode) -> Value {
+pub(crate) fn get_keymap_tail_parent(keymap: &Value, symbol_mode: SymbolMode) -> Value {
     let Some(mut cursor) = keymap_binding_spine(keymap, symbol_mode) else {
         return Value::NIL;
     };
@@ -782,7 +782,7 @@ pub fn get_keymap_tail_parent(keymap: &Value, symbol_mode: SymbolMode) -> Value 
 ///
 /// An explicit nil binding (e.g. from `define-key m [?b] nil`) shadows
 /// parent bindings, matching GNU Emacs behavior where nil != unbound.
-pub fn list_keymap_access(
+pub(crate) fn list_keymap_access(
     keymap: &Value,
     event: &Value,
     noinherit: bool,
@@ -794,7 +794,7 @@ pub fn list_keymap_access(
 
 /// [`list_keymap_access`] with the obarray GNU's `access_keymap_1` resolves a
 /// symbol spine tail through (`get_keymap`), for the lookup paths that have one.
-pub fn list_keymap_access_in_obarray(
+pub(crate) fn list_keymap_access_in_obarray(
     keymap: &Value,
     event: &Value,
     noinherit: bool,
@@ -813,7 +813,7 @@ pub fn list_keymap_access_in_obarray(
     )
 }
 
-pub fn list_keymap_access_unresolved(
+pub(crate) fn list_keymap_access_unresolved(
     keymap: &Value,
     event: &Value,
     noinherit: bool,
@@ -924,7 +924,7 @@ pub fn list_keymap_access_with_event(
     }
 }
 
-pub fn list_keymap_access_impl(
+pub(crate) fn list_keymap_access_impl(
     keymap: &Value,
     event: &Value,
     noinherit: bool,
@@ -962,7 +962,7 @@ pub fn list_keymap_lookup_one(keymap: &Value, event: &Value, symbol_mode: Symbol
 /// accepting `(t . COMMAND)` default bindings.
 ///
 /// This mirrors GNU Emacs `access_keymap` with `noinherit=false, t_ok=true`.
-pub fn list_keymap_lookup_one_t_ok(
+pub(crate) fn list_keymap_lookup_one_t_ok(
     keymap: &Value,
     event: &Value,
     symbol_mode: SymbolMode,
@@ -998,7 +998,7 @@ pub fn list_keymap_lookup_one_noinherit(
 
 /// Accumulate same-level prefixes and retain the new composition until the
 /// runtime walk ends, including while later members evaluate their filters.
-pub fn accumulate_prefix_keymap(
+pub(crate) fn accumulate_prefix_keymap(
     existing: Option<Value>,
     next: Value,
     resolution: &mut dyn KeyeltResolution,
@@ -1014,7 +1014,7 @@ pub fn accumulate_prefix_keymap(
 /// Compose prefix keymaps found at the same keymap level.  GNU
 /// `access_keymap_1` keeps those as separate embedded members:
 /// `(keymap MAP1 MAP2 ...)`.
-pub fn compose_prefix_keymaps(first: &Value, second: &Value) -> Value {
+pub(crate) fn compose_prefix_keymaps(first: &Value, second: &Value) -> Value {
     Value::list(vec![KeymapMarker::Keymap.symbol_value(), *first, *second])
 }
 
@@ -1025,7 +1025,7 @@ pub fn compose_prefix_keymaps(first: &Value, second: &Value) -> Value {
 /// This distinction matters for `define-key` on a composed prefix map:
 /// `access_keymap(..., noinherit=true)` must stop at the parent boundary so the
 /// write goes into CHILD rather than mutating an inherited map.
-pub fn compose_prefix_with_parent_keymap(
+pub(crate) fn compose_prefix_with_parent_keymap(
     child: &Value,
     parent: &Value,
     symbol_mode: SymbolMode,
@@ -1161,7 +1161,7 @@ pub fn resolve_keymap_or_autoload(
 
 /// GNU `map_keymap_item`: a `t` binding shadows lower-precedence keymaps exactly
 /// like an explicit nil binding, so it is reported as nil.
-pub fn normalized_binding_value(value: Value, symbol_mode: SymbolMode) -> Value {
+pub(crate) fn normalized_binding_value(value: Value, symbol_mode: SymbolMode) -> Value {
     if eq_value_swp(&value, &Value::T, symbol_mode == SymbolMode::Positioned) {
         Value::NIL
     } else {
@@ -1330,10 +1330,10 @@ pub fn list_keymap_for_each_binding_recursive<F>(
 }
 
 /// Guard against a circular keymap spine (a `setcdr`-built cycle).
-pub const MAX_KEYMAP_SPINE_STEPS: usize = 100_000;
+pub(crate) const MAX_KEYMAP_SPINE_STEPS: usize = 100_000;
 
 /// Guard against mutually-nested keymaps when a consumer recurses into submaps.
-pub const MAX_KEYMAP_WALK_DEPTH: usize = 64;
+pub(crate) const MAX_KEYMAP_WALK_DEPTH: usize = 64;
 
 /// Global keymap content-mutation epoch.
 ///
@@ -1372,14 +1372,14 @@ pub fn note_keymap_mutation() {
 /// Dynamically binding or assigning that variable does not select a new map;
 /// only `use-global-map` changes the runtime selection.
 #[derive(Clone, Copy, Debug, Default)]
-pub enum GlobalMapSelection {
+pub(crate) enum GlobalMapSelection {
     #[default]
     Uninitialized,
     Selected(Value),
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SelectedGlobalMap {
+pub(crate) struct SelectedGlobalMap {
     selection: GlobalMapSelection,
 }
 
@@ -1853,7 +1853,7 @@ pub enum DefaultBindingMode {
 }
 
 impl DefaultBindingMode {
-    pub fn accepts_default(self) -> bool {
+    pub(crate) fn accepts_default(self) -> bool {
         matches!(self, Self::Accept)
     }
 }

@@ -94,7 +94,8 @@ use std::collections::{HashMap, HashSet};
 /// minibuffer uses its live buffer even before a reader is active. No body/chrome presentation is accepted.
 /// Each exclusive Context request owns a copy of this immutable numeric selector.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RedisplayMiniGeometrySource {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum RedisplayMiniGeometrySource {
     EchoArea,
     ActiveMinibuffer,
 }

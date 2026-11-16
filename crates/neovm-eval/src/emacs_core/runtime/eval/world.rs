@@ -28,7 +28,7 @@ mod era;
 #[cfg(test)]
 pub(crate) use era::ParallelHeapEraWorldCollectExt;
 pub(crate) use era::ParallelHeapEraWorldExt;
-pub use era::WorldEra;
+pub(crate) use era::WorldEra;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use era::WorldProofEra;
 #[cfg(test)]
@@ -1167,7 +1167,7 @@ impl Context {
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0} World storage views remain after Context retirement")]
-pub struct OutstandingWorldViews(NonZeroUsize);
+pub(crate) struct OutstandingWorldViews(NonZeroUsize);
 static_assertions::assert_impl_all!(OutstandingWorldViews: Send,Sync);
 
 #[derive(Debug, thiserror::Error)]

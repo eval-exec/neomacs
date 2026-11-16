@@ -456,7 +456,8 @@ impl Context {
     /// lookup (buffer-local, then `buffer_defaults`) — the obarray value cell of
     /// a forwarded slot var is always nil, so the resolver must read the default
     /// slot directly.
-    pub fn buffer_default_value(&self, name: &str) -> Option<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn buffer_default_value(&self, name: &str) -> Option<Value> {
         // GNU default read: BVAR (&buffer_defaults, slot) for a slot-backed
         // per-buffer variable (src/buffer.c:1116, 2289); for any other
         // variable the obarray default cell is GNU's Fdefault_value.
@@ -1445,7 +1446,8 @@ impl Context {
         )
     }
 
-    pub fn current_message_text(&self) -> Option<String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn current_message_text(&self) -> Option<String> {
         self.current_message
             .as_ref()
             .map(|message| neovm_value::emacs_char::to_utf8_lossy(message.as_bytes()))
@@ -1813,7 +1815,8 @@ impl Context {
         let _ = self.clear_echo_area_message_with_hook(false);
     }
 
-    pub fn clear_current_message(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_current_message(&mut self) {
         self.cancel_key_echo_state();
         if self.clear_echo_area_message() == EchoMessageClearResult::PreserveEchoArea {}
     }
