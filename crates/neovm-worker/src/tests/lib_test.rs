@@ -528,6 +528,293 @@ fn reap_finished_removes_cancelled_task_entries() {
 }
 
 #[test]
+fn close_cancels_queued_work_and_interrupts_running_work() {
+    let (entered, entered_rx) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let task_release_rx = Arc::clone(&release_rx);
+    let rt = WorkerRuntime::with_executor(
+        WorkerConfig {
+            threads: 1,
+            queue_capacity: 4,
+        },
+        move |form, _opts, _ctx| {
+            if form.bytes == [1] {
+                entered.send(()).expect("report running task");
+                task_release_rx
+                    .lock()
+                    .expect("release receiver")
+                    .recv()
+                    .expect("release running task");
+            }
+            Ok(form.clone())
+        },
+    );
+    let workers = rt.start_dummy_workers();
+    let running = rt
+        .spawn(LispValue { bytes: vec![1] }, TaskOptions::default())
+        .expect("running task queued");
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("worker entered running task");
+    let queued = rt
+        .spawn(LispValue { bytes: vec![2] }, TaskOptions::default())
+        .expect("queued task accepted before close");
+
+    let release_on_close = release.clone();
+    rt.tasks
+        .read()
+        .expect("task map")
+        .get(&running.0)
+        .expect("running task registered")
+        .interrupt
+        .lock()
+        .expect("interrupt hook")
+        .replace(Interrupt(Arc::new(move || {
+            release_on_close.send(()).expect("release running task");
+        })));
+
+    rt.close();
+    assert_eq!(rt.task_status(queued), Some(TaskStatus::Cancelled));
+    assert_eq!(rt.task_status(running), Some(TaskStatus::Cancelled));
+    for worker in workers {
+        worker.join().expect("worker should finish");
+    }
+    assert_eq!(
+        TaskScheduler::task_await(&rt, running, Some(Duration::from_secs(1)))
+            .expect_err("running work is interrupted during close"),
+        TaskError::Cancelled
+    );
+}
+
+#[test]
+fn cancel_running_task_calls_interrupt_once_and_clears_hook() {
+    let (entered, entered_rx) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let task_release_rx = Arc::clone(&release_rx);
+    let rt = WorkerRuntime::with_executor(
+        WorkerConfig {
+            threads: 1,
+            queue_capacity: 4,
+        },
+        move |form, _opts, _ctx| {
+            if form.bytes == [1] {
+                entered.send(()).expect("report running task");
+                task_release_rx
+                    .lock()
+                    .expect("release receiver")
+                    .recv()
+                    .expect("release running task");
+            }
+            Ok(form.clone())
+        },
+    );
+    let workers = rt.start_dummy_workers();
+    let task = rt
+        .spawn(LispValue { bytes: vec![1] }, TaskOptions::default())
+        .expect("task enqueued");
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("worker entered task");
+    let interrupts = Arc::new(AtomicU64::new(0));
+    let interrupt_count = Arc::clone(&interrupts);
+    rt.tasks
+        .read()
+        .expect("task map")
+        .get(&task.0)
+        .expect("task registered")
+        .interrupt
+        .lock()
+        .expect("interrupt hook")
+        .replace(Interrupt(Arc::new(move || {
+            interrupt_count.fetch_add(1, Ordering::Relaxed);
+        })));
+
+    assert!(rt.cancel(task));
+    assert!(rt.cancel(task));
+    release.send(()).expect("release cancelled task");
+    rt.close();
+    for worker in workers {
+        worker.join().expect("worker should finish");
+    }
+    assert_eq!(interrupts.load(Ordering::Relaxed), 1);
+    assert!(
+        rt.tasks
+            .read()
+            .expect("task map")
+            .get(&task.0)
+            .expect("task retained until wait")
+            .interrupt
+            .lock()
+            .expect("interrupt hook")
+            .is_none()
+    );
+    assert_eq!(
+        TaskScheduler::task_await(&rt, task, Some(Duration::from_secs(1))),
+        Err(TaskError::Cancelled)
+    );
+}
+
+#[test]
+fn isolate_startup_keeps_successful_owners_when_one_fails() {
+    let attempts = Arc::new(AtomicU64::new(0));
+    let factory_attempts = Arc::clone(&attempts);
+    let rt = WorkerRuntime::with_isolate_executor(
+        WorkerConfig {
+            threads: 2,
+            queue_capacity: 8,
+        },
+        Arc::new(move || {
+            if factory_attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                return Err(WorkerStartError::Initialization(
+                    "one owner failed".to_string(),
+                ));
+            }
+            Ok(Box::new(Context::new(
+                neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+            )))
+        }),
+    );
+    let workers = rt.try_start_workers().expect("one owner is usable");
+    assert_eq!(rt.boot_times().len(), 1);
+    assert!(
+        rt.startup_error()
+            .expect("startup failure retained")
+            .contains("one owner failed")
+    );
+    let task = rt
+        .spawn(
+            LispValue {
+                bytes: crate::transfer::encode_call(&crate::transfer::Call {
+                    function: crate::transfer::Transfer::Subr("+".to_string()),
+                    args: vec![
+                        crate::transfer::Transfer::Fixnum(20),
+                        crate::transfer::Transfer::Fixnum(22),
+                    ],
+                }),
+            },
+            TaskOptions::default(),
+        )
+        .expect("remaining owner accepts a task");
+    let result = TaskScheduler::task_await(&rt, task, Some(Duration::from_secs(2)))
+        .expect("remaining owner completes task");
+    rt.close();
+    for worker in workers {
+        worker.join().expect("owner should join");
+    }
+    assert_eq!(
+        crate::transfer::decode(&result.bytes).expect("decode task result"),
+        crate::transfer::Transfer::Fixnum(42)
+    );
+}
+
+#[test]
+fn isolate_startup_fails_all_owners_and_reports_pending_task() {
+    let rt = WorkerRuntime::with_isolate_executor(
+        WorkerConfig {
+            threads: 2,
+            queue_capacity: 8,
+        },
+        Arc::new(|| {
+            Err(WorkerStartError::Initialization(
+                "all owners failed".to_string(),
+            ))
+        }),
+    );
+    let task = rt
+        .spawn(LispValue::default(), TaskOptions::default())
+        .expect("task queued before startup");
+    assert!(matches!(
+        rt.try_start_workers(),
+        Err(WorkerStartError::Initialization(_))
+    ));
+    assert!(matches!(
+        TaskScheduler::task_await(&rt, task, Some(Duration::from_secs(1))),
+        Err(TaskError::Failed(Signal { symbol, .. })) if symbol == "worker-startup-failed"
+    ));
+    assert_eq!(rt.boot_times().len(), 0);
+}
+
+#[test]
+fn four_cached_isolates_report_boots_and_complete_sixteen_tasks() {
+    let pool = Box::leak(Box::new(crate::isolate::IsolatePool::new(
+        crate::isolate::IsolatePoolConfig {
+            threads: 4,
+            queue_capacity: 32,
+            boot: crate::isolate::IsolateBoot::CachedBootstrap,
+        },
+    )));
+    pool.ensure_started();
+    pool.wait_started();
+    let boot_times = pool.runtime().boot_times();
+    assert_eq!(boot_times.len(), 4);
+    let stats = pool.stats();
+    assert_eq!(stats.ready, 4);
+    assert_eq!(stats.boot, crate::isolate::IsolateBoot::CachedBootstrap);
+    assert!(!stats.final_image_used);
+
+    let call = crate::transfer::Call {
+        function: crate::transfer::Transfer::Subr("+".to_string()),
+        args: vec![
+            crate::transfer::Transfer::Fixnum(20),
+            crate::transfer::Transfer::Fixnum(22),
+        ],
+    };
+    for _ in 0..16 {
+        let task = crate::isolate::spawn_call(pool, &call).expect("task enqueued");
+        assert_eq!(
+            crate::transfer::decode(
+                &TaskScheduler::task_await(pool.runtime(), task, Some(Duration::from_secs(5)))
+                    .expect("task result")
+                    .bytes
+            )
+            .expect("decode task result"),
+            crate::transfer::Transfer::Fixnum(42)
+        );
+    }
+    while pool.stats().completed < 16 {
+        thread::yield_now();
+    }
+    let stats = pool.stats();
+    eprintln!("isolate boot times: {:?}", boot_times);
+    assert_eq!(stats.completed, 16);
+    assert_eq!(stats.ready, 4);
+    pool.close();
+}
+
+#[test]
+fn configured_pool_width_uses_lisp_value_or_environment_default() {
+    let pool = crate::isolate::IsolatePool::new(crate::isolate::IsolatePoolConfig {
+        threads: 8,
+        queue_capacity: 8,
+        boot: crate::isolate::IsolateBoot::CachedBootstrap,
+    });
+
+    assert_eq!(pool.configured_threads(None), 8);
+    assert_eq!(pool.configured_threads(Some(0)), 0);
+    assert_eq!(pool.configured_threads(Some(3)), 3);
+}
+
+#[test]
+fn disabled_pool_keeps_zero_width_and_reports_startup_error() {
+    let pool = Box::leak(Box::new(crate::isolate::IsolatePool::new(
+        crate::isolate::IsolatePoolConfig {
+            threads: 8,
+            queue_capacity: 8,
+            boot: crate::isolate::IsolateBoot::CachedBootstrap,
+        },
+    )));
+
+    pool.ensure_started_with(Some(0));
+    pool.wait_started();
+
+    assert_eq!(pool.threads(), 0);
+    assert_eq!(pool.configured_threads(Some(3)), 0);
+    assert!(pool.stats().startup_error.is_some());
+}
+
+#[test]
 fn elisp_executor_evaluates_source_task() {
     let rt = WorkerRuntime::with_elisp_executor(WorkerConfig {
         threads: 1,
