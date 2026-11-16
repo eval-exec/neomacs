@@ -71,7 +71,7 @@ pub(crate) struct WorldBatonGuard<'heap, 'owner> {
 }
 
 #[allow(dead_code)] // Dormant E1 contract; E2 owns runtime construction.
-pub(crate) struct BatonWitness<'guard, 'heap, 'owner> {
+pub struct BatonWitness<'guard, 'heap, 'owner> {
     guard: Invariant<'guard>,
     heap: Invariant<'heap>,
     owner: Invariant<'owner>,

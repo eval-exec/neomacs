@@ -2717,6 +2717,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl ParallelExecution::require_heap
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl ParallelExecution::require_owner
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl ParallelExecution::require_shape
+crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct BatonWitness
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct HeapIdentity
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	struct	struct OwnerState
 crates/neovm-eval/src/emacs_core/runtime/eval/perf.rs	enum	enum PerfOp
