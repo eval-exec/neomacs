@@ -15,15 +15,9 @@
 
 use crate::transfer::{self, Call, TransferError};
 use crate::{WorkerConfig, WorkerRuntime, WorkerStartError, eval_error_to_task_error};
+use neovm_core::TaskScheduler;
 use neovm_core::emacs_core::eval::Context;
-use neovm_core::emacs_core::load::{
-    RuntimeImageRole, apply_runtime_startup_state, runtime_image_available,
-};
-use neovm_core::emacs_core::load_boot::{
-    create_bootstrap_evaluator_cached, load_runtime_image_with_features,
-};
 use neovm_core::emacs_core::print::print_value_with_eval;
-use neovm_core::{TaskScheduler, Value};
 use neovm_host_abi::{LispValue, Signal, TaskError};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -56,57 +50,12 @@ pub enum IsolateBoot {
 
 impl IsolateBoot {
     fn context(&self) -> Result<Box<Context>, WorkerStartError> {
-        let mut evaluator = match self {
-            Self::CachedBootstrap => {
-                let mut evaluator =
-                    Box::new(create_bootstrap_evaluator_cached().map_err(|err| {
-                        WorkerStartError::Initialization(format!("bootstrap evaluator: {err:?}"))
-                    })?);
-                evaluator.setup_thread_locals();
-                if let Err(err) = apply_runtime_startup_state(&mut evaluator) {
-                    let failure =
-                        format!("runtime startup state: {:?}", eval_error_to_task_error(err));
-                    return Err(WorkerStartError::Initialization(
-                        match evaluator.shutdown() {
-                            Ok(()) => failure,
-                            Err(err) => format!("{failure}; worker shutdown: {err}"),
-                        },
-                    ));
-                }
-                evaluator
-            }
-            Self::RuntimeImage { dump_file_override } => {
-                let role = if dump_file_override.is_some()
-                    || runtime_image_available(RuntimeImageRole::Final)
-                {
-                    Some(RuntimeImageRole::Final)
-                } else if runtime_image_available(RuntimeImageRole::Bootstrap) {
-                    Some(RuntimeImageRole::Bootstrap)
-                } else {
-                    None
-                };
-                match role {
-                    Some(role) => Box::new(
-                        load_runtime_image_with_features(role, &[], dump_file_override.as_deref())
-                            .map_err(|err| {
-                                WorkerStartError::Initialization(format!(
-                                    "runtime image {}: {:?}",
-                                    role.image_file_name(),
-                                    eval_error_to_task_error(err)
-                                ))
-                            })?,
-                    ),
-                    None => return Self::CachedBootstrap.context(),
-                }
-            }
-        };
-        evaluator.setup_thread_locals();
-        // A worker has no terminal and no command loop: `message` and the
-        // startup paths that consult this must take the batch branch.
-        evaluator.set_variable("noninteractive", Value::T);
-        Ok(evaluator)
+        crate::isolate::boot::context(self)
     }
 }
+
+#[path = "boot.rs"]
+pub(crate) mod boot;
 
 /// Pool construction parameters.
 #[derive(Clone, Debug, PartialEq, Eq)]
