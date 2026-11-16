@@ -511,6 +511,9 @@ mod architecture_canonical_registration_trace_test;
 mod architecture_host_cfg_elisp_regression_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/oracle_form_empty_binding_guard_test.rs"]
+mod architecture_oracle_form_empty_binding_guard_test;
+#[cfg(test)]
 #[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;
 
