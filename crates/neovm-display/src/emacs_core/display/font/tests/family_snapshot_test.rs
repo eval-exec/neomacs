@@ -1,5 +1,5 @@
 use super::*;
-use neovm_value::intern::{intern_lisp_string, resolve_sym_lisp_string};
+use neovm_value::intern::intern_lisp_string;
 
 fn row(name: &str, alternatives: &[&str]) -> (SymId, Vec<SymId>) {
     (
