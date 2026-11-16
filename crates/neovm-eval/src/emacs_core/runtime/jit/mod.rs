@@ -1885,7 +1885,7 @@ pub mod contract_fixture {
     pub use neovm_value::value::jit_runtime::{Runtime, set_compiled_id_word, set_leaf_slot_word};
 
     /// A fresh, unattached source state for the negative fixture.
-    pub(crate) fn fixture_runtime() -> Runtime {
+    pub fn fixture_runtime() -> Runtime {
         Runtime::new()
     }
 }

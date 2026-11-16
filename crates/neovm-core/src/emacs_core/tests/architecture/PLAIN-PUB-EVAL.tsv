@@ -3148,6 +3148,7 @@ crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	use	use Effects as Effect
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	enum	enum Plan
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	enum	enum ReoptLevel
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	enum	enum Tier
+crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn fixture_runtime
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn hot_threshold
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn impl ReoptLevel::from_u8
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	fn	fn impl ReoptLevel::name
