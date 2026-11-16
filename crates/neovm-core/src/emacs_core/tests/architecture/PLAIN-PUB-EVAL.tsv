@@ -159,6 +159,10 @@ crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrBatch::n
 crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed0
 crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed1
 crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed2
+crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed3
+crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed4
+crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed5
+crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	fn	fn impl SubrSpec::fixed6
 crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	struct	struct SubrBatch
 crates/neovm-eval/src/emacs_core/lisp/native/subr/mod.rs	struct	struct SubrSpec
 crates/neovm-eval/src/emacs_core/lisp/print/error_format.rs	fn	fn format_eval_result

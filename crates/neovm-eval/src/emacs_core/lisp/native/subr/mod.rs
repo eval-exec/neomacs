@@ -330,28 +330,28 @@ impl SubrSpec {
     }
 
     /// Declare a three-slot Rust entrypoint with a type-checked maximum arity.
-    pub(crate) const fn fixed3(name: &'static str, function: SubrFn3, minimum: FixedMin3) -> Self {
+    pub const fn fixed3(name: &'static str, function: SubrFn3, minimum: FixedMin3) -> Self {
         Self::native(
             name,
             SubrFn::A3(function),
             SubrArity::new(minimum.get(), Some(3)),
         )
     }
-    pub(crate) const fn fixed4(name: &'static str, function: SubrFn4, minimum: FixedMin4) -> Self {
+    pub const fn fixed4(name: &'static str, function: SubrFn4, minimum: FixedMin4) -> Self {
         Self::native(
             name,
             SubrFn::A4(function),
             SubrArity::new(minimum.get(), Some(4)),
         )
     }
-    pub(crate) const fn fixed5(name: &'static str, function: SubrFn5, minimum: FixedMin5) -> Self {
+    pub const fn fixed5(name: &'static str, function: SubrFn5, minimum: FixedMin5) -> Self {
         Self::native(
             name,
             SubrFn::A5(function),
             SubrArity::new(minimum.get(), Some(5)),
         )
     }
-    pub(crate) const fn fixed6(name: &'static str, function: SubrFn6, minimum: FixedMin6) -> Self {
+    pub const fn fixed6(name: &'static str, function: SubrFn6, minimum: FixedMin6) -> Self {
         Self::native(
             name,
             SubrFn::A6(function),
