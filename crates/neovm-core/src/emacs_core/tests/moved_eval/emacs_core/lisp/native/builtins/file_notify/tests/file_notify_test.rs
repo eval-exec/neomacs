@@ -20,7 +20,6 @@ use neovm_eval::test_support::authority::{
     drain_batch_for_test, file_notify_register_for_test, file_notify_unregister_for_test,
     reset_file_notify_thread_locals_for_test,
 };
-#[cfg(target_os = "macos")]
 use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
@@ -202,7 +201,7 @@ fn kqueue_call(
     name: &str,
     args: Vec<Value>,
 ) -> neovm_value::error::EvalResult {
-    eval.funcall_general(Value::symbol(name), args)
+    eval.funcall_general(Value::from_sym_id(intern(name)), args)
 }
 
 #[cfg(target_os = "macos")]

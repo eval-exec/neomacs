@@ -4,6 +4,7 @@
 //! equivalents; these bodies only touch the Obarray and lower-crate
 //! vocabulary, so they live with the bootstrap that runs them.
 
+use crate::emacs_core::reader::ObarrayReadSymbolsExt;
 use neovm_value::display_vocab::{
     FONT_SLANT_STYLE_TABLE, FONT_WEIGHT_STYLE_TABLE, FONT_WIDTH_STYLE_TABLE, font_style_table,
 };
@@ -23,7 +24,7 @@ pub(crate) fn init_font_vars(obarray: &mut neovm_value::symbol::Obarray) {
         .chain(FONT_WIDTH_STYLE_TABLE)
     {
         for name in *names {
-            obarray.intern(name);
+            obarray.intern_member(name);
         }
     }
     for (name, value) in [
@@ -34,6 +35,11 @@ pub(crate) fn init_font_vars(obarray: &mut neovm_value::symbol::Obarray) {
         ("font-slant-table", font_style_table(FONT_SLANT_STYLE_TABLE)),
         ("font-width-table", font_style_table(FONT_WIDTH_STYLE_TABLE)),
     ] {
+        // GNU publishes these in `Vfont_weight_table` and friends after
+        // interning the symbols (font.c); the port builds the tables in
+        // Rust, so publish the symbols as members at the seed boundary
+        // (PEER 5786 census: font weight/slant/width aliases).
+        obarray.intern_member_symbols_in(value);
         obarray.seed_value(name, value);
         obarray.make_special(name);
         obarray.set_constant(name);

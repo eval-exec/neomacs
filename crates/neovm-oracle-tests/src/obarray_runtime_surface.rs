@@ -40,25 +40,51 @@ fn oracle_prop_runtime_interned_boot_spellings() {
 }
 
 /// Spellings a profile without the matching `#ifdef` must not intern.
+///
+/// `fontsize` is a Linux absence and a macOS presence: `nsfns.m` DEFSYMs it,
+/// so the NS reference build and a macOS Neo both intern it. The row is
+/// host-keyed instead of pinned to the Linux answer.
 #[test]
-fn oracle_prop_compiled_out_spellings_are_absent_from_the_obarray() {
+fn oracle_prop_fontsize_follows_the_compiled_object_list() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    // fontsize is DEFSYM'd in nsfns.m; xwidgetp / xwidget-live-p /
-    // xwidget-view-p and the xwidget variables exist only with GNU's
-    // `--with-xwidgets` (configure.ac:4456-4497). The reference linux-gtk3
-    // profile has none of them.
-    let form = r#"(list (and (intern-soft "fontsize") t)
-       (and (intern-soft "xwidgetp") t)
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let expect = expect_test::expect![[r#""OK (nil)""#]];
+    #[cfg(all(not(windows), target_os = "macos"))]
+    let expect = expect_test::expect![[r#""OK (t)""#]];
+    #[cfg(windows)]
+    let expect = expect_test::expect![[r#""OK (nil)""#]];
+    assert_oracle_parity_expect(r#"(list (and (intern-soft "fontsize") t))"#, expect);
+}
+
+/// The xwidget spellings a build without `--with-xwidgets` must not intern.
+///
+/// The Linux/Windows production builds do not enable the port's `xwidgets`
+/// feature (our HAVE_XWIDGETS), matching the reference GNU. The macOS product
+/// enables the `webview` backend, which implies `xwidgets`, so the row is
+/// ignored there; the R8 agreement guard covers that build instead.
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS product enables webview => xwidgets (R8 guard)"
+)]
+fn oracle_prop_xwidget_spellings_are_absent_without_the_feature() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"(list (and (intern-soft "xwidgetp") t)
        (and (intern-soft "xwidget-live-p") t)
        (and (intern-soft "xwidget-view-p") t)
        (and (intern-soft "xwidget-list") t))"#;
-    let expect = expect_test::expect![[r#""OK (nil nil nil nil nil)""#]];
+    let expect = expect_test::expect![[r#""OK (nil nil nil nil)""#]];
     assert_oracle_parity_expect(form, expect);
 }
 
 /// The same compiled-out names are not functions or variables either.
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS product enables webview => xwidgets (R8 guard)"
+)]
 fn oracle_prop_compiled_out_definitions_are_absent() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -68,5 +94,38 @@ fn oracle_prop_compiled_out_definitions_are_absent() {
        (boundp 'xwidget-list)
        (boundp 'xwidget-webkit-disable-javascript))"#;
     let expect = expect_test::expect![[r#""OK (nil nil nil nil nil)""#]];
+    assert_oracle_parity_expect(form, expect);
+}
+
+/// Literal C startup interns (`intern_c_string`) land in the profile that
+/// compiles the file, exactly as GNU's object list decides.
+#[test]
+fn oracle_prop_c_intern_spellings_follow_the_profile() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // `accelerate-menu` is xmenu.c, `bidi-class` is bidi.c (both compiled in
+    // the Linux/GTK reference); `kqueue` is kqueue.c (macOS); `w32notify` is
+    // w32notify.c (Windows).
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let (form, expect) = (
+        r#"(list (and (intern-soft "accelerate-menu") t)
+           (and (intern-soft "bidi-class") t)
+           (and (intern-soft "kqueue") t))"#,
+        expect_test::expect![[r#""OK (t t nil)""#]],
+    );
+    #[cfg(all(not(windows), target_os = "macos"))]
+    let (form, expect) = (
+        r#"(list (and (intern-soft "accelerate-menu") t)
+           (and (intern-soft "kqueue") t)
+           (and (intern-soft "w32notify") t))"#,
+        expect_test::expect![[r#""OK (nil t nil)""#]],
+    );
+    #[cfg(windows)]
+    let (form, expect) = (
+        r#"(list (and (intern-soft "w32notify") t)
+           (and (intern-soft "accelerate-menu") t)
+           (and (intern-soft "kqueue") t))"#,
+        expect_test::expect![[r#""OK (t nil nil)""#]],
+    );
     assert_oracle_parity_expect(form, expect);
 }

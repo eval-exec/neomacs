@@ -27,3 +27,16 @@ fn features_and_coding_systems_are_obarray_members_oracle() {
     let expected = expect_test::expect![[r#""OK (0 0 0)""#]];
     common::assert_oracle_parity_expect(form, expected);
 }
+
+/// GNU `make-symbol` returns a fresh uninterned object that is not the
+/// obarray's symbol for the name: `intern-soft` answers nil for it. The
+/// member funnels (`intern`, `intern_member`) never produce this state.
+#[test]
+fn make_symbol_is_not_the_obarray_symbol_oracle() {
+    common::return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(let ((s (make-symbol "peer-5786-uninterned")))
+  (list (eq s (intern-soft "peer-5786-uninterned"))
+        (intern-soft "peer-5786-uninterned")))"#;
+    let expected = expect_test::expect![[r#""OK (nil nil)""#]];
+    common::assert_oracle_parity_expect(form, expected);
+}

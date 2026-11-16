@@ -461,13 +461,13 @@ fn major_before_first_minor_preserves_permanent_edge() {
 
 #[test]
 fn minor_uninterned_symbol_weak_key_survives_without_old_owner_retrace() {
-    use crate::intern::{intern_uninterned, is_canonical_id};
+    use crate::intern::{is_canonical_id, make_uninterned_symbol};
     use crate::value::{HashTableTest, LispHashTable};
 
     let mut heap = heap_with_generations(true);
     set_tagged_heap(&mut heap);
     let roots = ScratchRoots::new();
-    let symbol_id = intern_uninterned("u34-minor-old-owner-symbol");
+    let symbol_id = make_uninterned_symbol("u34-minor-old-owner-symbol");
     assert!(!is_canonical_id(symbol_id));
     let symbol = TaggedValue::from_sym_id(symbol_id);
     let owner = heap.alloc_vector(vec![symbol]);
@@ -520,7 +520,7 @@ fn minor_uninterned_symbol_weak_key_survives_without_old_owner_retrace() {
 
 #[test]
 fn minor_then_major_old_owner_keeps_new_uninterned_weak_symbol_key() {
-    use crate::intern::{intern_uninterned, is_canonical_id};
+    use crate::intern::{is_canonical_id, make_uninterned_symbol};
     use crate::value::{HashTableTest, LispHashTable};
 
     for cons_owner in [false, true] {
@@ -539,7 +539,7 @@ fn minor_then_major_old_owner_keeps_new_uninterned_weak_symbol_key() {
 
             // Create the symbol after promotion: the old owner's earlier
             // trace cannot have installed this symbol's side-table mark.
-            let id = intern_uninterned("u34-review-new-symbol-in-old-owner");
+            let id = make_uninterned_symbol("u34-review-new-symbol-in-old-owner");
             assert!(!is_canonical_id(id));
             let symbol = TaggedValue::from_sym_id(id);
             let strong_value = if with_position {

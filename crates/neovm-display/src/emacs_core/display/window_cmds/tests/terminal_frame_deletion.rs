@@ -4,7 +4,7 @@ use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::print::format_eval_result;
 use neovm_value::value::Value;
 
-fn context_with_hidden_gui_peer(primary_window_system: Option<&str>) -> Context {
+fn context_with_hidden_gui_peer(primary_window_system: Option<&'static str>) -> Context {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
     eval.edit.buffers.set_current(scratch);

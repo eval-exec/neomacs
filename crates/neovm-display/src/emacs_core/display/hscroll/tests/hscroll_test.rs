@@ -286,3 +286,59 @@ fn larger_margin_triggers_earlier() {
     let input = centered(145, 160, 20, 0);
     assert_eq!(compute_auto_hscroll(&input), Some(65));
 }
+
+// -------------------------------------------------------------------------
+// The redisplay pass: no column scan for a window that wraps lines.
+// -------------------------------------------------------------------------
+
+/// A visible frame whose selected window shows the current buffer, holding
+/// one 1,000,000-character line with point at its end.
+fn context_with_point_at_the_end_of_a_long_line() -> (Context, neovm_edit::buffer::BufferId) {
+    let mut ctx = crate::test_utils::xdisp_test_upper_layer_helpers::interactive_context(|| {
+        neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime())
+    });
+    let buffer_id = ctx
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    ctx.frame_manager_mut()
+        .create_frame("hscroll-long-line", 800, 480, buffer_id);
+    ctx.edit
+        .buffers
+        .get_mut(buffer_id)
+        .expect("buffer")
+        .insert(&"a".repeat(1_000_000));
+    (ctx, buffer_id)
+}
+
+fn point_column_scans_in_one_pass(ctx: &mut Context) -> usize {
+    let before = POINT_COLUMN_SCANS.load(std::sync::atomic::Ordering::Relaxed);
+    update_auto_hscroll_before_redisplay(ctx);
+    POINT_COLUMN_SCANS.load(std::sync::atomic::Ordering::Relaxed) - before
+}
+
+/// GNU's `hscroll_window_tree` (src/xdisp.c) reads the cursor row it already
+/// has. It only scrolls a row that is truncated, and a window that wraps
+/// lines has none. With `truncate-lines` nil, then, the pass must not walk the
+/// million characters before point to measure a column it cannot use.
+#[test]
+fn wrapped_window_pass_does_not_scan_point_column() {
+    let (mut ctx, _) = context_with_point_at_the_end_of_a_long_line();
+
+    assert_eq!(point_column_scans_in_one_pass(&mut ctx), 0);
+}
+
+/// The control: with `truncate-lines` t the same windows do measure point's
+/// column, so the zero above is the wrap check and not a skipped window.
+#[test]
+fn truncated_window_pass_scans_point_column() {
+    let (mut ctx, buffer_id) = context_with_point_at_the_end_of_a_long_line();
+    ctx.edit
+        .buffers
+        .set_buffer_local_property(buffer_id, "truncate-lines", Value::T)
+        .expect("enable truncation");
+
+    assert!(point_column_scans_in_one_pass(&mut ctx) > 0);
+}

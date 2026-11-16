@@ -54,8 +54,8 @@ use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, FrameFullscre
 use neovm_value::error::*;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::{
-    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,
-    is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
+    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, is_canonical_id, is_keyword_id,
+    make_uninterned_symbol, resolve_sym, symbol_name_id,
 };
 use neovm_value::kmacro::KmacroManager;
 use neovm_value::symbol::{CanonicalAccess, ConstantWrite, Obarray};
@@ -2151,12 +2151,12 @@ fn value_from_symbol_id(sym_id: SymId) -> Value {
 
 fn hidden_internal_interpreter_environment_symbol() -> SymId {
     static HIDDEN_SYMBOL: OnceLock<SymId> = OnceLock::new();
-    *HIDDEN_SYMBOL.get_or_init(|| intern_uninterned("internal-interpreter-environment"))
+    *HIDDEN_SYMBOL.get_or_init(|| make_uninterned_symbol("internal-interpreter-environment"))
 }
 
 fn hidden_load_read_stream_token() -> LoadReadStreamToken {
     static HIDDEN_SYMBOL: OnceLock<LoadReadStreamToken> = OnceLock::new();
-    *HIDDEN_SYMBOL.get_or_init(|| LoadReadStreamToken(intern_uninterned("get-file-char")))
+    *HIDDEN_SYMBOL.get_or_init(|| LoadReadStreamToken(make_uninterned_symbol("get-file-char")))
 }
 
 fn default_directory_symbol() -> SymId {
@@ -4343,7 +4343,7 @@ pub(crate) fn finish_require_in_state(
     loaded_path: Option<&Path>,
 ) -> EvalResult {
     if features.contains(&sym_id) {
-        Ok(Value::symbol(name))
+        Ok(Value::from_sym_id(intern(name)))
     } else {
         let message = if let Some(path) = loaded_path {
             format!(

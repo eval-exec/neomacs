@@ -83,7 +83,7 @@ fn spec_fast_path_engages_for_one_two_and_three_arguments() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     for nargs in 1..=3usize {
         let name = format!("neo-spec-gate-g{nargs}");
-        let g = Value::symbol(&name);
+        let g = Value::from_sym_id(intern((&name).as_ref()));
         let target = callee(nargs);
         ev.obarray.set_symbol_function_id(intern(&name), target);
         // (lambda (x) (G x x ... x))
@@ -195,7 +195,7 @@ fn two_argument_spec_calls_preserve_order_and_heap_identity() {
         (left_heap, right_heap),
     ];
     let name = "neo-spec-gate-packed-two-identity";
-    let g = Value::symbol(name);
+    let g = Value::from_sym_id(intern(name));
     // Two blocks prevent the trivial-body path. Both branches return (a . b),
     // with each StackRef selecting a different original argument word.
     let target = lambda(
@@ -716,7 +716,7 @@ fn calling(name: &str, max_stack: usize) -> Value {
         true,
         max_stack,
         vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
-        vec![Value::symbol(name)],
+        vec![Value::from_sym_id(intern(name))],
     )
 }
 

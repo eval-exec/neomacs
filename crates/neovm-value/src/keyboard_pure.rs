@@ -3,7 +3,7 @@ use crate::error::LispCondition;
 use crate::tagged::value::SymbolMode;
 use crate::{
     error::{Flow, signal},
-    intern::resolve_sym,
+    intern::{intern, resolve_sym},
     value::{Value, ValueKind, VecLikeType, list_to_vec},
 };
 
@@ -439,7 +439,12 @@ pub fn reorder_event_symbol_modifiers(value: Value, mode: SymbolMode) -> Value {
     if canonical == name {
         value
     } else {
-        Value::symbol(canonical)
+        // GNU's `reorder_modifiers` keeps the symbol it was given and
+        // `apply_modifiers` interns a derived name (src/keyboard.c). This
+        // value helper has no obarray, so it resolves the canonical id;
+        // the publication site that hands the event to Lisp (define-key,
+        // the loader) publishes membership through the member funnels.
+        Value::from_sym_id(intern(&canonical))
     }
 }
 
@@ -523,11 +528,14 @@ pub fn convert_lucid_event_list(items: &[Value], mode: SymbolMode) -> Option<Val
             if mod_bits == 0 {
                 Some(Value::symbol(name))
             } else {
-                Some(Value::symbol(format!(
+                // See reorder_event_symbol_modifiers: the derived modifier
+                // spelling resolves a canonical id here; the publication
+                // site makes it a member.
+                Some(Value::from_sym_id(intern(&format!(
                     "{}{}",
                     event_modifier_prefix(mod_bits),
                     name
-                )))
+                ))))
             }
         }
         _ => None,

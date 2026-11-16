@@ -2768,7 +2768,7 @@ fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_lim
     let names = list_to_vec(&names).unwrap();
     assert_eq!(names.len(), 1);
     assert!(names[0].as_utf8_str().unwrap().contains("-bold-"));
-    let uninterned = Value::from_sym_id(neovm_value::intern::intern_uninterned("ftcrhb"));
+    let uninterned = Value::from_sym_id(neovm_value::intern::make_uninterned_symbol("ftcrhb"));
     let driver_spec = font_spec(vec![Value::keyword("type"), uninterned]).unwrap();
     let entities =
         list_fonts_for_pattern(&mut eval, vec![driver_spec, Value::NIL, Value::fixnum(1)]).unwrap();

@@ -857,7 +857,7 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
     ev.gc_stress = true;
     let ctx = &mut ev as *mut Context;
     let mk_sym = |name: &str| {
-        let s = Value::symbol(name);
+        let s = Value::from_sym_id(intern(name));
         let neovm_value::value::ValueKind::Symbol(id) = s.kind() else {
             panic!("symbol");
         };
@@ -1218,7 +1218,7 @@ fn inline_plus_residual_call_keeps_shared_speculation_in_mir() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let mk_sym = |name: &str| {
-        let s = Value::symbol(name);
+        let s = Value::from_sym_id(intern(name));
         let neovm_value::value::ValueKind::Symbol(id) = s.kind() else {
             panic!("symbol");
         };
@@ -1308,7 +1308,7 @@ fn precise_eviction_only_evicts_inlined_dependents() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let mk_sym = |name: &str| {
-        let s = Value::symbol(name);
+        let s = Value::from_sym_id(intern(name));
         let neovm_value::value::ValueKind::Symbol(id) = s.kind() else {
             panic!("symbol");
         };
@@ -2267,7 +2267,7 @@ fn arith_intrinsic_bitops_jit_match_interp_and_deopt() {
         });
         f.lexical = true;
         f.ops = ops;
-        f.constants = vec![Value::symbol(op_name)].into();
+        f.constants = vec![Value::from_sym_id(intern(op_name))].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         compile_bytecode_function_with(&f, Some(ob)).expect("bit-op body compiles")
     };
@@ -2389,7 +2389,7 @@ fn arith_intrinsic_inline_level_b_matches_interp() {
         });
         f.lexical = true;
         f.ops = ops;
-        f.constants = vec![Value::symbol(op_name)].into();
+        f.constants = vec![Value::from_sym_id(intern(op_name))].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         compile_bytecode_function_with(&f, Some(ob)).expect("inline bit-op body compiles")
     };
@@ -3281,8 +3281,8 @@ fn baseline_switch_back_edge_polls_store_their_own_roots() {
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
         for (name, target) in [("jit-sw-carry-a", 0), ("jit-sw-carry-b", 2)] {
-            let key = Value::symbol(name).to_hash_key(&ht.test);
-            ht.insert(key, Value::symbol(name), Value::fixnum(target));
+            let key = Value::from_sym_id(intern(name)).to_hash_key(&ht.test);
+            ht.insert(key, Value::from_sym_id(intern(name)), Value::fixnum(target));
         }
     });
     let ops = [
@@ -4965,8 +4965,8 @@ fn switch_follows_mutation_after_compile() {
     let mut ev =
         crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
-    let [a, b, c, d, e] =
-        ["a", "b", "c", "d", "e"].map(|n| Value::symbol(format!("jit-sw-mut-{n}")));
+    let [a, b, c, d, e] = ["a", "b", "c", "d", "e"]
+        .map(|n| Value::from_sym_id(intern((format!("jit-sw-mut-{n}")).as_ref())));
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
         for (key, offset) in [(a, 8), (b, 12)] {
@@ -5336,7 +5336,7 @@ fn compiled_unbind_and_frame_exit_propagate_restore_watcher_signals() {
             Op::Unbind(1),
             Op::Return,
         ],
-        &[Value::symbol(variable), Value::make_int(1)],
+        &[Value::from_sym_id(intern(variable)), Value::make_int(1)],
     )
     .expect("explicit unbind body compiles");
     assert_eq!(explicit.call(explicit_ptr, &[]), NativeRun::Signal);
@@ -5354,7 +5354,7 @@ fn compiled_unbind_and_frame_exit_propagate_restore_watcher_signals() {
     let frame_ptr = &mut frame_ctx as *mut crate::emacs_core::eval::Context as *mut u8;
     let dangling = lower_nullary_leaf(
         &[Op::Constant(1), Op::VarBind(0), Op::True, Op::Return],
-        &[Value::symbol(variable), Value::make_int(1)],
+        &[Value::from_sym_id(intern(variable)), Value::make_int(1)],
     )
     .expect("dangling binding body compiles");
     assert_eq!(dangling.call(frame_ptr, &[]), NativeRun::Signal);
@@ -5663,7 +5663,7 @@ fn compiles_nested_cons_list() {
 fn harness_with_inc_callee(name: &str) -> (crate::emacs_core::eval::Context, Value) {
     let mut ev =
         crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
-    let sym_val = Value::symbol(name);
+    let sym_val = Value::from_sym_id(intern(name));
     let neovm_value::value::ValueKind::Symbol(sym_id) = sym_val.kind() else {
         panic!("Value::symbol must produce a symbol");
     };
@@ -5955,7 +5955,7 @@ fn compiles_eq_and_symbolp() {
     let mut ev =
         crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
-    let sym_a = Value::symbol("jit-eq-sym-a");
+    let sym_a = Value::from_sym_id(intern(("jit-eq-sym-a").as_ref()));
     let s = Value::string("eq-str");
 
     let eq2 = |a: Value, b: Value, ctx: *mut u8| {
@@ -6012,7 +6012,7 @@ fn compiles_apply_with_leading_args() {
     // (apply 'add2 40 (list 2)) -> 42: leading args + spread tail.
     let mut ev =
         crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
-    let sym_val = Value::symbol("jit-test-add2-apply");
+    let sym_val = Value::from_sym_id(intern(("jit-test-add2-apply").as_ref()));
     let neovm_value::value::ValueKind::Symbol(sym_id) = sym_val.kind() else {
         panic!("symbol expected");
     };
@@ -6812,7 +6812,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
     const VARS: usize = 3;
     let var_vals: Vec<Value> = ["fuzz-jit-var-a", "fuzz-jit-var-b", "fuzz-jit-var-c"]
         .iter()
-        .map(Value::symbol)
+        .map(|name| Value::symbol(*name))
         .collect();
     let var_ids: Vec<SymId> = var_vals
         .iter()
@@ -7215,7 +7215,7 @@ fn subr_spec_many_allowlist_disjoint_from_manyslice() {
 fn subr_spec_kind_rejects_registered_manyslice() {
     use crate::emacs_core::eval::Context;
     let ev = Context::new(crate::test_utils::unit_runtime());
-    let sid = |name: &str| match Value::symbol(name).kind() {
+    let sid = |name: &str| match Value::from_sym_id(intern(name)).kind() {
         neovm_value::value::ValueKind::Symbol(id) => id,
         _ => panic!("symbol"),
     };
@@ -7271,7 +7271,7 @@ fn subr_spec_kind_rejects_registered_manyslice() {
 fn subr_spec_kind_classifies_bitwise_arith_at_two_args() {
     use crate::emacs_core::eval::Context;
     let ev = Context::new(crate::test_utils::unit_runtime());
-    let sid = |name: &str| match Value::symbol(name).kind() {
+    let sid = |name: &str| match Value::from_sym_id(intern(name)).kind() {
         neovm_value::value::ValueKind::Symbol(id) => id,
         _ => panic!("symbol"),
     };
@@ -9170,7 +9170,7 @@ fn a_record_type_of_site_answers_inline() {
         f.constants = vec![
             Value::symbol("symbol-name"),
             Value::symbol("zzz"),
-            Value::symbol(name),
+            Value::from_sym_id(intern(name)),
         ]
         .into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
@@ -9495,7 +9495,7 @@ fn fboundp_sites_use_the_dedicated_shim() {
         });
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-        f.constants = vec![Value::symbol(name)].into();
+        f.constants = vec![Value::from_sym_id(intern(name))].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
         f
     };
@@ -9781,7 +9781,7 @@ fn type_tag_predicate_sites_answer_inline() {
         });
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-        f.constants = vec![Value::symbol(name)].into();
+        f.constants = vec![Value::from_sym_id(intern(name))].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
         f
     };
@@ -10145,7 +10145,7 @@ fn type_of_call_sites_answer_as_the_builtin_on_the_fast_path() {
         });
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-        f.constants = vec![Value::symbol(name)].into();
+        f.constants = vec![Value::from_sym_id(intern(name))].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
         // The site is the GC-free predicate intrinsic, not a general subr
         // speculation (which counts as a fast completion too).
@@ -10231,7 +10231,7 @@ fn an_unrelated_redefinition_keeps_an_inlining_leaf_compiled() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let mk_sym = |name: &str| {
-        let s = Value::symbol(name);
+        let s = Value::from_sym_id(intern(name));
         let neovm_value::value::ValueKind::Symbol(id) = s.kind() else {
             panic!("symbol");
         };
@@ -10442,7 +10442,7 @@ fn subr_spec_screened_entry_cache_engages_and_a_rewrite_invalidates_it() {
     });
     f.lexical = true;
     f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-    f.constants = vec![Value::symbol(name)].into();
+    f.constants = vec![Value::from_sym_id(intern(name))].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("subr spec body");
 

@@ -304,7 +304,7 @@ fn point_motion_property<'a, Vars: EditVariableRead<'a>>(
     buf: &crate::buffer::Buffer,
     point_byte: EmacsBytePos,
     after_point: bool,
-    property: &str,
+    property: &'static str,
 ) -> Value {
     let accessible = buf.accessible_emacs_byte_region();
     if after_point {

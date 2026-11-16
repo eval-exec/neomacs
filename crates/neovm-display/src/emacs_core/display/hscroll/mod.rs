@@ -368,6 +368,11 @@ fn hscroll_margin_cols(ctx: &Context) -> i64 {
         .clamp(0, 1_000_000)
 }
 
+/// Point-column scans `update_auto_hscroll_before_redisplay` has made. Each
+/// one walks point's line from its beginning; the tests count them.
+#[cfg(test)]
+static POINT_COLUMN_SCANS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Update each leaf window's `hscroll` to follow point before the layout engine
 /// reads it, mirroring GNU `hscroll_window_tree` (called from
 /// `redisplay_internal` before window layout, src/xdisp.c).
@@ -565,6 +570,15 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
             continue;
         }
 
+        // STEP 5 scrolls only a truncated line, so a window that wraps lines
+        // never needs point's column. Measuring it walks point's line from
+        // its beginning: on a long line that is the whole cost of the pass.
+        if !snap.line_truncated {
+            continue;
+        }
+
+        #[cfg(test)]
+        POINT_COLUMN_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let point_col = match neovm_edit::emacs_core::indent::display_column_at_emacs_byte_pos(
             ctx,
             snap.buffer_id,

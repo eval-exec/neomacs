@@ -8359,7 +8359,7 @@ pub fn builtin_skip_syntax_backward_2<H: TextHost>(
 }
 
 fn expect_skip_syntax_args(
-    caller: &str,
+    caller: &'static str,
     args: &[Value],
 ) -> Result<(SkipSyntaxClasses, Option<i64>), Flow> {
     if !(1..=2).contains(&args.len()) {

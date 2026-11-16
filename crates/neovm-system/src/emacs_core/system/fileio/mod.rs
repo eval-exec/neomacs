@@ -2596,7 +2596,7 @@ fn maybe_dispatch_resolved_file_handler(
     second_lookup: Option<&neovm_value::heap_types::LispString>,
     mut call_args: Vec<Value>,
 ) -> Result<Option<Value>, Flow> {
-    let operation_sym = Value::symbol(operation_name);
+    let operation_sym = Value::from_sym_id(intern(operation_name));
     if let Some(first) = first_lookup {
         let handler = find_file_name_handler_lisp_for_eval(eval, first, operation_sym);
         if !handler.is_nil() {
@@ -4630,7 +4630,7 @@ pub fn dispatch_file_handler(
     let Some(filename) = eval.lisp_string(*first) else {
         return Ok(None);
     };
-    let operation_sym = Value::symbol(operation_name);
+    let operation_sym = Value::from_sym_id(intern(operation_name));
     let handler = find_file_name_handler_lisp_for_eval(eval, filename, operation_sym);
     if handler.is_nil() {
         return Ok(None);
@@ -6585,7 +6585,10 @@ pub fn builtin_insert_file_contents(
 
     // GNU `insert-file-contents' sets `last-coding-system-used' before
     // `after-insert-file-set-coding' derives `buffer-file-coding-system'.
-    eval.set_variable("last-coding-system-used", Value::symbol(&contents.coding));
+    eval.set_variable(
+        "last-coding-system-used",
+        Value::from_sym_id(intern((&contents.coding).as_ref())),
+    );
 
     let inserted_char_count = run_after_insert_file_pipeline(
         eval,

@@ -117,7 +117,7 @@ fn video_error(message: impl Into<String>) -> neovm_value::error::Flow {
     signal("error", vec![Value::string(message.into())])
 }
 
-fn wrong_type(predicate: &str, value: Value) -> Flow {
+fn wrong_type(predicate: &'static str, value: Value) -> Flow {
     signal("wrong-type-argument", vec![Value::symbol(predicate), value])
 }
 

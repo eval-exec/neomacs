@@ -450,6 +450,8 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::next_singl
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::next_single_text_prop_change_after_emacs_byte_pos_bounded
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::next_text_prop_change_after_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::next_watched_property_state_change_after_emacs_byte_pos
+crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::nth_newline_emacs_byte
+crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::prev_newline_emacs_byte
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::previous_single_text_prop_change_before_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::previous_syntax_prop_state_run_start_at_char_pos
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::previous_watched_property_state_change_before_emacs_byte_pos

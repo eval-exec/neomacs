@@ -8,10 +8,10 @@
 //! because the obarray field is `pub(crate)`. Buffer state is the public
 //! `edit.buffers` field. The auto-save failure-time round trip also asserts
 //! the dumped image field, through the existing `dump_evaluator` surface.
+use neovm_value::intern::intern;
 
 use neovm_edit::buffer::LispCharPos1;
 use neovm_value::heap_types::LispMarker;
-use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
 fn test_ob() -> neovm_value::symbol::Obarray {

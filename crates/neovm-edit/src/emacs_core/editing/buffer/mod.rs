@@ -4089,7 +4089,7 @@ pub fn builtin_restore_buffer_modified_p<H: EditHost>(
 
 fn optional_buffer_tick_target_in_manager(
     buffers: &BufferManager,
-    name: &str,
+    name: &'static str,
     args: &[Value],
 ) -> Result<Option<BufferId>, Flow> {
     expect_max_args(name, args, 1)?;

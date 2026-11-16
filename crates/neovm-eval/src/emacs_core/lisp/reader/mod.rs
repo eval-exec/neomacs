@@ -272,7 +272,7 @@ pub fn finish_minibuffer_result_after_unwind(
             vec![Value::string("Trailing garbage following expression")],
         ));
     }
-    eval.obarray_mut().materialize_read_symbols(value);
+    eval.obarray_mut().intern_member_symbols_in(value);
     Ok(value)
 }
 
@@ -661,7 +661,7 @@ pub fn read_from_active_load_cursor(
     if let Some(cursor) = ctx.load_read_cursors.last_mut() {
         cursor.pos = next_pos;
     }
-    ctx.obarray_mut().materialize_read_symbols(value);
+    ctx.obarray_mut().intern_member_symbols_in(value);
     Ok(value)
 }
 
@@ -766,7 +766,7 @@ pub fn builtin_read_from_string(ctx: &mut super::eval::Context, args: Vec<Value>
     )?;
     if result.is_cons() {
         ctx.obarray_mut()
-            .materialize_read_symbols(result.cons_car());
+            .intern_member_symbols_in(result.cons_car());
     }
     Ok(result)
 }
@@ -898,7 +898,7 @@ pub fn read_from_callable(
     symbol_position_mode: SymbolPositionMode,
 ) -> EvalResult {
     let value = super::value_reader::read_from_callable(ctx, func, symbol_position_mode)?;
-    ctx.obarray_mut().materialize_read_symbols(value);
+    ctx.obarray_mut().intern_member_symbols_in(value);
     Ok(value)
 }
 
@@ -1032,33 +1032,34 @@ impl KeyboardInputRuntime for super::eval::Context {
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 
-/// Reader/load side effect on the moving obarray.
+/// Publish the canonical symbols inside VALUE as obarray members.
 ///
-/// GNU's reader interns symbol tokens into `Vobarray` while reading;
-/// Neomacs' value reader allocates canonical symbol ids first, so callers
-/// that read source must apply the same obarray side effect. The helper
-/// lives with the reader (its only production callers) and extends the
-/// moving `Obarray`, so the symbol module names no byte-code item.
+/// GNU interns every symbol it hands to Lisp: the reader interns symbol
+/// tokens into `Vobarray` while reading (`src/lread.c:4674-4709`), and C
+/// initialization paths intern the names they publish. Neomacs' value
+/// reader and Rust boot tables allocate canonical symbol ids first, so the
+/// callers that read source or seed Lisp-visible boot values apply the same
+/// obarray side effect here. Extending `Obarray` keeps this helper out of
+/// the symbol module, which must not name a byte-code item.
 pub(crate) trait ObarrayReadSymbolsExt {
-    fn materialize_read_symbols(&mut self, value: Value);
-    fn materialize_read_symbols_1(&mut self, value: Value, seen: &mut rustc_hash::FxHashSet<usize>);
+    fn intern_member_symbols_in(&mut self, value: Value);
+    fn intern_member_symbols_in_1(&mut self, value: Value, seen: &mut rustc_hash::FxHashSet<usize>);
 }
 
 impl ObarrayReadSymbolsExt for Obarray {
-    /// Materialize the symbols read from Lisp source in the active global
-    /// obarray.  GNU's reader interns symbol tokens into `Vobarray` while
-    /// reading; Neomacs' value reader allocates canonical symbol ids first,
-    /// so callers that read source must apply the same obarray side effect.
-    fn materialize_read_symbols(&mut self, value: Value) {
+    /// Make every canonical symbol reachable from VALUE a member of this
+    /// obarray. Non-canonical `make-symbol` objects stay uninterned, as in
+    /// GNU.
+    fn intern_member_symbols_in(&mut self, value: Value) {
         // Cycle detection must use object *identity*, not `Value`'s `==`
         // (which is structural `equal`).  A `Vec` + `contains` here was
         // O(n^2) deep-`equal` over every loaded form -- the dominant cost of
         // startup.  Track visited heap objects by their tagged-pointer bits.
         let mut seen = rustc_hash::FxHashSet::default();
-        self.materialize_read_symbols_1(value, &mut seen);
+        self.intern_member_symbols_in_1(value, &mut seen);
     }
 
-    fn materialize_read_symbols_1(
+    fn intern_member_symbols_in_1(
         &mut self,
         value: Value,
         seen: &mut rustc_hash::FxHashSet<usize>,
@@ -1069,8 +1070,8 @@ impl ObarrayReadSymbolsExt for Obarray {
                 if !seen.insert(value.bits()) {
                     return;
                 }
-                self.materialize_read_symbols_1(value.cons_car(), seen);
-                self.materialize_read_symbols_1(value.cons_cdr(), seen);
+                self.intern_member_symbols_in_1(value.cons_car(), seen);
+                self.intern_member_symbols_in_1(value.cons_cdr(), seen);
             }
             ValueKind::Veclike(
                 VecLikeType::Vector
@@ -1087,7 +1088,7 @@ impl ObarrayReadSymbolsExt for Obarray {
                     .or_else(|| value.closure_slots())
                 {
                     for slot in slots.iter().copied() {
-                        self.materialize_read_symbols_1(slot, seen);
+                        self.intern_member_symbols_in_1(slot, seen);
                     }
                 }
             }
@@ -1097,7 +1098,7 @@ impl ObarrayReadSymbolsExt for Obarray {
                 }
                 if let Some(slots) = value.char_table_external_slots() {
                     for slot in slots {
-                        self.materialize_read_symbols_1(slot, seen);
+                        self.intern_member_symbols_in_1(slot, seen);
                     }
                 }
             }
@@ -1107,7 +1108,7 @@ impl ObarrayReadSymbolsExt for Obarray {
                 }
                 if let Some(table) = value.as_sub_char_table_obj() {
                     for slot in table.contents.iter().copied() {
-                        self.materialize_read_symbols_1(slot, seen);
+                        self.intern_member_symbols_in_1(slot, seen);
                     }
                 }
             }
@@ -1117,10 +1118,10 @@ impl ObarrayReadSymbolsExt for Obarray {
                 }
                 if let Some(table) = value.as_hash_table() {
                     for key_value in table.key_snapshots().copied() {
-                        self.materialize_read_symbols_1(key_value, seen);
+                        self.intern_member_symbols_in_1(key_value, seen);
                     }
                     for value in table.data.values().copied() {
-                        self.materialize_read_symbols_1(value, seen);
+                        self.intern_member_symbols_in_1(value, seen);
                     }
                 }
             }
@@ -1129,27 +1130,27 @@ impl ObarrayReadSymbolsExt for Obarray {
                     return;
                 }
                 if let Some(bytecode) = value.get_bytecode_data() {
-                    self.materialize_read_symbols_1(bytecode.arglist, seen);
+                    self.intern_member_symbols_in_1(bytecode.arglist, seen);
                     for constant in bytecode.constants.iter().copied() {
-                        self.materialize_read_symbols_1(constant, seen);
+                        self.intern_member_symbols_in_1(constant, seen);
                     }
                     if let Some(env) = bytecode.env {
-                        self.materialize_read_symbols_1(env, seen);
+                        self.intern_member_symbols_in_1(env, seen);
                     }
                     if let Some(doc_form) = bytecode.doc_form {
-                        self.materialize_read_symbols_1(doc_form, seen);
+                        self.intern_member_symbols_in_1(doc_form, seen);
                     }
                     if let Some(interactive) = bytecode.interactive {
-                        self.materialize_read_symbols_1(interactive, seen);
+                        self.intern_member_symbols_in_1(interactive, seen);
                     }
                     for slot in bytecode.extra_slots.iter().copied() {
-                        self.materialize_read_symbols_1(slot, seen);
+                        self.intern_member_symbols_in_1(slot, seen);
                     }
                 }
             }
             ValueKind::Veclike(VecLikeType::SymbolWithPos) => {
                 if let Some(symbol) = value.as_symbol_with_pos_sym() {
-                    self.materialize_read_symbols_1(symbol, seen);
+                    self.intern_member_symbols_in_1(symbol, seen);
                 }
             }
             _ => {}

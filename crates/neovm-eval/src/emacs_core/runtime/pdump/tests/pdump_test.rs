@@ -368,7 +368,7 @@ fn test_restore_snapshot_preserves_core_subr_callable_surface() {
 fn test_restore_snapshot_preserves_lone_uninterned_symbol_identity() {
     crate::test_utils::init_test_tracing();
     let mut template = Context::new(crate::test_utils::unit_runtime());
-    let solo = neovm_value::intern::intern_uninterned("compat-pdump-solo-uninterned");
+    let solo = neovm_value::intern::make_uninterned_symbol("compat-pdump-solo-uninterned");
     template
         .obarray
         .set_symbol_value("compat-pdump-uninterned-holder", Value::from_sym_id(solo));
@@ -398,7 +398,7 @@ fn test_restore_snapshot_preserves_raw_unibyte_symbol_name_storage() {
     crate::test_utils::init_test_tracing();
     let mut template = Context::new(crate::test_utils::unit_runtime());
     let raw_name = neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'a']);
-    let uninterned = neovm_value::intern::intern_uninterned_lisp_string(&raw_name);
+    let uninterned = neovm_value::intern::make_uninterned_symbol_lisp_string(&raw_name);
     let canonical = neovm_value::intern::intern_lisp_string(&raw_name);
     template.obarray.set_symbol_value(
         "compat-pdump-raw-uninterned-holder",
@@ -545,7 +545,7 @@ fn test_restore_snapshot_rejects_duplicate_obarray_symbol_slots() {
 fn test_restore_snapshot_rejects_global_member_without_symbol_entry() {
     crate::test_utils::init_test_tracing();
     let template = Context::new(crate::test_utils::unit_runtime());
-    let dangling = neovm_value::intern::intern_uninterned("compat-pdump-missing-global");
+    let dangling = neovm_value::intern::make_uninterned_symbol("compat-pdump-missing-global");
     let mut snapshot = snapshot_evaluator(&template);
     snapshot
         .obarray

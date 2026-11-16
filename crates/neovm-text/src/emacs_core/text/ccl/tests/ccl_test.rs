@@ -1540,7 +1540,12 @@ fn execute_ccl_on_string(
     (bytes, status)
 }
 
-fn map_multiple_return(return_word: i64, mapper: &str, calling: &str, after: &str) -> Vec<Value> {
+fn map_multiple_return(
+    return_word: i64,
+    mapper: &'static str,
+    calling: &'static str,
+    after: &'static str,
+) -> Vec<Value> {
     let callee = Value::vector(
         [0, 3, return_word, 22]
             .into_iter()

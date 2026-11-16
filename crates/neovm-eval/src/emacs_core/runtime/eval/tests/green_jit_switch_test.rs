@@ -20,6 +20,7 @@ use crate::emacs_core::print::print_value;
 pub use crate::emacs_core::subr::{FixedMin1, SubrSpec};
 use neovm_value::error::{EvalResult, Flow};
 use neovm_value::error::{LispCondition, signal};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 use neovm_value::value::Value;
 use std::marker::PhantomData;
@@ -414,7 +415,7 @@ fn run_worker_task(context: &mut Context, task: WorkerTask) -> EvalResult {
         WorkerTask::Signal => ("f5-jit-worker-error", Vec::new()),
         WorkerTask::Binding => ("f5-jit-own-binding", vec![Value::symbol("worker")]),
     };
-    context.apply(Value::symbol(function), arguments)
+    context.apply(Value::from_sym_id(intern(function)), arguments)
 }
 
 fn worker_limit(context: &mut Context) -> EvalResult {
@@ -430,7 +431,7 @@ fn worker_binding(context: &mut Context) -> EvalResult {
     run_worker_task(context, WorkerTask::Binding)
 }
 
-fn yield_then(name: &str) -> ByteCodeFunction {
+fn yield_then(name: &'static str) -> ByteCodeFunction {
     bytecode(
         vec![
             Op::Constant(0),
@@ -440,7 +441,10 @@ fn yield_then(name: &str) -> ByteCodeFunction {
             Op::Call(0),
             Op::Return,
         ],
-        vec![Value::symbol("thread-yield"), Value::symbol(name)],
+        vec![
+            Value::symbol("thread-yield"),
+            Value::from_sym_id(intern(name)),
+        ],
         FixtureArity::Nullary,
     )
 }
@@ -488,7 +492,7 @@ fn compiled_blocking_call(operation: BlockingCall) -> ByteCodeFunction {
         vec![
             Value::symbol("f5-jit-allocate"),
             Value::symbol("f5-jit-witness"),
-            Value::symbol(function),
+            Value::from_sym_id(intern(function)),
             Value::symbol("mutex-unlock"),
         ],
         FixtureArity::Unary,
