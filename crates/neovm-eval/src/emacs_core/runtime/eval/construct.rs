@@ -6,6 +6,7 @@
 use super::hooks_proof::EvalHooksInstalled;
 use super::*;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
+use crate::emacs_core::reader::ObarrayReadSymbolsExt;
 use neovm_value::symbol::CanonicalAccess;
 
 /// GNU `coding.c` interns every registered coding-system name through
@@ -590,7 +591,12 @@ impl Context {
         // are installed.
         let features_value = initial_features_value(obarray);
         obarray.seed_value("features", features_value);
-        super::boot_vars::xwidget::init_xwidget_variables(obarray);
+        // GNU defines the xwidget variables only when `--with-xwidgets`
+        // compiled `xwidget.c` (`configure.ac:4456-4497`); the reference
+        // profile does not, so `(boundp 'xwidget-list)` is nil there.
+        if cfg!(feature = "xwidgets") {
+            super::boot_vars::xwidget::init_xwidget_variables(obarray);
+        }
         obarray.set_canonical_value(
             CanonicalAccess::BOOTSTRAP,
             lexical_binding_symbol(),
@@ -2655,6 +2661,22 @@ impl Context {
 
         // Standard keymaps (C creates these in keyboard.c:init_kboard)
         // keyboard.c:14130 DEFVAR_LISP -- special like every C DEFVAR.
+        // These Rust-built keymaps publish event symbols that GNU's reader
+        // or C initializers intern (for example the `C-begin` family in
+        // `local-function-key-map`). Publish membership at the seed
+        // boundary so no key symbol reaches Lisp uninterned (PEER 5786).
+        for keymap in [
+            special_event_map,
+            mode_line_window_dedicated_keymap,
+            text_mode_map,
+            tool_bar_map,
+            key_translation_map,
+            function_key_map,
+            input_decode_map,
+            local_function_key_map,
+        ] {
+            obarray.intern_member_symbols_in(keymap);
+        }
         obarray.define_special_variable("special-event-map", special_event_map);
         obarray.seed_value(
             "mode-line-window-dedicated-keymap",
@@ -2778,14 +2800,15 @@ impl Context {
         let mut ev = Self::assemble(world, seed);
         super::super::runtime_identity::install(&mut ev);
         if surface.finishes_runtime_activation() {
-            ev.provide_value(
-                Value::symbol("make-network-process"),
-                Some(
-                    crate::emacs_core::eval::data::process_state::make_network_process_subfeatures(
-                    ),
-                ),
-            )
-            .expect("startup make-network-process provide should succeed");
+            // GNU builds the capability list when `make-network-process`
+            // runs, and every keyword it advertises is interned; the port
+            // publishes the list at startup, so publish its symbols as
+            // members here (PEER 5786 census: the eight socket keywords).
+            let subfeatures =
+                crate::emacs_core::eval::data::process_state::make_network_process_subfeatures();
+            ev.obarray.intern_member_symbols_in(subfeatures);
+            ev.provide_value(Value::symbol("make-network-process"), Some(subfeatures))
+                .expect("startup make-network-process provide should succeed");
             ev.finish_runtime_activation(false);
         }
         // The minimal constructor performs its final activation after its

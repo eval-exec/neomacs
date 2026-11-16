@@ -741,7 +741,7 @@ pub fn builtin_emacs_pid(args: Vec<Value>) -> EvalResult {
     Ok(Value::fixnum(std::process::id() as i64))
 }
 
-fn gc_bucket(name: &str, counts: &[i64]) -> Value {
+fn gc_bucket(name: &'static str, counts: &[i64]) -> Value {
     let mut items = Vec::with_capacity(counts.len() + 1);
     items.push(Value::symbol(name));
     items.extend(counts.iter().copied().map(Value::fixnum));
@@ -783,7 +783,7 @@ pub fn builtin_memory_use_counts(args: Vec<Value>) -> EvalResult {
     ))
 }
 
-fn layout_stat_pair(name: &str, value: usize) -> Value {
+fn layout_stat_pair(name: &'static str, value: usize) -> Value {
     let value = i64::try_from(value).unwrap_or(i64::MAX);
     Value::cons(Value::symbol(name), Value::fixnum(value))
 }

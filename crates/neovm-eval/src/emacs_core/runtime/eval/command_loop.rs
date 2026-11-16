@@ -542,7 +542,7 @@ impl Context {
                 super::super::builtins::dispatch_builtin(
                     self,
                     "run-hooks",
-                    vec![Value::symbol(hook_name)],
+                    vec![Value::from_sym_id(intern(hook_name))],
                 )
                 .unwrap_or(Ok(Value::NIL))
             }
@@ -562,7 +562,7 @@ impl Context {
     pub fn queue_pending_safe_hook(&mut self, hook_name: &str, args: &[Value]) {
         self.queue_pending_safe_funcall(
             Value::symbol("run-hook-with-args"),
-            std::iter::once(Value::symbol(hook_name))
+            std::iter::once(Value::from_sym_id(intern(hook_name)))
                 .chain(args.iter().copied())
                 .collect(),
         );

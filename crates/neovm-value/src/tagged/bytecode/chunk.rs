@@ -716,8 +716,12 @@ impl ByteCodeFunction {
     }
 
     /// Add a symbol name to the constant pool and return its index.
+    ///
+    /// The bytecode compiler has no obarray; the loader publishes the
+    /// constants through `intern_member_symbols_in` (its ByteCode branch),
+    /// which is where GNU's `intern`-on-read effect lands.
     pub fn add_symbol(&mut self, name: &str) -> u16 {
-        self.add_constant(Value::symbol(name))
+        self.add_constant(Value::from_sym_id(crate::intern::intern(name)))
     }
 
     /// Emit an instruction.

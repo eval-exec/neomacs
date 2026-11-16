@@ -1462,7 +1462,7 @@ pub const FONT_WIDTH_STYLE_TABLE: &[(i64, &[&str])] = &[
     (200, &["ultra-expanded", "ultraexpanded", "wide"]),
 ];
 
-pub fn font_style_table(entries: &[(i64, &[&str])]) -> Value {
+pub fn font_style_table(entries: &[(i64, &'static [&'static str])]) -> Value {
     Value::vector(
         entries
             .iter()

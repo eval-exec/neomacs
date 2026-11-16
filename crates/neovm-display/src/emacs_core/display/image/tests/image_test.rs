@@ -2017,7 +2017,7 @@ fn image_spec_parses_frame_index_into_a_dedicated_type() {
 #[test]
 fn image_spec_parses_gnu_mask_intent_into_a_closed_policy() {
     crate::test_utils::init_test_tracing();
-    let request_for = |key: &str, value: Value| {
+    let request_for = |key: &'static str, value: Value| {
         let spec = Value::list(vec![
             Value::symbol("image"),
             Value::keyword("type"),

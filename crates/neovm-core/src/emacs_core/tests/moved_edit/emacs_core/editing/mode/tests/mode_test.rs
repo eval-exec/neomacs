@@ -773,7 +773,7 @@ fn custom_type_nested_list() {
 }
 
 fn mode_symbol(name: &str) -> Value {
-    Value::symbol(name)
+    Value::from_sym_id(intern(name))
 }
 
 fn mode_symbol_opt(name: Option<&str>) -> Option<Value> {

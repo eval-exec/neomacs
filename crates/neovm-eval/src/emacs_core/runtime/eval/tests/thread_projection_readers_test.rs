@@ -30,7 +30,7 @@ const SHAPES: &[(&str, &str)] = &[
 fn fixture() -> Context {
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
     let mut ev = Context::new(crate::test_utils::unit_runtime());
-    ev.obarray.intern("tpr-obj");
+    ev.obarray.intern_member("tpr-obj");
     ev.obarray
         .install_objfwd(intern("tpr-obj"), alloc_objfwd(Value::fixnum(4343)));
     ev.obarray.define_int_variable("tpr-int", 4444);
@@ -62,9 +62,9 @@ fn reader() -> ByteCodeFunction {
 
 /// GNU `Bvarref` of NAME through the VM (`fast_path_var_ref`, then
 /// `lookup_var_id`): the printed value or the signal's symbol.
-fn vm_read(ev: &mut Context, name: &str) -> String {
+fn vm_read(ev: &mut Context, name: &'static str) -> String {
     let mut f = reader();
-    f.constants = vec![Value::symbol(name)].into();
+    f.constants = vec![Value::from_sym_id(intern(name))].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     let mut vm = Vm::from_context(ev);
     match vm.execute(&f, vec![]) {

@@ -30,7 +30,7 @@ use neovm_edit::emacs_core::editfns::{
 use neovm_value::error::LispCondition;
 use neovm_value::error::expect_min_args;
 use neovm_value::error::{EvalResult, Flow, signal};
-use neovm_value::intern::{SymId, resolve_sym};
+use neovm_value::intern::{SymId, intern, resolve_sym};
 use neovm_value::list_scan::GnuTailCycle;
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::value::*;
@@ -473,7 +473,7 @@ fn serialize_cons_object(
     depth: usize,
 ) -> Result<(), Flow> {
     let is_alist = matches!(value.cons_car().kind(), ValueKind::Cons);
-    let wrong_type = |predicate: &str, object: Value| {
+    let wrong_type = |predicate: &'static str, object: Value| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol(predicate), object],
@@ -1355,7 +1355,7 @@ impl<'a> JsonParser<'a> {
 
         loop {
             let (key, val) = self.parse_object_member(c)?;
-            pairs.push(Value::cons(Value::symbol(key), val));
+            pairs.push(Value::cons(Value::from_sym_id(intern(&key)), val));
 
             c = self.skip_ws_consume()?;
             if c == b'}' {
@@ -1380,7 +1380,7 @@ impl<'a> JsonParser<'a> {
         let mut name = String::with_capacity(key.len() + 1);
         name.push(':');
         name.push_str(key);
-        let value = Value::keyword(&name);
+        let value = Value::from_kw_id(intern(&name));
         self.keyword_cache.insert(key.to_string(), value);
         value
     }

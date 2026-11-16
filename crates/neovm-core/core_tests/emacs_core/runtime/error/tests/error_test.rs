@@ -3,6 +3,7 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{FlowRef, FlowResultExt};
 use crate::emacs_core::print::{PrintShorthandSymbol, format_flow_with_eval, quote_payload};
 use crate::emacs_core::{Context, Value, print_value_bytes_with_eval, print_value_with_eval};
+use neovm_value::intern::intern;
 
 #[test]
 fn list_prints_buffers_with_names_in_eval_context() -> Result<(), EvalError> {
@@ -172,7 +173,7 @@ fn print_shorthand_symbol_domain_matches_gnu_printer_symbols() {
         (PrintShorthandSymbol::Comma, ","),
         (PrintShorthandSymbol::CommaAt, ",@"),
     ] {
-        let value = Value::symbol(name);
+        let value = Value::from_sym_id(intern(name));
         assert_eq!(symbol.name(), name);
         assert_eq!(PrintShorthandSymbol::from_lisp_value(&value), Some(symbol));
     }

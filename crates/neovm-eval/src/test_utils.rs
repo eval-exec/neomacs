@@ -703,9 +703,7 @@ mod unit_runtime {
             s::command_where_is_internal,
         ),
         WindowTreeHooks::new(
-            s::window_tree_char_property_window_lookup,
             s::window_tree_window_resize_check,
-            s::window_tree_window_resize_apply,
             s::window_tree_apply_mini_window_resize,
             s::window_tree_frame_resize_pixelwise,
             s::window_tree_frame_parameter_entry,
@@ -738,8 +736,6 @@ mod unit_runtime {
     }
 
     static PROCESS: ProcessHooks = ProcessHooks::new(
-        s::process_unlink,
-        s::process_delete,
         unit_process_shutdown_noop,
         s::process_open_channel,
         s::process_print_handle,
@@ -943,6 +939,23 @@ mod unit_runtime {
         duration: std::time::Duration,
         timer_deadline: crate::emacs_core::eval::GnuTimerTimestamp,
     ) -> Result<(), neovm_value::error::Flow> {
+        // F-4: this unit body is the exact wait only while the runtime has no
+        // other wake source: no live process can queue a wait notification,
+        // and no wait-notifier poller is registered. Assert both premises.
+        let live = ctx.processes().live_process_ids();
+        assert!(
+            live.is_empty(),
+            "ABSENT layer: unit wait reached with live processes ({live:?}); \
+             the Green/select sleep would ignore process output"
+        );
+        // PEER 5796: the OS-signal self-pipe half was vacuous (that slot is
+        // the constant-None absent-layer value). A notifier-source assert
+        // cannot be written from the poller field either: the unit runtime
+        // does own a poller, but its handle is reachable only through the
+        // `process.wait_notifier` hook, which is still a refusal stand-in
+        // here, so nothing can publish a wake. The empty process table above
+        // already covers the only other source (process output). The
+        // process-table assert is therefore the real premise.
         match ctx.green_select_switch(duration)? {
             crate::emacs_core::eval::SelectTurn::Switched => Ok(()),
             crate::emacs_core::eval::SelectTurn::Block(wait_time) => {

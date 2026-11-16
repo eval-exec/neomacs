@@ -1858,7 +1858,7 @@ fn atom_backed_completion_returns_the_symbols_materialized_name_object() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     eval.obarray_view_mut()
-        .intern("atom-backed-completion-name-identity-probe");
+        .intern_member("atom-backed-completion-name-identity-probe");
 
     let result = eval
         .eval_str(

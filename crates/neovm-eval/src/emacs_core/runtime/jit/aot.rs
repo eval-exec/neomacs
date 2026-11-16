@@ -27,6 +27,7 @@ use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::{Linkage, Module, default_libcall_names};
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use neovm_value::intern::intern;
 
 use super::backend::BackendError;
 use super::compile::{CompileError, DeoptCells};
@@ -2468,7 +2469,7 @@ pub fn testkit_call_bearing_selftest(
         f
     };
     let sym = |name: &str| -> (Value, SymId) {
-        let s = Value::symbol(name);
+        let s = Value::from_sym_id(intern(name));
         let ValueKind::Symbol(id) = s.kind() else {
             unreachable!("symbol");
         };

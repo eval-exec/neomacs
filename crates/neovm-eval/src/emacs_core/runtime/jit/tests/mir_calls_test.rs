@@ -2,6 +2,7 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
@@ -22,7 +23,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
 }
 
 fn install(ev: &mut Context, name: &str, f: ByteCodeFunction) -> Value {
-    let sym = Value::symbol(name);
+    let sym = Value::from_sym_id(intern(name));
     ev.obarray
         .set_symbol_function_id(sym.as_bare_symbol_id().unwrap(), Value::make_bytecode(f));
     sym
@@ -315,7 +316,7 @@ fn mir_call_observability_matches_the_interpreter() {
                 ],
                 vec![
                     value,
-                    Value::symbol(variable),
+                    Value::from_sym_id(intern(variable)),
                     Value::symbol("mir-call-state-point"),
                 ],
                 0,

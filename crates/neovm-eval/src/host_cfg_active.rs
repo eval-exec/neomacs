@@ -24,6 +24,7 @@ impl HostCfgClass {
             HostCfgClass::Dbus => cfg!(neomacs_have_dbus),
             HostCfgClass::Lcms2 => cfg!(neomacs_have_lcms2),
             HostCfgClass::Sqlite => cfg!(feature = "sqlite"),
+            HostCfgClass::Xwidgets => cfg!(feature = "xwidgets"),
             HostCfgClass::VmProfile => cfg!(feature = "vm-profile"),
             HostCfgClass::NotMacos => !cfg!(target_os = "macos"),
             HostCfgClass::X11Only => !cfg!(windows) && !cfg!(target_os = "macos"),

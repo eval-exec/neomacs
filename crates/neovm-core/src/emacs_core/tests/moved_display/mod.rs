@@ -50,7 +50,11 @@ mod cycling_test;
 #[path = "selection_test.rs"]
 mod selection_test;
 
-#[cfg(test)]
+// The xwidget object model is gated on the `xwidgets` cargo feature, the
+// port's match for GNU's HAVE_XWIDGETS; without it the subrs these tests
+// drive are not registered, so the module is absent exactly like
+// `src/xwidget.c` in a build without `--with-xwidgets`.
+#[cfg(all(test, feature = "xwidgets"))]
 #[path = "xwidget_runtime_test.rs"]
 mod xwidget_runtime_test;
 

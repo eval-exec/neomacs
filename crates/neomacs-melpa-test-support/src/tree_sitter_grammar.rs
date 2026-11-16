@@ -12,6 +12,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 mod matrix;
 pub use matrix::{
@@ -203,7 +205,53 @@ fn prefetch_cached_tree_sitter_grammar_with_source_directory(
         return Ok(paths.grammar_directory);
     }
 
-    remove_incomplete_cache(&paths)?;
+    let mut failure = String::new();
+    for attempt in 1..=GRAMMAR_PREFETCH_ATTEMPTS {
+        match attempt_pin_prefetch(gnu_emacs, source, &paths, &expected_marker) {
+            Ok(()) => return Ok(paths.grammar_directory),
+            Err(error) => {
+                // No backoff slot after the final attempt: nothing retries it.
+                if let Some(delay) = GRAMMAR_PREFETCH_BACKOFF.get((attempt - 1) as usize) {
+                    eprintln!(
+                        "GRAMMAR-PREFETCH-RETRY: {} attempt {attempt}/{} failed: {error}; \
+                         retrying in {delay:?}",
+                        source.language, GRAMMAR_PREFETCH_ATTEMPTS,
+                    );
+                    thread::sleep(*delay);
+                }
+                failure = error;
+            }
+        }
+    }
+    Err(format!(
+        "Tree-sitter grammar `{}` prefetch failed after {} attempts: {failure}",
+        source.language, GRAMMAR_PREFETCH_ATTEMPTS,
+    ))
+}
+
+/// A flaky network fetch is the one transient failure mode of a grammar
+/// prefetch: a GitHub TLS EOF kills `git fetch`, a truncated checkout fails
+/// the `parser.c` hash check, and a download that dies mid-install leaves
+/// no library. Every one of those heals on a fresh attempt, so the prefetch
+/// retries each pin a bounded number of times with backoff instead of
+/// pushing the whole grammar run -- and every gate that calls it -- through
+/// an outer retry loop. Local filesystem failures do not heal, but retrying
+/// them costs only the bounded backoff, and the final error keeps the root
+/// cause.
+const GRAMMAR_PREFETCH_ATTEMPTS: u32 = 3;
+const GRAMMAR_PREFETCH_BACKOFF: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(8)];
+
+/// One clean-slate prefetch attempt: drop any partial state, fetch, verify
+/// the pin's bytes, build through GNU Emacs, and publish the ready marker.
+/// The caller holds the cache lock, so consecutive attempts cannot race
+/// another prefetch of the same pin.
+fn attempt_pin_prefetch(
+    gnu_emacs: &EmacsRuntime,
+    source: GrammarSourceSpec<'_>,
+    paths: &GrammarCachePaths,
+    expected_marker: &str,
+) -> Result<(), String> {
+    remove_incomplete_cache(paths)?;
     for directory in [
         paths.home.join(".emacs.d"),
         paths.tmp.clone(),
@@ -220,12 +268,12 @@ fn prefetch_cached_tree_sitter_grammar_with_source_directory(
         })?;
     }
 
-    prepare_grammar_checkout(gnu_emacs, source, &paths)?;
-    verify_parser_source_hash(source, &paths)?;
-    install_grammar(gnu_emacs, source, &paths)?;
+    prepare_grammar_checkout(gnu_emacs, source, paths)?;
+    verify_parser_source_hash(source, paths)?;
+    install_grammar(gnu_emacs, source, paths)?;
 
     let marker_tmp = paths.root.join(format!("ready.{}.tmp", std::process::id()));
-    fs::write(&marker_tmp, &expected_marker).map_err(|error| {
+    fs::write(&marker_tmp, expected_marker).map_err(|error| {
         format!(
             "failed to write Tree-sitter grammar cache marker {}: {error}",
             marker_tmp.display()
@@ -236,8 +284,7 @@ fn prefetch_cached_tree_sitter_grammar_with_source_directory(
             "failed to publish Tree-sitter grammar cache marker {}: {error}",
             paths.ready_marker.display()
         )
-    })?;
-    Ok(paths.grammar_directory)
+    })
 }
 
 /// Read an already-prefetched grammar and verify its pin.

@@ -1301,7 +1301,7 @@ fn expand_script_symbol(
     char_script_table: Option<&Value>,
 ) -> Option<Vec<FontsetTarget>> {
     let table = char_script_table?;
-    let target = Value::symbol(name);
+    let target = Value::from_sym_id(intern(name));
     let mut ranges = Vec::new();
     for_each_non_nil_char_table_run(table, |key, value| {
         if value != target {
@@ -1315,7 +1315,7 @@ fn expand_script_symbol(
 }
 
 fn lookup_charset_script(alist: &Value, charset_name: &str) -> Option<String> {
-    let target = Value::symbol(charset_name);
+    let target = Value::from_sym_id(intern(charset_name));
     let mut cursor = *alist;
     loop {
         match cursor.kind() {

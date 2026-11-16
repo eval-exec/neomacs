@@ -865,8 +865,9 @@ pub fn define_coding_system_internal(
         args.clone(),
         mode,
     )?;
-    // SAFETY: the completed coding-system registration is recorded only in
-    // symbol value/property cells. This helper is noncalling and preserves
+    // SAFETY: the completed coding-system registration is recorded in
+    // symbol value/property cells and in obarray membership (GNU interns the
+    // `make_subsidiaries` names). This helper is noncalling and preserves
     // canonical dispatch metadata and manager storage identity.
     let owner = &mut eval.owner;
     unsafe {
@@ -887,8 +888,9 @@ pub fn define_coding_system_alias(eval: &mut super::eval::Context, args: Vec<Val
         args.clone(),
         mode,
     )?;
-    // SAFETY: the completed coding-system registration is recorded only in
-    // symbol value/property cells. This helper is noncalling and preserves
+    // SAFETY: the completed coding-system registration is recorded in
+    // symbol value/property cells and in obarray membership (GNU interns the
+    // `make_subsidiaries` names). This helper is noncalling and preserves
     // canonical dispatch metadata and manager storage identity.
     let owner = &mut eval.owner;
     unsafe {
@@ -913,7 +915,15 @@ pub fn set_coding_system_priority(eval: &mut super::eval::Context, args: Vec<Val
     // variable (coding.c) from the reordered category priorities.
     let categories =
         neovm_text::emacs_core::coding::coding_category_priority_list(&eval.coding_systems, mode);
-    let list = Value::list(categories.into_iter().map(Value::symbol).collect());
+    // GNU interns the `coding-category-*` symbols while building
+    // `Vcoding_category_list` (coding.c); publish them through the member
+    // funnel instead of wrapping bare name-registry ids (PEER 5786).
+    let list = Value::list(
+        categories
+            .into_iter()
+            .map(|category| eval.intern_member_id_value(category))
+            .collect(),
+    );
     eval.set_variable("coding-category-list", list);
     Ok(result)
 }

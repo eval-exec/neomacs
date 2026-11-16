@@ -140,7 +140,7 @@ fn contained_panic_detaches_native_frames_before_the_caller_exits() {
             ev.gc_collect_exact();
             let ctx_ptr = &mut ev as *mut Context as *mut u8;
             let name = format!("neo-detach-callee-{nargs}-{framed}");
-            let callee_sym = Value::symbol(&name);
+            let callee_sym = Value::from_sym_id(intern((&name).as_ref()));
             // (lambda (a..) (neovm--internal-panic "detach-boom")), or with a
             // dynamic binding around the call so the callee runs framed.
             let (ops, constants) = if framed {
@@ -263,7 +263,7 @@ fn a_leaked_cleanup_after_a_contained_panic_reads_only_detached_frames() {
         ev.gc_collect_exact();
         let ctx_ptr = &mut ev as *mut Context as *mut u8;
         let name = format!("neo-detach-leak-callee-{nargs}");
-        let callee_sym = Value::symbol(&name);
+        let callee_sym = Value::from_sym_id(intern((&name).as_ref()));
         ev.eval_str(&format!(
             "(progn
                (setq neo-detach-seen 'unset)

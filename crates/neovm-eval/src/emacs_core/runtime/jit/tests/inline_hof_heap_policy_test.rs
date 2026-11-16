@@ -51,7 +51,7 @@ fn inline_hof_heap_policy_detects_hidden_loop_stores_and_releases_scope() {
                     Op::Call(2),
                     Op::Return,
                 ],
-                vec![Value::symbol(name), callback],
+                vec![Value::from_sym_id(intern(name)), callback],
             );
             let fused = inline::fuse_calls_v2(
                 caller.executable_ops(),

@@ -92,7 +92,17 @@ fn oracle_prop_every_compiled_defsym_spelling_is_in_the_runtime_obarray() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     // The count is part of the pinned expectation; update it only together
-    // with a regenerated ledger.
+    // with a regenerated ledger. It is host-keyed because the active set is
+    // the build profile's `defsym_name[]`: 1811 Linux, 1703 macOS, 1855
+    // Windows rows carry that host's gate in `gnu_defsyms.snapshot.tsv`.
+    // Linux and macOS counts are observed against the attested oracle
+    // (both editors answer zero missing); the Windows count is derived from
+    // the ledger and has no observed run yet.
+    #[cfg(windows)]
+    let expect = expect_test::expect![[r#""OK (1855 0 nil)""#]];
+    #[cfg(all(not(windows), target_os = "macos"))]
+    let expect = expect_test::expect![[r#""OK (1703 0 nil)""#]];
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     let expect = expect_test::expect![[r#""OK (1811 0 nil)""#]];
     assert_oracle_parity_expect(&census_form(), expect);
 }

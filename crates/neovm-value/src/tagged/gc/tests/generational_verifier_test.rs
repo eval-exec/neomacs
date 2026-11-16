@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::heap_types::LispString;
-use crate::intern::intern_uninterned;
+use crate::intern::make_uninterned_symbol;
 use crate::value::scratch_bridge::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
@@ -162,7 +162,7 @@ fn generational_verifier_accepts_barriered_old_cons_arena_and_box_edges() {
         cons,
         TaggedValue::fixnum(211)
     ));
-    let symbol = TaggedValue::from_sym_id(intern_uninterned("u34-verifier-old-symbol"));
+    let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u34-verifier-old-symbol"));
     assert!(crate::tagged::mutate::set_vector_slot(vector, 0, symbol));
     {
         let child = heap.alloc_symbol_with_pos(symbol, TaggedValue::fixnum(223));
@@ -218,7 +218,7 @@ fn generational_verifier_accepts_mapped_and_permanent_owners() {
         let child = heap.alloc_cons(TaggedValue::fixnum(229), TaggedValue::NIL);
         assert!(crate::tagged::mutate::set_vector_slot(mapped, 0, child));
     }
-    let symbol = TaggedValue::from_sym_id(intern_uninterned("u34-verifier-mapped-symbol"));
+    let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u34-verifier-mapped-symbol"));
     assert!(crate::tagged::mutate::set_vector_slot(mapped, 1, symbol));
     {
         let child = heap.alloc_symbol_with_pos(symbol, TaggedValue::fixnum(233));

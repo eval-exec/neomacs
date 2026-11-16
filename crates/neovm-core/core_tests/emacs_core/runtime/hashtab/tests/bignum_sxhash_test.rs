@@ -7,6 +7,7 @@
 //! `(= (sxhash-eql (expt 2 100)) (sxhash-eql (expt 2 100)))` was nil and a
 //! `gethash` of an equal bignum key missed.  GNU returns `t` / the stored
 //! value in every case below (verified with `emacs --batch`).
+use neovm_value::intern::intern;
 
 use super::*;
 use crate::emacs_core::builtins::collections::builtin_make_hash_table;
@@ -20,7 +21,11 @@ fn pow2(n: u32) -> Value {
 }
 
 fn make_table(test: &str) -> Value {
-    builtin_make_hash_table(vec![Value::keyword("test"), Value::symbol(test)]).unwrap()
+    builtin_make_hash_table(vec![
+        Value::keyword("test"),
+        Value::from_sym_id(intern(test)),
+    ])
+    .unwrap()
 }
 
 #[test]

@@ -1109,6 +1109,8 @@ impl GapBuffer {
     /// all char-aligned).
     fn count_chars_in_logical_byte_range(&self, lo: usize, hi: usize) -> usize {
         debug_assert!(lo <= hi && hi <= self.total_bytes);
+        #[cfg(test)]
+        super::buffer_text::note_byte_to_char_scanned_bytes(hi - lo);
         let mut chars = 0;
         if lo < self.gap_start_bytes {
             let pre_hi = hi.min(self.gap_start_bytes);

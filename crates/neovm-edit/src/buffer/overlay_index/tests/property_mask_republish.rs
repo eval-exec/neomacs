@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::intern::intern;
 
 /// Give `overlay` exactly the property names in `names`, as successive
 /// `overlay-put` calls (or a Lisp rewrite of its plist) would.
@@ -110,7 +111,7 @@ fn property_mask_changes_keep_multilevel_filters_exact_under_pending_shifts() {
 
     // Replacing a class can lose and gain bits in one operation.
     let replacement = (0..257)
-        .map(|i| Value::symbol(&format!("mask-republish-replacement-{i}")))
+        .map(|i| Value::from_sym_id(intern(&format!("mask-republish-replacement-{i}"))))
         .find(|property| {
             overlay_property_signature_bit(*property) != overlay_property_signature_bit(face)
         })

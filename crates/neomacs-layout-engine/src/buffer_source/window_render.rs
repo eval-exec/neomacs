@@ -851,7 +851,7 @@ fn is_height_keyword(value: neovm_core::emacs_core::Value) -> bool {
 mod face_keyword_identity_tests {
     use super::{is_face_keyword, is_height_keyword};
     use neovm_core::emacs_core::Value;
-    use neovm_core::emacs_core::intern::intern_uninterned;
+    use neovm_core::emacs_core::intern::make_uninterned_symbol;
 
     /// An uninterned symbol named `:height` does not take the short-face path.
     /// The probe only grows the body-matrix slot count; face realization
@@ -859,7 +859,7 @@ mod face_keyword_identity_tests {
     /// GNU redisplay pair would not observe this gate.
     #[test]
     fn uninterned_colon_height_does_not_open_the_short_face_path() {
-        let uninterned = Value::from_sym_id(intern_uninterned(":height"));
+        let uninterned = Value::from_sym_id(make_uninterned_symbol(":height"));
         assert!(!uninterned.is_bare_keyword());
         assert!(!is_face_keyword(uninterned));
         assert!(!is_height_keyword(uninterned));
@@ -870,7 +870,7 @@ mod face_keyword_identity_tests {
         assert!(is_face_keyword(Value::keyword(":weight")));
         assert!(!is_height_keyword(Value::keyword(":weight")));
 
-        let unique = Value::from_sym_id(intern_uninterned(":foo-probe-unique"));
+        let unique = Value::from_sym_id(make_uninterned_symbol(":foo-probe-unique"));
         assert!(!is_face_keyword(unique));
         assert!(neovm_core::emacs_core::intern::lookup_interned(":foo-probe-unique").is_none());
     }

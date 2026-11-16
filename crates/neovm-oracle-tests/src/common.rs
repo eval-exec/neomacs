@@ -973,7 +973,9 @@ const NATIVE_COMP_SUPPRESSION_PRELUDE: &str = "(setq native-comp-jit-compilation
 // than an intermediate event-loop state.
 const ORACLE_TEST_SUPPORT_PRELUDE: &str = r#"(progn
   (defun neovm--oracle-settle-process (process &optional attempts)
-    (let ((remaining (or attempts 20)))
+    ;; Default 600 x 0.05s: the old 20 x 0.05s ceiling is itself a flake
+    ;; risk at gate load (lead #6341); explicit bounds still win.
+    (let ((remaining (or attempts 600)))
       (while (and (> remaining 0) (process-live-p process))
         (setq remaining (1- remaining))
         (accept-process-output process 0.05))
@@ -982,7 +984,7 @@ const ORACLE_TEST_SUPPORT_PRELUDE: &str = r#"(progn
       ;; the live-status loop.
       (accept-process-output process 0)
       (when (process-live-p process)
-        (error "Oracle process did not settle after %d attempts" (or attempts 20)))
+        (error "Oracle process did not settle after %d attempts" (or attempts 600)))
       (process-status process))))"#;
 
 #[derive(Clone, Copy)]

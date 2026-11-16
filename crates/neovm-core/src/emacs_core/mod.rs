@@ -411,6 +411,10 @@ mod symbol_plist_regression_test;
 mod symbol_redirect_regression_test;
 
 #[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/symbol/tests/membership_census_test.rs"]
+mod symbol_membership_census_test;
+
+#[cfg(test)]
 #[path = "tests/moved_eval/mod.rs"]
 mod moved_eval_tests;
 

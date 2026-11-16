@@ -113,7 +113,7 @@ fn window_text_pixel_size_chrome_obeys_window_parameter_overrides() {
     }
 }
 
-fn enabled_band_after_absent_publication(formats: &[&str], selector: Option<&str>) {
+fn enabled_band_after_absent_publication(formats: &[&str], selector: Option<&'static str>) {
     let (mut eval, window) = chrome_context();
     eval.frame_manager_mut()
         .selected_frame_mut()

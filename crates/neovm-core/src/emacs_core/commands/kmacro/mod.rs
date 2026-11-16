@@ -268,7 +268,7 @@ pub(crate) fn builtin_execute_kbd_macro(
 fn name_last_kbd_macro_impl(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
-    call_name: &str,
+    call_name: &'static str,
 ) -> EvalResult {
     expect_args(call_name, &args, 1)?;
 

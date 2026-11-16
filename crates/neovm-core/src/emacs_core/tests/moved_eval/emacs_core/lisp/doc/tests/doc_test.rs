@@ -598,7 +598,8 @@ fn documentation_core_subr_stubs_use_oracle_first_line_shapes() {
         evaluator
             .obarray_view_mut()
             .set_symbol_function(name, Value::subr(intern(name)));
-        let result = builtin_documentation(&mut evaluator, vec![Value::symbol(name)]).unwrap();
+        let result =
+            builtin_documentation(&mut evaluator, vec![Value::from_sym_id(intern(name))]).unwrap();
         let text = result
             .as_utf8_str()
             .expect("core subr documentation should return a string");

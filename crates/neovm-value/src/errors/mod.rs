@@ -35,8 +35,21 @@ use std::collections::{HashMap, HashSet};
 /// Set `error-conditions` and `error-message` properties on `name` in the
 /// obarray.  `conditions` is the full list of condition symbols (including
 /// `name` itself, its parents, and their transitive ancestors).
-fn put_error_properties(obarray: &mut Obarray, name: &str, message: &str, conditions: Vec<&str>) {
-    let cond_list = Value::list(conditions.iter().map(|s| Value::symbol(*s)).collect());
+fn put_error_properties<I, S>(obarray: &mut Obarray, name: &str, message: &str, conditions: I)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    // GNU `define-error` interns every condition name it publishes; the
+    // port builds the transitive list by name, so publish each canonical id
+    // as a member before storing the list.
+    let mut values = Vec::new();
+    for condition in conditions {
+        let id = crate::intern::intern(condition.as_ref());
+        obarray.ensure_interned_global_id(id);
+        values.push(Value::from_sym_id(id));
+    }
+    let cond_list = Value::list(values);
     obarray
         .put_property(name, "error-conditions", cond_list)
         .expect("error-conditions plist should always be valid during init");
@@ -681,8 +694,7 @@ pub fn register_dbus_error(obarray: &mut Obarray) {
 
 fn register_simple(obarray: &mut Obarray, name: &str, message: &str, parents: &[&str]) {
     let conditions = build_conditions_from_obarray(obarray, name, parents);
-    let cond_refs: Vec<&str> = conditions.iter().map(|s| s.as_str()).collect();
-    put_error_properties(obarray, name, message, cond_refs);
+    put_error_properties(obarray, name, message, &conditions);
 }
 
 // ---------------------------------------------------------------------------
