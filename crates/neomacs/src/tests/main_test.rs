@@ -52,7 +52,7 @@ use neovm_core::emacs_core::display_host::{
 };
 use neovm_core::emacs_core::error::EvalError;
 use neovm_core::emacs_core::eval::{
-    PopupMenuEntry, PopupMenuRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
+    DisplayHost, PopupMenuEntry, PopupMenuRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
     VideoResolveRequest, VideoResolveSource, WebKitResolveRequest, WebKitResolveSource,
 };
 use neovm_core::emacs_core::image_catalog::{AxisSize, ImageRotation, ImageSizeSpec};
@@ -93,6 +93,19 @@ mod platform_fonts;
 #[path = "frame_snapshot_policy_test.rs"]
 mod frame_snapshot_policy;
 
+/// The synthetic display every GUI startup fixture bootstraps.
+///
+/// A fixture models a session that started on this display, so the frame's
+/// `display` parameter, the Lisp `DISPLAY` environment and the native host's
+/// connection identity must all agree with it.
+fn gui_display_identity() -> neomacs_display_protocol::GraphicalDisplayIdentity {
+    neomacs_display_protocol::GraphicalDisplayIdentity::named(
+        neomacs_display_protocol::GraphicalBackend::X11,
+        ":42",
+    )
+    .expect("constant synthetic display name")
+}
+
 fn gui_display() -> BootstrapDisplayConfig {
     let observation = neomacs_display_protocol::DisplayObservation::X11(
         neomacs_display_protocol::X11DisplayObservation::new(
@@ -104,11 +117,7 @@ fn gui_display() -> BootstrapDisplayConfig {
     bootstrap_gui_display_config(
         Interactivity::Interactive,
         gui_frame_font_scale_from_observation(observation),
-        neomacs_display_protocol::GraphicalDisplayIdentity::named(
-            neomacs_display_protocol::GraphicalBackend::X11,
-            ":42",
-        )
-        .unwrap(),
+        gui_display_identity(),
     )
 }
 
@@ -2391,7 +2400,62 @@ fn raw_dump_loadup_invocation_owns_mode_and_build_argv() {
     );
 }
 
+/// Stand-in native connection for the GUI startup fixtures.
+///
+/// Production's `PrimaryWindowDisplayHost` owns the display connection the
+/// process really opened; a test evaluator has none. GNU's
+/// `window-system-initialization` still calls `x-open-connection` for the
+/// display the session started on, and since the admission rule in
+/// `builtin_x_open_connection` requires the host to own that connection, the
+/// fixture must supply it or startup aborts before the behaviours under test
+/// run.
+struct StartupGuiDisplayHost {
+    identity: neomacs_display_protocol::GraphicalDisplayIdentity,
+}
+
+impl DisplayHost for StartupGuiDisplayHost {
+    fn graphical_connection_identity(
+        &self,
+        display: Option<&str>,
+    ) -> Result<Option<neomacs_display_protocol::GraphicalDisplayIdentity>, String> {
+        match display {
+            // pgtk's nil display opens the owned default (src/pgtkfns.c:2140).
+            None | Some("") => Ok(Some(self.identity.clone())),
+            Some(name) if name == self.identity.terminal_name() => Ok(Some(self.identity.clone())),
+            Some(name) => Err(format!(
+                "synthetic startup display {} refused foreign display {name}",
+                self.identity.terminal_name()
+            )),
+        }
+    }
+
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Give a GUI startup fixture the display connection its bootstrap declares.
+fn install_synthetic_startup_display(eval: &mut Context) {
+    let identity = gui_display_identity();
+    // GNU resolves DISPLAY from `process-environment` first
+    // (src/callproc.c:1716-1746), so the ambient value would otherwise win
+    // over the frame's synthetic display and x-open-connection would ask for
+    // a foreign name, which the host correctly refuses.
+    eval.eval_str(&format!(
+        r#"(setenv "DISPLAY" "{}")"#,
+        identity.terminal_name()
+    ))
+    .expect("pin the fixture's synthetic display in process-environment");
+    eval.set_variable("x-display-name", Value::string(identity.terminal_name()));
+    eval.set_display_host(Box::new(StartupGuiDisplayHost { identity }));
+}
+
 fn bootstrap_runtime_gui_frame(eval: &mut Context) -> FrameId {
+    install_synthetic_startup_display(eval);
     load_neomacs_gui_term_layer(eval);
     let _bootstrap = bootstrap_buffers(eval, 960, 640, gui_display());
     eval.frame_manager()
@@ -4727,6 +4791,7 @@ fn cl_generic_context_dispatch_uses_neo_window_system_method() {
 fn pdump_preserves_neo_term_generic_methods() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
+    install_synthetic_startup_display(&mut eval);
     load_neomacs_gui_term_layer(&mut eval);
 
     let pre = eval
@@ -4816,6 +4881,7 @@ fn neo_win_registers_neo_display_format() {
 fn neo_window_system_initialization_preserves_gnu_clipboard_policy_and_user_customization() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
+    install_synthetic_startup_display(&mut eval);
 
     let rendered = eval
         .eval_str(
