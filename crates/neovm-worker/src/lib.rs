@@ -7,7 +7,7 @@ use neovm_host_abi::{
     TaskOptions, TaskPriority,
 };
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -588,6 +588,7 @@ impl ChannelEvents {
 
 pub struct WorkerRuntime {
     config: WorkerConfig,
+    worker_count: AtomicUsize,
     next_task: AtomicU64,
     next_channel: AtomicU64,
     select_cursor: AtomicU64,
@@ -603,6 +604,7 @@ pub struct WorkerRuntime {
     worker_stack_bytes: Option<usize>,
     /// How long each owner took to construct its Context, in start order.
     boot_times: Mutex<Vec<Duration>>,
+    startup_error: Mutex<Option<String>>,
     /// The first exit a task ordered, if any. Latched rather than merely
     /// returned to that task's awaiter: a host must be able to obey a
     /// kill-emacs it never awaited.
@@ -650,6 +652,7 @@ impl WorkerRuntime {
     fn with_executor_factory(config: WorkerConfig, executor: Executor) -> Self {
         Self {
             config,
+            worker_count: AtomicUsize::new(config.threads),
             next_task: AtomicU64::new(1),
             next_channel: AtomicU64::new(1),
             select_cursor: AtomicU64::new(0),
@@ -663,6 +666,7 @@ impl WorkerRuntime {
             elisp_started: AtomicBool::new(false),
             worker_stack_bytes: None,
             boot_times: Mutex::new(Vec::new()),
+            startup_error: Mutex::new(None),
             shutdown: Arc::new(Mutex::new(None)),
         }
     }
@@ -690,7 +694,22 @@ impl WorkerRuntime {
     }
 
     pub fn config(&self) -> WorkerConfig {
-        self.config
+        WorkerConfig {
+            threads: self.worker_count.load(Ordering::Acquire),
+            ..self.config
+        }
+    }
+
+    pub(crate) fn configure_worker_count(&self, threads: usize) {
+        debug_assert!(!self.elisp_started.load(Ordering::Acquire));
+        self.worker_count.store(threads, Ordering::Release);
+    }
+
+    pub(crate) fn startup_error(&self) -> Option<String> {
+        self.startup_error
+            .lock()
+            .expect("startup error mutex poisoned")
+            .clone()
     }
 
     pub fn stats(&self) -> RuntimeStats {
@@ -850,18 +869,21 @@ impl WorkerRuntime {
         };
 
         task.context.cancel();
-        if task.mark_cancelled() {
+        let newly_cancelled = task.mark_cancelled();
+        if newly_cancelled {
             self.metrics.cancelled.fetch_add(1, Ordering::Relaxed);
             self.enqueue_finished(handle);
         }
-        // Held across the call: the owner clears the hook under this lock
-        // before lowering its quit, so a raise here cannot outlive the task.
-        let interrupt = task
-            .interrupt
-            .lock()
-            .expect("task interrupt mutex poisoned");
-        if let Some(interrupt) = interrupt.as_ref() {
-            (interrupt.0)();
+        if newly_cancelled {
+            // Held across the call: the owner clears the hook under this lock
+            // before lowering its quit, so a raise here cannot outlive the task.
+            let interrupt = task
+                .interrupt
+                .lock()
+                .expect("task interrupt mutex poisoned");
+            if let Some(interrupt) = interrupt.as_ref() {
+                (interrupt.0)();
+            }
         }
         true
     }
@@ -879,12 +901,58 @@ impl WorkerRuntime {
     }
 
     pub fn close(&self) {
-        let mut state = self
+        let pending = {
+            let mut state = self
+                .queue
+                .state
+                .lock()
+                .expect("worker queue mutex poisoned");
+            state.closed = true;
+            let mut pending = Vec::with_capacity(state.len());
+            while let Some(handle) = state.pop() {
+                pending.push(handle);
+            }
+            pending
+        };
+        for handle in pending {
+            let task = self
+                .tasks
+                .read()
+                .expect("tasks map rwlock poisoned")
+                .get(&handle.0)
+                .cloned();
+            if let Some(task) = task {
+                if task.mark_cancelled() {
+                    self.metrics.cancelled.fetch_add(1, Ordering::Relaxed);
+                    self.enqueue_finished(handle);
+                }
+            }
+        }
+        // Interrupt running Lisp so a spinner can observe quit and release
+        // its owner. Shared host executors have no interrupt hook and finish.
+        let running: Vec<_> = self
+            .tasks
+            .read()
+            .expect("tasks map rwlock poisoned")
+            .iter()
+            .filter_map(|(&handle, task)| {
+                (task.status() == TaskStatus::Running
+                    && task
+                        .interrupt
+                        .lock()
+                        .expect("task interrupt mutex poisoned")
+                        .is_some())
+                .then_some(TaskHandle(handle))
+            })
+            .collect();
+        for handle in running {
+            self.cancel(handle);
+        }
+        let state = self
             .queue
             .state
             .lock()
             .expect("worker queue mutex poisoned");
-        state.closed = true;
         drop(state);
         self.queue.ready.notify_all();
     }
@@ -909,7 +977,7 @@ impl WorkerRuntime {
     pub fn try_start_workers(&self) -> Result<Vec<thread::JoinHandle<()>>, WorkerStartError> {
         let worker_count = match &self.executor {
             Executor::Elisp(_) => {
-                if self.config.threads == 0 {
+                if self.worker_count.load(Ordering::Acquire) == 0 {
                     let err = WorkerStartError::NoWorkers;
                     self.fail_startup(&err);
                     return Err(err);
@@ -922,7 +990,7 @@ impl WorkerRuntime {
             // Isolates are independent heaps: one owner per configured
             // thread, started once.
             Executor::Isolate(_) => {
-                if self.config.threads == 0 {
+                if self.worker_count.load(Ordering::Acquire) == 0 {
                     let err = WorkerStartError::NoWorkers;
                     self.fail_startup(&err);
                     return Err(err);
@@ -930,9 +998,9 @@ impl WorkerRuntime {
                 self.elisp_started
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                     .map_err(|_| WorkerStartError::AlreadyStarted)?;
-                self.config.threads
+                self.worker_count.load(Ordering::Acquire)
             }
-            Executor::Shared(_) => self.config.threads,
+            Executor::Shared(_) => self.worker_count.load(Ordering::Acquire),
         };
 
         let mut joins: Vec<thread::JoinHandle<()>> = Vec::with_capacity(worker_count);
@@ -1025,14 +1093,15 @@ impl WorkerRuntime {
                             .expect("task interrupt mutex poisoned") = Some(interrupt.clone());
                     }
                     let execution = executor.execute(&task.form, &task.opts, &task.context);
+                    // Under the lock a cancel holds while raising; once
+                    // cleared, the quit this owner lowers next is the last
+                    // one this task can receive. Clear even for an executor
+                    // whose hook was installed by a host or runtime test.
+                    *task
+                        .interrupt
+                        .lock()
+                        .expect("task interrupt mutex poisoned") = None;
                     if interrupt.is_some() {
-                        // Under the lock a cancel holds while raising; once
-                        // cleared, the quit this owner lowers next is the
-                        // last one this task can receive.
-                        *task
-                            .interrupt
-                            .lock()
-                            .expect("task interrupt mutex poisoned") = None;
                         executor.lower_quit();
                     }
                     let was_cancelled = matches!(execution, Err(TaskError::Cancelled));
@@ -1106,6 +1175,18 @@ impl WorkerRuntime {
             }
         }
         if let Some(err) = failure {
+            let ready_owners = self
+                .boot_times
+                .lock()
+                .expect("boot times mutex poisoned")
+                .len();
+            if matches!(self.executor, Executor::Isolate(_)) && ready_owners > 0 {
+                *self
+                    .startup_error
+                    .lock()
+                    .expect("startup error mutex poisoned") = Some(err.to_string());
+                return Ok(joins);
+            }
             self.fail_startup(&err);
             for worker in joins {
                 let _ = worker.join();
