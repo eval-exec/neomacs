@@ -244,16 +244,19 @@ fn unsupported_lisp_objects_report_their_cl_type_names() {
     let mut ctx = context();
     for (form, expected) in [
         ("(current-buffer)", "buffer"),
+        ("(obarray-make)", "obarray"),
         ("(make-marker)", "marker"),
         ("(make-overlay 1 2)", "overlay"),
         ("(selected-window)", "window"),
         ("(selected-frame)", "frame"),
+        ("(frame-terminal (selected-frame))", "terminal"),
         ("(current-window-configuration)", "window-configuration"),
         ("(make-mutex \"transfer-test\")", "mutex"),
         (
             "(make-condition-variable (make-mutex \"transfer-test-cv\"))",
             "condition-variable",
         ),
+        ("(make-finalizer #'ignore)", "finalizer"),
         ("(make-char-table 'transfer-test)", "char-table"),
         (
             "(make-process :name \"transfer-test\" :command '(\"true\") :noquery t)",
