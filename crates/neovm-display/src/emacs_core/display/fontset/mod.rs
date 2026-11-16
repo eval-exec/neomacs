@@ -27,7 +27,8 @@ pub use native_policy::{
 use native_policy::{SharedFontsetEntries, StoredFontsetEntry};
 use strum::{EnumString, IntoStaticStr};
 
-pub const DEFAULT_FONTSET_NAME: &str = "-*-*-*-*-*-*-*-*-*-*-*-*-fontset-default";
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const DEFAULT_FONTSET_NAME: &str = "-*-*-*-*-*-*-*-*-*-*-*-*-fontset-default";
 pub(crate) const DEFAULT_FONTSET_ALIAS: &str = "fontset-default";
 
 fn fontset_string_text(value: &Value) -> Option<String> {
@@ -806,7 +807,8 @@ pub fn matching_entries_for_char(ch: char) -> Vec<FontSpecEntry> {
     matching_entries_for_fontset(DEFAULT_FONTSET_NAME, ch)
 }
 
-pub fn matching_entries_for_fontset(name: &str, ch: char) -> Vec<FontSpecEntry> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn matching_entries_for_fontset(name: &str, ch: char) -> Vec<FontSpecEntry> {
     let name = fontset_name_spelling(name);
     registry()
         .read()

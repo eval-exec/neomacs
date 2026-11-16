@@ -312,6 +312,7 @@ pub(crate) fn replace_alternative_font_registry_alist(names: Vec<(LispString, Ve
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub fn alternative_font_registries(registry: &str) -> Vec<String> {
     let lookup = registry.trim();
     if lookup.is_empty() {
