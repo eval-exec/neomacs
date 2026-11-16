@@ -4280,7 +4280,9 @@ impl crate::emacs_core::eval::Context {
                 Ok(None)
             }
             InputEvent::TtyByte { byte, target } => {
-                if !frame_already_routed {
+                if frame_already_routed {
+                    self.select_tty_keyboard_input_kboard(target);
+                } else {
                     self.route_tty_keyboard_input(target);
                 }
                 match tty_input_decoding {
@@ -4333,7 +4335,9 @@ impl crate::emacs_core::eval::Context {
                 }
             }
             InputEvent::TtyCharacter { character, target } => {
-                if !frame_already_routed {
+                if frame_already_routed {
+                    self.select_tty_keyboard_input_kboard(target);
+                } else {
                     self.route_tty_keyboard_input(target);
                 }
                 if self.command_loop.keyboard.has_unread_selection_event() {
@@ -4505,7 +4509,9 @@ impl crate::emacs_core::eval::Context {
                 key,
                 emacs_frame_id,
             } => {
-                if !frame_already_routed {
+                if frame_already_routed {
+                    self.select_keyboard_input_kboard(emacs_frame_id);
+                } else {
                     self.route_keyboard_input_to_frame(emacs_frame_id);
                 }
                 if self.command_loop.keyboard.has_unread_selection_event() {

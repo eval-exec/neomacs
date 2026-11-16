@@ -1967,6 +1967,54 @@ fn read_char_switches_active_kboard_to_keypress_source_frame_terminal() {
 }
 
 #[test]
+fn read_char_switches_active_kboard_to_tty_byte_source_frame_terminal() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    let buf = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(buf);
+    let primary = ev.frame_manager_mut().create_frame("F1", 960, 640, buf);
+    ev.command_loop_mut()
+        .keyboard
+        .set_input_decode_map(Value::symbol("primary-map"));
+
+    crate::emacs_core::terminal::pure::ensure_terminal_runtime_owner(
+        7,
+        "tty-7",
+        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::interactive(Some("xterm-256color".to_string()), neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256)),
+    );
+    let secondary = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F2", 7, 960, 640, buf);
+    assert!(ev.frame_manager_mut().select_frame(primary));
+    ev.sync_keyboard_terminal_owner();
+    assert_eq!(ev.command_loop().keyboard.active_terminal_id(), 0);
+
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(vec![b'z'], secondary.0))
+        .unwrap();
+
+    assert_eq!(
+        ev.read_char().expect("switch-frame before the byte"),
+        Value::list(vec![
+            Value::symbol("switch-frame"),
+            Value::make_frame(secondary.0)
+        ])
+    );
+    assert_eq!(
+        ev.read_char().expect("the byte stays queued"),
+        Value::fixnum('z' as i64)
+    );
+    // Nothing acted on the switch-frame, so F1 is still selected; the byte
+    // is still read under its own terminal's kboard.
+    assert_eq!(ev.command_loop().keyboard.active_terminal_id(), 7);
+    assert_eq!(
+        ev.command_loop().keyboard.input_decode_map(),
+        Value::NIL,
+        "a byte re-read behind its switch-frame should be read under its source terminal's kboard"
+    );
+}
+
+#[test]
 fn read_char_reswitches_to_cached_frame_when_selected_tty_is_different() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();

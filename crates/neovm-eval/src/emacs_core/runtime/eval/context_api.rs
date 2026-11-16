@@ -1796,12 +1796,7 @@ impl Context {
 
     #[doc(hidden)]
     pub fn route_keyboard_input_to_frame(&mut self, emacs_frame_id: u64) {
-        let frame_id = if emacs_frame_id == 0 {
-            self.frames.selected_frame().map(|frame| frame.id)
-        } else {
-            Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
-        };
-        if let Some(frame_id) = frame_id {
+        if let Some(frame_id) = self.keyboard_input_frame(emacs_frame_id) {
             self.observe_keyboard_input_frame(frame_id);
         } else {
             self.command_loop
@@ -1810,14 +1805,58 @@ impl Context {
         }
     }
 
+    /// Make current the kboard `route_keyboard_input_to_frame` would select,
+    /// without recording the event frame or raising a switch-frame.  GNU
+    /// `kbd_buffer_get_event` returns the event's kboard on every read, also
+    /// when it re-reads an event it left queued behind a switch-frame.
+    pub(super) fn select_keyboard_input_kboard(&mut self, emacs_frame_id: u64) {
+        if let Some(frame_id) = self.keyboard_input_frame(emacs_frame_id) {
+            self.select_input_frame_kboard(frame_id);
+        } else {
+            self.command_loop
+                .keyboard
+                .select_terminal(crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID);
+        }
+    }
+
+    fn keyboard_input_frame(
+        &self,
+        emacs_frame_id: u64,
+    ) -> Option<neovm_value::display_vocab::FrameId> {
+        if emacs_frame_id == 0 {
+            self.frames.selected_frame().map(|frame| frame.id)
+        } else {
+            Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
+        }
+    }
+
     #[doc(hidden)]
     pub fn route_tty_keyboard_input(
         &mut self,
         target: crate::emacs_core::eval::keyboard::TtyInputTarget,
     ) {
+        if let Some(frame_id) = self.tty_keyboard_input_frame(target) {
+            self.observe_keyboard_input_frame(frame_id);
+        }
+    }
+
+    /// TTY counterpart of `select_keyboard_input_kboard`.
+    pub(super) fn select_tty_keyboard_input_kboard(
+        &mut self,
+        target: crate::emacs_core::eval::keyboard::TtyInputTarget,
+    ) {
+        if let Some(frame_id) = self.tty_keyboard_input_frame(target) {
+            self.select_input_frame_kboard(frame_id);
+        }
+    }
+
+    fn tty_keyboard_input_frame(
+        &self,
+        target: crate::emacs_core::eval::keyboard::TtyInputTarget,
+    ) -> Option<neovm_value::display_vocab::FrameId> {
         use crate::emacs_core::eval::keyboard::TtyInputTarget;
 
-        let frame_id = match target {
+        match target {
             TtyInputTarget::SelectedFrame => self.frames.selected_frame().map(|frame| frame.id),
             TtyInputTarget::Frame(frame_id) => self
                 .frames
@@ -1830,9 +1869,14 @@ impl Context {
                 .filter(|frame| frame.terminal_id == terminal_id)
                 .map(|frame| frame.id)
                 .or_else(|| self.frames.top_frame_on_terminal(terminal_id)),
-        };
-        if let Some(frame_id) = frame_id {
-            self.observe_keyboard_input_frame(frame_id);
+        }
+    }
+
+    fn select_input_frame_kboard(&mut self, frame_id: neovm_value::display_vocab::FrameId) {
+        if let Some(frame) = self.frames.get(frame_id) {
+            self.command_loop
+                .keyboard
+                .select_terminal(frame.terminal_id);
         }
     }
 
@@ -1843,11 +1887,7 @@ impl Context {
     /// selected most recently.
     #[doc(hidden)]
     pub fn observe_keyboard_input_frame(&mut self, frame_id: neovm_value::display_vocab::FrameId) {
-        if let Some(frame) = self.frames.get(frame_id) {
-            self.command_loop
-                .keyboard
-                .select_terminal(frame.terminal_id);
-        }
+        self.select_input_frame_kboard(frame_id);
 
         let selected_frame = self.frames.selected_frame().map(|frame| frame.id);
         let last_event_frame = self
