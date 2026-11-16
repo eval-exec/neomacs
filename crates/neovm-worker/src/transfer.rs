@@ -293,7 +293,13 @@ impl Walker<'_> {
                 let table = value
                     .as_hash_table()
                     .ok_or(TransferError::Unsupported("hash-table"))?;
-                let result = if table.test_name.is_some() {
+                let standard_test = table.test_name.is_none_or(|name_id| {
+                    let name = neovm_core::emacs_core::intern::resolve_sym(name_id);
+                    HashTableTest::from_symbol_name(name).is_some_and(|test| {
+                        name_id == neovm_core::emacs_core::intern::intern(test.name())
+                    })
+                });
+                let result = if !standard_test {
                     Err(TransferError::UserHashTableTest)
                 } else {
                     let mut entries = Vec::new();
