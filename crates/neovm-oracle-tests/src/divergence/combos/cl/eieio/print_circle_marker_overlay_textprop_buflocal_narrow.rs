@@ -348,7 +348,7 @@ fn combo_eieio_doubly_linked_with_print() {
                             (push (dl-payload cur) result)
                             (setq cur (dl-prev cur)
                                   count (1+ count)))
-                          (reverse result)))))
+                          (reverse result))))
           (goto-char 7)
           (insert (format "fwd=%s:bwd=%s" forward backward))
           (setf (marker-position m) 10)
@@ -366,7 +366,7 @@ fn combo_eieio_doubly_linked_with_print() {
           (list mp os oe bs pa pb pc cycle-verified backward-verified
                 (marker-position m)
                 (buffer-string)
-                dlist)))
+                dlist))))
       (kill-buffer buf)))"#,
         expect,
     );

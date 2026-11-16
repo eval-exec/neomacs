@@ -9,6 +9,7 @@
 use neovm_eval::emacs_core::builtins::higher_order_test_support::{
     CapturedSortPredicate, resolve_sort_predicate_for_test,
 };
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
 #[test]
@@ -63,7 +64,7 @@ fn sort_capture_keeps_void_and_autoload_symbols() {
     eval.eval_str("(autoload 'sort-capture-autoload \"sort-capture-missing-file\")")
         .expect("install autoload");
     for name in ["sort-capture-void", "sort-capture-autoload"] {
-        let symbol = Value::symbol(name);
+        let symbol = Value::from_sym_id(intern(name));
         let CapturedSortPredicate::Generic { function } =
             resolve_sort_predicate_for_test(&mut eval, symbol)
         else {

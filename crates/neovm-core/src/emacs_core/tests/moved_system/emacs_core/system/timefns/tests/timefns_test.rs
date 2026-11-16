@@ -5,6 +5,7 @@ use neovm_system::emacs_core::timefns::*;
 use neovm_value::error::Flow;
 use neovm_value::error::{FlowKind, FlowResultExt};
 use neovm_value::heap_types::LispString;
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use neovm_value::value::ValueKind;
 use neovm_value::value::list_to_vec;
@@ -34,7 +35,7 @@ fn condition_case_print(result: Result<Value, Flow>) -> String {
     match result.kinded() {
         Ok(value) => neovm_eval::emacs_core::print::print_value(&value),
         Err(FlowKind::Signal(sig)) => {
-            let symbol = Value::symbol(sig.symbol_name());
+            let symbol = Value::from_sym_id(intern(sig.symbol_name()));
             let err_obj = if let Some(raw) = sig.raw_data {
                 Value::cons(symbol, raw)
             } else {

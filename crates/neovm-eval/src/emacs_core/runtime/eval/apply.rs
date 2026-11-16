@@ -4187,7 +4187,7 @@ impl Context {
         invalid_fn: Value,
         rewrite_builtin_wrong_arity: bool,
     ) -> EvalResult {
-        let frame_function = Value::symbol(name);
+        let frame_function = Value::from_sym_id(intern(name));
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(frame_function, &args);
         let result =
@@ -4271,7 +4271,7 @@ impl Context {
                     {
                         Err(signal(
                             LispCondition::InvalidFunction,
-                            vec![Value::symbol(name)],
+                            vec![Value::from_sym_id(intern(name))],
                         ))
                     }
                     other => other.map_err(Flow::from_kind),
@@ -4293,7 +4293,7 @@ impl Context {
             }
             NamedCallTarget::Void => Err(signal(
                 LispCondition::VoidFunction,
-                vec![Value::symbol(name)],
+                vec![Value::from_sym_id(intern(name))],
             )),
         }
     }

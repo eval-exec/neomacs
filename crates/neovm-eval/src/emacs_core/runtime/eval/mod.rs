@@ -54,8 +54,8 @@ use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, FrameFullscre
 use neovm_value::error::*;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::{
-    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,
-    is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
+    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, is_canonical_id, is_keyword_id,
+    make_uninterned_symbol, resolve_sym, symbol_name_id,
 };
 use neovm_value::kmacro::KmacroManager;
 use neovm_value::symbol::{CanonicalAccess, ConstantWrite, Obarray};
@@ -316,17 +316,28 @@ fn initial_feature_names() -> Vec<&'static str> {
     neovm_value::system_vocab::c_features::initial_feature_names()
 }
 
-fn initial_features_value() -> Value {
+fn initial_features_value(obarray: &mut Obarray) -> Value {
     Value::list(
         initial_feature_names()
             .into_iter()
-            .map(Value::symbol)
+            .map(|name| {
+                let id = intern(name);
+                obarray.ensure_interned_global_id(id);
+                Value::from_sym_id(id)
+            })
             .collect(),
     )
 }
 
-fn initial_feature_ids() -> Vec<SymId> {
-    initial_feature_names().into_iter().map(intern).collect()
+fn initial_feature_ids(obarray: &mut Obarray) -> Vec<SymId> {
+    initial_feature_names()
+        .into_iter()
+        .map(|name| {
+            let id = intern(name);
+            obarray.ensure_interned_global_id(id);
+            id
+        })
+        .collect()
 }
 
 /// GNU's `echo_buffer[2]`: the two buffers the echo area is allowed to display
@@ -2140,12 +2151,12 @@ fn value_from_symbol_id(sym_id: SymId) -> Value {
 
 fn hidden_internal_interpreter_environment_symbol() -> SymId {
     static HIDDEN_SYMBOL: OnceLock<SymId> = OnceLock::new();
-    *HIDDEN_SYMBOL.get_or_init(|| intern_uninterned("internal-interpreter-environment"))
+    *HIDDEN_SYMBOL.get_or_init(|| make_uninterned_symbol("internal-interpreter-environment"))
 }
 
 fn hidden_load_read_stream_token() -> LoadReadStreamToken {
     static HIDDEN_SYMBOL: OnceLock<LoadReadStreamToken> = OnceLock::new();
-    *HIDDEN_SYMBOL.get_or_init(|| LoadReadStreamToken(intern_uninterned("get-file-char")))
+    *HIDDEN_SYMBOL.get_or_init(|| LoadReadStreamToken(make_uninterned_symbol("get-file-char")))
 }
 
 fn default_directory_symbol() -> SymId {
@@ -2261,7 +2272,12 @@ struct CoreEvalSymbols {
 }
 
 fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) -> CoreEvalSymbols {
-    obarray.intern("internal-interpreter-environment");
+    // The evaluation environment lives on the process-interned HIDDEN symbol
+    // below; the spelling must not be an obarray member. GNU creates
+    // `Qinternal_interpreter_environment` in `syms_of_eval` and immediately
+    // `Funintern`s it (`src/eval.c:4597`), so `(intern-soft
+    // "internal-interpreter-environment")` is nil at startup. This used to
+    // call `obarray.intern(...)` here and re-expose it.
     let internal_interpreter_environment_symbol = hidden_internal_interpreter_environment_symbol();
     obarray.seed_value_id(internal_interpreter_environment_symbol, Value::NIL);
     obarray.make_special_id(internal_interpreter_environment_symbol);
@@ -4334,7 +4350,7 @@ pub(crate) fn finish_require_in_state(
     loaded_path: Option<&Path>,
 ) -> EvalResult {
     if features.contains(&sym_id) {
-        Ok(Value::symbol(name))
+        Ok(Value::from_sym_id(intern(name)))
     } else {
         let message = if let Some(path) = loaded_path {
             format!(

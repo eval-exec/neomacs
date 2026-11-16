@@ -1976,7 +1976,7 @@ fn streaming_readevalloop(
         let Some((form, next_pos)) = read_result else {
             break; // EOF
         };
-        eval.obarray_mut().materialize_read_symbols(form);
+        eval.obarray_mut().intern_member_symbols_in(form);
 
         // Log a preview of the form source text.
         let form_start = pos;
@@ -2157,7 +2157,7 @@ fn streaming_readevalloop_lisp_source(
                 }
                 None => (probed_form, probed_next),
             };
-            eval.obarray_mut().materialize_read_symbols(form);
+            eval.obarray_mut().intern_member_symbols_in(form);
 
             let form_start = pos;
             if let Some(cursor) = eval.load_read_cursors.last_mut() {
@@ -4184,7 +4184,7 @@ fn value_runtime_literal(value: Value) -> Option<Value> {
         return Some(value);
     }
     // (quote X) -> X
-    value_quoted_symbol_name(value).map(|name| Value::symbol(&name))
+    value_quoted_symbol_name(value).map(|name| Value::from_sym_id(intern((&name).as_ref())))
 }
 
 #[derive(Default)]
@@ -4549,7 +4549,7 @@ pub(crate) fn collect_loaddefs_autoload_args(
         &mut state.symbol_names,
         &mut std::collections::BTreeSet::new(),
     );
-    let mut args = vec![Value::symbol(&name), file_value];
+    let mut args = vec![Value::from_sym_id(intern((&name).as_ref())), file_value];
     for item in items.iter().skip(3).take(3) {
         let Some(value) = value_runtime_literal(*item) else {
             return;
@@ -4814,6 +4814,60 @@ pub(crate) fn runtime_source_bootstrap_surface_state(
     )
 }
 
+/// True when the strip loops left only nil-valued property markers on ID.
+///
+/// That state exists so eager macro expansion cannot resurrect a stripped
+/// macro or documentation; it is NOT a runtime surface.
+fn symbol_plist_is_surface_free(
+    eval: &super::eval::Context,
+    id: neovm_value::intern::SymId,
+) -> bool {
+    let plist = eval.obarray().symbol_plist_id(id);
+    if plist.is_nil() {
+        return true;
+    }
+    let Some(items) = list_to_vec(&plist) else {
+        return false;
+    };
+    items.len() % 2 == 0 && items.chunks(2).all(|kv| kv[1].is_nil())
+}
+
+/// True when a transient-source symbol is only a leftover: no function, no
+/// canonical value, no non-nil property value, no runtime reference, and no
+/// runtime coding-system membership.
+///
+/// The constant/special flags a transient `defconst`/`defvar` set are NOT a
+/// surface: GNU's dumped image never loaded the source, so the symbol is
+/// absent entirely, and Lisp cannot observe those internal flags once the
+/// name is gone. Names referenced from preloaded values or functions are kept
+/// by `referenced_symbol_names`; loaddefs autoloads are filtered by the
+/// callers before this predicate.
+fn symbol_is_transient_source_leftover(
+    eval: &super::eval::Context,
+    id: neovm_value::intern::SymId,
+    referenced_symbol_names: &std::collections::BTreeSet<String>,
+) -> bool {
+    if id == neovm_value::intern::NIL_SYM_ID || id == neovm_value::intern::T_SYM_ID {
+        return false;
+    }
+    if referenced_symbol_names.contains(neovm_value::intern::resolve_sym(id)) {
+        return false;
+    }
+    if eval.obarray().symbol_function_id(id).is_some() {
+        return false;
+    }
+    if eval
+        .obarray()
+        .canonical_boundp_id(CanonicalAccess::DUMP, id)
+    {
+        return false;
+    }
+    if eval.coding_systems.contains_runtime_symbol(id) {
+        return false;
+    }
+    symbol_plist_is_surface_free(eval, id)
+}
+
 fn symbol_has_runtime_surface(eval: &super::eval::Context, id: neovm_value::intern::SymId) -> bool {
     id == neovm_value::intern::NIL_SYM_ID
         || id == neovm_value::intern::T_SYM_ID
@@ -4858,6 +4912,54 @@ pub(crate) fn symbol_has_runtime_surface_or_reference(
 ) -> bool {
     symbol_has_runtime_surface(eval, id)
         || referenced_symbol_names.contains(neovm_value::intern::resolve_sym(id))
+}
+
+/// Re-publish the event symbols of GNU's terminal translation maps.
+///
+/// GNU's reader interns every symbol in the map literals that `term/*.el`
+/// installs (`C-M-S-up`, ...), and the symbols stay members because the maps
+/// reference them. `normalize_bootstrap_runtime_surface` strips by name every
+/// symbol read from a transient source, and its referenced-name scan does not
+/// reach these map values, so the event heads were left uninterned in the
+/// dumped image (PEER 5786 census: 60+ reachable non-members held by
+/// `local-function-key-map`). The maps are Lisp-visible variables, so every
+/// stored canonical symbol belongs to the obarray; re-publish membership
+/// after the normalization pass.
+fn republish_terminal_translation_map_symbols(eval: &mut super::eval::Context) {
+    for name in [
+        "special-event-map",
+        "function-key-map",
+        "input-decode-map",
+        "local-function-key-map",
+        "key-translation-map",
+        "tool-bar-map",
+        "text-mode-map",
+    ] {
+        let id = neovm_value::intern::intern(name);
+        let Some(value) = eval
+            .obarray()
+            .canonical_value(neovm_value::symbol::CanonicalAccess::BOOTSTRAP, id)
+        else {
+            continue;
+        };
+        eval.obarray_mut().intern_member_symbols_in(value);
+    }
+}
+
+/// Whether `name`/`id` is a member GNU's initial obarray always keeps.
+///
+/// Two tables are exempt from the transient-source strip: the fixed-id
+/// `WellKnown` table and every compiled `DEFSYM` spelling. GNU interns the
+/// latter in `init_obarray_once` (`src/lread.c:5193-5203`) as statics and no
+/// `Funintern` runs on them during dump construction, so a spelling that a
+/// since-unloaded Lisp file made the reader intern - `call`, `ch`, `conses`,
+/// `current`, `d`, `entry`, `intervals`, `p`, `strings` - must stay in the
+/// dumped image.
+fn keeps_gnu_defsym_initial_member(name: &str, id: neovm_value::intern::SymId) -> bool {
+    neovm_value::intern::WellKnown::is_table_id(id)
+        || neovm_value::intern::is_active_gnu_defsym_spelling(name)
+        || neovm_value::intern::is_active_gnu_c_intern_spelling(name)
+        || neovm_value::intern::is_active_gnu_c_defun_spelling(name)
 }
 
 fn is_gnu_preloaded_syntax_symbol(name: &str) -> bool {
@@ -5203,7 +5305,11 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
         }
         let _ = super::builtins::builtin_put(
             eval,
-            vec![Value::symbol(name), Value::symbol(prop), Value::NIL],
+            vec![
+                Value::from_sym_id(intern((name).as_ref())),
+                Value::from_sym_id(intern((prop).as_ref())),
+                Value::NIL,
+            ],
         );
     }
 
@@ -5213,7 +5319,7 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("autoload-macro"),
                 Value::NIL,
             ],
@@ -5228,7 +5334,7 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("autoload-macro"),
                 Value::NIL,
             ],
@@ -5245,7 +5351,7 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("variable-documentation"),
                 Value::NIL,
             ],
@@ -5274,10 +5380,10 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
         // GNU's initial obarray keeps every DEFSYM even when loadup's source
         // surface for it is gone: C holds the symbol as a static, and
         // `Funintern` never runs on it during dump construction.
-        if neovm_value::intern::WellKnown::is_table_id(id) {
+        if keeps_gnu_defsym_initial_member(name, id) {
             continue;
         }
-        if !symbol_has_runtime_surface_or_reference(eval, id, &referenced_symbol_names) {
+        if symbol_is_transient_source_leftover(eval, id, &referenced_symbol_names) {
             eval.obarray_mut().unintern_id(id);
         }
     }
@@ -5289,7 +5395,7 @@ pub(crate) fn normalize_bootstrap_runtime_surface(
             let _ = super::builtins::builtin_put(
                 eval,
                 vec![
-                    Value::symbol(name),
+                    Value::from_sym_id(intern((name).as_ref())),
                     Value::symbol("autoload-macro"),
                     Value::NIL,
                 ],
@@ -5430,7 +5536,11 @@ pub fn normalize_final_dump_runtime_surface(
         }
         let _ = super::builtins::builtin_put(
             eval,
-            vec![Value::symbol(name), Value::symbol(prop), Value::NIL],
+            vec![
+                Value::from_sym_id(intern((name).as_ref())),
+                Value::from_sym_id(intern((prop).as_ref())),
+                Value::NIL,
+            ],
         );
     }
 
@@ -5440,7 +5550,7 @@ pub fn normalize_final_dump_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("autoload-macro"),
                 Value::NIL,
             ],
@@ -5455,7 +5565,7 @@ pub fn normalize_final_dump_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("autoload-macro"),
                 Value::NIL,
             ],
@@ -5472,7 +5582,7 @@ pub fn normalize_final_dump_runtime_surface(
         let _ = super::builtins::builtin_put(
             eval,
             vec![
-                Value::symbol(name),
+                Value::from_sym_id(intern((name).as_ref())),
                 Value::symbol("variable-documentation"),
                 Value::NIL,
             ],
@@ -5493,7 +5603,7 @@ pub fn normalize_final_dump_runtime_surface(
             let _ = super::builtins::builtin_put(
                 eval,
                 vec![
-                    Value::symbol(name),
+                    Value::from_sym_id(intern((name).as_ref())),
                     Value::symbol("autoload-macro"),
                     Value::NIL,
                 ],
@@ -5520,10 +5630,10 @@ pub fn normalize_final_dump_runtime_surface(
         // GNU's initial obarray keeps every DEFSYM even when loadup's source
         // surface for it is gone: C holds the symbol as a static, and
         // `Funintern` never runs on it during dump construction.
-        if neovm_value::intern::WellKnown::is_table_id(id) {
+        if keeps_gnu_defsym_initial_member(name, id) {
             continue;
         }
-        if !symbol_has_runtime_surface_or_reference(eval, id, &referenced_symbol_names) {
+        if symbol_is_transient_source_leftover(eval, id, &referenced_symbol_names) {
             eval.obarray_mut().unintern_id(id);
         }
     }
@@ -6133,6 +6243,7 @@ pub fn apply_runtime_startup_state(eval: &mut super::eval::Context) -> Result<()
     // Normalize the runtime-visible autoload/feature surface again after
     // those forms run.
     normalize_bootstrap_runtime_surface(eval, &project_root)?;
+    republish_terminal_translation_map_symbols(eval);
 
     // This surface emulates a GNU -Q FINAL image for runtime consumers, so
     // the interpreted-closure env filter belongs here even when the cached
@@ -6391,7 +6502,7 @@ pub fn bootstrap_evaluator_for_loadup(
         }
         let bootstrap_features = normalized_bootstrap_features(extra_features);
         for feature in &bootstrap_features {
-            let _ = eval.provide_value(Value::symbol(feature), None);
+            let _ = eval.provide_value(Value::from_sym_id(intern((feature).as_ref())), None);
         }
         maybe_trace_bootstrap_step(format!(
             "create_bootstrap_evaluator_with_features: provided-features={bootstrap_features:?}"
@@ -6753,7 +6864,7 @@ pub fn load_runtime_image_for_executable(
     if !extra_features.is_empty() {
         let bootstrap_features = normalized_bootstrap_features(extra_features);
         for feature in &bootstrap_features {
-            let _ = eval.provide_value(Value::symbol(feature), None);
+            let _ = eval.provide_value(Value::from_sym_id(intern((feature).as_ref())), None);
         }
     }
 

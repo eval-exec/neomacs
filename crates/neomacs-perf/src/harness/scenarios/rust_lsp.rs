@@ -16,7 +16,8 @@ use crate::harness::{
     deserialize_optional_error, mismatch, prepare_gui_runtime_directory, scenario_outcome,
     sha256_file,
 };
-use crate::harness::{GrammarProvenance, PackageProvenance, prepare_cached_tree_sitter_grammar};
+use crate::harness::{GrammarProvenance, PackageProvenance};
+use neomacs_melpa_test_support::extra_tree_sitter_grammar_pin;
 use neomacs_melpa_test_support::{EmacsRuntime, PreparedPackageSet, locked_melpa_sources};
 
 /// The workload identity behind a row.
@@ -46,9 +47,6 @@ const fn replay_fixture(scenario: ScenarioId) -> (&'static str, u64) {
         _ => ("rust-lsp-diagnostics.json", 4),
     }
 }
-const RUST_GRAMMAR_REPOSITORY: &str = "https://github.com/tree-sitter/tree-sitter-rust";
-const RUST_GRAMMAR_REVISION: &str = "18b0515fca567f5a10aee9978c6d2640e878671a";
-
 pub(crate) fn prepare(
     workspace_root: &Path,
     request: &RunRequest,
@@ -61,12 +59,8 @@ pub(crate) fn prepare(
     let lsp_mode = lsp_mode_source.package();
     let packages =
         PreparedPackageSet::from_locked_melpa(&EmacsRuntime::gnu_emacs(), lsp_mode, "lsp-mode.el")?;
-    let cached_grammar = prepare_cached_tree_sitter_grammar(
-        &EmacsRuntime::gnu_emacs(),
-        "rust",
-        RUST_GRAMMAR_REPOSITORY,
-        RUST_GRAMMAR_REVISION,
-    )?;
+    let rust_grammar_pin = extra_tree_sitter_grammar_pin("rust")?;
+    let cached_grammar = rust_grammar_pin.prepare()?;
     let grammar_directory = run_directory.join("tree-sitter");
     let grammar_libraries =
         copy_grammar_libraries(&cached_grammar, &grammar_directory, "tree-sitter-rust")?;
@@ -113,9 +107,9 @@ pub(crate) fn prepare(
             upstream_revision: lsp_mode_source.upstream_revision(),
         },
         tree_sitter_grammar: GrammarProvenance {
-            language: "rust",
-            repository: RUST_GRAMMAR_REPOSITORY,
-            revision: RUST_GRAMMAR_REVISION,
+            language: rust_grammar_pin.language,
+            repository: rust_grammar_pin.repository,
+            revision: rust_grammar_pin.revision,
         },
         editor,
         host: collect_host_provenance(request.machine_policy()),

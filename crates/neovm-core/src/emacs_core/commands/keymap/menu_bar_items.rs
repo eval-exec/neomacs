@@ -4,6 +4,7 @@
 //! pending popup anchor), so they are R0 bodies in the core command layer
 //! (STAGE4 design §5). They read evaluator state through `&Context` and the
 //! keymap Value substrate from the parent module.
+use neovm_value::intern::intern;
 
 use crate::emacs_core::error::{EvalResult, expect_args_range};
 use crate::emacs_core::eval::Context;
@@ -23,7 +24,7 @@ pub(crate) fn builtin_menu_bar_menu_at_x_y(eval: &mut Context, args: Vec<Value>)
         && frame_id.is_none_or(|id| id == anchor.frame_id)
         && let Some(menu_key) = &anchor.menu_key
     {
-        return Ok(Value::symbol(menu_key));
+        return Ok(Value::from_sym_id(intern((menu_key).as_ref())));
     }
     for (key, label) in menu_bar_top_level_items_for_frame(eval, frame_id) {
         let width = label.chars().count() as i64 + 1;

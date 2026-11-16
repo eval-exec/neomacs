@@ -14,6 +14,7 @@
 
 use neomacs_display_protocol::face::TtySpaceIdentity;
 use neovm_core::emacs_core::eval::VariableView;
+use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::xfaces::realization::XfacesRealizationContextExt;
 use neovm_core::face::realization::BasicFace;
 use neovm_core::window::DisplayFrameExt;
@@ -202,6 +203,22 @@ pub(crate) trait LayoutBufferView {
     fn layout_indexed_newline_count(&self, _range: EmacsByteRange) -> Option<usize> {
         None
     }
+    /// Position just past the `n`th `\n` in `[from, limit)`, and how many
+    /// were crossed (fewer than `n` when `limit` came first). The buffer's
+    /// `nth_newline_emacs_byte`: one `memchr` pass, or its text line index.
+    fn layout_nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize);
+    /// Last `\n` in `[floor, from)`. The buffer's `prev_newline_emacs_byte`:
+    /// `memrchr` over windows that widen back from `from`.
+    fn layout_prev_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        floor: EmacsBytePos,
+    ) -> Option<EmacsBytePos>;
     /// Prove the complete source has no text properties, including categories
     /// and aliases. Projected/unknown views must conservatively return false.
     fn layout_text_props_is_empty(&self) -> bool {
@@ -472,6 +489,23 @@ impl LayoutBufferView for Buffer {
         // The layout's counts are the line-number gutter's, repeated for
         // every redisplay: large enough ranges may build the index.
         self.indexed_newline_count(range, neovm_core::buffer::LineIndexBuild::IfLarge)
+    }
+
+    fn layout_nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize) {
+        self.nth_newline_emacs_byte(from, limit, n)
+    }
+
+    fn layout_prev_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        floor: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.prev_newline_emacs_byte(from, floor)
     }
 
     fn layout_text_props_is_empty(&self) -> bool {
@@ -2557,6 +2591,39 @@ impl<'a, B: LayoutBufferView> RustBufferAccess<'a, B> {
     }
 }
 
+impl<B: LayoutBufferView> crate::scroll_policy::LineText for RustBufferAccess<'_, B> {
+    fn charpos_to_bytepos(&self, charpos: i64) -> i64 {
+        RustBufferAccess::charpos_to_bytepos(self, charpos)
+    }
+
+    fn bytepos_to_charpos(&self, bytepos: i64) -> i64 {
+        layout_emacs_byte_pos_from_i64(bytepos).map_or(0, |pos| {
+            buffer_emacs_byte_pos_to_charpos(self.buffer, pos) as i64
+        })
+    }
+
+    fn after_nth_newline(&self, from: i64, to: i64, n: usize) -> (i64, usize) {
+        let (Some(from_pos), Some(to_pos)) = (
+            layout_emacs_byte_pos_from_i64(from),
+            layout_emacs_byte_pos_from_i64(to),
+        ) else {
+            return (from, 0);
+        };
+        let (after, crossed) = self
+            .buffer
+            .layout_nth_newline_emacs_byte(from_pos, to_pos, n);
+        (after.get() as i64, crossed)
+    }
+
+    fn last_newline_before(&self, from: i64, to: i64) -> Option<i64> {
+        let floor = layout_emacs_byte_pos_from_i64(from)?;
+        let before = layout_emacs_byte_pos_from_i64(to)?;
+        self.buffer
+            .layout_prev_newline_emacs_byte(before, floor)
+            .map(|newline| newline.get() as i64)
+    }
+}
+
 /// Soft cap (in emacs bytes) on how far ahead the display `invisible` scan
 /// walks the text-property interval tree per redisplay. Beyond this the scan
 /// returns a soft boundary and the checkpoint cache re-scans a screenful later;
@@ -3602,7 +3669,7 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
         let value = self
             .buffer
             .layout_overlays()
-            .overlay_get_named(overlay_id, Value::symbol(property))?;
+            .overlay_get_named(overlay_id, Value::from_sym_id(intern(property)))?;
         let string = value.as_lisp_string()?;
         if string.as_bytes().is_empty() {
             return None;
@@ -3687,11 +3754,19 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
             .unwrap_or_else(|| self.buffer.layout_point_max_char_pos().get()) as i64
     }
 
-    /// Get a specific text property at a position.
+    /// Get a character property (overlay first, then text) at a position.
+    ///
+    /// Mirrors GNU `get_it_property`, which calls `Fget_char_property` with the
+    /// window as OBJECT: a non-nil overlay value that applies to this window
+    /// wins over the text property. Its callers read `line-prefix` and
+    /// `wrap-prefix`.
     pub fn get_property(&self, charpos: i64, name: Value) -> Option<Value> {
         let bytepos = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, charpos);
-        self.buffer
-            .layout_text_prop_at_emacs_byte_pos(bytepos, name)
+        LayoutCharPropertyLookup::new(self.buffer, name).overlay_or_text_value_at(
+            self.buffer,
+            bytepos,
+            self.window_id,
+        )
     }
 }
 
@@ -6509,7 +6584,7 @@ impl FaceResolver {
 
         let base = (*self.default_face).clone();
         let mut resolved = self
-            .resolve_remapped_face_value_over(remapping, &base, &Value::symbol(name))
+            .resolve_remapped_face_value_over(remapping, &base, &Value::from_sym_id(intern(name)))
             .unwrap_or(base);
         resolved.face_id = BasicFaceId::SENTINEL;
         resolved.canonical_tty_role = None;

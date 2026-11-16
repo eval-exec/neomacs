@@ -2,7 +2,7 @@
 
 use super::*;
 #[cfg(test)]
-use crate::intern::intern_uninterned;
+use crate::intern::make_uninterned_symbol;
 #[cfg(test)]
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::value::{HashKey, HashTableTest, LispHashTable};
@@ -85,7 +85,7 @@ fn transitive_bare_symbol_cycle(claims: bool, generational: bool, ancestor: Symb
     unsafe { heap.set_generational_enabled(generational) };
     heap.install();
 
-    let symbol = TaggedValue::from_sym_id(intern_uninterned("u35-transitive-worker-weak-key"));
+    let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u35-transitive-worker-weak-key"));
     let id = symbol.as_bare_symbol_id().unwrap();
     let child = match ancestor {
         SymbolAncestor::Cons => heap.alloc_cons(symbol, TaggedValue::NIL),
@@ -361,7 +361,7 @@ fn tier_h_actual_worker_stop_mid_scan_hands_off_every_child_before_termination()
         let records: Vec<_> = (0..CHILDREN)
             .map(|i| heap.alloc_record(vec![TaggedValue::fixnum(i as i64)]))
             .collect();
-        let symbol = TaggedValue::from_sym_id(intern_uninterned("u35-worker-stop-callback"));
+        let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u35-worker-stop-callback"));
         let mut table = LispHashTable::new(HashTableTest::Eq);
         for (i, &record) in records.iter().enumerate() {
             let key = TaggedValue::fixnum(i as i64);

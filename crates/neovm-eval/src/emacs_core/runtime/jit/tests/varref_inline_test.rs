@@ -9,6 +9,7 @@ use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn body(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
@@ -106,7 +107,7 @@ fn every_symbol_shape_reads_as_the_interpreter_reads_it() {
         ("vri-never-defined", false),
     ];
     for &(name, inline) in cases {
-        let f = reader(Value::symbol(name));
+        let f = reader(Value::from_sym_id(intern(name)));
         let want = interpret(&mut eval, &f);
         let (got, shim_calls) = native(ctx_ptr, &f);
         assert_eq!(got, want, "{name}");
@@ -163,7 +164,8 @@ fn reads_survive_obarray_growth_and_absent_symbols() {
     let f = reader(Value::symbol("vri-grow"));
     let leaf = compile_bytecode_function(&f).expect("compiles");
     for i in 0..12_000 {
-        eval.obarray.intern(&format!("vri-growth-filler-{i}"));
+        eval.obarray
+            .intern_member(&format!("vri-growth-filler-{i}"));
     }
     eval_ok(&mut eval, "(setq vri-grow 'after)");
     VARREF_SHIM_CALLS.with(|c| c.set(0));
@@ -293,7 +295,7 @@ fn raw_varref_preserves_integer_values_across_inline_and_fallback_reads() {
     ] {
         let mut f = body(
             vec![Op::Add1, Op::VarRef(0), Op::List(2), Op::Return],
-            vec![Value::symbol(name)],
+            vec![Value::from_sym_id(intern(name))],
         );
         let mut params = f.params.named().expect("named fixture parameters").clone();
         params.required.push(neovm_value::intern::intern("x"));
@@ -407,7 +409,7 @@ fn raw_varref_keeps_heap_roots_live_at_a_later_collecting_call() {
             vec![
                 Value::make_int(1),
                 Value::make_int(2),
-                Value::symbol(name),
+                Value::from_sym_id(intern(name)),
                 Value::symbol("raw-vri-collect"),
             ],
         );
@@ -542,7 +544,7 @@ fn aliases_of_buffer_identities_keep_original_name_context() {
         ),
         ("buffer-undo-list", "(3 4)", Ok(())),
     ] {
-        let f = reader(Value::symbol(name));
+        let f = reader(Value::from_sym_id(intern(name)));
         let leaf = compile_bytecode_function(&f).expect("compiles");
         assert_eq!(
             eval.obarray

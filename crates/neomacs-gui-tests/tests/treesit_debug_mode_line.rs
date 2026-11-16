@@ -2,7 +2,7 @@
 use neomacs_gui_tests::{
     GuiBackend, GuiRunOptions, GuiRunStatus, GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
 };
-use neomacs_melpa_test_support::{EmacsRuntime, GNU31_TREE_SITTER_GRAMMARS};
+use neomacs_melpa_test_support::GNU31_TREE_SITTER_GRAMMARS;
 use std::{path::PathBuf, time::Duration};
 
 #[test]
@@ -12,7 +12,7 @@ fn go_grammar_and_multibyte_mode_line_render_with_debug_logging() {
         .iter()
         .find(|case| case.language == "go")
         .unwrap()
-        .prepare(&EmacsRuntime::gnu_emacs())
+        .prepare()
         .unwrap();
     let artifacts = root.join(format!(
         "tmp/neomacs-gui-tests/treesit-debug-{}",

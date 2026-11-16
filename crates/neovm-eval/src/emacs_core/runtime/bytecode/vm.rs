@@ -7730,7 +7730,7 @@ impl<'a> Vm<'a> {
     #[doc(hidden)]
     pub fn lookup_var(&mut self, name: &str) -> EvalResult {
         if name.starts_with(':') {
-            return Ok(Value::keyword(name));
+            return Ok(Value::from_kw_id(intern(&format!(":{name}"))));
         }
 
         let name_id = intern(name);
@@ -7765,7 +7765,7 @@ impl<'a> Vm<'a> {
 
         Err(signal(
             LispCondition::VoidVariable,
-            vec![Value::symbol(name)],
+            vec![Value::from_sym_id(intern(name))],
         ))
     }
 
@@ -7799,7 +7799,7 @@ impl<'a> Vm<'a> {
             ConstantWrite::Refused => {
                 return Err(signal(
                     LispCondition::SettingConstant,
-                    vec![Value::symbol(name)],
+                    vec![Value::from_sym_id(intern(name))],
                 ));
             }
         }
@@ -7947,13 +7947,13 @@ impl<'a> Vm<'a> {
                 } else {
                     Err(signal(
                         LispCondition::WrongTypeArgument,
-                        vec![Value::symbol(predicate), *val],
+                        vec![Value::from_sym_id(intern(predicate)), *val],
                     ))
                 }
             }
             _ => Err(signal(
                 LispCondition::WrongTypeArgument,
-                vec![Value::symbol(predicate), *val],
+                vec![Value::from_sym_id(intern(predicate)), *val],
             )),
         }
     }
@@ -10471,7 +10471,7 @@ impl<'a> Vm<'a> {
                         self.ctx.store_variable_by_name(&sym_name, args[0]);
                     }
                     self.ctx.obarray.make_special(&sym_name);
-                    return Ok(Value::symbol(sym_name));
+                    return Ok(Value::from_sym_id(intern((sym_name).as_ref())));
                 }
                 return Ok(Value::NIL);
             }

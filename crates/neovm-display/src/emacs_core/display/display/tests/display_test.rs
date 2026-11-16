@@ -2939,7 +2939,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
-    let assert_wta = |result: EvalResult, pred: &str, arg: Value| match result.kinded() {
+    let assert_wta = |result: EvalResult, pred: &'static str, arg: Value| match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
@@ -3378,13 +3378,14 @@ fn x_clipboard_input_context_batch_semantics() {
     let term = terminal_handle_value();
     let frame = Value::make_frame(1);
 
-    let assert_wrong_type = |result: EvalResult, pred: &str, arg: Value| match result.kinded() {
-        Err(FlowKind::Signal(sig)) => {
-            assert_eq!(sig.symbol_name(), "wrong-type-argument");
-            assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
-        }
-        other => panic!("expected wrong-type-argument signal, got {other:?}"),
-    };
+    let assert_wrong_type =
+        |result: EvalResult, pred: &'static str, arg: Value| match result.kinded() {
+            Err(FlowKind::Signal(sig)) => {
+                assert_eq!(sig.symbol_name(), "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
+            }
+            other => panic!("expected wrong-type-argument signal, got {other:?}"),
+        };
     let assert_error = |result: EvalResult, msg: &str| match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
@@ -3482,13 +3483,14 @@ fn x_clipboard_input_context_batch_semantics() {
 #[test]
 fn x_selection_property_tip_batch_semantics() {
     crate::test_utils::init_test_tracing();
-    let assert_wrong_type = |result: EvalResult, pred: &str, arg: Value| match result.kinded() {
-        Err(FlowKind::Signal(sig)) => {
-            assert_eq!(sig.symbol_name(), "wrong-type-argument");
-            assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
-        }
-        other => panic!("expected wrong-type-argument signal, got {other:?}"),
-    };
+    let assert_wrong_type =
+        |result: EvalResult, pred: &'static str, arg: Value| match result.kinded() {
+            Err(FlowKind::Signal(sig)) => {
+                assert_eq!(sig.symbol_name(), "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
+            }
+            other => panic!("expected wrong-type-argument signal, got {other:?}"),
+        };
     let assert_error = |result: EvalResult, msg: &str| match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");

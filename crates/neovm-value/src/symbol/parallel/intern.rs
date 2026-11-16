@@ -379,6 +379,13 @@ impl SymbolBacking {
             .map_err(|_| RegistrationError::Capacity)?;
         let floor = FunctionEpoch(symbols.sides.first().map_or(0, |side| side.floor()));
         let prepared = PreparedChunks::new(PreparedChunkCount(added), floor)?;
+        // SAFETY: disjoint membership-order vector, covered by the same
+        // WRITER. The admission below must record GNU's `intern_sym` order
+        // without a fallible push, so reserve its one slot here, before any
+        // state is published.
+        unsafe { &mut *addr_of_mut!((*root).member_order) }
+            .try_reserve(1)
+            .map_err(|_| RegistrationError::Capacity)?;
         // All fallible preparation ended. Any unexpected refusal below this
         // point is sticky poison before the outer WRITER is released.
         symbols.chunks.extend(prepared.chunks);
@@ -408,11 +415,16 @@ impl SymbolBacking {
                 .store(fault, std::sync::atomic::Ordering::Release);
             return Err(RegistrationError::Poisoned);
         }
-        // SAFETY: disjoint counters are updated under the retained World
-        // WRITER after all fallible preparation and slot publication ended.
+        // SAFETY: disjoint counters and the membership order are updated
+        // under the retained World WRITER after all fallible preparation and
+        // slot publication ended. The order slot was reserved above; the
+        // admission order this records is GNU's `intern_sym` order, so a
+        // later serial intern sorts behind this admission instead of ahead
+        // of it when completion reverses the bucket.
         unsafe {
             (*root).global_member_count = count;
             (*root).members_epoch = epoch;
+            (*root).member_order.push(metadata.id());
         }
         Ok(())
     }

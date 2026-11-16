@@ -34,7 +34,7 @@ pub enum ConnectionType {
 
 /// Status of a network connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NetworkStatus {
+pub(crate) enum NetworkStatus {
     Open,
     Closed,
     Failed(String),
@@ -42,7 +42,7 @@ pub enum NetworkStatus {
 }
 
 /// A TCP network stream.
-pub struct NetworkStream {
+pub(crate) struct NetworkStream {
     pub id: u64,
     pub name: Value,
     pub host: String,
@@ -52,15 +52,15 @@ pub struct NetworkStream {
     pub filter: Value,
     pub sentinel: Value,
     pub status: NetworkStatus,
-    pub output_buffer: Vec<u8>,
+    pub(crate) output_buffer: Vec<u8>,
     pub coding_system: Value,
-    pub conn_type: ConnectionType,
+    pub(crate) conn_type: ConnectionType,
 }
 
 /// Handles async output from a subprocess or network stream.
 pub struct ProcessFilter {
     pub function: Value,
-    pub output_buffer: LispString,
+    pub(crate) output_buffer: LispString,
 }
 
 /// Handles state changes for a process or network stream.
@@ -73,7 +73,7 @@ pub struct ProcessSentinel {
 // ---------------------------------------------------------------------------
 
 /// Central registry for network connections, process filters, and sentinels.
-pub struct NetworkManager {
+pub(crate) struct NetworkManager {
     connections: HashMap<u64, NetworkStream>,
     next_id: u64,
     process_filters: HashMap<u64, ProcessFilter>,
@@ -100,7 +100,7 @@ impl NetworkManager {
 
     /// Open a TCP connection to `host:port`.  Returns the connection id on
     /// success, or an error string on failure.
-    pub fn open_connection(
+    pub(crate) fn open_connection(
         &mut self,
         name: &str,
         host: &str,
@@ -145,7 +145,7 @@ impl NetworkManager {
     }
 
     /// Close a network connection.  Returns true if the connection existed.
-    pub fn close_connection(&mut self, id: u64) -> bool {
+    pub(crate) fn close_connection(&mut self, id: u64) -> bool {
         if let Some(conn) = self.connections.get_mut(&id) {
             // Drop the TcpStream, which closes the socket.
             conn.stream = None;
@@ -158,7 +158,7 @@ impl NetworkManager {
 
     /// Send raw bytes over a connection.  Returns the number of bytes
     /// written.
-    pub fn send_data(&mut self, id: u64, data: &[u8]) -> Result<usize, String> {
+    pub(crate) fn send_data(&mut self, id: u64, data: &[u8]) -> Result<usize, String> {
         let conn = self
             .connections
             .get_mut(&id)
@@ -193,7 +193,11 @@ impl NetworkManager {
     /// Receive data from a connection.  An optional timeout overrides the
     /// socket's default read timeout.  Returns the bytes read (may be empty
     /// if the timeout expires with no data).
-    pub fn receive_data(&mut self, id: u64, timeout: Option<Duration>) -> Result<Vec<u8>, String> {
+    pub(crate) fn receive_data(
+        &mut self,
+        id: u64,
+        timeout: Option<Duration>,
+    ) -> Result<Vec<u8>, String> {
         let conn = self
             .connections
             .get_mut(&id)
@@ -247,17 +251,17 @@ impl NetworkManager {
     }
 
     /// Query the status of a connection.
-    pub fn connection_status(&self, id: u64) -> Option<&NetworkStatus> {
+    pub(crate) fn connection_status(&self, id: u64) -> Option<&NetworkStatus> {
         self.connections.get(&id).map(|c| &c.status)
     }
 
     /// Get a reference to a connection by id.
-    pub fn get_connection(&self, id: u64) -> Option<&NetworkStream> {
+    pub(crate) fn get_connection(&self, id: u64) -> Option<&NetworkStream> {
         self.connections.get(&id)
     }
 
     /// List all connections: (id, name, host, port).
-    pub fn list_connections(&self) -> Vec<(u64, Value, &str, u16)> {
+    pub(crate) fn list_connections(&self) -> Vec<(u64, Value, &str, u16)> {
         self.connections
             .values()
             .map(|c| (c.id, c.name, c.host.as_str(), c.port))
@@ -265,7 +269,7 @@ impl NetworkManager {
     }
 
     /// Delete a connection entirely (close + remove from registry).
-    pub fn delete_connection(&mut self, id: u64) -> bool {
+    pub(crate) fn delete_connection(&mut self, id: u64) -> bool {
         if let Some(mut conn) = self.connections.remove(&id) {
             conn.stream = None;
             // Also remove associated filter/sentinel.
@@ -280,7 +284,7 @@ impl NetworkManager {
     // -- Process filters and sentinels --------------------------------------
 
     /// Set the filter function for a process/connection id.
-    pub fn set_process_filter(&mut self, process_id: u64, filter: Value) {
+    pub(crate) fn set_process_filter(&mut self, process_id: u64, filter: Value) {
         self.process_filters.insert(
             process_id,
             ProcessFilter {
@@ -291,28 +295,28 @@ impl NetworkManager {
     }
 
     /// Set the sentinel function for a process/connection id.
-    pub fn set_process_sentinel(&mut self, process_id: u64, sentinel: Value) {
+    pub(crate) fn set_process_sentinel(&mut self, process_id: u64, sentinel: Value) {
         self.process_sentinels
             .insert(process_id, ProcessSentinel { function: sentinel });
     }
 
     /// Get the filter function name for a process/connection.
-    pub fn get_process_filter(&self, process_id: u64) -> Option<Value> {
+    pub(crate) fn get_process_filter(&self, process_id: u64) -> Option<Value> {
         self.process_filters.get(&process_id).map(|f| f.function)
     }
 
     /// Get the sentinel function name for a process/connection.
-    pub fn get_process_sentinel(&self, process_id: u64) -> Option<Value> {
+    pub(crate) fn get_process_sentinel(&self, process_id: u64) -> Option<Value> {
         self.process_sentinels.get(&process_id).map(|s| s.function)
     }
 
     /// Remove the filter for a process/connection.
-    pub fn remove_process_filter(&mut self, process_id: u64) {
+    pub(crate) fn remove_process_filter(&mut self, process_id: u64) {
         self.process_filters.remove(&process_id);
     }
 
     /// Remove the sentinel for a process/connection.
-    pub fn remove_process_sentinel(&mut self, process_id: u64) {
+    pub(crate) fn remove_process_sentinel(&mut self, process_id: u64) {
         self.process_sentinels.remove(&process_id);
     }
 
@@ -320,7 +324,7 @@ impl NetworkManager {
 
     /// Drain and return accumulated output for a connection, decoding as
     /// UTF-8 (lossy).  An optional timeout triggers a receive attempt first.
-    pub fn accept_process_output(
+    pub(crate) fn accept_process_output(
         &mut self,
         id: u64,
         timeout: Option<Duration>,
@@ -340,7 +344,7 @@ impl NetworkManager {
     }
 
     /// Whether there is un-consumed output buffered for a connection.
-    pub fn process_output_pending(&self, id: u64) -> bool {
+    pub(crate) fn process_output_pending(&self, id: u64) -> bool {
         self.connections
             .get(&id)
             .map(|c| !c.output_buffer.is_empty())

@@ -138,7 +138,7 @@ fn allocate_bool_vector_word_capacity(
 // Errors
 // ---------------------------------------------------------------------------
 
-fn wrong_type(pred: &str, got: &Value) -> Flow {
+fn wrong_type(pred: &'static str, got: &Value) -> Flow {
     signal(
         LispCondition::WrongTypeArgument,
         vec![Value::symbol(pred), *got],

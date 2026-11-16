@@ -358,7 +358,7 @@ fn osr_binding_frame_exit_unwinds_inherited_and_new_binds_for_each_outcome() {
             if exit == "return" {
                 f.ops.push(Op::StackRef(1));
             } else {
-                let callee = f.add_constant(Value::symbol(exit));
+                let callee = f.add_constant(Value::from_sym_id(intern(exit)));
                 let tag = f.add_constant(Value::symbol(if exit == "signal" {
                     "error"
                 } else {

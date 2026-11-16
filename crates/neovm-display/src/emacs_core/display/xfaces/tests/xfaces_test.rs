@@ -158,8 +158,8 @@ fn uninterned_symbol_named_unspecified_is_not_a_color() {
     use crate::face::{Color, FaceAttrValue};
 
     let seed = Value::from_sym_id(WellKnown::Unspecified.id());
-    let fresh = Value::from_sym_id(neovm_value::intern::intern_uninterned("unspecified"));
-    let red_symbol = Value::from_sym_id(neovm_value::intern::intern_uninterned("red"));
+    let fresh = Value::from_sym_id(neovm_value::intern::make_uninterned_symbol("unspecified"));
+    let red_symbol = Value::from_sym_id(neovm_value::intern::make_uninterned_symbol("red"));
     assert_ne!(fresh.bits(), seed.bits());
     assert_eq!(fresh.as_bare_symbol_name(), Some("unspecified"));
     assert_eq!(red_symbol.as_bare_symbol_name(), Some("red"));

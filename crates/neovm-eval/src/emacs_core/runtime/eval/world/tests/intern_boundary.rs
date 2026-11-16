@@ -1,6 +1,6 @@
 //! Cold scalar bridge for retained serial bytecode/native cache witnesses.
 use crate::emacs_core::eval::Context;
-use neovm_value::intern::{SymId, intern, intern_uninterned};
+use neovm_value::intern::{SymId, intern, make_uninterned_symbol};
 
 struct StampsOn;
 impl Drop for StampsOn {
@@ -29,10 +29,10 @@ impl Context {
             self.obarray
                 .set_symbol_value_id(id, neovm_value::value::Value::string(&fresh));
         }
-        let mut gap = intern_uninterned("p3sym-c5-serial-cache-gap");
+        let mut gap = make_uninterned_symbol("p3sym-c5-serial-cache-gap");
         let target = (u64::from(gap.to_raw()) / 4096 + 2) * 4096 + 17;
         while u64::from(gap.to_raw()) + 1 < target {
-            gap = intern_uninterned("p3sym-c5-serial-cache-gap");
+            gap = make_uninterned_symbol("p3sym-c5-serial-cache-gap");
         }
         holders
     }

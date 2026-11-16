@@ -106,7 +106,7 @@ fn div_cx109_rear_nonsticky_blocks_property_at_end() {
 #[test]
 fn div_cx109_text_property_stickiness_on_insertion() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (bold bold nil nil bold bold)""#]];
+    let expect = expect_test::expect![[r#""OK (bold bold nil bold bold bold nil nil bold bold)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -118,15 +118,16 @@ fn div_cx109_text_property_stickiness_on_insertion() {
     (let ((props-at-2 (get-text-property 2 'face))
           (props-at-3 (get-text-property 3 'face))
           (props-at-4 (get-text-property 4 'face))
-          (props-at-5 (get-text-property 5 'face))))
+          (props-at-5 (get-text-property 5 'face)))
     (goto-char 3)
     (insert "Y")
     (list props-before
+          props-at-2 props-at-3 props-at-4 props-at-5
           (get-text-property 1 'face)
           (get-text-property 3 'face)
           (get-text-property 4 'face)
           (get-text-property 5 'face)
-          (get-text-property 6 'face))))
+          (get-text-property 6 'face)))))
 "##,
         expect,
     );

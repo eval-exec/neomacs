@@ -272,13 +272,13 @@ fn div_cx78_case_region_indent_fill_marker_overlay_undo_narrow_mega() {
                          (marker-position m)
                          (overlay-start ov) (overlay-end ov)
                          (point-min) (point-max)
-                         (text-properties-at 1)))))
+                         (text-properties-at 1))))
         (undo) (undo)
         (widen)
         (list state
               (buffer-string) (marker-position m)
               (overlay-start ov) (overlay-end ov)
-              (text-properties-at 1)))))"##,
+              (text-properties-at 1))))))"##,
         expect,
     );
 }

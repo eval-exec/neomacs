@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
+use neovm_value::intern::intern;
 use neovm_value::value::ValueKind;
 
 // --- Seq.el pure operations ---
@@ -1043,7 +1044,7 @@ fn cl_map_result_type_domain_matches_gnu_sequence_symbols() {
         (ClMapResultType::Vector, "vector"),
         (ClMapResultType::String, "string"),
     ] {
-        let value = Value::symbol(name);
+        let value = Value::from_sym_id(intern(name));
         assert_eq!(result_type.name(), name);
         assert_eq!(ClMapResultType::from_lisp_value(&value), Some(result_type));
     }

@@ -15,6 +15,7 @@ use crate::emacs_core::reader::{
 };
 use crate::window::DisplayFrameManagerExt;
 use neovm_value::error::{EvalResult, Flow, FlowKind, FlowResultExt};
+use neovm_value::intern::intern;
 use neovm_value::value::*;
 
 #[must_use = "a restored minibuffer window must invalidate its display chrome"]
@@ -518,7 +519,7 @@ pub(crate) fn run_minibuffer_mode_if_bound(
     mode: &str,
 ) -> EvalResult {
     if eval.obarray().symbol_function(mode).is_some() {
-        eval.apply0(Value::symbol(mode))
+        eval.apply0(Value::from_sym_id(intern(mode)))
     } else {
         Ok(Value::NIL)
     }

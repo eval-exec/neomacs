@@ -12592,6 +12592,114 @@ fn layout_frame_rust_renders_line_prefix_through_row_builder() {
 }
 
 #[test]
+fn layout_frame_rust_renders_overlay_line_prefix_like_a_text_property_one() {
+    // GNU reads `line-prefix` through `get_it_property` ->
+    // `Fget_char_property` (overlays first, then text properties), so an
+    // overlay prefix is drawn exactly like a text-property prefix.
+    let (_eval, _buffer, _frame, rows, _cw, _ch) =
+        layout_main_text_rows_with("", |eval, buffer| {
+            eval.buffer_manager_mut().set_current(buffer);
+            eval.eval_str(
+                "(progn
+                   (insert \"A-plain\\n\")
+                   (let ((b (point)))
+                     (insert \"B-overlay-line-prefix\\n\")
+                     (overlay-put (make-overlay b (point)) 'line-prefix \">>>>\"))
+                   (let ((b (point)))
+                     (insert \"C-textprop-line-prefix\\n\")
+                     (put-text-property b (point) 'line-prefix \"####\"))
+                   (goto-char (point-min)))",
+            )
+            .expect("overlay and text-property line-prefix buffer");
+        });
+    let texts: Vec<String> = rows
+        .iter()
+        .map(|row| glyphs_logical_text(&row.glyphs[1]))
+        .collect();
+    let row_containing = |needle: &str| {
+        texts
+            .iter()
+            .find(|text| text.contains(needle))
+            .unwrap_or_else(|| panic!("no row contains {needle:?}: {texts:?}"))
+    };
+
+    assert!(
+        row_containing("A-plain").starts_with("A-plain"),
+        "a line without a prefix stays unprefixed: {texts:?}"
+    );
+    assert!(
+        row_containing("B-overlay-line-prefix").starts_with(">>>>B-overlay-line-prefix"),
+        "an overlay line-prefix must be drawn before its line: {texts:?}"
+    );
+    assert!(
+        row_containing("C-textprop-line-prefix").starts_with("####C-textprop-line-prefix"),
+        "a text-property line-prefix keeps being drawn: {texts:?}"
+    );
+}
+
+#[test]
+fn layout_frame_rust_scopes_overlay_line_prefix_to_its_window_property() {
+    // GNU `get_char_property_and_overlay` skips an overlay whose `window`
+    // property names another window (`overlay_matches_window`), so a
+    // `line-prefix` overlay bound to the left window must not be drawn in a
+    // right window showing the same buffer.
+    let (mut eval, frame_id, buf_id, left_window) =
+        incr_editing_frame("first-line\nsecond-line\n", 800, 600);
+    let right_window = eval
+        .frame_manager_mut()
+        .split_window(
+            frame_id,
+            left_window,
+            neovm_core::window::SplitDirection::Horizontal,
+            buf_id,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .expect("split window onto the same buffer");
+    eval.buffer_manager_mut().set_current(buf_id);
+    let overlay = eval
+        .eval_str("(let ((o (make-overlay 1 11))) (overlay-put o 'line-prefix \">>>>\") o)")
+        .expect("make line-prefix overlay");
+    eval.eval_form(Value::list(vec![
+        Value::symbol("overlay-put"),
+        Value::list(vec![Value::symbol("quote"), overlay]),
+        Value::list(vec![Value::symbol("quote"), Value::symbol("window")]),
+        Value::make_window(left_window.0),
+    ]))
+    .expect("bind overlay to the left window");
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let texts_for = |window: neovm_core::window::WindowId| {
+        enabled_window_row_texts(
+            state
+                .window_matrices
+                .iter()
+                .find(|entry| entry.window_id.get() == window.0 as i64)
+                .expect("window matrix"),
+        )
+    };
+    let left = texts_for(left_window);
+    let right = texts_for(right_window);
+    assert!(
+        left.iter().any(|text| text.starts_with(">>>>first-line")),
+        "the overlay's own window draws its prefix: {left:?}"
+    );
+    assert!(
+        right.iter().any(|text| text.contains("first-line")),
+        "the other window still shows the line: {right:?}"
+    );
+    assert!(
+        !right.iter().any(|text| text.contains(">>>>")),
+        "a window-bound overlay prefix must not leak into another window: {right:?}"
+    );
+}
+
+#[test]
 fn layout_frame_rust_remaps_named_faces_on_line_and_wrap_prefix_strings() {
     use neomacs_display_protocol::types::Color;
 

@@ -22,11 +22,10 @@ use crate::tagged::SymbolMode;
 pub use native_message::CErrorMessage;
 
 use crate::error::{Flow, signal_with_data, signal_with_data_id};
-use crate::intern::{SymId, T_SYM_ID, intern, resolve_sym};
+use crate::intern::{SymId, T_SYM_ID, intern};
 use crate::symbol::Obarray;
 use crate::value::ValueKind;
 use crate::value::*;
-use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Obarray-based error hierarchy helpers
@@ -35,8 +34,21 @@ use std::collections::{HashMap, HashSet};
 /// Set `error-conditions` and `error-message` properties on `name` in the
 /// obarray.  `conditions` is the full list of condition symbols (including
 /// `name` itself, its parents, and their transitive ancestors).
-fn put_error_properties(obarray: &mut Obarray, name: &str, message: &str, conditions: Vec<&str>) {
-    let cond_list = Value::list(conditions.iter().map(|s| Value::symbol(*s)).collect());
+fn put_error_properties<I, S>(obarray: &mut Obarray, name: &str, message: &str, conditions: I)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    // GNU `define-error` interns every condition name it publishes; the
+    // port builds the transitive list by name, so publish each canonical id
+    // as a member before storing the list.
+    let mut values = Vec::new();
+    for condition in conditions {
+        let id = crate::intern::intern(condition.as_ref());
+        obarray.ensure_interned_global_id(id);
+        values.push(Value::from_sym_id(id));
+    }
+    let cond_list = Value::list(values);
     obarray
         .put_property(name, "error-conditions", cond_list)
         .expect("error-conditions plist should always be valid during init");
@@ -85,68 +97,6 @@ fn iter_symbol_list(value: &Value, symbol_mode: SymbolMode) -> Vec<String> {
 // ---------------------------------------------------------------------------
 // Hierarchical signal matching (for condition-case)
 // ---------------------------------------------------------------------------
-
-/// Check whether `signal_sym` matches `condition_sym` using the error
-/// hierarchy stored in the obarray.
-///
-/// Returns `true` if:
-/// - `condition_sym` is `"t"` (catches everything),
-/// - `condition_sym == signal_sym`, or
-/// - `condition_sym` appears in `signal_sym`'s `error-conditions` plist.
-///
-/// This is the hierarchical replacement for the flat `signal_matches` in
-/// `error.rs`.
-pub fn signal_matches_hierarchical(
-    obarray: &Obarray,
-    signal_sym: &str,
-    condition_sym: &str,
-    symbol_mode: SymbolMode,
-) -> bool {
-    // `t` catches all signals.
-    if condition_sym == "t" {
-        return true;
-    }
-    // Exact match (fast path).
-    if signal_sym == condition_sym {
-        return true;
-    }
-    // Check the error-conditions plist on the signal symbol.
-    if let Some(conds) = obarray.get_property(signal_sym, "error-conditions") {
-        for sym_name in iter_symbol_list(&conds, symbol_mode) {
-            if sym_name == condition_sym {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Like `signal_matches_hierarchical` but matches a runtime `Value`
-/// produced by compiled bytecode condition handlers.
-pub fn signal_matches_condition_value(
-    obarray: &Obarray,
-    signal_sym: &str,
-    pattern: &Value,
-    symbol_mode: SymbolMode,
-) -> bool {
-    match pattern.kind() {
-        ValueKind::T => true,
-        ValueKind::Nil => false,
-        ValueKind::Cons => list_to_vec(pattern).is_some_and(|items| {
-            items
-                .iter()
-                .any(|item| signal_matches_condition_value(obarray, signal_sym, item, symbol_mode))
-        }),
-        _ => {
-            // Use symbol_id to handle both bare symbols and symbol-with-pos wrappers.
-            if let Some(id) = crate::value::symbol_id(pattern, symbol_mode) {
-                signal_matches_hierarchical(obarray, signal_sym, resolve_sym(id), symbol_mode)
-            } else {
-                false
-            }
-        }
-    }
-}
 
 // Every caught signal reads this property (GNU's `Qerror_conditions`).
 fn error_conditions_sym_id() -> SymId {
@@ -541,16 +491,6 @@ pub fn init_standard_errors(obarray: &mut Obarray) {
         "invalid escape sequence",
         &["json-parse-error"],
     );
-    // Neomacs extension: serialization-side failures (GNU signals a plain
-    // `error` for these). Kept as a `json-error` subtype so existing
-    // `condition-case` handlers on `json-error` still catch them.
-    register_simple(
-        obarray,
-        "json-serialize-error",
-        "JSON serialize error",
-        &["json-error"],
-    );
-
     // --- treesit-error family (GNU src/treesit.c `syms_of_treesit`) ---
     register_simple(
         obarray,
@@ -697,8 +637,7 @@ pub fn register_dbus_error(obarray: &mut Obarray) {
 
 fn register_simple(obarray: &mut Obarray, name: &str, message: &str, parents: &[&str]) {
     let conditions = build_conditions_from_obarray(obarray, name, parents);
-    let cond_refs: Vec<&str> = conditions.iter().map(|s| s.as_str()).collect();
-    put_error_properties(obarray, name, message, cond_refs);
+    put_error_properties(obarray, name, message, &conditions);
 }
 
 // ---------------------------------------------------------------------------
@@ -728,234 +667,6 @@ pub fn build_signal_flow_id(symbol: SymId, data: Value) -> Flow {
 // ErrorRegistry (HashMap-based, standalone — usable without an Obarray)
 // ---------------------------------------------------------------------------
 
-/// A standalone registry that tracks error parent relationships.
-///
-/// This can be used independently of the obarray (e.g. for testing or
-/// embedding).  For the full Emacs-compatible approach, prefer the
-/// obarray-based functions above.
-pub struct ErrorRegistry {
-    /// Map from error symbol name to its parent error symbol names.
-    parents: HashMap<SymId, Vec<SymId>>,
-}
-
-impl ErrorRegistry {
-    /// Create a new registry pre-populated with the standard Emacs error
-    /// hierarchy.
-    pub fn new() -> Self {
-        let mut reg = Self {
-            parents: HashMap::new(),
-        };
-        reg.init_standard_hierarchy();
-        reg
-    }
-
-    /// Register a new error type using symbol identity.
-    pub fn define_error_sym(&mut self, name: SymId, _message: &str, parents: &[SymId]) {
-        let parent_list = if parents.is_empty() {
-            vec![intern("error")]
-        } else {
-            parents.to_vec()
-        };
-        self.parents.insert(name, parent_list);
-    }
-
-    /// Register a new error type.
-    pub fn define_error(&mut self, name: &str, _message: &str, parents: &[&str]) {
-        let name = intern(name);
-        let parents: Vec<SymId> = parents.iter().map(|s| intern(s)).collect();
-        self.define_error_sym(name, _message, &parents);
-    }
-
-    /// Check whether `signal` inherits from `condition` (directly or
-    /// transitively).
-    pub fn signal_matches_condition_sym(&self, signal_sym: SymId, condition: SymId) -> bool {
-        if condition == intern("t") {
-            return true;
-        }
-        if signal_sym == condition {
-            return true;
-        }
-        let mut visited = HashSet::new();
-        let mut stack = vec![signal_sym];
-        while let Some(current) = stack.pop() {
-            if !visited.insert(current) {
-                continue;
-            }
-            if let Some(parents) = self.parents.get(&current) {
-                for &parent in parents {
-                    if parent == condition {
-                        return true;
-                    }
-                    stack.push(parent);
-                }
-            }
-        }
-        false
-    }
-
-    pub fn signal_matches_condition(&self, signal_sym: &str, condition: &str) -> bool {
-        self.signal_matches_condition_sym(intern(signal_sym), intern(condition))
-    }
-
-    /// Collect the full condition list for a signal (self + all ancestors).
-    pub fn conditions_for_sym(&self, signal_sym: SymId) -> Vec<SymId> {
-        let mut result = vec![signal_sym];
-        let mut visited = HashSet::new();
-        visited.insert(signal_sym);
-        let mut stack = vec![signal_sym];
-        while let Some(current) = stack.pop() {
-            if let Some(parents) = self.parents.get(&current) {
-                for &parent in parents {
-                    if visited.insert(parent) {
-                        result.push(parent);
-                        stack.push(parent);
-                    }
-                }
-            }
-        }
-        result
-    }
-
-    pub fn conditions_for(&self, signal_sym: &str) -> Vec<String> {
-        self.conditions_for_sym(intern(signal_sym))
-            .into_iter()
-            .map(|sym| resolve_sym(sym).to_owned())
-            .collect()
-    }
-
-    fn init_standard_hierarchy(&mut self) {
-        // Root.
-        self.parents.insert(intern("error"), vec![]);
-
-        let simple_children_of_error = [
-            "quit",
-            "user-error",
-            "args-out-of-range",
-            "beginning-of-buffer",
-            "end-of-buffer",
-            "buffer-read-only",
-            "coding-system-error",
-            "invalid-function",
-            "invalid-read-syntax",
-            "invalid-regexp",
-            "mark-inactive",
-            "no-catch",
-            "scan-error",
-            "search-failed",
-            "setting-constant",
-            "void-function",
-            "void-variable",
-            "wrong-number-of-arguments",
-            "wrong-type-argument",
-            "cl-assertion-failed",
-            "permission-denied",
-            "recursion-error",
-            "inhibited-interaction",
-        ];
-        for name in &simple_children_of_error {
-            self.parents.insert(intern(name), vec![intern("error")]);
-        }
-
-        // GNU data.c makes text-read-only a subcondition of buffer-read-only
-        // (not a direct child of error), so `(buffer-read-only ...)' handlers
-        // catch a text-read-only signal.
-        self.parents
-            .insert(intern("text-read-only"), vec![intern("buffer-read-only")]);
-
-        // arith-error family.
-        self.parents
-            .insert(intern("arith-error"), vec![intern("error")]);
-        for name in &[
-            "overflow-error",
-            "range-error",
-            "domain-error",
-            "underflow-error",
-        ] {
-            self.parents
-                .insert(intern(name), vec![intern("arith-error")]);
-        }
-
-        // file-error family.
-        self.parents
-            .insert(intern("file-error"), vec![intern("error")]);
-        for name in &[
-            "file-already-exists",
-            "file-date-error",
-            "file-locked",
-            "file-missing",
-            "file-notify-error",
-        ] {
-            self.parents
-                .insert(intern(name), vec![intern("file-error")]);
-        }
-        std::cfg_select! {
-            neomacs_have_dbus => {
-                self.parents
-                    .insert(intern("dbus-error"), vec![intern("error")]);
-            }
-            _ => {}
-        }
-
-        // json-error family (mirrors GNU src/json.c `syms_of_json`).
-        self.parents
-            .insert(intern("json-error"), vec![intern("error")]);
-        for name in &[
-            "json-out-of-memory",
-            "json-parse-error",
-            "json-object-too-deep",
-            "json-utf8-decode-error",
-            "json-invalid-surrogate-error",
-            "json-number-out-of-range-error",
-            // Neomacs extension (GNU uses a plain `error` here).
-            "json-serialize-error",
-        ] {
-            self.parents
-                .insert(intern(name), vec![intern("json-error")]);
-        }
-        // These are children of json-parse-error in GNU, not json-error.
-        for name in &[
-            "json-end-of-file",
-            "json-trailing-content",
-            "json-escape-sequence-error",
-        ] {
-            self.parents
-                .insert(intern(name), vec![intern("json-parse-error")]);
-        }
-
-        // remote-file-error is a child of file-error.
-        self.parents
-            .insert(intern("remote-file-error"), vec![intern("file-error")]);
-
-        // Dynamic module errors (mirrors GNU src/emacs-module.c).
-        for name in &[
-            "module-out-of-memory",
-            "module-load-failed",
-            "invalid-arity",
-            "memory-buffer-too-small",
-        ] {
-            self.parents.insert(intern(name), vec![intern("error")]);
-        }
-        for name in &[
-            "module-open-failed",
-            "module-not-gpl-compatible",
-            "missing-module-init-function",
-            "module-init-failed",
-        ] {
-            self.parents
-                .insert(intern(name), vec![intern("module-load-failed")]);
-        }
-    }
-}
-
-impl Default for ErrorRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-#[cfg(test)]
-#[path = "tests/errors_test.rs"]
-mod tests;
