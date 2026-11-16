@@ -915,7 +915,15 @@ pub fn set_coding_system_priority(eval: &mut super::eval::Context, args: Vec<Val
     // variable (coding.c) from the reordered category priorities.
     let categories =
         neovm_text::emacs_core::coding::coding_category_priority_list(&eval.coding_systems, mode);
-    let list = Value::list(categories.into_iter().map(Value::symbol).collect());
+    // GNU interns the `coding-category-*` symbols while building
+    // `Vcoding_category_list` (coding.c); publish them through the member
+    // funnel instead of wrapping bare name-registry ids (PEER 5786).
+    let list = Value::list(
+        categories
+            .into_iter()
+            .map(|category| eval.intern_member_id_value(category))
+            .collect(),
+    );
     eval.set_variable("coding-category-list", list);
     Ok(result)
 }

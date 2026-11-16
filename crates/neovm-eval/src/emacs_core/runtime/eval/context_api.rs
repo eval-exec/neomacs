@@ -171,6 +171,18 @@ impl Context {
         Value::from_sym_id(self.obarray.intern_member_lisp_string(name))
     }
 
+    /// Publish an existing canonical `SymId` as an obarray member and return
+    /// it as a Value.
+    ///
+    /// Use when the id was resolved earlier (for example a priority list of
+    /// category ids) and GNU interns the name at publication. A non-canonical
+    /// `make-symbol` id is left uninterned, as in GNU.
+    #[inline]
+    pub fn intern_member_id_value(&mut self, id: SymId) -> Value {
+        self.obarray.ensure_interned_global_id(id);
+        Value::from_sym_id(id)
+    }
+
     /// GNU `make-symbol`: a fresh uninterned symbol, as a Value. Never an
     /// obarray member; use only where GNU itself calls `make-symbol`.
     #[inline]

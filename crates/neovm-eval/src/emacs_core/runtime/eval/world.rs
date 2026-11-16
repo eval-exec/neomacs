@@ -930,7 +930,7 @@ obarray_method_proxies! {
     pub fn intern_member_lisp_value(name_value: neovm_value::tagged::value::TaggedValue) -> SymId;
     pub fn ensure_interned_global_id(id: SymId);
     #[doc(hidden)]
-    pub fn materialize_read_symbols(value: Value);
+    pub fn intern_member_symbols_in(value: Value);
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_symbol_value(name: &str, value: Value);
     pub fn seed_value(name: &str, value: Value);

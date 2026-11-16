@@ -1976,7 +1976,7 @@ fn streaming_readevalloop(
         let Some((form, next_pos)) = read_result else {
             break; // EOF
         };
-        eval.obarray_mut().materialize_read_symbols(form);
+        eval.obarray_mut().intern_member_symbols_in(form);
 
         // Log a preview of the form source text.
         let form_start = pos;
@@ -2157,7 +2157,7 @@ fn streaming_readevalloop_lisp_source(
                 }
                 None => (probed_form, probed_next),
             };
-            eval.obarray_mut().materialize_read_symbols(form);
+            eval.obarray_mut().intern_member_symbols_in(form);
 
             let form_start = pos;
             if let Some(cursor) = eval.load_read_cursors.last_mut() {
@@ -4860,6 +4860,38 @@ pub(crate) fn symbol_has_runtime_surface_or_reference(
         || referenced_symbol_names.contains(neovm_value::intern::resolve_sym(id))
 }
 
+/// Re-publish the event symbols of GNU's terminal translation maps.
+///
+/// GNU's reader interns every symbol in the map literals that `term/*.el`
+/// installs (`C-M-S-up`, ...), and the symbols stay members because the maps
+/// reference them. `normalize_bootstrap_runtime_surface` strips by name every
+/// symbol read from a transient source, and its referenced-name scan does not
+/// reach these map values, so the event heads were left uninterned in the
+/// dumped image (PEER 5786 census: 60+ reachable non-members held by
+/// `local-function-key-map`). The maps are Lisp-visible variables, so every
+/// stored canonical symbol belongs to the obarray; re-publish membership
+/// after the normalization pass.
+fn republish_terminal_translation_map_symbols(eval: &mut super::eval::Context) {
+    for name in [
+        "special-event-map",
+        "function-key-map",
+        "input-decode-map",
+        "local-function-key-map",
+        "key-translation-map",
+        "tool-bar-map",
+        "text-mode-map",
+    ] {
+        let id = neovm_value::intern::intern(name);
+        let Some(value) = eval
+            .obarray()
+            .canonical_value(neovm_value::symbol::CanonicalAccess::BOOTSTRAP, id)
+        else {
+            continue;
+        };
+        eval.obarray_mut().intern_member_symbols_in(value);
+    }
+}
+
 /// Whether `name`/`id` is a member GNU's initial obarray always keeps.
 ///
 /// Two tables are exempt from the transient-source strip: the fixed-id
@@ -6148,6 +6180,7 @@ pub fn apply_runtime_startup_state(eval: &mut super::eval::Context) -> Result<()
     // Normalize the runtime-visible autoload/feature surface again after
     // those forms run.
     normalize_bootstrap_runtime_surface(eval, &project_root)?;
+    republish_terminal_translation_map_symbols(eval);
 
     // This surface emulates a GNU -Q FINAL image for runtime consumers, so
     // the interpreted-closure env filter belongs here even when the cached

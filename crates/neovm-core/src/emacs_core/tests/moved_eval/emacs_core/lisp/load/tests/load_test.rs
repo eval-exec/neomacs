@@ -15561,7 +15561,7 @@ fn runtime_cleanup_preserves_symbols_referenced_by_live_values() {
     let symbol = Value::from_sym_id(symbol_id);
     let live_value = Value::list(vec![symbol]);
 
-    eval.obarray_mut().materialize_read_symbols(live_value);
+    eval.obarray_mut().intern_member_symbols_in(live_value);
     eval.obarray_mut()
         .set_symbol_value("custom-face-attributes", live_value);
 

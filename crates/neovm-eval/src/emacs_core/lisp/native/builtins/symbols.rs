@@ -4752,6 +4752,13 @@ pub(crate) fn cache_event_symbol_properties_in_obarray(
     obarray: &mut Obarray,
     symbol: SymId,
 ) -> EvalResult {
+    // GNU creates every derived event symbol in `modify_event_symbol` /
+    // `apply_modifiers` with `intern` (src/keyboard.c:7800-7830), so the
+    // event heads a keymap or a Lisp caller observes are obarray members.
+    // The port builds the `C-M-S-kp-up`-style names from strings; publish
+    // membership at this one cache boundary, which both event-symbol startup
+    // seeding and `define-key` go through (PEER 5786 census).
+    obarray.ensure_interned_global_id(symbol);
     let symbol_value = Value::from_sym_id(symbol);
     let name = symbol_value.as_bare_symbol_name().ok_or_else(|| {
         signal(
