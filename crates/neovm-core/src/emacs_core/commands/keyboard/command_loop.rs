@@ -608,6 +608,9 @@ impl CommandLoopHost for Context {
             self.assign_by_id(CommandLoopSymbol::RealThisCommand.id(), Value::NIL);
             self.assign_by_id(CommandLoopSymbol::ThisOriginalCommand.id(), Value::NIL);
 
+            // Before every input wait, the first one included.
+            self.command_loop_1_idle_sweep();
+
             // Read a complete key sequence (may be multi-key, e.g. C-x C-f).
             //
             // Bind `inhibit-quit` to t around the command-loop read, the way
@@ -1027,7 +1030,6 @@ impl CommandLoopHost for Context {
             // interval — we approximate that with a "no pending
             // events in the unread queue" probe.
             self.command_loop_1_maybe_auto_save();
-            self.command_loop_1_idle_sweep();
             if let Some(observation) = command_observation.as_mut() {
                 observation.complete_finalization();
             }
@@ -1122,7 +1124,8 @@ impl CommandLoopHost for Context {
         self.run_command_loop_auto_save("input interval");
     }
 
-    /// Finish a deferred sweep while no input is pending.
+    /// Finish a deferred sweep while no input is pending, before the
+    /// command loop reads the next key sequence.
     ///
     /// Safe points run sweep slices only as the mutator allocates
     /// (`TaggedHeap::sweep_slice_due`), so a session that goes idle right
@@ -1130,7 +1133,9 @@ impl CommandLoopHost for Context {
     /// `gcs-done`, the doomed finalizers, `post-gc-hook`, the swept GPU
     /// handles -- until it allocates again.  GNU `read_char` asks for a
     /// collection before it waits, when no input is pending (keyboard.c:2975-2977,
-    /// `if (!detect_input_pending_run_timers (0)) maybe_gc ();`).
+    /// `if (!detect_input_pending_run_timers (0)) maybe_gc ();`), on every
+    /// read: a sweep already in progress when the loop starts is drained
+    /// before the first one.
     /// Input is polled between batches of slices, so a key pressed
     /// meanwhile waits for one batch at most.
     fn command_loop_1_idle_sweep(&mut self) {

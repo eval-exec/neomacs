@@ -84,9 +84,10 @@ fn tty_erase_char_defaults_to_nil_and_is_special_like_gnu() {
     );
 }
 
-#[test]
-fn an_idle_command_loop_finishes_a_paced_deferred_sweep() {
-    use super::command_loop::CommandLoopHost;
+/// A context whose paced deferred sweep is in progress and owes no slice to
+/// a mutator that does not allocate, with the `gcs-done` count before the
+/// cycle completes.
+fn context_with_a_paced_deferred_sweep() -> (crate::emacs_core::Context, u64) {
     use neovm_value::heap_types::LispString;
     // Select the concurrent (non-generational) collector for this heap only:
     // the knob is read per heap, when the constructor runs, and the previous
@@ -138,6 +139,13 @@ fn an_idle_command_loop_finishes_a_paced_deferred_sweep() {
         "idle safe points finished the paced sweep"
     );
     assert_eq!(context.gc_count_for_test(), completed);
+    (context, completed)
+}
+
+#[test]
+fn an_idle_command_loop_finishes_a_paced_deferred_sweep() {
+    use super::command_loop::CommandLoopHost;
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
     context.command_loop_1_idle_sweep();
     assert!(!context.tagged_heap().sweep_in_progress());
     assert_eq!(
@@ -145,4 +153,26 @@ fn an_idle_command_loop_finishes_a_paced_deferred_sweep() {
         completed + 1,
         "the idle command loop completes the cycle"
     );
+}
+
+#[test]
+fn the_command_loop_finishes_a_paced_deferred_sweep_before_its_first_input_wait() {
+    use super::command_loop::CommandLoopHost;
+    // GNU `read_char` collects before it waits when no input is pending
+    // (keyboard.c:2975-2977), so a sweep already in progress when the loop
+    // starts (after startup, say) must not wait for the first command.
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    context.command_loop_mut().running = true;
+    // No input source: the first read reaches end of input and the loop
+    // returns without running a command.
+    let result = context.command_loop_1();
+    assert!(
+        result.is_ok(),
+        "the command loop failed before its first read"
+    );
+    assert!(
+        !context.tagged_heap().sweep_in_progress(),
+        "the first input wait left the deferred sweep unfinished"
+    );
+    assert_eq!(context.gc_count_for_test(), completed + 1);
 }
