@@ -309,3 +309,46 @@ fn hash_a_live_key_mutated_after_planning_answers_from_the_plan() {
     assert_eq!(dispatch(&table, nested(5)), (hit, None));
     assert_eq!(dispatch(&table, nested(6)), (None, hit));
 }
+
+/// GNU `hash_table_thaw` (src/fns.c) rehashes every dumped entry and keeps
+/// all `count` of them. Two live keys mutated into `equal` shapes are dumped
+/// as the same materialized key; the rebuild keeps both entries, in order.
+#[test]
+fn hash_rebuild_keeps_entries_whose_keys_became_equal() {
+    let mut table = LispHashTable::new(HashTableTest::Equal);
+    let first = list(&[Value::symbol("a")]);
+    let second = list(&[Value::symbol("b")]);
+    put(&mut table.data, first, Value::fixnum(1));
+    put(&mut table.data, second, Value::fixnum(2));
+    second.set_car(Value::symbol("a"));
+    // What the dump writer writes: each key object's materialized key, the
+    // value, and the key object as the snapshot.
+    let dumped: Vec<_> = table
+        .data
+        .keyed_entries_in_slot_order()
+        .into_iter()
+        .map(|(_, entry)| {
+            (
+                entry.key.to_hash_key(&HashTableTest::Equal),
+                entry.value,
+                Some(entry.key),
+            )
+        })
+        .collect();
+    assert_eq!(dumped[0].0, dumped[1].0, "both keys materialize alike");
+
+    let mut reloaded = LispHashTable::new(HashTableTest::Equal);
+    reloaded.rebuild_from_ordered_entries(dumped);
+    let entries: Vec<(usize, Value)> = reloaded
+        .entries_in_slot_order()
+        .map(|entry| (entry.key.bits(), entry.value))
+        .collect();
+    assert_eq!(
+        entries,
+        vec![
+            (first.bits(), Value::fixnum(1)),
+            (second.bits(), Value::fixnum(2)),
+        ]
+    );
+    assert_eq!(reloaded.data.len(), 2);
+}

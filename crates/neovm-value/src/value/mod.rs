@@ -1549,6 +1549,15 @@ impl HashTableStorage {
         None
     }
 
+    /// File `hash_key` as a new entry without looking for an equal one, as
+    /// GNU `hash_table_thaw` files every dumped entry: keys dumped from live
+    /// objects mutated into `equal` shapes stay separate entries.
+    fn push_entry(&mut self, hash_key: HashKey, key: Value, value: Value) {
+        let hash = stored_hash(&hash_key, key);
+        let slot = self.alloc_slot(key, value);
+        self.index.insert_new(hash, hash_key, slot);
+    }
+
     pub fn insert_replacing_key(
         &mut self,
         hash_key: HashKey,
@@ -2627,8 +2636,9 @@ impl LispHashTable {
     }
 
     /// Rebuild from insertion-ordered `(hash_key, value, key_snapshot)`
-    /// triples: one insert (one hash) per entry, no temporary maps. The
-    /// pdump loader's path — its dump format stores entries pre-sorted.
+    /// triples: one entry (one hash) per triple, no temporary maps and no
+    /// merging of equal keys. The pdump loader's path — its dump format
+    /// stores entries pre-sorted.
     pub fn rebuild_from_ordered_entries(&mut self, entries: Vec<(HashKey, Value, Option<Value>)>) {
         self.data.clear();
         self.data.reserve(entries.len());
@@ -2640,7 +2650,7 @@ impl LispHashTable {
                 None if hash_key.is_structural() => crate::hashtab::hash_key_to_value(&hash_key),
                 None => value,
             };
-            self.insert(hash_key, key, value);
+            self.data.push_entry(hash_key, key, value);
         }
     }
 
