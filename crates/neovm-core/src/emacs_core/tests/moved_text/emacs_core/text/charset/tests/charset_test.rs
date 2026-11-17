@@ -1337,6 +1337,84 @@ fn iso_charset_last_definition_wins_regardless_of_id() {
     reset_charset_registry();
 }
 
+/// A snapshot/restore round trip must keep each designation's winner. The
+/// winner is write history (the later definition), not `set-charset-priority`
+/// order, so reordering priority after a shared designation must not flip it.
+#[test]
+fn iso_charset_winner_survives_snapshot_restore_after_priority_change() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let define = |name: &'static str| {
+        let mut args = vec![Value::NIL; 17];
+        args[0] = Value::symbol(name);
+        args[1] = Value::fixnum(1);
+        args[2] = Value::vector(vec![Value::fixnum(32), Value::fixnum(127)]);
+        args[5] = Value::fixnum(i64::from(b'|'));
+        builtin_define_charset_internal(args).unwrap();
+    };
+    let lookup = || {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(96),
+            Value::fixnum(i64::from(b'|')),
+        ])
+        .expect("iso-charset")
+    };
+    define("test-iso-rt-a");
+    define("test-iso-rt-b");
+    assert_eq!(lookup(), Value::symbol("test-iso-rt-b"));
+    builtin_set_charset_priority(vec![
+        Value::symbol("test-iso-rt-b"),
+        Value::symbol("test-iso-rt-a"),
+    ])
+    .unwrap();
+    assert_eq!(lookup(), Value::symbol("test-iso-rt-b"));
+    let snapshot = snapshot_charset_registry();
+    reset_charset_registry();
+    restore_charset_registry(snapshot);
+    assert_eq!(lookup(), Value::symbol("test-iso-rt-b"));
+    // Older snapshots and dumps carry no table; the rebuild must agree.
+    let mut legacy = snapshot_charset_registry();
+    legacy.iso_designations = None;
+    reset_charset_registry();
+    restore_charset_registry(legacy);
+    assert_eq!(lookup(), Value::symbol("test-iso-rt-b"));
+    reset_charset_registry();
+}
+
+/// Snapshots materialize alias clones named by the alias; restore must not
+/// let one take over a designation from the physical charset.
+#[test]
+fn iso_charset_ignores_alias_clones_after_snapshot_restore() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    builtin_define_charset_alias(vec![
+        Value::symbol("test-iso-ascii-alias"),
+        Value::symbol("ascii"),
+    ])
+    .unwrap();
+    let lookup = || {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(b'B')),
+        ])
+        .expect("iso-charset")
+    };
+    assert_eq!(lookup(), Value::symbol("ascii"));
+    let snapshot = snapshot_charset_registry();
+    reset_charset_registry();
+    restore_charset_registry(snapshot);
+    assert_eq!(lookup(), Value::symbol("ascii"));
+    // Older snapshots and dumps carry no table; the rebuild must agree.
+    let mut legacy = snapshot_charset_registry();
+    legacy.iso_designations = None;
+    reset_charset_registry();
+    restore_charset_registry(legacy);
+    assert_eq!(lookup(), Value::symbol("ascii"));
+    reset_charset_registry();
+}
+
 #[test]
 fn iso_charset_validates_arguments_like_gnu() {
     crate::test_utils::init_test_tracing();

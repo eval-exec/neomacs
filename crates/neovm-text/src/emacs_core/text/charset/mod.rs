@@ -324,6 +324,9 @@ pub struct CharsetInfoSnapshot {
     pub plist: Vec<(SymId, Value)>,
 }
 
+/// A key of GNU's `iso_charset_table`: (dimension, chars-96?, final char).
+pub type IsoDesignationKey = (i64, bool, i64);
+
 #[derive(Clone, Debug)]
 #[doc(hidden)]
 pub struct CharsetRegistrySnapshot {
@@ -334,6 +337,10 @@ pub struct CharsetRegistrySnapshot {
     /// aliases. None reconstructs old materialized-alias snapshots.
     pub priority_identities: Option<Vec<SymId>>,
     pub aliases: Option<Vec<(SymId, SymId)>>,
+    /// GNU's `iso_charset_table` winners, `((dimension, chars-96?, final
+    /// char), charset name)`, sorted by key. None (older dumps) rebuilds the
+    /// table approximately from the charsets.
+    pub iso_designations: Option<Vec<(IsoDesignationKey, SymId)>>,
     pub next_id: i64,
     /// Index into `priority` of the first non-preferred charset, mirroring GNU's
     /// `Vcharset_non_preferred_head` (charset.c:85). `char_charset` returns the
@@ -1056,21 +1063,22 @@ impl CharsetRegistry {
         }
     }
 
-    /// Rebuild the ISO designation table after `restore`, which does not carry
-    /// it.  Definition order (`priority_identities`, then id for anything
-    /// else) stands in for GNU's write order, so the later definition wins.
+    /// Approximate the ISO designation table for a snapshot that does not
+    /// carry it (older dumps).  Alias clones that `snapshot` materialized into
+    /// `charsets` are skipped (the explicit alias list names them), and the
+    /// physical charsets are ordered by id, so the later definition wins.
+    /// `priority_identities` is not used: `set-charset-priority` reorders it,
+    /// which would flip winners.
     fn rebuild_iso_charset_table(&mut self) {
-        let mut order: Vec<SymId> = self.priority_identities.clone();
-        let mut rest: Vec<(i64, SymId)> = self
+        let mut order: Vec<(i64, SymId)> = self
             .charsets
             .iter()
-            .filter(|(name, _)| !order.contains(name))
+            .filter(|(name, _)| !self.aliases.contains_key(name))
             .map(|(name, info)| (info.id, *name))
             .collect();
-        rest.sort_by_key(|(id, _)| *id);
-        order.extend(rest.into_iter().map(|(_, name)| name));
+        order.sort_by_key(|(id, _)| *id);
         self.iso_charset_table.clear();
-        for name in order {
+        for (_, name) in order {
             self.record_iso_designation(name);
         }
     }
@@ -1156,12 +1164,20 @@ impl CharsetRegistry {
             .collect();
         aliases.sort_by(|left, right| resolve_sym(left.0).cmp(resolve_sym(right.0)));
 
+        let mut iso_designations: Vec<_> = self
+            .iso_charset_table
+            .iter()
+            .map(|(&key, &name)| (key, name))
+            .collect();
+        iso_designations.sort_by_key(|(key, _)| *key);
+
         CharsetRegistrySnapshot {
             charsets,
             priority: self.priority.clone(),
             emacs_mule_order: self.emacs_mule_order.clone(),
             priority_identities: Some(self.priority_identities.clone()),
             aliases: Some(aliases),
+            iso_designations: Some(iso_designations),
             next_id: self.next_id,
             non_preferred_head: self.non_preferred_head,
         }
@@ -1239,6 +1255,7 @@ impl CharsetRegistry {
         };
 
         let legacy_identities = snapshot.priority_identities.is_none();
+        let iso_designations = snapshot.iso_designations;
         let mut registry = Self {
             charsets,
             aliases,
@@ -1250,7 +1267,10 @@ impl CharsetRegistry {
             iso_charset_table: rustc_hash::FxHashMap::default(),
             next_id: snapshot.next_id,
         };
-        registry.rebuild_iso_charset_table();
+        match iso_designations {
+            Some(winners) => registry.iso_charset_table = winners.into_iter().collect(),
+            None => registry.rebuild_iso_charset_table(),
+        }
         registry.capture_preferred_identities();
         if legacy_identities {
             // Old snapshots stored public names, including materialized
