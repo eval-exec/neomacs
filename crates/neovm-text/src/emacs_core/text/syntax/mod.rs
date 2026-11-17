@@ -539,9 +539,10 @@ impl std::ops::BitOrAssign for SyntaxFlags {
 /// A single entry in a syntax table: the class, an optional matching
 /// character (for parens/string delimiters), and comment/prefix flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SyntaxEntry {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct SyntaxEntry {
     pub class: SyntaxClass,
-    pub matching_char: Option<char>,
+    pub(crate) matching_char: Option<char>,
     pub flags: SyntaxFlags,
 }
 
@@ -556,7 +557,8 @@ impl SyntaxEntry {
     }
 
     /// Create an entry with a matching character (for open/close parens).
-    pub fn with_match(class: SyntaxClass, matching: char) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn with_match(class: SyntaxClass, matching: char) -> Self {
         Self {
             class,
             matching_char: Some(matching),
@@ -571,7 +573,8 @@ impl SyntaxEntry {
 
 /// Parse an Emacs syntax descriptor string (e.g., `" "`, `"w"`, `"()"`,
 /// `". 12"`) into a `SyntaxEntry`.
-pub fn string_to_syntax(s: &str) -> Result<SyntaxEntry, String> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn string_to_syntax(s: &str) -> Result<SyntaxEntry, String> {
     let chars: Vec<char> = s.chars().collect();
     let descriptor = chars.first().copied().unwrap_or('\0');
     let class = SyntaxClass::from_char(descriptor)
@@ -658,7 +661,8 @@ fn materialize_syntax_entry(entry: &SyntaxEntry, object_reuse: LispSyntaxObjectR
 
 /// Convert a `SyntaxEntry` using GNU's ordinary `string-to-syntax` policy:
 /// reuse the canonical object for a bare, unflagged syntax code.
-pub fn syntax_entry_to_value(entry: &SyntaxEntry) -> Value {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn syntax_entry_to_value(entry: &SyntaxEntry) -> Value {
     materialize_syntax_entry(entry, LispSyntaxObjectReuse::CanonicalBare)
 }
 
@@ -779,7 +783,8 @@ impl SyntaxTable {
     /// Materializes the chartable on first call via
     /// `ensure_standard_syntax_table_object()` — the same one installed
     /// on new buffers by `current_buffer_syntax_table_object_in_buffers`.
-    pub fn new_standard() -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn new_standard() -> Self {
         match ensure_standard_syntax_table_object() {
             Ok(table) => Self { chartable: table },
             // If we can't build the chartable (no thread-local state),
@@ -791,11 +796,12 @@ impl SyntaxTable {
         }
     }
 
+    #[cfg(test)]
     /// Same as `new_standard` — GNU's `make-syntax-table` with nil parent
     /// creates a fresh, empty chartable whose parent is the standard
     /// table. The distinction is handled at the chartable level by
     /// `builtin_make_syntax_table`.
-    pub fn make_syntax_table() -> Self {
+    pub(crate) fn make_syntax_table() -> Self {
         Self::new_standard()
     }
 
@@ -813,7 +819,8 @@ impl SyntaxTable {
     /// subsequent `modify_syntax_entry` calls don't leak into the
     /// shared standard. Returns the new `SyntaxTable`. Mirrors the
     /// GNU idiom `(set-syntax-table (copy-syntax-table))`.
-    pub fn isolate_for_buffer(buf: &mut neovm_edit::buffer::buffer::Buffer) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn isolate_for_buffer(buf: &mut neovm_edit::buffer::buffer::Buffer) -> Self {
         use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
         let slot = buf.slots()[BUFFER_SLOT_SYNTAX_TABLE.index()];
         let source = if slot.is_nil() {
@@ -830,10 +837,11 @@ impl SyntaxTable {
         Self { chartable: own }
     }
 
+    #[cfg(test)]
     /// Deep-copy the backing chartable, matching GNU `copy-syntax-table`
     /// (`syntax.c:265-282`). The copy is independent: mutations to
     /// either table do not affect the other.
-    pub fn copy_syntax_table(&self) -> Self {
+    pub(crate) fn copy_syntax_table(&self) -> Self {
         if self.chartable.is_nil() {
             return *self;
         }
@@ -864,7 +872,7 @@ impl SyntaxTable {
     /// (`0..=MAX_CHAR`), not by Unicode scalar values; keep this path
     /// available for callers such as `char-syntax`.
     #[inline(always)]
-    pub fn get_entry_code(&self, code: u32) -> Option<SyntaxEntry> {
+    pub(crate) fn get_entry_code(&self, code: u32) -> Option<SyntaxEntry> {
         syntax_entry_at_char_code(&self.chartable, code)
     }
 
@@ -936,7 +944,8 @@ impl Default for SyntaxTable {
 ///
 /// A "word" is a maximal run of characters with syntax class `Word`.
 /// Between words, non-word characters are skipped.
-pub fn forward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn forward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
     forward_word_with_options(
         buf,
         table,
@@ -1451,8 +1460,9 @@ pub fn forward_word_with_options(
     (buffer_char_to_emacs_byte_pos(buf, abs_char), true)
 }
 
+#[cfg(test)]
 /// Move backward over `count` words.  Returns the resulting Emacs byte position.
-pub fn backward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
+pub(crate) fn backward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
     backward_word_with_options(
         buf,
         table,
@@ -1795,10 +1805,11 @@ fn backward_word_with_options(
     (buffer_char_to_emacs_byte_pos(buf, abs_char), true)
 }
 
+#[cfg(test)]
 /// Skip forward over characters whose syntax class matches any character in
 /// `syntax_chars` (each character in the string names a syntax class,
 /// e.g., `"w_"` matches Word and Symbol).  Returns the resulting byte position.
-pub fn skip_syntax_forward(
+pub(crate) fn skip_syntax_forward(
     buf: &Buffer,
     table: &SyntaxTable,
     syntax_chars: &str,
@@ -1859,9 +1870,10 @@ fn skip_syntax_forward_with_options(
     buffer_char_to_emacs_byte_pos(buf, abs_char).get()
 }
 
+#[cfg(test)]
 /// Skip backward over characters whose syntax class matches any character in
 /// `syntax_chars`.  Returns the resulting byte position.
-pub fn skip_syntax_backward(
+pub(crate) fn skip_syntax_backward(
     buf: &Buffer,
     table: &SyntaxTable,
     syntax_chars: &str,
@@ -1976,12 +1988,13 @@ impl SkipSyntaxClasses {
     }
 }
 
+#[cfg(test)]
 /// Scan for balanced expressions (sexps).
 ///
 /// Starting from byte position `from`, scan `count` sexps forward (positive
 /// count) or backward (negative count).  Returns the byte position after the
 /// last sexp, or an error if unbalanced.
-pub fn scan_sexps(
+pub(crate) fn scan_sexps(
     buf: &Buffer,
     table: &SyntaxTable,
     from: usize,
@@ -3846,12 +3859,62 @@ impl<'a> SyntaxPropByteRun<'a> {
 /// The matcher addresses a string by byte offset from its first byte, the
 /// intervals address it by character, so the string itself is needed for the
 /// conversion GNU does with `string_byte_to_char`
-/// (`RE_SYNTAX_TABLE_BYTE_TO_CHAR`, src/syntax.h).
+/// (`RE_SYNTAX_TABLE_BYTE_TO_CHAR`, src/syntax.h). A Lisp string converts
+/// through its object's position cache, as GNU's does.
 #[derive(Clone, Copy)]
 struct StringPropSource<'a> {
     resolver: CharPropertyResolver<'a>,
-    string: &'a LispString,
+    position_source: StringSyntaxPositionSource<'a>,
     intervals: &'a TextPropertyTable,
+}
+
+/// Character coordinates of the cached run's byte bounds, so the next refill
+/// can count from the run it leaves instead of from an end of the string.
+/// GNU keeps its run bounds in characters for the same reason
+/// (`update_syntax_table`, src/syntax.c).
+#[derive(Clone, Copy, Debug)]
+struct StringRunChars {
+    start: usize,
+    end: usize,
+}
+
+/// Number of characters that start in `bytes` (GNU `CHAR_HEAD_P`), the count
+/// [`LispString::byte_to_gnu_char_pos`] takes over a prefix or suffix.
+fn char_heads(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .filter(|&&byte| neovm_value::emacs_char::char_head_p(byte))
+        .count()
+}
+
+/// The byte offset [`LispString::char_to_byte_pos`] gives character
+/// `char_pos - back` of a multibyte string, found by walking back from
+/// `byte_pos`, which holds character `char_pos`. `None` when the bytes before
+/// `byte_pos` hold fewer than `back` characters.
+fn char_start_before(bytes: &[u8], byte_pos: usize, back: usize) -> Option<usize> {
+    let Some(nth) = back.checked_sub(1) else {
+        return Some(char_start_after(bytes, byte_pos, 0));
+    };
+    bytes[..byte_pos]
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|&(_, &byte)| neovm_value::emacs_char::char_head_p(byte))
+        .nth(nth)
+        .map(|(pos, _)| pos)
+}
+
+/// The byte offset [`LispString::char_to_byte_pos`] gives character
+/// `char_pos + forward` of a multibyte string, found by walking forward from
+/// `byte_pos`, which holds character `char_pos`; the end of the string past
+/// its last character.
+fn char_start_after(bytes: &[u8], byte_pos: usize, forward: usize) -> usize {
+    bytes[byte_pos..]
+        .iter()
+        .enumerate()
+        .filter(|&(_, &byte)| neovm_value::emacs_char::char_head_p(byte))
+        .nth(forward)
+        .map_or(bytes.len(), |(offset, _)| byte_pos + offset)
 }
 
 /// String regexp syntax positions must retain the exact heap identity/payload.
@@ -3988,6 +4051,12 @@ static_assertions::assert_impl_all!(StringSyntaxPositionError: Send, Sync, Copy)
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct StringSyntaxPropByteRun<'a> {
     run: PropRunCells,
+    // `None` until a refill caches a run, and while `run` is not one.
+    run_chars: Cell<Option<StringRunChars>>,
+    // Bytes the refills' position walks visited: the cost the regression
+    // tests bound.
+    #[cfg(test)]
+    scanned_bytes: Cell<usize>,
     source: Option<StringPropSource<'a>>,
     position_mode: StringSyntaxPositionMode<'a>,
     // The regex syntax callback is currently infallible. Retain its FIRST
@@ -4058,7 +4127,7 @@ impl<'a> StringSyntaxPropByteRun<'a> {
                 Some(intervals),
             ) => Some(StringPropSource {
                 resolver,
-                string,
+                position_source,
                 intervals,
             }),
             _ => None,
@@ -4070,6 +4139,9 @@ impl<'a> StringSyntaxPropByteRun<'a> {
         };
         Self {
             run,
+            run_chars: Cell::new(None),
+            #[cfg(test)]
+            scanned_bytes: Cell::new(0),
             source,
             position_mode,
             position_error: Cell::new(None),
@@ -4169,14 +4241,22 @@ impl<'a> StringSyntaxPropByteRun<'a> {
     /// Locate the interval containing `byte_pos`, resolve its property once, and
     /// cache both with the run converted to byte coordinates.
     ///
+    /// A fontified string has an interval every few characters, so this runs
+    /// once per few characters scanned. Its conversions therefore count from
+    /// known positions -- the run being left, and `byte_pos` itself for the new
+    /// run's bounds -- and cost the distance walked, as GNU's do, rather than a
+    /// walk from an end of the string each.
+    ///
     /// Outlined so the per-character check above stays inlinable into the match
     /// loop.
     #[inline(never)]
     fn refill_run(&self, source: StringPropSource<'a>, byte_pos: usize) -> Option<Value> {
-        let position = source.string.byte_to_gnu_char_pos(byte_pos);
+        let string = source.position_source.string();
+        let byte_pos = byte_pos.min(string.sbytes());
+        let position = self.char_pos_near_run(source, byte_pos);
         let char_pos = CharPos0::try_from(position)
             .ok()
-            .filter(|position| position.get() <= source.string.schars());
+            .filter(|position| position.get() <= string.schars());
         let Some(char_pos) = char_pos else {
             if self.position_error.get().is_none() {
                 self.position_error
@@ -4186,19 +4266,100 @@ impl<'a> StringSyntaxPropByteRun<'a> {
             // Avoid repeating invalid interval lookups while the infallible
             // bounded matcher returns control. This is never a valid result.
             self.run.set(0, usize::MAX, None);
+            self.run_chars.set(None);
             return None;
         };
         let (plist, start, end) = source
             .intervals
-            .interval_plist_run_at_char_pos(char_pos, source.string.schars());
+            .interval_plist_run_at_char_pos(char_pos, string.schars());
         let value = plist.and_then(|plist| source.resolver.resolve_interval_plist(plist));
-        self.run.set(
-            source.string.char_to_byte_pos(start.get()),
-            source.string.char_to_byte_pos(end.get()),
-            value,
-        );
+        let (start, end, char_pos) = (start.get(), end.get(), char_pos.get());
+        let (start_byte, end_byte) = if !string.is_multibyte() || string.schars() == string.sbytes()
+        {
+            (start.min(string.schars()), end.min(string.schars()))
+        } else {
+            // The interval contains `char_pos`: each bound is a run's length
+            // away from `byte_pos`, or its distance from the nearer end of
+            // the string. Walk the shorter of the two, so a long run (a
+            // whole-string `fontified` interval, a property-free tail) costs
+            // no more than the conversion from an end did.
+            let bytes = string.as_bytes();
+            let schars = string.schars();
+            let from_ends = |bound: usize| bound.min(schars.saturating_sub(bound));
+            let start_byte = char_pos
+                .checked_sub(start)
+                .filter(|&back| back <= from_ends(start))
+                .and_then(|back| char_start_before(bytes, byte_pos, back));
+            self.record_scan(start_byte.map_or(0, |start_byte| byte_pos - start_byte));
+            let start_byte =
+                start_byte.unwrap_or_else(|| self.char_to_byte_from_end(string, start));
+            let end_byte = match end.checked_sub(char_pos) {
+                Some(forward) if forward <= from_ends(end) => {
+                    let end_byte = char_start_after(bytes, byte_pos, forward);
+                    self.record_scan(end_byte - byte_pos);
+                    end_byte
+                }
+                _ => self.char_to_byte_from_end(string, end),
+            };
+            (start_byte, end_byte)
+        };
+        self.run.set(start_byte, end_byte, value);
+        self.run_chars.set(Some(StringRunChars { start, end }));
         value
     }
+
+    /// GNU's character coordinate for `byte_pos`, counted from the nearer bound
+    /// of the cached run when that is nearer than both ends of the string --
+    /// the usual case, since a scan leaves a run into its neighbour -- and
+    /// otherwise converted by the position source.
+    fn char_pos_near_run(&self, source: StringPropSource<'a>, byte_pos: usize) -> GnuStringCharPos {
+        let string = source.position_source.string();
+        if let Some(chars) = self.run_chars.get()
+            && string.is_multibyte()
+            && string.schars() != string.sbytes()
+        {
+            let (start_byte, end_byte) = (self.run.start.get(), self.run.end.get());
+            let (anchor_byte, anchor_char) =
+                if byte_pos.abs_diff(start_byte) <= byte_pos.abs_diff(end_byte) {
+                    (start_byte, chars.start)
+                } else {
+                    (end_byte, chars.end)
+                };
+            let from_ends = byte_pos.min(string.sbytes() - byte_pos);
+            if byte_pos.abs_diff(anchor_byte) < from_ends {
+                let bytes = string.as_bytes();
+                self.record_scan(byte_pos.abs_diff(anchor_byte));
+                let char_pos = if byte_pos >= anchor_byte {
+                    Some(anchor_char + char_heads(&bytes[anchor_byte..byte_pos]))
+                } else {
+                    anchor_char.checked_sub(char_heads(&bytes[byte_pos..anchor_byte]))
+                };
+                if let Some(char_pos) = char_pos {
+                    return GnuStringCharPos::new(char_pos as i64);
+                }
+            }
+        }
+        // An upper bound: a Lisp string's position cache may start nearer.
+        self.record_scan(byte_pos.min(string.sbytes() - byte_pos));
+        source.position_source.byte_to_gnu_char_pos(byte_pos)
+    }
+
+    /// [`LispString::char_to_byte_pos`], which walks from the nearer end of
+    /// the string.
+    fn char_to_byte_from_end(&self, string: &LispString, char_pos: usize) -> usize {
+        let byte_pos = string.char_to_byte_pos(char_pos);
+        self.record_scan(byte_pos.min(string.sbytes() - byte_pos));
+        byte_pos
+    }
+
+    #[cfg(test)]
+    fn record_scan(&self, bytes: usize) {
+        self.scanned_bytes.set(self.scanned_bytes.get() + bytes);
+    }
+
+    #[cfg(not(test))]
+    #[inline(always)]
+    fn record_scan(&self, _bytes: usize) {}
 }
 
 /// Syntax class seen by GNU's regexp `SYNTAX` macro at a byte offset into a
@@ -8211,7 +8372,7 @@ pub fn builtin_skip_syntax_backward_2<H: TextHost>(
 }
 
 fn expect_skip_syntax_args(
-    caller: &str,
+    caller: &'static str,
     args: &[Value],
 ) -> Result<(SkipSyntaxClasses, Option<i64>), Flow> {
     if !(1..=2).contains(&args.len()) {

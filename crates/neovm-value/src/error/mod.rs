@@ -1201,7 +1201,7 @@ mod format_hook_tests;
 /// split as [`expect_fixnum`].
 #[cold]
 #[inline(never)]
-fn wrong_number_of_arguments(name: &str, nargs: usize) -> Flow {
+fn wrong_number_of_arguments(name: &'static str, nargs: usize) -> Flow {
     signal(
         LispCondition::WrongNumberOfArguments,
         vec![Value::symbol(name), Value::fixnum(nargs as i64)],
@@ -1211,7 +1211,7 @@ fn wrong_number_of_arguments(name: &str, nargs: usize) -> Flow {
 /// Signal wrong-number-of-arguments unless `args` has exactly `n` items.
 #[inline]
 #[doc(hidden)]
-pub fn expect_args(name: &str, args: &[Value], n: usize) -> Result<(), Flow> {
+pub fn expect_args(name: &'static str, args: &[Value], n: usize) -> Result<(), Flow> {
     if args.len() != n {
         Err(wrong_number_of_arguments(name, args.len()))
     } else {
@@ -1222,7 +1222,7 @@ pub fn expect_args(name: &str, args: &[Value], n: usize) -> Result<(), Flow> {
 /// Signal wrong-number-of-arguments unless `args` has at least `min` items.
 #[inline]
 #[doc(hidden)]
-pub fn expect_min_args(name: &str, args: &[Value], min: usize) -> Result<(), Flow> {
+pub fn expect_min_args(name: &'static str, args: &[Value], min: usize) -> Result<(), Flow> {
     if args.len() < min {
         Err(wrong_number_of_arguments(name, args.len()))
     } else {
@@ -1233,7 +1233,7 @@ pub fn expect_min_args(name: &str, args: &[Value], min: usize) -> Result<(), Flo
 /// Signal wrong-number-of-arguments unless `args` has at most `max` items.
 #[inline]
 #[doc(hidden)]
-pub fn expect_max_args(name: &str, args: &[Value], max: usize) -> Result<(), Flow> {
+pub fn expect_max_args(name: &'static str, args: &[Value], max: usize) -> Result<(), Flow> {
     if args.len() > max {
         Err(wrong_number_of_arguments(name, args.len()))
     } else {
@@ -1244,7 +1244,12 @@ pub fn expect_max_args(name: &str, args: &[Value], max: usize) -> Result<(), Flo
 /// Signal wrong-number-of-arguments unless `min <= args.len() <= max`.
 #[inline]
 #[doc(hidden)]
-pub fn expect_args_range(name: &str, args: &[Value], min: usize, max: usize) -> Result<(), Flow> {
+pub fn expect_args_range(
+    name: &'static str,
+    args: &[Value],
+    min: usize,
+    max: usize,
+) -> Result<(), Flow> {
     if args.len() < min || args.len() > max {
         Err(wrong_number_of_arguments(name, args.len()))
     } else {

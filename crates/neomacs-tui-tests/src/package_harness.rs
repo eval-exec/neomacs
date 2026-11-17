@@ -15,8 +15,10 @@
 
 use crate::TuiSession;
 use crate::package_scenario::PackageTuiPair;
-use std::any::Any;
+use std::any::{Any, TypeId};
+use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Once;
 use std::time::Duration;
 
 /// Re-read `session` until `predicate` holds, or fail with the final screen.
@@ -69,25 +71,111 @@ pub fn invoke_with_prompt_timeout(
 }
 
 /// The message text of a caught panic payload.
-pub fn panic_text(payload: Box<dyn Any + Send>) -> String {
-    payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| {
-            payload
-                .downcast_ref::<&str>()
-                .map(|value| (*value).to_owned())
-        })
-        .unwrap_or_else(|| "non-string panic payload".to_owned())
+///
+/// A payload thrown with `panic_any` carries no message. Stable Rust cannot
+/// print a `dyn Any` value, so the report keeps what identity the payload
+/// has, the way `prin1` prints an opaque object: `#<...>`. String-shaped
+/// payloads -- `String`, `&str`, `Box<str>`, `Box<String>` -- print
+/// verbatim.
+///
+/// The payload arrives inside the panic runtime's `Box<dyn Any + Send>`,
+/// and asking that BOX for its `type_id` reports the box itself, whatever
+/// the payload: every opaque report used to print as
+/// `Box<dyn Any + Send>`, which identifies nothing. The identity therefore
+/// reads through `&*payload`. A payload that is itself a caught panic
+/// re-thrown -- a boxed `Box<dyn Any + Send>` -- unwraps a layer at a time,
+/// so a re-thrown message reports as the message rather than as a box.
+///
+/// The unit type names itself, because one dependency in this tree panics
+/// with `()` on purpose: `expect-test` prints the diff between the expect
+/// file and the captured value on stdout and then `resume_unwind`s a `()`
+/// precisely to keep the failure backtrace-free. A `()` reaching this
+/// function is therefore not an opaque payload but a snapshot mismatch, and
+/// the report says where the diff went instead of an identity that
+/// identifies nothing.
+pub fn panic_text(mut payload: Box<dyn Any + Send>) -> String {
+    loop {
+        if let Some(text) = payload.downcast_ref::<String>() {
+            return text.clone();
+        }
+        if let Some(text) = payload.downcast_ref::<&str>() {
+            return (*text).to_owned();
+        }
+        if let Some(text) = payload.downcast_ref::<Box<str>>() {
+            return (**text).to_owned();
+        }
+        if let Some(text) = payload.downcast_ref::<Box<String>>() {
+            return (**text).clone();
+        }
+        match payload.downcast::<Box<dyn Any + Send>>() {
+            // The downcast's `Ok` retypes this very allocation, so the
+            // re-thrown payload is the box it holds -- the dereference.  The
+            // box itself would do for one pass and then match its own
+            // wrapper type on every later pass, unrolling nothing and
+            // looping forever.
+            Ok(rethrown) => payload = *rethrown,
+            Err(payload) => {
+                let inner = &*payload;
+                if inner.type_id() == TypeId::of::<()>() {
+                    return "#<unit () panic payload -- expect-test reports a \
+                             snapshot mismatch this way; the diff between the \
+                             expect file and the captured value prints on \
+                             stdout, above this report>"
+                        .to_owned();
+                }
+                return format!("#<non-string panic payload {:?}>", inner.type_id());
+            }
+        }
+    }
+}
+
+thread_local! {
+    /// Where the most recent panic on this thread started, recorded by the
+    /// hook [`install_panic_origin_hook`] chains in.
+    static PANIC_ORIGIN: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Chain a panic hook that records where each panic starts.
+///
+/// A caught panic reports its payload, but a `panic_any` payload has no
+/// message and a re-thrown one may have lost its origin; the location is
+/// the part that survives both. Nextest runs each test in its own process,
+/// so the process-wide hook only ever sees this suite's own panics, and
+/// the previous hook still prints, so nothing is silenced.
+fn install_panic_origin_hook() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Some(location) = info.location() {
+                let origin = format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                );
+                PANIC_ORIGIN.with(|cell| *cell.borrow_mut() = Some(origin));
+            }
+            previous(info);
+        }));
+    });
 }
 
 /// Run `phase`, turning a panic into a `String` labelled with `label`.
 ///
 /// A suite reports every failed step of a scenario rather than dying on the
-/// first one, which needs the panic as a value.
+/// first one, which needs the panic as a value. The report carries where
+/// the panic started, which a message-less payload cannot say for itself.
 pub fn catch_phase<T>(label: &str, phase: impl FnOnce() -> T) -> Result<T, String> {
-    catch_unwind(AssertUnwindSafe(phase))
-        .map_err(|payload| format!("{label}: {}", panic_text(payload)))
+    install_panic_origin_hook();
+    PANIC_ORIGIN.with(|cell| *cell.borrow_mut() = None);
+    catch_unwind(AssertUnwindSafe(phase)).map_err(|payload| {
+        let origin = PANIC_ORIGIN.with(|cell| cell.borrow().clone());
+        match origin {
+            Some(origin) => format!("{label}: {} (panicked at {origin})", panic_text(payload)),
+            None => format!("{label}: {}", panic_text(payload)),
+        }
+    })
 }
 
 /// Run one step against both editors, keeping both failures.

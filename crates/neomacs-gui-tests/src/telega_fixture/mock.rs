@@ -781,7 +781,12 @@ pub mod terminal_signal_observer {
                         record.len() - written,
                     )
                 };
-                if count < 0 && unsafe { *libc::__errno_location() } == libc::EINTR {
+                // Portable EINTR test: libc exposes `__errno_location` only
+                // on Linux-likes and `__error` on Darwin, so read the errno
+                // through std instead of naming the platform symbol.
+                if count < 0
+                    && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+                {
                     continue;
                 }
                 if count <= 0 {

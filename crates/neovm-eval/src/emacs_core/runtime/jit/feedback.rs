@@ -60,7 +60,7 @@ pub(crate) use neovm_value::value::jit_runtime::feedback::{POLY, STABLE_WINDOW};
 /// `NEOVM_JIT_FEEDBACK`: whether call targets are recorded, and whether
 /// compiles may read them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FeedbackMode {
+pub(crate) enum FeedbackMode {
     /// Nothing recorded (the default: today's code, CLIF-identical).
     Off,
     /// The interpreter records the call targets of its non-constant call
@@ -112,7 +112,7 @@ impl FeedbackMode {
     /// Use remains false here; its TIER2-on T1 exception is selected by the
     /// lowering's actual leaf emission and stops when that leaf closes.
     #[inline(always)]
-    pub fn records_compiled(self) -> bool {
+    pub(crate) fn records_compiled(self) -> bool {
         matches!(self, FeedbackMode::Record | FeedbackMode::Census)
     }
 
@@ -157,7 +157,7 @@ pub(crate) fn feedback_mode_test_override() -> Option<FeedbackMode> {
 /// `NEOVM_JIT_SPEC_SOURCES=on` raises either to `use` (its consumer needs
 /// its input).
 #[inline]
-pub fn feedback_mode() -> FeedbackMode {
+pub(crate) fn feedback_mode() -> FeedbackMode {
     #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = feedback_mode_test_override() {
         return mode;

@@ -1,8 +1,7 @@
 use std::time::Duration;
 
 use crate::{
-    ASCIIDOC_MODE_MELPA_PIN, CachedMelpaOracle, EmacsRuntime, elisp_string,
-    prepare_cached_tree_sitter_grammar_from_subdirectory,
+    ASCIIDOC_MODE_MELPA_PIN, CachedMelpaOracle, elisp_string, extra_tree_sitter_grammar_pin,
 };
 
 use super::batch_support::assert_oracle_batch_cases;
@@ -19,27 +18,14 @@ mod navigation;
 mod surface;
 
 const ASCIIDOC_MODE_TEST_TIMEOUT: Duration = Duration::from_secs(180);
-const ASCIIDOC_TREE_SITTER_REPOSITORY: &str = "https://github.com/cathaysia/tree-sitter-asciidoc";
-const ASCIIDOC_TREE_SITTER_REVISION: &str = "68b1a5b9bdb01dcd049c1252ea0c33a2063df72e";
 
 fn asciidoc_mode_oracle(source_file: &str) -> CachedMelpaOracle {
-    let gnu_emacs = EmacsRuntime::gnu_emacs();
-    let block_grammar_dir = prepare_cached_tree_sitter_grammar_from_subdirectory(
-        &gnu_emacs,
-        "asciidoc",
-        ASCIIDOC_TREE_SITTER_REPOSITORY,
-        ASCIIDOC_TREE_SITTER_REVISION,
-        "tree-sitter-asciidoc/src",
-    )
-    .expect("prepare pinned AsciiDoc block grammar below ./tmp");
-    let inline_grammar_dir = prepare_cached_tree_sitter_grammar_from_subdirectory(
-        &gnu_emacs,
-        "asciidoc-inline",
-        ASCIIDOC_TREE_SITTER_REPOSITORY,
-        ASCIIDOC_TREE_SITTER_REVISION,
-        "tree-sitter-asciidoc_inline/src",
-    )
-    .expect("prepare pinned AsciiDoc inline grammar below ./tmp");
+    let block_grammar_dir = extra_tree_sitter_grammar_pin("asciidoc")
+        .and_then(|pin| pin.prepare())
+        .expect("read the pinned AsciiDoc block grammar from the prefetched cache");
+    let inline_grammar_dir = extra_tree_sitter_grammar_pin("asciidoc-inline")
+        .and_then(|pin| pin.prepare())
+        .expect("read the pinned AsciiDoc inline grammar from the prefetched cache");
     let block_grammar_dir = elisp_string(&block_grammar_dir.to_string_lossy());
     let inline_grammar_dir = elisp_string(&inline_grammar_dir.to_string_lossy());
 

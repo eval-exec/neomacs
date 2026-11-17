@@ -455,7 +455,7 @@ fn cohort<H: CombinedParts>(
 ) -> std::thread::Result<()> {
     let world_roots = host.roots();
     let setup = RefCell::new(GraphSetup::Empty);
-    let nonce = crate::intern::intern_uninterned("c6-cohort-nonce");
+    let nonce = crate::intern::make_uninterned_symbol("c6-cohort-nonce");
     let spelling = format!("p3sym-c6-cohort-{}", nonce.0);
     let layout = name_minor::Layout::for_scenario(scenario);
     assert!(

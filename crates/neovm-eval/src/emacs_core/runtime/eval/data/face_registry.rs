@@ -12,7 +12,8 @@ use neovm_value::value::Value;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
-pub const FIRST_DYNAMIC_FACE_ID: i64 = 186;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const FIRST_DYNAMIC_FACE_ID: i64 = 186;
 
 pub struct FaceAttrState {
     pub selected_created: FxHashSet<SymId>,

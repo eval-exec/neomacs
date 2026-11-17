@@ -19,7 +19,7 @@
 pub(crate) mod read_detection;
 
 use super::text_host::{TextHost, TextVariableStore};
-use neovm_edit::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
+use neovm_edit::buffer::{Buffer, BufferManager, EmacsByteRange, LispCharPos1};
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
 use neovm_value::emacs_char::EmacsChar;
 use neovm_value::error::LispCondition;
@@ -139,7 +139,7 @@ pub enum EolType {
 }
 
 impl EolType {
-    pub fn from_specified_symbol_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_specified_symbol_name(name: &str) -> Option<Self> {
         match name.parse().ok()? {
             EolType::Unix => Some(EolType::Unix),
             EolType::Dos => Some(EolType::Dos),
@@ -148,7 +148,7 @@ impl EolType {
         }
     }
 
-    pub fn from_specified_symbol_value(value: &Value, mode: SymbolMode) -> Option<Self> {
+    pub(crate) fn from_specified_symbol_value(value: &Value, mode: SymbolMode) -> Option<Self> {
         Self::from_specified_symbol_name(value.as_symbol_name(mode)?)
     }
 
@@ -156,15 +156,11 @@ impl EolType {
         self.into()
     }
 
-    pub fn to_int(self) -> i64 {
+    pub(crate) fn to_int(self) -> i64 {
         self.specified_index().unwrap_or(0)
     }
 
-    pub fn to_symbol(self) -> Value {
-        Value::symbol(self.name())
-    }
-
-    pub fn specified_index(self) -> Option<i64> {
+    pub(crate) fn specified_index(self) -> Option<i64> {
         match self {
             EolType::Undecided => None,
             specified => Some(i8::from(specified) as i64),
@@ -180,7 +176,7 @@ impl EolType {
         }
     }
 
-    pub fn from_suffix(name: &str) -> Option<EolType> {
+    pub(crate) fn from_suffix(name: &str) -> Option<EolType> {
         if name.ends_with("-unix") {
             Some(EolType::Unix)
         } else if name.ends_with("-dos") {
@@ -1039,7 +1035,8 @@ pub(crate) fn ccl_coding_spec(info: &CodingSystemInfo) -> Option<CclCodingSpec> 
 #[enumflags2::bitflags]
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IsoFlag {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum IsoFlag {
     LongForm = 0x0001,
     AsciiAtEol = 0x0002,
     AsciiAtCntl = 0x0004,
@@ -1058,19 +1055,20 @@ pub enum IsoFlag {
 /// The ISO-2022 designation state of a coding system: the charset initially
 /// loaded into each graphic register G0-G3 (`initial`), the charset->register
 /// map consulted while encoding (`request`), and the control `flags`.
-pub struct Iso2022Spec {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct Iso2022Spec {
     pub initial: [Option<SymId>; 4],
     pub request: Vec<(SymId, u8)>,
     /// `(reg94, reg96)` — the graphic register that 94- and 96-character sets
     /// are designated to while encoding (GNU `coding_attr_iso_usage`). A value
     /// of 4 means "no fixed register"; such charsets fall back to G0.
-    pub reg_usage: (u8, u8),
+    pub(crate) reg_usage: (u8, u8),
     pub flags: enumflags2::BitFlags<IsoFlag>,
 }
 
 impl Iso2022Spec {
     /// The graphic register (0-3) a charset is designated to while encoding.
-    pub fn register_of(&self, charset: SymId) -> Option<u8> {
+    pub(crate) fn register_of(&self, charset: SymId) -> Option<u8> {
         self.request
             .iter()
             .find(|(cs, _)| *cs == charset)
@@ -1081,7 +1079,7 @@ impl Iso2022Spec {
     /// following GNU's reg-usage rule (`setup_iso_safe_charsets`): a 96-set
     /// uses `reg96`, any other set uses `reg94`; a register of 4 ("none")
     /// falls back to G0.
-    pub fn encode_register(&self, chars_96: bool) -> usize {
+    pub(crate) fn encode_register(&self, chars_96: bool) -> usize {
         let reg = if chars_96 {
             self.reg_usage.1
         } else {
@@ -1786,7 +1784,7 @@ impl CodingSystemManager {
     }
 
     /// Get all aliases that point to a given canonical name.
-    pub fn aliases_for(&self, canonical: SymId) -> Vec<SymId> {
+    pub(crate) fn aliases_for(&self, canonical: SymId) -> Vec<SymId> {
         self.alias_order
             .get(&canonical)
             .cloned()
@@ -1794,9 +1792,27 @@ impl CodingSystemManager {
     }
 
     /// List all registered coding system names (canonical only).
-    pub fn list_all(&self) -> Vec<SymId> {
+    pub(crate) fn list_all(&self) -> Vec<SymId> {
         let mut names: Vec<SymId> = self.systems.keys().copied().collect();
         names.sort_by(|left, right| resolve_sym(*left).cmp(resolve_sym(*right)));
+        names
+    }
+
+    /// Every coding-system name GNU interns at startup: the registered
+    /// canonical names, their aliases, and the generated EOL subsidiaries
+    /// (all of which live in `systems`). GNU `coding.c` creates each through
+    /// `intern_c_string`, so each is an obarray member; the eval boot path
+    /// uses this list to give the names the same membership here.
+    #[doc(hidden)]
+    pub fn lisp_visible_names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self
+            .systems
+            .keys()
+            .chain(self.aliases.keys())
+            .map(|id| resolve_sym(*id))
+            .collect();
+        names.sort_unstable();
+        names.dedup();
         names
     }
 
@@ -1948,8 +1964,27 @@ fn cons_coding_system_alist<S: TextVariableStore>(vars: &mut S, name: SymId) {
 }
 
 fn record_coding_system_name<S: TextVariableStore>(vars: &mut S, name: SymId) {
+    // GNU interns every name it publishes on `coding-system-list` and
+    // `coding-system-alist`: `make_subsidiaries` creates the
+    // `-unix`/`-dos`/`-mac` systems with `intern` (src/coding.c:10968-10984),
+    // and base/alias names arrive as Lisp symbols. The port used to create
+    // the subsidiary ids in the name registry only, so 321 of the 642
+    // variable entries were not obarray members. Mark membership here, at
+    // the one point both define paths publish a name. Non-canonical ids
+    // (`make-symbol` inputs) stay uninterned, as in GNU.
+    vars.obarray().ensure_interned_global_id(name);
     cons_coding_system_variable(vars, name);
     cons_coding_system_alist(vars, name);
+}
+
+/// Resolve a runtime coding-system spelling to its canonical symbol value.
+///
+/// Coding-system names reach Lisp only through `record_coding_system_name`,
+/// which publishes membership (GNU interns the `make_subsidiaries` names,
+/// src/coding.c:10968-10984). The query paths below re-resolve those same
+/// canonical ids; they never introduce a fresh Lisp-visible name.
+fn coding_name_value(name: &str) -> Value {
+    Value::from_sym_id(intern(name))
 }
 
 /// Mirror GNU `define-coding-system-internal`'s updates to
@@ -1993,6 +2028,21 @@ pub fn record_lisp_define_coding_system_alias<S: TextVariableStore>(
         return;
     };
     record_coding_system_name(vars, alias_id);
+}
+
+/// Record every name GNU's `define-coding-system-alias` publishes: the
+/// alias's EOL subsidiaries first, then the alias (the order the registry
+/// function returns). `record_coding_system_name` conses each onto
+/// `coding-system-list`/`coding-system-alist` and publishes obarray
+/// membership.
+#[doc(hidden)]
+pub fn record_lisp_define_coding_system_alias_with_subsidiaries<S: TextVariableStore>(
+    vars: &mut S,
+    names: &[SymId],
+) {
+    for name in names {
+        record_coding_system_name(vars, *name);
+    }
 }
 
 impl neovm_value::gc_trace::GcTrace for CodingSystemManager {
@@ -2249,7 +2299,12 @@ pub fn builtin_coding_system_aliases(
     {
         names.push(format!("{canonical}{suffix}"));
     }
-    Ok(Value::list(names.into_iter().map(Value::symbol).collect()))
+    Ok(Value::list(
+        names
+            .into_iter()
+            .map(|name| coding_name_value(&name))
+            .collect(),
+    ))
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2278,10 +2333,10 @@ pub(crate) fn builtin_coding_system_get(
             return Ok(value);
         }
         return match prop_name {
-            ":name" | "name" => Ok(Value::symbol(display_base_name(strip_eol_suffix(
+            ":name" | "name" => Ok(coding_name_value(&display_base_name(strip_eol_suffix(
                 &resolved_name,
             )))),
-            ":coding-type" | "coding-type" => Ok(Value::symbol(
+            ":coding-type" | "coding-type" => Ok(coding_name_value(
                 coding_type_for_base(strip_eol_suffix(&resolved_name))
                     .unwrap_or(resolve_sym(info.coding_type)),
             )),
@@ -2764,7 +2819,7 @@ fn builtin_coding_system_plist_uncached(
         coding_category_for_base(base)
     };
     plist_push_key(&mut plist, intern(":category"), Value::symbol(category));
-    plist_push_key(&mut plist, intern(":name"), Value::symbol(display_name));
+    plist_push_key(&mut plist, intern(":name"), coding_name_value(display_name));
     // `:docstring` keeps GNU's position right after `:name`; fall back to the
     // stored property when there is no built-in docstring for this base.
     if let Some(doc) = coding_docstring_for_base(base)
@@ -2776,7 +2831,7 @@ fn builtin_coding_system_plist_uncached(
     plist_push_key(
         &mut plist,
         intern(":coding-type"),
-        Value::symbol(coding_type),
+        coding_name_value(coding_type),
     );
     plist_push_key(&mut plist, intern(":mnemonic"), Value::fixnum(mnemonic));
     if let Some(charset_list) = coding_charset_list_for_base(base).or_else(|| {
@@ -2957,7 +3012,7 @@ fn builtin_coding_system_base_uncached(
     let name = coding_symbol_name(&args[0], mode)?;
     let resolved_name = resolve_runtime_name(mgr, &name)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![args[0]]))?;
-    Ok(Value::symbol(display_base_name(strip_eol_suffix(
+    Ok(coding_name_value(&display_base_name(strip_eol_suffix(
         &resolved_name,
     ))))
 }
@@ -3018,9 +3073,9 @@ fn builtin_coding_system_eol_type_uncached(
     // Return [base-unix base-dos base-mac] using Emacs display base names.
     let base = eol_vector_base(strip_eol_suffix(&resolved_name));
     let vec = vec![
-        Value::symbol(format!("{base}-unix")),
-        Value::symbol(format!("{base}-dos")),
-        Value::symbol(format!("{base}-mac")),
+        coding_name_value(&format!("{base}-unix")),
+        coding_name_value(&format!("{base}-dos")),
+        coding_name_value(&format!("{base}-mac")),
     ];
     Ok(Value::vector(vec))
 }
@@ -3392,13 +3447,13 @@ pub(crate) fn builtin_coding_system_change_text_conversion(
 
     if let Some(eol) = first_eol {
         if let Some(derived) = derive_coding_for_eol(resolved_text_base, eol) {
-            return Ok(Value::symbol(derived));
+            return Ok(coding_name_value(&derived));
         }
         return Ok(Value::NIL);
     }
 
     if EolType::from_suffix(&text_name).is_some() {
-        return Ok(Value::symbol(display_base_name(strip_eol_suffix(
+        return Ok(coding_name_value(&display_base_name(strip_eol_suffix(
             &text_name,
         ))));
     }
@@ -3406,7 +3461,7 @@ pub(crate) fn builtin_coding_system_change_text_conversion(
     match text_name.as_str() {
         "binary" => Ok(Value::symbol("no-conversion")),
         "emacs-internal" => Ok(Value::symbol("utf-8-emacs")),
-        _ => Ok(Value::symbol(text_name)),
+        _ => Ok(coding_name_value(&text_name)),
     }
 }
 
@@ -4026,6 +4081,24 @@ pub fn builtin_define_coding_system_alias(
     args: Vec<Value>,
     mode: SymbolMode,
 ) -> EvalResult {
+    define_coding_system_alias_with_subsidiaries(mgr, args, mode)?;
+    Ok(Value::NIL)
+}
+
+/// GNU `Fdefine_coding_system_alias` including its subsidiary propagation.
+///
+/// When CODING-SYSTEM's spec carries the subsidiary VECTOR (an undecided
+/// base, the `make_subsidiaries` output stored at define time), GNU creates
+/// `<alias>-unix`/`-dos`/`-mac` and recursively aliases each to the base's
+/// corresponding subsidiary (`src/coding.c:11581-11610`). Returns the names
+/// GNU publishes, in its creation order: the three subsidiaries, then the
+/// alias itself.
+#[doc(hidden)]
+pub fn define_coding_system_alias_with_subsidiaries(
+    mgr: &mut CodingSystemManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> Result<Vec<SymId>, Flow> {
     expect_args("define-coding-system-alias", &args, 2)?;
 
     let alias = coding_symbol_name(&args[0], mode)?;
@@ -4041,11 +4114,33 @@ pub fn builtin_define_coding_system_alias(
     let canonical = mgr.resolve(&target).ok_or_else(|| {
         signal(
             LispCondition::CodingSystemError,
-            vec![Value::symbol(&target)],
+            vec![coding_name_value(&target)],
         )
     })?;
-    mgr.add_alias(&alias, resolve_sym(canonical));
-    Ok(Value::NIL)
+    let canonical_name = resolve_sym(canonical);
+    // GNU appends ALIAS to the shared spec's alias list before creating the
+    // alias's subsidiaries.
+    mgr.add_alias(&alias, canonical_name);
+
+    let mut names = Vec::with_capacity(4);
+    let has_subsidiaries = mgr
+        .get(canonical_name)
+        .is_some_and(|info| matches!(info.eol_type, EolType::Undecided));
+    if has_subsidiaries {
+        for suffix in ["-unix", "-dos", "-mac"] {
+            let subsidiary_alias = format!("{alias}{suffix}");
+            let subsidiary_target = format!("{canonical_name}{suffix}");
+            // The base's variants are registered at define time. A base whose
+            // own name already carries an EOL suffix deliberately has none,
+            // so it has no subsidiary to alias.
+            if mgr.resolve(&subsidiary_target).is_some() {
+                mgr.add_alias(&subsidiary_alias, &subsidiary_target);
+                names.push(intern(&subsidiary_alias));
+            }
+        }
+    }
+    names.push(intern(&alias));
+    Ok(names)
 }
 
 /// `(set-coding-system-priority &rest CODING-SYSTEMS)` -- assign higher
@@ -5393,7 +5488,7 @@ fn apply_detected_eol(
             return sym;
         }
         match mgr.canonical_name_for_detected_eol(name, eol_suffix) {
-            Some(resolved) => Value::symbol(resolved),
+            Some(resolved) => coding_name_value(&resolved),
             None => sym,
         }
     };
@@ -6169,7 +6264,7 @@ pub fn builtin_coding_system_priority_list(
         // of the highest-priority category when HIGHESTP is non-nil
         // (`return CODING_ATTR_BASE_NAME (attrs)`), not a one-element list.
         if let Some(first) = mgr.priority.first() {
-            Ok(Value::symbol(coding_system_base_name(
+            Ok(coding_name_value(&coding_system_base_name(
                 mgr,
                 resolve_sym(*first),
             )))
@@ -6180,7 +6275,7 @@ pub fn builtin_coding_system_priority_list(
         let items: Vec<Value> = mgr
             .priority
             .iter()
-            .map(|id| Value::symbol(coding_system_base_name(mgr, resolve_sym(*id))))
+            .map(|id| coding_name_value(&coding_system_base_name(mgr, resolve_sym(*id))))
             .collect();
         Ok(Value::list(items))
     }
@@ -6491,7 +6586,7 @@ fn safe_coding_systems_for_text(
     exclude: Option<Value>,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
-    if !text.is_multibyte() || text.as_bytes().is_ascii() {
+    if !text.is_multibyte() || text.schars() == text.sbytes() {
         return Ok(Value::T);
     }
 
@@ -6515,7 +6610,7 @@ fn safe_coding_systems_for_text(
             continue;
         };
         if chars.iter().all(|&ch| repertoire.encodes(ch)) {
-            safe_codings.push(Value::symbol(coding));
+            safe_codings.push(coding_name_value(&coding));
         }
     }
     safe_codings.push(Value::symbol("raw-text"));
@@ -6560,6 +6655,25 @@ pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
         .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    safe_coding_systems_for_region(
+        eval.coding_systems(),
+        buffer,
+        (start, end),
+        &args,
+        eval.symbol_mode(),
+    )
+}
+
+/// The buffer branch of `find-coding-systems-region-internal`: START and END
+/// are the resolved positions of `args[0]` and `args[1]`, which also form the
+/// `args-out-of-range` data.
+fn safe_coding_systems_for_region(
+    mgr: &CodingSystemManager,
+    buffer: &Buffer,
+    (start, end): (i64, i64),
+    args: &[Value],
+    mode: SymbolMode,
+) -> Result<Value, Flow> {
     if !buffer.get_multibyte() {
         return Ok(Value::T);
     }
@@ -6577,13 +6691,13 @@ pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(start)),
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(end)),
     );
+    // Every non-ASCII character takes at least two bytes, so a region with as
+    // many bytes as characters is ASCII: answer before copying it.
+    if byte_range.len().get() as i64 == end - start {
+        return Ok(Value::T);
+    }
     let text = buffer.buffer_substring_lisp_string_range(byte_range);
-    safe_coding_systems_for_text(
-        eval.coding_systems(),
-        &text,
-        args.get(2).copied(),
-        eval.symbol_mode(),
-    )
+    safe_coding_systems_for_text(mgr, &text, args.get(2).copied(), mode)
 }
 
 // ===========================================================================
@@ -6692,6 +6806,10 @@ pub fn register_bootstrap_vars<S: TextVariableStore>(vars: &mut S) {
 #[cfg(test)]
 #[path = "tests/coding_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/allocation_test.rs"]
+mod allocation_tests;
 
 /// VIS write route (lead #1052): the priorities field stays pub(crate) for
 /// this crate; the authority fence delegates here instead of touching it.

@@ -538,7 +538,7 @@ impl Context {
                 super::super::builtins::dispatch_builtin(
                     self,
                     "run-hooks",
-                    vec![Value::symbol(hook_name)],
+                    vec![Value::from_sym_id(intern(hook_name))],
                 )
                 .unwrap_or(Ok(Value::NIL))
             }
@@ -558,7 +558,7 @@ impl Context {
     pub fn queue_pending_safe_hook(&mut self, hook_name: &str, args: &[Value]) {
         self.queue_pending_safe_funcall(
             Value::symbol("run-hook-with-args"),
-            std::iter::once(Value::symbol(hook_name))
+            std::iter::once(Value::from_sym_id(intern(hook_name)))
                 .chain(args.iter().copied())
                 .collect(),
         );
@@ -697,11 +697,6 @@ impl Context {
     /// acknowledgement is per window rather than a blanket clear.
     pub fn note_chrome_generated(&mut self, window: WindowId) {
         self.chrome_dirty.note_chrome_generated(window);
-    }
-
-    /// Drop a deleted window's chrome acknowledgement.
-    pub fn forget_chrome_window(&mut self, window: WindowId) {
-        self.chrome_dirty.forget_window(window);
     }
 
     #[doc(hidden)]
@@ -1277,7 +1272,8 @@ impl Context {
 
     /// Perform a full mark-and-sweep garbage collection.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub fn gc_collect(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn gc_collect(&mut self) {
         self.gc_collect_exact();
     }
 
@@ -1819,7 +1815,7 @@ impl Context {
     /// matching heap, Obarray and TLS writers without Lisp or allocation
     /// safepoints through capture and launch. Rejection precedes blackening.
     #[doc(hidden)]
-    pub unsafe fn start_concurrent_mark(
+    unsafe fn start_concurrent_mark(
         &mut self,
         heap_ptr: *mut neovm_value::tagged::gc::TaggedHeap,
         kind: ConcurrentCycleKind,

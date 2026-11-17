@@ -34,9 +34,7 @@ fn divergence_pcase_destructuring_nested() {
 fn divergence_pcase_guard_and_pattern() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" list (funcall classify 42) (eq (funcall classify 42) 'positive) (eq (funcall classify -5) 'negative) (eq (funcall classify 0) 'zero) (eq (funcall classify \"hello\") 'string) (eq (funcall classify nil) 'nil) (eq (funcall classify '(1 2)) 'cons) (eq (funcall classify 'sym) 'other))""#
-    ]];
+    let expect = expect_test::expect![[r#""OK (positive t t t t t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((classify (lambda (x)
@@ -47,7 +45,7 @@ fn divergence_pcase_guard_and_pattern() {
                       ((pred stringp) 'string)
                       ((pred null) 'nil)
                       ((pred consp) 'cons)
-                      (_ 'other))))
+                      (_ 'other)))))
     (list (funcall classify 42)
           (eq (funcall classify 42) 'positive)
           (eq (funcall classify -5) 'negative)
@@ -55,7 +53,7 @@ fn divergence_pcase_guard_and_pattern() {
           (eq (funcall classify "hello") 'string)
           (eq (funcall classify nil) 'nil)
           (eq (funcall classify '(1 2)) 'cons)
-          (eq (funcall classify 'sym) 'other)))) )"#,
+          (eq (funcall classify 'sym) 'other)))) "#,
         expect,
     );
 }

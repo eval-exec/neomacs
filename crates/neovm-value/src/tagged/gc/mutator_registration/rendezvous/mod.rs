@@ -186,14 +186,14 @@ pub struct Rendezvous<'era> {
 }
 #[derive(Debug, Clone)]
 pub struct Snapshot {
-    pub phase: Phase,
-    pub request_epoch: u64,
-    pub completed_epoch: u64,
-    pub queued: bool,
-    pub frozen: Vec<MutatorKey>,
-    pub debt: Vec<MutatorKey>,
+    pub(crate) phase: Phase,
+    pub(crate) request_epoch: u64,
+    pub(crate) completed_epoch: u64,
+    pub(crate) queued: bool,
+    pub(crate) frozen: Vec<MutatorKey>,
+    pub(crate) debt: Vec<MutatorKey>,
     pub owners: Vec<(MutatorKey, Mode)>,
-    pub traces: usize,
+    pub(crate) traces: usize,
 }
 impl std::fmt::Debug for Rendezvous<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -220,7 +220,7 @@ impl Rendezvous<'_> {
         })
     }
     /// A notification is only a hint; predicate loops decide every transition.
-    pub fn notify(&self) {
+    pub(crate) fn notify(&self) {
         self.registry.park.wake.notify_all();
     }
 }
@@ -232,7 +232,7 @@ impl<K: EraKeeper> EraCore<'_, K> {
             .retain()
             .expect("live fixture epoch")
     }
-    pub fn rendezvous(&self) -> Rendezvous<'_> {
+    pub(crate) fn rendezvous(&self) -> Rendezvous<'_> {
         Rendezvous {
             registry: self.registry(),
         }

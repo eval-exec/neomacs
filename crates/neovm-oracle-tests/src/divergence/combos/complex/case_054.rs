@@ -83,7 +83,7 @@ fn div_cx54_process_output_env_coding_exitcode_timer_narrow_overlay_textprop_und
 fn div_cx54_json_xml_dom_serialize_parse_chain_with_hash_multibyte_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" list (length items) (cdr (assoc 'text (aref items 0))) (cdr (assoc 'text (aref items 1))) (mapcar #'dom-text (dom-by-tag xml-dom 'item)) (secure-hash 'sha256 json-str) (secure-hash 'md5 xml-str))""#
+        r#""OK (2 \"café\" \"世界\" (\"café\" \"世界\") \"904b653a3e60c111e09bc20fb20b4630b7963ea8162a72979fbf1222760bc0e4\" \"d7a24f6eee61f8ef54cbf9d8a22d2701\")""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
@@ -97,7 +97,7 @@ fn div_cx54_json_xml_dom_serialize_parse_chain_with_hash_multibyte_mega() {
                         (buffer-string)))
              (xml-dom (with-temp-buffer
                         (insert xml-str)
-                        (car (xml-parse-region (point-min) (point-max)))))
+                        (car (xml-parse-region (point-min) (point-max))))))
         (list (length items)
               (cdr (assoc 'text (aref items 0)))
               (cdr (assoc 'text (aref items 1)))
@@ -105,7 +105,7 @@ fn div_cx54_json_xml_dom_serialize_parse_chain_with_hash_multibyte_mega() {
               (secure-hash 'sha256 json-str)
               (secure-hash 'md5 xml-str))))
   (error (cons 'errored (car e))))
-)"##,
+"##,
         expect,
     );
 }
@@ -301,20 +301,21 @@ fn div_cx54_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_e
 fn div_cx54_read_eval_backquote_destructuring_lexical_macro_propertized_hash_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" let* ((names (eval (car (read-from-string \"`(,@(mapcar #'car (caar ,data)))\")) t)) (vals (eval (car (read-from-string \"`(,@(mapcar #'cdr (caar ,data)))\")) t)) (ht (make-hash-table :test 'equal))) (cl-loop for n in names for v in vals do (puthash n v ht)) (list names vals (hash-table-count ht) (mapcar (lambda (n) (gethash n ht)) names) (secure-hash 'md5 (prin1-to-string ht))))""#
+        r#""OK ((\"café\" \"世界\") (1 2) 2 (1 2) \"19401e3413cbee90d77fc18f5d636dfe\")""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t))
-  (let ((data '((("café" . 1) ("世界" . 2))))
-    (let* ((names (eval (car (read-from-string "`(,@(mapcar #'car (caar ,data)))")) t))
-           (vals (eval (car (read-from-string "`(,@(mapcar #'cdr (caar ,data)))")) t))
+  (require 'cl-lib)
+  (let ((data '((("café" . 1) ("世界" . 2)))))
+    (let* ((names (eval (car (read-from-string (format "`(,@(mapcar #'car (car '%S)))" data))) t))
+           (vals (eval (car (read-from-string (format "`(,@(mapcar #'cdr (car '%S)))" data))) t))
            (ht (make-hash-table :test 'equal)))
       (cl-loop for n in names for v in vals do (puthash n v ht))
       (list names vals (hash-table-count ht)
             (mapcar (lambda (n) (gethash n ht)) names)
             (secure-hash 'md5 (prin1-to-string ht))))))
-)"##,
+"##,
         expect,
     );
 }

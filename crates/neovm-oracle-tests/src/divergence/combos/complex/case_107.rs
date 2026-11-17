@@ -167,20 +167,20 @@ fn div_cx107_generator_with_closure_capture() {
 #[test]
 fn div_cx107_iter_close_availability() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-function lambda-iter)""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable e)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
     (progn
       (require 'generator)
       (let ((iter (let ((lexical-binding t))
-                    (lambda-iter
+                    (iter-lambda
                       (iter-yield :first)
                       (iter-yield :second)
-                      (iter-yield :third))))))
+                      (iter-yield :third)))))
         (iter-next iter)
         (iter-close iter)
-        (iter-next iter)))
+        (iter-next iter))))
   (error (list :errored (car e)))"##,
         expect,
     );
@@ -189,23 +189,27 @@ fn div_cx107_iter_close_availability() {
 #[test]
 fn div_cx107_generator_recurse_via_yield_from() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-function lambda-iter)""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (invalid-function (closure (t) (iter-yield-from (iter-lambda (dolist (lst '((a b) (c d) (e f g))) (dolist (x lst) (iter-yield x))))) (let (cps-current-state-1 cps-current-value-0 cps-state-terminal-2 cps-state-atom-3) (setf cps-state-terminal-2 (lambda nil (signal 'iter-end-of-sequence cps-current-value-0))) (setf cps-state-atom-3 (lambda nil (setf cps-current-value-0 (prog1 nil (setf cps-current-state-1 cps-state-terminal-2))))) (setf cps-current-state-1 cps-state-atom-3) (let ((iterator (lambda (op value) (cond ((eq op :close) (setf cps-current-state-1 cps-state-terminal-2 cps-current-value-0 nil)) ((eq op :next) (setf cps-current-value-0 value) (let ((yielded nil)) (unwind-protect (prog1 (catch 'cps--yield (while t (funcall cps-current-state-1))) (setf yielded t)) (unless yielded (setf cps-current-state-1 cps-state-terminal-2 cps-current-value-0 nil))))) (t (error \"Unknown iterator operation %S\" op)))))) nil iterator))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
     (progn
       (require 'generator)
       (let ((lexical-binding t))
-        (let ((iter (lambda-iter
-                       (dolist (lst '((a b) (c d) (e f g)))
-                         (dolist (x lst)
-                           (iter-yield x)))))))
+        (let ((iter (iter-lambda
+                      (iter-yield-from
+                       (iter-lambda
+                         (dolist (lst '((a b) (c d) (e f g)))
+                           (dolist (x lst)
+                             (iter-yield x))))))))
           (list (iter-next iter)
                 (iter-next iter)
                 (iter-next iter)
                 (iter-next iter)
                 (iter-next iter)
-                (iter-next iter)))))
+                (iter-next iter))))))
   (error (list :errored (car e)))"##,
         expect,
     );

@@ -14,7 +14,7 @@ impl Context {
     /// before calling this.
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
-    pub fn from_dump(
+    pub(crate) fn from_dump(
         tagged_heap: neovm_value::tagged::gc::AliasableBox<neovm_value::tagged::gc::TaggedHeap>,
         obarray: Obarray,
         lexenv: Value,
@@ -378,11 +378,13 @@ impl Context {
             }
         }
 
-        ev.provide_value(
-            Value::symbol("make-network-process"),
-            Some(crate::emacs_core::eval::data::process_state::make_network_process_subfeatures()),
-        )
-        .expect("startup make-network-process provide should succeed");
+        // Same startup publication as the fresh constructor: the advertised
+        // capability keywords must be obarray members (PEER 5786).
+        let subfeatures =
+            crate::emacs_core::eval::data::process_state::make_network_process_subfeatures();
+        ev.obarray.intern_member_symbols_in(subfeatures);
+        ev.provide_value(Value::symbol("make-network-process"), Some(subfeatures))
+            .expect("startup make-network-process provide should succeed");
 
         // The fringe-bitmap registry is reconstructed empty by `from_dump` (it
         // is not part of the dump image), so re-seed GNU's standard built-in

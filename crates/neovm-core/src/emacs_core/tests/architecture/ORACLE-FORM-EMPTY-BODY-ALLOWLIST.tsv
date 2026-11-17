@@ -1,0 +1,8 @@
+# Oracle rows with a deliberate empty-body form (peer 5794). One row per
+# finding: `<crate-relative file>::<test fn>[#n>` TAB one-line reason.
+# Rows whose subject IS the empty body belong here; an empty-body let whose
+# later siblings read a binding is NEVER allowlistable — fix the row instead.
+combination/b_tree.rs::oracle_prop_btree_search_basic	(when (< key k)) is the author-commented "break-like" placeholder in the child-position scan; nothing to run when key < k
+progn/prog1_prog2_comprehensive.rs::oracle_prop_progn_comprehensive_return_patterns	(progn) is the row subject: the empty-progn-returns-nil element of the return-pattern list
+when_unless_comprehensive.rs::oracle_prop_when_unless_comp_return_values	(when t) is the row subject: no-body when returns nil
+when_unless_comprehensive.rs::oracle_prop_when_unless_comp_return_values#2	(unless nil) is the row subject: no-body unless returns nil

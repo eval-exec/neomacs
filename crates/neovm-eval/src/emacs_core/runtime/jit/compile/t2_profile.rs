@@ -286,7 +286,7 @@ pub(super) fn credit_window_open(obs: *const LeafObs) -> bool {
 /// points to the live leaf-observation record. The call comes from generated
 /// code holding the frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_call_prof(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_call_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -311,7 +311,7 @@ pub unsafe extern "C" fn neovm_jit_t2_call_prof(
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_call_subr_prof(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_call_subr_prof(
     ctx: *mut u8,
     sym: i64,
     expected: i64,
@@ -352,7 +352,7 @@ pub unsafe extern "C" fn neovm_jit_t2_call_subr_prof(
 /// leaf-observation record. The call comes from generated code holding the
 /// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_call_feedback_prof(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_call_feedback_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -380,7 +380,7 @@ pub unsafe extern "C" fn neovm_jit_t2_call_feedback_prof(
 /// leaf-observation record. The call comes from generated code holding the
 /// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_call_feedback_census(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_call_feedback_census(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -415,7 +415,7 @@ mod tests;
 /// leaf-observation record. The call comes from generated code holding the
 /// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_call_use_prof(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_call_use_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -447,7 +447,7 @@ pub unsafe extern "C" fn neovm_jit_t2_call_use_prof(
 /// leaf-observation record. The call comes from generated code holding the
 /// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_apply_use_prof(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_apply_use_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -473,7 +473,7 @@ pub unsafe extern "C" fn neovm_jit_t2_apply_use_prof(
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_record_call_use_target(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_record_call_use_target(
     site: *const CallSiteFeedback,
     target: i64,
     obs: *const LeafObs,

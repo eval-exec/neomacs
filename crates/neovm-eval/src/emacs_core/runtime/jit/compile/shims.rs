@@ -14,7 +14,7 @@ use super::*;
 /// through [`register_shims`], so the only effect of `no_mangle` is an exported
 /// symbol name. All shims the MIR tier can emit ([`MIR_SHIM_NAMES`]) carry it.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_gc_save() -> i64 {
+pub(crate) extern "C" fn neovm_jit_gc_save() -> i64 {
     save_scratch_gc_roots() as i64
 }
 
@@ -28,7 +28,8 @@ pub extern "C" fn neovm_jit_gc_save() -> i64 {
 /// operands the JIT roots before calls. `gc_restore` truncates to the saved
 /// depth, so a variable push count is fine.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_gc_push(bits: i64) {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) extern "C" fn neovm_jit_gc_push(bits: i64) {
     let v = unsafe {
         /* SAFETY: JIT constant-pool word */
         Value::from_bits(bits as usize)
@@ -51,7 +52,7 @@ pub extern "C" fn neovm_jit_gc_push(bits: i64) {
 /// `ptr` addresses exactly `count` tagged-bits words the generated code
 /// wrote immediately before this call (its residual buffer); `count >= 0`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_gc_push_many(ptr: *const i64, count: i64) {
+pub(crate) unsafe extern "C" fn neovm_jit_gc_push_many(ptr: *const i64, count: i64) {
     for i in 0..count {
         // SAFETY: the generated code wrote `count` tagged words at `ptr`.
         let v = unsafe {
@@ -66,7 +67,7 @@ pub unsafe extern "C" fn neovm_jit_gc_push_many(ptr: *const i64, count: i64) {
 
 /// Pop the scratch roots back to a saved depth.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_gc_restore(saved: i64) {
+pub(crate) extern "C" fn neovm_jit_gc_restore(saved: i64) {
     restore_scratch_gc_roots(saved as usize);
 }
 
@@ -98,7 +99,7 @@ pub extern "C" fn neovm_jit_cons(car: i64, cdr: i64) -> i64 {
 /// concurrent cycle) and never reaches a GC safe point, so nothing can collect
 /// while the caller's other values sit in native slots.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_make_float(value: f64) -> i64 {
+pub(crate) extern "C" fn neovm_jit_make_float(value: f64) -> i64 {
     neovm_value::tagged::gc::with_tagged_heap(|heap| heap.alloc_float_inline(value)).bits() as i64
 }
 
@@ -109,7 +110,7 @@ pub extern "C" fn neovm_jit_make_float(value: f64) -> i64 {
 /// The vmctx contract (see `neovm_jit_call`); pure Vec growth — no lisp,
 /// no GC, no safe point.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
+pub(crate) unsafe extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
     // SAFETY: see neovm_jit_call's function-level contract.
     // SAFETY (owner chain): Context work here uses this owner or its
     // typed reborrows; no older-raw callback intervenes before its last use
@@ -137,7 +138,7 @@ pub unsafe extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
 /// The vmctx contract (see `neovm_jit_call`).
 #[unsafe(no_mangle)]
 #[cold]
-pub unsafe extern "C" fn neovm_jit_stack_check(ctx: *mut u8) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_stack_check(ctx: *mut u8) -> i64 {
     if crate::emacs_core::eval::native_stack::native_stack_exhausted() {
         0
     } else {
@@ -154,20 +155,22 @@ std::thread_local! {
 }
 
 /// Native return code: success, result bits written through `out`.
-pub const STATUS_OK: i64 = 1;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const STATUS_OK: i64 = 1;
 /// Native return code: a speculation guard failed before any side effect ran —
 /// rerun the body on the Tier-0 interpreter.
-pub const STATUS_DEOPT: i64 = 0;
+pub(crate) const STATUS_DEOPT: i64 = 0;
 /// Native return code: a runtime call raised a non-local `Flow`; take it with
 /// [`take_pending_flow`] and propagate.
-pub const STATUS_SIGNAL: i64 = 2;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const STATUS_SIGNAL: i64 = 2;
 
 /// Native return code: a speculation guard failed at a PRECISE bytecode pc —
 /// the live operand stack was spilled into the leaf's deopt buffer and the
 /// frame's binds/handlers were left REGISTERED (no frame unwind): the caller
 /// resumes the Tier-0 interpreter mid-function via `Vm::run_resumed_frame`.
 /// Unlike [`STATUS_DEOPT`], this is sound even after side effects ran.
-pub const STATUS_DEOPT_AT: i64 = 3;
+pub(crate) const STATUS_DEOPT_AT: i64 = 3;
 /// Native return code: a compiled leaf's entry stack guard measured the
 /// native stack below its red zone. The callee did NOT run; the caller must
 /// re-run this call on the Tier-0 interpreter, whose probes grow stacker
@@ -186,7 +189,8 @@ pub(crate) const STATUS_STACK_FALLBACK: i64 = 5;
 /// like the other STATUS codes (`aot::compute_abi_tag`), although AOT leaves
 /// can never contain subr spec sites (speculation requires `Some(obarray)`;
 /// AOT compiles at `None`).
-pub const STATUS_NEED_GENERIC: i64 = 4;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const STATUS_NEED_GENERIC: i64 = 4;
 
 /// Test/debug-build counter of speculated direct-call shim entries (evidence
 /// that `find_spec_sites` + the spec lowering actually engage). Release unit
@@ -343,7 +347,8 @@ pub(crate) fn cbsym_spec_generic_count_for_test() -> u64 {
 /// thread's re-dispatch is abandoned along with the rest of that extent and
 /// the panic error is what propagates. Accepted, documented trade-off.
 #[inline(never)]
-pub fn take_pending_flow() -> Option<Flow> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn take_pending_flow() -> Option<Flow> {
     let flow = PENDING_FLOW.with(|p| p.borrow_mut().take());
     match PENDING_SHIM_PANIC.with(|p| p.borrow_mut().take()) {
         Some(message) => Some(signal("error", vec![Value::string(&message)])),
@@ -659,7 +664,7 @@ pub(crate) use jit_shim_contain;
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_call(
+pub(crate) unsafe extern "C" fn neovm_jit_call(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -856,7 +861,7 @@ fn jit_call_status(res: Result<Value, Flow>, out: *mut i64) -> i64 {
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_apply(
+pub(crate) unsafe extern "C" fn neovm_jit_apply(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -1265,7 +1270,7 @@ thread_local! {
 /// # Safety
 /// Same vmctx contract as [`neovm_jit_call`], but only a shared read.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 {
     #[cfg(test)]
     EQ_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     let a = unsafe {
@@ -1302,7 +1307,7 @@ pub unsafe extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 
 /// # Safety
 /// Same read-only vmctx contract as [`neovm_jit_eq_slow`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_symbolp_slow(ctx: *mut u8, v: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_symbolp_slow(ctx: *mut u8, v: i64) -> i64 {
     #[cfg(test)]
     SYMBOLP_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     let v = unsafe {
@@ -1357,7 +1362,7 @@ pub(crate) fn var_shim_calls() -> (usize, usize, usize, usize) {
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     VARREF_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1417,7 +1422,11 @@ pub unsafe extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64)
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_varset_collection(
+    ctx: *mut u8,
+    sym: i64,
+    val: i64,
+) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1471,7 +1480,7 @@ pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1523,7 +1532,11 @@ pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i
 /// # Safety
 /// Same vmctx contract as [`neovm_jit_call`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_varbind_collection(
+    ctx: *mut u8,
+    sym: i64,
+    val: i64,
+) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1579,7 +1592,7 @@ pub unsafe extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, va
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1638,7 +1651,7 @@ pub unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> 
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     // SAFETY: see neovm_jit_call's function-level contract.
@@ -1689,7 +1702,7 @@ pub unsafe extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i6
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     // SAFETY: see neovm_jit_call's function-level contract.
@@ -1733,8 +1746,8 @@ pub unsafe extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
 }
 
 // Selected array observer; no change to main exports or registration order.
-pub use super::array_profile::neovm_jit_t2_record_array_use;
-pub use super::sqrt_binding::neovm_jit_sqrt_binding_valid;
+pub(crate) use super::array_profile::neovm_jit_t2_record_array_use;
+pub(crate) use super::sqrt_binding::neovm_jit_sqrt_binding_valid;
 
 /// Carrier park: drop shim scratch and pending panic state.
 pub(crate) fn reset_carrier_tls() {

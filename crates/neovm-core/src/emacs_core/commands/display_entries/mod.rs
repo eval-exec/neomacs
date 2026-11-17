@@ -4,6 +4,7 @@
 //! and the command loop's pointer snapshot.  Under R0 the bodies stay core-side;
 //! the window/frame records and the display engine remain core-owned and the
 //! evaluator context is reached through the core facade.
+use neovm_value::intern::intern;
 
 use crate::emacs_core::builtins::expect_string_lossy;
 use crate::emacs_core::builtins::strings::builtin_string_to_number;
@@ -336,7 +337,7 @@ pub(crate) fn builtin_xw_display_color_p_ctx(
 
 fn tty_display_dimension(
     ctx: &mut crate::emacs_core::eval::Context,
-    name: &str,
+    name: &'static str,
     args: &[Value],
 ) -> Result<(i64, i64), Flow> {
     expect_args_range(name, args, 0, 1)?;
@@ -830,7 +831,9 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute_from_resource(
             ":bold" | ":italic" => {
                 face_boolean_x_resource_value(&resource_value, true)?.expect("signal=true")
             }
-            ":weight" | ":slant" | ":width" => Value::symbol(&resource_value),
+            ":weight" | ":slant" | ":width" => {
+                Value::from_sym_id(intern((&resource_value).as_ref()))
+            }
             ":inverse-video" | ":extend" => {
                 face_boolean_x_resource_value(&resource_value, true)?.expect("signal=true")
             }

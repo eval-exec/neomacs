@@ -2788,6 +2788,10 @@ mod git_fixture_tests;
 #[path = "tests/snapshot_test.rs"]
 mod snapshot_tests;
 
+#[cfg(test)]
+#[path = "tests/package_harness_test.rs"]
+mod package_harness_tests;
+
 pub mod git_fixture;
 pub mod package_harness;
 pub mod package_scenario;

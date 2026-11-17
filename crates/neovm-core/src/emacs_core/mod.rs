@@ -233,7 +233,6 @@ pub mod data {
     // to the compatibility sequence.
     pub use neovm_eval::emacs_core::data::*;
 }
-pub use neovm_eval::emacs_core::debug;
 pub use neovm_eval::emacs_core::debug_on_call;
 pub use neovm_eval::emacs_core::defvar_bool;
 pub use neovm_eval::emacs_core::defvar_object;
@@ -301,7 +300,6 @@ pub use neovm_system::emacs_core::filelock;
 pub use neovm_system::emacs_core::host_input;
 #[path = "load_boot.rs"]
 pub mod load_boot;
-pub use neovm_system::emacs_core::network;
 pub(crate) use neovm_system::emacs_core::os_signal;
 pub use neovm_system::emacs_core::path_exec;
 pub use neovm_system::emacs_core::perf_trace;
@@ -411,6 +409,10 @@ mod symbol_plist_regression_test;
 mod symbol_redirect_regression_test;
 
 #[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/symbol/tests/membership_census_test.rs"]
+mod symbol_membership_census_test;
+
+#[cfg(test)]
 #[path = "tests/moved_eval/mod.rs"]
 mod moved_eval_tests;
 
@@ -453,6 +455,10 @@ mod architecture_transmute_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/layering_guard_test.rs"]
 mod architecture_layering_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/merge_ratchet.rs"]
+mod architecture_merge_ratchet;
 
 #[cfg(test)]
 #[path = "tests/architecture/moving_set.rs"]
@@ -503,6 +509,9 @@ mod architecture_canonical_registration_trace_test;
 mod architecture_host_cfg_elisp_regression_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/oracle_form_empty_binding_guard_test.rs"]
+mod architecture_oracle_form_empty_binding_guard_test;
+#[cfg(test)]
 #[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;
 
@@ -541,6 +550,10 @@ mod architecture_debug_assert_side_effect_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/leaf_slot_writer_guard_test.rs"]
 mod architecture_leaf_slot_writer_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/obarray_writer_raw_symbol_guard_test.rs"]
+mod architecture_obarray_writer_raw_symbol_guard_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/value_display_hook_guard_test.rs"]

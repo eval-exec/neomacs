@@ -9,6 +9,7 @@ use super::*;
 use neovm_eval::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
 };
+use neovm_value::intern::intern;
 use neovm_value::tagged::value::SymbolMode;
 
 use super::NetworkSocketIo;
@@ -1122,7 +1123,7 @@ impl ProcessDecodedRun {
 /// Deriving it at read time, as this type does, is that same function with no
 /// cache left to invalidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProcessOutputSink {
+pub(crate) enum ProcessOutputSink {
     /// The internal default filter is inserting into a live UNIBYTE buffer, so
     /// character-code conversion is dropped and only the EOL conversion of the
     /// resolved coding survives.
@@ -1163,7 +1164,7 @@ impl ProcessOutputSink {
 /// (`setup_process_coding_systems`, :8380-8400, which does not consult
 /// `fast-read-process-output' at all), this says whether the decode happens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProcessReadBranch {
+pub(crate) enum ProcessReadBranch {
     /// `read_and_insert_process_output` (src/process.c:6459-6460) reached with a
     /// LIVE buffer to insert into, which is where `fast-read-process-output'
     /// and the default filter send a read (:6557-6558).
@@ -1250,7 +1251,8 @@ pub(super) enum ProcessRunDisposition {
 /// parameter rather than two because a read that had one and not the other
 /// could decode into the wrong shape or skip a decode GNU makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ProcessOutputDestination {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct ProcessOutputDestination {
     pub(super) sink: ProcessOutputSink,
     pub(super) branch: ProcessReadBranch,
 }
@@ -2716,7 +2718,7 @@ pub(super) fn serial_expect_fixnum(value: Value) -> Result<i64, Flow> {
 }
 
 pub(super) fn serial_value_eq_symbol(value: Value, symbol: &str) -> bool {
-    neovm_value::value::eq_value(&value, &Value::symbol(symbol))
+    neovm_value::value::eq_value(&value, &Value::from_sym_id(intern(symbol)))
 }
 
 /// GNU `serial_open`, src/sysdep.c:2980-2990 (termios) / src/w32.c:11098
@@ -8250,7 +8252,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         )
         .expect("inherited coding is registered");
         if let Some(proc) = self.processes_mut().get_mut(id) {
-            proc.coding_encode = Value::symbol(&inherited);
+            proc.coding_encode = Value::from_sym_id(intern((&inherited).as_ref()));
             proc.encoding_state = state;
         }
     }

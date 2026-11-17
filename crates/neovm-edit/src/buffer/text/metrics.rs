@@ -28,25 +28,25 @@ impl TextMetrics {
         }
     }
 
-    pub const fn from_lengths(chars: CharLen, emacs_bytes: EmacsByteLen) -> Self {
+    pub(crate) const fn from_lengths(chars: CharLen, emacs_bytes: EmacsByteLen) -> Self {
         Self { chars, emacs_bytes }
     }
 
-    pub const fn from_extent(extent: TextExtent) -> Self {
+    pub(crate) const fn from_extent(extent: TextExtent) -> Self {
         Self {
             chars: extent.chars(),
             emacs_bytes: extent.emacs_bytes(),
         }
     }
 
-    pub const fn add_metrics(self, other: Self) -> Self {
+    pub(crate) const fn add_metrics(self, other: Self) -> Self {
         Self {
             chars: self.chars.add_len(other.chars),
             emacs_bytes: self.emacs_bytes.add_len(other.emacs_bytes),
         }
     }
 
-    pub const fn add_extent(self, extent: TextExtent) -> Self {
+    pub(crate) const fn add_extent(self, extent: TextExtent) -> Self {
         Self {
             chars: self.chars.add_len(extent.chars()),
             emacs_bytes: self.emacs_bytes.add_len(extent.emacs_bytes()),
@@ -73,7 +73,7 @@ impl TextMetrics {
         CharPos0::ZERO.add_len(self.chars)
     }
 
-    pub const fn emacs_byte_end(self) -> EmacsBytePos {
+    pub(crate) const fn emacs_byte_end(self) -> EmacsBytePos {
         EmacsBytePos::ZERO.add_len(self.emacs_bytes)
     }
 

@@ -104,7 +104,7 @@ impl GapBuffer {
         Self::new_with_multibyte(true)
     }
 
-    pub fn new_with_multibyte(multibyte: bool) -> Self {
+    pub(crate) fn new_with_multibyte(multibyte: bool) -> Self {
         Self {
             buf: vec![0u8; GAP_BYTES_MIN],
             multibyte,
@@ -242,19 +242,19 @@ impl GapBuffer {
     }
 
     /// GNU `GPT_BYTE`: logical Emacs byte position of the gap.
-    pub fn gpt_byte(&self) -> usize {
+    pub(crate) fn gpt_byte(&self) -> usize {
         self.gap_start_bytes
     }
 
     /// GNU `Z_BYTE`: logical Emacs byte position of the end of buffer text.
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub fn z_byte(&self) -> usize {
+    pub(crate) fn z_byte(&self) -> usize {
         self.total_bytes
     }
 
     /// Size of the gap in bytes.
     #[inline]
-    pub fn gap_size(&self) -> usize {
+    pub(crate) fn gap_size(&self) -> usize {
         self.gap_end - self.gap_start
     }
 
@@ -1109,6 +1109,8 @@ impl GapBuffer {
     /// all char-aligned).
     fn count_chars_in_logical_byte_range(&self, lo: usize, hi: usize) -> usize {
         debug_assert!(lo <= hi && hi <= self.total_bytes);
+        #[cfg(test)]
+        super::buffer_text::note_byte_to_char_scanned_bytes(hi - lo);
         let mut chars = 0;
         if lo < self.gap_start_bytes {
             let pre_hi = hi.min(self.gap_start_bytes);

@@ -268,7 +268,10 @@ fn params_on_stack(f: &ByteCodeFunction) -> bool {
 /// construction) exactly as the interpreter's `run_frame` seeds it.
 /// Dynamic-binding bytecode (params bound via `varbind`, not on the stack)
 /// still bails.
-pub fn compile_bytecode_function(f: &ByteCodeFunction) -> Result<CompiledLeaf, CompileError> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn compile_bytecode_function(
+    f: &ByteCodeFunction,
+) -> Result<CompiledLeaf, CompileError> {
     compile_bytecode_function_with(f, None)
 }
 
@@ -823,7 +826,8 @@ pub(crate) fn body_is_call_heavy(ops: &[Op], constants: &[Value]) -> bool {
     calls > arith
 }
 
-pub fn compile_bytecode_function_with(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn compile_bytecode_function_with(
     f: &ByteCodeFunction,
     obarray: Option<&Obarray>,
 ) -> Result<CompiledLeaf, CompileError> {
@@ -851,13 +855,13 @@ pub(crate) fn compile_bytecode_function_tiered(
 
 /// What a compile is asked to do beyond the body itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CompileRequest {
+pub(crate) struct CompileRequest {
     /// The register allocator policy (`lowering::choose_regalloc`).
     pub(crate) regalloc: lowering::RegallocPolicy,
     /// Compile a body the profitability gate would refuse: the deferred
     /// re-attempt of a call-heavy body that has since proven hot enough to
     /// amortize its compile (`RuntimeState::profit_deferred_heat`).
-    pub bypass_profit_gate: bool,
+    pub(crate) bypass_profit_gate: bool,
     /// Why the compile runs (the `[neovm-jit-*phases]` origin rows).
     pub(crate) origin: super::stats::CompileOrigin,
     /// What the compile is in the tier spine (`tier2`): a T1 entry compile
@@ -921,7 +925,7 @@ pub(crate) fn front_requires_osr_evidence(f: &ByteCodeFunction, request: Compile
 }
 
 /// [`compile_bytecode_function_tiered`] with the full [`CompileRequest`].
-pub fn compile_bytecode_function_requested(
+pub(crate) fn compile_bytecode_function_requested(
     f: &ByteCodeFunction,
     obarray: Option<&Obarray>,
     request: CompileRequest,
@@ -3569,7 +3573,8 @@ pub(crate) fn baseline_needs_rt(ops: &[Op], has_backedge: bool) -> bool {
 /// Heap-store leaves must be lowered with their intended executing heap
 /// installed; they are not portable across heaps or generational modes.
 /// Heapless lowering retains the legacy generation-disabled shape.
-pub fn lower_leaf(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn lower_leaf(
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -3580,7 +3585,8 @@ pub fn lower_leaf(
 /// [`lower_leaf`] with the function's GNU byte-offset map, needed to resolve
 /// `Op::Switch` jump-table addresses to instruction indices (GNU bytecode
 /// stores byte offsets; natively compiled chunks store indices directly).
-pub fn lower_leaf_with_map(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn lower_leaf_with_map(
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -3592,7 +3598,8 @@ pub fn lower_leaf_with_map(
 /// [`lower_leaf_with_map`] plus the compiling thread's obarray, enabling
 /// direct-call speculation (constant-symbol callees bound to bytecode get
 /// epoch-validated direct calls; see [`find_spec_sites`]).
-pub fn lower_leaf_full(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn lower_leaf_full(
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -3632,7 +3639,7 @@ fn mask_dynamic_prefix(constants: &[Value], dynamic_prefix: usize) -> Vec<Value>
 /// mid-execution. The OSR entry checks the header's known-fixnum facts against
 /// the original tagged snapshot before reusing those facts or untagging slot
 /// variables. A failed entry guard resumes at the header without bytecode effects.
-pub fn lower_leaf_full_osr(
+pub(crate) fn lower_leaf_full_osr(
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -4138,12 +4145,12 @@ pub(crate) struct BaselineAotMeta {
     /// VarBind/Unbind/save-* present (the loader's `has_binds`).
     pub has_binds: bool,
     /// condition-case/catch handlers present.
-    pub has_handlers: bool,
+    pub(crate) has_handlers: bool,
     /// R2 increment B2: the `Op::Call` subr/bytecode spec sites baked into this
     /// leaf (in slot order — descriptor position == codegen slot index). Empty when
     /// emitted without a live obarray (CBSym-only, increment A). The descriptor
     /// carries these so the loader can re-classify + arm each runtime `SpecSlot`.
-    pub spec_sites: Vec<super::aot::AotSpecSite>,
+    pub(crate) spec_sites: Vec<super::aot::AotSpecSite>,
 }
 
 /// R2-E (baseline-tier AOT emit): lower a bytecode body through the BASELINE tier

@@ -220,7 +220,7 @@ impl OwnerRecordId {
 /// record. No `Value`: the record's values live in the slab, which the
 /// collector traces.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct OwnerBindingRef {
+pub struct OwnerBindingRef {
     sym: SymId,
     record: OwnerRecordId,
 }
@@ -229,7 +229,7 @@ impl OwnerBindingRef {
     /// The specpdl's handle on RECORD, a binding of SYM.
     #[inline]
     #[doc(hidden)]
-    pub fn new(sym: SymId, record: OwnerRecordId) -> Self {
+    pub(crate) fn new(sym: SymId, record: OwnerRecordId) -> Self {
         Self { sym, record }
     }
 
@@ -272,6 +272,12 @@ pub struct OwnerSlab {
     /// GNU fileio.c's auto-saving flag and mode bits, local to this owner.
     /// No Lisp argument, manager reference or native handle is retained.
     native_fileio: AutoSaveNativeWritePolicy,
+    /// GNU fileio.c's `auto_saving_dir_umask` (fileio.c:159): zero normally,
+    /// `077` only while `do_auto_save_make_dir` (fileio.c:6297-6306) runs the
+    /// `make-directory` funcall, with `do_auto_save_eh` (:6308-6313) clearing
+    /// it on error. Kept beside `native_fileio` but separate, exactly as GNU
+    /// keeps the write policy and the directory umask as independent statics.
+    native_fileio_dir_umask: u32,
     _thread_confined: PhantomData<*const ()>,
 }
 
@@ -319,6 +325,7 @@ impl OwnerSlab {
             parked: Vec::new(),
             green: None,
             native_fileio: AutoSaveNativeWritePolicy::Ordinary { preserved_mode: 0 },
+            native_fileio_dir_umask: 0,
             _thread_confined: PhantomData,
         }
     }
@@ -980,6 +987,27 @@ impl Context {
         policy: AutoSaveNativeWritePolicy,
     ) -> AutoSaveNativeWritePolicy {
         std::mem::replace(&mut self.ensure_owner_slab().native_fileio, policy)
+    }
+
+    /// Copy this owner's directory-creation umask without activating an owner
+    /// slab. GNU's static `auto_saving_dir_umask` begins at zero; a dormant
+    /// owner has exactly that state, so `make-directory-internal` outside the
+    /// list-file window always sees the ordinary umask.
+    #[doc(hidden)]
+    pub fn auto_saving_dir_umask(&self) -> u32 {
+        self.owner
+            .slab()
+            .map_or(0, |slab| slab.native_fileio_dir_umask)
+    }
+
+    /// Replace only this owner's directory-creation umask, returning its
+    /// prior value. The system file-I/O scope owns GNU's set/clear window:
+    /// `do_auto_save_make_dir` sets `077` around the funcall and both the
+    /// normal return and the error arm clear it, rather than restoring a
+    /// saved value. No slab borrow is retained while a caller invokes Lisp.
+    #[doc(hidden)]
+    pub fn replace_auto_saving_dir_umask(&mut self, umask: u32) -> u32 {
+        std::mem::replace(&mut self.ensure_owner_slab().native_fileio_dir_umask, umask)
     }
 
     /// This owner's slab, made and registered with the World on first use.
@@ -2338,36 +2366,6 @@ impl Context {
         self.with_revealed_projection(base, |ctx| {
             ctx.obarray
                 .set_canonical_value(CanonicalAccess::STORAGE, base, value);
-        });
-    }
-
-    /// [`Context::makunbound_variable`] of a projected cell.
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn makunbound_owner_variable(&mut self, id: SymId) {
-        debug_assert!(
-            self.owner.slab().is_some(),
-            "a Context that sees a projected cell has an owner slab"
-        );
-        let Some((base, projection)) = self.projection_behind(id) else {
-            self.obarray
-                .makunbound_canonical(CanonicalAccess::ROUTED, id);
-            return;
-        };
-        let index = projection.index();
-        if let Some(slab) = self.owner.slab_mut()
-            && slab.slot(index, Channel::Default).value().is_some()
-        {
-            slab.set_slot(
-                index,
-                Channel::Default,
-                SlotState::Bound(SlotValue::new(Value::UNBOUND)),
-            );
-            return;
-        }
-        self.with_revealed_projection(base, |ctx| {
-            ctx.obarray
-                .makunbound_canonical(CanonicalAccess::STORAGE, base);
         });
     }
 }

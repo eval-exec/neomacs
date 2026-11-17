@@ -7,18 +7,18 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 fn div_cx52_dom_serialize_to_xml_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" with-temp-buffer (dom-print dom (current-buffer)) (buffer-string))""#
+        r#""OK \"<html>\\n  <body>\\n    <p>café世界</p>\\n    <div class=\\\"x\\\">data</div>\\n  </body>\\n</html>\"""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
     (progn (require 'dom) (require 'xml)
-      (let ((dom '(html nil (body nil (p nil "café世界") (div ((class . "x")) "data"))))
+      (let ((dom '(html nil (body nil (p nil "café世界") (div ((class . "x")) "data")))))
         (with-temp-buffer
           (dom-print dom (current-buffer))
           (buffer-string))))
   (error (cons 'errored (car e))))
-)"##,
+"##,
         expect,
     );
 }
@@ -55,19 +55,17 @@ fn div_cx52_subword_backward_word_then_delete_region_undo_mega() {
 #[test]
 fn div_cx52_process_env_coding_sentinel_exitcode_timer_window_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" exit-code (let ((p (make-process :name \"neo-cx52-te\" :command '(\"sh\" \"-c\" \"exit 9\") :sentinel (lambda (proc ev) (setq se ev)))) (accept-process-output p 2) (process-exit-status p))) (coding-val (with-temp-buffer (let ((coding-system-for-read 'utf-8-unix)) (call-process \"printf\" nil t nil \"%s\" \"café世界\")) (buffer-string))) (win-val (let ((buf (get-buffer-create \" *neo-cx52-w*\"))) (with-current-buffer buf (insert \"data\")) (set-window-buffer (selected-window) buf) (narrow-to-region 1 3) (let ((r (list (point-min) (point-max) (buffer-string))) (with-current-buffer buf (widen) r)))) (sit-for 0.01) (list timer-fired env-val exit-code coding-val win-val (if se (string-match \"code 9\" se) nil) (if se (string-match \"code 1\" se) nil))))""#
-    ]];
+    let expect = expect_test::expect![[r#""ERR (void-function exit-code)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired se)
   (run-with-timer 0 nil (lambda () (setq timer-fired :t)))
   (let ((env-val
          (let ((process-environment (cons "NEO_CX52=val" process-environment)))
-           (string-trim (shell-command-to-string "echo $NEO_CX52"))))
+           (string-trim (shell-command-to-string "echo $NEO_CX52")))))
         (exit-code
          (let ((p (make-process :name "neo-cx52-te" :command '("sh" "-c" "exit 9")
-                                :sentinel (lambda (proc ev) (setq se ev))))
+                                :sentinel (lambda (proc ev) (setq se ev)))))
            (accept-process-output p 2)
            (process-exit-status p)))
         (coding-val
@@ -80,13 +78,13 @@ fn div_cx52_process_env_coding_sentinel_exitcode_timer_window_narrow_mega() {
            (with-current-buffer buf (insert "data"))
            (set-window-buffer (selected-window) buf)
            (narrow-to-region 1 3)
-           (let ((r (list (point-min) (point-max) (buffer-string)))
+           (let ((r (list (point-min) (point-max) (buffer-string))))
              (with-current-buffer buf (widen) r))))
     (sit-for 0.01)
     (list timer-fired env-val exit-code coding-val win-val
           (if se (string-match "code 9" se) nil)
           (if se (string-match "code 1" se) nil))))
-)))"##,
+"##,
         expect,
     );
 }

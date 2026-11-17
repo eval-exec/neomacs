@@ -4,7 +4,7 @@ use neovm_value::boolvec::{bool_vector_from_bits, bool_vector_ref_value};
 
 use neovm_value::error::{FlowKind, FlowResultExt as _};
 
-use neovm_value::intern::{intern, intern_uninterned};
+use neovm_value::intern::{intern, make_uninterned_symbol};
 
 use neovm_value::symbol::CanonicalAccess;
 

@@ -1,18 +1,26 @@
 error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<AllStopped<'static>>`, but its trait bounds were not satisfied
  --> tests/p1rv_ui/all_stopped_cannot_cross_threads.rs:8:44
   |
-8 |     ThreadTransfer::<AllStopped<'static>>::transfer(stopped);
-  |                                            ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<AllStopped<'static>>` due to unsatisfied trait bounds
+8 |       ThreadTransfer::<AllStopped<'static>>::transfer(stopped);
+  |                                              ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<AllStopped<'static>>` due to unsatisfied trait bounds
   |
  ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/keeper.rs
   |
-  | pub struct AllStopped<'era> {
-  | --------------------------- doesn't satisfy `AllStopped<'static>: Send`
+  |   pub struct AllStopped<'era> {
+  |   --------------------------- doesn't satisfy `AllStopped<'static>: Send`
+  |
+ ::: $RUST/alloc/src/rc.rs
+  |
+  | / pub struct Rc<
+  | |     T: ?Sized,
+  | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+  | | > {
+  | |_- doesn't satisfy `Rc<()>: Send`
   |
  ::: tests/p1rv_ui/../thread_safety_ui/support/thread_bounds.rs
   |
-  | pub struct ThreadTransfer<T>(PhantomData<T>);
-  | ---------------------------- associated function or constant `transfer` not found for this struct
+  |   pub struct ThreadTransfer<T>(PhantomData<T>);
+  |   ---------------------------- associated function or constant `transfer` not found for this struct
   |
   = note: the following trait bounds were not satisfied:
           `Rc<()>: Send`

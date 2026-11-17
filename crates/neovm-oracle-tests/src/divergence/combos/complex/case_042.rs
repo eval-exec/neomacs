@@ -313,7 +313,7 @@ fn div_cx42_json_encode_hashtable_plist_alist_mega() {
 fn div_cx42_dom_operations_recursive_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" list (length (dom-by-tag dom 'p)) (length (dom-by-tag dom 'li)) (dom-attr (nth 1 (dom-by-tag dom 'p)) 'id) (dom-text (car (dom-by-tag dom 'title))) (mapcar #'dom-text (dom-by-tag dom 'li)) (dom-by-tag dom 'div))""#
+        r#""OK (2 2 \"p2\" \"Title\" (\"Item 1\" \"Item 2\") ((div ((class . \"container\")) (p nil \"Para 1\") (p ((id . \"p2\")) \"Para 2\") (ul nil (li nil \"Item 1\") (li nil \"Item 2\")))))""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
@@ -327,7 +327,7 @@ fn div_cx42_dom_operations_recursive_mega() {
                        (p ((id . "p2")) "Para 2")
                        (ul nil
                         (li nil "Item 1")
-                        (li nil "Item 2"))))))
+                        (li nil "Item 2")))))))
         (list (length (dom-by-tag dom 'p))
               (length (dom-by-tag dom 'li))
               (dom-attr (nth 1 (dom-by-tag dom 'p)) 'id)
@@ -335,7 +335,7 @@ fn div_cx42_dom_operations_recursive_mega() {
               (mapcar #'dom-text (dom-by-tag dom 'li))
               (dom-by-tag dom 'div))))
   (error (cons 'errored (car e))))
-)"##,
+"##,
         expect,
     );
 }

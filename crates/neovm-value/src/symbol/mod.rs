@@ -340,15 +340,6 @@ impl BufferlessValue {
             Self::PerBufferSlot | Self::Void => None,
         }
     }
-
-    /// Only the arm that agrees with GNU unconditionally.
-    #[must_use]
-    pub fn global_only(self) -> Option<Value> {
-        match self {
-            Self::Global(value) => Some(value),
-            Self::DefaultOfLocalized(_) | Self::PerBufferSlot | Self::Void => None,
-        }
-    }
 }
 
 /// Two-bit `interned` flag. Mirrors GNU `enum symbol_interned`
@@ -649,17 +640,6 @@ impl SetInternalBind {
     }
 }
 
-/// Stub for GNU `let_shadows_buffer_binding_p`
-/// (`src/eval.c:3559-3577`). Returns `true` if the symbol is
-/// currently `let`-bound to a buffer-local binding shadowing the
-/// per-buffer slot.
-///
-/// Phase 5 stub: always `false`. Phase 7 wires this against the
-/// specpdl `LET_LOCAL` records.
-pub fn let_shadows_buffer_binding_p(_sym_id: SymId) -> bool {
-    false
-}
-
 /// Reasons [`Obarray::make_variable_alias`] can fail. Mirrors the
 /// `xsignal` callsites in GNU `Fdefvaralias` (`src/eval.c:631-726`).
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -935,12 +915,6 @@ impl CanonicalDispatchCells {
     #[doc(hidden)]
     pub fn admission_debugger(&self) -> DebuggerDescriptor {
         DebuggerDescriptor(self.debug_on_next_call_cell_ref())
-    }
-
-    #[cfg(feature = "jit")]
-    #[inline(always)]
-    pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
-        *self.function_epoch.get_mut()
     }
 
     #[inline(always)]
@@ -1430,14 +1404,6 @@ impl SymbolChunks {
         for side in &self.sides {
             side.set_floor(floor);
         }
-    }
-
-    /// Whether slot `idx`'s chunk holds a stamp array (tests).
-    #[cfg(any(test, feature = "test-support"))]
-    fn chunk_has_fn_stamps(&self, idx: usize) -> bool {
-        self.sides
-            .get(idx >> 12)
-            .is_some_and(|side| side.has_stamps())
     }
 
     /// Capture the start-of-cycle scan parts for the Stage 1b concurrent obarray
@@ -2103,23 +2069,54 @@ impl Obarray {
                 self.ensure_global_member_if_canonical(id);
             }
         }
+        // Then the literal `intern_c_string`/`intern` spellings GNU's
+        // `syms_of_*` code interns directly (font tables, Fprovide names,
+        // menu and DND tables, ...), in the generated source order.
+        for (name, gate) in crate::intern::gnu_defsyms_generated::GNU_C_INTERNS {
+            if gate.is_active() {
+                let id = crate::intern::intern(name);
+                self.ensure_global_member_if_canonical(id);
+            }
+        }
+        // Then the DEFUN subr names every compiled GNU object interns through
+        // `defsubr`; the port declines a few of those subrs, and GNU's
+        // obarray still carries their names (members with no function).
+        for (name, gate) in crate::intern::gnu_defsyms_generated::GNU_C_DEFUNS {
+            if gate.is_active() {
+                let id = crate::intern::intern(name);
+                self.ensure_global_member_if_canonical(id);
+            }
+        }
         for symbol in crate::intern::WellKnown::VARIANTS {
+            // A fixed id is not membership: GNU's build only interns the
+            // spellings its compiled `defsym_name[]` carries, so a spelling
+            // whose sources this profile does not compile (`fontsize` on
+            // Linux) keeps its id but stays out of the obarray.
+            if crate::intern::is_gnu_defsym_spelling_absent_for_this_profile(symbol.name()) {
+                continue;
+            }
             self.ensure_global_member_if_canonical(symbol.id());
         }
     }
 
-    /// Intern a symbol: look up by name, creating if absent.
-    /// Returns the symbol name (which is the key for identity).
-    pub fn intern(&mut self, name: &str) -> String {
+    /// GNU `intern`: the symbol named NAME as a member of this obarray,
+    /// created if absent.
+    ///
+    /// This is the member-producing funnel. The free
+    /// [`crate::intern::intern`] resolves a canonical name id without
+    /// touching any obarray; a symbol created only that way is not
+    /// Lisp-visible and must come through here (or
+    /// `make_uninterned_symbol` where GNU uses `make-symbol`).
+    pub fn intern_member(&mut self, name: &str) -> SymId {
         let id = intern(name);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
-        name.to_string()
+        id
     }
 
     /// Intern a symbol from an exact Lisp-string name, preserving raw
     /// unibyte and multibyte storage.
-    pub fn intern_lisp_string(&mut self, name: &LispString) -> SymId {
+    pub fn intern_member_lisp_string(&mut self, name: &LispString) -> SymId {
         let id = intern_lisp_string(name);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
@@ -2128,9 +2125,13 @@ impl Obarray {
 
     /// Intern a symbol from a Lisp string OBJECT, which becomes the symbol's
     /// name when this call creates it -- GNU `intern`. Use this rather than
-    /// [`Self::intern_lisp_string`] whenever the name came from Lisp, so
+    /// [`Self::intern_member_lisp_string`] whenever the name came from Lisp,
+    /// so
     /// `symbol-name` gives that object back with its text properties.
-    pub fn intern_lisp_value(&mut self, name_value: crate::tagged::value::TaggedValue) -> SymId {
+    pub fn intern_member_lisp_value(
+        &mut self,
+        name_value: crate::tagged::value::TaggedValue,
+    ) -> SymId {
         let id = crate::intern::intern_lisp_value(name_value);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
@@ -2183,14 +2184,6 @@ impl Obarray {
     pub fn get(&self, name: &str) -> Option<&LispSymbol> {
         let id = lookup_interned(name)?;
         self.slot(id).filter(|sym| sym.interned_global)
-    }
-
-    /// Get symbol data (mutable). Crate-private: cross-crate mutation goes
-    /// through the signed narrow routes (AUTHORITY-ITEMS), never a raw
-    /// borrow of the symbol cell.
-    pub(crate) fn get_mut(&mut self, name: &str) -> Option<&mut LispSymbol> {
-        let id = lookup_interned(name)?;
-        self.slot_mut(id).filter(|sym| sym.interned_global)
     }
 
     /// Ensure symbol storage exists for an arbitrary symbol id.
@@ -2251,57 +2244,6 @@ impl Obarray {
         self.canonical_value(access, intern(name))
     }
 
-    /// GNU's `Vfoo` / `foo` / `BVAR (current_buffer, foo)` -- the one spelling
-    /// for "what the C code reads here", given the buffer that is current.
-    ///
-    /// GNU needs no such helper because it has no choice to make: the swap-in
-    /// has already put `current_buffer`'s binding in the cell the C code
-    /// dereferences (`src/data.c:1573-1603`), and a `DEFVAR_PER_BUFFER` name
-    /// is only ever spelled `BVAR (current_buffer, ...)`. This port keeps the
-    /// two places apart, so a Rust site has to name the buffer -- and the
-    /// sites that could not were ledger 191's class.
-    ///
-    /// A `struct buffer` slot wins over the obarray unconditionally: for an
-    /// always-local slot it *is* the value, and for a conditional slot GNU's
-    /// `set-default` propagation leaves the live default in that same slot, so
-    /// reading it is right in both cases. `set_default_internal`'s
-    /// `BUFFER_OBJFWDP` arm calls `set_per_buffer_default` (`src/buffer.h:1627`)
-    /// and then walks `FOR_EACH_LIVE_BUFFER` writing the new default into every
-    /// buffer whose `PER_BUFFER_VALUE_P` is clear (`src/data.c:2087-2114`).
-    ///
-    /// `indent::dynamic_buffer_or_global_symbol_value` is the older, identical
-    /// reader; it lives in a file ledger 195 owns, so collapsing the two is
-    /// owed rather than done here (ledger 196).
-    pub fn canonical_value_in_buffer<B: BufferLocalView>(
-        &self,
-        access: CanonicalAccess,
-        buf: Option<&B>,
-        name: &str,
-    ) -> Option<Value> {
-        self.canonical_value_in_buffer_id(access, buf, intern(name))
-    }
-
-    /// [`Self::canonical_value_in_buffer`] by identity.
-    ///
-    /// The `local_var_alist` lookup is gated on [`Self::is_localized`]: a
-    /// symbol no buffer has ever localised can have no alist entry (every
-    /// insertion path marks it `Localized` first), so the walk would only ever
-    /// answer `None`. That keeps this reader roughly the cost of
-    /// [`Self::symbol_value_copied`] on the overwhelmingly common global path, which
-    /// matters where a caller reads a dozen names at once -- the `print-*`
-    /// family, for one.
-    pub fn canonical_value_in_buffer_id<B: BufferLocalView>(
-        &self,
-        _access: CanonicalAccess,
-        buf: Option<&B>,
-        id: SymId,
-    ) -> Option<Value> {
-        match self.buffer_value(buf, id) {
-            Some(value) => Some(value),
-            None => self.canonical_value(CanonicalAccess::STORAGE, id),
-        }
-    }
-
     /// [`Self::canonical_value_in_buffer_id`]'s read, with PROJECTED
     /// answering the arms [`Self::value_with`] gives it: BUF's slot and
     /// local binding are canonical storage, which no projection changes.
@@ -2335,18 +2277,6 @@ impl Obarray {
             return Some(value);
         }
         self.value_with(id, projected)
-    }
-
-    /// BUF's slot or local binding of ID, if it has one. A plain match, not
-    /// a closure for the global read: LLVM outlined that closure, storing
-    /// its captures on every call.
-    #[inline(always)]
-    fn buffer_value<B: BufferLocalView>(&self, buf: Option<&B>, id: SymId) -> Option<Value> {
-        let buf = buf?;
-        if let Some(value) = Self::buffer_slot_value(buf, id) {
-            return Some(value);
-        }
-        buf.local_binding(id, self.is_localized(id))
     }
 
     /// BUF's `struct buffer` slot of ID, when ID names one.
@@ -4138,12 +4068,6 @@ impl Obarray {
             && self.symbols.fn_unchanged_since(Self::slot_index(id), since)
     }
 
-    /// Test hook: whether `id`'s chunk has allocated its stamp array.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn chunk_has_fn_stamps_for_test(&self, id: SymId) -> bool {
-        self.symbols.chunk_has_fn_stamps(Self::slot_index(id))
-    }
-
     /// A specific function `id` was redefined (cell write / fmakunbound): bump the
     /// epoch (the coarse "any binding may have changed" signal JIT call
     /// speculation re-arms on). When JIT is enabled, also evict the JIT cache
@@ -4312,55 +4236,8 @@ impl Obarray {
         }
     }
 
-    /// [`Self::makunbound_canonical`] for the owner-aware API: a thread
-    /// projection answers [`CanonicalWrite::Projected`] from the forwarded
-    /// arm, which leaves every forwarder as it is.
-    #[inline(always)]
-    #[doc(hidden)]
-    pub fn makunbound_canonical_routed(&mut self, id: SymId) -> CanonicalWrite {
-        self.ensure_global_member_if_canonical(id);
-        let target = self.resolve_alias_for_write(id);
-        if self
-            .slot(target)
-            .is_none_or(|sym| sym.trapped_write() == SymbolTrappedWrite::NoWrite)
-        {
-            return CanonicalWrite::Done;
-        }
-        let blv = match self.cell_write_ensure(target).arm() {
-            ArmMut::Plain(plain) => {
-                plain.store(Value::UNBOUND);
-                return CanonicalWrite::Done;
-            }
-            // `resolve_alias_for_write` stops on an alias only when the chain
-            // does not end; GNU `Fmakunbound` on an alias undoes it
-            // (`src/data.c:781-784`).
-            ArmMut::Alias(alias) => {
-                alias.unalias(Value::UNBOUND);
-                return CanonicalWrite::Done;
-            }
-            ArmMut::Forwarded(forwarded) => {
-                return if forwarded.descriptor().thread_projection().is_some() {
-                    CanonicalWrite::Projected
-                } else {
-                    CanonicalWrite::Done
-                };
-            }
-            ArmMut::Localized(local) => local.blv(),
-        };
-        // Safety: a `Localized` cell names a record self.blvs owns.
-        let blv = unsafe { &mut *blv.as_ptr() };
-        if blv.fwd.is_some() {
-            return CanonicalWrite::Done;
-        }
-        blv.defcell.get().set_cdr(Value::UNBOUND);
-        if crate::value::eq_value(&blv.valcell.get(), &blv.defcell.get()) {
-            blv.valcell.get().set_cdr(Value::UNBOUND);
-        }
-        CanonicalWrite::Done
-    }
-
     /// Check if a symbol is bound (has a value cell).
-    pub fn canonical_boundp(&self, access: CanonicalAccess, name: &str) -> bool {
+    pub(crate) fn canonical_boundp(&self, access: CanonicalAccess, name: &str) -> bool {
         self.canonical_boundp_id(access, intern(name))
     }
 
@@ -4491,11 +4368,6 @@ impl Obarray {
         crate::tagged::gc::note_root_overwrite(sym.plist.get());
         store_plist_head(sym, plist);
         SymbolPropertyRevision::changed(symbol);
-    }
-
-    /// Get the symbol's full plist as a flat list.
-    pub fn symbol_plist(&self, name: &str) -> Value {
-        self.symbol_plist_id(intern(name))
     }
 
     /// Get the symbol's full plist as a flat list by identity.
@@ -4698,7 +4570,7 @@ impl Obarray {
 
     /// Check whether a symbol is a buffer-local variable by identity.
     /// Phase F: uses the redirect tag rather than the legacy value enum.
-    pub fn is_buffer_local_id(&self, id: SymId) -> bool {
+    pub(crate) fn is_buffer_local_id(&self, id: SymId) -> bool {
         self.slot(id)
             .is_some_and(|s| s.redirect() == SymbolRedirect::Localized)
     }
@@ -4919,10 +4791,6 @@ impl Obarray {
         self.global_member_count
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.global_member_count == 0
-    }
-
     /// All interned symbol names.
     pub fn all_symbols(&self) -> Vec<&str> {
         self.symbols
@@ -5025,18 +4893,6 @@ impl Obarray {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn dispatch_cells_address_for_test(&self) -> usize {
         std::ptr::from_ref(&self.dispatch_cells).addr()
-    }
-
-    /// Read the publication clock while this obarray is exclusively owned.
-    /// The mutable borrow excludes concurrent clock readers as well as writers;
-    /// independent mutators may own separate obarrays (clones have fresh clocks).
-    /// Shared readers must use `function_epoch` and its Acquire ordering instead.
-    /// Return a copy so no clock borrow survives native re-entry. Keeping this
-    /// load ordinary lets the warmed JIT guard fold it into its comparison.
-    #[cfg(feature = "jit")]
-    #[inline]
-    pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
-        *self.dispatch_cells.function_epoch.get_mut()
     }
 
     /// Test-only: set `function_epoch` (the wrap-skip tests). Re-gated to
@@ -5342,6 +5198,16 @@ mod copied_value_tests;
 #[cfg(test)]
 #[path = "tests/plist_epoch_test.rs"]
 mod plist_epoch_tests;
+
+#[cfg(test)]
+#[path = "tests/member_funnel_test.rs"]
+mod member_funnel_tests;
+
+#[cfg(any(test, feature = "test-support"))]
+mod membership_audit;
+
+#[cfg(any(test, feature = "test-support"))]
+pub use membership_audit::VisibilityViolation;
 
 /// The pre-`CanonicalAccess` spellings, for tests, which set up and inspect
 /// canonical storage. Production code names its reason

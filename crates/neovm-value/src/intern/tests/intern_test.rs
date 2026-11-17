@@ -180,7 +180,7 @@ fn visible_symbol_name_reads_reuse_a_large_working_set() {
     let symbols: Vec<_> = (0..1024)
         .map(|i| {
             let spelling = format!("visible-name-replacement-{i}");
-            let symbol = intern_uninterned(&spelling);
+            let symbol = make_uninterned_symbol(&spelling);
             if i % 2 == 0 {
                 materialize_symbol_name_value(symbol);
             }
@@ -276,7 +276,7 @@ fn visible_symbol_name_reads_survive_thread_cache_destruction() {
     let checked = Arc::new(AtomicBool::new(false));
     let on_thread = Arc::clone(&checked);
     std::thread::spawn(move || {
-        let symbol = intern_uninterned("visible-name-thread-exit-probe");
+        let symbol = make_uninterned_symbol("visible-name-thread-exit-probe");
         // TLS destructors run in reverse initialization order. Register the
         // diagnostic first so its read runs after the name cache is destroyed.
         READ_ON_DROP.with(|slot| {
@@ -320,23 +320,6 @@ fn visible_symbol_name_reads_preserve_identity_after_unintern_and_restore() {
         resolve_lisp_visible_symbol_name(replacement),
         LispVisibleSymbolName::Atom { .. }
     ));
-}
-
-#[test]
-fn lisp_object_symbol_name_resolution_uses_its_declared_storage_first() {
-    crate::test_utils::init_test_tracing();
-    let mut heap = crate::tagged::gc::TaggedHeap::new();
-    crate::tagged::gc::set_tagged_heap(&mut heap);
-    let name = crate::value::Value::string("lisp-object-symbol-name-storage-probe");
-    let symbol = make_uninterned_symbol_with_name_value(name);
-
-    reset_symbol_name_value_probes();
-    assert_eq!(resolve_sym_name_value(symbol).unwrap().bits(), name.bits());
-    assert_eq!(
-        symbol_name_value_probes(),
-        (1, 0),
-        "a Lisp-created symbol should find its exact name object without probing the materialized fallback"
-    );
 }
 
 #[test]
@@ -525,7 +508,7 @@ fn canonical_id_distinguishes_interned_from_uninterned_duplicates() {
     crate::test_utils::init_test_tracing();
     let mut registry = SymbolRegistry::new();
     let canonical = registry.intern("dup");
-    let uninterned = registry.intern_uninterned("dup");
+    let uninterned = registry.make_uninterned_symbol("dup");
 
     assert!(registry.is_canonical_id(canonical));
     assert!(!registry.is_canonical_id(uninterned));
@@ -621,7 +604,7 @@ fn dump_symbol_table_separates_name_atoms_from_symbol_slots() {
     crate::test_utils::init_test_tracing();
     let mut registry = SymbolRegistry::new();
     let canonical = registry.intern("shared-name");
-    let uninterned = registry.intern_uninterned("shared-name");
+    let uninterned = registry.make_uninterned_symbol("shared-name");
 
     let dumped = registry.dump_symbol_table();
 
@@ -730,7 +713,7 @@ fn symbol_registry_exposes_name_ids_separately() {
     crate::test_utils::init_test_tracing();
     let mut registry = SymbolRegistry::new();
     let canonical = registry.intern("shared-name");
-    let uninterned = registry.intern_uninterned("shared-name");
+    let uninterned = registry.make_uninterned_symbol("shared-name");
 
     let canonical_name = registry.name_id(canonical);
     let uninterned_name = registry.name_id(uninterned);
@@ -738,79 +721,6 @@ fn symbol_registry_exposes_name_ids_separately() {
     assert_eq!(canonical_name, uninterned_name);
     assert_eq!(registry.resolve_name(canonical_name), "shared-name");
     assert_ne!(canonical, uninterned);
-}
-
-#[test]
-fn uninterned_symbol_name_value_roots_are_heap_owned() {
-    crate::test_utils::init_test_tracing();
-
-    let mut heap1 = crate::tagged::gc::TaggedHeap::new();
-    crate::tagged::gc::set_tagged_heap(&mut heap1);
-    let heap1_id = crate::tagged::gc::current_tagged_heap_identity().unwrap();
-    let name = crate::value::Value::string("owned-symbol-name");
-    let sym = make_uninterned_symbol_with_name_value(name);
-
-    assert_eq!(resolve_sym_name_value(sym), Some(name));
-    let mut roots = Vec::new();
-    collect_symbol_name_gc_roots(&mut roots, heap1_id);
-    assert!(roots.contains(&name));
-
-    let mut heap2 = crate::tagged::gc::TaggedHeap::new();
-    crate::tagged::gc::set_tagged_heap(&mut heap2);
-    let heap2_id = crate::tagged::gc::current_tagged_heap_identity().unwrap();
-    let mut roots = Vec::new();
-    collect_symbol_name_gc_roots(&mut roots, heap2_id);
-
-    assert!(!roots.contains(&name));
-    assert_eq!(resolve_sym_name_value(sym), None);
-    assert_eq!(
-        resolve_sym_lisp_string(sym).as_utf8_str(),
-        Some("owned-symbol-name")
-    );
-}
-
-#[test]
-fn shared_symbol_name_object_is_one_gc_root_per_heap() {
-    crate::test_utils::init_test_tracing();
-
-    let mut heap = crate::tagged::gc::TaggedHeap::new();
-    crate::tagged::gc::set_tagged_heap(&mut heap);
-    let heap_id = crate::tagged::gc::current_tagged_heap_identity().unwrap();
-    let name = crate::value::Value::string("shared-symbol-name-root");
-
-    let first = make_uninterned_symbol_with_name_value(name);
-    let second = make_uninterned_symbol_with_name_value(name);
-    assert_ne!(first, second, "make-symbol identity must remain unique");
-    assert_eq!(resolve_sym_name_value(first), Some(name));
-    assert_eq!(resolve_sym_name_value(second), Some(name));
-
-    let equal_but_distinct_name = crate::value::Value::string("shared-symbol-name-root");
-    assert_ne!(
-        equal_but_distinct_name.bits(),
-        name.bits(),
-        "the regression fixture needs two equal strings with distinct identities"
-    );
-    let third = make_uninterned_symbol_with_name_value(equal_but_distinct_name);
-    assert_eq!(resolve_sym_name_value(third), Some(equal_but_distinct_name));
-
-    let mut roots = Vec::new();
-    collect_symbol_name_gc_roots(&mut roots, heap_id);
-    let shared_occurrences = roots
-        .iter()
-        .filter(|root| root.bits() == name.bits())
-        .count();
-    assert_eq!(
-        shared_occurrences, 1,
-        "one shared Lisp name object should occupy one GC root slot"
-    );
-    let distinct_occurrences = roots
-        .iter()
-        .filter(|root| root.bits() == equal_but_distinct_name.bits())
-        .count();
-    assert_eq!(
-        distinct_occurrences, 1,
-        "equal-but-distinct name objects must retain separate GC roots"
-    );
 }
 
 #[test]

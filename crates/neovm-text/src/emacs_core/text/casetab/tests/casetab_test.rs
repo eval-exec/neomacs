@@ -224,7 +224,11 @@ fn standard_case_table_has_extra_slots() {
 
 /// A real char-table with purpose `purpose` and these extra slots.
 fn char_table_with_extras(purpose: &str, extras: &[Value]) -> Value {
-    let table = Value::make_char_table(Value::symbol(purpose), Value::NIL, extras.len());
+    let table = Value::make_char_table(
+        Value::from_sym_id(neovm_value::intern::intern(&purpose)),
+        Value::NIL,
+        extras.len(),
+    );
     let _ = table.with_char_table_mut(|obj| {
         obj.copy_extras(extras);
     });

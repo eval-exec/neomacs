@@ -590,6 +590,26 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
             std::iter::empty::<OsString>(),
         );
     }
+    // Tree-sitter grammar tests consume the sha-verified grammar cache
+    // without cloning on a miss.
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("treesit-grammars")
+    ) {
+        args.next();
+        if let Some(unexpected) = args.next() {
+            return Err(format!(
+                "treesit-grammars does not accept arguments; found `{}`",
+                unexpected.to_string_lossy()
+            )
+            .into());
+        }
+        return run_workspace_cli(
+            "neomacs-melpa-test-support",
+            &["--bin", "prefetch-tree-sitter-grammars"],
+            std::iter::empty::<OsString>(),
+        );
+    }
     let options = FreshBuildOptions::parse(repo_root, args)?;
     run_fresh_build(&options)
 }
@@ -4711,6 +4731,7 @@ Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [-
        cargo xtask check-dependency-coherence
        cargo xtask font-fixtures
        cargo xtask image-fixtures
+       cargo xtask treesit-grammars
        cargo xtask render-window-icon --out-dir DIR [--source PATH]
        cargo xtask perf list
        cargo xtask perf run SCENARIO [--editor PATH] [--iterations N] [--frontend batch|tui|gui]

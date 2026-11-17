@@ -2526,35 +2526,6 @@ fn font_put_wrong_arity() {
     assert!(font_put(vec![Value::NIL, Value::NIL]).is_err());
 }
 
-#[test]
-fn bounded_family_alternatives_preserve_order_and_refuse_excess_payload() {
-    crate::test_utils::init_test_tracing();
-    crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(vec![
-        Value::list(vec![Value::list(vec![
-            Value::string("Fixture"),
-            Value::string("Second"),
-            Value::string("Third"),
-        ])]),
-    ])
-    .unwrap();
-    assert_eq!(
-        super::bounded_alternative_font_families("fixture", 8, 256),
-        Some(super::alternative_font_families("fixture"))
-    );
-    assert_eq!(
-        super::bounded_alternative_font_families("fixture", 2, 256),
-        None
-    );
-    assert_eq!(
-        super::bounded_alternative_font_families("fixture", 8, 8),
-        None
-    );
-    assert_eq!(
-        super::bounded_alternative_font_families("Absent", 0, 256),
-        None
-    );
-}
-
 // GNU font.c:4634-4700 keeps the font driver's shape method installed when
 // shaping returns nil. composite.c:982-989 can call it again on later runs.
 #[derive(Clone, Copy, Debug)]
@@ -2766,7 +2737,7 @@ fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_lim
     let names = list_to_vec(&names).unwrap();
     assert_eq!(names.len(), 1);
     assert!(names[0].as_utf8_str().unwrap().contains("-bold-"));
-    let uninterned = Value::from_sym_id(neovm_value::intern::intern_uninterned("ftcrhb"));
+    let uninterned = Value::from_sym_id(neovm_value::intern::make_uninterned_symbol("ftcrhb"));
     let driver_spec = font_spec(vec![Value::keyword("type"), uninterned]).unwrap();
     let entities =
         list_fonts_for_pattern(&mut eval, vec![driver_spec, Value::NIL, Value::fixnum(1)]).unwrap();

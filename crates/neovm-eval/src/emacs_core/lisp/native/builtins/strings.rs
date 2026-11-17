@@ -2189,8 +2189,8 @@ fn format_string_spec_tracked(
 /// (editfns.c:3808-3813, applied at 4380-4396).
 #[derive(Debug)]
 pub(crate) struct FormatPropSpan {
-    pub result_char_start: usize,
-    pub result_char_end: usize,
+    pub(crate) result_char_start: usize,
+    pub(crate) result_char_end: usize,
     /// The STRING the copied properties come from -- not the argument index.
     ///
     /// GNU `styled_format` rewrites `spec_arguments[spec_index]` in place when it
@@ -2199,7 +2199,7 @@ pub(crate) struct FormatPropSpan {
     /// instead re-read the original argument, which made a symbol's propertized
     /// name impossible to express.
     pub source: Value,
-    pub arg_char_len: usize,
+    pub(crate) arg_char_len: usize,
 }
 
 /// How one run of format-string characters becomes one run of result

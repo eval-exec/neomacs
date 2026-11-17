@@ -10,6 +10,7 @@ use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_edit::emacs_core::position::LispRegionArgs;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, expect_args, expect_max_args, signal};
+use neovm_value::intern::intern;
 use neovm_value::value::ValueKind;
 use neovm_value::value::*;
 use std::borrow::Cow;
@@ -357,7 +358,10 @@ fn parse_xml_attributes(
             .normalized_value(quick_xml::XmlVersion::Implicit1_0)
             .map(|value| value.into_owned())
             .unwrap_or_else(|_| String::from_utf8_lossy(&attr.value).into_owned());
-        result.push(Value::cons(Value::symbol(&key), Value::string(&val)));
+        result.push(Value::cons(
+            Value::from_sym_id(intern(&key)),
+            Value::string(&val),
+        ));
     }
     result
 }
@@ -374,7 +378,7 @@ fn make_element_node(tag: &str, attrs: Vec<Value>, children: Vec<Value>) -> Valu
     } else {
         Value::list(attrs)
     };
-    let mut elements = vec![Value::symbol(tag), attr_list];
+    let mut elements = vec![Value::from_sym_id(intern(tag)), attr_list];
     elements.extend(children);
     Value::list(elements)
 }
@@ -1169,7 +1173,7 @@ fn convert_tl_attributes(attrs: &tl::Attributes) -> Vec<Value> {
         // libxml2 applies that context before exposing `property->content'.
         let val_str = htmlize::unescape_attribute(val_str.as_ref());
         result.push(Value::cons(
-            Value::symbol(key.as_ref()),
+            Value::from_sym_id(intern(key.as_ref())),
             Value::string(val_str.as_ref()),
         ));
     }

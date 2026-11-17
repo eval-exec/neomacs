@@ -37,8 +37,10 @@ pub use source_lock::{
     prepare_cached_locked_package_plan,
 };
 pub use tree_sitter_grammar::{
-    GNU31_TREE_SITTER_GRAMMARS, GrammarSourceDirectory, TreeSitterGrammarCase,
-    prepare_cached_tree_sitter_grammar, prepare_cached_tree_sitter_grammar_from_subdirectory,
+    EXTRA_TREE_SITTER_GRAMMAR_PINS, ExtraTreeSitterGrammarPin, GNU31_TREE_SITTER_GRAMMARS,
+    GrammarSourceDirectory, TreeSitterGrammarCase, cached_tree_sitter_grammar,
+    extra_tree_sitter_grammar_pin, prefetch_cached_tree_sitter_grammar,
+    prefetch_cached_tree_sitter_grammar_from_subdirectory,
 };
 
 pub const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(300);

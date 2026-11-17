@@ -10,10 +10,7 @@ use crate::value::LispHashTable;
 use crate::value::text_props::TextPropertyTable;
 
 use super::collection_reads::{StoreState, WriteProjection, record_projected_write_in_store};
-use super::gc::{
-    HeapWriteKind, note_heap_slot_write, note_heap_slot_write_in_store, note_heap_write,
-    with_store_state,
-};
+use super::gc::{HeapWriteKind, note_heap_slot_write_in_store, note_heap_write, with_store_state};
 use super::header::{
     BoolVectorObj, ByteCodeObj, ByteCodeSlotObject, ConsCell, HashTableObj, LambdaObj, MacroObj,
     MarkerObj, OverlayObj, RecordObj, StringObj, VecLikeHeader, VecLikeType, VectorObj, XwidgetObj,
@@ -527,38 +524,6 @@ pub fn with_closure_slots_mut<R>(
 #[inline]
 pub fn replace_closure_slots(value: TaggedValue, slots: Vec<TaggedValue>) -> bool {
     with_closure_slots_mut(value, |data| *data = slots).is_some()
-}
-
-#[inline]
-pub fn set_closure_slot(value: TaggedValue, index: usize, item: TaggedValue) -> bool {
-    LispCollectionRevision::changed(value);
-    match value.veclike_type() {
-        // Atomic stores, as for vector slots: a concurrent reader of the slot
-        // (the GC thread, once closures are traced there) sees a whole value.
-        Some(VecLikeType::Lambda) => unsafe {
-            let ptr = value.as_veclike_ptr().unwrap() as *mut LambdaObj;
-            let obj = &mut *ptr;
-            let _ = obj.parsed_params.take();
-            if index >= obj.data.len() {
-                return false;
-            }
-            note_heap_slot_write(value, HeapWriteKind::ClosureSlot, index, item);
-            obj.data.store_atomic(index, item);
-            true
-        },
-        Some(VecLikeType::Macro) => unsafe {
-            let ptr = value.as_veclike_ptr().unwrap() as *mut MacroObj;
-            let obj = &mut *ptr;
-            let _ = obj.parsed_params.take();
-            if index >= obj.data.len() {
-                return false;
-            }
-            note_heap_slot_write(value, HeapWriteKind::ClosureSlot, index, item);
-            obj.data.store_atomic(index, item);
-            true
-        },
-        _ => false,
-    }
 }
 
 #[inline]

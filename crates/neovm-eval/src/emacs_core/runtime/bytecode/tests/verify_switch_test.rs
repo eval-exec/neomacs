@@ -17,7 +17,7 @@ fn jump_table(entries: &[(&str, Value)]) -> Value {
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
         for (name, target) in entries {
-            let key = Value::symbol(name);
+            let key = Value::from_sym_id(intern((name).as_ref()));
             ht.insert(key.to_hash_key(&ht.test), key, *target);
         }
     });

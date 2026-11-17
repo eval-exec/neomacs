@@ -1914,13 +1914,13 @@ pub(crate) fn opt_mode_scope_for_test(mode: OptMode) -> impl Drop {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OptPasses {
     pub fold: bool,
-    pub bool_rep: bool,
+    pub(crate) bool_rep: bool,
     pub reps: bool,
-    pub gvn: bool,
+    pub(crate) gvn: bool,
     /// Car/cdr read reuse (`opt::passes::reads`); GVN subsumes it.
     pub reads: bool,
     pub range: bool,
-    pub licm: bool,
+    pub(crate) licm: bool,
     pub sink: bool,
 }
 

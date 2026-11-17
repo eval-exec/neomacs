@@ -11,7 +11,8 @@ use std::cell::{Cell, RefCell};
 ///
 /// Every variant means "stay on the Tier-0 interpreter"; none is fatal.
 #[derive(Debug)]
-pub enum CompileError {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum CompileError {
     /// The function's parameter list is unsupported: `&optional`/`&rest`, or
     /// required params that are dynamically bound (not on the operand stack).
     TakesArguments,
@@ -207,7 +208,7 @@ impl LoadedUnit {
 
     /// The unit's leaf index, resolved by `init` on first use.
     #[doc(hidden)]
-    pub fn index_or_init(
+    pub(crate) fn index_or_init(
         &self,
         init: impl FnOnce(&libloading::Library) -> Option<AotUnitIndex>,
     ) -> Option<AotUnitIndex> {
@@ -240,10 +241,10 @@ impl core::fmt::Debug for LoadedUnit {
 pub(crate) struct AotLeafMeta {
     pub arity: usize,
     pub required: usize,
-    pub has_rest: bool,
+    pub(crate) has_rest: bool,
     pub has_binds: bool,
-    pub has_handlers: bool,
-    pub has_side_effects: bool,
+    pub(crate) has_handlers: bool,
+    pub(crate) has_side_effects: bool,
     /// Deepest pre-op operand stack (the framestate a precise guard spills);
     /// sizes `deopt_spill` when `has_precise_deopt`.
     pub max_depth: usize,
@@ -251,7 +252,7 @@ pub(crate) struct AotLeafMeta {
     /// deopt-buffer addresses, so those buffers must be sized + their bases
     /// load-resolved. The R1c-5 pure subset is always `false` (rerun-from-start
     /// deopt only); call-bearing AOT is a later increment.
-    pub has_precise_deopt: bool,
+    pub(crate) has_precise_deopt: bool,
 }
 
 /// Which code producer a [`CompiledLeaf`]'s `entry` pointer lives in — and what
@@ -899,7 +900,8 @@ impl core::fmt::Debug for CompiledLeaf {
 
 /// Outcome of executing a compiled function.
 #[derive(Debug, PartialEq, Eq)]
-pub enum NativeRun {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum NativeRun {
     /// Native code produced a result (the raw tagged [`Value`] bits).
     Ok(usize),
     /// A speculation guard failed. The poisoning analysis guarantees no side
@@ -931,7 +933,7 @@ pub struct DeoptResume {
     pub handlers: usize,
     pub binds: Vec<usize>,
     pub spec_base: usize,
-    pub cond_base: usize,
+    pub(crate) cond_base: usize,
     /// The cause the cold block stored in [`DeoptCells::reason`], if any
     /// (the deopt hook classifies from the op otherwise).
     pub(crate) cause: Option<crate::emacs_core::jit::reopt::DeoptCause>,
@@ -956,7 +958,7 @@ impl CompiledLeaf {
 
     /// The tier that produced this leaf (see [`LeafTier`]).
     #[doc(hidden)]
-    pub fn tier(&self) -> LeafTier {
+    pub(crate) fn tier(&self) -> LeafTier {
         self.tier
     }
 
@@ -1002,7 +1004,7 @@ impl CompiledLeaf {
     /// exactly like a fresh JIT compile. A `None` obarray (test/testkit load) leaves
     /// every site DISARMED.
     #[doc(hidden)]
-    pub unsafe fn from_aot(
+    pub(crate) unsafe fn from_aot(
         entry: *const u8,
         backing: std::sync::Arc<LoadedUnit>,
         meta: AotLeafMeta,
@@ -1233,7 +1235,13 @@ impl CompiledLeaf {
     /// (`callee.constants.as_ptr()`), REQUIRED when `dynamic_prefix > 0`:
     /// the leaf loads the `make-closure`-patched slots through it. Null is
     /// accepted only for an unpatched leaf (the JIT ignores the param then).
-    pub fn call_consts(&self, vmctx: *mut u8, consts: *const Value, args: &[Value]) -> NativeRun {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn call_consts(
+        &self,
+        vmctx: *mut u8,
+        consts: *const Value,
+        args: &[Value],
+    ) -> NativeRun {
         debug_assert!(self.accepts(args.len()), "compiled call arity mismatch");
         // Copy the argument bits into a contiguous i64 buffer for the native
         // ABI (no heap alloc for the common <= 8 args). A `Value` is an opaque
@@ -1340,7 +1348,7 @@ impl CompiledLeaf {
     /// SAFETY: as [`Self::entry_call_raw_memory`].
     #[inline(always)]
     #[doc(hidden)]
-    pub unsafe fn entry_call_raw_register(
+    pub(crate) unsafe fn entry_call_raw_register(
         &self,
         vmctx: *mut u8,
         consts: *const Value,
@@ -1870,7 +1878,7 @@ impl CompiledLeaf {
     #[inline(never)]
     #[allow(clippy::too_many_arguments)] // mirrors invoke_native's locals
     #[doc(hidden)]
-    pub fn cold_frame_exit(
+    pub(crate) fn cold_frame_exit(
         &self,
         vmctx: *mut u8,
         status: i64,

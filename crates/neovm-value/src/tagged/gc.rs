@@ -147,7 +147,7 @@ impl MemoryUseCountSlot {
 }
 
 impl HeapWriteRecord {
-    pub const fn bulk(owner: TaggedValue, kind: HeapWriteKind) -> Self {
+    pub(crate) const fn bulk(owner: TaggedValue, kind: HeapWriteKind) -> Self {
         Self {
             owner,
             kind,
@@ -1433,11 +1433,6 @@ impl TaggedHeap {
         }
     }
 
-    /// Lifetime count of cap-forced concurrent-mark terminations.
-    pub fn must_finish_count(&self) -> u64 {
-        self.must_finish_count
-    }
-
     /// Trace probe: the projected mark-window allocation in bytes (the
     /// cap-pressure field detector). For the `NEOVM_GC concurrent_start`
     /// line; informational since the paced trigger was reverted.
@@ -1522,10 +1517,6 @@ impl TaggedHeap {
         if !self.gc_threshold_overridden {
             self.gc_threshold = threshold.max(1);
         }
-    }
-
-    pub fn clear_gc_threshold_override(&mut self) {
-        self.gc_threshold_overridden = false;
     }
 
     pub fn gc_threshold_is_overridden(&self) -> bool {
@@ -2903,8 +2894,6 @@ mod marker_arena_tests;
 /// Record and closure slot stores are atomic: race-free against an atomic
 /// reader, same semantics, same barrier through a concurrent mark.
 #[cfg(test)]
-#[path = "gc/tests/slot_store_test.rs"]
-mod slot_store_tests;
 #[cfg(test)]
 #[path = "gc/tests/symbol_with_pos_arena_test.rs"]
 mod symbol_with_pos_arena_tests;

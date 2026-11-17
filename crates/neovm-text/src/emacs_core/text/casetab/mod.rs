@@ -90,7 +90,7 @@ impl CaseTable {
     }
 
     /// Create the standard ASCII case table (a-z <-> A-Z).
-    pub fn standard_ascii() -> Self {
+    pub(crate) fn standard_ascii() -> Self {
         let mut upcase = HashMap::new();
         let mut downcase = HashMap::new();
         let mut canonicalize = HashMap::new();
@@ -130,7 +130,9 @@ impl CaseTable {
 
 /// Manages case tables, providing standard ASCII case conversion by default.
 #[derive(Clone, Debug)]
-pub struct CaseTableManager {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct CaseTableManager {
+    #[cfg(test)]
     /// The standard (immutable) case table.
     standard: CaseTable,
     /// The current buffer-local case table.
@@ -142,6 +144,7 @@ impl CaseTableManager {
     pub fn new() -> Self {
         let table = CaseTable::standard_ascii();
         Self {
+            #[cfg(test)]
             standard: table.clone(),
             current: table,
         }
@@ -149,28 +152,31 @@ impl CaseTableManager {
 
     /// Convert a character to uppercase using the current case table.
     /// Returns the character unchanged if no upcase mapping exists.
-    pub fn upcase_char(&self, c: char) -> char {
+    pub(crate) fn upcase_char(&self, c: char) -> char {
         *self.current.upcase.get(&c).unwrap_or(&c)
     }
 
     /// Convert a character to lowercase using the current case table.
     /// Returns the character unchanged if no downcase mapping exists.
-    pub fn downcase_char(&self, c: char) -> char {
+    pub(crate) fn downcase_char(&self, c: char) -> char {
         *self.current.downcase.get(&c).unwrap_or(&c)
     }
 
     /// Convert an entire string to uppercase.
-    pub fn upcase_string(&self, s: &str) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn upcase_string(&self, s: &str) -> String {
         s.chars().map(|c| self.upcase_char(c)).collect()
     }
 
     /// Convert an entire string to lowercase.
-    pub fn downcase_string(&self, s: &str) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn downcase_string(&self, s: &str) -> String {
         s.chars().map(|c| self.downcase_char(c)).collect()
     }
 
+    #[cfg(test)]
     /// Return a reference to the standard case table.
-    pub fn standard_table(&self) -> &CaseTable {
+    pub(crate) fn standard_table(&self) -> &CaseTable {
         &self.standard
     }
 
@@ -184,8 +190,9 @@ impl CaseTableManager {
         self.current = table;
     }
 
+    #[cfg(test)]
     /// Set the standard case table.
-    pub fn set_standard(&mut self, table: CaseTable) {
+    pub(crate) fn set_standard(&mut self, table: CaseTable) {
         self.standard = table;
     }
 }
@@ -202,7 +209,7 @@ impl Default for CaseTableManager {
 
 /// Signal `wrong-type-argument` with a predicate name.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn wrong_type(pred: &str, got: &Value) -> Flow {
+fn wrong_type(pred: &'static str, got: &Value) -> Flow {
     signal(
         LispCondition::WrongTypeArgument,
         vec![Value::symbol(pred), *got],
@@ -756,7 +763,8 @@ pub fn ensure_case_table_derived_slots_with_symbols(
 /// Return `true` if `v` is a case table (GNU `Fcase_table_p`): a char-table
 /// with the `case-table` purpose whose up/canon/eqv extras are nil or
 /// char-tables, with eqv present only alongside canon.
-pub fn is_case_table(v: &Value) -> bool {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn is_case_table(v: &Value) -> bool {
     is_case_table_with_symbols(v, SymbolMode::Bare)
 }
 

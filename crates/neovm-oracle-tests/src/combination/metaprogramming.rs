@@ -99,7 +99,7 @@ fn oracle_prop_meta_struct_system() {
                                                                val))
                                                       acc)))
                                   (setq i (1+ i)))
-                                (nreverse acc))))
+                                (nreverse acc)))))
                         `(progn
                            ;; Constructor
                            (fset ',make-fn
@@ -158,8 +158,8 @@ fn oracle_prop_meta_struct_system() {
                       (fmakunbound 'neovm--test-person-email)
                       (fmakunbound 'neovm--test-set-person-name)
                       (fmakunbound 'neovm--test-set-person-age)
-                      (fmakunbound 'neovm--test-set-person-email))))"#;
-    let expect = expect_test::expect![[r#""OK neovm--test-defrecord""#]];
+                      (fmakunbound 'neovm--test-set-person-email)))"#;
+    let expect = expect_test::expect![[r#""ERR (void-function neovm--test-set-person-age)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

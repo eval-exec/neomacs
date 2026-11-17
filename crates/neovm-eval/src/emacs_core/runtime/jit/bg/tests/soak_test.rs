@@ -86,7 +86,7 @@ fn jit_bg_worker_installs_under_a_collection_per_allocation() {
                 },
                 // Interpreted this call (cold, or pending).
                 None => ev
-                    .apply(Value::symbol(symbol), vec![])
+                    .apply(Value::from_sym_id(intern((symbol).as_ref())), vec![])
                     .expect("interpreted"),
             };
             assert_eq!(&print_value(&value), expected, "round {round}");

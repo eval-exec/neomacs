@@ -33,7 +33,7 @@ pub use error_format::{
 };
 pub use error_format::{
     format_eval_result, format_eval_result_bytes_with_eval, format_eval_result_with_eval, map_flow,
-    print_value_bytes_escaped_with_eval, print_value_bytes_with_eval, print_value_with_eval,
+    print_value_bytes_with_eval, print_value_with_eval,
 };
 
 pub(crate) mod string_format;
@@ -77,13 +77,6 @@ struct StatefulPrintOutput {
 
 impl StatefulPrintOutput {
     #[doc(hidden)]
-    pub fn from_str(value: &str) -> Self {
-        Self {
-            bytes: value.as_bytes().to_vec(),
-        }
-    }
-
-    #[doc(hidden)]
     pub fn push(&mut self, character: char) {
         let mut encoded = [0; 4];
         self.bytes
@@ -101,11 +94,6 @@ impl StatefulPrintOutput {
     }
 
     #[doc(hidden)]
-    pub fn append(&mut self, other: Self) {
-        self.bytes.extend(other.bytes);
-    }
-
-    #[doc(hidden)]
     pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
@@ -113,11 +101,6 @@ impl StatefulPrintOutput {
     #[doc(hidden)]
     pub fn len(&self) -> usize {
         self.bytes.len()
-    }
-
-    #[doc(hidden)]
-    pub fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
     }
 
     #[doc(hidden)]
@@ -135,23 +118,23 @@ impl std::fmt::Write for StatefulPrintOutput {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PrintOptions {
-    pub print_gensym: bool,
+    pub(crate) print_gensym: bool,
     pub print_circle: bool,
-    pub print_quoted: bool,
-    pub print_symbols_bare: bool,
+    pub(crate) print_quoted: bool,
+    pub(crate) print_symbols_bare: bool,
     pub print_escape_newlines: bool,
     pub print_escape_nonascii: bool,
-    pub print_escape_multibyte: bool,
-    pub print_escape_control_characters: bool,
-    pub print_integers_as_characters: bool,
-    pub print_level: Option<i64>,
-    pub print_length: Option<i64>,
-    pub print_continuous_numbering: bool,
-    pub print_number_table: Option<Value>,
-    pub float_output_format: Option<Value>,
+    pub(crate) print_escape_multibyte: bool,
+    pub(crate) print_escape_control_characters: bool,
+    pub(crate) print_integers_as_characters: bool,
+    pub(crate) print_level: Option<i64>,
+    pub(crate) print_length: Option<i64>,
+    pub(crate) print_continuous_numbering: bool,
+    pub(crate) print_number_table: Option<Value>,
+    pub(crate) float_output_format: Option<Value>,
     pub print_noescape: bool,
-    pub charset_text_property: CharsetTextProperty,
-    pub unreadable_function: Option<Value>,
+    pub(crate) charset_text_property: CharsetTextProperty,
+    pub(crate) unreadable_function: Option<Value>,
     pub(crate) print_string_destination: PrincStringDestination,
     backquote_output_level: usize,
 }
@@ -165,7 +148,7 @@ impl Default for PrintOptions {
 /// Policy for charset annotations (GNU print.c:1586-1610).
 /// This is a per-call value; it holds no mutator-local global state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CharsetTextProperty {
+pub(crate) enum CharsetTextProperty {
     Never,
     Guessable,
     Always,
@@ -382,7 +365,8 @@ impl PrintOptions {
         }
     }
 
-    pub const fn with_print_gensym(print_gensym: bool) -> Self {
+    #[cfg(test)]
+    pub(crate) const fn with_print_gensym(print_gensym: bool) -> Self {
         Self {
             print_gensym,
             print_circle: false,
@@ -465,7 +449,8 @@ impl PrintOptions {
 /// State for the print-circle two-pass algorithm.
 /// Keys are object identity values (SymId).
 #[derive(Debug)]
-pub struct PrintCircleState {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct PrintCircleState {
     /// Maps object identity -> label status:
     /// 0 = seen once (removed after pass 1)
     /// negative = assigned label, not yet printed
@@ -2597,7 +2582,7 @@ static_assertions::assert_not_impl_any!(PrintDepthGuard<'static, 'static>: Send,
 
 impl<'scope, 'context> PrintDepthGuard<'scope, 'context> {
     #[doc(hidden)]
-    pub fn enter(state: &'scope mut PrintState<'context>) -> Self {
+    pub(crate) fn enter(state: &'scope mut PrintState<'context>) -> Self {
         let saved_depth = state.depth;
         state.depth += 1;
         Self {
@@ -2608,7 +2593,7 @@ impl<'scope, 'context> PrintDepthGuard<'scope, 'context> {
     }
 
     #[doc(hidden)]
-    pub fn state(&mut self) -> &mut PrintState<'context> {
+    pub(crate) fn state(&mut self) -> &mut PrintState<'context> {
         self.state
     }
 }
@@ -2917,7 +2902,7 @@ static_assertions::assert_not_impl_any!(PrintShorthandGuard<'static, 'static>: S
 
 impl<'scope, 'context> PrintShorthandGuard<'scope, 'context> {
     #[doc(hidden)]
-    pub fn enter(
+    fn enter(
         state: &'scope mut PrintState<'context>,
         options: PrintOptions,
         shorthand: SymbolShorthand,
@@ -2938,7 +2923,7 @@ impl<'scope, 'context> PrintShorthandGuard<'scope, 'context> {
     }
 
     #[doc(hidden)]
-    pub fn state(&mut self) -> &mut PrintState<'context> {
+    pub(crate) fn state(&mut self) -> &mut PrintState<'context> {
         self.state
     }
 }
@@ -3506,7 +3491,7 @@ pub fn print_value_with_buffers(
     print_value_with_buffers_and_options(value, buffers, options)
 }
 
-pub fn print_value_with_buffers_and_options(
+pub(crate) fn print_value_with_buffers_and_options(
     value: &Value,
     buffers: &neovm_edit::buffer::BufferManager,
     options: PrintOptions,
@@ -3599,7 +3584,8 @@ pub fn print_value_bytes(value: &Value) -> Vec<u8> {
     print_value_bytes_with_options(value, PrintOptions::default())
 }
 
-pub fn print_value_bytes_with_options(value: &Value, options: PrintOptions) -> Vec<u8> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn print_value_bytes_with_options(value: &Value, options: PrintOptions) -> Vec<u8> {
     let _print_guard = enter_print_call(&options);
     // Delegate to the stateful printer when circle/level/length are active.
     if options.print_circle || options.print_level.is_some() || options.print_length.is_some() {

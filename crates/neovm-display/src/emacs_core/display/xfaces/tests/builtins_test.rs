@@ -4,6 +4,16 @@ use super::*;
 use crate::emacs_core::display_host::FontResolveRequest;
 use crate::emacs_core::font::*;
 use crate::face::{Color, FaceAttrValue, FaceHeight};
+
+/// Test view of the live family capture, matching the removed production
+/// wrapper's infallible shape. The registry is always readable in tests.
+fn alternative_font_families(family: &str) -> Vec<String> {
+    capture_alternative_font_families(family)
+        .expect("alternative family registry")
+        .iter()
+        .map(|name| name.to_string())
+        .collect()
+}
 use crate::test_utils::xfaces_upper_layer_helpers::LiveFrameFontDisplayHost;
 use crate::test_utils::xfaces_upper_layer_helpers::{
     ensure_selected_gui_frame, resolved_frame_font,
@@ -2864,7 +2874,9 @@ fn internal_set_font_selection_order_rejects_invalid_order() {
 #[test]
 fn internal_set_alternative_font_family_alist_returns_converted_list() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_internal_set_alternative_font_family_alist(vec![Value::NIL]).unwrap();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let result =
+        builtin_internal_set_alternative_font_family_alist(&mut eval, vec![Value::NIL]).unwrap();
     assert!(result.is_nil());
 }
 
@@ -2875,7 +2887,11 @@ fn internal_set_alternative_font_family_alist_converts_strings_to_symbols() {
         Value::string("Foo"),
         Value::string("Bar"),
     ])]);
-    let result = builtin_internal_set_alternative_font_family_alist(vec![input]).unwrap();
+    let result = builtin_internal_set_alternative_font_family_alist(
+        &mut neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime()),
+        vec![input],
+    )
+    .unwrap();
     let outer = list_to_vec(&result).expect("outer list");
     let inner = list_to_vec(&outer[0]).expect("inner list");
     assert_eq!(inner[0].as_bare_symbol_name(), Some("Foo"));
@@ -2890,7 +2906,11 @@ fn internal_set_alternative_font_family_alist_accepts_raw_unibyte_strings() {
     ]));
     let expected = neovm_eval::emacs_core::builtins::lisp_string_to_runtime_string(raw);
     let input = Value::list(vec![Value::list(vec![raw])]);
-    let result = builtin_internal_set_alternative_font_family_alist(vec![input]).unwrap();
+    let result = builtin_internal_set_alternative_font_family_alist(
+        &mut neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime()),
+        vec![input],
+    )
+    .unwrap();
     let outer = list_to_vec(&result).expect("outer list");
     let inner = list_to_vec(&outer[0]).expect("inner list");
     // Issue #131: the family is interned faithfully, so its symbol name keeps the
@@ -2913,7 +2933,11 @@ fn internal_set_alternative_font_family_alist_updates_family_lookup_order() {
         Value::string("Noto Sans Mono CJK SC"),
         Value::string("Sarasa Gothic CL"),
     ])]);
-    builtin_internal_set_alternative_font_family_alist(vec![input]).unwrap();
+    builtin_internal_set_alternative_font_family_alist(
+        &mut neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime()),
+        vec![input],
+    )
+    .unwrap();
 
     assert_eq!(
         alternative_font_families("noto sans mono"),

@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 /// buffer as the exact Lisp object `kill-buffer` received. The result is the
 /// replacement buffer id, or `None` when the upper layer finds none (the
 /// threads then keep their buffer, matching GNU).
-pub type BeforeBufferKilled = fn(
+pub(crate) type BeforeBufferKilled = fn(
     &mut Context,
     neovm_edit::buffer::BufferId,
     Value,
@@ -63,7 +63,7 @@ pub(crate) fn install_buffer_kill_hooks(
 }
 
 /// The installed table, if core has run one of the two pinned install seams.
-pub fn buffer_kill_hooks() -> Option<&'static BufferKillHooks> {
+pub(crate) fn buffer_kill_hooks() -> Option<&'static BufferKillHooks> {
     BUFFER_KILL_HOOKS.get()
 }
 
@@ -71,7 +71,7 @@ pub fn buffer_kill_hooks() -> Option<&'static BufferKillHooks> {
 ///
 /// Typed refusal if the table is missing: this path is unreachable after
 /// construction, so reaching it means the construction seam itself is broken.
-pub fn other_buffer_for_killed(
+pub(crate) fn other_buffer_for_killed(
     ctx: &mut Context,
     killed: neovm_edit::buffer::BufferId,
     killed_value: Value,

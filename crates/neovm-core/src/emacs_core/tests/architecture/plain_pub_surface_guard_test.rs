@@ -39,16 +39,26 @@
 //! one row; reordering or duplication is not growth.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use syn::{Attribute, ImplItem, Item, Visibility};
 
+use super::architecture_merge_ratchet as merge_ratchet;
 use super::architecture_production_source_roots::workspace_root;
 
 const ARCHITECTURE_DIR: &str = "crates/neovm-core/src/emacs_core/tests/architecture";
 const PREFIX: &str = "PLAIN-PUB-";
 const HEADER: &str = "file\tkind\titem";
 const BUMP_SUBJECT: &str = "PC11 PROMOTION-LEDGER ceiling bump:";
+
+/// The plain-pub view of the shared merge-aware ratchet rules.
+fn rules_for(ceiling_path: &str) -> merge_ratchet::Rules<'_> {
+    merge_ratchet::Rules {
+        ceiling_path,
+        bump_subject: BUMP_SUBJECT,
+        error_tag: "B3_PLAIN_PUB_RATCHET",
+        exempt: &[],
+    }
+}
 const CRATES: &[(&str, &str)] = &[
     ("neovm-value", "VALUE"),
     ("neovm-edit", "EDIT"),
@@ -646,23 +656,8 @@ fn check_surface(scanned: &BTreeSet<Row>, baseline: &BTreeSet<Row>) -> Result<()
     ))
 }
 
-fn ceiling(text: &str) -> Result<usize, String> {
-    let text = text.trim();
-    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err("B3_PLAIN_PUB_RATCHET expected one nonnegative integer".into());
-    }
-    text.parse()
-        .map_err(|_| "B3_PLAIN_PUB_RATCHET count overflow".into())
-}
-
 fn at_most(rows: usize, limit: usize) -> Result<(), String> {
-    if rows <= limit {
-        Ok(())
-    } else {
-        Err(format!(
-            "B3_PLAIN_PUB_RATCHET {rows} baseline rows exceed ceiling {limit}"
-        ))
-    }
+    merge_ratchet::at_most(rows, limit, &rules_for("p"))
 }
 
 fn monotonic(
@@ -672,79 +667,18 @@ fn monotonic(
     changed: &[String],
     ceiling_path: &str,
 ) -> Result<(), String> {
-    if next <= previous {
-        return Ok(());
-    }
-    if subject.starts_with(BUMP_SUBJECT)
-        && !subject[BUMP_SUBJECT.len()..].trim().is_empty()
-        && changed.len() == 1
-        && changed[0] == ceiling_path
-    {
-        return Ok(());
-    }
-    Err(format!(
-        "B3_PLAIN_PUB_RATCHET silent ceiling increase {previous} -> {next}; \
-         requires a named ceiling-only bump commit"
-    ))
-}
-
-fn git(workspace: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .current_dir(workspace)
-        .args(args)
-        .output()
-        .map_err(|error| format!("B3_PLAIN_PUB_RATCHET git: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "B3_PLAIN_PUB_RATCHET git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    String::from_utf8(output.stdout)
-        .map_err(|error| format!("B3_PLAIN_PUB_RATCHET non-UTF8 history: {error}"))
+    merge_ratchet::monotonic(
+        previous,
+        next,
+        subject,
+        changed,
+        &rules_for(ceiling_path),
+        "",
+    )
 }
 
 fn ratchet(workspace: &Path, rows: usize, ceiling_path: &str) -> Result<(), String> {
-    let current = ceiling(&read(&workspace.join(ceiling_path))?)?;
-    at_most(rows, current)?;
-    let log = git(
-        workspace,
-        &[
-            "log",
-            "--first-parent",
-            "--reverse",
-            "--format=%H",
-            "HEAD",
-            "--",
-            ceiling_path,
-        ],
-    )?;
-    let revisions: Vec<_> = log.lines().filter(|line| !line.is_empty()).collect();
-    if revisions.is_empty() {
-        return Err("B3_PLAIN_PUB_RATCHET ceiling must have a tracked history anchor".into());
-    }
-    let mut previous = None;
-    for revision in revisions {
-        let value = ceiling(&git(
-            workspace,
-            &["show", &format!("{revision}:{ceiling_path}")],
-        )?)?;
-        if let Some(previous) = previous {
-            let subject = git(workspace, &["show", "-s", "--format=%s", revision])?;
-            let files = git(
-                workspace,
-                &["diff-tree", "--no-commit-id", "--name-only", "-r", revision],
-            )?;
-            let files: Vec<_> = files.lines().map(str::to_string).collect();
-            monotonic(previous, value, subject.trim(), &files, ceiling_path)?;
-        }
-        previous = Some(value);
-    }
-    let previous = previous.ok_or("B3_PLAIN_PUB_RATCHET missing history anchor")?;
-    if current > previous {
-        return Err("B3_PLAIN_PUB_RATCHET uncommitted ceiling increase".into());
-    }
-    Ok(())
+    merge_ratchet::ratchet(workspace, rows, &rules_for(ceiling_path))
 }
 
 fn validate_crate(workspace: &Path, crate_dir: &str, suffix: &str) -> Result<(), String> {
@@ -950,6 +884,45 @@ impl S {
         );
         assert!(at_most(10, 10).is_ok());
         assert!(at_most(11, 10).is_err());
+    }
+
+    #[test]
+    fn a_merge_of_a_side_named_bump_is_accepted() {
+        let repo = merge_ratchet::TestRepo::new();
+        repo.commit("init", &[("ledger.ceiling", "1\n"), ("other.rs", "a\n")]);
+        repo.checkout_new("side");
+        repo.commit(
+            "PC11 PROMOTION-LEDGER ceiling bump: 1 -> 2 (plain-pub side row)",
+            &[("ledger.ceiling", "2\n")],
+        );
+        repo.checkout("main");
+        repo.commit("unrelated main work", &[("main.txt", "m\n")]);
+        repo.merge("side");
+        merge_ratchet::ratchet(repo.path(), 2, &rules_for("ledger.ceiling"))
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    #[test]
+    fn an_evil_merge_raise_is_rejected() {
+        let repo = merge_ratchet::TestRepo::new();
+        repo.commit("init", &[("ledger.ceiling", "1\n"), ("other.rs", "a\n")]);
+        repo.checkout_new("side");
+        repo.commit(
+            "PC11 PROMOTION-LEDGER ceiling bump: 1 -> 2 (plain-pub side row)",
+            &[("ledger.ceiling", "2\n")],
+        );
+        repo.checkout("main");
+        repo.commit("unrelated main work", &[("main.txt", "m\n")]);
+        repo.merge_no_commit("side");
+        repo.write(&[("ledger.ceiling", "3\n")]);
+        repo.git(&["add", "-A"]);
+        repo.git(&["commit", "-q", "--no-edit"]);
+        let error =
+            merge_ratchet::ratchet(repo.path(), 3, &rules_for("ledger.ceiling")).unwrap_err();
+        assert!(
+            error.contains("silent ceiling increase 2 -> 3 in the resolution of merge"),
+            "{error}"
+        );
     }
 
     #[test]

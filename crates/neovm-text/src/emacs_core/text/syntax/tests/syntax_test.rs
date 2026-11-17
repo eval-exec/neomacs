@@ -857,3 +857,260 @@ fn elisp_like_table() -> SyntaxTable {
     table.modify_syntax_entry('?', SyntaxEntry::simple(SyntaxClass::Symbol));
     table
 }
+
+/// A variable view with nothing bound, as under `emacs -Q`:
+/// `char-property-alias-alist` and `default-text-properties` read as void,
+/// so the `syntax-table` resolver reads each interval's own plist.
+#[derive(Clone, Copy)]
+struct UnboundVariables<'a>(&'a neovm_value::symbol::Obarray);
+
+impl<'a> EditVariableRead<'a> for UnboundVariables<'a> {
+    fn obarray(self) -> &'a neovm_value::symbol::Obarray {
+        self.0
+    }
+
+    fn value(self, _id: neovm_value::intern::SymId) -> Option<Value> {
+        None
+    }
+
+    fn value_by_name(self, _name: &str) -> Option<Value> {
+        None
+    }
+
+    fn value_in_buffer(
+        self,
+        _buf: Option<&Buffer>,
+        _id: neovm_value::intern::SymId,
+    ) -> Option<Value> {
+        None
+    }
+
+    fn value_or_nil(self, _id: neovm_value::intern::SymId) -> Value {
+        Value::NIL
+    }
+}
+
+/// `nchars` of 70-char lines with a two-byte `é` every 10 characters, the
+/// text of the `string-match "\\w+"` reproduction.
+fn multibyte_lines(nchars: usize) -> String {
+    let line: String = (0..70)
+        .map(|i| match i {
+            69 => '\n',
+            i if i % 10 == 5 => 'é',
+            i if i % 7 == 3 => ' ',
+            i => char::from(b'a' + (i % 26) as u8),
+        })
+        .collect();
+    line.chars().cycle().take(nchars).collect()
+}
+
+fn put_string_property(
+    string: &mut LispString,
+    start: usize,
+    end: usize,
+    name: &'static str,
+    value: Value,
+) {
+    let len = string.schars();
+    string.intervals_mut().put_property_for_object_char_len(
+        neovm_edit::buffer::CharRange::new(CharPos0::new(start), CharPos0::new(end)),
+        CharLen::new(len),
+        Value::symbol(name),
+        value,
+    );
+}
+
+#[test]
+fn string_syntax_run_refills_do_not_rescan_the_string() {
+    crate::test_utils::init_test_tracing();
+    // A fontified multibyte string: a `face` interval on every other 5-char
+    // span, 20k intervals over 200k characters. Reading the `syntax-table`
+    // property at every byte must cost about the bytes read, not one
+    // whole-string position conversion per interval crossed.
+    let obarray = neovm_value::symbol::Obarray::new();
+    let buffers = BufferManager::new();
+    let nchars = 200_000;
+    let mut string = LispString::from_utf8(&multibyte_lines(nchars));
+    assert_eq!(string.schars(), nchars);
+    assert!(string.sbytes() > nchars, "the string is multibyte");
+    let bold = Value::symbol("bold");
+    for i in 0..nchars / 10 {
+        put_string_property(&mut string, 10 * i, 10 * i + 5, "face", bold);
+    }
+    let props = SyntaxProperties::for_scan(true, UnboundVariables(&obarray), &buffers);
+    let scans_before = neovm_value::emacs_char::position_conversion_scan_steps_for_test();
+
+    let forward = StringSyntaxPropByteRun::new(props, &string, string.intervals().as_table());
+    for byte in 0..string.sbytes() {
+        assert!(forward.syntax_table_prop_at_string_byte(byte).is_none());
+    }
+    // A scan that starts mid-string and runs backward, as `\b` and the
+    // backward syntax skips do.
+    let backward = StringSyntaxPropByteRun::new(props, &string, string.intervals().as_table());
+    for byte in (0..string.sbytes() / 2).rev() {
+        assert!(backward.syntax_table_prop_at_string_byte(byte).is_none());
+    }
+
+    let scans = neovm_value::emacs_char::position_conversion_scan_steps_for_test() - scans_before;
+    // Each scan may locate its first position from an end of the string;
+    // every later run is reached by walking from the run before it.
+    assert!(
+        scans <= 2,
+        "{scans} whole-string position conversions for {} property intervals",
+        nchars / 10
+    );
+    // The walks themselves visit each byte a bounded number of times.
+    let read = string.sbytes() + string.sbytes() / 2;
+    let walked = forward.scanned_bytes.get() + backward.scanned_bytes.get();
+    assert!(walked <= 4 * read, "{walked} bytes walked to read {read}");
+}
+
+#[test]
+fn string_syntax_run_refills_cost_no_more_than_the_nearer_string_end() {
+    crate::test_utils::init_test_tracing();
+    // Long runs: one interval over the whole string, as a `fontified` or
+    // `face` run over a region gives, and a property only at the start, which
+    // leaves one property-free run to the end. A `string-match` loop with a
+    // small START opens a new scan near the start each time. Locating that
+    // scan's run must cost about the distance to the start, as converting
+    // from the nearer end of the string did, not the run's length.
+    let obarray = neovm_value::symbol::Obarray::new();
+    let buffers = BufferManager::new();
+    let nchars = 200_000;
+    let text = "é".repeat(nchars);
+    let mut whole = LispString::from_utf8(&text);
+    put_string_property(&mut whole, 0, nchars, "fontified", Value::T);
+    let mut head = LispString::from_utf8(&text);
+    put_string_property(&mut head, 0, 5, "face", Value::symbol("bold"));
+    let props = SyntaxProperties::for_scan(true, UnboundVariables(&obarray), &buffers);
+    for string in [&whole, &head] {
+        for start in (0..2000).map(|i| 2 * i) {
+            let run = StringSyntaxPropByteRun::new(props, string, string.intervals().as_table());
+            let read = start..start + 20;
+            for byte in read.clone().step_by(2) {
+                assert!(run.syntax_table_prop_at_string_byte(byte).is_none());
+            }
+            let walked = run.scanned_bytes.get();
+            assert!(
+                walked <= 4 * read.end,
+                "{walked} bytes walked to read bytes {read:?} of {}",
+                string.sbytes()
+            );
+        }
+    }
+}
+
+#[test]
+fn string_syntax_runs_walked_from_a_neighbour_match_a_fresh_lookup() {
+    crate::test_utils::init_test_tracing();
+    // Characters of one to four bytes, `syntax-table` intervals of varying
+    // length with gaps between them, and a long interval at each end, read at
+    // every character start in forward, backward and jumping order. Every
+    // cached run must equal the interval's bounds converted from an end of
+    // the string, and every answer what a fresh lookup computes. A Lisp
+    // string, which converts through its object's position cache, must agree
+    // the same way.
+    let obarray = neovm_value::symbol::Obarray::new();
+    let buffers = BufferManager::new();
+    let alphabet = ['a', 'é', '€', '😀', ' ', 'z'];
+    let text: String = (0..1500)
+        .map(|i| alphabet[(i * 7 + i / 5) % alphabet.len()])
+        .collect();
+    let string = varied_syntax_intervals(&text);
+    let props = SyntaxProperties::for_scan(true, UnboundVariables(&obarray), &buffers);
+    let intervals = string.intervals().as_table();
+    let lisp = Value::heap_string(varied_syntax_intervals(&text));
+    let lisp_string = lisp.as_lisp_string().expect("a Lisp string");
+    let lisp_intervals = lisp_string.intervals().as_table();
+    let table = intervals.expect("the string has intervals");
+    // The matcher reads at character starts (and the end); a byte inside a
+    // character is not a GNU syntax position.
+    let forward: Vec<usize> = text
+        .char_indices()
+        .map(|(byte, _)| byte)
+        .chain([text.len()])
+        .collect();
+    let backward: Vec<usize> = forward.iter().rev().copied().collect();
+    let jumping: Vec<usize> = (0..4000)
+        .map(|i| forward[(i * 7919 + i * i * 31) % forward.len()])
+        .collect();
+    // Let the Lisp string's conversions fill the position cache, as they do
+    // under the evaluator.
+    neovm_value::string_pos_cache::install_notification_hook_for_test();
+    neovm_value::string_pos_cache::reset_string_pos_cache();
+    for order in [forward, backward, jumping] {
+        let walked = StringSyntaxPropByteRun::new(props, &string, intervals);
+        let walked_lisp = StringSyntaxPropByteRun::for_source(
+            props,
+            StringSyntaxPositionSource::try_from(&lisp).expect("a Lisp string"),
+            lisp_intervals,
+        );
+        for &byte in &order {
+            let fresh = StringSyntaxPropByteRun::new(props, &string, intervals);
+            let expected = fresh
+                .syntax_table_prop_at_string_byte(byte)
+                .map(Value::bits);
+            let char_pos = usize::try_from(string.byte_to_gnu_char_pos(byte).get())
+                .expect("a character start");
+            let (_, start, end) =
+                table.interval_plist_run_at_char_pos(CharPos0::new(char_pos), string.schars());
+            let run = (
+                string.char_to_byte_pos(start.get()),
+                string.char_to_byte_pos(end.get()),
+            );
+            for (name, walked) in [("owned", &walked), ("lisp", &walked_lisp)] {
+                assert_eq!(
+                    walked
+                        .syntax_table_prop_at_string_byte(byte)
+                        .map(Value::bits),
+                    expected,
+                    "{name}: property at byte {byte}"
+                );
+                assert_eq!(
+                    (walked.run.start.get(), walked.run.end.get()),
+                    run,
+                    "{name}: run at byte {byte}"
+                );
+                assert_eq!(walked.position_error(), None);
+            }
+            // A refill's conversion leaves a pair the cache may hand to the
+            // next conversion of the same string; it must be exact.
+            if let Some((char_pos, byte_pos)) =
+                neovm_value::string_pos_cache::cached_pair(lisp, lisp_string)
+            {
+                assert_eq!(
+                    char_pos,
+                    string.byte_to_gnu_char_pos(byte_pos),
+                    "cached pair after byte {byte}"
+                );
+            }
+        }
+    }
+    assert!(
+        neovm_value::string_pos_cache::cached_pair(lisp, lisp_string).is_some(),
+        "the Lisp string's refills convert through its position cache"
+    );
+    neovm_value::string_pos_cache::reset_string_pos_cache();
+}
+
+/// `text` with `syntax-table` intervals of 1 to 11 characters and gaps of 0
+/// to 3 between them, behind a 200-character interval at the start and in
+/// front of one at the end.
+fn varied_syntax_intervals(text: &str) -> LispString {
+    let mut string = LispString::from_utf8(text);
+    let nchars = string.schars();
+    let mut start = 200;
+    let mut k = 0_i64;
+    put_string_property(&mut string, 0, start, "syntax-table", Value::fixnum(-1));
+    while start < nchars - 200 {
+        let len = 1 + (k as usize * 3) % 11;
+        let end = (start + len).min(nchars - 200);
+        if k % 3 != 2 {
+            put_string_property(&mut string, start, end, "syntax-table", Value::fixnum(k));
+        }
+        start = end + (k as usize) % 4;
+        k += 1;
+    }
+    put_string_property(&mut string, nchars - 200, nchars, "syntax-table", Value::T);
+    string
+}
