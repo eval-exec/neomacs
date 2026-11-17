@@ -2946,14 +2946,10 @@ impl<'a> Vm<'a> {
     }
 
     /// Set the current depth and max_depth (inherited from the Context).
-    pub fn set_depth(&mut self, depth: usize, max_depth: usize) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_depth(&mut self, depth: usize, max_depth: usize) {
         self.ctx.depth = depth;
         self.ctx.max_depth = max_depth;
-    }
-
-    /// Get the current depth (to sync back to the Context).
-    pub fn get_depth(&self) -> usize {
-        self.ctx.depth
     }
 
     #[inline(always)]
@@ -3012,7 +3008,7 @@ impl<'a> Vm<'a> {
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub fn finish_live_bytecode_depth_overflow(
+    fn finish_live_bytecode_depth_overflow(
         &mut self,
         cursor: RunLoopCursor,
         overflow: BytecodeDepthOverflow,
@@ -3058,13 +3054,13 @@ impl<'a> Vm<'a> {
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub fn check_live_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
+    fn check_live_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
         self.check_bytecode_call_depth()
     }
 
     #[inline(always)]
     #[doc(hidden)]
-    pub fn check_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
+    fn check_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
         if self.ctx.max_depth < 100 {
             self.ctx.max_depth = 100;
         }
@@ -3102,7 +3098,7 @@ impl<'a> Vm<'a> {
     /// unwinding the caller's bindings.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn unbind_frame_target(
+    fn unbind_frame_target(
         &mut self,
         target: Result<Option<frame_bindings::FrameUnbindTarget>, frame_bindings::FrameUnbindError>,
     ) -> EvalResult {
@@ -4017,7 +4013,7 @@ impl<'a> Vm<'a> {
     }
 
     #[doc(hidden)]
-    pub fn bind_dynamic_formals_rooted(
+    pub(crate) fn bind_dynamic_formals_rooted(
         &mut self,
         mut cursor: super::function_slots::FormalCursor,
         roots_at: usize,
@@ -4176,7 +4172,7 @@ impl<'a> Vm<'a> {
     /// subtracting the frame's immutable cost and restores it with one
     /// store.
     #[doc(hidden)]
-    pub fn install_iterative_interpreter_frame(
+    fn install_iterative_interpreter_frame(
         &mut self,
         cursor: &mut StackCursor,
         callee: PreparedInterpreterCallee,
@@ -4296,16 +4292,6 @@ impl<'a> Vm<'a> {
         })
     }
 
-    #[doc(hidden)]
-    pub fn finish_interpreter_frame(
-        &mut self,
-        frame: &InterpreterFrame,
-        is_entry: bool,
-        result: EvalResult,
-    ) -> EvalResult {
-        self.finish_interpreter_frame_at(frame, is_entry, result, None)
-    }
-
     /// [`Self::finish_interpreter_frame`] with the position a NONLOCAL exit
     /// must publish for this frame's cleanup.
     ///
@@ -4362,7 +4348,7 @@ impl<'a> Vm<'a> {
     /// unwind is represented as data rather than host-stack control flow.
     #[inline(never)]
     #[doc(hidden)]
-    pub fn complete_interpreter_frame_chain(
+    fn complete_interpreter_frame_chain(
         &mut self,
         callers: &mut InterpreterCallerStack,
         aux_stack: &mut InterpreterFrameAuxStack,
@@ -4464,7 +4450,7 @@ impl<'a> Vm<'a> {
     /// require the caller to publish before leaving the driver's register
     /// state. Nothing here allocates or reaches a GC safe point.
     #[doc(hidden)]
-    pub fn complete_interpreter_frame_value(
+    fn complete_interpreter_frame_value(
         &mut self,
         cursor: &mut StackCursor,
         callers: &mut InterpreterCallerStack,
@@ -4568,7 +4554,7 @@ impl<'a> Vm<'a> {
     // install_iterative_interpreter_frame (measured +60 Ir/call outlined).
     #[inline(always)]
     #[doc(hidden)]
-    pub fn dispatch_interpreter_stack_call(
+    fn dispatch_interpreter_stack_call(
         &mut self,
         func_val: Value,
         args_start: usize,
@@ -4665,7 +4651,7 @@ impl<'a> Vm<'a> {
     /// call nor a per-function atomic heat/feedback operation on Bcall.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn dispatch_bytecode_tier(
+    pub(crate) fn dispatch_bytecode_tier(
         &mut self,
         func: &ByteCodeFunction,
         args_start: usize,
@@ -4704,7 +4690,7 @@ impl<'a> Vm<'a> {
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub fn osr_transfer(
+    fn osr_transfer(
         &mut self,
         func: &ByteCodeFunction,
         frame_base: usize,
@@ -4925,7 +4911,7 @@ impl<'a> Vm<'a> {
 
     #[inline(never)]
     #[doc(hidden)]
-    pub fn run_loop(
+    fn run_loop(
         &mut self,
         entry_func: &ByteCodeFunction,
         frame_base: usize,
@@ -5009,7 +4995,7 @@ impl<'a> Vm<'a> {
     /// `setup_frame`/`Breturn` jumps; the inner loop remains opcode dispatch.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn run_interpreter_driver<const VERIFIED: bool>(
+    fn run_interpreter_driver<const VERIFIED: bool>(
         &mut self,
         callers: &mut InterpreterCallerStack,
         aux_stack: &mut InterpreterFrameAuxStack,
@@ -8327,7 +8313,7 @@ impl<'a> Vm<'a> {
     /// measured ~22 Ir/call tax the armed path must not pay. Only the cold
     /// defensive deopt fallback below builds a `Vm`.
     #[doc(hidden)]
-    pub fn call_armed_callee_native(
+    pub(crate) fn call_armed_callee_native(
         ctx: &mut crate::emacs_core::eval::Context,
         called: Value,
         callee: Value,
@@ -8443,7 +8429,7 @@ impl<'a> Vm<'a> {
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub fn run_retained_upgrade_from_spec(
+    pub(crate) fn run_retained_upgrade_from_spec(
         ctx: &mut crate::emacs_core::eval::Context,
         called: Value,
         callee: Value,
@@ -8499,7 +8485,7 @@ impl<'a> Vm<'a> {
     /// native call-args slot), valid for the whole call.
     #[cfg(feature = "jit")]
     #[doc(hidden)]
-    pub fn call_armed_bytecode_value_native(
+    pub(crate) fn call_armed_bytecode_value_native(
         ctx: &mut crate::emacs_core::eval::Context,
         callee: Value,
         args_ptr: *const i64,
@@ -8547,7 +8533,7 @@ impl<'a> Vm<'a> {
     #[cfg(feature = "jit")]
     #[inline(never)]
     #[doc(hidden)]
-    pub fn call_apply_native(
+    pub(crate) fn call_apply_native(
         ctx: &mut crate::emacs_core::eval::Context,
         apply: Value,
         args_ptr: *const i64,
@@ -8686,7 +8672,7 @@ impl<'a> Vm<'a> {
     #[cfg(feature = "jit")]
     #[inline(always)]
     #[doc(hidden)]
-    pub fn run_leaf_native_to_native(
+    pub(crate) fn run_leaf_native_to_native(
         ctx: &mut crate::emacs_core::eval::Context,
         frame_function: Value,
         callee: Value,
@@ -8910,7 +8896,7 @@ impl<'a> Vm<'a> {
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub fn interp_fallback_native(
+    pub(crate) fn interp_fallback_native(
         ctx_ptr: *mut crate::emacs_core::eval::Context,
         bc: &ByteCodeFunction,
         callee: Value,
@@ -9060,7 +9046,7 @@ impl<'a> Vm<'a> {
     /// or are cold.
     #[inline(never)]
     #[doc(hidden)]
-    pub fn call_function_untraced_from_stack(
+    pub(crate) fn call_function_untraced_from_stack(
         &mut self,
         root: CallableRoot<'_>,
         func_val: Value,
@@ -9206,7 +9192,7 @@ impl<'a> Vm<'a> {
 
     #[inline(never)]
     #[doc(hidden)]
-    pub fn call_resolved_builtin_from_stack_args(
+    pub(crate) fn call_resolved_builtin_from_stack_args(
         ctx: &mut crate::emacs_core::eval::Context,
         func_val: Value,
         args_start: usize,
@@ -9747,7 +9733,7 @@ impl<'a> Vm<'a> {
     /// original synchronous VM; no detached World projection is retained.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn resolve_interpreter_stack_call_target(
+    fn resolve_interpreter_stack_call_target(
         &mut self,
         func_val: Value,
         nargs: usize,
@@ -9814,7 +9800,7 @@ impl<'a> Vm<'a> {
     /// cycles, not just instructions, for anything that changes its size.
     #[inline(never)]
     #[doc(hidden)]
-    pub fn resolve_stack_call_target(&mut self, func_val: Value) -> ResolvedStackCallTarget {
+    fn resolve_stack_call_target(&mut self, func_val: Value) -> ResolvedStackCallTarget {
         match func_val.kind() {
             ValueKind::Veclike(VecLikeType::ByteCode) => ResolvedStackCallTarget::ByteCode {
                 callee: ResolvedByteCodeCallee::from_direct_value(func_val),
@@ -9994,7 +9980,7 @@ impl<'a> Vm<'a> {
     #[inline(never)]
     #[allow(clippy::too_many_arguments)] // one per loop local the cold path touches
     #[doc(hidden)]
-    pub fn resume_flow_out_of_line(
+    fn resume_flow_out_of_line(
         &mut self,
         pc_local: &mut usize,
         osr_tried: bool,
@@ -10072,7 +10058,7 @@ impl<'a> Vm<'a> {
     }
 
     #[doc(hidden)]
-    pub fn resume_nonlocal(
+    fn resume_nonlocal(
         &mut self,
         _func: &ByteCodeFunction,
         pc: &mut usize,

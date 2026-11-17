@@ -139,7 +139,7 @@ pub enum EolType {
 }
 
 impl EolType {
-    pub fn from_specified_symbol_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_specified_symbol_name(name: &str) -> Option<Self> {
         match name.parse().ok()? {
             EolType::Unix => Some(EolType::Unix),
             EolType::Dos => Some(EolType::Dos),
@@ -148,7 +148,7 @@ impl EolType {
         }
     }
 
-    pub fn from_specified_symbol_value(value: &Value, mode: SymbolMode) -> Option<Self> {
+    pub(crate) fn from_specified_symbol_value(value: &Value, mode: SymbolMode) -> Option<Self> {
         Self::from_specified_symbol_name(value.as_symbol_name(mode)?)
     }
 
@@ -156,15 +156,11 @@ impl EolType {
         self.into()
     }
 
-    pub fn to_int(self) -> i64 {
+    pub(crate) fn to_int(self) -> i64 {
         self.specified_index().unwrap_or(0)
     }
 
-    pub fn to_symbol(self) -> Value {
-        Value::symbol(self.name())
-    }
-
-    pub fn specified_index(self) -> Option<i64> {
+    pub(crate) fn specified_index(self) -> Option<i64> {
         match self {
             EolType::Undecided => None,
             specified => Some(i8::from(specified) as i64),
@@ -180,7 +176,7 @@ impl EolType {
         }
     }
 
-    pub fn from_suffix(name: &str) -> Option<EolType> {
+    pub(crate) fn from_suffix(name: &str) -> Option<EolType> {
         if name.ends_with("-unix") {
             Some(EolType::Unix)
         } else if name.ends_with("-dos") {
@@ -1039,7 +1035,8 @@ pub(crate) fn ccl_coding_spec(info: &CodingSystemInfo) -> Option<CclCodingSpec> 
 #[enumflags2::bitflags]
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IsoFlag {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum IsoFlag {
     LongForm = 0x0001,
     AsciiAtEol = 0x0002,
     AsciiAtCntl = 0x0004,
@@ -1058,19 +1055,20 @@ pub enum IsoFlag {
 /// The ISO-2022 designation state of a coding system: the charset initially
 /// loaded into each graphic register G0-G3 (`initial`), the charset->register
 /// map consulted while encoding (`request`), and the control `flags`.
-pub struct Iso2022Spec {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct Iso2022Spec {
     pub initial: [Option<SymId>; 4],
     pub request: Vec<(SymId, u8)>,
     /// `(reg94, reg96)` — the graphic register that 94- and 96-character sets
     /// are designated to while encoding (GNU `coding_attr_iso_usage`). A value
     /// of 4 means "no fixed register"; such charsets fall back to G0.
-    pub reg_usage: (u8, u8),
+    pub(crate) reg_usage: (u8, u8),
     pub flags: enumflags2::BitFlags<IsoFlag>,
 }
 
 impl Iso2022Spec {
     /// The graphic register (0-3) a charset is designated to while encoding.
-    pub fn register_of(&self, charset: SymId) -> Option<u8> {
+    pub(crate) fn register_of(&self, charset: SymId) -> Option<u8> {
         self.request
             .iter()
             .find(|(cs, _)| *cs == charset)
@@ -1081,7 +1079,7 @@ impl Iso2022Spec {
     /// following GNU's reg-usage rule (`setup_iso_safe_charsets`): a 96-set
     /// uses `reg96`, any other set uses `reg94`; a register of 4 ("none")
     /// falls back to G0.
-    pub fn encode_register(&self, chars_96: bool) -> usize {
+    pub(crate) fn encode_register(&self, chars_96: bool) -> usize {
         let reg = if chars_96 {
             self.reg_usage.1
         } else {
@@ -1786,7 +1784,7 @@ impl CodingSystemManager {
     }
 
     /// Get all aliases that point to a given canonical name.
-    pub fn aliases_for(&self, canonical: SymId) -> Vec<SymId> {
+    pub(crate) fn aliases_for(&self, canonical: SymId) -> Vec<SymId> {
         self.alias_order
             .get(&canonical)
             .cloned()
@@ -1794,7 +1792,7 @@ impl CodingSystemManager {
     }
 
     /// List all registered coding system names (canonical only).
-    pub fn list_all(&self) -> Vec<SymId> {
+    pub(crate) fn list_all(&self) -> Vec<SymId> {
         let mut names: Vec<SymId> = self.systems.keys().copied().collect();
         names.sort_by(|left, right| resolve_sym(*left).cmp(resolve_sym(*right)));
         names

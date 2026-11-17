@@ -4,6 +4,16 @@ use super::*;
 use crate::emacs_core::display_host::FontResolveRequest;
 use crate::emacs_core::font::*;
 use crate::face::{Color, FaceAttrValue, FaceHeight};
+
+/// Test view of the live family capture, matching the removed production
+/// wrapper's infallible shape. The registry is always readable in tests.
+fn alternative_font_families(family: &str) -> Vec<String> {
+    capture_alternative_font_families(family)
+        .expect("alternative family registry")
+        .iter()
+        .map(|name| name.to_string())
+        .collect()
+}
 use crate::test_utils::xfaces_upper_layer_helpers::LiveFrameFontDisplayHost;
 use crate::test_utils::xfaces_upper_layer_helpers::{
     ensure_selected_gui_frame, resolved_frame_font,

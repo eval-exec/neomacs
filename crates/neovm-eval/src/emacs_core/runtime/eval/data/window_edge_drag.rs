@@ -24,7 +24,7 @@ use neovm_value::keyboard_pure::MouseButton;
 /// Constructible only from a region whose drag moves one, so a press on
 /// ordinary text cannot open a resize session: there is no value to pass.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WindowEdgeGrab(MouseButton);
+pub(crate) struct WindowEdgeGrab(MouseButton);
 
 impl WindowEdgeGrab {
     /// The grab a press on `region` makes, or `None` if dragging there moves
@@ -42,7 +42,7 @@ impl WindowEdgeGrab {
 /// release nor a focus loss, the degraded state is "install instantly", which
 /// is invisible — unlike a stuck animation, which is not.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct WindowEdgeDrag {
+pub(crate) struct WindowEdgeDrag {
     /// The most recent drag: the one running, or the last one that finished.
     ///
     /// One field rather than a live drag beside a separate counter, because

@@ -77,11 +77,22 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
     })?;
     both(pair, "type the fixture prefix", |session| {
         session.send(b"note-");
+        // Counting the fixture's rows alone is true before the prefix lands:
+        // the unfiltered `C-x b` list shows every `note-` buffer beside
+        // `*Messages*`, so the count waits for nothing while the keystrokes
+        // are still in flight and the checkpoint below can freeze the
+        // unfiltered screen.  The count indicator is Vertico's own report of
+        // the filter -- `1/4` once `note-` has been read, `1/5` while the
+        // list is still unfiltered -- so waiting for it waits for the prefix
+        // to have been processed, not merely sent.
         wait_for(
             session,
             Duration::from_secs(8),
-            "the fixture's candidates",
-            |grid| candidate_rows(grid, PREFIX).len() == TOTAL,
+            "the filtered candidate window",
+            |grid| {
+                count_indicator_in(grid, PROMPT) == format!("1/{TOTAL}")
+                    && candidate_rows(grid, PREFIX).len() == TOTAL
+            },
         );
     })?;
 

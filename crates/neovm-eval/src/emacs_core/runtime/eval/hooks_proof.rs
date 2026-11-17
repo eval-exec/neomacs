@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 /// The slot returns the typed publication status so [`install_eval_hooks`]
 /// propagates a conflict (`HookInstallError::DifferentTable`) instead of
 /// swallowing it in release builds (peer follow-up F1).
-pub type SqliteFinalizerInstaller = fn() -> Result<HookInstallStatus, HookInstallError>;
+pub(crate) type SqliteFinalizerInstaller = fn() -> Result<HookInstallStatus, HookInstallError>;
 
 /// The one core-owned set of eval cold tables.
 ///
@@ -413,7 +413,8 @@ impl Context {
     /// An existing `Context` can only have been built with the proof, and
     /// installation is process-permanent, so the value is always available.
     /// These constructors never re-install.
-    pub fn hooks_installed(&self) -> EvalHooksInstalled {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn hooks_installed(&self) -> EvalHooksInstalled {
         assert!(
             HOOKS_INSTALLED.get().is_some(),
             "an existing Context implies a published eval hook set"

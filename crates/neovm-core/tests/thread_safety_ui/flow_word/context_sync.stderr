@@ -34,7 +34,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
   ::: $RUST/core/src/ptr/non_null.rs
    |
    |   pub struct NonNull<T: PointeeSized> {
-   |   ----------------------------------- doesn't satisfy 39 bounds
+   |   ----------------------------------- doesn't satisfy 38 bounds
    |
   ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs
    |
@@ -98,7 +98,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: std::marker::Sync`
            `Cell<u64>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
-           `NonNull<SelectedGlobalMap>: std::marker::Sync`
+           `NonNull<keymap_lookup::SelectedGlobalMap>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<Option<LispString>>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`

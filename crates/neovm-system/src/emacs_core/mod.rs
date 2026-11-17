@@ -20,8 +20,6 @@ pub mod fileio;
 pub mod filelock;
 #[path = "system/host_input.rs"]
 pub mod host_input;
-#[path = "system/network/mod.rs"]
-pub mod network;
 #[path = "system/os_signal/mod.rs"]
 pub mod os_signal;
 #[path = "system/path_exec/mod.rs"]

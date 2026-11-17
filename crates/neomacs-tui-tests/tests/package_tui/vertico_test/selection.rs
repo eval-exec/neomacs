@@ -53,8 +53,24 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
         wait_for(
             session,
             Duration::from_secs(8),
-            "the fixture's three candidates",
-            |grid| candidate_rows(grid, PREFIX).len() == 3,
+            "the typed fixture prefix and its three filtered candidates",
+            |grid| {
+                // The unfiltered session already contains all three fixture
+                // rows: `vertico-count` is five here, and the session holds
+                // exactly the three fixture buffers beside the boot buffers,
+                // so counting the rows waits for nothing while the keystrokes
+                // are still in flight. The count indicator is Vertico's own
+                // report of the filter -- `1/3` only once `project-` has
+                // been read, while the unfiltered list counts every buffer
+                // the session holds.
+                grid.iter().any(|row| {
+                    row.contains(PROMPT)
+                        && row
+                            .split_once(": ")
+                            .is_some_and(|(_, input)| input.trim_end() == PREFIX)
+                }) && count_indicator_in(grid, PROMPT) == "1/3"
+                    && candidate_rows(grid, PREFIX).len() == 3
+            },
         );
         // The three rows and the first-candidate highlight are painted by
         // separate redisplay passes; wait for the candidate window to show

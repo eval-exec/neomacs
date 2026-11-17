@@ -654,7 +654,6 @@ Obarray::set_internal_localized_with	method	pub(restricted)	crates/neovm-value/s
 Obarray::function_cell_snapshot	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:3897	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:1481; crates/neovm-core/src/emacs_core/runtime/jit/compile/sqrt_binding.rs:84
 Obarray::invalidate_all_function_bindings	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:3952	symbol	m1-approved
 Obarray::set_symbol_function_id_for	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4049	symbol	m1-approved
-Obarray::makunbound_canonical_routed	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4181	symbol	m1-approved
 Obarray::boundp_id_with	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4246	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:292; crates/neovm-core/src/emacs_core/runtime/eval/variable_access.rs:262
 Obarray::symbol_plist_snapshot_id	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4371	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:981
 Obarray::default_value_with	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4721	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/eval/variable_access.rs:225

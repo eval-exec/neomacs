@@ -50,7 +50,7 @@ fn a_dormant_context_reads_and_writes_canonical_storage() {
         assert_eq!(eval(&mut ev, "tva-v"), "6");
         assert_eq!(canonical(&mut ev, "tva-v"), "6");
         assert!(ev.variables().boundp_by_name("tva-v"));
-        ev.makunbound_variable(intern("tva-v"));
+        eval(&mut ev, "(makunbound \'tva-v)");
         assert_eq!(eval(&mut ev, "(boundp 'tva-v)"), "nil");
         assert_eq!(show(ev.default_value_only_by_name("tva-v")), "void");
     }
@@ -86,7 +86,7 @@ fn writes_under_a_binding_stay_the_owner_s() {
     ev.store_variable_by_name("tva-v", Value::fixnum(8));
     assert_eq!(eval(&mut ev, "tva-v"), "8");
     assert_eq!(canonical(&mut ev, "tva-v"), "5");
-    ev.makunbound_variable(intern("tva-v"));
+    eval(&mut ev, "(makunbound \'tva-v)");
     assert_eq!(eval(&mut ev, "(boundp 'tva-v)"), "nil");
     assert_eq!(canonical(&mut ev, "tva-v"), "5");
     ev.unbind_to(count);

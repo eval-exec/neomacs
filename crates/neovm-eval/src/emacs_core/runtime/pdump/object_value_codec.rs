@@ -6,7 +6,7 @@
 
 use super::DumpError;
 #[doc(hidden)]
-pub use super::types::{
+pub(crate) use super::types::{
     DumpBufferId, DumpByteCodeFunction, DumpByteCodeInstructions, DumpByteCodeKeyPart,
     DumpByteData, DumpFunctionParams, DumpFunctionParamsKind, DumpHashKey, DumpHashTableTest,
     DumpHashTableWeakness, DumpHeapObject, DumpHeapRef, DumpLambdaParams, DumpLispHashTable,

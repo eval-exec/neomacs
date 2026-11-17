@@ -932,7 +932,8 @@ fn expand_tilde_path_buf(path: &LispString) -> PathBuf {
 /// value rather than two booleans (`false, false` at a call site said nothing,
 /// and `require` silently got the wrong one).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LoadSuffixRequirement {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum LoadSuffixRequirement {
     /// GNU NOSUFFIX = t: exactly the name given, no suffix appended.
     ExactNameOnly,
     /// GNU MUST-SUFFIX = t: only suffixed candidates, so an extensionless file
@@ -947,7 +948,7 @@ pub enum LoadSuffixRequirement {
 
 impl LoadSuffixRequirement {
     /// GNU `Frequire`: MUST-SUFFIX is t exactly when no FILENAME was supplied.
-    pub fn for_require(filename_given: bool) -> Self {
+    pub(crate) fn for_require(filename_given: bool) -> Self {
         if filename_given {
             Self::BareNameAllowed
         } else {
@@ -956,11 +957,7 @@ impl LoadSuffixRequirement {
     }
 
     #[doc(hidden)]
-    pub fn candidates(
-        self,
-        vars: VariableView<'_>,
-        file: &LispString,
-    ) -> Result<LoadCandidates, Flow> {
+    fn candidates(self, vars: VariableView<'_>, file: &LispString) -> Result<LoadCandidates, Flow> {
         if self == Self::ExactNameOnly {
             // GNU Fload does not even inspect the suffix variables when
             // NOSUFFIX is non-nil.  Besides avoiding needless work, keeping
@@ -997,7 +994,8 @@ pub fn find_file_in_load_path(name: &str, load_path: &[LispString]) -> Option<Pa
 }
 
 /// Search `load-path` for NAME under an explicit suffix policy.
-pub fn find_file_in_load_path_with_requirement(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn find_file_in_load_path_with_requirement(
     name: &str,
     load_path: &[LispString],
     requirement: LoadSuffixRequirement,
@@ -1020,7 +1018,8 @@ pub fn find_file_in_load_path_with_requirement(
 /// - `prefer_newer`: ignore suffix order and choose the newest suffixed file.
 /// - default: search each load-path directory in order, trying `.elc` before
 ///   `.el`, then bare names when suffixless loading is allowed.
-pub fn find_file_in_load_path_with_flags(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn find_file_in_load_path_with_flags(
     name: &str,
     load_path: &[LispString],
     no_suffix: bool,
@@ -3398,7 +3397,7 @@ pub enum RuntimeImageRole {
 }
 
 impl RuntimeImageRole {
-    pub const fn canonical_image_stem(self) -> &'static str {
+    pub(crate) const fn canonical_image_stem(self) -> &'static str {
         match self {
             Self::Bootstrap => "bootstrap-neomacs",
             Self::Final => "neomacs",
@@ -3412,7 +3411,8 @@ impl RuntimeImageRole {
         }
     }
 
-    pub fn fingerprinted_image_file_name(self) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn fingerprinted_image_file_name(self) -> String {
         format!(
             "{}-{}.pdump",
             self.canonical_image_stem(),
@@ -3876,7 +3876,7 @@ pub fn fingerprinted_runtime_image_path_for_executable(
         .join(role.fingerprinted_image_file_name())
 }
 
-pub fn default_runtime_image_path(role: RuntimeImageRole) -> PathBuf {
+pub(crate) fn default_runtime_image_path(role: RuntimeImageRole) -> PathBuf {
     let executable = std::env::current_exe()
         .ok()
         .and_then(|path| path.canonicalize().ok().or(Some(path)))

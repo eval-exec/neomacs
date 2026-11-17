@@ -116,18 +116,18 @@ impl Drop for GlobalRefEntry {
     }
 }
 
-pub type DynamicModuleRegistryHandle = HeapRegistryHandle<Vec<Option<GlobalRefEntry>>>;
+pub(crate) type DynamicModuleRegistryHandle = HeapRegistryHandle<Vec<Option<GlobalRefEntry>>>;
 
 thread_local! {
     static GLOBAL_REFS: HeapRegistrySlot<Vec<Option<GlobalRefEntry>>> =
         HeapRegistrySlot::new(Vec::new());
 }
 
-pub fn current_dynamic_module_registry_handle() -> DynamicModuleRegistryHandle {
+pub(crate) fn current_dynamic_module_registry_handle() -> DynamicModuleRegistryHandle {
     GLOBAL_REFS.with(HeapRegistrySlot::current)
 }
 
-pub fn install_dynamic_module_registry_handle(handle: &DynamicModuleRegistryHandle) {
+pub(crate) fn install_dynamic_module_registry_handle(handle: &DynamicModuleRegistryHandle) {
     GLOBAL_REFS.with(|slot| slot.install(handle));
 }
 
@@ -137,7 +137,7 @@ pub fn reset_dynamic_module_registry() {
 
 /// Carrier park: forget the installed global-ref registry handle (a plain
 /// store). The World's registry stays alive through its Contexts.
-pub fn park_dynamic_module_registry() {
+pub(crate) fn park_dynamic_module_registry() {
     GLOBAL_REFS.with(HeapRegistrySlot::park);
 }
 
@@ -154,11 +154,11 @@ pub fn with_global_refs<R>(
     GLOBAL_REFS.with(f)
 }
 
-pub fn retire_dynamic_module_registry(registry: &DynamicModuleRegistryHandle) {
+pub(crate) fn retire_dynamic_module_registry(registry: &DynamicModuleRegistryHandle) {
     registry.borrow_mut().clear();
 }
 
-pub fn collect_dynamic_module_registry_gc_roots(
+pub(crate) fn collect_dynamic_module_registry_gc_roots(
     registry: &DynamicModuleRegistryHandle,
     roots: &mut Vec<Value>,
 ) {

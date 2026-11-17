@@ -70,7 +70,7 @@ impl ValueBits {
 pub(crate) struct ParamShape {
     pub required: usize,
     pub optional: usize,
-    pub has_rest: bool,
+    pub(crate) has_rest: bool,
 }
 
 impl ParamShape {
@@ -85,19 +85,19 @@ impl ParamShape {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OptCensus {
     pub blocks: usize,
-    pub insts: usize,
+    pub(crate) insts: usize,
     pub phis: usize,
     pub frames: usize,
-    pub dead_leaders: usize,
-    pub critical_edges: usize,
+    pub(crate) dead_leaders: usize,
+    pub(crate) critical_edges: usize,
     pub refinements: usize,
     pub fold: Option<super::passes::fold::FoldStats>,
     pub bools: Option<super::passes::bools::BoolStats>,
     pub reps: Option<RepsCensus>,
-    pub gvn: Option<super::passes::gvn::GvnStats>,
+    pub(crate) gvn: Option<super::passes::gvn::GvnStats>,
     pub reads: Option<super::passes::reads::ReadStats>,
     pub range: Option<super::passes::range::RangeStats>,
-    pub licm: Option<super::passes::licm::LicmStats>,
+    pub(crate) licm: Option<super::passes::licm::LicmStats>,
     pub arrays: Option<super::passes::array_reads::ArrayLiftStats>,
     pub sink: Option<super::sink_recipes::SinkStats>,
 }
@@ -118,26 +118,26 @@ pub(crate) struct RepsCensus {
 #[doc(hidden)]
 pub struct Func {
     pub blocks: Vec<BlockData>,
-    pub insts: Vec<InstData>,
+    pub(crate) insts: Vec<InstData>,
     pub values: Vec<ValueData>,
     pub frames: Vec<FrameState>,
     pub entry: Block,
     pub osr: Option<OsrEntry>,
     pub consts: Box<[ValueBits]>,
-    pub dynamic_prefix: usize,
+    pub(crate) dynamic_prefix: usize,
     pub arity: ParamShape,
     pub census: OptCensus,
     /// Exact original Aref guards and mutable-layout witnesses, owned by this
     /// compilation. This sidecar contains IDs/scalars only and is immutable
     /// when a backend worker receives the plan; it stores no Lisp pointers.
-    pub array_reads: super::passes::array_reads::ArrayReadProofs,
+    pub(crate) array_reads: super::passes::array_reads::ArrayReadProofs,
     /// Compiler-owned exact-point identities and physical SSA cache versions.
     /// Immutable after publication; no runtime/TLS Lisp object cache.
-    pub sink_recipes: super::sink_recipes::SinkRecipes,
+    pub(crate) sink_recipes: super::sink_recipes::SinkRecipes,
     /// Per-source-pc stacks for the shared baseline-emitter adapter.
-    pub source_states: Vec<Option<SourceState>>,
+    pub(crate) source_states: Vec<Option<SourceState>>,
     /// Full GNU stack at each block entry, including invariant non-phi values.
-    pub entry_stacks: Vec<Box<[Value]>>,
+    pub(crate) entry_stacks: Vec<Box<[Value]>>,
     frame_intern: HashMap<FrameState, FrameId>,
 }
 
@@ -264,11 +264,11 @@ impl Func {
 #[derive(Clone, Debug)]
 pub(crate) struct BlockData {
     pub params: Vec<Value>,
-    pub insts: Vec<Inst>,
+    pub(crate) insts: Vec<Inst>,
     pub term: Term,
     pub preds: Vec<Block>,
     pub pc: u32,
-    pub loop_header: Option<LoopId>,
+    pub(crate) loop_header: Option<LoopId>,
     pub cold: bool,
 }
 
@@ -534,7 +534,7 @@ pub(crate) struct SourceState {
 /// values remain owned and rooted by the transferring mutator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OsrEntry {
-    pub entry_pc: u32,
+    pub(crate) entry_pc: u32,
     pub depth: usize,
     pub header: Block,
 }

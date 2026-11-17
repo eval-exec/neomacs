@@ -55,7 +55,7 @@ pub(crate) fn lambda_closure_length(value: &Value) -> Option<i64> {
 ///   [0]=ARGS  [1]=BODY  [2]=ENV  [(3)=nil, (4)=DOCSTRING/TYPE, (5)=INTERACTIVE]
 /// Slot count is observable and slot 5's presence is significant even when
 /// its value is nil.
-pub fn lambda_to_closure_vector(value: &Value) -> Vec<Value> {
+pub(crate) fn lambda_to_closure_vector(value: &Value) -> Vec<Value> {
     value
         .closure_slots()
         .map(|slots| slots.to_vec())

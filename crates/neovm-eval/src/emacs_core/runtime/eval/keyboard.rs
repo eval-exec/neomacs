@@ -29,7 +29,8 @@ mod input_method;
 mod keysym;
 mod unread;
 
-pub use keysym::{native_key_android, native_key_macos, native_key_ohos, native_key_windows};
+pub use keysym::{native_key_android, native_key_macos, native_key_windows};
+
 pub(crate) use neovm_value::system_vocab::input::{
     ExecutingKbdMacroRuntimeSnapshot, KeySequenceBufferSelection, ReadKeySequenceOptions,
     TtyInputDecoding,
@@ -58,19 +59,22 @@ pub(crate) trait FatalSignalShutdown {
 
 // Command-loop and keyboard state lives in the evaluator data module
 // (stage-4 W2/E6b); these re-exports keep the historical keyboard paths.
+// One statement per visibility class: the layering guard counts each `use`
+// statement as an upward keyboard->eval site, and that ratchet may only
+// decrease, so all narrowed leaves share the single pub(crate) statement.
 pub(crate) use crate::emacs_core::eval::data::command_loop::{
     AUTO_SAVE_TIMEOUT, COMMAND_EXECUTE, ECHO_KEYSTROKES, ECHO_KEYSTROKES_HELP, EXECUTING_KBD_MACRO,
     HELP_CHAR, HELP_EVENT_LIST, INPUT_METHOD_FUNCTION, INTERNAL_TIMER_START_IDLE,
     KEY_TRANSLATION_MAP, KEYBOARD_TRANSLATE_TABLE, KeyEchoDecoration, KeyEchoState,
-    LAST_INPUT_EVENT, LAST_KBD_MACRO, LAST_NONMENU_EVENT, MouseEventPayload, PREFIX_HELP_COMMAND,
-    SPECIAL_EVENT_MAP, THIS_COMMAND_KEYS_SHIFT_TRANSLATED, TRANSLATE_UPPER_CASE_KEY_BINDINGS,
-    UNDEFINED_SYMBOL, UNREAD_INPUT_METHOD_EVENTS, UNREAD_POST_INPUT_METHOD_EVENTS,
-    help_event_echo_suffix, num_nonmacro_input_events_symbol,
+    KeyboardRuntime, LAST_INPUT_EVENT, LAST_KBD_MACRO, LAST_NONMENU_EVENT, LastMouseClick,
+    MouseEventPayload, MousePressState, NonmacroInputEvent, PREFIX_HELP_COMMAND,
+    PresentedMouseObservation, ReadKeySequenceState, SPECIAL_EVENT_MAP,
+    THIS_COMMAND_KEYS_SHIFT_TRANSLATED, TRANSLATE_UPPER_CASE_KEY_BINDINGS, UNDEFINED_SYMBOL,
+    UNREAD_INPUT_METHOD_EVENTS, UNREAD_POST_INPUT_METHOD_EVENTS, help_event_echo_suffix,
+    num_nonmacro_input_events_symbol,
 };
 pub use crate::emacs_core::eval::data::command_loop::{
-    CommandLoop, KBoard, KeyboardRuntime, LastMouseClick, MousePixelPositionState, MousePressState,
-    NonmacroInputEvent, PrefixArg, PresentedInteractions, PresentedMouseArea,
-    PresentedMouseObservation, PresentedMouseTarget, ReadKeySequenceState,
+    CommandLoop, KBoard, PrefixArg, PresentedMouseArea, PresentedMouseTarget,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -214,7 +218,8 @@ impl Modifiers {
         }
     }
 
-    pub fn ctrl_meta() -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn ctrl_meta() -> Self {
         Self {
             ctrl: true,
             meta: true,
@@ -270,7 +275,8 @@ impl Modifiers {
     ///
     /// The order is GNU's canonical modifier order (`event_modifier_prefix`,
     /// mirroring keymap.c:1478): A- C- H- M- S- s-.
-    pub fn prefix_string(&self) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn prefix_string(&self) -> String {
         let mut s = String::new();
         if self.alt {
             s.push_str("A-");
@@ -452,7 +458,8 @@ impl KeyEvent {
         }
     }
 
-    pub fn named_with_mods(key: NamedKey, mods: Modifiers) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn named_with_mods(key: NamedKey, mods: Modifiers) -> Self {
         Self {
             key: Key::Named(key),
             modifiers: mods,
@@ -461,7 +468,8 @@ impl KeyEvent {
 
     /// Convert this host key event into the Lisp-visible Emacs event
     /// representation used by the command loop and keymap lookup.
-    pub fn to_emacs_event_value(&self) -> Value {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn to_emacs_event_value(&self) -> Value {
         let event = crate::emacs_core::eval::keymap_lookup::KeyEvent::from(self.clone());
         crate::emacs_core::eval::keymap_lookup::key_event_to_emacs_event(&event)
     }
@@ -474,7 +482,7 @@ impl KeyEvent {
     /// customized `quit-char` values; this helper only catches the
     /// overwhelmingly common default so a blocked bytecode loop can be
     /// interrupted.
-    pub fn is_default_quit_char(&self) -> bool {
+    pub(crate) fn is_default_quit_char(&self) -> bool {
         if !matches!(self.key, Key::Char('g')) {
             return false;
         }
@@ -483,7 +491,8 @@ impl KeyEvent {
     }
 
     /// Format as Emacs key description (e.g., "C-x", "M-f", "RET").
-    pub fn to_description(&self) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn to_description(&self) -> String {
         let emacs_event = self.to_emacs_event_value();
         // A Rust-side label (logs, messages): decode here rather than making
         // the shared builder lossy for the Lisp-facing callers.
@@ -493,7 +502,8 @@ impl KeyEvent {
     }
 
     /// Parse an Emacs key description (e.g., "C-x", "M-f").
-    pub fn from_description(desc: &str) -> Option<Self> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn from_description(desc: &str) -> Option<Self> {
         let encoded = super::kbd::parse_kbd_string(desc).ok()?;
         let events = super::kbd::key_events_from_designator(&encoded).ok()?;
         let [event] = events.as_slice() else {
@@ -643,7 +653,8 @@ impl KeySequence {
     }
 
     /// Format as Emacs key sequence description.
-    pub fn to_description(&self) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn to_description(&self) -> String {
         self.events
             .iter()
             .map(|e| e.to_description())
@@ -652,7 +663,8 @@ impl KeySequence {
     }
 
     /// Parse an Emacs key sequence description (e.g., "C-x C-f").
-    pub fn from_description(desc: &str) -> Option<Self> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn from_description(desc: &str) -> Option<Self> {
         let encoded = super::kbd::parse_kbd_string(desc).ok()?;
         let emacs_events = super::kbd::key_events_from_designator(&encoded).ok()?;
         let events = emacs_events
@@ -972,20 +984,20 @@ enum MouseEventFallbackStep {
 // X11 keysym constants used by the render thread (winit) and TTY frontend.
 pub const XK_RETURN: u32 = 0xFF0D;
 pub const XK_TAB: u32 = 0xFF09;
-pub const XK_BACKSPACE: u32 = 0xFF08;
-pub const XK_DELETE: u32 = 0xFFFF;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const XK_BACKSPACE: u32 = 0xFF08;
+pub(crate) const XK_DELETE: u32 = 0xFFFF;
 pub const XK_ESCAPE: u32 = 0xFF1B;
 pub const XK_LEFT: u32 = 0xFF51;
 pub const XK_UP: u32 = 0xFF52;
 pub const XK_RIGHT: u32 = 0xFF53;
 pub const XK_DOWN: u32 = 0xFF54;
-pub const XK_HOME: u32 = 0xFF50;
-pub const XK_END: u32 = 0xFF57;
-pub const XK_PAGE_UP: u32 = 0xFF55;
-pub const XK_PAGE_DOWN: u32 = 0xFF56;
-pub const XK_INSERT: u32 = 0xFF63;
+pub(crate) const XK_HOME: u32 = 0xFF50;
+pub(crate) const XK_END: u32 = 0xFF57;
+pub(crate) const XK_PAGE_UP: u32 = 0xFF55;
+pub(crate) const XK_PAGE_DOWN: u32 = 0xFF56;
+pub(crate) const XK_INSERT: u32 = 0xFF63;
 pub const XK_F1: u32 = 0xFFBE;
-pub const XK_F24: u32 = 0xFFD5;
 
 // Render thread modifier bitmask constants.
 //
@@ -996,10 +1008,12 @@ pub const XK_F24: u32 = 0xFFD5;
 // `alt_modifier' from `meta_modifier'.
 pub const RENDER_SHIFT_MASK: u32 = 1 << 0;
 pub const RENDER_CTRL_MASK: u32 = 1 << 1;
-pub const RENDER_META_MASK: u32 = 1 << 2;
-pub const RENDER_SUPER_MASK: u32 = 1 << 3;
-pub const RENDER_ALT_MASK: u32 = 1 << 4;
-pub const RENDER_HYPER_MASK: u32 = 1 << 5;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const RENDER_META_MASK: u32 = 1 << 2;
+pub(crate) const RENDER_SUPER_MASK: u32 = 1 << 3;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const RENDER_ALT_MASK: u32 = 1 << 4;
+pub(crate) const RENDER_HYPER_MASK: u32 = 1 << 5;
 
 /// Meaning of a character-shaped frontend event before it enters Emacs's
 /// command loop.
@@ -1170,7 +1184,8 @@ pub fn render_key_transport_to_input_event(
 ///
 /// Returns `None` for keysyms that should be ignored (modifier-only keys,
 /// unknown keysyms, etc.).
-pub fn keysym_to_key_event(keysym: u32, modifiers: u32) -> Option<KeyEvent> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn keysym_to_key_event(keysym: u32, modifiers: u32) -> Option<KeyEvent> {
     let mut mods = render_modifiers_to_modifiers(modifiers);
 
     let key = match keysym {
@@ -1509,14 +1524,16 @@ impl InputEvent {
         }
     }
 
-    pub fn key_press(key: KeyEvent) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn key_press(key: KeyEvent) -> Self {
         Self::KeyPress {
             key,
             emacs_frame_id: 0,
         }
     }
 
-    pub fn key_press_in_frame(key: KeyEvent, emacs_frame_id: u64) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn key_press_in_frame(key: KeyEvent, emacs_frame_id: u64) -> Self {
         Self::KeyPress {
             key,
             emacs_frame_id,
@@ -1998,7 +2015,8 @@ impl crate::emacs_core::eval::Context {
             .register_mouse_target(presentation, target)
     }
 
-    pub fn resolve_presented_mouse_target(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn resolve_presented_mouse_target(
         &self,
         presentation: u64,
         interaction: u32,
@@ -2148,7 +2166,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn lookup_key_sequence_suffix_translation(
+    fn lookup_key_sequence_suffix_translation(
         &mut self,
         map: Value,
         events: &[Value],
@@ -2240,7 +2258,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn apply_translation_map_to_events(
+    fn apply_translation_map_to_events(
         &mut self,
         map: Value,
         mut translated: Vec<Value>,
@@ -2350,7 +2368,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn key_echo_message(
+    pub(crate) fn key_echo_message(
         &mut self,
         translated_events: &[Value],
         decoration: KeyEchoDecoration,
@@ -2434,7 +2452,7 @@ impl crate::emacs_core::eval::Context {
     /// deliberately cancels any previous keyboard ownership, so ownership is
     /// installed only after the new message has been committed.
     #[doc(hidden)]
-    pub fn publish_key_echo_message(
+    pub(crate) fn publish_key_echo_message(
         &mut self,
         events: &[Value],
         prompt: Option<LispString>,
@@ -2548,7 +2566,7 @@ impl crate::emacs_core::eval::Context {
     ///
     /// Keyboard audit Finding 10.
     #[doc(hidden)]
-    pub fn maybe_apply_input_method_function(
+    fn maybe_apply_input_method_function(
         &mut self,
         event: Value,
     ) -> Result<InputMethodEvent, neovm_value::error::Flow> {
@@ -2674,7 +2692,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn apply_shift_translation_to_current_key_sequence(
+    fn apply_shift_translation_to_current_key_sequence(
         &mut self,
     ) -> Option<KeySequenceShiftTranslation> {
         let translated = self
@@ -2701,7 +2719,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn finalize_shift_translated_key_sequence(
+    fn finalize_shift_translated_key_sequence(
         &mut self,
         sequence_is_undefined: bool,
         options: ReadKeySequenceOptions,
@@ -4091,7 +4109,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn pop_queued_read_char_event(
+    fn pop_queued_read_char_event(
         &mut self,
         idle_policy: IdleTransitionPolicy,
     ) -> Result<QueuedReadCharEvent, neovm_value::error::Flow> {
@@ -4880,7 +4898,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn read_char_event_with_timeout(
+    fn read_char_event_with_timeout(
         &mut self,
         timeout: Option<std::time::Duration>,
         tty_input_decoding: TtyInputDecoding,
@@ -4889,14 +4907,14 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn read_char_event_with_timeout_for_key_sequence(
+    fn read_char_event_with_timeout_for_key_sequence(
         &mut self,
     ) -> Result<Option<ReadCharEvent>, neovm_value::error::Flow> {
         self.read_char_event_with_timeout_policy(None, true, TtyInputDecoding::KeyboardCodingSystem)
     }
 
     #[doc(hidden)]
-    pub fn read_char_event_with_timeout_policy(
+    fn read_char_event_with_timeout_policy(
         &mut self,
         timeout: Option<std::time::Duration>,
         command_input: bool,
@@ -5696,7 +5714,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn make_mouse_event(
+    pub(crate) fn make_mouse_event(
         eval: &mut Self,
         button: &MouseButton,
         modifiers: &Modifiers,
@@ -5888,7 +5906,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn simplify_mouse_event_once(
+    fn simplify_mouse_event_once(
         event: Value,
         mode: SymbolMode,
     ) -> Option<(MouseEventFallbackStep, Option<Value>)> {
@@ -5939,7 +5957,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn resolve_undefined_mouse_sequence_fallback(
+    fn resolve_undefined_mouse_sequence_fallback(
         &mut self,
         events: &[Value],
         lookup_position: Option<&Value>,
@@ -6012,7 +6030,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
-    pub fn mouse_posn_descriptor_value(desc: MousePosnDescriptor) -> Value {
+    fn mouse_posn_descriptor_value(desc: MousePosnDescriptor) -> Value {
         let area_or_pos = match desc.area {
             Some(area) => Value::symbol(area),
             None => desc.metrics.point.map(Value::fixnum).unwrap_or(Value::NIL),
@@ -6486,7 +6504,7 @@ impl crate::emacs_core::eval::Context {
     /// stale observation left by an earlier pointer event would open a drag on
     /// a press that landed in the text body.
     #[doc(hidden)]
-    pub fn grabbed_window_edge(
+    pub(crate) fn grabbed_window_edge(
         &self,
         button: MouseButton,
         x: f32,
@@ -7095,7 +7113,8 @@ impl crate::emacs_core::eval::Context {
 
 /// Parsed interactive argument specification.
 #[derive(Clone, Debug)]
-pub enum InteractiveCode {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum InteractiveCode {
     /// No arguments.
     None,
     /// Buffer name (with completion).
@@ -7138,7 +7157,8 @@ fn interactive_prompt_lisp_string(prompt: &str) -> LispString {
 
 /// Parse an interactive specification string.
 /// Example: "sSearch for: \nnRepeat count: "
-pub fn parse_interactive_spec(spec: &str) -> Vec<InteractiveCode> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn parse_interactive_spec(spec: &str) -> Vec<InteractiveCode> {
     if spec.is_empty() {
         return vec![InteractiveCode::None];
     }

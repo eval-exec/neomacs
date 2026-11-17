@@ -205,11 +205,11 @@ fn decode_extended_sequence_span(s: &str, start: usize) -> Option<(usize, u32)> 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
 pub struct StorageUnit {
-    pub storage_start: usize,
-    pub storage_end: usize,
+    pub(crate) storage_start: usize,
+    pub(crate) storage_end: usize,
     pub code: u32,
     pub display_width: usize,
-    pub logical_byte_len: usize,
+    pub(crate) logical_byte_len: usize,
 }
 
 /// Scan a storage string into [`StorageUnit`]s.

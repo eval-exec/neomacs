@@ -5,7 +5,7 @@ use neovm_value::tagged::value::{CanonicalSubrFactory, TaggedValue};
 /// Heap-allocated built-in function (like GNU's PVEC_SUBR).
 /// Contains a GNU-shaped fixed-arity or variadic entry point together with
 /// arity metadata stored on the SubrObj itself.
-pub type SubrFnMany = fn(
+pub(crate) type SubrFnMany = fn(
     &mut crate::emacs_core::eval::Context,
     Vec<neovm_value::tagged::value::TaggedValue>,
 ) -> neovm_value::error::EvalResult;
@@ -13,53 +13,45 @@ pub type SubrFnMany = fn(
 ///
 /// Keeping this shape distinct avoids erasing the implementation's actual
 /// dependency behind an adapter closure that accepts and discards `Context`.
-pub type SubrFnManyNoContext =
+pub(crate) type SubrFnManyNoContext =
     fn(Vec<neovm_value::tagged::value::TaggedValue>) -> neovm_value::error::EvalResult;
-pub type SubrFnManySlice = fn(
+pub(crate) type SubrFnManySlice = fn(
     &mut crate::emacs_core::eval::Context,
     &[neovm_value::tagged::value::TaggedValue],
 ) -> neovm_value::error::EvalResult;
-pub type SubrFn0 = fn(&mut crate::emacs_core::eval::Context) -> neovm_value::error::EvalResult;
-pub type SubrFn1 = fn(
+pub(crate) type SubrFn0 =
+    fn(&mut crate::emacs_core::eval::Context) -> neovm_value::error::EvalResult;
+pub(crate) type SubrFn1 = fn(
     &mut crate::emacs_core::eval::Context,
     neovm_value::tagged::value::TaggedValue,
 ) -> neovm_value::error::EvalResult;
-pub type SubrFn2 = fn(
+pub(crate) type SubrFn2 = fn(
     &mut crate::emacs_core::eval::Context,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
 ) -> neovm_value::error::EvalResult;
-pub type SubrFn3 = fn(
-    &mut crate::emacs_core::eval::Context,
-    neovm_value::tagged::value::TaggedValue,
-    neovm_value::tagged::value::TaggedValue,
-    neovm_value::tagged::value::TaggedValue,
-) -> neovm_value::error::EvalResult;
-pub type SubrFn4 = fn(
+pub(crate) type SubrFn3 = fn(
     &mut crate::emacs_core::eval::Context,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
-    neovm_value::tagged::value::TaggedValue,
 ) -> neovm_value::error::EvalResult;
-pub type SubrFn5 = fn(
+pub(crate) type SubrFn4 = fn(
     &mut crate::emacs_core::eval::Context,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
-    neovm_value::tagged::value::TaggedValue,
 ) -> neovm_value::error::EvalResult;
-pub type SubrFn6 = fn(
+pub(crate) type SubrFn5 = fn(
     &mut crate::emacs_core::eval::Context,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
-    neovm_value::tagged::value::TaggedValue,
 ) -> neovm_value::error::EvalResult;
-pub type SubrFn7 = fn(
+pub(crate) type SubrFn6 = fn(
     &mut crate::emacs_core::eval::Context,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
@@ -67,9 +59,18 @@ pub type SubrFn7 = fn(
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
+) -> neovm_value::error::EvalResult;
+pub(crate) type SubrFn7 = fn(
+    &mut crate::emacs_core::eval::Context,
+    neovm_value::tagged::value::TaggedValue,
+    neovm_value::tagged::value::TaggedValue,
+    neovm_value::tagged::value::TaggedValue,
+    neovm_value::tagged::value::TaggedValue,
+    neovm_value::tagged::value::TaggedValue,
+    neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
 ) -> neovm_value::error::EvalResult;
-pub type SubrFn8 = fn(
+pub(crate) type SubrFn8 = fn(
     &mut crate::emacs_core::eval::Context,
     neovm_value::tagged::value::TaggedValue,
     neovm_value::tagged::value::TaggedValue,
@@ -82,7 +83,8 @@ pub type SubrFn8 = fn(
 ) -> neovm_value::error::EvalResult;
 
 #[derive(Clone, Copy)]
-pub enum SubrFn {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum SubrFn {
     Many(SubrFnMany),
     ManyNoContext(SubrFnManyNoContext),
     ManySlice(SubrFnManySlice),
@@ -110,7 +112,8 @@ unsafe impl CanonicalSubrFactory for EvalCanonicalSubrFactory {
 }
 
 /// Upper-local extension trait remains coherent when TaggedValue moves lower.
-pub trait SubrValueExt: Sized {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) trait SubrValueExt: Sized {
     fn subr_from_sym_id(sym_id: SymId) -> Self;
     fn subr(sym_id: SymId) -> Self;
 }

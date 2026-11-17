@@ -1335,19 +1335,6 @@ impl HashTableStorage {
         self.index.insert_new(hash, hash_key, slot);
     }
 
-    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-    #[cfg(any(test, feature = "test-support"))]
-    /// `get_mut` counterpart of [`Self::get_by_value`].
-    pub(crate) fn get_mut_by_value(
-        &mut self,
-        value: Value,
-        test: HashTableTest,
-        symbols_with_pos_enabled: bool,
-    ) -> Option<&mut Value> {
-        let slot = self.slot_by_value(value, test, symbols_with_pos_enabled)?;
-        self.slot_value_mut(slot)
-    }
-
     /// `remove` counterpart of [`Self::get_by_value`].
     pub fn remove_by_value(
         &mut self,
@@ -1869,16 +1856,6 @@ pub enum HashTableWeakness {
 impl HashTableWeakness {
     pub fn from_gnu_code(code: u8) -> Option<Self> {
         Self::try_from(code).ok()
-    }
-
-    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn option_from_gnu_code(code: u8) -> Option<Option<Self>> {
-        if code == 0 {
-            Some(None)
-        } else {
-            Self::from_gnu_code(code).map(Some)
-        }
     }
 
     pub fn gnu_code(self) -> u8 {
@@ -3553,13 +3530,6 @@ impl TaggedValue {
         mutate::replace_closure_slots(self, slots)
     }
 
-    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-    #[cfg(any(test, feature = "test-support"))]
-    /// Update a single closure slot through the centralized write path.
-    pub(crate) fn set_closure_slot(self, index: usize, value: Value) -> bool {
-        mutate::set_closure_slot(self, index, value)
-    }
-
     fn closure_parsed_params_cell(self) -> Option<&'static OnceLock<LambdaParams>> {
         let header = self.as_veclike_ptr()?;
         match unsafe { (*header).type_tag } {
@@ -3965,17 +3935,6 @@ impl TaggedValue {
     /// Update a single record slot through the centralized write path.
     pub fn set_record_slot(self, index: usize, value: Value) -> bool {
         mutate::set_record_slot(self, index, value)
-    }
-
-    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-    #[cfg(any(test, feature = "test-support"))]
-    /// Replace the contents of either a vector or record.
-    pub(crate) fn replace_vectorlike_sequence_data(self, values: Vec<Value>) -> bool {
-        match self.veclike_type() {
-            Some(VecLikeType::Vector) => self.replace_vector_data(values),
-            Some(VecLikeType::Record) => self.replace_record_data(values),
-            _ => false,
-        }
     }
 
     /// Get hash table reference.

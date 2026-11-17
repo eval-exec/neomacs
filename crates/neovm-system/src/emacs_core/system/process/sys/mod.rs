@@ -29,7 +29,8 @@ pub(crate) use signals::{
 };
 
 mod process_status;
-pub use process_status::process_is_alive;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use process_status::process_is_alive;
 
 mod child_exit_event;
 pub(crate) use child_exit_event::{ChildExitEvent, ChildExitNotification};
@@ -54,7 +55,8 @@ mod fd;
 #[cfg(unix)]
 pub(crate) use fd::dup_fd;
 #[cfg(unix)]
-pub use fd::set_fd_nonblocking;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use fd::set_fd_nonblocking;
 
 mod fs;
 pub(crate) use fs::executable_path_access;
@@ -98,13 +100,15 @@ mod child_wait;
 #[cfg(all(unix, feature = "test-support"))]
 pub mod child_wait;
 #[cfg(unix)]
-pub use child_wait::ChildWait;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use child_wait::ChildWait;
 #[cfg(unix)]
 pub(crate) use child_wait::poll_child_status;
 // The raw-status decode entry point is currently only exercised by status-decode
 // tests; production reaps through `poll_child_status`.
 #[cfg(all(unix, any(test, feature = "test-support")))]
-pub use child_wait::decode_wait_status;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use child_wait::decode_wait_status;
 
 #[cfg(unix)]
 mod socket_options;

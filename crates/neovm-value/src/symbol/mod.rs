@@ -978,14 +978,6 @@ impl CanonicalDispatchCells {
         DebuggerDescriptor(self.debug_on_next_call_cell_ref())
     }
 
-    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-    #[cfg(any(test, feature = "test-support"))]
-    #[cfg(feature = "jit")]
-    #[inline(always)]
-    pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
-        *self.function_epoch.get_mut()
-    }
-
     #[inline(always)]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
@@ -1473,14 +1465,6 @@ impl SymbolChunks {
         for side in &self.sides {
             side.set_floor(floor);
         }
-    }
-
-    /// Whether slot `idx`'s chunk holds a stamp array (tests).
-    #[cfg(any(test, feature = "test-support"))]
-    fn chunk_has_fn_stamps(&self, idx: usize) -> bool {
-        self.sides
-            .get(idx >> 12)
-            .is_some_and(|side| side.has_stamps())
     }
 
     /// Capture the start-of-cycle scan parts for the Stage 1b concurrent obarray
@@ -4183,13 +4167,6 @@ impl Obarray {
             && self.symbols.fn_unchanged_since(Self::slot_index(id), since)
     }
 
-    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-    /// Test hook: whether `id`'s chunk has allocated its stamp array.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn chunk_has_fn_stamps_for_test(&self, id: SymId) -> bool {
-        self.symbols.chunk_has_fn_stamps(Self::slot_index(id))
-    }
-
     /// A specific function `id` was redefined (cell write / fmakunbound): bump the
     /// epoch (the coarse "any binding may have changed" signal JIT call
     /// speculation re-arms on). When JIT is enabled, also evict the JIT cache
@@ -4356,53 +4333,6 @@ impl Obarray {
         if crate::value::eq_value(&blv.valcell.get(), &blv.defcell.get()) {
             blv.valcell.get().set_cdr(Value::UNBOUND);
         }
-    }
-
-    /// [`Self::makunbound_canonical`] for the owner-aware API: a thread
-    /// projection answers [`CanonicalWrite::Projected`] from the forwarded
-    /// arm, which leaves every forwarder as it is.
-    #[inline(always)]
-    #[doc(hidden)]
-    pub fn makunbound_canonical_routed(&mut self, id: SymId) -> CanonicalWrite {
-        self.ensure_global_member_if_canonical(id);
-        let target = self.resolve_alias_for_write(id);
-        if self
-            .slot(target)
-            .is_none_or(|sym| sym.trapped_write() == SymbolTrappedWrite::NoWrite)
-        {
-            return CanonicalWrite::Done;
-        }
-        let blv = match self.cell_write_ensure(target).arm() {
-            ArmMut::Plain(plain) => {
-                plain.store(Value::UNBOUND);
-                return CanonicalWrite::Done;
-            }
-            // `resolve_alias_for_write` stops on an alias only when the chain
-            // does not end; GNU `Fmakunbound` on an alias undoes it
-            // (`src/data.c:781-784`).
-            ArmMut::Alias(alias) => {
-                alias.unalias(Value::UNBOUND);
-                return CanonicalWrite::Done;
-            }
-            ArmMut::Forwarded(forwarded) => {
-                return if forwarded.descriptor().thread_projection().is_some() {
-                    CanonicalWrite::Projected
-                } else {
-                    CanonicalWrite::Done
-                };
-            }
-            ArmMut::Localized(local) => local.blv(),
-        };
-        // Safety: a `Localized` cell names a record self.blvs owns.
-        let blv = unsafe { &mut *blv.as_ptr() };
-        if blv.fwd.is_some() {
-            return CanonicalWrite::Done;
-        }
-        blv.defcell.get().set_cdr(Value::UNBOUND);
-        if crate::value::eq_value(&blv.valcell.get(), &blv.defcell.get()) {
-            blv.valcell.get().set_cdr(Value::UNBOUND);
-        }
-        CanonicalWrite::Done
     }
 
     /// Check if a symbol is bound (has a value cell).
@@ -5062,18 +4992,6 @@ impl Obarray {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn dispatch_cells_address_for_test(&self) -> usize {
         std::ptr::from_ref(&self.dispatch_cells).addr()
-    }
-
-    /// Read the publication clock while this obarray is exclusively owned.
-    /// The mutable borrow excludes concurrent clock readers as well as writers;
-    /// independent mutators may own separate obarrays (clones have fresh clocks).
-    /// Shared readers must use `function_epoch` and its Acquire ordering instead.
-    /// Return a copy so no clock borrow survives native re-entry. Keeping this
-    /// load ordinary lets the warmed JIT guard fold it into its comparison.
-    #[cfg(feature = "jit")]
-    #[inline]
-    pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
-        *self.dispatch_cells.function_epoch.get_mut()
     }
 
     /// Test-only: set `function_epoch` (the wrap-skip tests). Re-gated to
