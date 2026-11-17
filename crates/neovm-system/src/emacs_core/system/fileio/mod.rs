@@ -2951,9 +2951,8 @@ fn set_file_times_path(
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-fn delete_file_compat(filename: &str) -> Result<(), Flow> {
+#[cfg(feature = "test-support")]
+pub fn delete_file_compat(filename: &str) -> Result<(), Flow> {
     match delete_file(filename) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
