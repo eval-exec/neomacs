@@ -5434,12 +5434,6 @@ pub fn builtin_handler_bind_1(eval: &mut super::eval::Context, args: Vec<Value>)
 }
 
 #[doc(hidden)]
-pub fn builtin_iso_charset(args: Vec<Value>) -> EvalResult {
-    expect_args("iso-charset", &args, 3)?;
-    Ok(Value::NIL)
-}
-
-#[doc(hidden)]
 pub fn builtin_keymap_prompt(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("keymap-prompt", &args, 1)?;
     let map = crate::emacs_core::eval::keymap_lookup::get_keymap_in_obarray(

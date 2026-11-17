@@ -8806,11 +8806,12 @@ fn pure_dispatch_def_keymap_placeholder_cluster_matches_compat_contracts() {
 
     let iso_charset = dispatch_builtin_pure(
         "iso-charset",
-        vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)],
+        vec![Value::fixnum(1), Value::fixnum(94), Value::fixnum(66)],
     )
     .expect("builtin iso-charset should resolve")
     .expect("builtin iso-charset should evaluate");
-    assert!(iso_charset.is_nil());
+    // GNU: (iso-charset 1 94 ?B) => ascii.
+    assert_eq!(iso_charset, Value::symbol("ascii"));
 
     let keyelt = dispatch_builtin_pure("keymap--get-keyelt", vec![Value::NIL, Value::NIL])
         .expect("builtin keymap--get-keyelt should resolve")
