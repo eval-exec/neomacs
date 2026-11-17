@@ -1266,6 +1266,108 @@ fn get_unused_iso_final_char_validates_dimension_and_chars() {
     assert!(matches!(bad_chars.kind(), FlowRef::Signal(_)));
 }
 
+fn iso_charset_error_message(args: Vec<Value>) -> String {
+    match builtin_iso_charset(args).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "error");
+            sig.data
+                .first()
+                .and_then(Value::as_lisp_string)
+                .map(|message| String::from_utf8_lossy(message.as_bytes()).into_owned())
+                .unwrap_or_default()
+        }
+        other => panic!("expected an error signal, got {other:?}"),
+    }
+}
+
+fn iso_charset_wrong_type(args: Vec<Value>) -> (Value, Value) {
+    match builtin_iso_charset(args).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            (sig.data[0], sig.data[1])
+        }
+        other => panic!("expected wrong-type-argument, got {other:?}"),
+    }
+}
+
+#[test]
+fn iso_charset_known_designations() {
+    crate::test_utils::init_test_tracing();
+    let lookup = |d: i64, c: i64, f: i64| {
+        builtin_iso_charset(vec![Value::fixnum(d), Value::fixnum(c), Value::fixnum(f)])
+            .expect("iso-charset")
+    };
+    // GNU: (iso-charset 1 94 ?B) => ascii, (iso-charset 1 96 ?A) =>
+    // latin-iso8859-1, (iso-charset 1 94 ?Z) => nil, no 3-dimension sets.
+    assert_eq!(lookup(1, 94, 66), Value::symbol("ascii"));
+    assert_eq!(lookup(1, 96, 65), Value::symbol("latin-iso8859-1"));
+    assert_eq!(lookup(1, 94, 90), Value::NIL);
+    assert_eq!(lookup(3, 94, 66), Value::NIL);
+}
+
+/// GNU's `iso_charset_table` is written on every definition, so the last
+/// definition of a designation wins whatever the charset ids are (neomacs
+/// ids come from `:emacs-mule-id` or a counter, not definition order).
+#[test]
+fn iso_charset_last_definition_wins_regardless_of_id() {
+    crate::test_utils::init_test_tracing();
+    reset_charset_registry();
+    let define = |name: &'static str, mule_id: Option<i64>| {
+        let mut args = vec![Value::NIL; 17];
+        args[0] = Value::symbol(name);
+        args[1] = Value::fixnum(1);
+        args[2] = Value::vector(vec![Value::fixnum(32), Value::fixnum(127)]);
+        args[5] = Value::fixnum(i64::from(b'}'));
+        args[7] = mule_id.map_or(Value::NIL, Value::fixnum);
+        builtin_define_charset_internal(args).unwrap();
+    };
+    let lookup = || {
+        builtin_iso_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(96),
+            Value::fixnum(i64::from(b'}')),
+        ])
+        .expect("iso-charset")
+    };
+    // The later definition gets the lower id here and still wins.
+    define("test-iso-first", None);
+    assert_eq!(lookup(), Value::symbol("test-iso-first"));
+    define("test-iso-second", Some(200));
+    assert_eq!(lookup(), Value::symbol("test-iso-second"));
+    reset_charset_registry();
+}
+
+#[test]
+fn iso_charset_validates_arguments_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let (a, b, c) = (Value::fixnum(1), Value::fixnum(94), Value::fixnum(66));
+    assert_eq!(
+        iso_charset_error_message(vec![Value::fixnum(0), b, c]),
+        "Invalid DIMENSION 0, it should be 1, 2, or 3"
+    );
+    assert_eq!(
+        iso_charset_error_message(vec![a, Value::fixnum(1), c]),
+        "Invalid CHARS 1, it should be 94 or 96"
+    );
+    assert_eq!(
+        iso_charset_error_message(vec![a, b, Value::fixnum(47)]),
+        "Invalid FINAL-CHAR \u{2018}/\u{2019}, it should be \u{2018}0\u{2019}..\u{2018}~\u{2019}"
+    );
+    assert_eq!(
+        iso_charset_wrong_type(vec![Value::NIL, b, c]),
+        (Value::symbol("fixnump"), Value::NIL)
+    );
+    assert_eq!(
+        iso_charset_wrong_type(vec![a, b, Value::fixnum(-1)]),
+        (Value::symbol("characterp"), Value::fixnum(-1))
+    );
+    // Type errors win over range errors, as in GNU.
+    assert_eq!(
+        iso_charset_wrong_type(vec![Value::fixnum(4), Value::fixnum(95), Value::fixnum(-1)]).0,
+        Value::symbol("characterp")
+    );
+}
+
 #[test]
 fn declare_equiv_charset_validates_and_accepts_valid_tuple() {
     crate::test_utils::init_test_tracing();
@@ -1302,6 +1404,17 @@ fn declare_equiv_charset_validates_and_accepts_valid_tuple() {
             Value::fixnum(1),
             Value::fixnum(94),
             Value::symbol("A"),
+            Value::symbol("ascii"),
+        ])
+        .is_err()
+    );
+    // GNU shares `check_iso_charset_parameter`: FINAL-CHAR outside `0'..`~'
+    // is an error too (oracle: "Invalid FINAL-CHAR ‘/’, ...").
+    assert!(
+        builtin_declare_equiv_charset(vec![
+            Value::fixnum(1),
+            Value::fixnum(94),
+            Value::fixnum(i64::from(b'/')),
             Value::symbol("ascii"),
         ])
         .is_err()

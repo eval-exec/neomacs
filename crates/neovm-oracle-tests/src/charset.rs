@@ -47,3 +47,23 @@ fn oracle_prop_decode_char_out_of_range_error_shape() {
     ]];
     crate::common::assert_oracle_parity_expect("(decode-char 'ucs -1)", expect);
 }
+
+#[test]
+fn oracle_prop_iso_charset_designations_and_errors() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU `Fiso_charset` (charset.c:2089): lookup in `iso_charset_table`,
+    // where a later definition wins (`thai-tis620` over `thai-iso8859-11`),
+    // plus the `check_iso_charset_parameter` errors.
+    let form = "(list (iso-charset 1 94 ?B) (iso-charset 2 94 ?B) (iso-charset 1 96 ?A) \
+        (iso-charset 2 94 ?A) (iso-charset 1 94 ?Z) (iso-charset 1 96 ?T) \
+        (condition-case e (iso-charset 0 94 ?B) (error e)) \
+        (condition-case e (iso-charset 1 1 ?A) (error e)) \
+        (condition-case e (iso-charset 1 94 ?/) (error e)) \
+        (condition-case e (iso-charset nil 94 ?B) (error e)) \
+        (condition-case e (iso-charset 1 94 -1) (error e)))";
+    let expect = expect_test::expect![[
+        r#""OK (ascii japanese-jisx0208 latin-iso8859-1 chinese-gb2312 nil thai-tis620 (error \"Invalid DIMENSION 0, it should be 1, 2, or 3\") (error \"Invalid CHARS 1, it should be 94 or 96\") (error \"Invalid FINAL-CHAR ‘/’, it should be ‘0’..‘~’\") (wrong-type-argument fixnump nil) (wrong-type-argument characterp -1))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

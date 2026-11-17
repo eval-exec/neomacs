@@ -465,6 +465,11 @@ pub struct CharsetRegistry {
     /// holds charset ids, so re-pointing an alias later does not change which
     /// charsets are preferred.
     preferred_identities: Vec<SymId>,
+    /// GNU's `iso_charset_table` (charset.c:103): (dimension, chars-96?,
+    /// final char) -> charset name.  Written whenever a charset with an
+    /// `:iso-final-char` is defined, so the last definition wins
+    /// (charset.c:1163-1166), and never cleared.
+    iso_charset_table: rustc_hash::FxHashMap<(i64, bool, i64), SymId>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
@@ -507,6 +512,11 @@ pub struct CharsetRegistry {
     /// The preferred charsets by canonical identity (test read surface; the
     /// production struct keeps this private). See the production definition.
     pub(crate) preferred_identities: Vec<SymId>,
+    /// GNU's `iso_charset_table` (charset.c:103): (dimension, chars-96?,
+    /// final char) -> charset name.  Written whenever a charset with an
+    /// `:iso-final-char` is defined, so the last definition wins
+    /// (charset.c:1163-1166), and never cleared.
+    iso_charset_table: rustc_hash::FxHashMap<(i64, bool, i64), SymId>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
@@ -531,6 +541,7 @@ impl CharsetRegistry {
             emacs_mule_order: Vec::new(),
             non_preferred_head: None,
             preferred_identities: Vec::new(),
+            iso_charset_table: rustc_hash::FxHashMap::default(),
             next_id: 256, // start above the Emacs built-in range
         };
         reg.init_standard_charsets(materialize_plists);
@@ -768,6 +779,7 @@ impl CharsetRegistry {
         let name = info.name;
         let supplementary_p = info.supplementary_p;
         self.charsets.insert(name, info);
+        self.record_iso_designation(name);
         // GNU's `Fdefine_charset_internal` appends every NEWLY-defined charset
         // to `Vcharset_ordered_list` (charset.c:1191-1219).  This is what makes
         // `charset-priority-list` return the full registered set in definition
@@ -1025,6 +1037,44 @@ impl CharsetRegistry {
             .map(|info| info.id)
     }
 
+    /// GNU `Fdefine_charset_internal` (charset.c:1163-1166): record NAME in
+    /// the ISO designation table, overwriting any earlier entry.
+    fn record_iso_designation(&mut self, name: SymId) {
+        let Some(info) = self.charsets.get(&name) else {
+            return;
+        };
+        if let Some(final_char) = info.iso_final_char
+            && (1..=3).contains(&info.dimension)
+            && (0..128).contains(&final_char)
+        {
+            let key = (
+                info.dimension,
+                code_space_is_96(&info.code_space),
+                final_char,
+            );
+            self.iso_charset_table.insert(key, name);
+        }
+    }
+
+    /// Rebuild the ISO designation table after `restore`, which does not carry
+    /// it.  Definition order (`priority_identities`, then id for anything
+    /// else) stands in for GNU's write order, so the later definition wins.
+    fn rebuild_iso_charset_table(&mut self) {
+        let mut order: Vec<SymId> = self.priority_identities.clone();
+        let mut rest: Vec<(i64, SymId)> = self
+            .charsets
+            .iter()
+            .filter(|(name, _)| !order.contains(name))
+            .map(|(name, info)| (info.id, *name))
+            .collect();
+        rest.sort_by_key(|(id, _)| *id);
+        order.extend(rest.into_iter().map(|(_, name)| name));
+        self.iso_charset_table.clear();
+        for name in order {
+            self.record_iso_designation(name);
+        }
+    }
+
     /// Register ALIAS as another name for TARGET.
     ///
     /// Unlike a copy, the alias resolves to the target dynamically, so any
@@ -1197,8 +1247,10 @@ impl CharsetRegistry {
             emacs_mule_order: snapshot.emacs_mule_order,
             non_preferred_head: snapshot.non_preferred_head,
             preferred_identities: Vec::new(),
+            iso_charset_table: rustc_hash::FxHashMap::default(),
             next_id: snapshot.next_id,
         };
+        registry.rebuild_iso_charset_table();
         registry.capture_preferred_identities();
         if legacy_identities {
             // Old snapshots stored public names, including materialized
@@ -2970,8 +3022,74 @@ pub fn builtin_decode_sjis_char(args: Vec<Value>) -> EvalResult {
 #[doc(hidden)]
 pub fn builtin_get_unused_iso_final_char(args: Vec<Value>) -> EvalResult {
     expect_args("get-unused-iso-final-char", &args, 2)?;
-    let dimension = expect_fixnump(&args[0])?;
-    let chars = expect_fixnump(&args[1])?;
+    let (dimension, chars_96, _) = check_iso_charset_parameter(&args[0], &args[1], None)?;
+    let chars = if chars_96 { 96 } else { 94 };
+    let final_char = match (dimension, chars) {
+        (1, 94) => 54,
+        (1, 96) => 51,
+        (2, 94) => 50,
+        (2, 96) | (3, 94) | (3, 96) => 48,
+        _ => 48,
+    };
+    Ok(Value::fixnum(final_char))
+}
+
+/// GNU's `iso_chars_96` (charset.c:912): a charset is a 96-set when the
+/// character count of its first code-space byte range (`code_space[2]` in
+/// GNU) is 96.  This port stores only the min/max pair.
+fn code_space_is_96(code_space: &[i64; 8]) -> bool {
+    code_space[1] - code_space[0] + 1 == 96
+}
+
+/// GNU `check_iso_charset_parameter` (charset.c:1385), shared by
+/// `get-unused-iso-final-char` and `iso-charset`.  Checks the argument types
+/// (DIMENSION and CHARS fixnums, then FINAL-CHAR a character when given),
+/// then the ranges, in GNU's order.  Returns `(dimension, chars_96,
+/// final_char)`, with `final_char` 0 when FINAL-CHAR is not given.
+fn check_iso_charset_parameter(
+    dimension: &Value,
+    chars: &Value,
+    final_char: Option<&Value>,
+) -> Result<(i64, bool, i64), Flow> {
+    let dimension = expect_fixnump(dimension)?;
+    let chars = expect_fixnump(chars)?;
+    let final_char = match final_char {
+        None => None,
+        Some(value) => match value.kind() {
+            ValueKind::Fixnum(c) if (0..=0x3F_FFFF).contains(&c) => Some(c),
+            _ => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("characterp"), *value],
+                ));
+            }
+        },
+    };
+    let chars_96 = check_iso_dimension_and_chars(dimension, chars)?;
+    if let Some(c) = final_char
+        && !(i64::from(b'0')..=i64::from(b'~')).contains(&c)
+    {
+        // GNU formats the character with `%c` inside quotes.  Known
+        // differences: raw-byte chars print as U+FFFD here (GNU emits the raw
+        // byte), and the quotes are always curved (GNU follows
+        // `text-quoting-style`).
+        let shown = u32::try_from(c)
+            .ok()
+            .and_then(char::from_u32)
+            .unwrap_or(char::REPLACEMENT_CHARACTER);
+        return Err(signal(
+            "error",
+            vec![Value::string(format!(
+                "Invalid FINAL-CHAR \u{2018}{shown}\u{2019}, it should be \u{2018}0\u{2019}..\u{2018}~\u{2019}"
+            ))],
+        ));
+    }
+    Ok((dimension, chars_96, final_char.unwrap_or(0)))
+}
+
+/// The DIMENSION and CHARS range checks of `check_iso_charset_parameter`;
+/// returns whether CHARS is 96.
+fn check_iso_dimension_and_chars(dimension: i64, chars: i64) -> Result<bool, Flow> {
     if !matches!(dimension, 1..=3) {
         return Err(signal(
             "error",
@@ -2988,14 +3106,27 @@ pub fn builtin_get_unused_iso_final_char(args: Vec<Value>) -> EvalResult {
             ))],
         ));
     }
-    let final_char = match (dimension, chars) {
-        (1, 94) => 54,
-        (1, 96) => 51,
-        (2, 94) => 50,
-        (2, 96) | (3, 94) | (3, 96) => 48,
-        _ => 48,
-    };
-    Ok(Value::fixnum(final_char))
+    Ok(chars == 96)
+}
+
+/// `(iso-charset DIMENSION CHARS FINAL-CHAR)` -- the charset with that
+/// ISO-2022 designation, or nil.  Mirrors GNU `Fiso_charset` (charset.c:2089),
+/// which reads `iso_charset_table` (see `CharsetRegistry::iso_charset_table`),
+/// so a later definition wins when two charsets share a designation (e.g.
+/// `thai-tis620` over `thai-iso8859-11`).
+#[doc(hidden)]
+pub fn builtin_iso_charset(args: Vec<Value>) -> EvalResult {
+    expect_args("iso-charset", &args, 3)?;
+    let (dimension, chars_96, final_char) =
+        check_iso_charset_parameter(&args[0], &args[1], Some(&args[2]))?;
+    Ok(CHARSET_REGISTRY
+        .with(|slot| {
+            slot.borrow()
+                .iso_charset_table
+                .get(&(dimension, chars_96, final_char))
+                .copied()
+        })
+        .map_or(Value::NIL, Value::from_sym_id))
 }
 
 /// `(declare-equiv-charset DIMENSION CHARS CH CHARSET)` -- declare an
@@ -3017,25 +3148,7 @@ pub fn builtin_declare_equiv_charset_in_state<H: TextHost>(
 fn builtin_declare_equiv_charset_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("declare-equiv-charset", &args, 4)?;
     let _charset = require_known_charset(&args[3], mode)?;
-    let dimension = expect_fixnump(&args[0])?;
-    let chars = expect_fixnump(&args[1])?;
-    let _ch = encode_char_input(&args[2])?;
-    if !matches!(dimension, 1..=3) {
-        return Err(signal(
-            "error",
-            vec![Value::string(format!(
-                "Invalid DIMENSION {dimension}, it should be 1, 2, or 3"
-            ))],
-        ));
-    }
-    if !matches!(chars, 94 | 96) {
-        return Err(signal(
-            "error",
-            vec![Value::string(format!(
-                "Invalid CHARS {chars}, it should be 94 or 96"
-            ))],
-        ));
-    }
+    check_iso_charset_parameter(&args[0], &args[1], Some(&args[2]))?;
     Ok(Value::NIL)
 }
 

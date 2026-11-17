@@ -3518,7 +3518,9 @@ crate::emacs_core::subr::define_subrs! {
     ),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "iso-charset",
-        NativeFn::ContextVec(|_ctx, args| builtin_iso_charset(args)),
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::charset::builtin_iso_charset(args)
+        }),
         SubrArity::new(3, Some(3)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
