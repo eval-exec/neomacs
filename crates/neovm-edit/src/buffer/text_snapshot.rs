@@ -22,8 +22,7 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 /// How [`super::buffer_text::BufferText`]'s snapshot clone holds the bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) enum TextSnapshotMode {
+pub enum TextSnapshotMode {
     /// Deep-copy the text bytes into every snapshot (the old behaviour).
     Copy = 1,
     /// Share the bytes copy-on-write; the snapshot is O(1).

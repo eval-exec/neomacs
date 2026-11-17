@@ -179,6 +179,7 @@ crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::get_
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn impl SyntaxTable::modify_syntax_entry
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn init_syntax_vars
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn reset_syntax_thread_locals
+crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxEntry
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxFlags
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxTable
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	use	use SyntaxClass

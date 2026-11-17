@@ -4663,6 +4663,7 @@ fn looking_at_string_with_syntax(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Match a regex against a string (not a buffer).
 ///
 /// `start` is the byte offset within `string` to begin matching.
@@ -4680,6 +4681,7 @@ pub(crate) fn string_match_full_with_case_fold(
     string_match_full_with_case_fold_and_posix(pattern, string, start, case_fold, false, match_data)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// POSIX longest-match variant of [`string_match_full_with_case_fold`]
 /// used by `posix-string-match`. See GNU `src/search.c:Fposix_string_match`.
 pub(crate) fn string_match_full_with_case_fold_and_posix(
@@ -4918,6 +4920,7 @@ pub fn string_search_start_with_case_fold_source_lisp_pattern_posix_syntax(
     .map(|bytes| engine_match_byte_start(&bytes)))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn string_match_full_with_case_fold_source_posix(
     pattern: &str,
     string: &str,
@@ -5039,6 +5042,7 @@ fn string_search_full_with_case_fold_source_compiled_syntax(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Match a regex against a string using Emacs default case-fold behavior.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn string_match_full(
@@ -5146,6 +5150,7 @@ pub(crate) fn compute_buffer_replacement_with_syntax(
     Ok((buffer_start, buffer_end, replacement))
 }
 
+#[cfg(feature = "test-support")]
 /// Replace the last match in SOURCE (Emacs-bytes) and return the resulting
 /// Emacs-bytes. `source_multibyte` mirrors the source Lisp string's
 /// `STRING_MULTIBYTE` flag and governs how the result is reassembled.
@@ -5172,6 +5177,7 @@ pub(crate) fn replace_match_string(
     )
 }
 
+#[cfg(feature = "test-support")]
 /// Variant of [`replace_match_string`] that threads the syntax table
 /// and `case-symbols-as-words` into the case-preservation decision.
 /// For pure string replacement (no buffer in scope), pass `None` for

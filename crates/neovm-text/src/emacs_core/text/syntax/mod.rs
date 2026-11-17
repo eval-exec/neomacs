@@ -539,8 +539,7 @@ impl std::ops::BitOrAssign for SyntaxFlags {
 /// A single entry in a syntax table: the class, an optional matching
 /// character (for parens/string delimiters), and comment/prefix flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct SyntaxEntry {
+pub struct SyntaxEntry {
     pub class: SyntaxClass,
     pub(crate) matching_char: Option<char>,
     pub flags: SyntaxFlags,
@@ -815,6 +814,7 @@ impl SyntaxTable {
         }
     }
 
+    #[cfg(feature = "test-support")]
     /// Install an isolated copy of the standard chartable on `buf` so
     /// subsequent `modify_syntax_entry` calls don't leak into the
     /// shared standard. Returns the new `SyntaxTable`. Mirrors the
@@ -940,6 +940,7 @@ impl Default for SyntaxTable {
 // Motion functions (operate on a Buffer + SyntaxTable)
 // ===========================================================================
 
+#[cfg(any(test, feature = "test-support"))]
 /// Move forward over `count` words.  Returns the resulting Emacs byte position.
 ///
 /// A "word" is a maximal run of characters with syntax class `Word`.
@@ -3012,6 +3013,7 @@ pub(crate) fn builtin_make_syntax_table(args: Vec<Value>) -> EvalResult {
     Ok(table)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(copy-syntax-table &optional TABLE)` — return a fresh copy of TABLE.
 pub(crate) fn builtin_copy_syntax_table(args: Vec<Value>) -> EvalResult {

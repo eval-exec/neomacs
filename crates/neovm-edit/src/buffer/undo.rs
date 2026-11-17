@@ -321,6 +321,7 @@ pub fn undo_list_boundary(undo_list: &mut Value) {
 // entry 150 deleted; grouping the list for replay is `primitive-undo''s job
 // (lisp/simple.el:3645), and it is Lisp.  This module RECORDS.
 
+#[cfg(any(test, feature = "test-support"))]
 /// Check whether the most recent entry is a nil boundary.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn undo_list_has_trailing_boundary(undo_list: &Value) -> bool {
@@ -452,8 +453,7 @@ pub trait UndoLimitBindings {
 
 /// One buffer's truncation limits, read at the moment GNU reads them.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct UndoLimits {
+pub struct UndoLimits {
     /// `undo-limit`: truncate *after* the boundary that pushes the list past
     /// this size (`src/undo.c:380-390`).
     limit: i64,

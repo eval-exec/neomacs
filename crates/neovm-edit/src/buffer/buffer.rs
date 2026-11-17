@@ -1342,6 +1342,7 @@ pub const DISPLAY_AFFECTING_GLOBAL_VARS: &[&str] = &[
     // shape, neither of which alters text layout.
 ];
 
+#[cfg(feature = "test-support")]
 /// Whether setting the named variable should mark redisplay dirty.
 ///
 /// Returns `true` for the curated per-buffer display slots and the
@@ -2300,6 +2301,7 @@ impl Drop for SavedLabeledRestrictions {
 }
 
 impl SavedRestrictionState {
+    #[cfg(feature = "test-support")]
     /// Test-facing access to the labeled-restriction stack this entry saved.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn labeled_restrictions(&self) -> &SavedLabeledRestrictions {
@@ -2837,6 +2839,7 @@ impl Buffer {
         )
     }
 
+    #[cfg(feature = "test-support")]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn try_new_with_text_backend_kind(
         id: BufferId,
@@ -2869,6 +2872,7 @@ impl Buffer {
         Self::new(id, name, SavedPointBeforeCommand::new_editor_global())
     }
 
+    #[cfg(feature = "test-support")]
     /// [`Buffer::new_standalone`] with an explicit text backend.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn try_new_standalone_with_text_backend_kind(
@@ -3224,6 +3228,7 @@ impl Buffer {
         self.slots[BUFFER_SLOT_AUTO_SAVE_FILE_NAME.index()]
     }
 
+    #[cfg(feature = "test-support")]
     /// Clone `buffer-auto-save-file-name` as an owned runtime string.
     /// This is a boundary helper for filesystem-facing code.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -4008,6 +4013,7 @@ impl Buffer {
         )
     }
 
+    #[cfg(feature = "test-support")]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn text_props_remove_property_in_emacs_byte_range(
         &mut self,
@@ -4609,6 +4615,7 @@ impl Buffer {
         self.goto_emacs_byte_pos(self.point_emacs_byte_pos());
     }
 
+    #[cfg(feature = "test-support")]
     /// Set the accessible byte range and point as one coherent buffer state.
     ///
     /// This mirrors GNU's invariant that `PT`/`PT_BYTE`, `BEGV`/`BEGV_BYTE`
@@ -4808,6 +4815,7 @@ impl Buffer {
         contains
     }
 
+    #[cfg(feature = "test-support")]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn marker_value(&self, marker: MarkerRef) -> Option<Value> {
         if marker.is_null() || !self.text.has_marker_ptr(marker.as_ptr()) {
@@ -5134,6 +5142,7 @@ impl Buffer {
         spans
     }
 
+    #[cfg(feature = "test-support")]
     /// The composition spans a window could show, scanning only that much text.
     ///
     /// `first_char` is the window's start and `budget` an upper bound on the
@@ -7046,6 +7055,7 @@ impl BufferManager {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Allocate a new indirect buffer that shares its root base buffer's text.
     ///
     /// This mirrors GNU Emacs's `make-indirect-buffer` C boundary:
@@ -7912,6 +7922,7 @@ impl BufferManager {
         Some(())
     }
 
+    #[cfg(feature = "test-support")]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn put_buffer_overlay_property(
         &mut self,
@@ -8238,6 +8249,7 @@ impl BufferManager {
         Some(())
     }
 
+    #[cfg(feature = "test-support")]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn set_buffer_file_truename(
         &mut self,
@@ -8290,6 +8302,7 @@ impl BufferManager {
         Some(())
     }
 
+    #[cfg(feature = "test-support")]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn move_buffer_overlay_to_emacs_byte_range(
         &mut self,
@@ -8826,6 +8839,7 @@ impl BufferManager {
         marker.anchor().map(TextPositionAnchor::char_pos)
     }
 
+    #[cfg(feature = "test-support")]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn marker_value(&self, marker: MarkerRef) -> Option<Value> {
         marker.as_value()

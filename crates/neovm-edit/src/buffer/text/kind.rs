@@ -44,6 +44,7 @@ impl BufferTextBackendKind {
         Self::variants().filter(|kind| kind.is_implemented())
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn non_gap_implemented_variants() -> impl Iterator<Item = Self> {
         Self::implemented_variants().filter(|kind| !kind.is_gap_buffer())

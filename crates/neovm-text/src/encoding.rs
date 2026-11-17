@@ -320,6 +320,7 @@ pub fn is_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Whether a string is multibyte (contains non-ASCII).
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn is_multibyte_string(s: &str) -> bool {

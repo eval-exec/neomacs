@@ -89,6 +89,7 @@ impl CaseTable {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Create the standard ASCII case table (a-z <-> A-Z).
     pub(crate) fn standard_ascii() -> Self {
         let mut upcase = HashMap::new();
@@ -128,6 +129,7 @@ impl CaseTable {
 // CaseTableManager
 // ---------------------------------------------------------------------------
 
+#[cfg(any(test, feature = "test-support"))]
 /// Manages case tables, providing standard ASCII case conversion by default.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -139,7 +141,9 @@ pub(crate) struct CaseTableManager {
     current: CaseTable,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl CaseTableManager {
+    #[cfg(any(test, feature = "test-support"))]
     /// Create a new manager with the standard ASCII case table.
     pub fn new() -> Self {
         let table = CaseTable::standard_ascii();
@@ -150,24 +154,28 @@ impl CaseTableManager {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Convert a character to uppercase using the current case table.
     /// Returns the character unchanged if no upcase mapping exists.
     pub(crate) fn upcase_char(&self, c: char) -> char {
         *self.current.upcase.get(&c).unwrap_or(&c)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Convert a character to lowercase using the current case table.
     /// Returns the character unchanged if no downcase mapping exists.
     pub(crate) fn downcase_char(&self, c: char) -> char {
         *self.current.downcase.get(&c).unwrap_or(&c)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Convert an entire string to uppercase.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn upcase_string(&self, s: &str) -> String {
         s.chars().map(|c| self.upcase_char(c)).collect()
     }
 
+    #[cfg(feature = "test-support")]
     /// Convert an entire string to lowercase.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn downcase_string(&self, s: &str) -> String {
@@ -180,11 +188,13 @@ impl CaseTableManager {
         &self.standard
     }
 
+    #[cfg(feature = "test-support")]
     /// Return a reference to the current case table.
     pub fn current_table(&self) -> &CaseTable {
         &self.current
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Set the current case table.
     pub fn set_current(&mut self, table: CaseTable) {
         self.current = table;
@@ -197,6 +207,7 @@ impl CaseTableManager {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl Default for CaseTableManager {
     fn default() -> Self {
         Self::new()
@@ -760,6 +771,7 @@ pub fn ensure_case_table_derived_slots_with_symbols(
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Return `true` if `v` is a case table (GNU `Fcase_table_p`): a char-table
 /// with the `case-table` purpose whose up/canon/eqv extras are nil or
 /// char-tables, with eqv present only alongside canon.
