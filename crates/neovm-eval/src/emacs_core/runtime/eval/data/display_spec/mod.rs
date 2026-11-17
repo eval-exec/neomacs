@@ -341,7 +341,7 @@ impl DisplayPropertySpecs {
     /// Whether the value is a LIST OF SPECS (to iterate) rather than one spec:
     /// GNU's test is a cons whose car is neither a recognized single-spec head
     /// nor a `(margin ...)` prefix nor nil.
-    pub fn is_spec_list(&self) -> bool {
+    pub(crate) fn is_spec_list(&self) -> bool {
         self.value.is_cons()
             && !self.value.cons_car().is_nil()
             && matches!(

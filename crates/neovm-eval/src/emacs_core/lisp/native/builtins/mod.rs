@@ -429,7 +429,7 @@ pub use arithmetic::*;
 pub use buffer_text_backend::*;
 pub use collections::*;
 pub(crate) use cons_list::LIST_SCAN_BUDGET;
-pub use cons_list::lambda_to_closure_vector;
+pub(crate) use cons_list::lambda_to_closure_vector;
 pub use cons_list::*;
 pub use from_value::*;
 #[doc(hidden)]

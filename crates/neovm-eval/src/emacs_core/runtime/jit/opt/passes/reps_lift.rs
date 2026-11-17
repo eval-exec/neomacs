@@ -20,9 +20,9 @@ pub(crate) use super::super::{
 /// Compiler-owned lifting diagnostics; published with the completed plan only.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LiftStats {
-    pub lifted_arithmetic: usize,
-    pub lifted_comparisons: usize,
-    pub type_guards: usize,
+    pub(crate) lifted_arithmetic: usize,
+    pub(crate) lifted_comparisons: usize,
+    pub(crate) type_guards: usize,
 }
 
 /// The caller invokes this only for `reps`. Verification precedes publication:

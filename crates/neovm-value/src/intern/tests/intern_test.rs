@@ -1,4 +1,5 @@
 use super::*;
+use crate::intern::b13_test_hooks::resolve_sym_name_value;
 
 fn unibyte_name(bytes: &[u8]) -> crate::heap_types::LispString {
     crate::heap_types::LispString::from_unibyte(bytes.to_vec())

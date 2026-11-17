@@ -10,12 +10,17 @@ use neovm_value::intern::{SymId, resolve_sym};
 use neovm_value::value::Value;
 use strum::{EnumString, IntoStaticStr};
 
+/// GNU `frame_parms[]` order oracle (`src/frame.c:4826-4887`), asserted by the
+/// table-drift tests below. Not a production path: `FrameParam::gnu_index`
+/// owns the order at runtime.
+#[cfg(test)]
 pub(crate) const GNU_FRAME_PARAM_COUNT: usize = 54;
 
 pub use neovm_value::display_vocab::FrameParam;
 
 pub use neovm_value::display_vocab::FrameFullscreen;
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
 pub(crate) enum FrameToolBarPosition {
@@ -25,16 +30,14 @@ pub(crate) enum FrameToolBarPosition {
     Bottom,
 }
 
+#[cfg(test)]
 impl FrameToolBarPosition {
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
     }
-
-    pub fn name(self) -> &'static str {
-        self.into()
-    }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
 pub(crate) enum FrameZGroup {
@@ -43,13 +46,10 @@ pub(crate) enum FrameZGroup {
     Below,
 }
 
+#[cfg(test)]
 impl FrameZGroup {
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
-    }
-
-    pub fn name(self) -> &'static str {
-        self.into()
     }
 }
 
@@ -80,6 +80,7 @@ impl CursorTypeSymbol {
     }
 }
 
+#[cfg(test)]
 pub(crate) const GNU_FRAME_PARAMS: [FrameParam; GNU_FRAME_PARAM_COUNT] = [
     FrameParam::AutoRaise,
     FrameParam::AutoLower,

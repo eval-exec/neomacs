@@ -149,16 +149,6 @@ impl PropertyInterval {
         }
     }
 
-    pub(crate) fn with_properties(range: CharRange, properties: HashMap<Value, Value>) -> Self {
-        let key_order: Vec<Value> = properties.keys().copied().collect();
-        Self {
-            start: range.start().get(),
-            end: range.end().get(),
-            properties,
-            key_order,
-        }
-    }
-
     fn from_plist(range: CharRange, plist: &[(Value, Value)]) -> Self {
         let mut properties = HashMap::new();
         for (key, value) in plist.iter().rev() {
@@ -1783,19 +1773,6 @@ impl IntervalTree {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    fn max_depth_for_test(&self) -> usize {
-        fn depth(tree: &IntervalTree, id: Option<IntervalId>) -> usize {
-            match id {
-                None => 0,
-                Some(id) => {
-                    1 + depth(tree, tree.nodes[id.0].left).max(depth(tree, tree.nodes[id.0].right))
-                }
-            }
-        }
-        depth(self, self.root)
-    }
-
     fn intervals_overlapping_after_splits(
         &mut self,
         range: CharRange,
@@ -2328,6 +2305,10 @@ impl IntervalTree {
 
     /// `find_id` without consulting or updating the memo -- the ground truth used
     /// by the differential test to prove the cache never goes stale.
+    #[allow(
+        dead_code,
+        reason = "test-only reference descent used by the differential interval tables"
+    )]
     #[cfg(any(test, feature = "test-support"))]
     fn find_id_uncached(&self, pos: CharPos0) -> Option<(CharPos0, IntervalId)> {
         let mut id = self.root?;
@@ -2617,10 +2598,6 @@ impl ConservativePropertyNames {
 /// names declare its source.  Pure structural rewrites retain the shared
 /// summary without an O(intervals) recount.
 enum ReplacementPropertyNames<'a> {
-    /// Only the test-only shape-merge helper performs a pure structural
-    /// rewrite today; every production replacement can add names.
-    #[cfg(any(test, feature = "test-support"))]
-    Preserve,
     Include(&'a ConservativePropertyNames),
 }
 
@@ -2671,7 +2648,8 @@ pub struct TextPropertyTable {
 /// This state can be shared between threads. A real interval table remains
 /// borrowed from its string on the mutator that owns it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-pub struct EmptyTextProperties {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct EmptyTextProperties {
     _private: (),
 }
 
@@ -3190,8 +3168,6 @@ impl TextPropertyTable {
     ) {
         self.mutation_tick += 1;
         match property_names {
-            #[cfg(any(test, feature = "test-support"))]
-            ReplacementPropertyNames::Preserve => {}
             ReplacementPropertyNames::Include(names) => self.property_names.include(names),
         }
         self.intervals = IntervalTree::from_runs_preserving_shape(runs);
@@ -4311,65 +4287,6 @@ impl TextPropertyTable {
         self.intervals.prune_trailing_empty_intervals();
     }
 
-    pub(crate) fn set_properties_in_char_range(
-        &mut self,
-        range: CharRange,
-        plist: Vec<(Value, Value)>,
-    ) {
-        self.set_properties_raw(range, plist);
-    }
-
-    fn set_properties_raw(&mut self, range: CharRange, plist: Vec<(Value, Value)>) {
-        self.mutation_tick += 1;
-        self.syntax_prop_tick += 1;
-        if plist
-            .iter()
-            .any(|&(name, _)| Self::name_is_syntax_relevant(name))
-        {
-            self.syntax_ranges_note_put(range);
-        } else {
-            self.syntax_ranges_revalidate();
-        }
-        if range.is_empty() {
-            return;
-        }
-        if plist.is_empty() && self.intervals.is_empty() {
-            return;
-        }
-        for (name, _) in &plist {
-            self.property_names.observe(*name);
-        }
-
-        self.intervals.ensure_cover(range.end());
-        self.intervals.split_at(range.start());
-        self.intervals.split_at(range.end());
-
-        let mut cursor = range.start();
-        let mut first = true;
-        while cursor < range.end() {
-            let Some((node_start, id)) = self.intervals.find_id(cursor) else {
-                break;
-            };
-            let node_end = self.intervals.interval_end(node_start, id);
-            self.intervals
-                .set_node_plist(id, plist_value_from_pairs(&plist));
-            if first {
-                first = false;
-            } else {
-                self.intervals.merge_interval_left(id);
-            }
-            if node_end <= cursor {
-                break;
-            }
-            cursor = node_end;
-        }
-
-        if plist.is_empty() {
-        } else {
-            self.intervals.prune_trailing_empty_intervals();
-        }
-    }
-
     pub fn set_properties_for_object_char_len(
         &mut self,
         range: CharRange,
@@ -5282,64 +5199,10 @@ impl TextPropertyTable {
         self.intervals.graft_shifted_runs(&runs, offset, new_root);
     }
 
-    /// The pre-graft algorithm (split, re-find and re-home per run), kept as
-    /// the reference oracle for `graft_shifted_runs`: the two must leave the
-    /// same interval partition and plist values.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn append_shifted_reference_for_test(
-        &mut self,
-        other: &TextPropertyTable,
-        offset: CharLen,
-    ) {
-        self.mutation_tick += 1;
-        self.syntax_prop_tick += 1;
-        for run in other.intervals.runs() {
-            self.property_names.observe_plist(run.plist);
-            let start = run.start().add_len(offset);
-            let end = run.end().add_len(offset);
-            if start >= end {
-                continue;
-            }
-            self.intervals.ensure_cover(end);
-            self.intervals.split_at(start);
-            self.intervals.split_at(end);
-            if !run.is_empty_plist() {
-                self.intervals.rehome_predecessor_plist(start);
-            }
-            let mut cursor = start;
-            while cursor < end {
-                let Some((node_start, id)) = self.intervals.find_id(cursor) else {
-                    break;
-                };
-                let node_end = self.intervals.interval_end(node_start, id);
-                let fresh = copy_plist_value(run.plist);
-                self.intervals.set_node_plist(id, fresh);
-                if node_end <= cursor {
-                    break;
-                }
-                cursor = node_end;
-            }
-        }
-    }
-
-    /// The raw plist object stored on the interval containing `pos` (identity
-    /// matters for the `copy_properties` aliasing rules).
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn raw_plist_at_for_test(&self, pos: CharPos0) -> Option<Value> {
-        self.intervals
-            .find_id(pos)
-            .map(|(_, id)| self.intervals.nodes[id.0].plist)
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn assert_tree_invariants_for_test(&self) {
         self.intervals.assert_invariants_for_test();
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn tree_max_depth_for_test(&self) -> usize {
-        self.intervals.max_depth_for_test()
     }
 
     /// `(start, end, plist pairs)` of every interval, empty ones included.
@@ -5425,68 +5288,9 @@ impl TextPropertyTable {
         self.intervals.merge_equal_neighbors_in(range);
     }
 
-    /// The pre-local algorithm, kept as the reference oracle for
-    /// [`Self::merge_adjacent_equal_properties_around`]: the two must leave
-    /// the same interval partition and plist values.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn merge_adjacent_equal_properties_around_reference_for_test(
-        &mut self,
-        range: CharRange,
-    ) {
-        self.mutation_tick += 1;
-        let mut runs = self.intervals.runs();
-        let start = range.start();
-        let end = range.end();
-        if start > end || runs.len() < 2 {
-            return;
-        }
-
-        loop {
-            let mut merged = false;
-            let mut idx = 0;
-            while idx + 1 < runs.len() {
-                let left_end = runs[idx].end();
-                let right_start = runs[idx + 1].start();
-                if left_end != right_start
-                    || runs[idx].plist.is_nil()
-                    || !plists_equal_eq(
-                        &plist_pairs(runs[idx].plist),
-                        &plist_pairs(runs[idx + 1].plist),
-                    )
-                    || left_end < start
-                    || right_start > end
-                {
-                    idx += 1;
-                    continue;
-                }
-
-                let right_end = runs[idx + 1].end();
-                runs[idx].set_end(right_end);
-                runs[idx].refresh_cache();
-                runs.remove(idx + 1);
-                merged = true;
-                break;
-            }
-
-            if !merged {
-                break;
-            }
-        }
-        self.replace_runs_preserving_shape(runs, ReplacementPropertyNames::Preserve);
-    }
-
     #[doc(hidden)]
     pub fn dump_intervals(&self) -> Vec<PropertyInterval> {
         self.intervals_snapshot()
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn debug_interval_bounds(&self) -> Vec<(usize, usize, bool)> {
-        self.intervals
-            .runs()
-            .into_iter()
-            .map(|run| (run.start().get(), run.end().get(), run.is_empty_plist()))
-            .collect()
     }
 
     #[doc(hidden)]
@@ -5793,5 +5597,185 @@ impl TextPropertyTable {
             .lock()
             .map(|guard| guard.0)
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl TextPropertyTable {
+        pub(crate) fn set_properties_in_char_range(
+            &mut self,
+            range: CharRange,
+            plist: Vec<(Value, Value)>,
+        ) {
+            self.set_properties_raw(range, plist);
+        }
+
+        pub(crate) fn set_properties_raw(&mut self, range: CharRange, plist: Vec<(Value, Value)>) {
+            self.mutation_tick += 1;
+            self.syntax_prop_tick += 1;
+            if plist
+                .iter()
+                .any(|&(name, _)| Self::name_is_syntax_relevant(name))
+            {
+                self.syntax_ranges_note_put(range);
+            } else {
+                self.syntax_ranges_revalidate();
+            }
+            if range.is_empty() {
+                return;
+            }
+            if plist.is_empty() && self.intervals.is_empty() {
+                return;
+            }
+            for (name, _) in &plist {
+                self.property_names.observe(*name);
+            }
+
+            self.intervals.ensure_cover(range.end());
+            self.intervals.split_at(range.start());
+            self.intervals.split_at(range.end());
+
+            let mut cursor = range.start();
+            let mut first = true;
+            while cursor < range.end() {
+                let Some((node_start, id)) = self.intervals.find_id(cursor) else {
+                    break;
+                };
+                let node_end = self.intervals.interval_end(node_start, id);
+                self.intervals
+                    .set_node_plist(id, plist_value_from_pairs(&plist));
+                if first {
+                    first = false;
+                } else {
+                    self.intervals.merge_interval_left(id);
+                }
+                if node_end <= cursor {
+                    break;
+                }
+                cursor = node_end;
+            }
+
+            if plist.is_empty() {
+            } else {
+                self.intervals.prune_trailing_empty_intervals();
+            }
+        }
+
+        pub(crate) fn raw_plist_at_for_test(&self, pos: CharPos0) -> Option<Value> {
+            self.intervals
+                .find_id(pos)
+                .map(|(_, id)| self.intervals.nodes[id.0].plist)
+        }
+
+        pub(crate) fn append_shifted_reference_for_test(
+            &mut self,
+            other: &TextPropertyTable,
+            offset: CharLen,
+        ) {
+            self.mutation_tick += 1;
+            self.syntax_prop_tick += 1;
+            for run in other.intervals.runs() {
+                self.property_names.observe_plist(run.plist);
+                let start = run.start().add_len(offset);
+                let end = run.end().add_len(offset);
+                if start >= end {
+                    continue;
+                }
+                self.intervals.ensure_cover(end);
+                self.intervals.split_at(start);
+                self.intervals.split_at(end);
+                if !run.is_empty_plist() {
+                    self.intervals.rehome_predecessor_plist(start);
+                }
+                let mut cursor = start;
+                while cursor < end {
+                    let Some((node_start, id)) = self.intervals.find_id(cursor) else {
+                        break;
+                    };
+                    let node_end = self.intervals.interval_end(node_start, id);
+                    let fresh = copy_plist_value(run.plist);
+                    self.intervals.set_node_plist(id, fresh);
+                    if node_end <= cursor {
+                        break;
+                    }
+                    cursor = node_end;
+                }
+            }
+        }
+
+        pub(crate) fn tree_max_depth_for_test(&self) -> usize {
+            self.intervals.max_depth_for_test()
+        }
+
+        pub(crate) fn merge_adjacent_equal_properties_around_reference_for_test(
+            &mut self,
+            range: CharRange,
+        ) {
+            self.mutation_tick += 1;
+            let mut runs = self.intervals.runs();
+            let start = range.start();
+            let end = range.end();
+            if start > end || runs.len() < 2 {
+                return;
+            }
+
+            loop {
+                let mut merged = false;
+                let mut idx = 0;
+                while idx + 1 < runs.len() {
+                    let left_end = runs[idx].end();
+                    let right_start = runs[idx + 1].start();
+                    if left_end != right_start
+                        || runs[idx].plist.is_nil()
+                        || !plists_equal_eq(
+                            &plist_pairs(runs[idx].plist),
+                            &plist_pairs(runs[idx + 1].plist),
+                        )
+                        || left_end < start
+                        || right_start > end
+                    {
+                        idx += 1;
+                        continue;
+                    }
+
+                    let right_end = runs[idx + 1].end();
+                    runs[idx].set_end(right_end);
+                    runs[idx].refresh_cache();
+                    runs.remove(idx + 1);
+                    merged = true;
+                    break;
+                }
+
+                if !merged {
+                    break;
+                }
+            }
+            let names = ConservativePropertyNames::Empty;
+            self.replace_runs_preserving_shape(runs, ReplacementPropertyNames::Include(&names));
+        }
+
+        pub(crate) fn debug_interval_bounds(&self) -> Vec<(usize, usize, bool)> {
+            self.intervals
+                .runs()
+                .into_iter()
+                .map(|run| (run.start().get(), run.end().get(), run.is_empty_plist()))
+                .collect()
+        }
+    }
+    impl IntervalTree {
+        pub(crate) fn max_depth_for_test(&self) -> usize {
+            fn depth(tree: &IntervalTree, id: Option<IntervalId>) -> usize {
+                match id {
+                    None => 0,
+                    Some(id) => {
+                        1 + depth(tree, tree.nodes[id.0].left)
+                            .max(depth(tree, tree.nodes[id.0].right))
+                    }
+                }
+            }
+            depth(self, self.root)
+        }
     }
 }

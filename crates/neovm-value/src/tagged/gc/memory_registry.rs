@@ -79,7 +79,8 @@ impl TaggedHeap {
         self.buffer_registry.get(id.0 as usize).copied().flatten()
     }
 
-    pub fn register_buffer_value(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn register_buffer_value(
         &mut self,
         id: crate::value::buffer_vocab::BufferId,
         value: TaggedValue,
@@ -269,37 +270,40 @@ impl TaggedHeap {
         ImageStamp::Stamped
     }
 
-    pub(crate) fn dirty_owner_count(&self) -> usize {
-        self.dirty_owners.len()
-    }
-
-    pub fn is_dirty_owner(&self, owner: TaggedValue) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_dirty_owner(&self, owner: TaggedValue) -> bool {
         self.dirty_owner_bits.contains(&owner.bits())
     }
 
-    pub(crate) fn take_dirty_owners(&mut self) -> Vec<TaggedValue> {
-        self.dirty_owner_bits.clear();
-        std::mem::take(&mut self.dirty_owners)
-    }
-
-    pub fn clear_dirty_owners(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_dirty_owners(&mut self) {
         self.dirty_owners.clear();
         self.dirty_owner_bits.clear();
     }
 
-    pub(crate) fn dirty_write_count(&self) -> usize {
-        self.dirty_writes.len()
-    }
-
-    pub fn dirty_writes(&self) -> &[HeapWriteRecord] {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dirty_writes(&self) -> &[HeapWriteRecord] {
         &self.dirty_writes
     }
 
-    pub(crate) fn take_dirty_writes(&mut self) -> Vec<HeapWriteRecord> {
-        std::mem::take(&mut self.dirty_writes)
-    }
-
-    pub fn clear_dirty_writes(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_dirty_writes(&mut self) {
         self.dirty_writes.clear();
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl TaggedHeap {
+        pub(crate) fn dirty_owner_count(&self) -> usize {
+            self.dirty_owners.len()
+        }
+
+        pub(crate) fn dirty_write_count(&self) -> usize {
+            self.dirty_writes.len()
+        }
     }
 }

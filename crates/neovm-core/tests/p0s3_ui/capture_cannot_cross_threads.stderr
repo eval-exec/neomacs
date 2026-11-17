@@ -34,7 +34,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `ConcurrentMarkCapture<'static>: Send`
           `*mut HashTableObj: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`
-          `*mut FinalizerObj: Send`
+          `*mut header::FinalizerObj: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`
           `*mut *mut MarkerObj: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`
@@ -70,7 +70,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `ConcurrentMarkCapture<'static>: Send`
           `*mut MarkerObj: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`
-          `*mut BignumObj: Send`
+          `*mut header::BignumObj: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`
           `NonNull<[Cell<usize>; 8192]>: Send`
           which is required by `ConcurrentMarkCapture<'static>: Send`

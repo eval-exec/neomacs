@@ -135,7 +135,7 @@ pub fn attach_window_position_markers(bm: &mut BufferManager, window: &mut Windo
     remove_attached_markers(bm, old.attached());
 }
 
-pub fn unchain_window_markers(bm: &mut BufferManager, window: &mut Window) {
+pub(crate) fn unchain_window_markers(bm: &mut BufferManager, window: &mut Window) {
     let Window::Leaf {
         position_markers, ..
     } = window

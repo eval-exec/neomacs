@@ -46,13 +46,6 @@ pub const MAX_5_BYTE_CHAR: u32 = 0x3F_FF7F;
 /// Maximum bytes needed to encode any Emacs character in multibyte form.
 pub const MAX_MULTIBYTE_LENGTH: usize = 5;
 
-/// Minimum leading byte of a multibyte Emacs character form (0xC0).
-pub(crate) const MIN_MULTIBYTE_LEADING_CODE: u8 = 0xC0;
-
-/// Maximum leading byte of a multibyte Emacs character form (0xF8).
-/// Note: this must be updated if `MAX_CHAR` is ever increased.
-pub(crate) const MAX_MULTIBYTE_LEADING_CODE: u8 = 0xF8;
-
 /// A validated Emacs character code in the 22-bit range `0..=MAX_CHAR`.
 ///
 /// Issue #131: the historical bug class was treating an Emacs character code as
@@ -111,13 +104,6 @@ impl EmacsChar {
     #[inline]
     pub fn code(self) -> u32 {
         self.0
-    }
-
-    /// Whether this is a Unicode scalar value (representable as a Rust `char`).
-    /// False for eight-bit raw bytes and non-Unicode codes.
-    #[inline]
-    pub(crate) fn is_unicode_scalar(self) -> bool {
-        char::from_u32(self.0).is_some()
     }
 
     /// Whether this is an eight-bit raw-byte character (`CHAR_BYTE8_P`).
@@ -237,23 +223,6 @@ pub fn char_resolve_modifier_mask(mut c: i64) -> i64 {
 // Named Unicode character codes used throughout the codebase
 // (mirrors GNU `character.h` `enum`).
 // ---------------------------------------------------------------------------
-
-pub(crate) const NO_BREAK_SPACE: u32 = 0x00A0;
-pub(crate) const SOFT_HYPHEN: u32 = 0x00AD;
-pub(crate) const ZERO_WIDTH_NON_JOINER: u32 = 0x200C;
-pub(crate) const ZERO_WIDTH_JOINER: u32 = 0x200D;
-pub(crate) const HYPHEN: u32 = 0x2010;
-pub(crate) const NON_BREAKING_HYPHEN: u32 = 0x2011;
-pub(crate) const LEFT_SINGLE_QUOTATION_MARK: u32 = 0x2018;
-pub(crate) const RIGHT_SINGLE_QUOTATION_MARK: u32 = 0x2019;
-pub(crate) const PARAGRAPH_SEPARATOR: u32 = 0x2029;
-pub(crate) const LEFT_POINTING_ANGLE_BRACKET: u32 = 0x2329;
-pub(crate) const RIGHT_POINTING_ANGLE_BRACKET: u32 = 0x232A;
-pub(crate) const LEFT_ANGLE_BRACKET: u32 = 0x3008;
-pub(crate) const RIGHT_ANGLE_BRACKET: u32 = 0x3009;
-pub(crate) const OBJECT_REPLACEMENT_CHARACTER: u32 = 0xFFFC;
-pub(crate) const TAG_SPACE: u32 = 0xE0020;
-pub(crate) const CANCEL_TAG: u32 = 0xE007F;
 
 // ---------------------------------------------------------------------------
 // Unicode general category (mirrors GNU `character.h` `enum unicode_category`).
@@ -472,30 +441,6 @@ pub fn char_to_byte_safe(c: u32) -> Option<u8> {
 // All of these are pure value tests, no allocations, no table lookups.
 // ---------------------------------------------------------------------------
 
-/// True iff `c` is a valid character code (0 ≤ c ≤ MAX_CHAR).
-///
-/// Mirrors GNU `CHAR_VALID_P`.
-#[inline]
-pub(crate) fn char_valid_p(c: i64) -> bool {
-    0 <= c && c <= MAX_CHAR as i64
-}
-
-/// True iff `c` is a single-byte (< 0x100) character.
-///
-/// Mirrors GNU `SINGLE_BYTE_CHAR_P`.
-#[inline]
-pub(crate) fn single_byte_char_p(c: i64) -> bool {
-    (0..0x100).contains(&c)
-}
-
-/// True iff `byte` starts a non-ASCII multibyte form (`(byte & 0xC0) == 0xC0`).
-///
-/// Mirrors GNU `LEADING_CODE_P`.
-#[inline]
-pub(crate) fn leading_code_p(byte: u8) -> bool {
-    (byte & 0xC0) == 0xC0
-}
-
 /// True iff `byte` is a continuation byte (`(byte & 0xC0) == 0x80`).
 ///
 /// Mirrors GNU `TRAILING_CODE_P`.
@@ -568,37 +513,6 @@ pub fn char_leading_code(c: u32) -> u8 {
     } else {
         // Raw byte: overlong 2-byte lead (0xC0 or 0xC1).
         0xC0 | ((c >> 6) & 0x01) as u8
-    }
-}
-
-/// True iff `c` is a Unicode variation selector (U+FE00..U+FE0F or
-/// U+E0100..U+E01EF).
-///
-/// Mirrors GNU `CHAR_VARIATION_SELECTOR_P`.
-#[inline]
-pub(crate) fn char_variation_selector_p(c: u32) -> bool {
-    (0xFE00..=0xFE0F).contains(&c) || (0xE0100..=0xE01EF).contains(&c)
-}
-
-/// True iff `c` is a UTF-16 surrogate code point (U+D800..U+DFFF).
-///
-/// Mirrors GNU `char_surrogate_p`.
-#[inline]
-pub(crate) fn char_surrogate_p(c: u32) -> bool {
-    (0xD800..=0xDFFF).contains(&c)
-}
-
-/// If `c` is an ASCII hex digit, return its numeric value (0..15);
-/// otherwise return -1.
-///
-/// Mirrors GNU `char_hexdigit`.
-#[inline]
-pub(crate) fn char_hexdigit(c: u32) -> i32 {
-    match c {
-        0x30..=0x39 => (c - 0x30) as i32,
-        0x41..=0x46 => (c - 0x41 + 10) as i32,
-        0x61..=0x66 => (c - 0x61 + 10) as i32,
-        _ => -1,
     }
 }
 
@@ -891,22 +805,6 @@ fn decode_multibyte_unchecked(bytes: &[u8]) -> (u32, usize) {
     (d as u32, 5)
 }
 
-/// Number of bytes in the multibyte character ending at `bytes[..end]`.
-///
-/// Mirrors GNU `raw_prev_char_len` (character.h:359). Caller must guarantee
-/// that `bytes[..end]` ends on a character boundary and that there is at
-/// least one preceding char head somewhere in `bytes[..end]`.
-pub(crate) fn raw_prev_char_len(bytes: &[u8], end: usize) -> usize {
-    debug_assert!(end > 0 && end <= bytes.len());
-    let mut len = 1;
-    loop {
-        if char_head_p(bytes[end - len]) {
-            return len;
-        }
-        len += 1;
-    }
-}
-
 /// Like [`string_char`] but advance `pos` past the decoded character.
 ///
 /// Returns the decoded character. Mirrors GNU `string_char_advance`.
@@ -915,42 +813,6 @@ pub fn string_char_advance(bytes: &[u8], pos: &mut usize) -> EmacsChar {
     let (character, len) = string_char(&bytes[*pos..]);
     *pos += len;
     character
-}
-
-/// Count how many characters are in `bytes`, treating it as a valid
-/// Emacs multibyte sequence.
-///
-/// Mirrors GNU `multibyte_chars_in_text` (character.c:519). Panics in
-/// debug builds if a byte position would yield a zero-length char.
-pub(crate) fn multibyte_chars_in_text(bytes: &[u8]) -> usize {
-    let mut chars = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        let len = match multibyte_length(&bytes[i..], true) {
-            Some(n) => n,
-            None => {
-                debug_assert!(false, "multibyte_chars_in_text: invalid sequence at {}", i);
-                1
-            }
-        };
-        i += len;
-        chars += 1;
-    }
-    chars
-}
-
-/// Number of characters in `bytes`, given the multibyte mode flag.
-///
-/// Mirrors GNU `chars_in_text` (character.c:503). When `multibyte` is
-/// false this returns `bytes.len()`; otherwise it delegates to
-/// [`multibyte_chars_in_text`].
-#[inline]
-pub(crate) fn chars_in_text(bytes: &[u8], multibyte: bool) -> usize {
-    if !multibyte {
-        bytes.len()
-    } else {
-        multibyte_chars_in_text(bytes)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1051,7 +913,9 @@ pub struct MultibyteParseMetrics {
     pub nbytes: usize,
 }
 
-pub fn parse_str_as_multibyte(src: &[u8]) -> MultibyteParseMetrics {
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn parse_str_as_multibyte(src: &[u8]) -> MultibyteParseMetrics {
     let mut chars = 0usize;
     let mut nbytes = 0usize;
     let mut p = 0usize;
@@ -1148,102 +1012,6 @@ pub(crate) fn emacs_downcase_code(code: u32) -> u32 {
 // Eight-bit byte counting and escaping (mirrors GNU character.c:742..839).
 // ---------------------------------------------------------------------------
 
-/// Count eight-bit raw-byte characters in `bytes`.
-///
-/// Mirrors GNU `string_count_byte8` (character.c:742). `multibyte`
-/// indicates whether the buffer is multibyte; in unibyte mode, every
-/// byte ≥ 0x80 counts; in multibyte mode, only `byte8`-leading code
-/// units count.
-pub(crate) fn string_count_byte8(bytes: &[u8], multibyte: bool) -> usize {
-    if !multibyte {
-        return bytes.iter().filter(|&&b| b >= 0x80).count();
-    }
-    let mut count = 0usize;
-    let mut p = 0usize;
-    while p < bytes.len() {
-        let lead = bytes[p];
-        let len = bytes_by_char_head(lead);
-        if char_byte8_head_p(lead) {
-            count += 1;
-        }
-        p += len.min(bytes.len() - p);
-    }
-    count
-}
-
-/// Replace eight-bit raw-byte characters in `bytes` with `\NNN` octal
-/// escapes. ASCII and other multibyte characters are passed through.
-///
-/// Mirrors GNU `string_escape_byte8` (character.c:772) for the byte
-/// payload only — the GNU version returns a new Lisp string with the
-/// updated `nchars`/`nbytes`. Callers wanting char/byte counts can
-/// recompute via [`chars_in_text`] on the result.
-pub(crate) fn string_escape_byte8(bytes: &[u8], multibyte: bool) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
-    if !multibyte {
-        for &b in bytes {
-            if b >= 0x80 {
-                let _ = write_octal(&mut out, b as u32);
-            } else {
-                out.push(b);
-            }
-        }
-        return out;
-    }
-    let mut p = 0usize;
-    while p < bytes.len() {
-        let lead = bytes[p];
-        let len = bytes_by_char_head(lead).min(bytes.len() - p);
-        if char_byte8_head_p(lead) {
-            let (c, n) = if len == 2 {
-                string_char_unchecked(&bytes[p..])
-            } else {
-                (EmacsChar::from_byte8(lead), 1)
-            };
-            let _ = write_octal(&mut out, char_to_byte8(c.code()) as u32);
-            p += n;
-        } else {
-            out.extend_from_slice(&bytes[p..p + len]);
-            p += len;
-        }
-    }
-    out
-}
-
-fn write_octal(out: &mut Vec<u8>, b: u32) -> usize {
-    let s = format!("\\{:03o}", b & 0xFF);
-    let n = s.len();
-    out.extend_from_slice(s.as_bytes());
-    n
-}
-
-/// Display width of a buffer of multibyte (or unibyte) text.
-///
-/// Mirrors GNU `strwidth` / `c_string_width` (character.c:290) — the
-/// simplified form without precision cap or display-table consultation.
-/// Sums [`char_width`] over decoded code points.
-pub(crate) fn strwidth(bytes: &[u8], multibyte: bool) -> usize {
-    let mut total = 0usize;
-    if !multibyte {
-        for &b in bytes {
-            total += char_width(b as char);
-        }
-        return total;
-    }
-    let mut p = 0usize;
-    while p < bytes.len() {
-        let (c, len) = string_char(&bytes[p..]);
-        if let Some(ch) = char::from_u32(c.code()) {
-            total += char_width(ch);
-        } else {
-            // Raw-byte / extended char: width 4 (octal display).
-            total += 4;
-        }
-        p += len.max(1);
-    }
-    total
-}
-
 // ---------------------------------------------------------------------------
 // Unicode general-category predicates (mirrors GNU character.c:956..1063).
 //
@@ -1283,20 +1051,6 @@ pub fn alphanumericp(cat: i64) -> bool {
     alphabeticp(cat) || cat_eq(cat, UnicodeCategory::DecimalNumber)
 }
 
-/// True if `cat` denotes a graphic character (UTS #18).
-///
-/// Mirrors GNU `graphicp` (character.c:1001): excludes Zs, Zl, Zp,
-/// Cc, Cs, Cn.
-pub(crate) fn graphicp(cat: i64) -> bool {
-    use UnicodeCategory::*;
-    !(cat_eq(cat, SpaceSeparator)
-        || cat_eq(cat, LineSeparator)
-        || cat_eq(cat, ParagraphSeparator)
-        || cat_eq(cat, Control)
-        || cat_eq(cat, Surrogate)
-        || cat_eq(cat, Unassigned))
-}
-
 /// True if `cat` denotes a printable character.
 ///
 /// Mirrors GNU `printablep` (character.c:1019): excludes Cc, Cs, Cn.
@@ -1321,13 +1075,6 @@ pub fn graphic_base_p(cat: i64) -> bool {
         || cat_eq(cat, Surrogate)
         || cat_eq(cat, Format)
         || cat_eq(cat, Unassigned))
-}
-
-/// True if `cat` is the space-separator category (Zs).
-///
-/// Mirrors GNU `blankp` (character.c:1056).
-pub(crate) fn blankp(cat: i64) -> bool {
-    cat_eq(cat, UnicodeCategory::SpaceSeparator)
 }
 
 // ---------------------------------------------------------------------------
@@ -1580,16 +1327,6 @@ pub fn emacs_bytes_to_lossy_string(bytes: &[u8], multibyte: bool) -> String {
     }
 }
 
-/// Convert a UTF-8 string to Emacs internal encoding.
-///
-/// For standard Unicode this is a no-op (UTF-8 is a subset of Emacs encoding).
-/// The returned `Vec<u8>` is byte-for-byte identical to the input's UTF-8
-/// representation.
-pub(crate) fn utf8_to_emacs(s: &str) -> Vec<u8> {
-    // Standard UTF-8 is already valid Emacs encoding. No transformation needed.
-    s.as_bytes().to_vec()
-}
-
 // ---------------------------------------------------------------------------
 // Character-code case mapping (stage-3b T2: moved verbatim from the lisp
 // builtins layer; bodies are value-pure codepoint tables)
@@ -1719,3 +1456,35 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/raw_byte_recovery.rs"]
 mod raw_byte_recovery_tests;
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    pub(crate) fn utf8_to_emacs(s: &str) -> Vec<u8> {
+        // Standard UTF-8 is already valid Emacs encoding. No transformation needed.
+        s.as_bytes().to_vec()
+    }
+
+    pub(crate) fn multibyte_chars_in_text(bytes: &[u8]) -> usize {
+        let mut chars = 0usize;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let len = match multibyte_length(&bytes[i..], true) {
+                Some(n) => n,
+                None => {
+                    debug_assert!(false, "multibyte_chars_in_text: invalid sequence at {}", i);
+                    1
+                }
+            };
+            i += len;
+            chars += 1;
+        }
+        chars
+    }
+
+    impl EmacsChar {
+        pub(crate) fn is_unicode_scalar(self) -> bool {
+            char::from_u32(self.0).is_some()
+        }
+    }
+}

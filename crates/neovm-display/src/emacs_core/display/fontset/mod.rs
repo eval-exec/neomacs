@@ -27,7 +27,8 @@ pub use native_policy::{
 use native_policy::{SharedFontsetEntries, StoredFontsetEntry};
 use strum::{EnumString, IntoStaticStr};
 
-pub const DEFAULT_FONTSET_NAME: &str = "-*-*-*-*-*-*-*-*-*-*-*-*-fontset-default";
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const DEFAULT_FONTSET_NAME: &str = "-*-*-*-*-*-*-*-*-*-*-*-*-fontset-default";
 pub(crate) const DEFAULT_FONTSET_ALIAS: &str = "fontset-default";
 
 fn fontset_string_text(value: &Value) -> Option<String> {
@@ -53,7 +54,7 @@ fn fontset_name_runtime(name: &FontNameSpelling) -> String {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum FontsetLookupPurpose {
+pub(crate) enum FontsetLookupPurpose {
     /// Rendering tries the configured font and tests its native glyph coverage.
     Rendering,
     /// `fontset-font` reports patterns admitted by encoding/repertory metadata.
@@ -254,30 +255,6 @@ impl FontsetData {
             .collect()
     }
 
-    fn bounded_entries_for_char(
-        &self,
-        code: u32,
-        max_entries: usize,
-    ) -> Option<Vec<FontSpecEntry>> {
-        let specific = self.specific_in_charset_order(code);
-        let fallback = self.fallback_in_charset_order();
-        let mut result = Vec::new();
-        for (index, entry) in specific.iter().chain(fallback.iter()).enumerate() {
-            if index >= max_entries {
-                return None;
-            }
-            result.push(
-                entry
-                    .original()
-                    .for_lookup(code, FontsetLookupPurpose::Rendering)?,
-            );
-            if matches!(entry.original(), FontSpecEntry::ExplicitNone) {
-                break;
-            }
-        }
-        Some(result)
-    }
-
     fn update_target(&mut self, target: FontsetTarget, entry: FontSpecEntry, add: FontsetAddMode) {
         let entry = StoredFontsetEntry::from(entry);
         match target {
@@ -286,6 +263,7 @@ impl FontsetData {
         }
     }
 
+    #[cfg(test)]
     fn specific_entries_for_char(&self, code: u32) -> Vec<FontSpecEntry> {
         self.find_range(code)
             .map(|range| range.entries.to_original_entries())
@@ -434,16 +412,11 @@ impl StoredFontSpecExt for StoredFontSpec {
 // The default bodies above are the implementation; this binds them to the
 // upper-layer type that owns the state.
 
-pub(crate) fn repertory_target_ranges(repertory: &FontRepertory) -> Option<Vec<(u32, u32)>> {
-    match repertory {
-        FontRepertory::Charset(name) => charset_target_ranges(resolve_sym(*name)),
-        FontRepertory::CharTableRanges(ranges) => Some(ranges.clone()),
-    }
-}
-
 /// Stage-4 W5/E13 upper extension trait over the eval-owned type.
-#[doc(hidden)]
-pub trait FontSpecEntryExt: Sized {
+///
+/// Crate-local: the only caller is this module's lookup pass, and its
+/// `purpose` parameter is a crate-private enum.
+pub(crate) trait FontSpecEntryExt: Sized {
     fn for_lookup(&self, code: u32, purpose: FontsetLookupPurpose) -> Option<Self>;
 }
 
@@ -830,27 +803,12 @@ pub(crate) fn resolve_fontset_name_arg(value: &Value) -> Result<String, Flow> {
     }
 }
 
-/// Bounded snapshot acquisition for detached font-selection jobs. Rendering
-/// entries discard encoding/repertory metadata without loading or expanding
-/// charset maps. Informational pattern queries retain that metadata through
-/// the ordinary reader.
-pub(crate) fn bounded_entries_for_char(
-    ch: char,
-    max_entries: usize,
-) -> Option<(u64, Vec<FontSpecEntry>)> {
-    let slot = registry().read().ok()?;
-    let data = slot
-        .fontsets
-        .get(&fontset_name_spelling(DEFAULT_FONTSET_NAME))?;
-    let entries = data.bounded_entries_for_char(ch as u32, max_entries)?;
-    Some((slot.generation, entries))
-}
-
 pub fn matching_entries_for_char(ch: char) -> Vec<FontSpecEntry> {
     matching_entries_for_fontset(DEFAULT_FONTSET_NAME, ch)
 }
 
-pub fn matching_entries_for_fontset(name: &str, ch: char) -> Vec<FontSpecEntry> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn matching_entries_for_fontset(name: &str, ch: char) -> Vec<FontSpecEntry> {
     let name = fontset_name_spelling(name);
     registry()
         .read()

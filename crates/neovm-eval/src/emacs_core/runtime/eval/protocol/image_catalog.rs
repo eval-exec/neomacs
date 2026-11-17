@@ -255,7 +255,8 @@ impl ResolvedImageMetadata {
 
     /// Build metadata from logical layout + realization report scale.
     #[must_use]
-    pub fn from_layout(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn from_layout(
         layout: ImageLayoutExtent,
         realization: ResolvedImageRealization,
         background: u32,
@@ -275,7 +276,8 @@ impl ResolvedImageMetadata {
     /// Attach decoder-owned metadata without making plain-image constructors
     /// fabricate animation state.
     #[must_use]
-    pub fn with_embedded(mut self, embedded: ImageEmbeddedMetadata) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn with_embedded(mut self, embedded: ImageEmbeddedMetadata) -> Self {
         self.embedded = embedded;
         self
     }

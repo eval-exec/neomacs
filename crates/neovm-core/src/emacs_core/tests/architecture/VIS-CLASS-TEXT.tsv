@@ -1,0 +1,27 @@
+crate	item	rule	evidence
+neovm-text	emacs_core::coding::Iso2022Spec	1	crates/neovm-text/src/emacs_core/text/coding/mod.rs:1132
+neovm-text	emacs_core::text::casetab::CaseTableManager::downcase_string	3	DELETE: ASCII model duplicated by the production (downcase OBJECT) path (neovm-eval strings.rs:647/508)
+neovm-text	emacs_core::text::casetab::CaseTableManager::upcase_string	3	DELETE: ASCII model duplicated by the production (upcase OBJECT) path (neovm-eval strings.rs:493/508)
+neovm-text	emacs_core::text::casetab::is_case_table	3	DELETE: wrapper duplicate; production is_case_table_with_symbols casetab/mod.rs:621 (eval builtins use it)
+neovm-text	emacs_core::text::casetab::CaseTableManager	3	DELETE: ASCII model duplicated by the production downcase/upcase object path (neovm-eval strings.rs:647/508) over buffer case tables
+neovm-text	emacs_core::text::charset::CharsetRegistry::contains_symbol	1	crates/neovm-text/src/emacs_core/text/charset/mod.rs:852
+neovm-text	emacs_core::text::charset::CharsetRegistry::decode_char	1	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1279
+neovm-text	emacs_core::text::charset::CharsetRegistry::define_alias	1	crates/neovm-text/src/emacs_core/text/charset/mod.rs:655
+neovm-text	emacs_core::text::charset::CharsetRegistry::priority_list	1	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2227
+neovm-text	emacs_core::text::charset::CharsetRegistry::set_priority	1	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2303
+neovm-text	emacs_core::text::coding::IsoFlag	1	crates/neovm-text/src/emacs_core/text/coding/mod.rs:2568
+neovm-text	emacs_core::text::composite::automatic_composition_spans_in	1	crates/neovm-text/src/emacs_core/text/composite/mod.rs:857
+neovm-text	emacs_core::text::regex::MatchGroup::emacs_byte_range	1	crates/neovm-text/src/emacs_core/text/regex/mod.rs:484
+neovm-text	emacs_core::text::regex::replace_match_string	2	wrapper delegating to production replace_match_string_with_syntax regex/mod.rs:5186; test: crates/neomacs-tui-tests/tests/eval_elisp.rs
+neovm-text	emacs_core::text::regex::string_match_full	2	wrapper delegating to production string_match_full_with_case_fold regex/mod.rs:4674; test: crates/neovm-core/src/emacs_core/tests/moved_text/emacs_core/text/regex/tests/regex_test.rs
+neovm-text	emacs_core::text::syntax::forward_word	2	wrapper delegating to production forward_word_with_options syntax/mod.rs:1381; test: crates/neomacs-tui-tests/tests/search.rs
+neovm-text	emacs_core::text::syntax::SyntaxEntry::with_match	1	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:3085
+neovm-text	emacs_core::text::syntax::SyntaxTable::isolate_for_buffer	2	helper builds the copy through production builtin_copy_syntax_table and the BUFFER_SLOT_SYNTAX_TABLE slot; test: crates/neovm-core/src/emacs_core/tests/moved_text/emacs_core/text/regex/tests/regex_test.rs
+neovm-text	emacs_core::text::syntax::SyntaxTable::new_standard	1	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:806
+neovm-text	emacs_core::text::syntax::string_to_syntax	1	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:2988
+neovm-text	emacs_core::text::syntax::syntax_entry_to_value	1	crates/neovm-text/src/emacs_core/text/syntax/mod.rs:930
+neovm-text	encoding::is_multibyte_string	3	DELETE: copy of production Value::make_string classification value/mod.rs:2704 (LispString::is_multibyte heap_types.rs:973); tests retargeted
+neovm-text	emacs_core::regex_emacs::CompiledPattern::can_be_null	1	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:1066
+neovm-text	emacs_core::regex_emacs::CompiledPattern::fastmap_accurate	1	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:1059
+neovm-text	emacs_core::regex_emacs::CompiledPattern::used_syntax	1	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:1068
+neovm-text	emacs_core::regex_emacs::CompiledPattern::multibyte_charsets	1	crates/neovm-text/src/emacs_core/text/regex/emacs.rs:1070

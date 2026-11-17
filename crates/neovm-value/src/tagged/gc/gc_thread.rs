@@ -2062,17 +2062,6 @@ pub fn note_heap_write(owner: TaggedValue, kind: HeapWriteKind) {
     }
 }
 
-/// Central mutation hook for slot writes to the tagged heap.
-#[inline(always)]
-pub(crate) fn note_heap_slot_write(
-    owner: TaggedValue,
-    kind: HeapWriteKind,
-    slot: usize,
-    value: TaggedValue,
-) {
-    with_store_state(|store| note_heap_slot_write_in_store(store, owner, kind, slot, value));
-}
-
 #[inline(always)]
 pub(crate) fn note_heap_slot_write_in_store(
     store: &super::super::collection_reads::StoreState,
@@ -2743,3 +2732,16 @@ mod collector_test_support;
 #[cfg(test)]
 #[path = "tests/collector_start_test.rs"]
 mod collector_start_tests;
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    pub(crate) fn note_heap_slot_write(
+        owner: TaggedValue,
+        kind: HeapWriteKind,
+        slot: usize,
+        value: TaggedValue,
+    ) {
+        with_store_state(|store| note_heap_slot_write_in_store(store, owner, kind, slot, value));
+    }
+}

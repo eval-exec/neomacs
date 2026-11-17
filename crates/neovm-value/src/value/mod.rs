@@ -20,7 +20,7 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::FxHasher;
 use strum::{EnumString, IntoStaticStr};
 
 use self::buffer_vocab::BufferId;
@@ -162,52 +162,6 @@ impl OrderedSymMap {
         }
     }
 
-    pub fn with_capacity(cap: usize) -> Self {
-        Self {
-            entries: Vec::with_capacity(cap),
-        }
-    }
-
-    pub fn get(&self, key: &SymId) -> Option<&Value> {
-        self.entries
-            .iter()
-            .rev()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v)
-    }
-
-    pub fn insert(&mut self, key: SymId, value: Value) {
-        if let Some(entry) = self.entries.iter_mut().rev().find(|(k, _)| *k == key) {
-            entry.1 = value;
-        } else {
-            self.entries.push((key, value));
-        }
-    }
-
-    pub fn contains_key(&self, key: &SymId) -> bool {
-        self.entries.iter().any(|(k, _)| k == key)
-    }
-
-    pub fn values(&self) -> impl Iterator<Item = &Value> {
-        self.entries.iter().map(|(_, v)| v)
-    }
-
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Value> {
-        self.entries.iter_mut().map(|(_, v)| v)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&SymId, &Value)> {
-        self.entries.iter().map(|(k, v)| (k, v))
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
     /// Reconstruct from a vec of entries (for pdump load).
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(crate) fn from_entries(entries: Vec<(SymId, Value)>) -> Self {
@@ -222,10 +176,6 @@ pub enum RuntimeBindingValue {
 }
 
 impl RuntimeBindingValue {
-    pub(crate) fn bound(value: Value) -> Self {
-        Self::Bound(value)
-    }
-
     pub fn as_value(self) -> Option<Value> {
         match self {
             Self::Bound(value) => Some(value),
@@ -293,10 +243,6 @@ impl OrderedRuntimeBindingMap {
         } else {
             self.entries.push((key, value));
         }
-    }
-
-    pub(crate) fn set_void(&mut self, key: SymId) {
-        self.insert_binding(key, RuntimeBindingValue::Void);
     }
 
     pub fn contains_key(&self, key: &SymId) -> bool {
@@ -428,9 +374,6 @@ fn string_text_props(value: Value) -> Option<&'static TextPropertyTable> {
 /// Heap resets automatically discard them with the owning string, so there is
 /// no side table to clear anymore.
 pub fn reset_string_text_properties() {}
-
-/// String text property GC roots are traced from `StringObj` during heap mark.
-pub(crate) fn collect_string_text_prop_gc_roots(_roots: &mut Vec<Value>) {}
 
 pub fn set_string_text_properties_table_for_value(value: Value, table: TextPropertyTable) {
     if table.is_empty() {
@@ -660,17 +603,6 @@ pub struct StringTextPropertyRun {
     pub start: usize,
     pub end: usize,
     pub plist: Value,
-}
-
-/// Snapshot of a cons cell's car and cdr values (legacy compatibility).
-pub(crate) struct ConsSnapshot {
-    pub car: Value,
-    pub cdr: Value,
-}
-
-/// Allocate a fresh float identity (stub — float identity is pointer-based).
-pub(crate) fn next_float_id() -> u32 {
-    0
 }
 
 // ---------------------------------------------------------------------------
@@ -1427,19 +1359,10 @@ impl HashTableStorage {
         self.index.insert_new(hash, hash_key, slot);
     }
 
-    /// `get_mut` counterpart of [`Self::get_by_value`].
-    pub(crate) fn get_mut_by_value(
-        &mut self,
-        value: Value,
-        test: HashTableTest,
-        symbols_with_pos_enabled: bool,
-    ) -> Option<&mut Value> {
-        let slot = self.slot_by_value(value, test, symbols_with_pos_enabled)?;
-        self.slot_value_mut(slot)
-    }
-
     /// `remove` counterpart of [`Self::get_by_value`].
-    pub fn remove_by_value(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn remove_by_value(
         &mut self,
         value: Value,
         test: HashTableTest,
@@ -1755,7 +1678,8 @@ impl HashTableStorage {
     /// Remove every entry `keep(key, value)` rejects, in index order (the
     /// order [`Self::remove`] over [`Self::iter`] would free the slots in),
     /// without re-hashing or cloning a key.
-    pub fn retain_entries(&mut self, mut keep: impl FnMut(Value, Value) -> bool) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn retain_entries(&mut self, mut keep: impl FnMut(Value, Value) -> bool) {
         // Never a store for the weak tables the GC sweeps: they are never
         // planned. Here so a storage-level removal is safe on its own.
         self.switch_plan.invalidate();
@@ -1803,27 +1727,6 @@ impl HashTableStorage {
             free_slots.push(slot);
             false
         });
-    }
-
-    pub fn replace_pointer_key(&mut self, old_ptr: usize, new_ptr: usize, new_key: Value) {
-        // A user-test table never reaches here: both call sites guard on an
-        // `Eq`/`Eql` test, and a `define-hash-table-test` table is created
-        // with `Equal`. That matters because re-keying an entry in place
-        // would strand its old `HashKey` in `user_buckets`. Enforce the
-        // guarantee rather than rely on it.
-        debug_assert!(
-            self.user_hashes.is_empty(),
-            "replace_pointer_key on a table carrying user hashes would strand a bucket entry"
-        );
-        let Some(removed) = self.index.remove_key(&HashKey::Ptr(old_ptr), &self.slots) else {
-            return;
-        };
-        let key = HashKey::Ptr(new_ptr);
-        self.index.insert_new(fx_hash_key(&key), key, removed.slot);
-        self.slots[removed.slot]
-            .as_mut()
-            .expect("hash index points to an empty entry slot")
-            .key = new_key;
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1974,14 +1877,6 @@ pub enum HashTableWeakness {
 impl HashTableWeakness {
     pub fn from_gnu_code(code: u8) -> Option<Self> {
         Self::try_from(code).ok()
-    }
-
-    pub(crate) fn option_from_gnu_code(code: u8) -> Option<Option<Self>> {
-        if code == 0 {
-            Some(None)
-        } else {
-            Self::from_gnu_code(code).map(Some)
-        }
     }
 
     pub fn gnu_code(self) -> u8 {
@@ -2631,10 +2526,6 @@ impl LispHashTable {
         self.data.slot_count()
     }
 
-    pub fn replace_pointer_key(&mut self, old_ptr: usize, new_ptr: usize, new_key: Value) {
-        self.data.replace_pointer_key(old_ptr, new_ptr, new_key);
-    }
-
     /// Rebuild from insertion-ordered `(hash_key, value, key_snapshot)`
     /// triples: one entry (one hash) per triple, no temporary maps and no
     /// merging of equal keys. The pdump loader's path — its dump format
@@ -2663,7 +2554,8 @@ impl LispHashTable {
 
     /// True when parked dump entries have not been hydrated yet.
     #[inline]
-    pub fn needs_hydration(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn needs_hydration(&self) -> bool {
         self.data.pending_entries().is_some()
     }
 
@@ -2672,30 +2564,6 @@ impl LispHashTable {
     pub(crate) fn hydrate_pending(&mut self) {
         if let Some(entries) = self.data.take_pending() {
             self.rebuild_from_ordered_entries(entries);
-        }
-    }
-
-    pub(crate) fn rebuild_from_parts(
-        &mut self,
-        values: FxHashMap<HashKey, Value>,
-        key_snapshots: FxHashMap<HashKey, Value>,
-        insertion_order: Vec<HashKey>,
-    ) {
-        self.data.clear();
-        self.data.reserve(values.len());
-        for hash_key in insertion_order {
-            let Some(value) = values.get(&hash_key).copied() else {
-                continue;
-            };
-            let key = key_snapshots.get(&hash_key).copied().unwrap_or(value);
-            self.insert(hash_key, key, value);
-        }
-        for (hash_key, value) in values {
-            if self.data.contains_key(&hash_key) {
-                continue;
-            }
-            let key = key_snapshots.get(&hash_key).copied().unwrap_or(value);
-            self.insert(hash_key, key, value);
         }
     }
 
@@ -2874,11 +2742,6 @@ impl TaggedValue {
     /// Callers must only pass SymIds whose canonical names already start with `:`.
     pub(crate) fn keyword_id(id: SymId) -> Self {
         TaggedValue::from_kw_id(id)
-    }
-
-    /// Create a keyword by interning a name string.
-    pub(crate) fn make_keyword(s: &'static str) -> Self {
-        Self::keyword(s)
     }
 
     /// Convert bool to Value (T or NIL).
@@ -3170,11 +3033,6 @@ impl TaggedValue {
         with_tagged_heap(|h| h.alloc_macro_from_data(data))
     }
 
-    /// Allocate a macro from already-validated GNU closure slots.
-    pub(crate) fn make_macro_with_slots(slots: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_macro(slots))
-    }
-
     /// Allocate a hash table.
     pub fn hash_table(test: HashTableTest) -> Self {
         with_tagged_heap(|h| h.alloc_hash_table(LispHashTable::new(test)))
@@ -3328,11 +3186,6 @@ impl TaggedValue {
         with_tagged_heap(|h| {
             h.alloc_xwidget(type_, title, buffer, width, height, xwidget_id, webview_id)
         })
-    }
-
-    /// Allocate a GNU-shaped xwidget view object.
-    pub(crate) fn make_xwidget_view(model: Value, window: Value) -> Self {
-        with_tagged_heap(|h| h.alloc_xwidget_view(model, window))
     }
 
     /// Allocate a bool-vector of `nbits` bits from `words` (`⌈nbits/64⌉`
@@ -3493,7 +3346,8 @@ impl TaggedValue {
 
     /// Check if this is a GC-managed shader-surface handle.
     #[inline]
-    pub fn is_surface_handle(self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_surface_handle(self) -> bool {
         self.veclike_type() == Some(VecLikeType::SurfaceHandle)
     }
 
@@ -3517,11 +3371,6 @@ impl TaggedValue {
     pub fn as_runtime_string_owned(self) -> Option<String> {
         self.as_lisp_string()
             .map(|string| crate::emacs_char::to_utf8_lossy(string.as_bytes()))
-    }
-
-    /// Access the heap string via a closure.
-    pub(crate) fn with_str<R>(self, f: impl FnOnce(&str) -> R) -> Option<R> {
-        self.as_utf8_str().map(f)
     }
 
     /// Borrow the `LispString` for a string value, for no longer than the
@@ -3703,19 +3552,9 @@ impl TaggedValue {
         }
     }
 
-    /// Mutate closure slots through the centralized tagged-runtime write path.
-    pub fn with_closure_slots_mut<R>(self, f: impl FnOnce(&mut Vec<Value>) -> R) -> Option<R> {
-        mutate::with_closure_slots_mut(self, f)
-    }
-
     /// Replace the entire closure slot vector through the centralized write path.
     pub fn replace_closure_slots(self, slots: Vec<Value>) -> bool {
         mutate::replace_closure_slots(self, slots)
-    }
-
-    /// Update a single closure slot through the centralized write path.
-    pub(crate) fn set_closure_slot(self, index: usize, value: Value) -> bool {
-        mutate::set_closure_slot(self, index, value)
     }
 
     fn closure_parsed_params_cell(self) -> Option<&'static OnceLock<LambdaParams>> {
@@ -3820,12 +3659,6 @@ impl TaggedValue {
         })
     }
 
-    /// Get the pointer address as a unique identity for a string value.
-    /// Used for text property operations.
-    pub(crate) fn str_ptr_key(self) -> Option<usize> {
-        self.as_string_ptr().map(|p| p as usize)
-    }
-
     /// Get the buffer ID from a buffer value.
     pub fn as_buffer_id(self) -> Option<BufferId> {
         if self.is_buffer() {
@@ -3921,11 +3754,6 @@ impl TaggedValue {
         }
     }
 
-    /// Mutate xwidget-view data through the centralized tagged-runtime write path.
-    pub fn with_xwidget_view_mut<R>(self, f: impl FnOnce(&mut XwidgetViewObj) -> R) -> Option<R> {
-        mutate::with_xwidget_view_mut(self, f)
-    }
-
     /// Get the marker data from a marker value.
     pub fn as_marker_data(self) -> Option<&'static crate::heap_types::LispMarker> {
         if self.is_marker() {
@@ -3992,7 +3820,8 @@ impl TaggedValue {
     /// tagged-vector encoding answers false; `boolvec::is_bool_vector` asks
     /// about both.
     #[inline]
-    pub fn is_bool_vector_obj(self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_bool_vector_obj(self) -> bool {
         self.veclike_type() == Some(VecLikeType::BoolVector)
     }
 
@@ -4010,7 +3839,11 @@ impl TaggedValue {
     /// Mutate packed bits through the centralized collection journal.
     /// Bool-vectors contain no Lisp references and need no GC pointer barrier.
     #[inline]
-    pub fn with_bool_vector_mut<R>(self, f: impl FnOnce(&mut BoolVectorObj) -> R) -> Option<R> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn with_bool_vector_mut<R>(
+        self,
+        f: impl FnOnce(&mut BoolVectorObj) -> R,
+    ) -> Option<R> {
         mutate::with_bool_vector_mut(self, f)
     }
 
@@ -4131,15 +3964,6 @@ impl TaggedValue {
         mutate::set_record_slot(self, index, value)
     }
 
-    /// Replace the contents of either a vector or record.
-    pub(crate) fn replace_vectorlike_sequence_data(self, values: Vec<Value>) -> bool {
-        match self.veclike_type() {
-            Some(VecLikeType::Vector) => self.replace_vector_data(values),
-            Some(VecLikeType::Record) => self.replace_record_data(values),
-            _ => false,
-        }
-    }
-
     /// Get hash table reference.
     #[inline]
     pub fn as_hash_table(self) -> Option<&'static LispHashTable> {
@@ -4207,7 +4031,9 @@ impl TaggedValue {
     }
 
     /// Replace the entire contents of a hash table value.
-    pub fn replace_hash_table(self, table: LispHashTable) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn replace_hash_table(self, table: LispHashTable) -> bool {
         self.with_hash_table_mut(|current| *current = table)
             .is_some()
     }
@@ -4242,6 +4068,7 @@ impl TaggedValue {
     /// production — see `mutate::with_bytecode_data_mut_for_test` for the
     /// invariant this gate enforces.
     #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn with_bytecode_data_mut_for_test<R>(
         self,
         f: impl FnOnce(&mut crate::tagged::bytecode::chunk::ByteCodeFunction) -> R,
@@ -4583,21 +4410,6 @@ fn bool_vectors_equal(left: Value, right: Value) -> bool {
 pub fn equal_value(left: &Value, right: &Value, depth: usize) -> bool {
     let mut seen = None;
     equal_value_inner(left, right, depth, &mut seen, false, EqualKind::Plain)
-}
-
-/// `equal-including-properties` — structural comparison that also compares
-/// string text-property intervals.  This mirrors GNU Emacs `internal_equal`
-/// carrying its comparison mode recursively into compound objects.
-pub(crate) fn equal_value_including_properties(left: &Value, right: &Value, depth: usize) -> bool {
-    let mut seen = None;
-    equal_value_inner(
-        left,
-        right,
-        depth,
-        &mut seen,
-        false,
-        EqualKind::IncludingProperties,
-    )
 }
 
 /// `equal` — structural comparison with optional symbol-with-pos transparency.
@@ -5921,12 +5733,6 @@ pub(crate) fn lexenv_binding_symbol_value(sym_id: SymId) -> Value {
     TaggedValue::from_sym_id(sym_id)
 }
 
-/// Look up symbol value in a cons-alist lexenv.
-pub(crate) fn lexenv_lookup(lexenv: Value, sym_id: SymId) -> Option<Value> {
-    let cell = lexenv_assq(lexenv, sym_id)?;
-    Some(unsafe { cons_cdr_unchecked(cons_ptr_unchecked(cell)) })
-}
-
 /// Return true if the lexical environment contains a bare-symbol declaration
 /// marking SYM_ID as locally special/dynamic.
 pub fn lexenv_declares_special(lexenv: Value, sym_id: SymId) -> bool {
@@ -5965,12 +5771,6 @@ unsafe fn cons_cdr_unchecked(ptr: *const ConsCell) -> Value {
 /// Mutate a binding in place: set cdr of the `(sym . val)` cons cell.
 pub fn lexenv_set(cell: Value, value: Value) {
     cell.set_cdr(value);
-}
-
-/// Prepend a `(sym . val)` binding onto a lexenv alist. Returns the new head.
-pub(crate) fn lexenv_prepend(lexenv: Value, sym_id: SymId, val: Value) -> Value {
-    let binding = Value::make_cons(lexenv_binding_symbol_value(sym_id), val);
-    Value::make_cons(binding, lexenv)
 }
 
 // ---------------------------------------------------------------------------
@@ -6052,5 +5852,39 @@ impl HashTableStorage {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn switch_epoch(&self) -> u64 {
         self.switch_epoch
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl TaggedValue {
+        pub(crate) fn replace_vectorlike_sequence_data(self, values: Vec<Value>) -> bool {
+            match self.veclike_type() {
+                Some(VecLikeType::Vector) => self.replace_vector_data(values),
+                Some(VecLikeType::Record) => self.replace_record_data(values),
+                _ => false,
+            }
+        }
+    }
+    impl HashTableStorage {
+        pub(crate) fn get_mut_by_value(
+            &mut self,
+            value: Value,
+            test: HashTableTest,
+            symbols_with_pos_enabled: bool,
+        ) -> Option<&mut Value> {
+            let slot = self.slot_by_value(value, test, symbols_with_pos_enabled)?;
+            self.slot_value_mut(slot)
+        }
+    }
+    impl HashTableWeakness {
+        pub(crate) fn option_from_gnu_code(code: u8) -> Option<Option<Self>> {
+            if code == 0 {
+                Some(None)
+            } else {
+                Self::from_gnu_code(code).map(Some)
+            }
+        }
     }
 }

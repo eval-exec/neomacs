@@ -308,8 +308,9 @@ pub fn string_width(s: &str) -> usize {
     s.chars().map(char_width).sum()
 }
 
+#[cfg(test)]
 /// Whether a character is printable (not a control char).
-pub fn is_printable(c: char) -> bool {
+pub(crate) fn is_printable(c: char) -> bool {
     let cp = c as u32;
     cp >= 0x20 && cp != 0x7f && !(0x80..=0x9f).contains(&cp)
 }
@@ -317,24 +318,6 @@ pub fn is_printable(c: char) -> bool {
 /// Whether a character is a whitespace character.
 pub fn is_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
-}
-
-/// Whether a character is a word constituent (alphanumeric + underscore).
-pub fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-/// Whether a string is all ASCII.
-pub fn is_ascii_string(s: &str) -> bool {
-    s.bytes().all(|b| b < 128)
-}
-
-/// Whether a string is multibyte (contains non-ASCII).
-pub fn is_multibyte_string(s: &str) -> bool {
-    s.chars().any(|ch| {
-        let cp = ch as u32;
-        cp > 0x7f && !(UNIBYTE_BYTE_SENTINEL_MIN..=UNIBYTE_BYTE_SENTINEL_MAX).contains(&cp)
-    })
 }
 
 /// Resolve the EOL conversion type of a coding-system NAME.
@@ -1547,8 +1530,9 @@ pub fn byte_to_char_pos(s: &str, byte_pos: usize) -> usize {
 // Glyphless character representation
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 /// How to display a glyphless (control/non-printable) character.
-pub fn glyphless_char_display(c: char) -> String {
+pub(crate) fn glyphless_char_display(c: char) -> String {
     let cp = c as u32;
     if cp < 0x20 {
         format!("^{}", (cp + 0x40) as u8 as char)

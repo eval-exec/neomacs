@@ -14,7 +14,8 @@ use std::os::unix::io::RawFd;
 /// is checked: a failed `F_GETFL` returns -1, and OR-ing `O_NONBLOCK` into that
 /// would have written an all-ones flag word back. On any valid descriptor the
 /// success path is identical to the previous code.
-pub fn set_fd_nonblocking(fd: RawFd) -> std::io::Result<()> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn set_fd_nonblocking(fd: RawFd) -> std::io::Result<()> {
     // SAFETY: `F_GETFL`/`F_SETFL` take no pointer arguments; the caller owns a
     // valid `fd` for the duration of the call.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };

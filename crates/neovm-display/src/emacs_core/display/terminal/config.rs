@@ -46,14 +46,6 @@ impl TtyTerminalConfig {
         self.name = Some(name.into());
         self
     }
-
-    pub(crate) fn with_attribute_capabilities(
-        mut self,
-        capabilities: TtyAttributeCapabilities,
-    ) -> Self {
-        self.attribute_capabilities = capabilities;
-        self
-    }
 }
 
 impl From<TtyTerminalConfig> for TerminalRuntimeConfig {

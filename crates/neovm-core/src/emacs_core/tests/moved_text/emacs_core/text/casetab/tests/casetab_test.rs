@@ -19,25 +19,75 @@ use neovm_text::emacs_core::casetab::*;
 use neovm_value::value::Value;
 
 #[test]
-fn manager_upcase_string() {
+fn production_upcase_string() {
     crate::test_utils::init_test_tracing();
-    let mgr = CaseTableManager::new();
-    assert_eq!(mgr.upcase_string("hello"), "HELLO");
-    assert_eq!(mgr.upcase_string("Hello World"), "HELLO WORLD");
-    assert_eq!(mgr.upcase_string("ABC"), "ABC");
-    assert_eq!(mgr.upcase_string(""), "");
-    assert_eq!(mgr.upcase_string("a1b2c3"), "A1B2C3");
+    let mut ev = crate::test_utils::runtime_startup_context();
+    for (form, expected) in [
+        (r#"(upcase "hello")"#, "HELLO"),
+        (r#"(upcase "Hello World")"#, "HELLO WORLD"),
+        (r#"(upcase "ABC")"#, "ABC"),
+        (r#"(upcase "")"#, ""),
+        (r#"(upcase "a1b2c3")"#, "A1B2C3"),
+    ] {
+        assert_eq!(
+            ev.eval_str(form).expect("upcase").as_utf8_str(),
+            Some(expected),
+            "form: {form}"
+        );
+    }
 }
 
 #[test]
-fn manager_downcase_string() {
+fn production_downcase_string() {
     crate::test_utils::init_test_tracing();
-    let mgr = CaseTableManager::new();
-    assert_eq!(mgr.downcase_string("HELLO"), "hello");
-    assert_eq!(mgr.downcase_string("Hello World"), "hello world");
-    assert_eq!(mgr.downcase_string("abc"), "abc");
-    assert_eq!(mgr.downcase_string(""), "");
-    assert_eq!(mgr.downcase_string("A1B2C3"), "a1b2c3");
+    let mut ev = crate::test_utils::runtime_startup_context();
+    for (form, expected) in [
+        (r#"(downcase "HELLO")"#, "hello"),
+        (r#"(downcase "Hello World")"#, "hello world"),
+        (r#"(downcase "abc")"#, "abc"),
+        (r#"(downcase "")"#, ""),
+        (r#"(downcase "A1B2C3")"#, "a1b2c3"),
+    ] {
+        assert_eq!(
+            ev.eval_str(form).expect("downcase").as_utf8_str(),
+            Some(expected),
+            "form: {form}"
+        );
+    }
+}
+
+#[test]
+fn production_downcase_char() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::runtime_startup_context();
+    for (form, expected) in [
+        (r#"(downcase ?A)"#, 97),
+        (r#"(downcase ?a)"#, 97),
+        (r#"(downcase 65)"#, 97),
+        (r#"(downcase ?Z)"#, 122),
+    ] {
+        let result = ev.eval_str(form).expect("downcase");
+        assert_eq!(result.as_fixnum(), Some(expected), "form: {form}");
+    }
+}
+
+#[test]
+fn production_downcase_errors() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::runtime_startup_context();
+    assert!(ev.eval_str("(downcase)").is_err());
+    assert!(ev.eval_str("(downcase ?A ?B)").is_err());
+    assert!(ev.eval_str("(downcase nil)").is_err());
+}
+
+#[test]
+fn production_case_conversion_roundtrip() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::runtime_startup_context();
+    let result = ev
+        .eval_str(r#"(downcase (upcase "Hello World"))"#)
+        .expect("roundtrip");
+    assert_eq!(result.as_utf8_str(), Some("hello world"));
 }
 
 #[test]
@@ -76,7 +126,7 @@ fn builtin_current_case_table_returns_case_table() {
     crate::test_utils::init_test_tracing();
     let mut ctx = crate::test_utils::new_context();
     let result = builtin_current_case_table(&mut ctx, vec![]).unwrap();
-    assert!(is_case_table(&result));
+    assert!(is_case_table_with_symbols(&result, SymbolMode::Bare));
 }
 
 #[test]
@@ -91,7 +141,7 @@ fn builtin_standard_case_table_returns_case_table() {
     crate::test_utils::init_test_tracing();
     let mut ctx = crate::test_utils::new_context();
     let result = builtin_standard_case_table(&mut ctx, vec![]).unwrap();
-    assert!(is_case_table(&result));
+    assert!(is_case_table_with_symbols(&result, SymbolMode::Bare));
 }
 
 #[test]
@@ -176,54 +226,6 @@ fn evaluator_case_table_roundtrip_and_isolation() {
     eval.edit.buffers.set_current(current_id);
     let restored = builtin_current_case_table(&mut eval, vec![]).unwrap();
     assert_eq!(restored, custom);
-}
-
-#[test]
-fn builtin_downcase_char_uppercase() {
-    crate::test_utils::init_test_tracing();
-    // (downcase ?A) -> 97 (i.e., ?a)
-    let result = builtin_downcase_char(vec![Value::char('A')]).unwrap();
-    assert!(result.is_fixnum());
-}
-
-#[test]
-fn builtin_downcase_char_lowercase_unchanged() {
-    crate::test_utils::init_test_tracing();
-    // (downcase ?a) -> 97
-    let result = builtin_downcase_char(vec![Value::char('a')]).unwrap();
-    assert!(result.is_fixnum());
-}
-
-#[test]
-fn builtin_downcase_char_from_int() {
-    crate::test_utils::init_test_tracing();
-    // (downcase 65) -> 97 (65 = ?A, 97 = ?a)
-    let result = builtin_downcase_char(vec![Value::fixnum(65)]).unwrap();
-    assert!(result.is_fixnum());
-}
-
-#[test]
-fn builtin_downcase_char_wrong_type() {
-    crate::test_utils::init_test_tracing();
-    assert!(builtin_downcase_char(vec![Value::string("A")]).is_err());
-    assert!(builtin_downcase_char(vec![Value::NIL]).is_err());
-}
-
-#[test]
-fn builtin_downcase_char_wrong_arg_count() {
-    crate::test_utils::init_test_tracing();
-    assert!(builtin_downcase_char(vec![]).is_err());
-    assert!(builtin_downcase_char(vec![Value::char('A'), Value::char('B')]).is_err());
-}
-
-#[test]
-fn string_roundtrip() {
-    crate::test_utils::init_test_tracing();
-    let mgr = CaseTableManager::new();
-    let original = "Hello World";
-    let upper = mgr.upcase_string(original);
-    let lower = mgr.downcase_string(&upper);
-    assert_eq!(lower, "hello world");
 }
 
 #[test]

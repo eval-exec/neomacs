@@ -56,7 +56,6 @@ fn migrated_string_subsystems_do_not_call_generic_runtime_string_adapter_directl
         "editing/marker/mod.rs",
         "commands/minibuffer/mod.rs",
         "lisp/native/misc/mod.rs",
-        "system/network/mod.rs",
         "system/process/mod.rs",
         "lisp/reader/mod.rs",
         "text/syntax/mod.rs",

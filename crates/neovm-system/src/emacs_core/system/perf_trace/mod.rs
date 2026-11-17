@@ -137,28 +137,6 @@ pub(crate) fn record_op(op: HotpathOp, elapsed: Duration) {
     });
 }
 
-pub(crate) fn reset_hotpath_stats() {
-    if !hotpath_timing_enabled() {
-        return;
-    }
-    HOTPATH_STATE.with(|state| {
-        *state.borrow_mut() = HotpathState::default();
-    });
-}
-
-pub(crate) fn log_hotpath_stats(label: &str) {
-    if !hotpath_timing_enabled() {
-        return;
-    }
-
-    HOTPATH_STATE.with(|state| {
-        let mut state = state.borrow_mut();
-        let snapshot = std::mem::take(&mut state.stats);
-        log_snapshot(label, &snapshot);
-        state.last_live_log = Instant::now();
-    });
-}
-
 fn log_snapshot(label: &str, snapshot: &HotpathStats) {
     for (name, counter) in snapshot.entries() {
         if counter.count == 0 {

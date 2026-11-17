@@ -1851,6 +1851,22 @@ pub struct SweepStats {
     pub mark_us: u64,
 }
 
+#[cfg(feature = "test-support")]
+impl SweepStats {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn mark_us(&self) -> u64 {
+        self.mark_us
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn max_termination_kinds(&self) -> DrainKinds {
+        self.max_termination_kinds
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn termination_count(&self) -> usize {
+        self.termination_count
+    }
+}
+
 /// One root group's cost inside a `seed_all_context_roots` call:
 /// `(name, wall µs enumerating+seeding the group, values the group visited)`.
 /// The count is the enumeration volume (every value fed to the seeding sink,
@@ -2001,6 +2017,42 @@ pub struct HandshakeStats {
     pub probe_cons_blocks: usize,
     /// Live buffers (= marker chain-head slots installed).
     pub probe_buffer_count: usize,
+}
+
+#[cfg(feature = "test-support")]
+impl HandshakeStats {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn start_count(&self) -> usize {
+        self.start_count
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn term_count(&self) -> usize {
+        self.term_count
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn last_start_floatsnap_us(&self) -> u64 {
+        self.last_start_floatsnap_us
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn last_start_vecbasesnap_us(&self) -> u64 {
+        self.last_start_vecbasesnap_us
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn last_start_bcsnap_us(&self) -> u64 {
+        self.last_start_bcsnap_us
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn probe_mapped_remembered(&self) -> usize {
+        self.probe_mapped_remembered
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn probe_vector_snapshot_len(&self) -> usize {
+        self.probe_vector_snapshot_len
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn probe_cons_blocks(&self) -> usize {
+        self.probe_cons_blocks
+    }
 }
 
 impl HandshakeStats {

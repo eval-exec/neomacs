@@ -48,6 +48,23 @@ pub fn is_active_gnu_c_intern_spelling(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `name` is a literal `DEFUN ("...", ...)` subr name of a compiled
+/// GNU object, which `defsubr` interns at startup.
+///
+/// GNU's image carries the names of every subr its objects declare. This port
+/// declines a few of them (the X toolkit dialogs, D-Bus, other window-system
+/// surfaces); their names stay members without a function. The generator
+/// scans the literal DEFUN names of each compiled object behind that
+/// profile's in-file `#if` guards (`gnu_c_defuns.snapshot.tsv`).
+#[doc(hidden)]
+pub fn is_active_gnu_c_defun_spelling(name: &str) -> bool {
+    let table = gnu_defsyms_generated::GNU_C_DEFUNS_BY_SPELLING;
+    table
+        .binary_search_by(|(spelling, _)| (*spelling).cmp(name))
+        .map(|index| table[index].1.is_active())
+        .unwrap_or(false)
+}
+
 /// Whether `name` is a GNU `DEFSYM` spelling that this build's profile does
 /// not compile in.
 ///
@@ -89,7 +106,10 @@ pub(crate) mod shared;
 mod well_known;
 #[cfg(feature = "test-support")]
 pub mod well_known;
-pub use well_known::{FIRST_ID as FIRST_WELL_KNOWN_SYM_ID, NAMES as WELL_KNOWN_NAMES, WellKnown};
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(feature = "test-support")]
+pub(crate) use well_known::NAMES as WELL_KNOWN_NAMES;
+pub use well_known::{FIRST_ID as FIRST_WELL_KNOWN_SYM_ID, WellKnown};
 
 use hashbrown::HashMap;
 use parking_lot::RwLock;
@@ -1784,7 +1804,7 @@ pub fn make_uninterned_symbol_lisp_string(s: &LispString) -> SymId {
 /// the name atom, which drops the string's text properties and its
 /// multibyteness.
 #[inline]
-pub fn intern_lisp_value(name_value: TaggedValue) -> SymId {
+pub(crate) fn intern_lisp_value(name_value: TaggedValue) -> SymId {
     let mut registry = global_symbol_registry().write();
     registry.intern_lisp_value(name_value)
 }
@@ -1877,29 +1897,6 @@ pub fn is_keyword_id(id: SymId) -> bool {
     drop(registry);
     thread_local_record_keyword(id, is_keyword);
     is_keyword
-}
-
-#[inline]
-pub(crate) fn resolve_sym_metadata(id: SymId) -> (&'static str, bool) {
-    ensure_thread_local_cache_epoch_current();
-    if let Some(is_canonical) = thread_local_is_canonical(id)
-        && is_canonical
-        && let Some(name) = thread_local_resolve(id)
-    {
-        return (name, true);
-    }
-    let registry = global_symbol_registry().read();
-    let name_value = registry.resolve_lisp_string(id);
-    let name = name_value
-        .as_utf8_str()
-        .unwrap_or_else(|| panic!("symbol name {:?} is not valid UTF-8", id));
-    let is_canonical = registry.is_canonical_id(id);
-    drop(registry);
-    thread_local_record_canonical(id, is_canonical);
-    if is_canonical {
-        thread_local_record_name(id, name_value);
-    }
-    (name, is_canonical)
 }
 
 #[inline]
@@ -2176,12 +2173,6 @@ pub fn map_lisp_visible_symbol_names<T>(
         mapped.push(map(id, registry.resolve_lisp_visible_name(id)));
     }
     mapped
-}
-
-#[inline]
-pub(crate) fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
-    let registry = global_symbol_registry().read();
-    registry.resolve_name_value(id)
 }
 
 #[doc(hidden)]
@@ -2553,27 +2544,6 @@ fn thread_local_record_keyword(id: SymId, is_keyword: bool) {
     });
 }
 
-/// Resolve a SymId to its string using the global runtime symbol registry.
-///
-/// Returns `None` if the id is outside the current symbol range instead of
-/// panicking. This is useful at serialization boundaries where we want a
-/// structured error instead of aborting the process on malformed runtime data.
-#[inline]
-pub(crate) fn try_resolve_sym(id: SymId) -> Option<&'static str> {
-    let registry = global_symbol_registry().read();
-    registry
-        .slot(id)
-        .map(|slot| registry.names.resolve(slot.name))
-}
-
-#[inline]
-pub(crate) fn try_resolve_sym_lisp_string(id: SymId) -> Option<&'static LispString> {
-    let registry = global_symbol_registry().read();
-    registry
-        .slot(id)
-        .map(|slot| registry.names.resolve_lisp_string(slot.name))
-}
-
 #[cfg(test)]
 #[path = "tests/intern_test.rs"]
 mod tests;
@@ -2684,5 +2654,14 @@ pub mod test_support {
         fn default() -> Self {
             Self::new()
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    pub(crate) fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
+        let registry = global_symbol_registry().read();
+        registry.resolve_name_value(id)
     }
 }

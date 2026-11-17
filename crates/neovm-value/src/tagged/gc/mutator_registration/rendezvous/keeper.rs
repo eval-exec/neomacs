@@ -73,7 +73,9 @@ pub struct AllStoppedFailure<'era> {
 }
 
 impl<'era> AllStoppedFailure<'era> {
-    pub fn into_stopped(self) -> AllStopped<'era> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn into_stopped(self) -> AllStopped<'era> {
         self.stopped
     }
 }

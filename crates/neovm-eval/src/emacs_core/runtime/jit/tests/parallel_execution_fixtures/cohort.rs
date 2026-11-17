@@ -468,7 +468,7 @@ fn prepared_cohort<P: Send>(
                         )
                         .expect("cohort collection");
                         assert!(report.major);
-                        assert_eq!(report.frozen_owners, size.count());
+                        assert_eq!(report.frozen_owners(), size.count());
                         if let Some((epoch, cycle)) = previous {
                             assert!(report.epoch > epoch);
                             assert!(report.cycle > cycle);
@@ -494,7 +494,9 @@ fn prepared_cohort<P: Send>(
                         .expect("cohort complete");
                         eprintln!(
                             "NMJIT_N4_COHORT_COLLECTION {size:?} {phase:?} epoch={} cycle={} owners={}",
-                            report.epoch, report.cycle, report.frozen_owners
+                            report.epoch,
+                            report.cycle,
+                            report.frozen_owners()
                         );
                         for sender in &commands.0 {
                             sender

@@ -187,6 +187,7 @@ impl FacadeEpochRetention {
         })
     }
 
+    #[allow(dead_code)] // LOST WIRING: evaluated by the facade/root-batch unit tests; production caller is the Part B prepared-root-batch constructor (A4/A5).
     fn validate(&self, heap: &TaggedHeap) -> Result<(), FacadeMarkExclusionError> {
         let actual = heap.heap_identity();
         if actual == self.heap_identity() {
@@ -229,6 +230,7 @@ impl FacadeMarkExclusion {
         self.epoch.heap_identity()
     }
 
+    #[allow(dead_code)] // LOST WIRING: evaluated by the facade/root-batch unit tests; production caller is the Part B prepared-root-batch constructor (A4/A5).
     pub(crate) fn validate(&self, heap: &TaggedHeap) -> Result<(), FacadeMarkExclusionError> {
         self.epoch.validate(heap)
     }

@@ -52,7 +52,7 @@ pub struct MinibufferState {
     pub prompt_end: usize,
     pub initial_input: LispString,
     pub history: Vec<LispString>,
-    pub history_position: Option<usize>,
+    pub(crate) history_position: Option<usize>,
     pub content: LispString,
     pub cursor_pos: usize,
     pub completion_table: Option<CompletionTable>,
@@ -240,7 +240,13 @@ impl MinibufferManager {
     }
 
     /// Append one history entry from a Lisp string.
-    pub fn add_to_history_lisp(&mut self, name: SymId, value: LispString, max_length: usize) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn add_to_history_lisp(
+        &mut self,
+        name: SymId,
+        value: LispString,
+        max_length: usize,
+    ) {
         self.history.add(name, value, max_length);
     }
 

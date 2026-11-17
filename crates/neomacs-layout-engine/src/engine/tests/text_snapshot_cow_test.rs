@@ -2,7 +2,8 @@
 //! no snapshot outlives the layout that built it.
 
 use super::*;
-use neovm_core::buffer::text_snapshot::{TextSnapshotMode, set_text_snapshot_mode_override};
+use neovm_core::buffer::text_snapshot::TextSnapshotMode;
+use neovm_edit::test_support::authority::set_text_snapshot_mode_override_for_test as set_text_snapshot_mode_override;
 
 struct ModeGuard;
 

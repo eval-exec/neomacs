@@ -71,6 +71,10 @@ portable-pty = { workspace = true, optional = true }
 
 [dev-dependencies]
 neomacs-infra.workspace = true
+# Downward eval test-support edge (TEST-SUPPORT-VIS-EVAL): the unit tests here
+# read eval items that are pub(crate) in production and pub only under
+# neovm-eval's test-support feature, so a per-crate test build enables it here.
+neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support"] }
 
 [features]
 # Live Wayland compositor tests.  These create real windows and need a running

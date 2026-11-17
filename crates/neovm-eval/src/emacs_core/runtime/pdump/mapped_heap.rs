@@ -9,7 +9,7 @@
 use super::DumpError;
 use super::mmap_image::ImageRelocation;
 #[doc(hidden)]
-pub use super::types::{
+pub(crate) use super::types::{
     DumpByteData, DumpConsSpan, DumpContextState, DumpFloatSpan, DumpHeapObject, DumpSlotSpan,
     DumpStringSpan, DumpTaggedHeap, DumpValue, DumpVecLikeSpan,
 };

@@ -21,14 +21,15 @@ use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 mod atomic_value;
-pub use atomic_value::AtomicTaggedValue;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use atomic_value::AtomicTaggedValue;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite_finalizer;
 #[cfg(all(any(test, feature = "test-support"), feature = "sqlite"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use sqlite_finalizer::sqlite_obj_finalizer_installed;
 mod value_vec;
-pub use value_vec::OwnedValueVec;
+pub(crate) use value_vec::OwnedValueVec;
 
 // ---------------------------------------------------------------------------
 // ConsCell — no header, minimal size
@@ -149,11 +150,6 @@ impl ConsCdrWord {
         Self(UnsafeCell::new(ConsCdrOrNext { cdr }))
     }
 
-    #[inline(always)]
-    pub(crate) const fn from_next(next: *mut ConsCell) -> Self {
-        Self(UnsafeCell::new(ConsCdrOrNext { next_free: next }))
-    }
-
     /// Plain owner read of the live `cdr` member. See [`ConsWord::get`].
     #[inline(always)]
     pub fn get(&self) -> TaggedValue {
@@ -190,7 +186,8 @@ impl ConsCdrWord {
     ///
     /// `self` must be a free cons cell, making `next_free` the active member.
     #[inline]
-    pub unsafe fn free_next(&self) -> *mut ConsCell {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) unsafe fn free_next(&self) -> *mut ConsCell {
         // SAFETY: the caller proves the union holds `next_free`.
         unsafe { (*self.0.get()).next_free }
     }
@@ -333,7 +330,8 @@ impl ConsCell {
     /// `self` must be a free cons cell, making `next_free` the active union
     /// field.
     #[inline]
-    pub unsafe fn free_next(&self) -> *mut ConsCell {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) unsafe fn free_next(&self) -> *mut ConsCell {
         unsafe { self.cdr_or_next.free_next() }
     }
 
@@ -505,7 +503,8 @@ impl HeaderFlags {
 /// both.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, IntoPrimitive)]
-pub enum MarkParity {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum MarkParity {
     One = 1,
     Two = 2,
 }
@@ -529,7 +528,8 @@ impl MarkParity {
 
 /// The mark byte of an object marked in no cycle: white under both
 /// parities.
-pub const UNMARKED_AT_REST: u8 = 0;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const UNMARKED_AT_REST: u8 = 0;
 
 /// The generation byte of a [`GcHeader`] (byte 6; P3.0 §3.1, P3.1 §3.2).
 ///
@@ -728,7 +728,8 @@ impl GcHeader {
 
     /// A header of `kind` born marked at `parity`.
     #[inline]
-    pub fn new_marked(kind: HeapObjectKind, parity: MarkParity) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn new_marked(kind: HeapObjectKind, parity: MarkParity) -> Self {
         let header = Self::new(kind);
         header.marked.store(parity.byte(), Ordering::Relaxed);
         header
@@ -811,7 +812,8 @@ impl GcHeader {
     /// the owning heap's parity — use `is_marked_at` unless you are
     /// asserting the raw byte itself (e.g. "never touched", or frozen).
     #[inline]
-    pub fn raw_mark(&self) -> u8 {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn raw_mark(&self) -> u8 {
         self.marked.load(Ordering::Relaxed)
     }
 
@@ -831,7 +833,8 @@ impl GcHeader {
 
     /// Is this young object marked for the cycle whose parity is `parity`?
     #[inline]
-    pub fn is_marked_at(&self, parity: MarkParity) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_marked_at(&self, parity: MarkParity) -> bool {
         self.marked.load(Ordering::Relaxed) == parity.byte()
     }
 
@@ -960,51 +963,7 @@ pub enum VecLikeType {
     VideoHandle = 40,
 }
 
-impl VecLikeType {
-    pub(crate) fn gnu_pvec_type(self) -> Option<GnuPvecType> {
-        Some(match self {
-            Self::Vector => GnuPvecType::NormalVector,
-            Self::Bignum => GnuPvecType::Bignum,
-            Self::Marker => GnuPvecType::Marker,
-            Self::Overlay => GnuPvecType::Overlay,
-            Self::Finalizer => GnuPvecType::Finalizer,
-            Self::SymbolWithPos => GnuPvecType::SymbolWithPos,
-            Self::UserPtr => GnuPvecType::UserPtr,
-            Self::Process => GnuPvecType::Process,
-            Self::Frame => GnuPvecType::Frame,
-            Self::Window => GnuPvecType::Window,
-            Self::BoolVector => GnuPvecType::BoolVector,
-            Self::Buffer => GnuPvecType::Buffer,
-            Self::HashTable => GnuPvecType::HashTable,
-            Self::Obarray => GnuPvecType::Obarray,
-            Self::Terminal => GnuPvecType::Terminal,
-            Self::WindowConfiguration => GnuPvecType::WindowConfiguration,
-            Self::Subr => GnuPvecType::Subr,
-            Self::Xwidget => GnuPvecType::Xwidget,
-            Self::XwidgetView => GnuPvecType::XwidgetView,
-            Self::Thread => GnuPvecType::Thread,
-            Self::Mutex => GnuPvecType::Mutex,
-            Self::CondVar => GnuPvecType::Condvar,
-            Self::ModuleFunction => GnuPvecType::ModuleFunction,
-            Self::TsNode => GnuPvecType::TsNode,
-            Self::Sqlite => GnuPvecType::Sqlite,
-            Self::Lambda => GnuPvecType::Closure,
-            Self::CharTable => GnuPvecType::CharTable,
-            Self::SubCharTable => GnuPvecType::SubCharTable,
-            Self::Record => GnuPvecType::Record,
-            Self::Font => GnuPvecType::Font,
-            Self::Macro
-            | Self::ByteCode
-            | Self::Timer
-            | Self::SurfaceHandle
-            | Self::VideoHandle => return None,
-        })
-    }
-
-    pub(crate) fn gnu_pvec_code(self) -> Option<u8> {
-        self.gnu_pvec_type().map(GnuPvecType::gnu_code)
-    }
-}
+impl VecLikeType {}
 
 /// Complete GNU `enum pvec_type` domain (`src/lisp.h`). This records all
 /// public GNU pseudovector tag codes even when Neomacs does not yet allocate
@@ -1050,15 +1009,7 @@ pub(crate) enum GnuPvecType {
     Font = 35,
 }
 
-impl GnuPvecType {
-    pub fn from_gnu_code(code: u8) -> Option<Self> {
-        Self::try_from(code).ok()
-    }
-
-    pub fn gnu_code(self) -> u8 {
-        self.into()
-    }
-}
+impl GnuPvecType {}
 
 use std::sync::OnceLock;
 
@@ -1689,61 +1640,6 @@ impl VectorScanSnapshot {
     }
 }
 
-/// Acquire a GC-visible interior-mutable value slot. Owner reads use
-/// [`AtomicTaggedValue::get`]; immutable mapped/leased words and fields traced
-/// only by their owner use ordinary Value reads.
-///
-/// A plain shared Value cannot supply atomic publication provenance:
-///
-/// ```compile_fail,E0308
-/// use neovm_core::tagged::header::load_value_atomic;
-/// use neovm_core::tagged::value::TaggedValue;
-/// let plain = TaggedValue::NIL;
-/// let _ = load_value_atomic(&plain);
-/// ```
-///
-/// PUBLICATION-ORDERING CONTRACT (concurrent GC, task #24 fix A): every store
-/// that can make a heap pointer visible to the GC thread mid-mark (cons
-/// car/cdr, vector slots, symbol value/function/plist cells — this module's
-/// atomic store helpers, including fixed char-table cells) is `Release`, and
-/// every GC-thread load that can be
-/// the first acquisition of such a pointer (cons car/cdr, slot/field loads —
-/// this module's atomic load helpers) is `Acquire`. The pairing makes the
-/// mutator's pre-publication writes — the arena `ptr::write` of the whole
-/// `GcHeader`/constructor, including `tenured`, `kind`, and the born-black
-/// parity bit — happen-before any dereference by the claim dispatcher
-/// (`concurrent_try_mark_owned`), which may otherwise read a torn/premature
-/// header on weakly-ordered targets (real UB on ARM; x86-TSO retired the
-/// writes in order anyway). Both orderings compile to plain `mov` on x86-64,
-/// and to `stlr`/`ldar` on AArch64. Objects reached through pre-cycle
-/// channels (start-handshake snapshots, the gray-queue channel handoff, the
-/// SATB/deferred mutexes) already carry happens-before from those seams; this
-/// contract closes the one remaining path — a fresh pointer stored into an
-/// already-snapshotted cell and read back mid-cycle. The mark bits themselves
-/// (`GcHeader.marked`, cons block bitmaps) stay `Relaxed`: they never
-/// publish field data, and a claim's field reads are ordered by this
-/// contract's pointer chain, not by the bit.
-#[inline]
-pub(crate) fn load_value_atomic(slot: &AtomicTaggedValue) -> TaggedValue {
-    slot.load_atomic()
-}
-
-/// Release-publish through the actual interior-mutable cell, without a unique
-/// slot borrow. See the publication contract on [`load_value_atomic`].
-///
-/// A plain mutable Value is also insufficient storage:
-///
-/// ```compile_fail,E0308
-/// use neovm_core::tagged::header::store_value_atomic;
-/// use neovm_core::tagged::value::TaggedValue;
-/// let mut plain = TaggedValue::NIL;
-/// store_value_atomic(&mut plain, TaggedValue::T);
-/// ```
-#[inline]
-pub(crate) fn store_value_atomic(slot: &AtomicTaggedValue, value: TaggedValue) {
-    slot.store_atomic(value);
-}
-
 impl From<Vec<TaggedValue>> for LispValueVec {
     fn from(value: Vec<TaggedValue>) -> Self {
         Self::owned(value)
@@ -1811,7 +1707,8 @@ pub struct VectorObj {
 }
 
 /// Number of slots in GNU's top-level char-table contents vector.
-pub const CHAR_TABLE_TOP_SLOTS: usize = 64;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const CHAR_TABLE_TOP_SLOTS: usize = 64;
 
 /// Heap-allocated character table.
 ///
@@ -2059,7 +1956,8 @@ pub struct FontObjectData {
 
 /// Heap-allocated opened-font pseudovector (`PVEC_FONT`).
 #[repr(C)]
-pub struct FontObj {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct FontObj {
     pub header: VecLikeHeader,
     pub data: FontObjectData,
 }
@@ -2164,7 +2062,8 @@ impl BoolVectorObj {
     /// The mask of the valid bits of the last word (all ones when `nbits`
     /// is a multiple of the word size).
     #[inline]
-    pub const fn last_word_mask(nbits: usize) -> u64 {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn last_word_mask(nbits: usize) -> u64 {
         match nbits % Self::WORD_BITS {
             0 => u64::MAX,
             rem => (1u64 << rem) - 1,
@@ -2239,12 +2138,6 @@ impl BoolVectorObj {
     pub fn byte(&self, index: usize) -> u8 {
         (self.words[index / 8] >> ((index % 8) * 8)) as u8
     }
-
-    /// The number of bytes of bit data: `⌈nbits/8⌉`.
-    #[inline]
-    pub(crate) fn byte_len(&self) -> usize {
-        self.nbits.div_ceil(8)
-    }
 }
 
 /// A thread owns its state independently of the live-thread registry.
@@ -2312,7 +2205,8 @@ impl CondVarObj {
 
 /// Heap-allocated handle for one host-owned video session.
 #[repr(C)]
-pub struct VideoObj {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct VideoObj {
     pub header: VecLikeHeader,
     pub video_id: VideoId,
 }
@@ -2545,7 +2439,7 @@ impl SubrStorageLayout {
 /// owned resource is the `Integer`'s internal limb buffer, which is
 /// freed when `Drop` runs in `free_gc_object`.
 #[repr(C)]
-pub struct BignumObj {
+pub(crate) struct BignumObj {
     pub header: VecLikeHeader,
     pub value: Integer,
 }
@@ -2571,7 +2465,7 @@ pub struct SymbolWithPosObj {
 /// functions of unmarked finalizers, and re-marks them so they survive the
 /// sweep until they have run (errors ignored).
 #[repr(C)]
-pub struct FinalizerObj {
+pub(crate) struct FinalizerObj {
     pub header: VecLikeHeader,
     /// Called with zero args after the GC cycle that finds this object
     /// unreachable. Immutable after allocation.

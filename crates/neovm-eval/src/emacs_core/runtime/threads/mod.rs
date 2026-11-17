@@ -120,7 +120,7 @@ impl ThreadName {
 /// traced children. A successful admission permits these leases to expire;
 /// a refusal leaves the caller's event intact.
 #[derive(Clone, Debug)]
-pub struct InFlightThreadEvent {
+pub(crate) struct InFlightThreadEvent {
     pub sender: SharedRoot,
     pub error_symbol: SharedRoot,
     pub data: SharedRoot,
