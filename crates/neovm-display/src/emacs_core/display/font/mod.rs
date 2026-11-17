@@ -312,36 +312,6 @@ pub(crate) fn replace_alternative_font_registry_alist(names: Vec<(LispString, Ve
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn alternative_font_registries(registry: &str) -> Vec<String> {
-    let lookup = registry.trim();
-    if lookup.is_empty() {
-        return Vec::new();
-    }
-
-    let Ok(alist) = alternative_font_registry_alist().read() else {
-        return vec![lookup.to_ascii_lowercase()];
-    };
-
-    alist
-        .iter()
-        .find_map(|(name, registries)| {
-            name.as_bytes()
-                .eq_ignore_ascii_case(lookup.as_bytes())
-                .then(|| {
-                    registries
-                        .iter()
-                        .map(|text| {
-                            // Issue #131: font registry names are ASCII identifiers; render the
-                            // string's Emacs bytes faithfully rather than via storage sentinels.
-                            neovm_value::emacs_char::to_utf8_lossy(text.as_bytes())
-                        })
-                        .collect()
-                })
-        })
-        .unwrap_or_else(|| vec![lookup.to_ascii_lowercase()])
-}
-
 // ---------------------------------------------------------------------------
 // Argument helpers (local to this module)
 // ---------------------------------------------------------------------------
