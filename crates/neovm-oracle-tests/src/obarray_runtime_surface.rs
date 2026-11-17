@@ -26,17 +26,43 @@ fn oracle_prop_runtime_interned_boot_spellings() {
     // reverse-oblique: font.c's BUILD_STYLE_TABLE names. utf-16le-dos:
     // make_subsidiaries (src/coding.c:10968-10981).
     //
-    // `misc` (indian.el's dynamic-binding variable) is NOT in this row: GNU's
-    // final image interns it while reading `indian.elc`, this port's dump-mode
-    // bytecode load resolves the same symbol through the name-only interner
-    // and never marks membership. It is the one open row of the peer-5786
-    // membership audit and is tracked as W2, not pinned green here.
+    // misc: menu-bar's load runs `substitute-key-definition` over the
+    // language-environment menu; looking up the mixed-case `Misc` entry
+    // falls into Flookup_key's backwards-compatibility fallback, which
+    // lowercases the key symbols and `Fintern`s them
+    // (src/keymap.c:1330-1432, `Fintern` at :1386). The dump image
+    // therefore holds the member. This port's fallback resolved the
+    // lowercased name through the name-only interner, which was the one
+    // open row of the peer-5786 membership audit (W2).
     let form = r#"(list (and (intern-soft "Sans Serif") t)
        (and (intern-soft "lcms2") t)
        (and (intern-soft "reverse-italic") t)
        (and (intern-soft "reverse-oblique") t)
-       (and (intern-soft "utf-16le-dos") t))"#;
-    let expect = expect_test::expect![[r#""OK (t t t t t)""#]];
+       (and (intern-soft "utf-16le-dos") t)
+       (and (intern-soft "misc") t))"#;
+    let expect = expect_test::expect![[r#""OK (t t t t t t)""#]];
+    assert_oracle_parity_expect(form, expect);
+}
+
+/// Flookup_key's mixed-case menu fallback interns the converted names.
+///
+/// GNU's fallback (`src/keymap.c:1330-1432`) calls `Fintern` for every
+/// lowercased symbol and again for its space-to-dash variant, so both
+/// spellings are obarray members even when only the dashed one is bound.
+/// All names are built with `intern`/`concat` so the form's reader cannot
+/// pre-intern them and hide the effect.
+#[test]
+fn oracle_prop_menu_case_and_space_fallback_membership() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"(let* ((m (make-sparse-keymap))
+                 (lower (intern (concat "fo" "o-bar"))))
+             (define-key m (vector 'menu-bar 'fallback-test lower) 'ignore)
+             (list (lookup-key m (vector 'menu-bar 'fallback-test
+                                         (intern (concat "Fo" "o Bar"))))
+                   (and (intern-soft (concat "foo" " bar")) t)
+                   (and (intern-soft (concat "fo" "o-bar")) t)))"#;
+    let expect = expect_test::expect![[r#""OK (ignore t t)""#]];
     assert_oracle_parity_expect(form, expect);
 }
 
