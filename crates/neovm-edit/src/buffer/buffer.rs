@@ -1342,31 +1342,6 @@ pub const DISPLAY_AFFECTING_GLOBAL_VARS: &[&str] = &[
     // shape, neither of which alters text layout.
 ];
 
-#[cfg(feature = "test-support")]
-/// Whether setting the named variable should mark redisplay dirty.
-///
-/// Returns `true` for the curated per-buffer display slots and the
-/// curated global display variables. This is the single source of
-/// truth queried by the `set`/`set-default`/buffer-local-set chokepoint
-/// so the answer is identical no matter which write path is taken
-/// (the tree-walk interpreter, the bytecode VM, `set-default`, custom).
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) fn variable_affects_display(name: &str) -> bool {
-    static DISPLAY_VAR_SET: OnceLock<FxHashMap<&'static str, ()>> = OnceLock::new();
-    DISPLAY_VAR_SET
-        .get_or_init(|| {
-            let mut set = FxHashMap::default();
-            for &name in DISPLAY_AFFECTING_BUFFER_SLOTS {
-                set.insert(name, ());
-            }
-            for &name in DISPLAY_AFFECTING_GLOBAL_VARS {
-                set.insert(name, ());
-            }
-            set
-        })
-        .contains_key(name)
-}
-
 /// `variable_affects_display` keyed by `SymId`, for the hot variable-set
 /// path. Resolves the symbol's name once into a dense `SymId -> bool`
 /// table so the chokepoint avoids a string hash on every assignment.

@@ -2756,7 +2756,7 @@ fn set_default_display_var_invalidates_redisplay() {
 /// variables.
 #[test]
 fn variable_affects_display_classifies_curated_set() {
-    use neovm_edit::buffer::buffer::variable_affects_display;
+    use neovm_edit::buffer::buffer::variable_affects_display_by_sym_id;
     for name in [
         "truncate-lines",
         "tab-width",
@@ -2770,7 +2770,7 @@ fn variable_affects_display_classifies_curated_set() {
         "word-wrap",
     ] {
         assert!(
-            variable_affects_display(name),
+            variable_affects_display_by_sym_id(neovm_value::intern::intern(name)),
             "{name} should be classified as display-affecting"
         );
     }
@@ -2782,7 +2782,7 @@ fn variable_affects_display_classifies_curated_set() {
         "case-fold-search",
     ] {
         assert!(
-            !variable_affects_display(name),
+            !variable_affects_display_by_sym_id(neovm_value::intern::intern(name)),
             "{name} should NOT be classified as display-affecting"
         );
     }

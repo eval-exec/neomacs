@@ -75,10 +75,13 @@ pub(crate) use text::{TextInsertion, TextReplacement, TextTransposition};
 #[cfg(feature = "test-support")]
 pub use text::{TextInsertion, TextReplacement, TextTransposition};
 pub use text_props::{ObjectIntervalPlistRun, ObjectIntervalRun, TextPropertyTable};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use undo::truncate_undo_list;
+#[cfg(feature = "test-support")]
+pub use undo::truncate_undo_list;
 pub(crate) use undo::undo_first_group_bytes;
 pub use undo::{
-    UndoLimitBindings, truncate_undo_list, undo_list_boundary, undo_list_is_disabled,
-    undo_list_record_insert,
+    UndoLimitBindings, undo_list_boundary, undo_list_is_disabled, undo_list_record_insert,
 };
 #[cfg(not(feature = "test-support"))]
 pub(crate) use undo::{UndoLimits, UndoRecording};

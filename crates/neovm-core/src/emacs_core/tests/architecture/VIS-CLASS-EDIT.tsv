@@ -1,0 +1,109 @@
+crate	item	rule	evidence
+neovm-edit	buffer::visited_file_modtime::FirstChangeModtime	1	crates/neovm-edit/src/buffer/visited_file_modtime.rs:242
+neovm-edit	buffer::visited_file_modtime::BaseVisitedFileModtime	1	crates/neovm-edit/src/buffer/visited_file_modtime.rs:254
+neovm-edit	buffer::buffer::BUFFER_SLOT_MARK_ACTIVE	1	crates/neovm-edit/src/buffer/buffer.rs:582
+neovm-edit	buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL	1	crates/neovm-edit/src/buffer/buffer.rs:592
+neovm-edit	buffer::buffer::Buffer::auto_save_file_name_runtime_string_owned	2	wrapper over production auto_save_file_name_lisp_string buffer.rs:43; test: crates/neovm-core/src/emacs_core/tests/moved_edit/buffer/buffer/tests/buffer_test.rs
+neovm-edit	buffer::buffer::Buffer::automatic_composition_spans_visible	2	wrapper over production automatic_composition_spans_visible_with_symbols buffer.rs:68; test: crates/neovm-core/src/emacs_core/tests/moved_text/emacs_core/text/composite/tests/composite_test.rs
+neovm-edit	buffer::buffer::Buffer::full_text_string	1	crates/neovm-edit/src/buffer/buffer.rs:3458
+neovm-edit	buffer::buffer::Buffer::has_name	1	crates/neovm-edit/src/buffer/buffer.rs:7486
+neovm-edit	buffer::buffer::Buffer::kill_buffer_local	1	crates/neovm-edit/src/buffer/buffer.rs:8408
+neovm-edit	buffer::buffer::Buffer::marker_chain_anchor_lookup	1	crates/neovm-edit/src/buffer/buffer.rs:7692
+neovm-edit	buffer::buffer::Buffer::marker_value	1	crates/neovm-edit/src/buffer/buffer.rs:8788
+neovm-edit	buffer::buffer::Buffer::recent_auto_save_p	1	crates/neovm-edit/src/emacs_core/editing/buffer/mod.rs:4166
+neovm-edit	buffer::buffer::Buffer::record_text_property_modification	1	crates/neovm-edit/src/buffer/buffer.rs:5015
+neovm-edit	buffer::buffer::Buffer::register_marker_at_emacs_byte_pos	1	crates/neovm-edit/src/buffer/buffer.rs:7394
+neovm-edit	buffer::buffer::Buffer::restore_accessible_region	1	crates/neovm-edit/src/buffer/buffer.rs:8481
+neovm-edit	buffer::buffer::Buffer::restore_accessible_region_with_current_full_end	1	crates/neovm-edit/src/buffer/buffer.rs:8494
+neovm-edit	buffer::buffer::Buffer::restore_modified_state	1	crates/neovm-edit/src/buffer/buffer.rs:8224
+neovm-edit	buffer::buffer::Buffer::set_accessible_region_and_point_from_emacs_bytes	2	wrapper over production narrow_to_emacs_byte_range + goto_emacs_byte_pos; test: crates/neovm-core/src/emacs_core/tests/moved_edit/buffer/buffer/tests/buffer_test.rs
+neovm-edit	buffer::buffer::Buffer::set_buffer_local_void_by_sym_id	1	crates/neovm-edit/src/buffer/buffer.rs:8398
+neovm-edit	buffer::buffer::Buffer::set_file_name_value	1	crates/neovm-edit/src/buffer/buffer.rs:8248
+neovm-edit	buffer::buffer::Buffer::set_mark_emacs_byte_pos	1	crates/neovm-edit/src/buffer/buffer.rs:7165
+neovm-edit	buffer::buffer::Buffer::set_multibyte_value	1	crates/neovm-edit/src/buffer/buffer.rs:7135
+neovm-edit	buffer::buffer::Buffer::set_point_anchor	1	crates/neovm-edit/src/buffer/buffer.rs:7863
+neovm-edit	buffer::buffer::Buffer::text_props_remove_property_in_emacs_byte_range	1	crates/neovm-edit/src/buffer/buffer.rs:4023
+neovm-edit	buffer::buffer::Buffer::try_new_standalone_with_text_backend_kind	2	wrapper over production try_new_with_text_backend_kind buffer.rs; test: crates/neomacs-layout-engine/src/neovm_bridge/tests/neovm_bridge_test.rs
+neovm-edit	buffer::buffer::Buffer::try_new_with_text_backend_kind	1	crates/neovm-edit/src/buffer/buffer.rs:2883
+neovm-edit	buffer::buffer::BufferManager::create_indirect_buffer	1	crates/neovm-edit/src/buffer/buffer_list_cursor.rs:244
+neovm-edit	buffer::buffer::BufferManager::create_marker_at_emacs_byte_pos	1	crates/neovm-edit/src/buffer/buffer.rs:7362
+neovm-edit	buffer::buffer::BufferManager::current_labeled_restriction_bounds	1	crates/neovm-edit/src/buffer/buffer.rs:8560
+neovm-edit	buffer::buffer::BufferManager::delete_buffer_overlay	1	crates/neovm-edit/src/emacs_core/editing/editfns/mod.rs:1251
+neovm-edit	buffer::buffer::BufferManager::generate_new_buffer_name_ignoring	1	crates/neovm-edit/src/emacs_core/editing/buffer/mod.rs:4304
+neovm-edit	buffer::buffer::BufferManager::marker_char_pos	1	crates/neovm-edit/src/buffer/buffer.rs:7666
+neovm-edit	buffer::buffer::BufferManager::marker_emacs_byte_pos	1	crates/neovm-edit/src/buffer/buffer.rs:7648
+neovm-edit	buffer::buffer::BufferManager::marker_value	1	crates/neovm-edit/src/buffer/buffer.rs:8788
+neovm-edit	buffer::buffer::BufferManager::move_buffer_overlay_to_emacs_byte_range	2	wrapper over production OverlayList::move_overlay_to_emacs_byte_range; test: crates/neovm-core/src/emacs_core/tests/moved_edit/buffer/buffer/tests/shared_overlay_modiff_test.rs
+neovm-edit	buffer::buffer::BufferManager::narrow_buffer_to_emacs_byte_range	1	crates/neovm-edit/src/emacs_core/editing/buffer/mod.rs:3916
+neovm-edit	buffer::buffer::BufferManager::put_buffer_overlay_property	2	wrapper over production OverlayList::overlay_put; test: crates/neovm-core/src/emacs_core/tests/moved_edit/buffer/buffer/tests/shared_overlay_modiff_test.rs
+neovm-edit	buffer::buffer::BufferManager::put_buffer_text_property_in_emacs_byte_range	1	crates/neovm-edit/src/emacs_core/editing/buffer/mod.rs:2949
+neovm-edit	buffer::buffer::BufferManager::register_marker_at_emacs_byte_pos	1	crates/neovm-edit/src/buffer/buffer.rs:7394
+neovm-edit	buffer::buffer::BufferManager::set_buffer_file_truename	2	slot write through production BUFFER_SLOT_FILE_TRUENAME storage; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/buffer/tests/buffer_test.rs
+neovm-edit	buffer::buffer::BufferManager::set_buffer_local_map	1	crates/neovm-edit/src/buffer/buffer.rs:8387
+neovm-edit	buffer::buffer::BufferManager::widen_buffer	1	crates/neovm-edit/src/buffer/buffer.rs:8635
+neovm-edit	buffer::buffer::variable_affects_display	3	DELETE: by-name duplicate of production variable_affects_display_by_sym_id buffer.rs:1409 (eval runtime_projection.rs:106, command_loop.rs:857); test retargeted
+neovm-edit	buffer::buffer::LabeledRestriction	1	crates/neovm-edit/src/buffer/buffer.rs:2206
+neovm-edit	buffer::buffer::SavedLabeledRestrictions	1	crates/neovm-edit/src/buffer/buffer.rs:2224
+neovm-edit	buffer::buffer_text::BufferText::markers_head_slot_raw	1	crates/neovm-edit/src/buffer/parallel_roots.rs:122
+neovm-edit	buffer::buffer_text::BufferText::record_text_property_modification	1	crates/neovm-edit/src/buffer/buffer.rs:5015
+neovm-edit	buffer::buffer_text::BufferText::text_props_remove_property_in_emacs_byte_range	1	crates/neovm-edit/src/buffer/buffer.rs:4023
+neovm-edit	buffer::buffer_text::BufferText::try_from_str_with_backend_kind	2	wrapper over production from_str_with_backend_kind buffer_text.rs; test: crates/neovm-core/src/emacs_core/tests/moved_edit/buffer/buffer_text/tests/fontification_noalloc.rs
+neovm-edit	buffer::insdel::Buffer::transpose_regions	1	crates/neovm-edit/src/buffer/insdel.rs:700
+neovm-edit	buffer::overlay::OverlayList::adjust_for_delete_emacs_byte_range	1	crates/neovm-edit/src/buffer/overlay.rs:1780
+neovm-edit	buffer::overlay::OverlayList::adjust_for_insert_at_emacs_byte_pos	1	crates/neovm-edit/src/buffer/overlay.rs:1741
+neovm-edit	buffer::overlay::OverlayList::delete_overlay	1	crates/neovm-edit/src/buffer/overlay.rs:1158
+neovm-edit	buffer::overlay::OverlayList::detach_overlay	1	crates/neovm-edit/src/buffer/overlay.rs:1033
+neovm-edit	buffer::overlay::OverlayList::highest_priority_overlay_at_emacs_byte_pos	2	query over production best_overlay_among + overlay property resolution; test: crates/neomacs-layout-engine/src/display_source/tests/display_source_test.rs
+neovm-edit	buffer::overlay::OverlayList::insert_overlay	1	crates/neovm-edit/src/emacs_core/editing/buffer/mod.rs:4739
+neovm-edit	buffer::overlay::OverlayList::move_overlay_to_emacs_byte_range	1	crates/neovm-edit/src/buffer/buffer.rs:8317
+neovm-edit	buffer::overlay::OverlayList::overlay_put	1	crates/neovm-edit/src/buffer/buffer.rs:7939
+neovm-edit	buffer::overlay::OverlayList::overlays_in_accessible_emacs_byte_range	1	crates/neovm-edit/src/buffer/overlay.rs:1200
+neovm-edit	buffer::overlay::OverlayList::previous_boundary_before_emacs_byte_pos	1	crates/neovm-edit/src/emacs_core/editing/textprop/mod.rs:4726
+neovm-edit	buffer::overlay::OverlayList::set_front_advance	2	state write of overlay front_advance; no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/buffer/overlay/tests/random_overlay_model_test.rs
+neovm-edit	buffer::overlay::OverlayList::set_rear_advance	2	state write of overlay rear_advance; no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/buffer/overlay/tests/random_overlay_model_test.rs
+neovm-edit	buffer::overlay::OverlayList::snapshot_clone	1	crates/neovm-edit/src/buffer/overlay.rs:304
+neovm-edit	buffer::text::edit::TextExtent::emacs_bytes	1	crates/neovm-edit/src/buffer/text/edit.rs:139
+neovm-edit	buffer::text::kind::BufferTextBackendKind::implemented_variants	1	crates/neovm-edit/src/buffer/text/kind.rs:50
+neovm-edit	buffer::text::kind::BufferTextBackendKind::non_gap_implemented_variants	2	filter over production implemented_variants/is_gap_buffer kind.rs; test: crates/neovm-core/src/emacs_core/tests/moved_eval/emacs_core/lisp/native/builtins/tests/builtins_test.rs
+neovm-edit	buffer::undo::UndoRecording	1	crates/neovm-edit/src/buffer/undo.rs:66
+neovm-edit	buffer::undo::UndoLimits::outer_limit_function_for	1	crates/neovm-edit/src/emacs_core/editing/undo/mod.rs:178
+neovm-edit	buffer::undo::undo_list_has_trailing_boundary	2	test-driven accessor re-exported for the moved undo tests; no production caller and no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/undo/tests/undo_test.rs
+neovm-edit	buffer::visited_file_modtime::FirstChangeModtime::to_lisp_value	1	crates/neovm-edit/src/buffer/visited_file_modtime.rs:165
+neovm-edit	buffer::visited_file_modtime::VisitedFileModtime::to_lisp_value	1	crates/neovm-edit/src/buffer/visited_file_modtime.rs:165
+neovm-edit	emacs_core::editing::bookmark::BookmarkManager::all_names	1	crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs:695
+neovm-edit	emacs_core::editing::bookmark::BookmarkManager::load_from_string	1	crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs:987
+neovm-edit	emacs_core::editing::bookmark::BookmarkManager::mark_saved	1	crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs:929
+neovm-edit	emacs_core::editing::bookmark::BookmarkManager::recent_names	2	accessor of the production recent list; no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/bookmark/tests/bookmark_test.rs
+neovm-edit	emacs_core::editing::bookmark::BookmarkManager::save_to_string	1	crates/neovm-edit/src/emacs_core/editing/bookmark/mod.rs:923
+neovm-edit	emacs_core::editing::mode::ModeRegistry::active_minor_modes	1	crates/neovm-edit/src/emacs_core/editing/mode/mod.rs:249
+neovm-edit	emacs_core::editing::mode::ModeRegistry::add_auto_mode	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::derived_mode_p	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::disable_minor_mode	1	crates/neovm-edit/src/emacs_core/editing/mode/mod.rs:471
+neovm-edit	emacs_core::editing::mode::ModeRegistry::enable_global_minor_mode	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::enable_minor_mode	1	crates/neovm-edit/src/emacs_core/editing/mode/mod.rs:474
+neovm-edit	emacs_core::editing::mode::ModeRegistry::font_lock_keywords	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::get_custom_group	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::get_custom_variable	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::get_major_mode	1	crates/neovm-edit/src/emacs_core/editing/mode/mod.rs:241
+neovm-edit	emacs_core::editing::mode::ModeRegistry::get_major_mode_def	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::is_minor_mode_active	1	crates/neovm-edit/src/emacs_core/editing/mode/mod.rs:470
+neovm-edit	emacs_core::editing::mode::ModeRegistry::mode_for_file	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::register_custom_group	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::register_custom_variable	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::register_major_mode	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::register_minor_mode	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::set_major_mode	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	emacs_core::editing::mode::ModeRegistry::toggle_minor_mode	2	test-driven Registry operation; production mode-line reader consumes the registry (mode/mod.rs:241,629); no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/mode/tests/mode_test.rs
+neovm-edit	buffer::LabeledRestriction	1	crates/neovm-edit/src/buffer/buffer.rs:2206
+neovm-edit	buffer::SavedLabeledRestrictions	1	crates/neovm-edit/src/buffer/buffer.rs:2224
+neovm-edit	buffer::TranspositionAnchorPolicy	1	crates/neovm-edit/src/buffer/edit_transaction.rs:996
+neovm-edit	buffer::TextInsertion	1	crates/neovm-edit/src/buffer/overlay.rs:1738
+neovm-edit	buffer::TextReplacement	1	crates/neovm-edit/src/buffer/text/backend/rope.rs:7
+neovm-edit	buffer::TextTransposition	1	crates/neovm-edit/src/buffer/edit_transaction.rs:14
+neovm-edit	buffer::UndoLimits	1	crates/neovm-edit/src/emacs_core/editing/undo/mod.rs:173
+neovm-edit	buffer::UndoRecording	1	crates/neovm-edit/src/buffer/undo.rs:66
+neovm-edit	buffer::undo_list_has_trailing_boundary	2	test-driven; no production caller and no duplicate implementation; test: crates/neovm-core/src/emacs_core/tests/moved_edit/emacs_core/editing/undo/tests/undo_test.rs
+neovm-edit	buffer::text::TextInsertion	1	crates/neovm-edit/src/buffer/overlay.rs:1738
+neovm-edit	buffer::text::TextReplacement	1	crates/neovm-edit/src/buffer/text/backend/rope.rs:7
+neovm-edit	buffer::text::TextTransposition	1	crates/neovm-edit/src/buffer/edit_transaction.rs:14
+neovm-edit	buffer::buffer::SavedRestrictionState::labeled_restrictions	1	crates/neovm-edit/src/buffer/buffer.rs:2308

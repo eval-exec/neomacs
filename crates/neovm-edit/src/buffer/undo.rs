@@ -453,7 +453,8 @@ pub trait UndoLimitBindings {
 
 /// One buffer's truncation limits, read at the moment GNU reads them.
 #[derive(Clone, Copy, Debug)]
-pub struct UndoLimits {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct UndoLimits {
     /// `undo-limit`: truncate *after* the boundary that pushes the list past
     /// this size (`src/undo.c:380-390`).
     limit: i64,
@@ -470,7 +471,8 @@ impl UndoLimits {
     /// `None` means `undo-limit` or `undo-strong-limit` holds something GNU's
     /// `DEFVAR_INT` slot could never hold; there is no defensible number to
     /// truncate with in that state, so the caller leaves the list alone.
-    pub fn read(bindings: &impl UndoLimitBindings) -> Option<Self> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn read(bindings: &impl UndoLimitBindings) -> Option<Self> {
         let (GnuIntVariable::Int(limit), GnuIntVariable::Int(strong_limit)) = (
             GnuIntVariable::of(bindings.undo_limit()),
             GnuIntVariable::of(bindings.undo_strong_limit()),
@@ -525,7 +527,8 @@ pub(crate) fn undo_first_group_bytes(undo_list: Value) -> i64 {
 /// exceeds the limit" loop does not have: the most recent record is always
 /// kept whole, and every cut lands on a group edge, so an undo list is never
 /// left holding half of a command's changes.
-pub fn truncate_undo_list(undo_list: Value, limits: &UndoLimits) -> Value {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn truncate_undo_list(undo_list: Value, limits: &UndoLimits) -> Value {
     let mut size_so_far: i64 = 0;
     let mut prev = Value::NIL;
     let mut next = undo_list;

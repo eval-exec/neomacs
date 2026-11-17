@@ -539,7 +539,8 @@ impl std::ops::BitOrAssign for SyntaxFlags {
 /// A single entry in a syntax table: the class, an optional matching
 /// character (for parens/string delimiters), and comment/prefix flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SyntaxEntry {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct SyntaxEntry {
     pub class: SyntaxClass,
     pub(crate) matching_char: Option<char>,
     pub flags: SyntaxFlags,
@@ -547,7 +548,8 @@ pub struct SyntaxEntry {
 
 impl SyntaxEntry {
     /// Create a simple entry with no matching char or flags.
-    pub fn simple(class: SyntaxClass) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn simple(class: SyntaxClass) -> Self {
         Self {
             class,
             matching_char: None,
@@ -863,7 +865,8 @@ impl SyntaxTable {
     /// `SYNTAX_ENTRY(c)`. Falls back to the standard chartable when
     /// the wrapper is nil-backed (handled by `syntax_entry_at_char`).
     #[inline(always)]
-    pub fn get_entry(&self, ch: char) -> Option<SyntaxEntry> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_entry(&self, ch: char) -> Option<SyntaxEntry> {
         self.get_entry_code(ch as u32)
     }
 
@@ -914,7 +917,9 @@ impl SyntaxTable {
     /// the table is a `NIL` placeholder — the evaluator's
     /// `modify-syntax-entry` builtin routes through the chartable
     /// directly for that case.
-    pub fn modify_syntax_entry(&mut self, ch: char, entry: SyntaxEntry) {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn modify_syntax_entry(&mut self, ch: char, entry: SyntaxEntry) {
         if self.chartable.is_nil() {
             return;
         }
