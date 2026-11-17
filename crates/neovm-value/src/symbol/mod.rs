@@ -4236,53 +4236,6 @@ impl Obarray {
         }
     }
 
-    /// [`Self::makunbound_canonical`] for the owner-aware API: a thread
-    /// projection answers [`CanonicalWrite::Projected`] from the forwarded
-    /// arm, which leaves every forwarder as it is.
-    #[inline(always)]
-    #[doc(hidden)]
-    pub fn makunbound_canonical_routed(&mut self, id: SymId) -> CanonicalWrite {
-        self.ensure_global_member_if_canonical(id);
-        let target = self.resolve_alias_for_write(id);
-        if self
-            .slot(target)
-            .is_none_or(|sym| sym.trapped_write() == SymbolTrappedWrite::NoWrite)
-        {
-            return CanonicalWrite::Done;
-        }
-        let blv = match self.cell_write_ensure(target).arm() {
-            ArmMut::Plain(plain) => {
-                plain.store(Value::UNBOUND);
-                return CanonicalWrite::Done;
-            }
-            // `resolve_alias_for_write` stops on an alias only when the chain
-            // does not end; GNU `Fmakunbound` on an alias undoes it
-            // (`src/data.c:781-784`).
-            ArmMut::Alias(alias) => {
-                alias.unalias(Value::UNBOUND);
-                return CanonicalWrite::Done;
-            }
-            ArmMut::Forwarded(forwarded) => {
-                return if forwarded.descriptor().thread_projection().is_some() {
-                    CanonicalWrite::Projected
-                } else {
-                    CanonicalWrite::Done
-                };
-            }
-            ArmMut::Localized(local) => local.blv(),
-        };
-        // Safety: a `Localized` cell names a record self.blvs owns.
-        let blv = unsafe { &mut *blv.as_ptr() };
-        if blv.fwd.is_some() {
-            return CanonicalWrite::Done;
-        }
-        blv.defcell.get().set_cdr(Value::UNBOUND);
-        if crate::value::eq_value(&blv.valcell.get(), &blv.defcell.get()) {
-            blv.valcell.get().set_cdr(Value::UNBOUND);
-        }
-        CanonicalWrite::Done
-    }
-
     /// Check if a symbol is bound (has a value cell).
     pub(crate) fn canonical_boundp(&self, access: CanonicalAccess, name: &str) -> bool {
         self.canonical_boundp_id(access, intern(name))

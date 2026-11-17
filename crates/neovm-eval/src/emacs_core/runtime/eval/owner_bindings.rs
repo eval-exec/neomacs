@@ -2368,35 +2368,4 @@ impl Context {
                 .set_canonical_value(CanonicalAccess::STORAGE, base, value);
         });
     }
-
-    /// [`Context::makunbound_variable`] of a projected cell.
-    #[cold]
-    #[inline(never)]
-    #[allow(dead_code)] // callee of the retained routed makunbound seam.
-    pub(crate) fn makunbound_owner_variable(&mut self, id: SymId) {
-        debug_assert!(
-            self.owner.slab().is_some(),
-            "a Context that sees a projected cell has an owner slab"
-        );
-        let Some((base, projection)) = self.projection_behind(id) else {
-            self.obarray
-                .makunbound_canonical(CanonicalAccess::ROUTED, id);
-            return;
-        };
-        let index = projection.index();
-        if let Some(slab) = self.owner.slab_mut()
-            && slab.slot(index, Channel::Default).value().is_some()
-        {
-            slab.set_slot(
-                index,
-                Channel::Default,
-                SlotState::Bound(SlotValue::new(Value::UNBOUND)),
-            );
-            return;
-        }
-        self.with_revealed_projection(base, |ctx| {
-            ctx.obarray
-                .makunbound_canonical(CanonicalAccess::STORAGE, base);
-        });
-    }
 }

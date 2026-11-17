@@ -1263,10 +1263,6 @@ impl KeyboardRuntime {
         self.kboard.begin_executing_kbd_macro(events);
     }
 
-    pub(crate) fn is_executing_kbd_macro(&self) -> bool {
-        self.kboard.is_executing_kbd_macro()
-    }
-
     pub(crate) fn finish_executing_kbd_macro(&mut self) {
         self.kboard.finish_executing_kbd_macro();
     }
@@ -1295,9 +1291,6 @@ pub struct CommandLoop {
     pub(crate) presented_interactions: PresentedInteractions,
     /// Next bounded GUI service opportunity while command input stays queued.
     pub(crate) gui_display_deadline: Option<Instant>,
-    /// Current prefix argument.
-    #[allow(dead_code)] // field carried by the pinned command-loop layout.
-    pub(crate) prefix_arg: PrefixArg,
     /// Whether we are in a recursive edit.
     pub recursive_depth: usize,
     /// Whether the command loop is running.
@@ -1343,7 +1336,6 @@ impl CommandLoop {
             keyboard: KeyboardRuntime::new(),
             presented_interactions: PresentedInteractions::default(),
             gui_display_deadline: None,
-            prefix_arg: PrefixArg::None,
             recursive_depth: 0,
             running: false,
             quit_flag: false,
@@ -1487,13 +1479,6 @@ impl CommandLoop {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn begin_executing_kbd_macro(&mut self, events: Vec<Value>) {
         self.keyboard.begin_executing_kbd_macro(events);
-    }
-
-    // LOST WIRING: CommandLoop-level kbd-macro query; the keyboard runtime
-    // exposes the same state and the command loop does not need this alias yet.
-    #[allow(dead_code)]
-    pub(crate) fn is_executing_kbd_macro(&self) -> bool {
-        self.keyboard.is_executing_kbd_macro()
     }
 
     pub(crate) fn finish_executing_kbd_macro(&mut self) {
