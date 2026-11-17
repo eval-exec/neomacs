@@ -228,11 +228,25 @@ fn obarray_writer_surface_has_no_name_to_raw_symbol_method() {
         scan.proxy_invocations,
         scan.proxy_signatures,
     );
+    let rendered: Vec<String> = scan
+        .violations
+        .iter()
+        .map(|violation| {
+            format!(
+                "{}:{} {}::{} at {}",
+                violation.file,
+                violation.line,
+                violation.container,
+                violation.method,
+                violation.site,
+            )
+        })
+        .collect();
     assert!(
-        scan.violations.is_empty(),
+        rendered.is_empty(),
         "the obarray writer surface hands out a raw LispSymbol (or raw symbol \
          handle) addressed by an Elisp name; route the operation through the \
-         membership/canonical-id funnels instead:\n{:#?}",
-        scan.violations,
+         membership/canonical-id funnels instead:\n{}",
+        rendered.join("\n"),
     );
 }
