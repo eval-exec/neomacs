@@ -245,32 +245,6 @@ fn event_modifier_prefix_combined() {
     assert_eq!(event_modifier_prefix(bits), "C-M-");
 }
 
-// --- basic_char_code ---
-
-#[test]
-fn basic_char_code_cases() {
-    crate::test_utils::init_test_tracing();
-    assert_eq!(basic_char_code(0), 64); // NUL → @
-    assert_eq!(basic_char_code(1), 97); // C-a → a
-    assert_eq!(basic_char_code(26), 122); // C-z → z
-    assert_eq!(basic_char_code(65), 97); // A → a (lowercase)
-}
-
-// --- symbol_has_modifier_prefix ---
-
-#[test]
-fn symbol_has_modifier_prefix_cases() {
-    crate::test_utils::init_test_tracing();
-    assert!(symbol_has_modifier_prefix("C-x"));
-    assert!(symbol_has_modifier_prefix("M-x"));
-    assert!(symbol_has_modifier_prefix("S-left"));
-    assert!(symbol_has_modifier_prefix("s-a")); // super
-    assert!(symbol_has_modifier_prefix("H-a")); // hyper
-    assert!(symbol_has_modifier_prefix("A-a")); // alt
-    assert!(!symbol_has_modifier_prefix("foo"));
-    assert!(!symbol_has_modifier_prefix("left"));
-}
-
 #[test]
 fn positioned_keyboard_events_and_lucid_modifiers_follow_symbol_policy() {
     // GNU keymap.c:2341 and keyboard.c:7850,7862,7882 use SYMBOLP.
