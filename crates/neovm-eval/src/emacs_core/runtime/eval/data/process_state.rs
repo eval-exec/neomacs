@@ -533,7 +533,7 @@ pub struct ProcessWaitBackend {
     #[cfg(any(test, feature = "test-support"))]
     pub native_connect_observer: NativeConnectObservationSlot,
     #[cfg(unix)]
-    pub signal_fd: Option<std::os::fd::RawFd>,
+    pub(crate) signal_fd: Option<std::os::fd::RawFd>,
     /// I/O multiplexer for process descriptors and cross-thread notifications.
     ///
     /// Shared (`Arc`) so any cross-thread producer can wake a blocked
@@ -581,7 +581,7 @@ pub struct BackendWaitEntry {
 /// It is never lowered, and it lives on the process rather than on the read
 /// because GNU's `coding` here IS the process's own `struct coding_system`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum LastBlock {
+pub(crate) enum LastBlock {
     /// No read has returned zero bytes yet.
     #[default]
     NotReached,
@@ -612,13 +612,13 @@ pub enum LastBlock {
 #[derive(Clone, Debug, Default)]
 pub struct ProcessCodingState {
     pub carryover: Vec<u8>,
-    pub last_block: LastBlock,
+    pub(crate) last_block: LastBlock,
     pub decoder: neovm_text::encoding::CodingDecoderState,
 }
 
 /// Whether GNU's installed output descriptor invokes an encoding engine.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProcessEncodingEligibility {
+pub(crate) enum ProcessEncodingEligibility {
     Required,
     Bypass,
 }
@@ -628,8 +628,8 @@ pub enum ProcessEncodingEligibility {
 #[derive(Clone, Debug)]
 pub struct ProcessEncodingDescriptor {
     pub coding: neovm_text::encoding::RuntimeCodingSystem,
-    pub raw_coding: neovm_text::encoding::RuntimeCodingSystem,
-    pub eligibility: ProcessEncodingEligibility,
+    pub(crate) raw_coding: neovm_text::encoding::RuntimeCodingSystem,
+    pub(crate) eligibility: ProcessEncodingEligibility,
     pub encoder: neovm_text::encoding::CodingEncoderState,
 }
 
@@ -747,7 +747,7 @@ pub enum NetworkSocket {
 
 impl NetworkSocket {
     /// GNU's process `:type` name for this socket.
-    pub fn kind_name(&self) -> &'static str {
+    pub(crate) fn kind_name(&self) -> &'static str {
         match self {
             Self::TcpStream(_) => "tcp-stream",
             Self::TcpListener(_) => "tcp-listener",
@@ -1463,12 +1463,12 @@ pub const READ_PROCESS_OUTPUT_MAX_CEILING: usize = i32::MAX as usize;
 
 pub const READ_OUTPUT_DELAY_INCREMENT_MS: u64 = 10;
 
-pub const READ_OUTPUT_DELAY_MAX_MS: u64 = READ_OUTPUT_DELAY_INCREMENT_MS * 5;
+pub(crate) const READ_OUTPUT_DELAY_MAX_MS: u64 = READ_OUTPUT_DELAY_INCREMENT_MS * 5;
 
 pub const READ_OUTPUT_DELAY_MAX_MAX_MS: u64 = READ_OUTPUT_DELAY_INCREMENT_MS * 7;
 
 impl ExitQueryPolicy {
-    pub const GNU_MAKE_PROCESS: Self = Self::Query;
+    pub(crate) const GNU_MAKE_PROCESS: Self = Self::Query;
 
     pub fn from_lisp_query_flag(flag: Value) -> Self {
         if flag.is_truthy() {
@@ -1570,7 +1570,7 @@ impl LiveProcessIo {
     /// and reads its `ECHILD` -- *nobody has that child* -- as "still
     /// running", so `kill(-pid, SIGKILL)` went to a pid the kernel had handed
     /// back.  See `process/reap.rs`.
-    pub fn terminate_and_defer_children(&mut self) {
+    pub(crate) fn terminate_and_defer_children(&mut self) {
         // GNU process.c:1135: `if (p->alive) record_kill_process (p, Qnil);`.
         // The `Unreaped` arm is this port's `p->alive`; the hook's own
         // implementation starts with the same state gate, so taking it here is
@@ -1636,7 +1636,7 @@ impl BackendWaitEntry {
 }
 
 impl ProcessWaitBackendInterest {
-    pub fn wants_notifications(self) -> bool {
+    pub(crate) fn wants_notifications(self) -> bool {
         matches!(
             self,
             Self::NotificationsOnly | Self::NotificationsAndProcesses
@@ -1881,7 +1881,7 @@ pub fn process_has_ready_async_dns(proc: &Process) -> bool {
         .is_some_and(pending_network_connect_has_ready_async_dns)
 }
 
-pub fn process_has_observable_child_status(proc: &Process) -> bool {
+pub(crate) fn process_has_observable_child_status(proc: &Process) -> bool {
     matches!(
         ProcessStatusSymbol::from_status_value(proc.status),
         Some(ProcessStatusSymbol::Run | ProcessStatusSymbol::Stop)
@@ -1899,7 +1899,7 @@ pub fn process_has_readable_process_io(proc: &Process) -> bool {
         && process_status_has_readable_process_io(&proc.status)
 }
 
-pub fn process_has_pending_tls_handshake_io(process: &Process) -> bool {
+pub(crate) fn process_has_pending_tls_handshake_io(process: &Process) -> bool {
     process.gnutls_initstage == GnutlsInitStage::HandshakeTried
         && process.live_io.tls_stream.is_some()
         && process.live_io.tls_polling == TlsPolling::Enabled
@@ -1937,11 +1937,12 @@ pub enum ProcessWaitDeadline {
 
 impl ProcessWaitEvents {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub fn from_sources(notification_wakeup: bool, ready_processes: Vec<ProcessId>) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn from_sources(notification_wakeup: bool, ready_processes: Vec<ProcessId>) -> Self {
         Self::from_sources_with_writable(notification_wakeup, ready_processes, Vec::new())
     }
 
-    pub fn from_sources_with_writable(
+    pub(crate) fn from_sources_with_writable(
         notification_wakeup: bool,
         ready_processes: Vec<ProcessId>,
         writable_processes: Vec<ProcessId>,
@@ -1984,7 +1985,8 @@ impl ProcessWaitEvents {
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub fn has_ready_process(&self, process: ProcessId) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn has_ready_process(&self, process: ProcessId) -> bool {
         self.ready_processes.contains(&process)
     }
 
@@ -2018,7 +2020,7 @@ pub fn signal_kill_number() -> i32 {
     }
 }
 
-pub fn keyword_name(value: &Value) -> Option<&str> {
+pub(crate) fn keyword_name(value: &Value) -> Option<&str> {
     match value.kind() {
         ValueKind::Symbol(k) => Some(resolve_sym(k)),
         _ => None,
@@ -2041,7 +2043,7 @@ pub enum ProcessStatusSymbol {
     Failed,
 }
 
-pub fn process_status_has_readable_process_io(status: &Value) -> bool {
+pub(crate) fn process_status_has_readable_process_io(status: &Value) -> bool {
     matches!(
         ProcessStatusSymbol::from_status_value(*status),
         Some(
@@ -2144,7 +2146,7 @@ pub fn process_filter_accepts_output(proc: &Process) -> bool {
     ProcessFilterDispatch::from_lisp(proc.filter).accepts_output()
 }
 
-pub fn pending_network_connect_has_ready_async_dns(pending: &PendingNetworkConnect) -> bool {
+pub(crate) fn pending_network_connect_has_ready_async_dns(pending: &PendingNetworkConnect) -> bool {
     matches!(pending, PendingNetworkConnect::Dns(request) if request.is_ready())
 }
 
@@ -2423,7 +2425,7 @@ impl ProcessManager {
         id
     }
 
-    pub fn allocate_process_name(&self, requested: LispString) -> LispString {
+    pub(crate) fn allocate_process_name(&self, requested: LispString) -> LispString {
         if !self.process_name_is_in_use(&requested) {
             return requested;
         }
@@ -2439,7 +2441,7 @@ impl ProcessManager {
         unreachable!("the process-name suffix space cannot be exhausted")
     }
 
-    pub fn process_name_is_in_use(&self, candidate: &LispString) -> bool {
+    pub(crate) fn process_name_is_in_use(&self, candidate: &LispString) -> bool {
         self.processes.values().any(|process| {
             process.name.as_lisp_string().is_some_and(|existing| {
                 // `Fget_process` searches `Vprocess_alist` with `assoc`, whose
@@ -2505,7 +2507,8 @@ impl ProcessManager {
     }
 
     /// Get process status for both live and stale process handles.
-    pub fn process_status_any(&self, id: ProcessId) -> Option<&Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn process_status_any(&self, id: ProcessId) -> Option<&Value> {
         self.processes
             .get(&id)
             .map(|p| &p.status)
@@ -2790,7 +2793,11 @@ impl ProcessWriteQueueEntry {
     }
 }
 
-pub fn write_queue_push_entry(queue: Value, entry: ProcessWriteQueueEntry, front: bool) -> Value {
+pub(crate) fn write_queue_push_entry(
+    queue: Value,
+    entry: ProcessWriteQueueEntry,
+    front: bool,
+) -> Value {
     let entry = Value::cons(
         entry.object,
         Value::cons(
@@ -2807,7 +2814,8 @@ pub fn write_queue_push_entry(queue: Value, entry: ProcessWriteQueueEntry, front
     Value::list(entries)
 }
 
-pub fn write_queue_push(queue: Value, input_obj: Value, front: bool) -> Value {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn write_queue_push(queue: Value, input_obj: Value, front: bool) -> Value {
     let len = input_obj
         .as_lisp_string()
         .map(|string| string.sbytes())
@@ -3064,19 +3072,19 @@ impl StatusChangeSite {
 // Misc process-name/status helpers (A3b-8).
 
 /// Record a process id -> name mapping for the printer.
-pub fn register_process_print_name(id: ProcessId, name: &str) {
+pub(crate) fn register_process_print_name(id: ProcessId, name: &str) {
     PROCESS_NAME_REGISTRY.with(|slot| {
         slot.borrow_mut().insert(id, name.to_string());
     });
 }
 
-pub fn process_name_value(name: &str) -> Value {
+pub(crate) fn process_name_value(name: &str) -> Value {
     Value::heap_string(crate::emacs_core::builtins::plain_str_to_lisp_string(
         name, true,
     ))
 }
 
-pub fn process_name_lisp_value(name: &LispString) -> Value {
+pub(crate) fn process_name_lisp_value(name: &LispString) -> Value {
     Value::heap_string(name.clone())
 }
 
@@ -3086,11 +3094,11 @@ pub fn process_name_runtime(name: Value) -> String {
         .unwrap_or_else(|| "<invalid-process-name>".to_string())
 }
 
-pub fn process_type_value(kind: &ProcessKind) -> Value {
+pub(crate) fn process_type_value(kind: &ProcessKind) -> Value {
     Value::symbol(kind.name())
 }
 
-pub fn make_process_command_lisp_value(
+pub(crate) fn make_process_command_lisp_value(
     kind: &ProcessKind,
     program: &LispString,
     args: &[LispString],
@@ -3140,7 +3148,7 @@ pub fn process_status_run_value() -> Value {
     Value::symbol("run")
 }
 
-pub fn write_queue_pop(queue: Value) -> (Value, Option<ProcessWriteQueueEntry>) {
+pub(crate) fn write_queue_pop(queue: Value) -> (Value, Option<ProcessWriteQueueEntry>) {
     if queue.is_nil() {
         return (Value::NIL, None);
     }
@@ -3190,7 +3198,7 @@ pub fn print_process_handle(value: &Value) -> Option<String> {
     })
 }
 
-pub fn default_process_tty_name() -> String {
+pub(crate) fn default_process_tty_name() -> String {
     // Fallback TTY name when the actual PTY slave path is not available.
     "/dev/pts/0".to_string()
 }
@@ -3363,7 +3371,7 @@ impl ProcessEncodingState {
         }
     }
 
-    pub fn requires_encoding(&self) -> bool {
+    pub(crate) fn requires_encoding(&self) -> bool {
         matches!(
             self,
             Self::Active(ProcessEncodingDescriptor {
@@ -3402,7 +3410,7 @@ impl ProcessEncodingState {
         }
     }
 
-    pub fn encoder_mut(&mut self) -> Option<&mut neovm_text::encoding::CodingEncoderState> {
+    pub(crate) fn encoder_mut(&mut self) -> Option<&mut neovm_text::encoding::CodingEncoderState> {
         match self {
             Self::Uninitialized => None,
             Self::Active(descriptor) => Some(&mut descriptor.encoder),
@@ -3551,7 +3559,7 @@ impl ProcessStatusSymbol {
 
 // Status symbol helper (A3b-8).
 
-pub fn process_status_symbol_value(status: Value) -> Value {
+pub(crate) fn process_status_symbol_value(status: Value) -> Value {
     list_to_vec(&status)
         .and_then(|items| items.first().copied())
         .unwrap_or(status)

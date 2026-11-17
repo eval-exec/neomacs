@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use super::architecture_production_source_roots::crates_dir;
 use syn::visit::Visit;
-use syn::{Expr, ItemFn, Lit};
+use syn::{Expr, Lit};
 
 /// Rows whose empty body is deliberate, with the reason. Keys are
 /// `<crate-relative file>::<test fn>[#<n>]`; `#n` disambiguates repeated
@@ -227,15 +227,6 @@ enum FindingKind {
     Bug,
     /// Any other empty-body form: legal, but must be allowlisted.
     Empty,
-}
-
-impl FindingKind {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Bug => "empty-binding-with-sibling-reference",
-            Self::Empty => "empty-body",
-        }
-    }
 }
 
 #[derive(Debug)]

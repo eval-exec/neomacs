@@ -78,11 +78,10 @@ pub use part::{
     WindowPartGeometry,
 };
 use sibling_layout::{ChildExtent, sibling_bounds};
-pub(crate) use split::{
-    CombinationLimit, DeleteOutcome, DeleteResize, ParentSeal, SplitAttachment,
-};
+pub(crate) use split::{CombinationLimit, DeleteOutcome, DeleteResize, SplitAttachment};
 
 mod display_ext;
+pub(crate) use display_ext::DisplayFrameManagerCrateExt;
 #[cfg(test)]
 pub(crate) use display_ext::DisplayFrameTestExt;
 pub(crate) use display_ext::DisplayWindowTreeExt;
@@ -100,9 +99,6 @@ pub(crate) use display::{
 };
 pub(crate) use display::{frame_config_scroll_bar_height, frame_config_scroll_bar_width};
 pub use frame_params::{CursorTypeSymbol, FrameFullscreen, FrameParam, FrameParamKey};
-pub(crate) use frame_params::{
-    FrameToolBarPosition, FrameZGroup, GNU_FRAME_PARAM_COUNT, GNU_FRAME_PARAMS,
-};
 pub(crate) use neovm_eval::emacs_core::eval::data::window_layout_query::WindowLayoutQueryAdapter;
 pub use neovm_eval::emacs_core::eval::data::window_state::WindowScrollBarGeometry;
 pub use scroll_bar::{HorizontalScrollBarType, VerticalScrollBarType};
@@ -293,12 +289,6 @@ impl<'a> WindowOutputUpdate<'a> {
         self.display.apply_physical_cursor_snapshot(cursor);
     }
 
-    fn fallback_output_cursor_from_snapshot(&mut self, snapshot: &WindowDisplaySnapshot) {
-        if self.display.output_cursor.is_none() {
-            self.replay_output_rows(&snapshot.rows);
-        }
-    }
-
     pub fn finalize_live_update(
         &mut self,
         logical_cursor: Option<WindowCursorPos>,
@@ -306,18 +296,6 @@ impl<'a> WindowOutputUpdate<'a> {
     ) {
         self.install_logical_cursor(logical_cursor);
         self.apply_physical_cursor_snapshot(phys_cursor);
-        self.commit();
-    }
-
-    pub(crate) fn finalize_with_output_fallback(
-        &mut self,
-        logical_cursor: Option<WindowCursorPos>,
-        phys_cursor: Option<WindowCursorSnapshot>,
-        output_fallback: &WindowDisplaySnapshot,
-    ) {
-        self.install_logical_cursor(logical_cursor);
-        self.apply_physical_cursor_snapshot(phys_cursor);
-        self.fallback_output_cursor_from_snapshot(output_fallback);
         self.commit();
     }
 

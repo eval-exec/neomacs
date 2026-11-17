@@ -345,7 +345,7 @@ impl<'a> VariableView<'a> {
 
     /// [`Self::boundp`] by name.
     #[inline]
-    pub fn boundp_by_name(self, name: &str) -> bool {
+    pub(crate) fn boundp_by_name(self, name: &str) -> bool {
         self.boundp(intern(name))
     }
 
@@ -431,7 +431,7 @@ impl<'a> VariableStore<'a> {
 
     /// [`Self::store`] by name (interning it).
     #[inline]
-    pub fn store_by_name(&mut self, name: &str, value: Value) {
+    pub(crate) fn store_by_name(&mut self, name: &str, value: Value) {
         self.store(intern(name), value);
     }
 
@@ -682,14 +682,6 @@ impl Context {
         let id = intern(name);
         if self.obarray.set_canonical_value_routed(id, value) == CanonicalWrite::Projected {
             self.store_owner_variable(id, value);
-        }
-    }
-
-    /// Make the variable void the way [`Self::store_variable`] writes it.
-    #[inline(never)]
-    pub fn makunbound_variable(&mut self, id: SymId) {
-        if self.obarray.makunbound_canonical_routed(id) == CanonicalWrite::Projected {
-            self.makunbound_owner_variable(id);
         }
     }
 }

@@ -233,7 +233,6 @@ pub mod data {
     // to the compatibility sequence.
     pub use neovm_eval::emacs_core::data::*;
 }
-pub use neovm_eval::emacs_core::debug;
 pub use neovm_eval::emacs_core::debug_on_call;
 pub use neovm_eval::emacs_core::defvar_bool;
 pub use neovm_eval::emacs_core::defvar_object;
@@ -301,7 +300,6 @@ pub use neovm_system::emacs_core::filelock;
 pub use neovm_system::emacs_core::host_input;
 #[path = "load_boot.rs"]
 pub mod load_boot;
-pub use neovm_system::emacs_core::network;
 pub(crate) use neovm_system::emacs_core::os_signal;
 pub use neovm_system::emacs_core::path_exec;
 pub use neovm_system::emacs_core::perf_trace;
@@ -552,6 +550,10 @@ mod architecture_debug_assert_side_effect_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/leaf_slot_writer_guard_test.rs"]
 mod architecture_leaf_slot_writer_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/obarray_writer_raw_symbol_guard_test.rs"]
+mod architecture_obarray_writer_raw_symbol_guard_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/value_display_hook_guard_test.rs"]

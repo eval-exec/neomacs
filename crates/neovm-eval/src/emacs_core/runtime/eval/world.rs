@@ -960,20 +960,19 @@ obarray_method_proxies! {
             buffer_defaults: Option<&[Value]>,
         ) -> Option<Value>;
     pub fn for_each_value_cell_mut(f: impl FnMut(&mut Value));
-    // Audited closed operation, test-support surface: core tests unbind a
-    // fixture variable through this adapter method instead of a mutable deref.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn makunbound(name: &str);
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn makunbound_id(id: SymId);
     pub fn makunbound_canonical_by_name(access: CanonicalAccess,
             name: &str,
         );
     pub fn makunbound_canonical(access: CanonicalAccess, id: SymId);
+    // Macro-input declaration: obarray_method_proxies! emits the audited
+    // ObarrayView/ObarrayWriteAccess proxies from this list; the proxies are
+    // called from Context::store_variable (variable_access.rs). Deleting the
+    // line removes them (E0596), so the lint's `never used` is about the
+    // declaration, not the routed operation.
+    #[allow(dead_code)]
     pub(crate) fn set_canonical_value_routed(id: SymId,
             value: Value,
         ) -> neovm_value::symbol::CanonicalWrite;
-    pub(crate) fn makunbound_canonical_routed(id: SymId) -> neovm_value::symbol::CanonicalWrite;
     pub fn put_property(name: &str, prop: &str, value: Value) -> Result<(), Flow>;
     pub fn put_property_id(symbol: SymId,
             prop: SymId,

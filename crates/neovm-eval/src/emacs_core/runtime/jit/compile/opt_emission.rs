@@ -60,41 +60,41 @@ pub(super) struct EmitContext<'a, 'b> {
     pub values: &'a SsaValues,
     pub blocks: &'a [Block],
     pub cfg: &'a Cfg,
-    pub seed_vars: &'a [Variable],
-    pub variable_raw: &'a [bool],
+    pub(crate) seed_vars: &'a [Variable],
+    pub(crate) variable_raw: &'a [bool],
     pub constants: &'a [Value],
     pub rt: Option<&'a RtCtx>,
-    pub spec_sites: &'a HashMap<usize, SpecSite>,
-    pub spec_slots: &'a [SpecSlot],
-    pub deopt_refs: DeoptRefs,
-    pub signal_exit: &'a mut Option<Block>,
-    pub backedge_counter: Option<StackSlot>,
-    pub out_var: Variable,
-    pub out_present: bool,
+    pub(crate) spec_sites: &'a HashMap<usize, SpecSite>,
+    pub(crate) spec_slots: &'a [SpecSlot],
+    pub(crate) deopt_refs: DeoptRefs,
+    pub(crate) signal_exit: &'a mut Option<Block>,
+    pub(crate) backedge_counter: Option<StackSlot>,
+    pub(crate) out_var: Variable,
+    pub(crate) out_present: bool,
     pub abi: LeafAbi,
-    pub reloc_base: Option<ClifValue>,
-    pub reloc_index: &'a HashMap<usize, u32>,
+    pub(crate) reloc_base: Option<ClifValue>,
+    pub(crate) reloc_index: &'a HashMap<usize, u32>,
     pub aot: bool,
-    pub spec_slot_base: Option<ClifValue>,
-    pub spec_expected_base: Option<ClifValue>,
-    pub dynamic_prefix: usize,
-    pub consts_base: Option<ClifValue>,
+    pub(crate) spec_slot_base: Option<ClifValue>,
+    pub(crate) spec_expected_base: Option<ClifValue>,
+    pub(crate) dynamic_prefix: usize,
+    pub(crate) consts_base: Option<ClifValue>,
     pub ops: &'a [Op],
-    pub verified_arrays:
+    pub(crate) verified_arrays:
         Option<&'a crate::emacs_core::jit::opt::passes::array_reads::VerifiedArrayReads>,
-    pub verified_sink: Option<&'a VerifiedSinkRecipes<'a>>,
-    pub sqrt_witnesses: &'a sqrt_snapshot::SqrtCallWitnesses,
+    pub(crate) verified_sink: Option<&'a VerifiedSinkRecipes<'a>>,
+    pub(crate) sqrt_witnesses: &'a sqrt_snapshot::SqrtCallWitnesses,
     pub point: RecipePoint,
     /// Contiguous defining-operation projection transport only; no mutable
     /// semantic box cache. Published fields are ordinary explicit SSA values.
-    pub sink_produced: HashMap<ir::Value, numeric_carrier::NumericCarrier>,
+    pub(crate) sink_produced: HashMap<ir::Value, numeric_carrier::NumericCarrier>,
     /// Invocation-owned immutable facts for independently verified exact
     /// recipe versions. Never shared with runtime/TLS or another compilation.
-    pub numeric_facts: sink_numeric_facts::NumericFacts,
-    pub known_fixnum_slots: &'a HashMap<usize, Vec<bool>>,
+    pub(crate) numeric_facts: sink_numeric_facts::NumericFacts,
+    pub(crate) known_fixnum_slots: &'a HashMap<usize, Vec<bool>>,
     /// Built by [`emit`] for GEN1 only, whose remembered-set barrier alone
     /// reads stored-value immediacy. Compilation-owned compiler ids.
-    pub stored_values: store_facts::StoredValueFacts,
+    pub(crate) stored_values: store_facts::StoredValueFacts,
 }
 
 impl SsaValues {

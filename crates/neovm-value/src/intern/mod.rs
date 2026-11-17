@@ -2172,14 +2172,6 @@ pub fn map_lisp_visible_symbol_names<T>(
     mapped
 }
 
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-#[inline]
-pub(crate) fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
-    let registry = global_symbol_registry().read();
-    registry.resolve_name_value(id)
-}
-
 #[doc(hidden)]
 pub fn collect_symbol_name_gc_roots(roots: &mut Vec<TaggedValue>, heap_id: usize) {
     let registry = global_symbol_registry().read();

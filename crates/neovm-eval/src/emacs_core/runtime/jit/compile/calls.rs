@@ -14,7 +14,7 @@ pub use crate::emacs_core::subr::leaf::Effects;
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NamedBuiltinCall {
     pub kind: SpecCalleeKind,
-    pub fast_effects: Effects,
+    pub(crate) fast_effects: Effects,
     pub effects: Effects,
 }
 

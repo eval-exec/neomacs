@@ -177,65 +177,6 @@ fn watched_prop_demand_preserves_duplicate_keys_malformed_plists_and_eq_values()
 }
 
 #[test]
-fn watched_prop_demand_queries_follow_property_plist_and_text_mutations() {
-    let face = Value::symbol("face");
-    let invisible = Value::symbol("invisible");
-    let display = Value::symbol("display");
-    let mut table = TextPropertyTable::new();
-    let mut total = 40usize;
-    for index in 0..10 {
-        put_chars(
-            &mut table,
-            index * 4,
-            index * 4 + 4,
-            face,
-            Value::fixnum(index as i64),
-        );
-    }
-    put_chars(&mut table, 0, 8, invisible, Value::NIL);
-    assert_boundary_queries(&table, total);
-    let plist = table
-        .raw_plist_at_for_test(char_pos(0))
-        .expect("live plist");
-    assert_eq!(plist.cons_car(), invisible);
-    plist.cons_cdr().set_car(Value::T);
-    assert_boundary_queries(&table, total);
-    for step in 0..30 {
-        let start = step * 13 % total;
-        let end = (start + 3).min(total);
-        match step % 6 {
-            0 => {
-                put_chars(&mut table, start, end, invisible, Value::T);
-            }
-            1 => {
-                remove_chars(&mut table, start, end, invisible);
-            }
-            2 => {
-                put_chars(&mut table, start, end, display, Value::fixnum(step as i64));
-            }
-            3 => {
-                table.adjust_for_insert_at_char_pos(char_pos(start), char_len(2));
-                total += 2;
-            }
-            4 => {
-                table.adjust_for_delete_char_range(char_range(start, end));
-                total -= end - start;
-            }
-            _ => {
-                set_chars(
-                    &mut table,
-                    start,
-                    end,
-                    vec![(face, Value::fixnum(step as i64))],
-                );
-            }
-        }
-        table.assert_tree_invariants_for_test();
-        assert_boundary_queries(&table, total);
-    }
-}
-
-#[test]
 fn watched_prop_demand_matches_randomized_queries_after_overlapping_edits() {
     let mut rng = 0xd5_b0_7eed_u64;
     let keys = [

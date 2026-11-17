@@ -1534,16 +1534,6 @@ fn equal_rows(ledger: &[LedgerRow], source: &[Candidate]) -> Result<(), String> 
     Ok(())
 }
 
-fn ceiling(text: &str) -> Result<RowCount, String> {
-    let text = text.trim();
-    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
-        return Err("B3_RATCHET expected one nonnegative integer".into());
-    }
-    text.parse()
-        .map(RowCount)
-        .map_err(|_| "B3_RATCHET count overflow".into())
-}
-
 /// The promotion-ledger view of the shared merge-aware ratchet rules.
 fn rules_for(ceiling_path: &str) -> merge_ratchet::Rules<'_> {
     merge_ratchet::Rules {

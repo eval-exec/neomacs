@@ -2062,19 +2062,6 @@ pub fn note_heap_write(owner: TaggedValue, kind: HeapWriteKind) {
     }
 }
 
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-/// Central mutation hook for slot writes to the tagged heap.
-#[inline(always)]
-pub(crate) fn note_heap_slot_write(
-    owner: TaggedValue,
-    kind: HeapWriteKind,
-    slot: usize,
-    value: TaggedValue,
-) {
-    with_store_state(|store| note_heap_slot_write_in_store(store, owner, kind, slot, value));
-}
-
 #[inline(always)]
 pub(crate) fn note_heap_slot_write_in_store(
     store: &super::super::collection_reads::StoreState,

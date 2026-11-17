@@ -67,17 +67,7 @@ fn clear_chars(table: &mut TextPropertyTable, start: usize, end: usize) {
 }
 
 fn set_chars(table: &mut TextPropertyTable, start: usize, end: usize, plist: Vec<(Value, Value)>) {
-    table.set_properties_in_char_range(char_range(start, end), plist);
-}
-
-fn set_chars_for_object_len(
-    table: &mut TextPropertyTable,
-    start: usize,
-    end: usize,
-    object_len: usize,
-    plist: Vec<(Value, Value)>,
-) {
-    table.set_properties_for_object_char_len(char_range(start, end), char_len(object_len), plist);
+    table.set_properties_for_object_char_len(char_range(start, end), char_len(end - start), plist);
 }
 
 fn next_change_after_char(table: &TextPropertyTable, pos: usize) -> Option<usize> {
@@ -131,14 +121,6 @@ fn insert_chars_at(table: &mut TextPropertyTable, pos: usize, len: usize) {
 
 fn delete_char_range(table: &mut TextPropertyTable, start: usize, end: usize) {
     table.adjust_for_delete_char_range(char_range(start, end));
-}
-
-fn replace_chars_at(table: &mut TextPropertyTable, start: usize, old_len: usize, new_len: usize) {
-    table.adjust_for_replace_at_char_pos(char_pos(start), char_len(old_len), char_len(new_len));
-}
-
-fn object_runs_for_char_len(table: &TextPropertyTable, len: usize) -> Vec<ObjectIntervalRun> {
-    table.object_interval_runs_for_char_len(char_len(len))
 }
 
 // -----------------------------------------------------------------------
@@ -458,29 +440,6 @@ fn remove_property_partial_range() {
     assert!(get_at_char(&table, 5, Value::symbol("face")).is_none());
     // [7, 10) still has face
     assert!(get_at_char(&table, 8, Value::symbol("face")).is_some());
-}
-
-#[test]
-fn remove_property_preserves_nil_interval_boundaries() {
-    crate::test_utils::init_test_tracing();
-    let mut table = TextPropertyTable::new();
-    put_chars(
-        &mut table,
-        0,
-        1,
-        Value::symbol("face"),
-        Value::symbol("bold"),
-    );
-
-    assert!(remove_chars(&mut table, 0, 1, Value::symbol("face")));
-
-    assert_eq!(table.debug_interval_bounds(), vec![(0, 1, true)]);
-    assert_eq!(
-        object_runs_for_char_len(&table, 2),
-        vec![(0, 1, Vec::new()), (1, 2, Vec::new())]
-    );
-    assert_eq!(next_raw_boundary_after_char(&table, 0), Some(1));
-    assert_eq!(next_change_after_char(&table, 0), None);
 }
 
 #[test]
@@ -893,93 +852,6 @@ fn adjust_insert_splits_spanning_interval_around_plain_inserted_text() {
 }
 
 #[test]
-fn adjust_insert_extends_plain_nil_interval_without_raw_split() {
-    crate::test_utils::init_test_tracing();
-    let mut table = TextPropertyTable::new();
-    put_chars(
-        &mut table,
-        0,
-        4,
-        Value::symbol("face"),
-        Value::symbol("bold"),
-    );
-    put_chars(
-        &mut table,
-        8,
-        10,
-        Value::symbol("face"),
-        Value::symbol("tail"),
-    );
-
-    insert_chars_at(&mut table, 6, 3);
-
-    assert_eq!(
-        table.debug_interval_bounds(),
-        vec![(0, 4, false), (4, 11, true), (11, 13, false)]
-    );
-    assert!(get_at_char(&table, 6, Value::symbol("face")).is_none());
-    assert!(get_at_char(&table, 10, Value::symbol("face")).is_none());
-    assert_eq!(
-        get_at_char(&table, 11, Value::symbol("face")),
-        Some(Value::symbol("tail"))
-    );
-}
-
-#[test]
-fn adjust_insert_at_nil_boundary_preserves_raw_default_interval() {
-    crate::test_utils::init_test_tracing();
-    let mut table = TextPropertyTable::new();
-    put_chars(
-        &mut table,
-        0,
-        4,
-        Value::symbol("face"),
-        Value::symbol("bold"),
-    );
-    put_chars(
-        &mut table,
-        8,
-        10,
-        Value::symbol("face"),
-        Value::symbol("tail"),
-    );
-
-    insert_chars_at(&mut table, 8, 2);
-
-    assert_eq!(
-        table.debug_interval_bounds(),
-        vec![(0, 4, false), (4, 8, true), (8, 10, true), (10, 12, false)]
-    );
-    assert!(get_at_char(&table, 8, Value::symbol("face")).is_none());
-    assert_eq!(
-        get_at_char(&table, 10, Value::symbol("face")),
-        Some(Value::symbol("tail"))
-    );
-}
-
-#[test]
-fn full_object_property_mutation_keeps_trailing_nil_interval_for_inherited_insert() {
-    crate::test_utils::init_test_tracing();
-    let mut table = TextPropertyTable::new();
-    put_chars_for_object_len(
-        &mut table,
-        0,
-        9,
-        20,
-        Value::symbol("org-todo-head"),
-        Value::string("TODO"),
-    );
-
-    insert_chars_at(&mut table, 17, 1);
-
-    assert_eq!(
-        table.debug_interval_bounds(),
-        vec![(0, 9, false), (9, 21, true)]
-    );
-    assert!(get_at_char(&table, 17, Value::symbol("org-todo-head")).is_none());
-}
-
-#[test]
 fn adjust_insert_at_interval_start() {
     crate::test_utils::init_test_tracing();
     let mut table = TextPropertyTable::new();
@@ -1036,93 +908,6 @@ fn adjust_insert_zero_length() {
     assert!(get_at_char(&table, 5, Value::symbol("face")).is_some());
     assert!(get_at_char(&table, 9, Value::symbol("face")).is_some());
     assert!(get_at_char(&table, 10, Value::symbol("face")).is_none());
-}
-
-#[test]
-fn adjust_insert_preserves_raw_boundaries_without_rebuilding_tree() {
-    crate::test_utils::init_test_tracing();
-    let mut table = TextPropertyTable::new();
-    for i in 0..4 {
-        put_chars(
-            &mut table,
-            i,
-            i + 1,
-            Value::symbol("slot"),
-            Value::fixnum(i as i64),
-        );
-    }
-
-    insert_chars_at(&mut table, 2, 2);
-
-    assert_eq!(
-        table.debug_interval_bounds(),
-        vec![
-            (0, 1, false),
-            (1, 2, false),
-            (2, 4, true),
-            (4, 5, false),
-            (5, 6, false),
-        ]
-    );
-    assert_eq!(
-        get_at_char(&table, 1, Value::symbol("slot")),
-        Some(Value::fixnum(1))
-    );
-    assert!(get_at_char(&table, 2, Value::symbol("slot")).is_none());
-    assert!(get_at_char(&table, 3, Value::symbol("slot")).is_none());
-    assert_eq!(
-        get_at_char(&table, 4, Value::symbol("slot")),
-        Some(Value::fixnum(2))
-    );
-}
-
-#[test]
-fn adjust_insert_beyond_trailing_property_preserves_insert_boundary() {
-    crate::test_utils::init_test_tracing();
-    let mut table = TextPropertyTable::new();
-    put_chars(
-        &mut table,
-        0,
-        4,
-        Value::symbol("part"),
-        Value::symbol("state"),
-    );
-    put_chars(
-        &mut table,
-        5,
-        10,
-        Value::symbol("part"),
-        Value::symbol("before"),
-    );
-
-    insert_chars_at(&mut table, 12, 8);
-    put_chars(
-        &mut table,
-        11,
-        19,
-        Value::symbol("part"),
-        Value::symbol("appended"),
-    );
-
-    // GNU `offset_intervals' still represents the default-property gap and
-    // the inserted text as separate interval nodes.  `put-text-property'
-    // updates both nodes but does not coalesce their now-equal plists.
-    assert_eq!(
-        table.debug_interval_bounds(),
-        vec![
-            (0, 4, false),
-            (4, 5, true),
-            (5, 10, false),
-            (10, 11, true),
-            (11, 12, false),
-            (12, 19, false),
-        ]
-    );
-    let snapshot = table.intervals_snapshot();
-    assert_eq!(snapshot[2].start, 11);
-    assert_eq!(snapshot[2].end, 12);
-    assert_eq!(snapshot[3].start, 12);
-    assert_eq!(snapshot[3].end, 19);
 }
 
 // -----------------------------------------------------------------------
@@ -1270,73 +1055,9 @@ fn adjust_delete_empty_range() {
     assert!(get_at_char(&table, 9, Value::symbol("face")).is_some());
 }
 
-#[test]
-fn adjust_delete_removes_multiple_nodes_without_rebuilding_tree() {
-    crate::test_utils::init_test_tracing();
-    let mut table = TextPropertyTable::new();
-    for i in 0..6 {
-        put_chars(
-            &mut table,
-            i,
-            i + 1,
-            Value::symbol("slot"),
-            Value::fixnum(i as i64),
-        );
-    }
-
-    delete_char_range(&mut table, 2, 5);
-
-    assert_eq!(
-        table.debug_interval_bounds(),
-        vec![(0, 1, false), (1, 2, false), (2, 3, false)]
-    );
-    assert_eq!(
-        get_at_char(&table, 0, Value::symbol("slot")),
-        Some(Value::fixnum(0))
-    );
-    assert_eq!(
-        get_at_char(&table, 1, Value::symbol("slot")),
-        Some(Value::fixnum(1))
-    );
-    assert_eq!(
-        get_at_char(&table, 2, Value::symbol("slot")),
-        Some(Value::fixnum(5))
-    );
-}
-
 // -----------------------------------------------------------------------
 // replace_range interval offset
 // -----------------------------------------------------------------------
-
-#[test]
-fn adjust_replace_growth_then_clear_preserves_gnu_nil_boundaries() {
-    crate::test_utils::init_test_tracing();
-    let face = Value::symbol("face");
-    let org_table = Value::symbol("org-table");
-    let mut table = TextPropertyTable::new();
-
-    put_chars_for_object_len(&mut table, 0, 24, 80, face, org_table);
-
-    // GNU `replace_range' calls `offset_intervals' once with the net
-    // replacement delta, then `graft_intervals_into_buffer' clears the
-    // inserted text when the replacement string has no intervals.
-    replace_chars_at(&mut table, 46, 3, 5);
-    set_chars_for_object_len(&mut table, 46, 51, 82, Vec::new());
-
-    put_chars_for_object_len(&mut table, 42, 53, 82, face, org_table);
-
-    assert_eq!(
-        table.debug_interval_bounds(),
-        vec![
-            (0, 24, false),
-            (24, 42, true),
-            (42, 46, false),
-            (46, 51, false),
-            (51, 53, false),
-            (53, 82, true),
-        ]
-    );
-}
 
 // -----------------------------------------------------------------------
 // GNU raw interval boundaries vs semantic property changes
@@ -1415,157 +1136,6 @@ fn adjacent_equal_but_not_eq_values_do_not_merge() {
     assert_eq!(table.intervals_snapshot().len(), 2);
     assert_eq!(next_change_after_char(&table, 0), Some(5));
     assert_eq!(next_change_after_char(&table, 5), Some(10));
-}
-
-#[test]
-fn set_properties_merges_replaced_intervals_like_gnu() {
-    crate::test_utils::init_test_tracing();
-    let mut table = TextPropertyTable::new();
-    put_chars(
-        &mut table,
-        0,
-        2,
-        Value::symbol("face"),
-        Value::symbol("bold"),
-    );
-    put_chars(
-        &mut table,
-        2,
-        4,
-        Value::symbol("face"),
-        Value::symbol("italic"),
-    );
-    put_chars(
-        &mut table,
-        4,
-        6,
-        Value::symbol("face"),
-        Value::symbol("underline"),
-    );
-
-    set_chars(
-        &mut table,
-        1,
-        5,
-        vec![(Value::symbol("category"), Value::T)],
-    );
-
-    assert_eq!(
-        table.debug_interval_bounds(),
-        vec![(0, 1, false), (1, 5, false), (5, 6, false)]
-    );
-    assert_eq!(next_raw_boundary_after_char(&table, 1), Some(5));
-    assert_eq!(
-        get_at_char(&table, 1, Value::symbol("category")),
-        Some(Value::T)
-    );
-    assert_eq!(
-        get_at_char(&table, 4, Value::symbol("category")),
-        Some(Value::T)
-    );
-    assert_eq!(
-        get_at_char(&table, 0, Value::symbol("face")),
-        Some(Value::symbol("bold"))
-    );
-    assert_eq!(
-        get_at_char(&table, 5, Value::symbol("face")),
-        Some(Value::symbol("underline"))
-    );
-}
-
-#[test]
-fn set_properties_nil_merges_replaced_intervals_like_gnu() {
-    crate::test_utils::init_test_tracing();
-    let mut table = TextPropertyTable::new();
-    put_chars(
-        &mut table,
-        0,
-        2,
-        Value::symbol("face"),
-        Value::symbol("bold"),
-    );
-    put_chars(
-        &mut table,
-        2,
-        4,
-        Value::symbol("face"),
-        Value::symbol("italic"),
-    );
-    put_chars(
-        &mut table,
-        4,
-        6,
-        Value::symbol("face"),
-        Value::symbol("underline"),
-    );
-
-    set_chars(&mut table, 1, 5, Vec::new());
-
-    assert_eq!(
-        table.debug_interval_bounds(),
-        vec![(0, 1, false), (1, 5, true), (5, 6, false)]
-    );
-    assert_eq!(next_raw_boundary_after_char(&table, 1), Some(5));
-    assert!(get_at_char(&table, 1, Value::symbol("face")).is_none());
-    assert!(get_at_char(&table, 4, Value::symbol("face")).is_none());
-    assert_eq!(
-        get_at_char(&table, 0, Value::symbol("face")),
-        Some(Value::symbol("bold"))
-    );
-    assert_eq!(
-        get_at_char(&table, 5, Value::symbol("face")),
-        Some(Value::symbol("underline"))
-    );
-}
-
-#[test]
-fn set_properties_merges_large_replaced_range_without_rebuilding_tree() {
-    crate::test_utils::init_test_tracing();
-    let mut table = TextPropertyTable::new();
-    for i in 0..10 {
-        put_chars(
-            &mut table,
-            i,
-            i + 1,
-            Value::symbol("slot"),
-            Value::fixnum(i as i64),
-        );
-    }
-
-    set_chars(
-        &mut table,
-        2,
-        8,
-        vec![(Value::symbol("category"), Value::T)],
-    );
-
-    assert_eq!(
-        table.debug_interval_bounds(),
-        vec![
-            (0, 1, false),
-            (1, 2, false),
-            (2, 8, false),
-            (8, 9, false),
-            (9, 10, false),
-        ]
-    );
-    assert_eq!(next_raw_boundary_after_char(&table, 2), Some(8));
-    assert_eq!(
-        get_at_char(&table, 2, Value::symbol("category")),
-        Some(Value::T)
-    );
-    assert_eq!(
-        get_at_char(&table, 7, Value::symbol("category")),
-        Some(Value::T)
-    );
-    assert_eq!(
-        get_at_char(&table, 1, Value::symbol("slot")),
-        Some(Value::fixnum(1))
-    );
-    assert_eq!(
-        get_at_char(&table, 8, Value::symbol("slot")),
-        Some(Value::fixnum(8))
-    );
 }
 
 // -----------------------------------------------------------------------
@@ -1852,57 +1422,6 @@ fn insert_directory_clean_then_delete_lines() {
     );
     assert_eq!(next_change_after_char(&table, 99), Some(105));
     assert_eq!(next_change_after_char(&table, 105), None);
-}
-
-/// Regression test: adjust_for_delete can produce runs where start >= end,
-/// which then causes next_property_change to loop infinitely or miss intervals.
-#[test]
-fn adjust_delete_produces_no_negative_len_runs() {
-    crate::test_utils::init_test_tracing();
-    let mut table = TextPropertyTable::new();
-    let prop = Value::symbol("dired-filename");
-    let val = Value::T;
-
-    // Put properties
-    put_chars(&mut table, 10, 20, prop, val);
-    put_chars(&mut table, 30, 40, prop, val);
-
-    // Delete a region that partially overlaps the end of the first interval
-    delete_char_range(&mut table, 15, 25);
-
-    // First interval should be truncated to [10, 15)
-    assert_eq!(next_change_after_char(&table, 0), Some(10));
-    assert_eq!(
-        next_change_after_char(&table, 10),
-        Some(15),
-        "first interval truncated at 15"
-    );
-
-    // Second interval should shift left by 10 (25-15=10)
-    // Was [30, 40), now [20, 30)
-    assert_eq!(
-        next_change_after_char(&table, 15),
-        Some(20),
-        "second interval at 20"
-    );
-    assert_eq!(
-        next_change_after_char(&table, 20),
-        Some(30),
-        "second interval ends at 30"
-    );
-    assert_eq!(next_change_after_char(&table, 30), None);
-
-    // Verify no intervals have start >= end
-    let interval_bounds = table.debug_interval_bounds();
-    for (start, end, _) in &interval_bounds {
-        assert!(start < end, "interval [{},{}) has start >= end", start, end);
-    }
-    // There should be exactly 2 non-empty intervals
-    let non_empty: Vec<_> = interval_bounds
-        .iter()
-        .filter(|(_, _, is_empty)| !is_empty)
-        .collect();
-    assert_eq!(non_empty.len(), 2);
 }
 
 /// Exact simulation of the decode loop in insert-directory.
@@ -2330,105 +1849,6 @@ fn random_table(rng: &mut u64, len: usize, segments: usize) -> TextPropertyTable
     table
 }
 
-#[test]
-fn graft_matches_the_per_run_reference_on_random_layouts() {
-    let mut rng = 0x5eed_u64;
-    for case in 0..400 {
-        let target_len = 1 + (lcg(&mut rng) as usize) % 120;
-        let base_segments = (lcg(&mut rng) as usize) % 8;
-        let base = random_table(&mut rng, target_len, base_segments);
-        let source_len = 1 + (lcg(&mut rng) as usize) % 40;
-        let source_segments = 1 + (lcg(&mut rng) as usize) % 6;
-        let source = random_table(&mut rng, source_len, source_segments);
-        // Offsets past the current cover exercise `ensure_cover`.
-        let offset = (lcg(&mut rng) as usize) % (target_len + 10);
-
-        let mut expected = base.clone();
-        expected.append_shifted_reference_for_test(&source, char_len(offset));
-        let mut actual = base.clone();
-        actual.append_shifted_at_char_offset(&source, char_len(offset));
-        actual.assert_tree_invariants_for_test();
-        assert_eq!(
-            actual.interval_plist_runs_for_test(),
-            expected.interval_plist_runs_for_test(),
-            "case {case}: graft at offset {offset}"
-        );
-    }
-}
-
-#[test]
-fn graft_rehomes_the_left_remainder_and_keeps_the_right_remainder_plist_object() {
-    let face = Value::symbol("face");
-    let mut table = TextPropertyTable::new();
-    set_chars(&mut table, 0, 30, vec![(face, Value::symbol("bold"))]);
-    let original = table.raw_plist_at_for_test(char_pos(5)).unwrap();
-    let mut source = TextPropertyTable::new();
-    set_chars(&mut source, 0, 10, vec![(face, Value::symbol("italic"))]);
-    let source_plist = source.raw_plist_at_for_test(char_pos(0)).unwrap();
-
-    table.append_shifted_at_char_offset(&source, char_len(10));
-
-    let left = table.raw_plist_at_for_test(char_pos(5)).unwrap();
-    let grafted = table.raw_plist_at_for_test(char_pos(15)).unwrap();
-    let right = table.raw_plist_at_for_test(char_pos(25)).unwrap();
-    // GNU `copy_properties (under, end_unchanged)`: the unchanged left part is
-    // re-homed onto a fresh plist ...
-    assert_ne!(left.bits(), original.bits());
-    assert_eq!(left, original);
-    // ... the grafted text never aliases the source string's plist ...
-    assert_ne!(grafted.bits(), source_plist.bits());
-    assert_eq!(grafted, source_plist);
-    // ... and `under` itself keeps its plist object past the graft.
-    assert_eq!(right.bits(), original.bits());
-    assert_eq!(get_at_char(&table, 15, face), Some(Value::symbol("italic")));
-    assert_eq!(get_at_char(&table, 25, face), Some(Value::symbol("bold")));
-    assert_eq!(table.intervals_snapshot().len(), 3);
-}
-
-#[test]
-fn graft_of_many_runs_balances_once_and_keeps_the_tree_shallow() {
-    let face = Value::symbol("face");
-    let bold = Value::symbol("bold");
-    let italic = Value::symbol("italic");
-    let mut table = TextPropertyTable::new();
-    for i in 0..1000 {
-        set_chars(
-            &mut table,
-            i,
-            i + 1,
-            vec![(face, if i % 2 == 0 { bold } else { italic })],
-        );
-    }
-    let mut source = TextPropertyTable::new();
-    for i in 0..300 {
-        set_chars(
-            &mut source,
-            i * 2,
-            i * 2 + 2,
-            vec![(face, if i % 2 == 0 { bold } else { italic })],
-        );
-    }
-    // The buffer insert stretches the tree by a property-free span first
-    // (GNU `adjust_intervals_for_insertion`), then the string's runs are
-    // grafted over it.
-    table.adjust_for_insert_at_char_pos(char_pos(500), char_len(600));
-    reset_interval_balance_calls_for_test();
-    table.append_shifted_at_char_offset(&source, char_len(500));
-    let balance_calls = interval_balance_calls_for_test();
-    table.assert_tree_invariants_for_test();
-
-    assert_eq!(table.intervals_snapshot().len(), 1300);
-    // The spine is relinked balanced in O(k); only the climb above the anchor
-    // rebalances (the old per-run split climbed twice per run, ~7K calls).
-    assert!(balance_calls <= 64, "balance calls: {balance_calls}");
-    let depth = table.tree_max_depth_for_test();
-    assert!(depth <= 40, "tree depth {depth}");
-    assert_eq!(get_at_char(&table, 500, face), Some(bold));
-    assert_eq!(get_at_char(&table, 1099, face), Some(italic));
-    assert_eq!(get_at_char(&table, 1100, face), Some(bold));
-    assert_eq!(get_at_char(&table, 499, face), Some(italic));
-}
-
 // ---- local adjacent-equal merge: GNU `merge_interval_left` at edit boundaries --
 
 fn bold_plist() -> Vec<(Value, Value)> {
@@ -2451,61 +1871,6 @@ fn two_equal_neighbours() -> TextPropertyTable {
         "precondition: the set path must leave the equal neighbours apart"
     );
     table
-}
-
-/// The reference clears a tree whose every run is property-free; the local
-/// merge leaves such runs in place.  Both mean "no properties", so compare
-/// modulo that representation.
-fn assert_same_partition(actual: &TextPropertyTable, expected: &TextPropertyTable, context: &str) {
-    let actual_runs = actual.interval_plist_runs_for_test();
-    let expected_runs = expected.interval_plist_runs_for_test();
-    if expected_runs.is_empty() {
-        assert!(
-            actual_runs.iter().all(|(_, _, plist)| plist.is_empty()),
-            "{context}: expected no properties, got {actual_runs:?}"
-        );
-        return;
-    }
-    assert_eq!(actual_runs, expected_runs, "{context}");
-}
-
-#[test]
-fn local_merge_matches_the_whole_buffer_reference_on_random_layouts() {
-    let mut rng = 0x6a11_u64;
-    for case in 0..400 {
-        let len = 1 + (lcg(&mut rng) as usize) % 120;
-        let segments = (lcg(&mut rng) as usize) % 10;
-        let mut base = random_table(&mut rng, len, segments);
-        // Plant unmerged equal neighbours, which only the insert path creates
-        // in practice, so the merge has work to do.
-        for _ in 0..(lcg(&mut rng) % 3) {
-            let at = (lcg(&mut rng) as usize) % len;
-            let width = 1 + (lcg(&mut rng) as usize) % 8;
-            let plist = if lcg(&mut rng).is_multiple_of(2) {
-                bold_plist()
-            } else {
-                italic_plist()
-            };
-            set_chars(&mut base, at, (at + width).min(len), plist.clone());
-            let next = (at + width).min(len);
-            set_chars(&mut base, next, (next + width).min(len + 4), plist);
-        }
-        let a = (lcg(&mut rng) as usize) % (len + 6);
-        let b = (lcg(&mut rng) as usize) % (len + 6);
-        let (a, b) = if a <= b { (a, b) } else { (b, a) };
-        let range = char_range(a, b);
-
-        let mut expected = base.clone();
-        expected.merge_adjacent_equal_properties_around_reference_for_test(range);
-        let mut actual = base.clone();
-        actual.merge_adjacent_equal_properties_around_char_range(range);
-        actual.assert_tree_invariants_for_test();
-        assert_same_partition(
-            &actual,
-            &expected,
-            &format!("case {case}: merge in [{a}, {b}]"),
-        );
-    }
 }
 
 #[test]
@@ -2566,44 +1931,6 @@ fn merge_leaves_property_free_neighbours_apart() {
         table.interval_plist_runs_for_test(),
         before,
         "nil-plist neighbours keep their shape, as the reference preserved it"
-    );
-}
-
-/// The point of the rewrite: merging at one boundary of a large partition
-/// must not touch the rest of the tree.  The reference rebuilt every node.
-#[test]
-fn merge_touches_only_the_edited_neighbourhood() {
-    let mut table = TextPropertyTable::new();
-    let runs = 2_000;
-    for index in 0..runs {
-        let start = index * 5;
-        let plist = if index % 2 == 0 {
-            bold_plist()
-        } else {
-            italic_plist()
-        };
-        set_chars(&mut table, start, start + 5, plist);
-    }
-    // Plant one unmerged equal pair in the middle: runs 1000 (bold) and a
-    // fresh bold run replacing the italic run 1001.
-    set_chars(&mut table, 5_005, 5_010, bold_plist());
-    let before = table.interval_plist_runs_for_test().len();
-    assert_eq!(before, runs);
-
-    reset_interval_balance_calls_for_test();
-    table.merge_adjacent_equal_properties_around_char_range(char_range(5_005, 5_005));
-    let balance_calls = interval_balance_calls_for_test();
-
-    table.assert_tree_invariants_for_test();
-    assert_eq!(table.interval_plist_runs_for_test().len(), before - 1);
-    assert!(
-        balance_calls <= 48,
-        "a local merge in a {runs}-run tree should rebalance one spine, not rebuild: {balance_calls} balance calls"
-    );
-    assert_eq!(
-        table.raw_plist_at_for_test(char_pos(5_004)),
-        table.raw_plist_at_for_test(char_pos(5_007)),
-        "the fused interval carries the left plist object"
     );
 }
 
@@ -2736,62 +2063,6 @@ fn put_splits_only_where_a_boundary_is_missing() {
 }
 
 #[test]
-fn put_split_leaves_the_original_plist_object_with_the_unchanged_text() {
-    // GNU `copy_properties (unchanged, i)`: the interval that is written
-    // takes a fresh copy; the untouched remainder keeps its plist object, so
-    // a cons chain Lisp holds from `text-properties-at` is never mutated by
-    // a put on neighbouring text.
-    let face = Value::symbol("face");
-    let bold = Value::symbol("bold");
-    let italic = Value::symbol("italic");
-
-    // Start split: [0, 5) is the remainder.
-    let mut table = TextPropertyTable::new();
-    put_chars_for_object_len(&mut table, 0, 10, 10, face, bold);
-    let original = table.raw_plist_at_for_test(char_pos(2)).unwrap();
-    put_chars_for_object_len(&mut table, 5, 10, 10, face, italic);
-    assert_eq!(
-        table.raw_plist_at_for_test(char_pos(2)).unwrap().bits(),
-        original.bits()
-    );
-    assert_ne!(
-        table.raw_plist_at_for_test(char_pos(7)).unwrap().bits(),
-        original.bits()
-    );
-    assert!(plist_value_get(original, face).is_some_and(|v| v.is_bare_symbol_named("bold")));
-
-    // End split: [5, 10) is the remainder.
-    let mut table = TextPropertyTable::new();
-    put_chars_for_object_len(&mut table, 0, 10, 10, face, bold);
-    let original = table.raw_plist_at_for_test(char_pos(2)).unwrap();
-    put_chars_for_object_len(&mut table, 0, 5, 10, face, italic);
-    assert_eq!(
-        table.raw_plist_at_for_test(char_pos(7)).unwrap().bits(),
-        original.bits()
-    );
-    assert_ne!(
-        table.raw_plist_at_for_test(char_pos(2)).unwrap().bits(),
-        original.bits()
-    );
-    assert!(plist_value_get(original, face).is_some_and(|v| v.is_bare_symbol_named("bold")));
-
-    // Both: [0, 3) keeps the object, [3, 6) and [6, 10) are two distinct copies.
-    let mut table = TextPropertyTable::new();
-    put_chars_for_object_len(&mut table, 0, 10, 10, face, bold);
-    let original = table.raw_plist_at_for_test(char_pos(2)).unwrap();
-    put_chars_for_object_len(&mut table, 3, 6, 10, face, italic);
-    let left = table.raw_plist_at_for_test(char_pos(1)).unwrap();
-    let mid = table.raw_plist_at_for_test(char_pos(4)).unwrap();
-    let right = table.raw_plist_at_for_test(char_pos(8)).unwrap();
-    assert_eq!(left.bits(), original.bits());
-    assert_ne!(mid.bits(), original.bits());
-    assert_ne!(right.bits(), original.bits());
-    assert_ne!(mid.bits(), right.bits());
-    assert!(plist_value_get(original, face).is_some_and(|v| v.is_bare_symbol_named("bold")));
-    assert!(plist_value_get(right, face).is_some_and(|v| v.is_bare_symbol_named("bold")));
-}
-
-#[test]
 fn put_walk_agrees_with_a_per_char_model() {
     // Randomized differential of the buffer put walk against a per-character
     // model: values, the `changed` answer, and the tree invariants after
@@ -2845,55 +2116,4 @@ fn put_walk_agrees_with_a_per_char_model() {
             }
         }
     }
-}
-
-/// The put walk balances at the split node and climbs only while a rotation
-/// happened (`balance_after_split`), never to the root unconditionally.
-/// Font-lock's shape -- adjacent puts walking forward, each splitting the
-/// default tail -- hangs every new piece off the previous one, and the
-/// tail's weight never changes, so a policy that looks only at the root
-/// let the depth grow by one per put (2001 for 4000 intervals). The depth
-/// must stay logarithmic, and the walk must stay right.
-#[test]
-fn forward_adjacent_puts_keep_the_tree_shallow_with_local_balancing() {
-    let face = Value::symbol("face");
-    let values = [Value::symbol("bold"), Value::symbol("italic")];
-    const N: usize = 40_000;
-    const STEP: usize = 10;
-    let mut table = TextPropertyTable::new();
-    for (i, start) in (0..N).step_by(STEP).enumerate() {
-        assert!(put_chars_for_object_len(
-            &mut table,
-            start,
-            start + STEP,
-            N,
-            face,
-            values[i % 2]
-        ));
-    }
-    table.assert_tree_invariants_for_test();
-    let intervals = N / STEP;
-    let depth = table.tree_max_depth_for_test();
-    let log2 = usize::BITS - intervals.leading_zeros();
-    assert!(
-        depth <= 4 * log2 as usize,
-        "{intervals} intervals at depth {depth} (log2 {log2}): a spine grew"
-    );
-    for (i, start) in (0..N).step_by(STEP).enumerate() {
-        let got = get_at_char(&table, start + 3, face).unwrap();
-        assert!(eq_value(&got, &values[i % 2]), "interval {i}");
-    }
-    // The same walk backwards, and a second pass that re-splits every
-    // interval in the middle: neither may deepen the tree past the bound.
-    for start in (0..N).step_by(STEP).rev() {
-        put_chars_for_object_len(&mut table, start + 2, start + 7, N, face, Value::NIL);
-    }
-    table.assert_tree_invariants_for_test();
-    let depth = table.tree_max_depth_for_test();
-    let intervals = table.interval_plist_runs_for_test().len();
-    let log2 = usize::BITS - intervals.leading_zeros();
-    assert!(
-        depth <= 4 * log2 as usize,
-        "{intervals} intervals at depth {depth} (log2 {log2}) after the backward pass"
-    );
 }

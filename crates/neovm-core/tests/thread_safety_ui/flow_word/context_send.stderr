@@ -83,7 +83,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
    = note: the following trait bounds were not satisfied:
            `*mut TaggedValue: Send`
            which is required by `neovm_core::Context: Send`
-           `NonNull<SelectedGlobalMap>: Send`
+           `NonNull<keymap_lookup::SelectedGlobalMap>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<Option<LispString>>: Send`
            which is required by `neovm_core::Context: Send`

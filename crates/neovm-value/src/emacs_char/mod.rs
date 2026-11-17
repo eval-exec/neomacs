@@ -106,15 +106,6 @@ impl EmacsChar {
         self.0
     }
 
-    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-    #[cfg(any(test, feature = "test-support"))]
-    /// Whether this is a Unicode scalar value (representable as a Rust `char`).
-    /// False for eight-bit raw bytes and non-Unicode codes.
-    #[inline]
-    pub(crate) fn is_unicode_scalar(self) -> bool {
-        char::from_u32(self.0).is_some()
-    }
-
     /// Whether this is an eight-bit raw-byte character (`CHAR_BYTE8_P`).
     #[inline]
     pub fn is_byte8(self) -> bool {
@@ -814,24 +805,6 @@ fn decode_multibyte_unchecked(bytes: &[u8]) -> (u32, usize) {
     (d as u32, 5)
 }
 
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-/// Number of bytes in the multibyte character ending at `bytes[..end]`.
-///
-/// Mirrors GNU `raw_prev_char_len` (character.h:359). Caller must guarantee
-/// that `bytes[..end]` ends on a character boundary and that there is at
-/// least one preceding char head somewhere in `bytes[..end]`.
-pub(crate) fn raw_prev_char_len(bytes: &[u8], end: usize) -> usize {
-    debug_assert!(end > 0 && end <= bytes.len());
-    let mut len = 1;
-    loop {
-        if char_head_p(bytes[end - len]) {
-            return len;
-        }
-        len += 1;
-    }
-}
-
 /// Like [`string_char`] but advance `pos` past the decoded character.
 ///
 /// Returns the decoded character. Mirrors GNU `string_char_advance`.
@@ -840,46 +813,6 @@ pub fn string_char_advance(bytes: &[u8], pos: &mut usize) -> EmacsChar {
     let (character, len) = string_char(&bytes[*pos..]);
     *pos += len;
     character
-}
-
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-/// Count how many characters are in `bytes`, treating it as a valid
-/// Emacs multibyte sequence.
-///
-/// Mirrors GNU `multibyte_chars_in_text` (character.c:519). Panics in
-/// debug builds if a byte position would yield a zero-length char.
-pub(crate) fn multibyte_chars_in_text(bytes: &[u8]) -> usize {
-    let mut chars = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        let len = match multibyte_length(&bytes[i..], true) {
-            Some(n) => n,
-            None => {
-                debug_assert!(false, "multibyte_chars_in_text: invalid sequence at {}", i);
-                1
-            }
-        };
-        i += len;
-        chars += 1;
-    }
-    chars
-}
-
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-/// Number of characters in `bytes`, given the multibyte mode flag.
-///
-/// Mirrors GNU `chars_in_text` (character.c:503). When `multibyte` is
-/// false this returns `bytes.len()`; otherwise it delegates to
-/// [`multibyte_chars_in_text`].
-#[inline]
-pub(crate) fn chars_in_text(bytes: &[u8], multibyte: bool) -> usize {
-    if !multibyte {
-        bytes.len()
-    } else {
-        multibyte_chars_in_text(bytes)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,110 +1010,6 @@ pub(crate) fn emacs_downcase_code(code: u32) -> u32 {
 // Eight-bit byte counting and escaping (mirrors GNU character.c:742..839).
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-/// Count eight-bit raw-byte characters in `bytes`.
-///
-/// Mirrors GNU `string_count_byte8` (character.c:742). `multibyte`
-/// indicates whether the buffer is multibyte; in unibyte mode, every
-/// byte ≥ 0x80 counts; in multibyte mode, only `byte8`-leading code
-/// units count.
-pub(crate) fn string_count_byte8(bytes: &[u8], multibyte: bool) -> usize {
-    if !multibyte {
-        return bytes.iter().filter(|&&b| b >= 0x80).count();
-    }
-    let mut count = 0usize;
-    let mut p = 0usize;
-    while p < bytes.len() {
-        let lead = bytes[p];
-        let len = bytes_by_char_head(lead);
-        if char_byte8_head_p(lead) {
-            count += 1;
-        }
-        p += len.min(bytes.len() - p);
-    }
-    count
-}
-
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-/// Replace eight-bit raw-byte characters in `bytes` with `\NNN` octal
-/// escapes. ASCII and other multibyte characters are passed through.
-///
-/// Mirrors GNU `string_escape_byte8` (character.c:772) for the byte
-/// payload only — the GNU version returns a new Lisp string with the
-/// updated `nchars`/`nbytes`. Callers wanting char/byte counts can
-/// recompute via [`chars_in_text`] on the result.
-pub(crate) fn string_escape_byte8(bytes: &[u8], multibyte: bool) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
-    if !multibyte {
-        for &b in bytes {
-            if b >= 0x80 {
-                let _ = write_octal(&mut out, b as u32);
-            } else {
-                out.push(b);
-            }
-        }
-        return out;
-    }
-    let mut p = 0usize;
-    while p < bytes.len() {
-        let lead = bytes[p];
-        let len = bytes_by_char_head(lead).min(bytes.len() - p);
-        if char_byte8_head_p(lead) {
-            let (c, n) = if len == 2 {
-                string_char_unchecked(&bytes[p..])
-            } else {
-                (EmacsChar::from_byte8(lead), 1)
-            };
-            let _ = write_octal(&mut out, char_to_byte8(c.code()) as u32);
-            p += n;
-        } else {
-            out.extend_from_slice(&bytes[p..p + len]);
-            p += len;
-        }
-    }
-    out
-}
-
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-fn write_octal(out: &mut Vec<u8>, b: u32) -> usize {
-    let s = format!("\\{:03o}", b & 0xFF);
-    let n = s.len();
-    out.extend_from_slice(s.as_bytes());
-    n
-}
-
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-/// Display width of a buffer of multibyte (or unibyte) text.
-///
-/// Mirrors GNU `strwidth` / `c_string_width` (character.c:290) — the
-/// simplified form without precision cap or display-table consultation.
-/// Sums [`char_width`] over decoded code points.
-pub(crate) fn strwidth(bytes: &[u8], multibyte: bool) -> usize {
-    let mut total = 0usize;
-    if !multibyte {
-        for &b in bytes {
-            total += char_width(b as char);
-        }
-        return total;
-    }
-    let mut p = 0usize;
-    while p < bytes.len() {
-        let (c, len) = string_char(&bytes[p..]);
-        if let Some(ch) = char::from_u32(c.code()) {
-            total += char_width(ch);
-        } else {
-            // Raw-byte / extended char: width 4 (octal display).
-            total += 4;
-        }
-        p += len.max(1);
-    }
-    total
-}
-
 // ---------------------------------------------------------------------------
 // Unicode general-category predicates (mirrors GNU character.c:956..1063).
 //
@@ -1220,22 +1049,6 @@ pub fn alphanumericp(cat: i64) -> bool {
     alphabeticp(cat) || cat_eq(cat, UnicodeCategory::DecimalNumber)
 }
 
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-/// True if `cat` denotes a graphic character (UTS #18).
-///
-/// Mirrors GNU `graphicp` (character.c:1001): excludes Zs, Zl, Zp,
-/// Cc, Cs, Cn.
-pub(crate) fn graphicp(cat: i64) -> bool {
-    use UnicodeCategory::*;
-    !(cat_eq(cat, SpaceSeparator)
-        || cat_eq(cat, LineSeparator)
-        || cat_eq(cat, ParagraphSeparator)
-        || cat_eq(cat, Control)
-        || cat_eq(cat, Surrogate)
-        || cat_eq(cat, Unassigned))
-}
-
 /// True if `cat` denotes a printable character.
 ///
 /// Mirrors GNU `printablep` (character.c:1019): excludes Cc, Cs, Cn.
@@ -1260,15 +1073,6 @@ pub fn graphic_base_p(cat: i64) -> bool {
         || cat_eq(cat, Surrogate)
         || cat_eq(cat, Format)
         || cat_eq(cat, Unassigned))
-}
-
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-/// True if `cat` is the space-separator category (Zs).
-///
-/// Mirrors GNU `blankp` (character.c:1056).
-pub(crate) fn blankp(cat: i64) -> bool {
-    cat_eq(cat, UnicodeCategory::SpaceSeparator)
 }
 
 // ---------------------------------------------------------------------------
@@ -1519,18 +1323,6 @@ pub fn emacs_bytes_to_lossy_string(bytes: &[u8], multibyte: bool) -> String {
             .map(|&b| if b < 0x80 { b as char } else { '\u{FFFD}' })
             .collect()
     }
-}
-
-#[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-#[cfg(any(test, feature = "test-support"))]
-/// Convert a UTF-8 string to Emacs internal encoding.
-///
-/// For standard Unicode this is a no-op (UTF-8 is a subset of Emacs encoding).
-/// The returned `Vec<u8>` is byte-for-byte identical to the input's UTF-8
-/// representation.
-pub(crate) fn utf8_to_emacs(s: &str) -> Vec<u8> {
-    // Standard UTF-8 is already valid Emacs encoding. No transformation needed.
-    s.as_bytes().to_vec()
 }
 
 // ---------------------------------------------------------------------------

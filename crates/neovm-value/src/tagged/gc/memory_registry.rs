@@ -284,12 +284,6 @@ impl TaggedHeap {
         ImageStamp::Stamped
     }
 
-    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn dirty_owner_count(&self) -> usize {
-        self.dirty_owners.len()
-    }
-
     pub fn is_dirty_owner(&self, owner: TaggedValue) -> bool {
         self.dirty_owner_bits.contains(&owner.bits())
     }
@@ -297,12 +291,6 @@ impl TaggedHeap {
     pub fn clear_dirty_owners(&mut self) {
         self.dirty_owners.clear();
         self.dirty_owner_bits.clear();
-    }
-
-    #[allow(dead_code, reason = "test-only item exercised by the crate unit tests")]
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn dirty_write_count(&self) -> usize {
-        self.dirty_writes.len()
     }
 
     pub fn dirty_writes(&self) -> &[HeapWriteRecord] {

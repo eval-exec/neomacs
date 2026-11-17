@@ -613,7 +613,7 @@ impl Context {
     ///
     /// # Errors
     /// A missing installed heap or an installed heap from another evaluator.
-    pub unsafe fn share_values_array<const N: usize>(
+    pub(crate) unsafe fn share_values_array<const N: usize>(
         &self,
         values: [Value; N],
     ) -> Result<
@@ -837,7 +837,8 @@ impl Context {
     }
 
     /// Set the maximum eval recursion depth.
-    pub fn set_max_depth(&mut self, depth: usize) {
+    #[cfg(test)]
+    pub(crate) fn set_max_depth(&mut self, depth: usize) {
         self.max_depth = depth;
     }
 

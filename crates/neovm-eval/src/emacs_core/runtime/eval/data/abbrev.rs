@@ -22,7 +22,8 @@ pub struct Abbrev {
 
 /// A named table of abbreviations (kept for pdump compatibility).
 #[derive(Clone, Debug)]
-pub struct AbbrevTable {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct AbbrevTable {
     pub name: LispString,
     pub abbrevs: HashMap<LispString, Abbrev>,
     pub parent: Option<LispString>,
@@ -74,7 +75,8 @@ impl AbbrevManager {
         }
     }
 
-    pub fn define_abbrev(&mut self, table: &str, abbrev: &str, expansion: &str) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn define_abbrev(&mut self, table: &str, abbrev: &str, expansion: &str) {
         let table_sym = abbrev_table_sym(table);
         let tbl = self
             .tables
@@ -92,7 +94,8 @@ impl AbbrevManager {
         );
     }
 
-    pub fn define_abbrev_full(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn define_abbrev_full(
         &mut self,
         table: &str,
         abbrev: &str,
@@ -117,7 +120,8 @@ impl AbbrevManager {
         );
     }
 
-    pub fn expand_abbrev(&mut self, table: &str, word: &str) -> Option<String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn expand_abbrev(&mut self, table: &str, word: &str) -> Option<String> {
         self.expand_abbrev_by_sym(abbrev_table_sym(table), word)
     }
 
@@ -145,18 +149,21 @@ impl AbbrevManager {
         None
     }
 
-    pub fn create_table(&mut self, name: &str) -> &mut AbbrevTable {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn create_table(&mut self, name: &str) -> &mut AbbrevTable {
         let table_sym = abbrev_table_sym(name);
         self.tables
             .entry(table_sym)
             .or_insert_with(|| AbbrevTable::new(name))
     }
 
-    pub fn get_table(&self, name: &str) -> Option<&AbbrevTable> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_table(&self, name: &str) -> Option<&AbbrevTable> {
         self.tables.get(&abbrev_table_sym(name))
     }
 
-    pub fn list_abbrevs(&self, table: &str) -> Vec<(String, String)> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn list_abbrevs(&self, table: &str) -> Vec<(String, String)> {
         match self.tables.get(&abbrev_table_sym(table)) {
             Some(tbl) => {
                 let mut entries: Vec<(String, String)> = tbl
@@ -176,7 +183,8 @@ impl AbbrevManager {
         }
     }
 
-    pub fn clear_table(&mut self, table: &str) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_table(&mut self, table: &str) {
         if let Some(tbl) = self.tables.get_mut(&abbrev_table_sym(table)) {
             tbl.abbrevs.clear();
         }
@@ -186,15 +194,17 @@ impl AbbrevManager {
         self.abbrev_mode
     }
 
-    pub fn set_enabled(&mut self, enabled: bool) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_enabled(&mut self, enabled: bool) {
         self.abbrev_mode = enabled;
     }
 
-    pub fn global_table_name(&self) -> LispString {
+    pub(crate) fn global_table_name(&self) -> LispString {
         runtime_string_to_abbrev_string(resolve_sym(self.global_table_sym))
     }
 
-    pub fn all_table_names(&self) -> Vec<LispString> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn all_table_names(&self) -> Vec<LispString> {
         let mut names: Vec<LispString> = self
             .tables
             .values()

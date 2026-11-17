@@ -151,13 +151,6 @@ fn remove_buffer_cleans_up() {
 }
 
 #[test]
-fn font_lock_level_default_is_level3() {
-    crate::test_utils::init_test_tracing();
-    let level = FontLockLevel::default();
-    assert_eq!(level, FontLockLevel::Level3);
-}
-
-#[test]
 fn mode_line_format_default_has_elements() {
     crate::test_utils::init_test_tracing();
     let fmt = ModeLineFormat::default_format();

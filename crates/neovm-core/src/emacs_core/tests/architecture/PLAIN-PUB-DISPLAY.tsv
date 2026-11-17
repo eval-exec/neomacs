@@ -326,6 +326,7 @@ crates/neovm-display/src/window/frame_params.rs	fn	fn impl FrameZGroup::name
 crates/neovm-display/src/window/frame_params.rs	use	use FrameFullscreen
 crates/neovm-display/src/window/frame_params.rs	use	use FrameParam
 crates/neovm-display/src/window/frame_params.rs	use	use FrameParamKey
+crates/neovm-display/src/window/geometry.rs	enum	enum AnchorEdge
 crates/neovm-display/src/window/geometry.rs	enum	enum GeometryQueryError
 crates/neovm-display/src/window/geometry.rs	enum	enum PresentationPrepareError
 crates/neovm-display/src/window/geometry.rs	enum	enum VisualAnchor
@@ -344,7 +345,6 @@ crates/neovm-display/src/window/geometry.rs	fn	fn impl SnapshotPointGeometry::ro
 crates/neovm-display/src/window/geometry.rs	fn	fn impl SnapshotPointGeometry::width
 crates/neovm-display/src/window/geometry.rs	fn	fn impl SnapshotWindowGeometry::cell_origin
 crates/neovm-display/src/window/geometry.rs	fn	fn impl SnapshotWindowGeometry::frame
-crates/neovm-display/src/window/geometry.rs	fn	fn impl SnapshotWindowGeometry::point_for_buffer_pos
 crates/neovm-display/src/window/geometry.rs	fn	fn impl SnapshotWindowGeometry::presentation
 crates/neovm-display/src/window/geometry.rs	fn	fn impl SnapshotWindowGeometry::regions
 crates/neovm-display/src/window/geometry.rs	fn	fn impl SnapshotWindowGeometry::window

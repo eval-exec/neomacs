@@ -220,7 +220,7 @@ impl OwnerRecordId {
 /// record. No `Value`: the record's values live in the slab, which the
 /// collector traces.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct OwnerBindingRef {
+pub struct OwnerBindingRef {
     sym: SymId,
     record: OwnerRecordId,
 }
@@ -229,7 +229,7 @@ impl OwnerBindingRef {
     /// The specpdl's handle on RECORD, a binding of SYM.
     #[inline]
     #[doc(hidden)]
-    pub fn new(sym: SymId, record: OwnerRecordId) -> Self {
+    pub(crate) fn new(sym: SymId, record: OwnerRecordId) -> Self {
         Self { sym, record }
     }
 
@@ -2366,36 +2366,6 @@ impl Context {
         self.with_revealed_projection(base, |ctx| {
             ctx.obarray
                 .set_canonical_value(CanonicalAccess::STORAGE, base, value);
-        });
-    }
-
-    /// [`Context::makunbound_variable`] of a projected cell.
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn makunbound_owner_variable(&mut self, id: SymId) {
-        debug_assert!(
-            self.owner.slab().is_some(),
-            "a Context that sees a projected cell has an owner slab"
-        );
-        let Some((base, projection)) = self.projection_behind(id) else {
-            self.obarray
-                .makunbound_canonical(CanonicalAccess::ROUTED, id);
-            return;
-        };
-        let index = projection.index();
-        if let Some(slab) = self.owner.slab_mut()
-            && slab.slot(index, Channel::Default).value().is_some()
-        {
-            slab.set_slot(
-                index,
-                Channel::Default,
-                SlotState::Bound(SlotValue::new(Value::UNBOUND)),
-            );
-            return;
-        }
-        self.with_revealed_projection(base, |ctx| {
-            ctx.obarray
-                .makunbound_canonical(CanonicalAccess::STORAGE, base);
         });
     }
 }

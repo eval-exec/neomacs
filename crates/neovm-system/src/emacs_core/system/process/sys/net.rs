@@ -53,15 +53,18 @@ pub(crate) fn af_inet() -> i32 {
 
 /// `AF_INET6` (IPv6).
 #[cfg(unix)]
-pub fn af_inet6() -> i32 {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn af_inet6() -> i32 {
     libc::AF_INET6
 }
 #[cfg(windows)]
-pub fn af_inet6() -> i32 {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn af_inet6() -> i32 {
     windows_sys::Win32::Networking::WinSock::AF_INET6 as i32
 }
 #[cfg(all(not(unix), not(windows)))]
-pub fn af_inet6() -> i32 {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn af_inet6() -> i32 {
     0
 }
 

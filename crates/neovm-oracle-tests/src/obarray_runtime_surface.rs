@@ -11,6 +11,7 @@
 //! Every name is queried as a STRING: a quoted symbol in the form would be
 //! interned by the reader before `intern-soft` runs and hide the answer.
 
+use crate::common::assert_oracle_deviation_with_env_expect;
 use crate::common::assert_oracle_parity_expect;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
@@ -170,4 +171,35 @@ fn oracle_prop_declined_x_toolkit_defun_names_follow_the_profile() {
     #[cfg(any(windows, target_os = "macos"))]
     let expect = expect_test::expect![[r#""OK (nil nil nil nil)""#]];
     assert_oracle_parity_expect(form, expect);
+}
+
+/// The same five names are members here but NOT fboundp: the documented
+/// decline of the subrs, pinned so membership parity cannot read as
+/// closing the subr gap.
+///
+/// GNU's `defsubr` leaves a function cell on every one of them in the
+/// reference Linux build (xfns.c); this port interns the names through the
+/// DEFUN ledger and declines the subrs (DIVERGENCES 190 §4). "Member, no
+/// function" is a state no GNU build has, so the row pins BOTH sides:
+/// Neomacs answers nil for all five while GNU answers t on Linux, and for
+/// `x-select-font` on the other profiles too -- NS `src/nsfns.m:1688`,
+/// w32 `src/w32font.c:2748`, pgtk `src/pgtkfns.c:3676`, Haiku
+/// `src/haikufont.c:1242` compile the same DEFUN, while the four dialogs
+/// are xfns.c-only and absent there.
+#[test]
+fn oracle_prop_declined_x_toolkit_defun_names_stay_members_without_functions() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"(list (fboundp 'x-get-page-setup)
+       (fboundp 'x-gtk-debug)
+       (fboundp 'x-page-setup-dialog)
+       (fboundp 'x-print-frames-dialog)
+       (fboundp 'x-select-font))"#;
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let gnu = expect_test::expect![[r#""OK (t t t t t)""#]];
+    #[cfg(all(not(windows), target_os = "macos"))]
+    let gnu = expect_test::expect![[r#""OK (nil nil nil nil t)""#]];
+    #[cfg(windows)]
+    let gnu = expect_test::expect![[r#""OK (nil nil nil nil t)""#]];
+    assert_oracle_deviation_with_env_expect(form, &[], gnu, r#""OK (nil nil nil nil nil)""#);
 }

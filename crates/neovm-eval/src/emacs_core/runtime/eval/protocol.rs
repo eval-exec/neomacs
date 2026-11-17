@@ -176,7 +176,7 @@ impl FrameFontSize {
         PositiveFontScalar::new(value).map(Self::Relative)
     }
 
-    pub fn from_face_height(height: FaceHeight) -> Option<Self> {
+    pub(crate) fn from_face_height(height: FaceHeight) -> Option<Self> {
         match height {
             FaceHeight::Absolute(tenths) => Self::points(f64::from(tenths) / 10.0),
             FaceHeight::Relative(scale) => Self::relative(scale),

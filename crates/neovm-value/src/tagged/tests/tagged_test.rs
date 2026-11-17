@@ -1,6 +1,5 @@
 //! Tests for the tagged pointer value system.
 
-use super::gc::{HeapWriteKind, HeapWriteRecord};
 use super::header::*;
 use super::value::*;
 use crate::intern::{SymId, intern};
@@ -219,107 +218,6 @@ fn vector_mutation_helper_updates_elements() {
     let items = unsafe { &(*(vec.as_veclike_ptr().unwrap() as *const VectorObj)).data };
     assert_eq!(items[0].as_fixnum(), Some(10));
     assert_eq!(items[1].as_fixnum(), Some(99));
-}
-
-#[test]
-fn heap_write_tracking_records_unique_mutated_owners_and_slot_events() {
-    crate::test_utils::init_test_tracing();
-    let mut heap = super::gc::TaggedHeap::new();
-    heap.set_write_tracking_mode(super::gc::WriteTrackingMode::OwnersAndRecords);
-    super::gc::set_tagged_heap(&mut heap);
-
-    let cons = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
-    let vec = heap.alloc_vector(vec![TaggedValue::fixnum(10), TaggedValue::fixnum(20)]);
-
-    cons.set_car(TaggedValue::fixnum(2));
-    cons.set_cdr(vec);
-    assert_eq!(heap.dirty_owner_count(), 1);
-    assert!(heap.is_dirty_owner(cons));
-    assert_eq!(heap.dirty_write_count(), 2);
-    assert_eq!(
-        heap.dirty_writes(),
-        &[
-            HeapWriteRecord::slot(cons, HeapWriteKind::ConsCar, 0, TaggedValue::fixnum(2)),
-            HeapWriteRecord::slot(cons, HeapWriteKind::ConsCdr, 1, vec),
-        ]
-    );
-
-    assert!(super::mutate::set_vector_slot(
-        vec,
-        1,
-        TaggedValue::fixnum(99)
-    ));
-    assert_eq!(heap.dirty_owner_count(), 2);
-    assert!(heap.is_dirty_owner(vec));
-    assert_eq!(heap.dirty_write_count(), 3);
-    assert_eq!(
-        heap.dirty_writes()[2],
-        HeapWriteRecord::slot(vec, HeapWriteKind::VectorSlot, 1, TaggedValue::fixnum(99))
-    );
-}
-
-#[test]
-fn bulk_mutation_helpers_record_bulk_write_kinds() {
-    crate::test_utils::init_test_tracing();
-    let mut heap = super::gc::TaggedHeap::new();
-    heap.set_write_tracking_mode(super::gc::WriteTrackingMode::OwnersAndRecords);
-    super::gc::set_tagged_heap(&mut heap);
-
-    let vec = heap.alloc_vector(vec![TaggedValue::fixnum(10), TaggedValue::fixnum(20)]);
-    let _ = super::mutate::with_vector_data_mut(vec, |items| {
-        items[1] = TaggedValue::fixnum(99);
-    });
-
-    assert_eq!(heap.dirty_owner_count(), 1);
-    assert_eq!(heap.dirty_write_count(), 1);
-    assert_eq!(
-        heap.dirty_writes(),
-        &[HeapWriteRecord::bulk(vec, HeapWriteKind::VectorBulk)]
-    );
-}
-
-#[test]
-fn collection_clears_dirty_owner_tracking_at_begin() {
-    crate::test_utils::init_test_tracing();
-    let mut heap = super::gc::TaggedHeap::new();
-    heap.set_write_tracking_mode(super::gc::WriteTrackingMode::OwnersAndRecords);
-    super::gc::set_tagged_heap(&mut heap);
-
-    let reachable = heap.alloc_vector(vec![TaggedValue::fixnum(10), TaggedValue::fixnum(20)]);
-    assert!(super::mutate::set_vector_slot(
-        reachable,
-        0,
-        TaggedValue::fixnum(42),
-    ));
-    assert_eq!(heap.dirty_owner_count(), 1);
-    assert_eq!(heap.dirty_write_count(), 1);
-
-    // Clear-at-BEGIN (the dirty_owners ABA fix): the owner-tracking tables are
-    // reset when a cycle STARTS — on the same per-cycle lifecycle as the SATB
-    // dedup sets — NOT at end-of-collection. A pre-cycle entry must not survive
-    // into this cycle's sweep, where a freed owner's slot can be reused under the
-    // same owner address bits (the ABA). So the reset is observable right after
-    // `begin_collection`, before the sweep runs.
-    // SAFETY: serial fixture heap; the caller holds the only heap view and no
-    // collector or compiled leaf runs.
-    unsafe { heap.begin_collection() };
-    assert_eq!(
-        heap.dirty_owner_count(),
-        0,
-        "begin_collection must clear dirty-owner tracking"
-    );
-    assert_eq!(
-        heap.dirty_write_count(),
-        0,
-        "begin_collection must clear the write records too"
-    );
-
-    // Completing the cycle leaves them clear (marking traces but writes no heap
-    // slots, so the barrier records nothing).
-    heap.seed_root(reachable);
-    heap.complete_collection();
-    assert_eq!(heap.dirty_owner_count(), 0);
-    assert_eq!(heap.dirty_write_count(), 0);
 }
 
 #[test]

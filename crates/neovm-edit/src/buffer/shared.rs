@@ -145,7 +145,7 @@ impl SharedUndoState {
         }
     }
 
-    pub fn shares_with(&self, other: &Self) -> bool {
+    pub(crate) fn shares_with(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
 
@@ -153,7 +153,7 @@ impl SharedUndoState {
         self.inner.borrow().list
     }
 
-    pub fn set_list(&self, list: Value) {
+    pub(crate) fn set_list(&self, list: Value) {
         self.inner.borrow_mut().list = list;
     }
 
@@ -161,25 +161,17 @@ impl SharedUndoState {
         self.inner.borrow().in_progress
     }
 
-    pub fn set_in_progress(&self, in_progress: bool) {
-        self.inner.borrow_mut().in_progress = in_progress;
-    }
-
     /// GNU `BUF_COMPACT (b)` — the modification tick at the last compaction.
-    pub fn compacted_modified_tick(&self) -> i64 {
+    pub(crate) fn compacted_modified_tick(&self) -> i64 {
         self.inner.borrow().compacted_modified_tick
     }
 
     /// GNU `BUF_COMPACT (buffer) = BUF_MODIFF (buffer)` (`src/buffer.c:1884`).
-    pub fn set_compacted_modified_tick(&self, tick: i64) {
+    pub(crate) fn set_compacted_modified_tick(&self, tick: i64) {
         self.inner.borrow_mut().compacted_modified_tick = tick;
     }
 
-    pub fn recorded_first_change(&self) -> bool {
-        self.inner.borrow().recorded_first_change
-    }
-
-    pub fn set_recorded_first_change(&self, recorded_first_change: bool) {
+    pub(crate) fn set_recorded_first_change(&self, recorded_first_change: bool) {
         self.inner.borrow_mut().recorded_first_change = recorded_first_change;
     }
 

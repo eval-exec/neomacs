@@ -34,20 +34,6 @@ pub struct FontLockKeyword {
     pub laxmatch: bool,
 }
 
-/// Font-lock decoration level.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum FontLockLevel {
-    /// Minimal highlighting.
-    Level1,
-    /// Low highlighting.
-    Level2,
-    /// Medium highlighting (default).
-    #[default]
-    Level3,
-    /// High highlighting.
-    Level4,
-}
-
 /// Font-lock configuration for a mode.
 pub struct FontLockDefaults {
     /// Keyword rules for this mode.
@@ -212,8 +198,9 @@ pub enum ModeLineElement {
 }
 
 impl ModeLineFormat {
+    #[cfg(test)]
     /// Return the standard Emacs-like default mode-line format.
-    pub fn default_format() -> Self {
+    pub(crate) fn default_format() -> Self {
         ModeLineFormat {
             elements: vec![
                 ModeLineElement::Literal(" ".to_string()),
@@ -360,13 +347,15 @@ impl ModeRegistry {
     // -------------------------------------------------------------------
 
     /// Register a major mode definition.
-    pub fn register_major_mode(&mut self, name: &str, mode: MajorMode) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn register_major_mode(&mut self, name: &str, mode: MajorMode) {
         self.major_modes.insert(mode_symbol_id(name), mode);
     }
 
     /// Set the major mode for a buffer. Replaces any existing major mode.
     /// Returns an error if the mode is not registered.
-    pub fn set_major_mode(&mut self, buffer_id: u64, mode_name: &str) -> Result<(), String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_major_mode(&mut self, buffer_id: u64, mode_name: &str) -> Result<(), String> {
         if !self.major_modes.contains_key(&mode_symbol_id(mode_name)) {
             return Err(format!("Unknown major mode: {}", mode_name));
         }
@@ -376,7 +365,8 @@ impl ModeRegistry {
     }
 
     /// Return the active major mode name for a buffer (defaults to fundamental-mode).
-    pub fn get_major_mode(&self, buffer_id: u64) -> &str {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_major_mode(&self, buffer_id: u64) -> &str {
         self.buffer_major_modes
             .get(&buffer_id)
             .copied()
@@ -386,7 +376,8 @@ impl ModeRegistry {
 
     /// Look up the best-matching mode for a filename via `auto-mode-alist`.
     /// Patterns are matched as suffix (ending) of the filename, like Emacs.
-    pub fn mode_for_file(&self, filename: &str) -> Option<&str> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn mode_for_file(&self, filename: &str) -> Option<&str> {
         for (pattern, mode_name) in &self.auto_mode_alist {
             if filename_matches_pattern(filename, pattern) {
                 return Some(mode_symbol_name(*mode_name));
@@ -396,13 +387,15 @@ impl ModeRegistry {
     }
 
     /// Return the `MajorMode` definition for a mode name, if registered.
-    pub fn get_major_mode_def(&self, mode_name: &str) -> Option<&MajorMode> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_major_mode_def(&self, mode_name: &str) -> Option<&MajorMode> {
         self.major_modes.get(&mode_symbol_id(mode_name))
     }
 
     /// Check whether `mode_name` is derived from `ancestor`.
     /// A mode derives from itself.
-    pub fn derived_mode_p(&self, mode_name: &str, ancestor: &str) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn derived_mode_p(&self, mode_name: &str, ancestor: &str) -> bool {
         let mut current = Some(mode_symbol(mode_name));
         while let Some(name) = current {
             let name_str = mode_symbol_name(name);
@@ -422,12 +415,18 @@ impl ModeRegistry {
     // -------------------------------------------------------------------
 
     /// Register a minor mode definition.
-    pub fn register_minor_mode(&mut self, name: &str, mode: MinorMode) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn register_minor_mode(&mut self, name: &str, mode: MinorMode) {
         self.minor_modes.insert(mode_symbol_id(name), mode);
     }
 
     /// Enable a minor mode in a specific buffer.
-    pub fn enable_minor_mode(&mut self, buffer_id: u64, mode_name: &str) -> Result<(), String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn enable_minor_mode(
+        &mut self,
+        buffer_id: u64,
+        mode_name: &str,
+    ) -> Result<(), String> {
         if !self.minor_modes.contains_key(&mode_symbol_id(mode_name)) {
             return Err(format!("Unknown minor mode: {}", mode_name));
         }
@@ -440,7 +439,8 @@ impl ModeRegistry {
     }
 
     /// Disable a minor mode in a specific buffer.
-    pub fn disable_minor_mode(&mut self, buffer_id: u64, mode_name: &str) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn disable_minor_mode(&mut self, buffer_id: u64, mode_name: &str) {
         if let Some(modes) = self.buffer_minor_modes.get_mut(&buffer_id) {
             let mode_symbol = mode_symbol(mode_name);
             modes.retain(|m| *m != mode_symbol);
@@ -449,7 +449,12 @@ impl ModeRegistry {
 
     /// Toggle a minor mode in a specific buffer. Returns `Ok(true)` if the
     /// mode is now active, `Ok(false)` if it was disabled.
-    pub fn toggle_minor_mode(&mut self, buffer_id: u64, mode_name: &str) -> Result<bool, String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn toggle_minor_mode(
+        &mut self,
+        buffer_id: u64,
+        mode_name: &str,
+    ) -> Result<bool, String> {
         if !self.minor_modes.contains_key(&mode_symbol_id(mode_name)) {
             return Err(format!("Unknown minor mode: {}", mode_name));
         }
@@ -463,7 +468,8 @@ impl ModeRegistry {
     }
 
     /// Check if a minor mode is active in a buffer (buffer-local or global).
-    pub fn is_minor_mode_active(&self, buffer_id: u64, mode_name: &str) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_minor_mode_active(&self, buffer_id: u64, mode_name: &str) -> bool {
         let mode_symbol = mode_symbol(mode_name);
         // Check buffer-local first.
         if let Some(modes) = self.buffer_minor_modes.get(&buffer_id)
@@ -476,7 +482,8 @@ impl ModeRegistry {
     }
 
     /// Return all active minor modes for a buffer (buffer-local + global).
-    pub fn active_minor_modes(&self, buffer_id: u64) -> Vec<&str> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn active_minor_modes(&self, buffer_id: u64) -> Vec<&str> {
         let mut result: Vec<&str> = Vec::new();
         // Global minor modes first (like Emacs).
         for name in &self.global_minor_modes {
@@ -499,7 +506,8 @@ impl ModeRegistry {
     // -------------------------------------------------------------------
 
     /// Enable a minor mode globally.
-    pub fn enable_global_minor_mode(&mut self, mode_name: &str) -> Result<(), String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn enable_global_minor_mode(&mut self, mode_name: &str) -> Result<(), String> {
         if !self.minor_modes.contains_key(&mode_symbol_id(mode_name)) {
             return Err(format!("Unknown minor mode: {}", mode_name));
         }
@@ -510,8 +518,9 @@ impl ModeRegistry {
         Ok(())
     }
 
+    #[cfg(test)]
     /// Disable a globally-active minor mode.
-    pub fn disable_global_minor_mode(&mut self, mode_name: &str) {
+    pub(crate) fn disable_global_minor_mode(&mut self, mode_name: &str) {
         let mode_symbol = mode_symbol(mode_name);
         self.global_minor_modes.retain(|m| *m != mode_symbol);
     }
@@ -525,7 +534,8 @@ impl ModeRegistry {
     /// `auto-mode-alist` regex patterns like `"\\.rs\\'"` which match file
     /// endings).  Here we use simple suffix matching: if the filename ends
     /// with `pattern`, it matches.
-    pub fn add_auto_mode(&mut self, pattern: LispString, mode: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn add_auto_mode(&mut self, pattern: LispString, mode: Value) {
         self.auto_mode_alist.push((pattern, mode));
     }
 
@@ -534,7 +544,8 @@ impl ModeRegistry {
     // -------------------------------------------------------------------
 
     /// Register a custom variable.
-    pub fn register_custom_variable(&mut self, name: &str, var: CustomVariable) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn register_custom_variable(&mut self, name: &str, var: CustomVariable) {
         if let Some(group_name) = var.group
             && let Some(group_symbol) = group_name.as_bare_symbol_id()
             && let Some(group) = self.custom_groups.get_mut(&group_symbol)
@@ -548,17 +559,20 @@ impl ModeRegistry {
     }
 
     /// Register a custom group.
-    pub fn register_custom_group(&mut self, name: &str, group: CustomGroup) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn register_custom_group(&mut self, name: &str, group: CustomGroup) {
         self.custom_groups.insert(mode_symbol_id(name), group);
     }
 
     /// Look up a custom variable by name.
-    pub fn get_custom_variable(&self, name: &str) -> Option<&CustomVariable> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_custom_variable(&self, name: &str) -> Option<&CustomVariable> {
         self.custom_variables.get(&mode_symbol_id(name))
     }
 
     /// Look up a custom group by name.
-    pub fn get_custom_group(&self, name: &str) -> Option<&CustomGroup> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_custom_group(&self, name: &str) -> Option<&CustomGroup> {
         self.custom_groups.get(&mode_symbol_id(name))
     }
 
@@ -567,7 +581,8 @@ impl ModeRegistry {
     // -------------------------------------------------------------------
 
     /// Return the font-lock keywords for a mode (walking the parent chain).
-    pub fn font_lock_keywords(&self, mode_name: &str) -> Option<&[FontLockKeyword]> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn font_lock_keywords(&self, mode_name: &str) -> Option<&[FontLockKeyword]> {
         let mut current = Some(mode_symbol(mode_name));
         while let Some(name) = current {
             if let Some(mode) = self
@@ -618,9 +633,10 @@ impl ModeRegistry {
     // Clean up
     // -------------------------------------------------------------------
 
+    #[cfg(test)]
     /// Remove all mode state associated with a buffer (e.g. when the buffer
     /// is killed).
-    pub fn remove_buffer(&mut self, buffer_id: u64) {
+    pub(crate) fn remove_buffer(&mut self, buffer_id: u64) {
         self.buffer_major_modes.remove(&buffer_id);
         self.buffer_minor_modes.remove(&buffer_id);
     }
