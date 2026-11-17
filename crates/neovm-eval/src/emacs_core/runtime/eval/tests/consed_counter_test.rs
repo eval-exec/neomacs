@@ -306,3 +306,60 @@ fn localized_consed_default_written_under_a_local_binding_is_loaded_later() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_returns(&mut eval, DEFAULT_WRITE_UNDER_LOCAL_FORM, "(t t t t)");
 }
+
+/// The buffer-aware readers answer a loaded local binding from the counter,
+/// as GNU's `buffer_local_value` stores the forwarded value into the loaded
+/// binding before it reads the cell (`src/buffer.c:1376-1399`), and keep the
+/// cell of a binding that is not loaded. The read in the second buffer loads
+/// its binding, as GNU's `set_buffer_internal_2` does at the switch
+/// (`src/buffer.c:2373-2391`).
+#[test]
+fn localized_consed_buffer_aware_reads_follow_the_loaded_local_binding() {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let symbol = neovm_value::intern::intern("cons-cells-consed");
+    assert!(holds(
+        &mut eval,
+        "(progn
+           (setq consed-reader-buffer-a (get-buffer-create \" *consed-reader-a*\"))
+           (set-buffer consed-reader-buffer-a)
+           (make-local-variable 'cons-cells-consed)
+           (make-list 1000 nil)
+           t)"
+    ));
+    let buffer_a = eval.edit.buffers.current_buffer().unwrap().id();
+    let low = Value::memory_use_counts_snapshot()[0] as i64;
+    let current = eval.edit.buffers.current_buffer();
+    let in_view = eval.variables().value_in_buffer(current, symbol).unwrap();
+    let inline = eval
+        .variable_value_in_buffer_inline(current, symbol)
+        .unwrap();
+    assert_eq!(in_view, Value::fixnum(low), "VariableView::value_in_buffer");
+    assert_eq!(
+        inline,
+        Value::fixnum(low),
+        "variable_value_in_buffer_inline"
+    );
+
+    assert!(holds(
+        &mut eval,
+        "(progn
+           (set-buffer (get-buffer-create \" *consed-reader-b*\"))
+           cons-cells-consed
+           (setq consed-reader-saved
+                 (buffer-local-value 'cons-cells-consed consed-reader-buffer-a))
+           (make-list 1000 nil)
+           t)"
+    ));
+    let saved = eval.eval_str("consed-reader-saved").unwrap();
+    let buffer = eval.edit.buffers.get_any(buffer_a);
+    assert_eq!(
+        eval.variables().value_in_buffer(buffer, symbol),
+        Some(saved),
+        "an unloaded binding reads its cell"
+    );
+    assert_eq!(
+        eval.variable_value_in_buffer_inline(buffer, symbol),
+        Some(saved),
+        "an unloaded binding reads its cell"
+    );
+}

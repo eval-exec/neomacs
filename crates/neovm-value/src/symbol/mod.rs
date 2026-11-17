@@ -594,6 +594,24 @@ fn localized_value(blv: &LispBufferLocalValue) -> Value {
         .unwrap_or_else(|| blv.valcell.get().cons_cdr())
 }
 
+/// A counter-backed variable's local VALUE in BUF, read from its cell: the
+/// counter instead when BUF's binding is the loaded one, as GNU's
+/// `buffer_local_value` stores the forwarded value into the loaded binding
+/// before reading the cell (`src/buffer.c:1376-1399`).
+#[cold]
+#[inline(never)]
+fn loaded_counter_or_cell<B: BufferLocalView>(
+    blv: &LispBufferLocalValue,
+    buf: &B,
+    id: SymId,
+    value: Value,
+) -> Value {
+    match buf.local_binding_cell(id) {
+        Some(cell) if crate::value::eq_value(&cell, &blv.valcell.get()) => localized_value(blv),
+        _ => value,
+    }
+}
+
 /// Read a localized symbol's global default: the counter while the default
 /// binding is loaded, else the default cell (GNU `default_value`,
 /// `src/data.c:1974-1983`).
@@ -2335,7 +2353,12 @@ impl Obarray {
         if let Some(buf) = buf
             && let Some(value) = buf.local_binding(id, self.is_localized(id))
         {
-            return Some(value);
+            return Some(
+                match self.blv(id).filter(|blv| counter_forwarder(blv).is_some()) {
+                    Some(blv) => loaded_counter_or_cell(blv, buf, id, value),
+                    None => value,
+                },
+            );
         }
         self.value_with(id, projected)
     }
