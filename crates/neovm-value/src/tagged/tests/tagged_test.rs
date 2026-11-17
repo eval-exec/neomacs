@@ -1,6 +1,5 @@
 //! Tests for the tagged pointer value system.
 
-use super::gc::{HeapWriteKind, HeapWriteRecord};
 use super::header::*;
 use super::value::*;
 use crate::intern::{SymId, intern};

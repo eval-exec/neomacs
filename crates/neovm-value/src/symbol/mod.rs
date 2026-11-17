@@ -1406,14 +1406,6 @@ impl SymbolChunks {
         }
     }
 
-    /// Whether slot `idx`'s chunk holds a stamp array (tests).
-    #[cfg(any(test, feature = "test-support"))]
-    fn chunk_has_fn_stamps(&self, idx: usize) -> bool {
-        self.sides
-            .get(idx >> 12)
-            .is_some_and(|side| side.has_stamps())
-    }
-
     /// Capture the start-of-cycle scan parts for the Stage 1b concurrent obarray
     /// scan: per existing chunk, its slots-array base pointer + its seqlock pointer,
     /// plus the logical live-slot count. The chunk arrays and seq boxes never move

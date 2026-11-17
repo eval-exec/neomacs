@@ -1,7 +1,6 @@
 use super::*;
 use crate::heap_types::LispMarker;
-use crate::intern::{intern, make_uninterned_symbol, resolve_sym};
-use crate::tagged::header::CLOSURE_ARGLIST;
+use crate::intern::{intern, make_uninterned_symbol};
 use crate::value::buffer_vocab::BufferId;
 use malachite::integer::Integer;
 use std::str::FromStr;

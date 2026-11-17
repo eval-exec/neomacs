@@ -2598,10 +2598,6 @@ impl ConservativePropertyNames {
 /// names declare its source.  Pure structural rewrites retain the shared
 /// summary without an O(intervals) recount.
 enum ReplacementPropertyNames<'a> {
-    /// Only the test-only shape-merge helper performs a pure structural
-    /// rewrite today; every production replacement can add names.
-    #[cfg(any(test, feature = "test-support"))]
-    Preserve,
     Include(&'a ConservativePropertyNames),
 }
 
@@ -3171,8 +3167,6 @@ impl TextPropertyTable {
     ) {
         self.mutation_tick += 1;
         match property_names {
-            #[cfg(any(test, feature = "test-support"))]
-            ReplacementPropertyNames::Preserve => {}
             ReplacementPropertyNames::Include(names) => self.property_names.include(names),
         }
         self.intervals = IntervalTree::from_runs_preserving_shape(runs);
