@@ -1197,8 +1197,14 @@ pub struct DumpCharsetRegistry {
     pub priority_identity_syms: Option<Vec<DumpSymId>>,
     #[serde(default)]
     pub alias_syms: Option<Vec<(DumpSymId, DumpSymId)>>,
+    /// `iso-charset` designation winners; missing in sections before version 4.
+    #[serde(default)]
+    pub iso_designation_syms: Option<Vec<(DumpIsoDesignationKey, DumpSymId)>>,
     pub next_id: i64,
 }
+
+/// `(dimension, chars-96?, final char)`, the key of GNU's `iso_charset_table`.
+pub type DumpIsoDesignationKey = (i64, bool, i64);
 
 #[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]

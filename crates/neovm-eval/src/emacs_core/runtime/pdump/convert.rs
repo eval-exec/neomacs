@@ -4516,6 +4516,12 @@ pub(crate) fn dump_charset_registry(encoder: &mut DumpEncoder) -> DumpCharsetReg
                 .map(|(alias, target)| (dump_sym_id(alias), dump_sym_id(target)))
                 .collect()
         }),
+        iso_designation_syms: snapshot.iso_designations.map(|entries| {
+            entries
+                .into_iter()
+                .map(|(key, name)| (key, dump_sym_id(name)))
+                .collect()
+        }),
         next_id: snapshot.next_id,
     }
 }
@@ -6932,6 +6938,12 @@ pub(crate) fn load_charset_registry(decoder: &mut LoadDecoder, dcr: &DumpCharset
             aliases
                 .iter()
                 .map(|(alias, target)| (load_sym_id(alias), load_sym_id(target)))
+                .collect()
+        }),
+        iso_designations: dcr.iso_designation_syms.as_ref().map(|entries| {
+            entries
+                .iter()
+                .map(|(key, name)| (*key, load_sym_id(name)))
                 .collect()
         }),
         next_id: dcr.next_id,

@@ -57,6 +57,7 @@ fn charset_section_round_trips_registry_state() {
         emacs_mule_order_syms: Some(vec![DumpSymId(2), DumpSymId(8)]),
         priority_identity_syms: Some(vec![DumpSymId(8), DumpSymId(2)]),
         alias_syms: Some(vec![(DumpSymId(12), DumpSymId(8))]),
+        iso_designation_syms: Some(vec![((1, true, 124), DumpSymId(8))]),
         next_id: 11,
     };
 
